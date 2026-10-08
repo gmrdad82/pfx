@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::{ErrorKind, Read};
 use std::path::{Component, Path, PathBuf};
@@ -48,6 +49,11 @@ struct Staged {
     rel: String,
 }
 
+struct Root {
+    named: PathBuf,
+    canon: PathBuf,
+}
+
 enum Dest {
     Root,
     File(String),
@@ -79,20 +85,23 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     let manifest = manifest.ok_or("--manifest is required")?;
     let out = out.ok_or("--out is required")?;
-    let line = stage(&manifest, &out)?;
+    let target = std::env::var_os("CARGO_TARGET_DIR");
+    let line = stage(&manifest, &out, target.as_deref())?;
     println!("{line}");
     Ok(())
 }
 
-fn stage(manifest: &Path, out: &Path) -> Result<String, String> {
+fn stage(manifest: &Path, out: &Path, target: Option<&OsStr>) -> Result<String, String> {
     let root = caller_root()?;
-    let manifest = locate_manifest(&root, manifest)?;
+    let cwd = cwd()?;
+    let manifest = locate_manifest(&[tree_root(&root)], &cwd, manifest)?;
     let text = fs::read_to_string(&manifest).map_err(|error| io(&manifest, error))?;
     let base = manifest
         .parent()
         .ok_or_else(|| format!("{} has no directory", manifest.display()))?
         .to_path_buf();
-    let spec = parse(&text, &root, &base)?;
+    let roots = roots(&root, &cwd, target);
+    let spec = parse(&text, &roots, &base)?;
     refuse_tools(&spec)?;
     let out = empty_out(out)?;
     if let Err(error) = write_stage(&out, &spec) {
@@ -148,24 +157,59 @@ fn caller_root() -> Result<PathBuf, String> {
     root.canonicalize().map_err(|error| io(&root, error))
 }
 
+fn tree_root(root: &Path) -> Root {
+    Root {
+        named: root.to_path_buf(),
+        canon: root.to_path_buf(),
+    }
+}
+
+fn roots(root: &Path, cwd: &Path, target: Option<&OsStr>) -> Vec<Root> {
+    let mut roots = vec![tree_root(root)];
+    roots.extend(target_root(root, cwd, target));
+    roots
+}
+
+fn target_root(root: &Path, cwd: &Path, target: Option<&OsStr>) -> Option<Root> {
+    let target = target.filter(|value| !value.is_empty())?;
+    let named = normalize(cwd, Path::new(target));
+    let canon = named.canonicalize().ok()?;
+    if root.starts_with(&canon) {
+        return None;
+    }
+    Some(Root { named, canon })
+}
+
+fn escapes(raw: &Path, roots: &[Root]) -> String {
+    match roots.get(1) {
+        None => format!("{} escapes the caller's folder", raw.display()),
+        Some(target) => format!(
+            "{} escapes the caller's folder and CARGO_TARGET_DIR ({})",
+            raw.display(),
+            target.canon.display()
+        ),
+    }
+}
+
 fn cwd() -> Result<PathBuf, String> {
     std::env::current_dir().map_err(|error| format!("cwd: {error}"))
 }
 
-fn locate_manifest(root: &Path, raw: &Path) -> Result<PathBuf, String> {
-    let path = resolve(root, &cwd()?, raw)?;
+fn locate_manifest(roots: &[Root], cwd: &Path, raw: &Path) -> Result<PathBuf, String> {
+    let path = resolve(roots, cwd, raw)?;
     if !path.is_file() {
         return Err(format!("{} is not a file", raw.display()));
     }
     Ok(path)
 }
 
-fn resolve(root: &Path, base: &Path, raw: &Path) -> Result<PathBuf, String> {
-    let built = normalize(base, raw);
+fn resolve(roots: &[Root], base: &Path, raw: &Path) -> Result<PathBuf, String> {
+    let built = through_root(roots, normalize(base, raw));
+    let within = |path: &Path| roots.iter().any(|root| path.starts_with(&root.canon));
     if let Some(link) = first_symlink(&built)? {
         let canon = fs::canonicalize(&link).map_err(|error| io(&link, error))?;
-        if !canon.starts_with(root) {
-            return Err(format!("{} escapes the caller's folder", raw.display()));
+        if !within(&canon) {
+            return Err(escapes(raw, roots));
         }
         return Err(format!("{} is a symlink", raw.display()));
     }
@@ -173,13 +217,13 @@ fn resolve(root: &Path, base: &Path, raw: &Path) -> Result<PathBuf, String> {
     let mut rest = Vec::new();
     while !existing.exists() {
         let Some(parent) = existing.parent() else {
-            return Err(format!("{} escapes the caller's folder", raw.display()));
+            return Err(escapes(raw, roots));
         };
         if parent == existing {
-            return Err(format!("{} escapes the caller's folder", raw.display()));
+            return Err(escapes(raw, roots));
         }
         let Some(name) = existing.file_name() else {
-            return Err(format!("{} escapes the caller's folder", raw.display()));
+            return Err(escapes(raw, roots));
         };
         rest.push(name.to_os_string());
         existing = parent;
@@ -190,13 +234,22 @@ fn resolve(root: &Path, base: &Path, raw: &Path) -> Result<PathBuf, String> {
     for name in rest.iter().rev() {
         full.push(name);
     }
-    if !full.starts_with(root) {
-        return Err(format!("{} escapes the caller's folder", raw.display()));
+    if !within(&full) {
+        return Err(escapes(raw, roots));
     }
     if !full.exists() {
         return Err(format!("missing file {}", raw.display()));
     }
     Ok(full)
+}
+
+fn through_root(roots: &[Root], built: PathBuf) -> PathBuf {
+    roots
+        .iter()
+        .filter_map(|root| Some((root, built.strip_prefix(&root.named).ok()?)))
+        .max_by_key(|(root, _)| root.named.components().count())
+        .map(|(root, rest)| root.canon.join(rest))
+        .unwrap_or(built)
 }
 
 fn normalize(base: &Path, raw: &Path) -> PathBuf {
@@ -260,7 +313,7 @@ fn empty_out(raw: &Path) -> Result<PathBuf, String> {
     out.canonicalize().map_err(|error| io(&out, error))
 }
 
-fn parse(text: &str, root: &Path, base: &Path) -> Result<Spec, String> {
+fn parse(text: &str, roots: &[Root], base: &Path) -> Result<Spec, String> {
     let value: toml::Value =
         toml::from_str(text).map_err(|error| format!("steam.toml: {error}"))?;
     let table = value.as_table().ok_or("steam.toml must be a table")?;
@@ -314,7 +367,7 @@ fn parse(text: &str, root: &Path, base: &Path) -> Result<Spec, String> {
         let Some(value) = depots.get(*platform) else {
             continue;
         };
-        let depot = parse_depot(platform, value, root, base)?;
+        let depot = parse_depot(platform, value, roots, base)?;
         if !ids.insert(depot.id) {
             return Err(format!("depot id {} is duplicated", depot.id));
         }
@@ -332,7 +385,7 @@ fn parse(text: &str, root: &Path, base: &Path) -> Result<Spec, String> {
 fn parse_depot(
     platform: &str,
     value: &toml::Value,
-    root: &Path,
+    roots: &[Root],
     base: &Path,
 ) -> Result<Depot, String> {
     let table = value
@@ -359,7 +412,7 @@ fn parse_depot(
         unknown(file, &format!("{platform}.files"), &["path", "depot"])?;
         let path = text_of(required(file, "path")?, "path")?;
         let depot = text_of(required(file, "depot")?, "depot")?;
-        let src = resolve(root, base, Path::new(&path))?;
+        let src = resolve(roots, base, Path::new(&path))?;
         add_mapping(
             id,
             &path,
@@ -871,7 +924,7 @@ mod tests {
         );
         let manifest = write_manifest(&game, &body);
         let out = root.join("out");
-        let line = stage(&manifest, &out).unwrap();
+        let line = stage(&manifest, &out, None).unwrap();
         let out = out.canonicalize().unwrap();
 
         let app = fs::read_to_string(out.join("app_build_424242.vdf")).unwrap();
@@ -1042,7 +1095,7 @@ mod tests {
             "",
             "[depots.windows]\nid = 11\n\n[[depots.windows.files]]\npath = \"missing.bin\"\ndepot = \"game.bin\"\n",
         );
-        let error = stage(&manifest, &out).unwrap_err();
+        let error = stage(&manifest, &out, None).unwrap_err();
         assert!(error.contains("missing file missing.bin"), "{error}");
         assert!(!out.join("content").exists());
         let _ = fs::remove_dir_all(&root);
@@ -1052,7 +1105,7 @@ mod tests {
             "",
             "[depots.windows]\nid = 11\n\n[[depots.windows.files]]\npath = \"/etc/passwd\"\ndepot = \"passwd\"\n",
         );
-        let error = stage(&manifest, &out).unwrap_err();
+        let error = stage(&manifest, &out, None).unwrap_err();
         assert!(
             error.contains("/etc/passwd") && error.contains("escapes the caller's folder"),
             "{error}"
@@ -1072,14 +1125,14 @@ mod tests {
             "app_id = 10\ndescription = \"build\"\n\n[depots.linux]\nid = 12\n\n[[depots.linux.files]]\npath = \"{climb}\"\ndepot = \"passwd\"\n"
         );
         fs::write(&manifest, body).unwrap();
-        let error = stage(&manifest, &out).unwrap_err();
+        let error = stage(&manifest, &out, None).unwrap_err();
         assert!(error.contains("escapes the caller's folder"), "{error}");
         assert!(!out.exists());
         let _ = fs::remove_dir_all(&root);
 
         let (root, manifest, out) =
             game_with("empty", "", "[depots.windows]\nid = 11\nfiles = []\n");
-        let error = stage(&manifest, &out).unwrap_err();
+        let error = stage(&manifest, &out, None).unwrap_err();
         assert_eq!(error, "depot 11 has no files");
         let _ = fs::remove_dir_all(&root);
 
@@ -1088,7 +1141,7 @@ mod tests {
             "",
             "[depots.windows]\nid = 11\n\n[[depots.windows.files]]\npath = \"game.bin\"\ndepot = \"game.bin\"\n\n[depots.linux]\nid = 11\n\n[[depots.linux.files]]\npath = \"game.bin\"\ndepot = \"game.bin\"\n",
         );
-        let error = stage(&manifest, &out).unwrap_err();
+        let error = stage(&manifest, &out, None).unwrap_err();
         assert_eq!(error, "depot id 11 is duplicated");
         let _ = fs::remove_dir_all(&root);
 
@@ -1097,7 +1150,7 @@ mod tests {
             "setlive = \"default\"",
             "[depots.windows]\nid = 11\n\n[[depots.windows.files]]\npath = \"game.bin\"\ndepot = \"game.bin\"\n",
         );
-        let error = stage(&manifest, &out).unwrap_err();
+        let error = stage(&manifest, &out, None).unwrap_err();
         assert_eq!(error, "setlive default needs setlive_default = true");
         assert!(!out.exists());
         let _ = fs::remove_dir_all(&root);
@@ -1116,7 +1169,7 @@ mod tests {
         tools.extend(TOOLS_MARKER.as_bytes());
         tools.extend(vec![0; 64]);
         fs::write(&game, &tools).unwrap();
-        let error = stage(&manifest, &out).unwrap_err();
+        let error = stage(&manifest, &out, None).unwrap_err();
         assert!(
             error.contains("game.bin")
                 && error.contains("pfx-game's tools feature")
@@ -1128,7 +1181,7 @@ mod tests {
         windows.extend(TOOLS_MARKER.as_bytes());
         assert!(carries_tools(&windows));
         fs::write(&game, &tools[..4096]).unwrap();
-        stage(&manifest, &out).unwrap();
+        stage(&manifest, &out, None).unwrap();
         let mut asset = b"notes: ".to_vec();
         asset.extend(TOOLS_MARKER.as_bytes());
         assert!(!carries_tools(&asset), "only executables are scanned");
@@ -1156,7 +1209,7 @@ mod tests {
             "setlive = \"default\"\nsetlive_default = true\npreview = true",
             "[depots.macos]\nid = 13\n\n[[depots.macos.files]]\npath = \"game.bin\"\ndepot = \"bin/\"\n",
         );
-        let line = stage(&manifest, &out).unwrap();
+        let line = stage(&manifest, &out, None).unwrap();
         let app = fs::read_to_string(out.join("app_build_10.vdf")).unwrap();
         assert!(app.contains("\t\"setlive\"\t\"default\"\n"), "{app}");
         assert!(app.contains("\t\"preview\"\t\"1\"\n"), "{app}");
@@ -1181,6 +1234,45 @@ mod tests {
     }
 
     #[test]
+    fn a_build_under_cargo_target_dir_stages_and_nothing_else_outside_the_tree_does() {
+        let scratch = scratch("target").canonicalize().unwrap();
+        let tree = scratch.join("tree");
+        let build = scratch.join("build");
+        let release = build.join("release");
+        fs::create_dir_all(&tree).unwrap();
+        fs::create_dir_all(&release).unwrap();
+        fs::create_dir_all(scratch.join("other")).unwrap();
+        let exe = release.join("game.exe");
+        fs::write(&exe, b"MZ").unwrap();
+        fs::write(scratch.join("other").join("secret"), b"secret").unwrap();
+
+        let shared = roots(&tree, &tree, Some(OsStr::new("../build")));
+        assert_eq!(resolve(&shared, &tree, &exe).unwrap(), exe);
+        let error = resolve(&shared, &tree, Path::new("../other/secret")).unwrap_err();
+        assert!(
+            error.contains("escapes the caller's folder and CARGO_TARGET_DIR"),
+            "{error}"
+        );
+        let error = resolve(&roots(&tree, &tree, None), &tree, &exe).unwrap_err();
+        assert_eq!(
+            error,
+            format!("{} escapes the caller's folder", exe.display())
+        );
+        for wide in [scratch.as_os_str(), tree.as_os_str(), OsStr::new("")] {
+            assert_eq!(roots(&tree, &tree, Some(wide)).len(), 1, "{wide:?}");
+        }
+        #[cfg(unix)]
+        {
+            let link = scratch.join("link");
+            std::os::unix::fs::symlink(&build, &link).unwrap();
+            let through = roots(&tree, &tree, Some(link.as_os_str()));
+            let named = link.join("release").join("game.exe");
+            assert_eq!(resolve(&through, &tree, &named).unwrap(), exe);
+        }
+        let _ = fs::remove_dir_all(&scratch);
+    }
+
+    #[test]
     #[cfg(unix)]
     fn a_symlink_is_refused() {
         let (root, manifest, out) = game_with(
@@ -1190,7 +1282,7 @@ mod tests {
         );
         let game = manifest.parent().unwrap();
         std::os::unix::fs::symlink(game.join("game.bin"), game.join("link.bin")).unwrap();
-        let error = stage(&manifest, &out).unwrap_err();
+        let error = stage(&manifest, &out, None).unwrap_err();
         assert!(error.contains("is a symlink"), "{error}");
         let _ = fs::remove_dir_all(&root);
     }
@@ -1204,7 +1296,7 @@ mod tests {
         );
         fs::create_dir_all(&out).unwrap();
         fs::write(out.join("keep"), b"keep").unwrap();
-        let error = stage(&manifest, &out).unwrap_err();
+        let error = stage(&manifest, &out, None).unwrap_err();
         assert_eq!(error, "--out is not empty");
         assert_eq!(fs::read(out.join("keep")).unwrap(), b"keep");
         let _ = fs::remove_dir_all(&root);
