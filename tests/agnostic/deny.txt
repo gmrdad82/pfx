@@ -1,0 +1,31 @@
+# What may not appear in the engine's tracked files. Read by tests/agnostic.rs.
+#
+# A line is `label kind pattern`. Matching is case-insensitive. A label's count is what the baseline records.
+#   word  the pattern with a non-word character (not a letter, digit or underscore) on both sides, so
+#         `paper_grain` and `dispatch_workgroups` do not hit; these are the product-name patterns below
+#   text  the pattern anywhere, even inside a longer word
+#   hex   a colour: no hex digit before it, and either nothing or an alpha pair of hex digits after it,
+#         so it is not matched inside a hash
+# `allow <phrase>` blanks that phrase before matching, for generic text that holds a name, such as Blender's own studio world.
+# File names count as text too. Skipped: prompts/, CONVENTIONS.md, HANDOVER.md, ROADMAP.md, AGENTS.md, tests/agnostic/.
+
+allow  studio light
+allow  studio-light
+allow  world = "studio"
+
+studio       word  studio
+paper        word  paper
+dispatch     word  dispatch
+inbox        word  inbox
+pito-visual  text  pito-visual
+pito-license text  pito-license
+
+rubik        word  rubik
+
+hex-1b2233   hex   1b2233
+hex-2f6bff   hex   2f6bff
+hex-ff4d5e   hex   ff4d5e
+hex-e9edf6   hex   e9edf6
+hex-8b5cf6   hex   8b5cf6
+hex-ffab1a   hex   ffab1a
+hex-19b68a   hex   19b68a

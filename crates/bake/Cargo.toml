@@ -1,0 +1,32 @@
+[package]
+name = "pfx-bake"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's bake: path-traced light the live renderer shows at raster cost, as probe grids and lightmaps with a deterministic manifest"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+pfx-trace = { path = "../trace" }
+pfx-gpu = { path = "../gpu" }
+pfx-load = { path = "../load" }
+pfx-materials = { path = "../materials" }
+pfx-core = { path = "../core" }
+pfx-geom = { path = "../geom" }
+half = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+sha2 = "0.11"
+hex = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+gltf = { version = "1.4", default-features = false, features = ["names", "utils"] }
+block_compression = { version = "0.10", default-features = false, features = ["bc15", "bc7"] }
+
+[dev-dependencies]
+pfx-load = { path = "../load", features = ["fixture"] }
+pollster = "0.4"
+naga = { version = "27", features = ["wgsl-in"] }
+ktx2 = "0.5"

@@ -1,0 +1,19 @@
+package pfx-test:play@0.1.0;
+
+interface game {
+  seed: func() -> u64;
+}
+
+world play {
+  import game;
+  import pfx:mods/log@0.1.0;
+
+  export bump: func(by: u32) -> u32;
+  export roll: func() -> u64;
+  export chat: func(times: u32);
+  export mix: func(a: f64, b: f64, steps: u32) -> f64;
+  export nan-bits: func(bits: u64, op: u32) -> u64;
+  export burn: func(steps: u32) -> u32;
+  export grow: func(pages: u32) -> u32;
+  export fall: func(depth: u32) -> u32;
+}

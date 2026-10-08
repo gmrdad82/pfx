@@ -1,0 +1,28 @@
+use std::sync::atomic::{AtomicU32, Ordering};
+
+wit_bindgen::generate!({
+    world: "gameplay",
+    path: "../wit",
+});
+
+static TURNS: AtomicU32 = AtomicU32::new(0);
+
+struct Module;
+
+impl Guest for Module {
+    fn tick(_tick: u64) -> u32 {
+        TURNS.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn save() -> Vec<u8> {
+        TURNS.load(Ordering::Relaxed).to_le_bytes().to_vec()
+    }
+
+    fn restore(state: Vec<u8>) {
+        if let Ok(bytes) = <[u8; 4]>::try_from(state.as_slice()) {
+            TURNS.store(u32::from_le_bytes(bytes), Ordering::Relaxed);
+        }
+    }
+}
+
+export!(Module);

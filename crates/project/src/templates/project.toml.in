@@ -1,0 +1,13 @@
+format = 1
+
+[project]
+name = "{{name}}"
+scene = "content/first.scene.toml"
+
+[authoring.pfx]
+play = "content/first.scene.toml"
+select = "incoming"
+
+[authoring.pfx.screen]
+desktop = ["16:9"]
+deck = ["16:10"]

@@ -1,0 +1,15 @@
+format = 1
+
+materials = ["materials.toml"]
+
+[mesh.block]
+file = "meshes/block.gltf"
+id = "8w61sxa1we"
+
+# a unit block standing on its origin
+[[object]]
+name = "block"
+mesh = "block"
+at = [0.0, 0.5, 0.0]
+material = "clay"
+id = "960k3wpa4t"

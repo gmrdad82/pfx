@@ -1,0 +1,33 @@
+(component
+  (core module $Main
+    (func $leave (param $n i32) (result i32)
+      (block $b1 (result i32)
+        (block $b0 (result i32)
+          (drop (br_if 2 (i32.const 7) (i32.eqz (local.get $n))))
+          (br_table $b0 $b1 2 $b0 (i32.const 9) (i32.sub (local.get $n) (i32.const 1))))
+        (if (i32.eq (local.get $n) (i32.const 4))
+          (then (return (i32.const 40))))
+        (if (i32.eq (local.get $n) (i32.const 5))
+          (then (return_call $leave (i32.const 0))))
+        (i32.add (i32.const 1)))
+      (i32.add (i32.const 1000)))
+    (func $probe (param $n i32) (result i32)
+      (if (result i32) (i32.eqz (local.get $n))
+        (then (i32.const 0))
+        (else (i32.add (call $probe (i32.sub (local.get $n) (i32.const 1))) (i32.const 1)))))
+    (func (export "run") (param $k i32) (param $d i32) (result i32)
+      (local $i i32)
+      (local $acc i32)
+      (block $done
+        (loop $next
+          (br_if $done (i32.ge_u (local.get $i) (local.get $k)))
+          (local.set $acc
+            (i32.add (local.get $acc) (call $leave (i32.rem_u (local.get $i) (i32.const 6)))))
+          (local.set $i (i32.add (local.get $i) (i32.const 1)))
+          (br $next)))
+      (i32.add (local.get $acc) (call $probe (local.get $d))))
+  )
+  (core instance $main (instantiate $Main))
+  (func (export "run") (param "k" u32) (param "d" u32) (result u32)
+    (canon lift (core func $main "run")))
+)

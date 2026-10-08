@@ -1,0 +1,15 @@
+format = 1
+
+[materials.grid]
+base = [0.05, 0.05, 0.055]
+roughness = 0.9
+
+[materials.axis_x]
+base = [0.6, 0.05, 0.07]
+roughness = 0.6
+emission = [0.5, 0.03, 0.05]
+
+[materials.axis_z]
+base = [0.08, 0.2, 0.7]
+roughness = 0.6
+emission = [0.05, 0.15, 0.6]

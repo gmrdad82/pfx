@@ -1,0 +1,337 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+APP=pfx
+NEUTRAL=crates/editor/tests/scenes/room.scene.toml
+
+die() {
+  echo "rig: $*" >&2
+  exit 2
+}
+
+rig_path() {
+  local name=${1:?rig name required} dir
+  [[ $name =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "invalid rig name [$name]"
+  dir=$(realpath -m "$PWD/tmp/rig-$name")
+  case "$dir" in
+    "$PWD"/tmp/?*) ;;
+    *) die "the rig folder must sit under the tree tmp/, got [$dir]" ;;
+  esac
+  printf '%s\n' "$dir"
+}
+
+existing_rig() {
+  local rig
+  rig=$(rig_path "$1")
+  [[ -d $rig ]] || die "no rig named [$1]; expected $rig"
+  printf '%s\n' "$rig"
+}
+
+read_pid() {
+  local file=$1 label=$2 pid
+  [[ -f $file ]] || return 1
+  read -r pid < "$file"
+  [[ $pid =~ ^[0-9]+$ ]] || die "invalid $label pid [$pid]"
+  printf '%s\n' "$pid"
+}
+
+pid_is() {
+  local pid=$1 name=$2
+  [[ -r /proc/$pid/comm ]] && [[ $(<"/proc/$pid/comm") == "$name" ]]
+}
+
+in_rig() {
+  local pid=$1 rig=$2
+  [[ -r /proc/$pid/environ ]] || return 1
+  grep -zFxq "RIG=$rig" "/proc/$pid/environ" 2>/dev/null
+}
+
+pid_is_rig_app() {
+  pid_is "$1" "$APP" && in_rig "$1" "$2"
+}
+
+compositor_of() {
+  local rig=$1 name=cage
+  [[ -f $rig/compositor ]] && read -r name < "$rig/compositor"
+  printf '%s\n' "$name"
+}
+
+pid_is_rig_compositor() {
+  pid_is "$1" "$(compositor_of "$2")" && in_rig "$1" "$2"
+}
+
+pid_is_rig_launcher() {
+  pid_is "$1" unshare && in_rig "$1" "$2"
+}
+
+find_rig_pid() {
+  local comm=$1 rig=$2 pid found=""
+  while read -r pid; do
+    [[ -n $pid ]] || continue
+    in_rig "$pid" "$rig" && found=$pid
+  done < <(pgrep -x "$comm" || true)
+  printf '%s\n' "$found"
+}
+
+read_socket() {
+  local rig=$1 app_pid shell_socket socket
+  app_pid=$(read_pid "$rig/app.pid" "$APP") || die "missing $APP pid at $rig/app.pid"
+  pid_is_rig_app "$app_pid" "$rig" || die "$APP pid $app_pid is not running"
+  [[ -f $rig/wayland ]] || die "missing Wayland socket record at $rig/wayland"
+  [[ -f $rig/shell-wayland ]] || die "missing shell Wayland socket record at $rig/shell-wayland"
+  read -r shell_socket < "$rig/shell-wayland" || true
+  [[ ${WAYLAND_DISPLAY:-} == "$shell_socket" ]] ||
+    die "refusing caller Wayland display [${WAYLAND_DISPLAY:-}]; expected shell display [$shell_socket]"
+  read -r socket < "$rig/wayland"
+  [[ -n $socket ]] || die "empty Wayland socket record"
+  [[ $socket != "${WAYLAND_DISPLAY:-}" ]] || die "refusing the shell's Wayland display [$socket]"
+  printf '%s\n' "$socket"
+}
+
+compositors() {
+  echo $(( $(pgrep -c -x cage || true) + $(pgrep -c -x labwc || true) ))
+}
+
+wait_for_compositor_slot() {
+  local waited=0
+  local wait_limit=${RIG_SLOT_WAIT:-600} slots=${RIG_SLOTS:-4}
+  [[ $wait_limit =~ ^[0-9]+$ ]] || die "RIG_SLOT_WAIT must be a non-negative integer, got [$wait_limit]"
+  [[ $slots =~ ^[1-9][0-9]*$ ]] || die "RIG_SLOTS must be a positive integer, got [$slots]"
+  if (( $(compositors) >= slots )); then
+    echo "rig: $(compositors) compositors hold the ${slots} slots; waiting up to ${wait_limit}s for one"
+    while (( $(compositors) >= slots )); do
+      if (( waited >= wait_limit )); then
+        echo "rig: the ${slots} compositor slots are still held after ${waited}s; not starting" >&2
+        pgrep -a -x cage >&2 || true
+        pgrep -a -x labwc >&2 || true
+        exit 2
+      fi
+      sleep 5
+      waited=$((waited + 5))
+    done
+    echo "rig: a slot freed after ${waited}s"
+  fi
+}
+
+stop_recorded() {
+  local rig=$1 app_pid="" comp_pid="" launcher_pid="" attempt
+  app_pid=$(read_pid "$rig/app.pid" "$APP" 2>/dev/null || true)
+  comp_pid=$(read_pid "$rig/compositor.pid" compositor 2>/dev/null || true)
+  launcher_pid=$(read_pid "$rig/launcher.pid" launcher 2>/dev/null || true)
+
+  if [[ -n $app_pid ]] && pid_is_rig_app "$app_pid" "$rig"; then
+    kill "$app_pid" 2>/dev/null || true
+    for attempt in {1..100}; do
+      pid_is_rig_app "$app_pid" "$rig" || break
+      sleep 0.1
+    done
+    ! pid_is_rig_app "$app_pid" "$rig" || kill -9 "$app_pid" 2>/dev/null || true
+  fi
+  [[ -z $comp_pid ]] || ! pid_is_rig_compositor "$comp_pid" "$rig" || kill "$comp_pid" 2>/dev/null || true
+  [[ -z $launcher_pid ]] || ! pid_is_rig_launcher "$launcher_pid" "$rig" || kill "$launcher_pid" 2>/dev/null || true
+
+  for attempt in {1..100}; do
+    { [[ -z $app_pid ]] || ! pid_is_rig_app "$app_pid" "$rig"; } &&
+      { [[ -z $comp_pid ]] || ! pid_is_rig_compositor "$comp_pid" "$rig"; } &&
+      { [[ -z $launcher_pid ]] || ! pid_is_rig_launcher "$launcher_pid" "$rig"; } && break
+    sleep 0.1
+  done
+}
+
+check_scene() {
+  local scene=$1
+  [[ -n $scene ]] || die "usage: bin/rig up <scene.toml|neutral> <name>"
+  [[ $scene == neutral ]] && scene=$NEUTRAL
+  [[ -f $scene ]] || die "no scene at [$scene]"
+  realpath "$scene"
+}
+
+check_binary() {
+  local binary=$1 newer
+  [[ -x $binary ]] || die "build first; missing $binary: build-step pfx-build tmp/build.log -- 'cargo build --release --bin pfx'"
+  newer=$(find src crates -type f -newer "$binary" -not -path '*/tmp/*' -print -quit)
+  [[ -z $newer ]] || die "$binary is older than $newer; build it first: build-step pfx-build tmp/build.log -- 'cargo build --release --bin pfx'"
+}
+
+up() {
+  local scene=${1-}
+  local name=${2:?usage: bin/rig up <scene.toml|neutral> <name>}
+  local binary="$PWD/target/release/$APP"
+  local compositor=${RIG_COMPOSITOR:-cage}
+  local app_pid="" socket="" comp_pid="" launcher_pid="" attempt rig live
+
+  rig=$(rig_path "$name")
+  scene=$(check_scene "$scene")
+  check_binary "$binary"
+  [[ $compositor == cage || $compositor == labwc ]] || die "RIG_COMPOSITOR must be cage or labwc, got [$compositor]"
+
+  if [[ -f $rig/app.pid ]]; then
+    live=$(read_pid "$rig/app.pid" "$APP" 2>/dev/null || true)
+    [[ -z $live ]] || ! pid_is_rig_app "$live" "$rig" || die "rig [$name] is already up; bin/rig down $name first"
+  fi
+
+  wait_for_compositor_slot
+
+  export RIG=$rig
+  mkdir -p "$RIG/tmp" "$RIG/config" "$RIG/cache" "$RIG/state" "$RIG/data"
+  rm -rf "$RIG/scene"
+  cp -r "$(dirname "$scene")" "$RIG/scene"
+  rm -f "$RIG/app.pid" "$RIG/compositor.pid" "$RIG/launcher.pid" "$RIG/wayland"
+  printf '%s\n' 'pcm.!default { type null }' 'ctl.!default { type null }' > "$RIG/asound-null.conf"
+  printf '%s\n' "${WAYLAND_DISPLAY:-}" > "$RIG/shell-wayland"
+  printf '%s\n' "$compositor" > "$RIG/compositor"
+  printf '%s\n' "$scene" > "$RIG/source"
+  SCENE="$RIG/scene/$(basename "$scene")"
+  export APP_BINARY=$binary SCENE
+
+  cat > "$RIG/app.sh" <<'EOS'
+#!/bin/sh
+exec env TMPDIR=/tmp PFX_EDIT_PGPU=off PIPEWIRE_RUNTIME_DIR=/nonexistent PULSE_SERVER=/nonexistent ALSA_CONFIG_PATH="$RIG/asound-null.conf" XDG_CONFIG_HOME="$RIG/config" XDG_CACHE_HOME="$RIG/cache" XDG_STATE_HOME="$RIG/state" XDG_DATA_HOME="$RIG/data" "$APP_BINARY" edit "$SCENE"
+EOS
+  chmod +x "$RIG/app.sh"
+
+  if [[ $compositor == labwc ]]; then
+    mkdir -p "$RIG/labwc"
+    cat > "$RIG/labwc/rc.xml" <<'EOS'
+<?xml version="1.0"?>
+<labwc_config>
+  <windowRules>
+    <windowRule identifier="*" serverDecoration="no"/>
+  </windowRules>
+</labwc_config>
+EOS
+  fi
+
+  # shellcheck disable=SC2016 # The isolated inner shell expands the exported rig inputs.
+  if [[ $compositor == cage ]]; then
+    unshare -Urm sh -c 'case "$RIG" in "$PWD"/tmp/?*) ;; *) echo "rig: RIG must sit under the tree tmp/, got [$RIG]" >&2; exit 2;; esac; echo "$RIG" >"$RIG/tmp/.rig" && mount --bind "$RIG/tmp" /tmp && [ "$(cat /tmp/.rig)" = "$RIG" ] || { echo "rig: /tmp is not $RIG/tmp" >&2; exit 2; }; exec env WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_XWAYLAND=/nonexistent cage -- "$RIG/app.sh"' >"$RIG/rig.log" 2>&1 &
+  else
+    unshare -Urm sh -c 'case "$RIG" in "$PWD"/tmp/?*) ;; *) echo "rig: RIG must sit under the tree tmp/, got [$RIG]" >&2; exit 2;; esac; echo "$RIG" >"$RIG/tmp/.rig" && mount --bind "$RIG/tmp" /tmp && [ "$(cat /tmp/.rig)" = "$RIG" ] || { echo "rig: /tmp is not $RIG/tmp" >&2; exit 2; }; exec env WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_XWAYLAND=/nonexistent labwc -C "$RIG/labwc" -S "$RIG/app.sh"' >"$RIG/rig.log" 2>&1 &
+  fi
+  launcher_pid=$!
+  printf '%s\n' "$launcher_pid" > "$RIG/launcher.pid"
+
+  for ((attempt = 0; attempt < 600; attempt++)); do
+    comp_pid=$(find_rig_pid "$compositor" "$RIG")
+    app_pid=$(find_rig_pid "$APP" "$RIG")
+    if [[ -n $app_pid ]] && pid_is_rig_app "$app_pid" "$RIG"; then
+      socket=$(grep -aEo 'WAYLAND_DISPLAY=[^[:cntrl:]]+' "/proc/$app_pid/environ" 2>/dev/null | cut -d= -f2- || true)
+      [[ -n $socket ]] && break
+    fi
+    kill -0 "$launcher_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+
+  [[ -z $comp_pid ]] || printf '%s\n' "$comp_pid" > "$RIG/compositor.pid"
+  [[ -z $app_pid ]] || printf '%s\n' "$app_pid" > "$RIG/app.pid"
+
+  if [[ -z $comp_pid ]] || ! pid_is_rig_compositor "$comp_pid" "$RIG"; then
+    echo "rig: $compositor did not come up; $APP pid=${app_pid:-none}; socket=${socket:-none}; rig fault before product boot" >&2
+    tail -n 20 "$RIG/rig.log" >&2 || true
+    stop_recorded "$RIG"
+    exit 1
+  fi
+  if [[ -z $app_pid ]] || ! pid_is_rig_app "$app_pid" "$RIG" || [[ -z $socket ]]; then
+    echo "rig: $APP did not come up; app pid=${app_pid:-none}; socket=${socket:-none}; compositor pid=$comp_pid; product or launch fault" >&2
+    tail -n 20 "$RIG/rig.log" >&2 || true
+    stop_recorded "$RIG"
+    exit 1
+  fi
+  if [[ $socket == "${WAYLAND_DISPLAY:-}" ]]; then
+    echo "rig: discovered the shell's Wayland display [$socket]; refusing" >&2
+    stop_recorded "$RIG"
+    exit 2
+  fi
+
+  printf '%s\n' "$socket" > "$RIG/wayland"
+  printf '%s pid=%s\n%s pid=%s\nwayland=%s\nscene=%s\nrig=%s\n' "$compositor" "$comp_pid" "$APP" "$app_pid" "$socket" "$SCENE" "$RIG"
+}
+
+shot() {
+  local name=${1:?usage: bin/rig shot <name> <file>}
+  local file=${2:?usage: bin/rig shot <name> <file>}
+  local rig socket output
+  [[ $file =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "invalid capture name [$file]"
+  rig=$(existing_rig "$name")
+  socket=$(read_socket "$rig")
+  output="$rig/tmp/$file.png"
+  WAYLAND_DISPLAY=$socket grim "$output"
+  printf '%s\n' "$output"
+  magick identify "$output"
+}
+
+keys() {
+  local name=${1:?usage: bin/rig keys <name> <wtype args...>}
+  local rig socket
+  shift
+  (( $# > 0 )) || die "usage: bin/rig keys <name> <wtype args...>"
+  rig=$(existing_rig "$name")
+  socket=$(read_socket "$rig")
+  WAYLAND_DISPLAY=$socket wtype -k F24 -s 800 "$@"
+}
+
+pointer() {
+  local name=${1:?usage: bin/rig pointer <name> <wlrctl pointer args...>}
+  local rig socket
+  shift
+  (( $# > 0 )) || die "usage: bin/rig pointer <name> <wlrctl pointer args...>"
+  rig=$(existing_rig "$name")
+  [[ $(compositor_of "$rig") == labwc ]] ||
+    die "the pointer needs labwc, and rig [$name] runs cage; never run wlrctl by hand: RIG_COMPOSITOR=labwc bin/rig up ..."
+  socket=$(read_socket "$rig")
+  WAYLAND_DISPLAY=$socket wlrctl pointer "$@"
+}
+
+down() {
+  local name=${1:?usage: bin/rig down <name>}
+  local rig app_pid="" comp_pid="" launcher_pid="" live=0
+  rig=$(existing_rig "$name")
+  stop_recorded "$rig"
+
+  app_pid=$(read_pid "$rig/app.pid" "$APP" 2>/dev/null || true)
+  comp_pid=$(read_pid "$rig/compositor.pid" compositor 2>/dev/null || true)
+  launcher_pid=$(read_pid "$rig/launcher.pid" launcher 2>/dev/null || true)
+  if [[ -n $app_pid ]] && pid_is_rig_app "$app_pid" "$rig"; then
+    echo "rig: teardown left recorded $APP pid $app_pid running" >&2
+    live=1
+  fi
+  if [[ -n $comp_pid ]] && pid_is_rig_compositor "$comp_pid" "$rig"; then
+    echo "rig: teardown left recorded compositor pid $comp_pid running" >&2
+    live=1
+  fi
+  if [[ -n $launcher_pid ]] && pid_is_rig_launcher "$launcher_pid" "$rig"; then
+    echo "rig: teardown left recorded launcher pid $launcher_pid running" >&2
+    live=1
+  fi
+  (( live == 0 )) || exit 1
+  echo "rig: recorded processes for [$name] are gone"
+}
+
+ls_rigs() {
+  local rig app_pid comp_pid source name
+  for rig in "$PWD"/tmp/rig-*/; do
+    [[ -d $rig ]] || continue
+    rig=${rig%/}
+    [[ -f $rig/app.pid ]] || continue
+    app_pid=$(read_pid "$rig/app.pid" "$APP" 2>/dev/null || true)
+    [[ -n $app_pid ]] || continue
+    pid_is_rig_app "$app_pid" "$rig" || continue
+    comp_pid=$(read_pid "$rig/compositor.pid" compositor 2>/dev/null || true)
+    source=""
+    [[ -f $rig/source ]] && read -r source < "$rig/source"
+    name=${rig##*/rig-}
+    printf '%s\t%s pid=%s\t%s pid=%s\t%s\n' "$name" "$(compositor_of "$rig")" "${comp_pid:-none}" "$APP" "$app_pid" "$source"
+  done
+}
+
+case ${1-} in
+  up) shift; up "$@" ;;
+  shot) shift; shot "$@" ;;
+  keys) shift; keys "$@" ;;
+  pointer) shift; pointer "$@" ;;
+  down) shift; down "$@" ;;
+  ls) ls_rigs ;;
+  *) die "usage: bin/rig {up <scene.toml|neutral> <name>|shot <name> <file>|keys <name> <wtype args>|pointer <name> <wlrctl pointer args>|down <name>|ls}" ;;
+esac

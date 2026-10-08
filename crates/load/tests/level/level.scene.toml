@@ -1,0 +1,49 @@
+format = 1
+
+materials = ["materials.toml"]
+fallback = "grey"
+
+[mesh.block]
+file = "meshes/block.gltf"
+id = "5kxsnwjj6h"
+
+[[object]]
+name = "floor"
+mesh = "block"
+at = [0.0, -0.05, 0.0]
+scale = [12.0, 0.1, 6.0]
+material = "grey"
+id = "cmnfwawm9q"
+
+[[object]]
+name = "ledge"
+mesh = "block"
+at = [2.0, 0.5, -1.0]
+scale = [1.0, 1.0, 1.0]
+material = "stone"
+id = "q26p5y3fdh"
+
+[sky]
+kind = "analytic"
+turbidity = 3.0
+
+[sun]
+model = "daylight"
+hour = 15.0
+
+[camera]
+at = [0.0, 3.0, 9.0]
+look_at = [0.0, 1.0, 0.0]
+fov = 45.0
+
+# a side-view strip of ground with one post, behind the floor's middle
+[[tiles]]
+name = "ground"
+plane = "xy"
+origin = [-3.5, 0.0, -2.0]
+palette = { "#" = "prefabs/block.prefab.toml", "p" = "prefabs/post.prefab.toml" }
+rows = [
+  "....p...",
+  "##..####",
+]
+id = "t1gr0nd00a"

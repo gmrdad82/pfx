@@ -1,0 +1,12 @@
+[package]
+name = "pfx-editor-doc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Editor documents: dotted-path TOML patches with their inverses, text splices, one labelled undo history over any edit, and stamped saves"
+
+[dependencies]
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }

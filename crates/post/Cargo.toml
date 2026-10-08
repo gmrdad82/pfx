@@ -1,0 +1,27 @@
+[package]
+name = "pfx-post"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's post-processing: the shared finish chain and image styles, from cel shading and noir to neon and 1930s rubber hose"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+bytemuck = "1"
+toml = "0.9"
+pfx-gpu = { path = "../gpu" }
+pfx-materials = { path = "../materials" }
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+wgpu = { version = "=27.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "=27.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
+
+[dev-dependencies]
+pollster = "0.4"
+png = "0.18"
+naga = { version = "27.0.3", default-features = false, features = ["wgsl-in"] }
+half = "2.7.1"

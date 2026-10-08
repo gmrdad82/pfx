@@ -1,0 +1,25 @@
+[package]
+name = "pfx-run"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's process plumbing for its renderers: pgpu and the build slice, ending children cleanly, job progress, the pinned ffmpeg"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+sha2 = "0.11"
+hex = "0.4"
+serde_json = "1"
+chrono = "0.4"
+fs2 = "0.4"
+ureq = "3"
+pfx-report = { git = "https://github.com/gmrdad82/pfx-report", tag = "v0.1.0" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+rustix = { version = "1", features = ["fs", "process"] }
+signal-hook = "0.3"

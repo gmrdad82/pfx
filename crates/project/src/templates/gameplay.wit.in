@@ -1,0 +1,7 @@
+package game:gameplay@0.1.0;
+
+world gameplay {
+  export tick: func(tick: u64) -> u32;
+  export save: func() -> list<u8>;
+  export restore: func(state: list<u8>);
+}

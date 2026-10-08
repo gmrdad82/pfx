@@ -1,0 +1,26 @@
+[package]
+name = "pfx-editor-viewport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "An egui viewport for pfx scenes: the engine's live frame in egui, an orbit camera, picking, a move, rotate and scale gizmo, and scene edits on the shared undo history"
+
+[dependencies]
+egui = { version = "=0.33.3", default-features = false }
+egui-wgpu = { version = "=0.33.3", default-features = false }
+glam = "0.33"
+pfx-gpu = { path = "../gpu" }
+pfx-live = { path = "../live" }
+pfx-load = { path = "../load" }
+pfx-editor-doc = { path = "../editor-doc" }
+pfx-editor-shell = { path = "../editor-shell" }
+pfx-editor-style = { path = "../editor-style" }
+
+[dev-dependencies]
+clap = { version = "4.6", features = ["derive"] }
+pfx-editor-style = { path = "../editor-style", features = ["fixture"] }
+pfx-editor-toml = { path = "../editor-toml" }
+png = "0.18"

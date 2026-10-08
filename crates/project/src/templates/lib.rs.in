@@ -1,0 +1,37 @@
+pub const NAME: &str = "{{name}}";
+
+#[derive(Default)]
+pub struct {{type}};
+
+impl {{type}} {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl pfx_game::Game for {{type}} {
+    fn start(&mut self, _world: &mut pfx_game::World) {}
+
+    fn tick(
+        &mut self,
+        _world: &mut pfx_game::World,
+        _tick: &pfx_game::Tick,
+        _input: &pfx_game::Input,
+    ) {
+    }
+}
+
+pub fn project() -> Result<pfx_project::Project, String> {
+    pfx_project::Project::locate(env!("CARGO_MANIFEST_DIR"))
+}
+
+pub fn config(project: &pfx_project::Project) -> Result<pfx_game::Config, String> {
+    let mut config = pfx_game::Config::new(NAME, env!("CARGO_PKG_VERSION"), project.play())
+        .exposure(pfx_game::Exposure::Fixed(1.0));
+    if let Some(screen) = project.screen() {
+        let policy = pfx_game::ScreenPolicy::from_table(screen)
+            .map_err(|error| format!("project.toml: [authoring.pfx.screen]: {error}"))?;
+        config = config.screen(policy);
+    }
+    Ok(config)
+}

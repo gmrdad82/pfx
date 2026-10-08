@@ -1,0 +1,20 @@
+[package]
+name = "pfx-editor-toml"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "An embedded egui TOML source panel: a tolerant lexer, highlighted live editing that applies checked splices onto the shared undo history, a diff with revert, and Open in editor"
+
+[dependencies]
+egui = { version = "=0.33.3", default-features = false }
+pfx-editor-doc = { path = "../editor-doc" }
+pfx-editor-style = { path = "../editor-style" }
+similar = { version = "2", default-features = false, features = ["text"] }
+toml_edit = { version = "0.25", default-features = false, features = ["parse", "display"] }
+
+[dev-dependencies]
+pfx-editor-style = { path = "../editor-style", features = ["fixture"] }
+pfx-editor-shell = { path = "../editor-shell" }

@@ -1,0 +1,27 @@
+[package]
+name = "pfx-gpu"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's GPU setup: device and adapter, offscreen targets and readback, GPU timing"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+winit = { version = "=0.30.13", optional = true }
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+wgpu = { version = "=27.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "=27.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
+
+[features]
+window = ["dep:winit"]
+
+[dev-dependencies]
+pollster = "0.4"
+winit = "=0.30.13"

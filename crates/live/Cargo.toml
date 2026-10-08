@@ -1,0 +1,53 @@
+[package]
+name = "pfx-live"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's live renderer: a rasterizer for a steady 60 fps at 4K, with sun shadows, baked light and temporal anti-aliasing"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+pfx-gpu = { path = "../gpu" }
+pfx-text = { path = "../text" }
+pfx-materials = { path = "../materials" }
+pfx-core = { path = "../core" }
+pfx-physics = { path = "../physics" }
+pfx-post = { path = "../post" }
+pfx-geom = { path = "../geom" }
+pfx-bake = { path = "../bake" }
+pfx-load = { path = "../load" }
+half = "2.7.1"
+bytemuck = { version = "1", features = ["derive"] }
+sha2 = "0.11"
+egui = { version = "=0.33.3", default-features = false, optional = true }
+egui-wgpu = { version = "=0.33.3", default-features = false, optional = true }
+pfx-input = { path = "../input", default-features = false, optional = true }
+pfx-theme = { path = "../theme", optional = true }
+
+[features]
+dev-hud = ["dep:egui", "dep:egui-wgpu", "dep:pfx-input", "dep:pfx-theme"]
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+wgpu = { version = "=27.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
+
+[target.'cfg(not(target_os = "windows"))'.dev-dependencies]
+pfx-run = { path = "../run" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "=27.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
+
+[dev-dependencies]
+pfx-text = { path = "../text", features = ["fixture"] }
+pfx-core = { path = "../core", features = ["fixture"] }
+pfx-load = { path = "../load", features = ["fixture"] }
+pollster = "0.4"
+naga = { version = "27.0.3", default-features = false, features = ["wgsl-in"] }
+png = "0.17"
+serde_json = "1"
+pfx-trace = { path = "../trace" }
+
+[[test]]
+name = "dev_hud"
+required-features = ["dev-hud"]

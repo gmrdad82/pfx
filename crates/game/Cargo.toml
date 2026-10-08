@@ -1,0 +1,38 @@
+[package]
+name = "pfx-game"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's game runtime: the one call a game's main makes, owning the window, pacing, input, sound, frame stats and the fixed tick, with a launcher for the game's own commands"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+tools = []
+dev-hud = ["pfx-play/dev-hud", "pfx-live/dev-hud"]
+steam = ["dep:pfx-steam"]
+modules = ["dep:pfx-mod"]
+
+[dependencies]
+pfx-core = { path = "../core" }
+pfx-gpu = { path = "../gpu", features = ["window"] }
+pfx-input = { path = "../input" }
+pfx-live = { path = "../live" }
+pfx-load = { path = "../load" }
+pfx-play = { path = "../play" }
+pfx-sound = { path = "../sound" }
+pfx-text = { path = "../text" }
+pfx-mod = { path = "../mod", optional = true }
+pfx-steam = { path = "../steam", default-features = false, features = ["input"], optional = true }
+winit = "=0.30.13"
+pollster = "0.4"
+
+[dev-dependencies]
+pfx-text = { path = "../text", features = ["fixture"] }
+serde_json = "1"
+toml = "0.9"
+
+[[example]]
+name = "empty"
+path = "examples/empty/main.rs"

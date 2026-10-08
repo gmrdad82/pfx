@@ -1,0 +1,14 @@
+[package]
+name = "pfx-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's core: springs and motion, daylight and the sun, deterministic time, and the refusal every command line prints for input it cannot parse"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[features]
+fixture = []

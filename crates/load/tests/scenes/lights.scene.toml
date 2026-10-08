@@ -1,0 +1,20 @@
+format = 1
+
+[[light]]
+name = "warm"
+position = [-1.6, 2.2, 1.4]
+color = [1.0, 0.82, 0.62]
+intensity = 6.0
+radius = 0.05
+range = 8.0
+id = "13cs3nmjxv"
+
+[[light]]
+name = "cool"
+position = [1.8, 1.6, 1.2]
+color = [0.62, 0.75, 1.0]
+intensity = 3.0
+radius = 0.05
+range = 8.0
+shadow = false
+id = "a7pncq7x29"

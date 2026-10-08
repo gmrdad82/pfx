@@ -1,0 +1,19 @@
+[package]
+name = "pfx-geom"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's geometry: levels of detail by projected error, analytic shapes as meshes, deformable surfaces that carry their content, SVG marks as bevelled solids and icon parts fused through a distance field"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+i_overlay = { version = "=9.0.0", default-features = false }
+lyon_tessellation = "=1.0.22"
+meshopt = "=0.6.2"
+roxmltree = "=0.21.1"
+svgtypes = "=0.16.1"
+
+[dev-dependencies]
+naga = { version = "27.0.3", default-features = false, features = ["wgsl-in"] }

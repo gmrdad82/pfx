@@ -1,0 +1,23 @@
+[package]
+name = "pfx-materials"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's materials: one physically based description shared by the live renderer and the path tracer, ageing included"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+
+[dev-dependencies]
+pollster = "0.4"
+
+[target.'cfg(not(target_os = "windows"))'.dev-dependencies]
+wgpu = { version = "=27.0.1", default-features = false, features = ["std", "wgsl", "vulkan"] }
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+wgpu = { version = "=27.0.1", default-features = false, features = ["std", "wgsl", "dx12", "vulkan"] }

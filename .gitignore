@@ -1,0 +1,16 @@
+/target
+/tmp
+/crates/*/target
+/crates/*/tmp
+/.dev
+/AGENTS.md
+/CLAUDE.md
+/HANDOVER.md
+/CONVENTIONS.md
+/ROADMAP.md
+/DESIGN.md
+/pito-app.toml
+/prompts
+/dev
+/brand
+/docs/adopt

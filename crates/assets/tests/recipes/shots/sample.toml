@@ -1,0 +1,16 @@
+[shots.shapes]
+line = "The sample icons in a row, turning"
+seconds = 2.0
+closure = "palindrome"
+
+[[shots.shapes.assets]]
+use = "icon:sample:*"
+layout = "line"
+
+[[shots.shapes.keys]]
+at = 0.0
+turn = -15.0
+
+[[shots.shapes.keys]]
+at = 2.0
+turn = 15.0

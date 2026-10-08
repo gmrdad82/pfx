@@ -1,0 +1,26 @@
+format = 1
+
+materials = ["content/materials/incoming.materials.toml"]
+
+[mesh.badge]
+file = "content/meshes/badge.glb"
+
+[mesh.wordmark]
+file = "content/meshes/wordmark.glb"
+
+[[object]]
+name = "badge"
+mesh = "badge"
+at = [-0.5459, 0.0, -0.002]
+
+[[object]]
+name = "wordmark"
+mesh = "wordmark"
+at = [0.0691, -0.165, -0.002]
+
+[text.version]
+text = "{{tag}}"
+font = "content/fonts/IBMPlexMono-Regular.ttf"
+size = 0.075
+color = [0.41145, 0.35632, 0.52681, 1.0]
+at = [0.909, -0.24, 0.0]

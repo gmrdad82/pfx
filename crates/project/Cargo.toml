@@ -1,0 +1,19 @@
+[package]
+name = "pfx-project"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's projects: a game's project.toml, its scenes and content folders, and pfx new's scaffold of a game repo"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+scaffold = ["dep:pfx-scene"]
+
+[dependencies]
+toml = "0.9"
+pfx-scene = { git = "https://github.com/gmrdad82/pfx-scene", tag = "v0.1.0", optional = true }
+
+[dev-dependencies]
+pfx-mod = { path = "../mod" }

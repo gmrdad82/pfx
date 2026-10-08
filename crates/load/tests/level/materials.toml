@@ -1,0 +1,17 @@
+format = 1
+
+[materials.grey]
+base = [0.5, 0.5, 0.5]
+roughness = 0.8
+id = "07ev0q8cj0"
+
+[materials.clay]
+base = [0.7, 0.32, 0.22]
+roughness = 0.9
+specular = 0.02
+id = "j8z1wag6vs"
+
+[materials.stone]
+base = [0.42, 0.44, 0.46]
+roughness = 0.7
+id = "8r275fg6b5"

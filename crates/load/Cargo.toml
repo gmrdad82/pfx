@@ -1,0 +1,30 @@
+[package]
+name = "pfx-load"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's asset loading: meshes, images, HDR skies and fonts, shipped with the product and cached"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+gltf = { version = "1.4", default-features = false, features = ["names", "utils", "extras"] }
+png = "0.18"
+sha2 = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+toml_edit = "0.25"
+pfx-scene = { git = "https://github.com/gmrdad82/pfx-scene", tag = "v0.1.0" }
+notify = "8.2"
+pfx-core = { path = "../core" }
+pfx-materials = { path = "../materials" }
+pfx-post = { path = "../post" }
+pfx-text = { path = "../text" }
+
+[features]
+fixture = ["pfx-core/fixture"]
+
+[dev-dependencies]
+pfx-core = { path = "../core", features = ["fixture"] }

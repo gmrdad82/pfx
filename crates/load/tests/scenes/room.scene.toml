@@ -1,0 +1,99 @@
+format = 1
+
+include = ["lights.scene.toml"]
+materials = ["materials.toml"]
+fallback = "grey"
+
+[mesh.block]
+file = "block.gltf"
+id = "jvp1bak1kx"
+
+[mesh.pillar]
+file = "pillar.gltf"
+node = "Pillar"
+id = "6yp2dc01gr"
+
+[mesh.pillar.nodes.Cap]
+material = "metal"
+
+[mesh.panel]
+file = "panel.gltf"
+id = "jhq72f5by0"
+
+[[object]]
+name = "floor"
+mesh = "block"
+at = [0.0, -0.05, 0.0]
+scale = [6.0, 0.1, 6.0]
+material = "grey"
+id = "5wgxc2j4q7"
+
+[[object]]
+name = "wall"
+mesh = "block"
+at = [0.0, 1.5, -2.0]
+scale = [6.0, 3.0, 0.1]
+material = "stone"
+id = "ce6yhxch3p"
+
+[[object]]
+name = "crate"
+mesh = "block"
+at = [-0.9, 0.35, 0.0]
+rotate = [0.0, 25.0, 0.0]
+scale = 0.7
+id = "vnrkf8pd3j"
+
+[[object]]
+name = "left pillar"
+mesh = "pillar"
+at = [0.6, 0.0, -0.6]
+id = "nb8svewvzs"
+
+[[object]]
+name = "right pillar"
+mesh = "pillar"
+at = [1.4, 0.0, -0.6]
+materials = { Pillar = "blue" }
+id = "7z24w16eak"
+
+[[object]]
+name = "screen"
+mesh = "panel"
+at = [0.0, 1.4, -1.94]
+scale = [1.6, 0.8, 1.0]
+content = "screen"
+id = "w61kc2vp5k"
+
+[content.screen]
+image = "screen.png"
+id = "8aybh78pph"
+
+[sky]
+kind = "room"
+
+[sky.room]
+width = 64
+floor = [0.18, 0.16, 0.14]
+wall = [0.3, 0.3, 0.32]
+ceiling = [0.5, 0.5, 0.52]
+
+[[sky.room.lights]]
+name = "window"
+az = -40.0
+el = 25.0
+width = 40.0
+height = 30.0
+power = 6.0
+color = [1.0, 0.95, 0.88]
+
+[sun]
+model = "authored"
+toward = [-0.4, 0.8, 0.45]
+color = [1.0, 0.92, 0.8]
+irradiance = 2.0
+
+[camera]
+at = [0.0, 1.4, 4.2]
+look_at = [0.0, 0.7, 0.0]
+fov = 40.0

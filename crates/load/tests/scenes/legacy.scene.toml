@@ -1,0 +1,29 @@
+# a format 0 scene, kept to prove the in-memory migration
+include = ["lights.scene.toml"]
+materials = ["materials.toml"]
+fallback = "grey"
+
+[mesh.block]
+file = "block.gltf"
+
+[[object]]
+name = "floor"
+mesh = "block"
+at = [0.0, -0.05, 0.0]
+scale = [6.0, 0.1, 6.0]
+material = "grey"
+
+[[object]]
+name = "crate"
+mesh = "block"
+at = [-0.9, 0.35, 0.0]
+scale = 0.7 # small
+id = 7
+
+[body.crate]
+restitution = 0.4
+
+[camera]
+at = [0.0, 1.4, 4.2]
+look_at = [0.0, 0.7, 0.0]
+fov = 40.0

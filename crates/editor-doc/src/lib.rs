@@ -1,0 +1,20 @@
+pub mod comment;
+pub mod edit;
+pub mod error;
+pub mod files;
+pub mod group;
+pub mod history;
+pub mod patch;
+pub mod splice;
+pub mod stamp;
+
+pub use comment::toggle_comment;
+pub use edit::{Caret, Edit, downcast};
+pub use error::DocError;
+pub use files::{File, Files, Format};
+pub use group::Group;
+pub use history::{Changed, DEPTH, GAP, History};
+pub use patch::{Key, Op, Replaced, TomlPatch, edit as edit_doc, parse_path, path_text, value_at};
+pub use splice::{TYPING, TextSplice};
+pub use stamp::{Disk, Seen, Stamp};
+pub use toml_edit;

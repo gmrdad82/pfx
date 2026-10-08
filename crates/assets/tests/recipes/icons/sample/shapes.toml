@@ -1,0 +1,15 @@
+[[icon]]
+name = "dot"
+
+[[icon.parts]]
+kind = "ball"
+at = [0.0, 0.0]
+r = 0.4
+
+[[icon]]
+name = "ring"
+
+[[icon.parts]]
+kind = "torus"
+major = 0.5
+minor = 0.1

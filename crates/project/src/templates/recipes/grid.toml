@@ -1,0 +1,172 @@
+# A floor grid of one metre squares, ten by ten, with the X axis in red and the Z axis in blue through the origin; build with manfred build.
+manfred = 1
+name = "pfx-grid"
+seed = 7
+
+[[object]]
+name = "x-5"
+kind = "plane"
+at = [-5.0, 0.0, 0.0]
+size = [0.02, 10.0]
+material = "grid"
+
+[[object]]
+name = "z-5"
+kind = "plane"
+at = [0.0, 0.0, -5.0]
+size = [10.0, 0.02]
+material = "grid"
+
+[[object]]
+name = "x-4"
+kind = "plane"
+at = [-4.0, 0.0, 0.0]
+size = [0.02, 10.0]
+material = "grid"
+
+[[object]]
+name = "z-4"
+kind = "plane"
+at = [0.0, 0.0, -4.0]
+size = [10.0, 0.02]
+material = "grid"
+
+[[object]]
+name = "x-3"
+kind = "plane"
+at = [-3.0, 0.0, 0.0]
+size = [0.02, 10.0]
+material = "grid"
+
+[[object]]
+name = "z-3"
+kind = "plane"
+at = [0.0, 0.0, -3.0]
+size = [10.0, 0.02]
+material = "grid"
+
+[[object]]
+name = "x-2"
+kind = "plane"
+at = [-2.0, 0.0, 0.0]
+size = [0.02, 10.0]
+material = "grid"
+
+[[object]]
+name = "z-2"
+kind = "plane"
+at = [0.0, 0.0, -2.0]
+size = [10.0, 0.02]
+material = "grid"
+
+[[object]]
+name = "x-1"
+kind = "plane"
+at = [-1.0, 0.0, 0.0]
+size = [0.02, 10.0]
+material = "grid"
+
+[[object]]
+name = "z-1"
+kind = "plane"
+at = [0.0, 0.0, -1.0]
+size = [10.0, 0.02]
+material = "grid"
+
+[[object]]
+name = "x+1"
+kind = "plane"
+at = [1.0, 0.0, 0.0]
+size = [0.02, 10.0]
+material = "grid"
+
+[[object]]
+name = "z+1"
+kind = "plane"
+at = [0.0, 0.0, 1.0]
+size = [10.0, 0.02]
+material = "grid"
+
+[[object]]
+name = "x+2"
+kind = "plane"
+at = [2.0, 0.0, 0.0]
+size = [0.02, 10.0]
+material = "grid"
+
+[[object]]
+name = "z+2"
+kind = "plane"
+at = [0.0, 0.0, 2.0]
+size = [10.0, 0.02]
+material = "grid"
+
+[[object]]
+name = "x+3"
+kind = "plane"
+at = [3.0, 0.0, 0.0]
+size = [0.02, 10.0]
+material = "grid"
+
+[[object]]
+name = "z+3"
+kind = "plane"
+at = [0.0, 0.0, 3.0]
+size = [10.0, 0.02]
+material = "grid"
+
+[[object]]
+name = "x+4"
+kind = "plane"
+at = [4.0, 0.0, 0.0]
+size = [0.02, 10.0]
+material = "grid"
+
+[[object]]
+name = "z+4"
+kind = "plane"
+at = [0.0, 0.0, 4.0]
+size = [10.0, 0.02]
+material = "grid"
+
+[[object]]
+name = "x+5"
+kind = "plane"
+at = [5.0, 0.0, 0.0]
+size = [0.02, 10.0]
+material = "grid"
+
+[[object]]
+name = "z+5"
+kind = "plane"
+at = [0.0, 0.0, 5.0]
+size = [10.0, 0.02]
+material = "grid"
+
+[[object]]
+name = "axis_x"
+kind = "plane"
+at = [0.0, 0.001, 0.0]
+size = [10.0, 0.035]
+material = "axis_x"
+
+[[object]]
+name = "axis_z"
+kind = "plane"
+at = [0.0, 0.001, 0.0]
+size = [0.035, 10.0]
+material = "axis_z"
+
+[materials.grid]
+base = [0.05, 0.05, 0.055]
+roughness = 0.9
+
+[materials.axis_x]
+base = [0.6, 0.05, 0.07]
+roughness = 0.6
+emission = [0.5, 0.03, 0.05]
+
+[materials.axis_z]
+base = [0.08, 0.2, 0.7]
+roughness = 0.6
+emission = [0.05, 0.15, 0.6]

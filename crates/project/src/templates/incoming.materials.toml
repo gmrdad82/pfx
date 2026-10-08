@@ -1,0 +1,50 @@
+format = 1
+
+[materials.dome]
+family = "lacquer"
+base = [0.01149, 0.00418, 0.05381]
+roughness = 0.3
+clearcoat = 0.4
+emission = [0.07658, 0.02789, 0.35869]
+
+[materials.lime]
+family = "lacquer"
+base = [0.09258, 0.13071, 0.00656]
+roughness = 0.25
+clearcoat = 0.4
+emission = [0.61721, 0.87137, 0.04374]
+
+[materials.lines]
+family = "lacquer"
+base = [0.03286, 0.02524, 0.06356]
+roughness = 0.3
+clearcoat = 0.4
+emission = [0.21905, 0.16826, 0.42372]
+
+[materials.tile]
+family = "lacquer"
+base = [0.01229, 0.00972, 0.02122]
+roughness = 0.45
+clearcoat = 0.4
+emission = [0.0, 0.0, 0.0]
+
+[materials.violet]
+family = "lacquer"
+base = [0.06172, 0.05345, 0.07902]
+roughness = 0.311
+clearcoat = 0.4
+emission = [0.41145, 0.35632, 0.52681]
+
+[materials.white]
+family = "lacquer"
+base = [0.11954, 0.11714, 0.12141]
+roughness = 0.26
+clearcoat = 0.4
+emission = [0.79691, 0.78093, 0.80942]
+
+[materials.wordmark]
+family = "lacquer"
+base = [0.84, 0.83, 0.83]
+roughness = 0.3
+clearcoat = 0.4
+emission = [0.0, 0.0, 0.0]

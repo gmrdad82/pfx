@@ -1,0 +1,21 @@
+[package]
+name = "pfx-editor-shell"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "An egui editor's window host on the pfx engine's GPU, and an offscreen shot harness driven by a typed input script"
+
+[dependencies]
+egui = { version = "=0.33.3", default-features = false }
+egui-wgpu = { version = "=0.33.3", default-features = false }
+egui-winit = { version = "=0.33.3", default-features = false, features = ["wayland", "clipboard"] }
+pfx-editor-style = { path = "../editor-style" }
+pfx-gpu = { path = "../gpu", features = ["window"] }
+png = "0.18"
+serde_json = "1"
+
+[dev-dependencies]
+pfx-editor-style = { path = "../editor-style", features = ["fixture"] }

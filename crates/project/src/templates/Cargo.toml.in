@@ -1,0 +1,19 @@
+[package]
+name = "{{name}}"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = ["tools"]
+tools = ["pfx-game/tools", "dep:pfx-editor"]
+
+[dependencies]
+pfx-game = { git = "{{source}}", tag = "{{tag}}" }
+pfx-project = { git = "{{source}}", tag = "{{tag}}" }
+pfx-editor = { git = "{{source}}", tag = "{{tag}}", optional = true }
+
+[dev-dependencies]
+pfx-gpu = { git = "{{source}}", tag = "{{tag}}" }
+png = "0.18"
+pollster = "0.4"

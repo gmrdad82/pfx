@@ -1,0 +1,110 @@
+(component
+  (import "pfx-test:play/game@0.1.0" (instance $game
+    (export "seed" (func (result u64)))
+  ))
+  (import "pfx:mods/log@0.1.0" (instance $log
+    (export "line" (func (param "text" string)))
+  ))
+  (core module $Memory
+    (memory (export "memory") 1)
+  )
+  (core instance $memory (instantiate $Memory))
+  (core func $seed (canon lower (func $game "seed")))
+  (core func $line (canon lower (func $log "line") (memory $memory "memory")))
+  (core instance $host
+    (export "seed" (func $seed))
+    (export "line" (func $line))
+    (export "memory" (memory $memory "memory"))
+  )
+  (core module $Main
+    (import "host" "seed" (func $seed (result i64)))
+    (import "host" "line" (func $line (param i32 i32)))
+    (import "host" "memory" (memory 1))
+    (global $count (mut i32) (i32.const 0))
+    (data (i32.const 16) "hello from a mod")
+    (func (export "bump") (param $by i32) (result i32)
+      (global.set $count (i32.add (global.get $count) (local.get $by)))
+      (global.get $count))
+    (func (export "roll") (result i64)
+      (i64.xor (call $seed) (i64.extend_i32_u (global.get $count))))
+    (func (export "chat") (param $times i32)
+      (block $done
+        (loop $next
+          (br_if $done (i32.eqz (local.get $times)))
+          (call $line (i32.const 16) (i32.const 16))
+          (local.set $times (i32.sub (local.get $times) (i32.const 1)))
+          (br $next))))
+    (func (export "mix") (param $a f64) (param $b f64) (param $steps i32) (result f64)
+      (block $done
+        (loop $next
+          (br_if $done (i32.eqz (local.get $steps)))
+          (local.set $a
+            (f64.add
+              (f64.add
+                (f64.mul (local.get $a) (f64.const 0.75))
+                (f64.mul (local.get $b) (f64.const 0.25)))
+              (f64.mul (f64.sqrt (f64.abs (local.get $a))) (f64.const 0.125))))
+          (local.set $b
+            (f64.add
+              (f64.div (local.get $b) (f64.add (f64.const 1) (f64.abs (local.get $a))))
+              (f64.promote_f32 (f32.mul (f32.demote_f64 (local.get $a)) (f32.const 0.5)))))
+          (local.set $steps (i32.sub (local.get $steps) (i32.const 1)))
+          (br $next)))
+      (f64.add (local.get $a) (local.get $b)))
+    (func (export "nan-bits") (param $bits i64) (param $op i32) (result i64)
+      (local $x f64)
+      (local $r f64)
+      (local.set $x (f64.reinterpret_i64 (local.get $bits)))
+      (local.set $r (local.get $x))
+      (if (i32.eq (local.get $op) (i32.const 0))
+        (then (local.set $r (f64.mul (local.get $x) (f64.const 1)))))
+      (if (i32.eq (local.get $op) (i32.const 1))
+        (then (local.set $r
+          (f64.div
+            (f64.sub (local.get $x) (local.get $x))
+            (f64.sub (local.get $x) (local.get $x))))))
+      (if (i32.eq (local.get $op) (i32.const 2))
+        (then (local.set $r (f64.sqrt (local.get $x)))))
+      (if (i32.eq (local.get $op) (i32.const 3))
+        (then (local.set $r
+          (f64.promote_f32 (f32.add (f32.demote_f64 (local.get $x)) (f32.const 1))))))
+      (if (i32.eq (local.get $op) (i32.const 4))
+        (then (local.set $r (f64.min (local.get $x) (f64.const 0)))))
+      (if (i32.eq (local.get $op) (i32.const 5))
+        (then (local.set $r (f64.add (local.get $x) (f64.const 1)))))
+      (i64.reinterpret_f64 (local.get $r)))
+    (func (export "burn") (param $steps i32) (result i32)
+      (local $h i32)
+      (block $done
+        (loop $next
+          (br_if $done (i32.eqz (local.get $steps)))
+          (local.set $h
+            (i32.add (i32.mul (local.get $h) (i32.const 31)) (local.get $steps)))
+          (local.set $steps (i32.sub (local.get $steps) (i32.const 1)))
+          (br $next)))
+      (local.get $h))
+    (func (export "grow") (param $pages i32) (result i32)
+      (memory.grow (local.get $pages)))
+    (func $fall (export "fall") (param $depth i32) (result i32)
+      (if (i32.eqz (local.get $depth))
+        (then unreachable))
+      (i32.add (call $fall (i32.sub (local.get $depth) (i32.const 1))) (i32.const 1)))
+  )
+  (core instance $main (instantiate $Main (with "host" (instance $host))))
+  (func (export "bump") (param "by" u32) (result u32)
+    (canon lift (core func $main "bump")))
+  (func (export "roll") (result u64)
+    (canon lift (core func $main "roll")))
+  (func (export "chat") (param "times" u32)
+    (canon lift (core func $main "chat")))
+  (func (export "mix") (param "a" f64) (param "b" f64) (param "steps" u32) (result f64)
+    (canon lift (core func $main "mix")))
+  (func (export "nan-bits") (param "bits" u64) (param "op" u32) (result u64)
+    (canon lift (core func $main "nan-bits")))
+  (func (export "burn") (param "steps" u32) (result u32)
+    (canon lift (core func $main "burn")))
+  (func (export "grow") (param "pages" u32) (result u32)
+    (canon lift (core func $main "grow")))
+  (func (export "fall") (param "depth" u32) (result u32)
+    (canon lift (core func $main "fall")))
+)

@@ -1,0 +1,36 @@
+format = 1
+
+[materials.grey]
+base = [0.5, 0.5, 0.5]
+roughness = 0.8
+id = "jb3t50pg50"
+
+[materials.clay]
+base = [0.7, 0.32, 0.22]
+roughness = 0.9
+specular = 0.02
+id = "krxssptzas"
+
+[materials.stone]
+base = [0.42, 0.44, 0.46]
+roughness = 0.7
+id = "n7798yae8m"
+
+[materials.metal]
+base = [0.9, 0.88, 0.82]
+roughness = 0.3
+metalness = 1.0
+id = "f4ypmfa8w3"
+
+[materials.blue]
+base = [0.15, 0.25, 0.7]
+roughness = 0.5
+id = "4a39dm2aws"
+
+[materials.screen]
+base = [0.02, 0.02, 0.02]
+roughness = 0.4
+id = "rwqfr6rjjc"
+
+[materials.screen.content_layer]
+slot = 0

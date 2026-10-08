@@ -1,0 +1,18 @@
+format = 1
+
+[materials.grey]
+base = [0.5, 0.5, 0.5]
+roughness = 0.8
+
+[materials.stone]
+base = [0.42, 0.44, 0.46]
+roughness = 0.7
+
+[materials.clay]
+base = [0.7, 0.32, 0.22]
+roughness = 0.9
+specular = 0.02
+
+[materials.blue]
+base = [0.15, 0.25, 0.7]
+roughness = 0.5

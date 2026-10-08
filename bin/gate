@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -uo pipefail
+cd "$(dirname "$0")/.." || exit 2
+
+steam_alone() {
+  local out
+  out=$(cargo tree -i pfx-steam --workspace -e normal,build,dev --prefix none 2>/dev/null)
+  ! printf '%s\n' "$out" | grep -Ev "^pfx-steam( |$)"
+}
+
+fails=()
+step() {
+  local name=$1
+  shift
+  echo "gate: $name"
+  if ! "$@"; then
+    fails+=("$name")
+  fi
+}
+
+step fmt cargo fmt --all --check
+step clippy cargo clippy --workspace --all-targets -- -D warnings
+step build cargo build -p pfx --bins --examples
+step unit-tests cargo test --workspace --lib --bins
+step agnostic cargo test -q --test agnostic
+step licences cargo test -q --test licences
+step steam-alone steam_alone
+if [ ${#fails[@]} -gt 0 ]; then
+  echo "gate: RED, failed: ${fails[*]}"
+  exit 1
+fi
+echo "gate: green"

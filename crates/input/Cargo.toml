@@ -1,0 +1,29 @@
+[package]
+name = "pfx-input"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's input: keyboard, mouse and controllers behind one action map, controller-family glyphs, rumble and input recording"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.11"
+pfx-gpu = { path = "../gpu", default-features = false }
+pfx-text = { path = "../text" }
+winit = { version = "=0.30.13", optional = true }
+gilrs = { version = "=0.11.2", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_UI_Input_KeyboardAndMouse"] }
+
+[features]
+default = ["winit", "gilrs"]
+winit = ["dep:winit"]
+gilrs = ["dep:gilrs"]
+
+[dev-dependencies]
+pfx-text = { path = "../text", features = ["fixture"] }
+serde_json = "1"

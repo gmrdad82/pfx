@@ -1,0 +1,9 @@
+[ffmpeg.linux-x86_64]
+url = "https://deps.pitomd.com/ffmpeg/ffmpeg-9.0.2-linux64-gpl.tar.xz"
+sha256 = "7dc13616ee2d069485c314ca9df47fdea4f0c92db81f6d810ee9070f979ee50d"
+size = 150142688
+
+[[moved]]
+package = "engine"
+from = "ssh://git@github.com/gmrdad82/pito-engine.git"
+to = "ssh://git@github.com/gmrdad82/pito-search.git"

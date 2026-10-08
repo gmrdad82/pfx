@@ -1,0 +1,5 @@
+package pfx:mods@0.1.0;
+
+interface log {
+  line: func(text: string);
+}

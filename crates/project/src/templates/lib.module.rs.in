@@ -1,0 +1,93 @@
+use pfx_game::modules::{Api, Host, Limits, Modules};
+
+pfx_game::modules::wasmtime::component::bindgen!({
+    path: "wit",
+    world: "gameplay",
+    wasmtime_crate: pfx_game::modules::wasmtime,
+});
+
+pub const NAME: &str = "{{name}}";
+
+pub struct {{type}} {
+    modules: Option<Modules<(), Gameplay>>,
+    turns: u32,
+}
+
+impl Default for {{type}} {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl {{type}} {
+    pub fn new() -> Self {
+        let modules = project().and_then(|project| modules(&project));
+        if let Err(error) = &modules {
+            eprintln!("{NAME}: {error}");
+        }
+        Self {
+            modules: modules.ok(),
+            turns: 0,
+        }
+    }
+
+    pub fn turns(&self) -> u32 {
+        self.turns
+    }
+}
+
+impl pfx_game::Game for {{type}} {
+    fn start(&mut self, _world: &mut pfx_game::World) {}
+
+    fn tick(
+        &mut self,
+        _world: &mut pfx_game::World,
+        tick: &pfx_game::Tick,
+        _input: &pfx_game::Input,
+    ) {
+        let Some(modules) = self.modules.as_mut() else {
+            return;
+        };
+        modules.tick();
+        let ticks = u64::from(tick.ticks);
+        for (_, called) in modules.each(|_, gameplay, store| gameplay.call_tick(store, ticks)) {
+            self.turns = called.value;
+        }
+    }
+
+    fn modules(&mut self) -> Option<&mut dyn pfx_game::Reload> {
+        self.modules
+            .as_mut()
+            .map(|modules| modules as &mut dyn pfx_game::Reload)
+    }
+}
+
+pub fn modules(project: &pfx_project::Project) -> Result<Modules<(), Gameplay>, String> {
+    let host = Host::new(Api::new("gameplay", "0.1.0"), Limits::default())
+        .map_err(|error| error.to_string())?;
+    let files = project
+        .modules()
+        .into_iter()
+        .map(|module| (module.id, module.path));
+    Ok(Modules::open(
+        host,
+        |store, instance| Gameplay::new(store, instance),
+        files,
+        |_| (),
+    ))
+}
+
+pub fn project() -> Result<pfx_project::Project, String> {
+    pfx_project::Project::locate(env!("CARGO_MANIFEST_DIR"))
+}
+
+pub fn config(project: &pfx_project::Project) -> Result<pfx_game::Config, String> {
+    let mut config = pfx_game::Config::new(NAME, env!("CARGO_PKG_VERSION"), project.play())
+        .exposure(pfx_game::Exposure::Fixed(1.0));
+    if let Some(screen) = project.screen() {
+        let policy = pfx_game::ScreenPolicy::from_table(screen)
+            .map_err(|error| format!("project.toml: [authoring.pfx.screen]: {error}"))?;
+        config = config.screen(policy);
+    }
+    Ok(config)
+}

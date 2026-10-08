@@ -1,0 +1,23 @@
+# {{name}}
+
+A new session starts with prompts/RESUME.md, which says where the last one stopped and what comes next; keep it current at every stopping point.
+
+{{name}} is a game on pfx, the engine, and one binary, `{{name}}`:
+
+- `cargo run --release` plays the game.
+- `cargo run --release -- edit` opens the same game in pfx's editor, on the scene `project.toml` names; F5 plays the game's own logic, F8 stops and restores the edited scene.
+- `cargo run --release -- help` lists the commands, `version` prints the version.
+- The Steam build is `cargo build --release --no-default-features`: the game alone, with its arguments ignored, no commands and no editor, and on Windows a GUI-subsystem exe with no console window. Every command and the editor live behind the `tools` feature, which the default build turns on.
+
+## Where things are
+
+- `src/lib.rs` is the game: a `pfx_game::Game` (its actions, `start`, `tick`, `frame` and `ui`). `src/main.rs` makes one call, `pfx_game::launch`, and registers the game's commands; the editor hook is compiled only with `tools`.
+- `project.toml` names the project, the scene the editor opens first (`[project] scene`), the scene the game plays (`[authoring.pfx] play`) the object the editor selects when it opens (`[authoring.pfx] select`), and the game's screen policy (`[authoring.pfx.screen]`, pfx's `[screen]` table: the aspects per device, which the game fits its window to and the editor frames the scene camera with). Everything under `content/` is data in pfx-scene's format: scenes, material libraries, meshes and images. A change there is a file edit; nothing compiles.
+- `content/first.scene.toml` is the empty world, like a 3D tool's default scene: `incoming`, pfx's mark as a group at the origin (`content/prefabs/incoming.prefab.toml`: the `badge` and the `wordmark`, one mesh each in `content/meshes/`, with their few materials in `content/materials/incoming.materials.toml`), a floor grid with the X axis in red and the Z axis in blue (`grid.glb`), one light and a three-quarter camera. It is all data: delete those objects, meshes and materials, or point `play` at another scene, and the game's own world takes their place.
+- `tests/first.rs` runs the first scene headless on the GPU for a few frames and checks the mark, the wordmark and the axes show; it is ignored by default and runs under pgpu: `pgpu run --class clip --as {{name}} -- cargo test -- --ignored --test-threads=1`.
+
+## pfx
+
+- Cargo.toml pins every pfx crate by one tag. Move them together, never one alone, so the build holds one copy of each engine crate.
+- pfx's docs at that tag: `docs/game.md` (the runtime and the launcher), `docs/projects.md` (projects and this scaffold), `docs/editor.md` (the editor) and `docs/scenes.md` (scenes as data).
+- A need the engine does not meet goes to pfx as a request; pfx stays generic, so nothing of this game goes into it.

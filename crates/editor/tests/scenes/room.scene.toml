@@ -1,0 +1,85 @@
+format = 1
+
+include = ["lights.scene.toml"]
+materials = ["materials.toml"]
+fallback = "grey"
+
+[mesh.block]
+file = "block.gltf"
+id = "jvp1bak1kx"
+
+[mesh.pillar]
+file = "pillar.gltf"
+node = "Pillar"
+id = "6yp2dc01gr"
+
+[mesh.pillar.nodes.Cap]
+material = "metal"
+
+[mesh.ball]
+file = "ball.gltf"
+id = "wggtnezh1p"
+
+[[object]]
+name = "floor"
+mesh = "block"
+at = [0.0, -0.05, 0.0]
+scale = [6.0, 0.1, 6.0]
+material = "grey"
+id = "5wgxc2j4q7"
+
+[[object]]
+name = "wall"
+mesh = "block"
+at = [0.0, 1.5, -2.0]
+scale = [6.0, 3.0, 0.1]
+material = "stone"
+id = "ce6yhxch3p"
+
+# the crate sits by the wall
+[[object]]
+name = "crate"
+mesh = "block"
+at = [-0.9, 0.35, 0.0]
+rotate = [0.0, 25.0, 0.0]
+scale = 0.7
+material = "clay"
+id = "vnrkf8pd3j"
+
+[[object]]
+name = "ball"
+mesh = "ball"
+parent = "crate"
+at = [0.0, 0.75, 0.0]
+scale = 0.5
+material = "blue"
+id = "0ba9akap89"
+
+[[object]]
+name = "pillar"
+mesh = "pillar"
+at = [1.0, 0.0, -0.6]
+id = "ct5pewb4ag"
+
+[sky]
+kind = "analytic"
+turbidity = 3.0
+
+[sun]
+model = "daylight"
+hour = 15.0
+
+[camera]
+at = [0.0, 1.4, 4.2]
+look_at = [0.0, 0.7, 0.0]
+fov = 40.0
+
+[[mover]]
+name = "spin"
+objects = ["pillar"]
+kind = "turn"
+pivot = [1.0, 0.0, -0.6]
+axis = [0.0, 1.0, 0.0]
+travel = [0.0, 90.0]
+period = 2.0
+id = "8w9hahxagx"

@@ -1,0 +1,11 @@
+scene = "room.gltf"
+app = "test"
+anchors = [12.0]
+samples = 1
+seed = 73
+
+[[volumes]]
+name = "room"
+min = [0.0, 1.0, 0.0]
+max = [0.0, 1.0, 0.0]
+spacing = 1.0

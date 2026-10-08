@@ -1,0 +1,42 @@
+[package]
+name = "pfx-editor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "pfx edit: the engine's scene editor, on the pfx-editor-* crates"
+
+[dependencies]
+egui = { version = "=0.33.3", default-features = false }
+egui-wgpu = { version = "=0.33.3", default-features = false }
+glam = "0.33"
+pfx-editor-doc = { path = "../editor-doc" }
+pfx-editor-shell = { path = "../editor-shell" }
+pfx-editor-style = { path = "../editor-style" }
+pfx-editor-toml = { path = "../editor-toml" }
+pfx-editor-viewport = { path = "../editor-viewport" }
+pfx-scene = { git = "https://github.com/gmrdad82/pfx-scene", tag = "v0.1.0" }
+pfx-game = { path = "../game" }
+pfx-gpu = { path = "../gpu", features = ["window"] }
+pfx-input = { path = "../input", default-features = false }
+pfx-live = { path = "../live" }
+pfx-load = { path = "../load" }
+pfx-materials = { path = "../materials" }
+pfx-play = { path = "../play", features = ["dev-hud"] }
+pfx-project = { path = "../project" }
+pfx-sound = { path = "../sound" }
+pfx-theme = { path = "../theme" }
+pfx-trace = { path = "../trace" }
+png = "0.18"
+serde_json = "1"
+toml = "0.9"
+
+[dev-dependencies]
+pfx-text = { path = "../text", features = ["fixture"] }
+pfx-mod = { path = "../mod" }
+wat = "=1.258.3"
+half = "2.7.1"
+pfx-core = { path = "../core" }
+pfx-project = { path = "../project", features = ["scaffold"] }

@@ -1,0 +1,27 @@
+format = 1
+
+materials = ["materials.toml"]
+
+[mesh.block]
+file = "block.gltf"
+id = "b10ckpa1r0"
+
+[mesh.ball]
+file = "ball.gltf"
+id = "ba11pa1r00"
+
+[[object]]
+name = "left"
+mesh = "block"
+at = [-0.25, 0.15, 0.0]
+scale = 0.3
+material = "clay"
+id = "1eftpa1r00"
+
+[[object]]
+name = "right"
+mesh = "ball"
+at = [0.25, 0.15, 0.0]
+scale = 0.3
+material = "brass"
+id = "r1ghtpa1r0"

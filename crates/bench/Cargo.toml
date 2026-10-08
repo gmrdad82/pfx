@@ -1,0 +1,19 @@
+[package]
+name = "pfx-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "pfx bench: a repeatable load for any pfx game or scene, played headless through pfx-play with the engine's frame stats on"
+
+[dependencies]
+pfx-core = { path = "../core" }
+pfx-gpu = { path = "../gpu" }
+pfx-input = { path = "../input", default-features = false }
+pfx-live = { path = "../live" }
+pfx-load = { path = "../load" }
+pfx-play = { path = "../play" }
+pollster = "0.4"
+serde_json = "1"

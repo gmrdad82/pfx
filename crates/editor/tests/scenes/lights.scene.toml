@@ -1,0 +1,18 @@
+format = 1
+
+[[light]]
+name = "warm"
+position = [-1.6, 2.2, 1.4]
+color = [1.0, 0.82, 0.62]
+intensity = 6.0
+radius = 0.05
+range = 8.0
+id = "13cs3nmjxv"
+
+[[emitter]]
+name = "bulb"
+position = [1.6, 2.0, 0.8]
+radius = 0.08
+color = [1.0, 0.9, 0.7]
+intensity = 2.0
+id = "h50y8cecae"

@@ -1,0 +1,53 @@
+format = 1
+
+[materials.floor]
+base = [0.32, 0.3, 0.28]
+roughness = 0.85
+id = "8azkd15njy"
+
+[materials.wall]
+base = [0.62, 0.6, 0.56]
+roughness = 0.9
+specular = 0.2
+id = "4vg7y3z6kq"
+
+[materials.desk]
+base = [0.46, 0.3, 0.18]
+roughness = 0.45
+specular = 0.4
+id = "wy7kd0p01b"
+
+[materials.leg]
+base = [0.12, 0.12, 0.13]
+roughness = 0.5
+id = "q4fwae6qq9"
+
+[materials.stone]
+base = [0.42, 0.44, 0.46]
+roughness = 0.7
+id = "hn89xd4xaq"
+
+[materials.metal]
+base = [0.9, 0.88, 0.82]
+roughness = 0.3
+metalness = 1.0
+id = "6t3psj2nqp"
+
+[materials.sheet]
+base = [0.82, 0.8, 0.74]
+roughness = 0.9
+specular = 0.1
+id = "thn5hgj4vy"
+
+[materials.red]
+base = [0.7, 0.12, 0.08]
+roughness = 0.4
+id = "y8yb9aj6qm"
+
+[materials.screen]
+base = [0.03, 0.03, 0.03]
+roughness = 0.35
+id = "er7hh40s4w"
+
+[materials.screen.content_layer]
+slot = 0

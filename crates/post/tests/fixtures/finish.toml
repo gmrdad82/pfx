@@ -1,0 +1,12 @@
+exposure = 1.1
+saturation = 1.05
+contrast = 1.1
+tone = "agx"
+dither = 0.5
+encode = true
+seed = 11
+
+[bloom]
+kind = "rings"
+strength = 0.3
+threshold = 1.2

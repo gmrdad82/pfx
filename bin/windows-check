@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.." || exit 2
+top=$(pwd)
+export CARGO_NET_GIT_FETCH_WITH_CLI=true
+target=x86_64-pc-windows-gnu
+args=()
+for crate in core geom gpu materials text post load physics sound trace bake live input steam mod play; do
+  manifest="crates/$crate/Cargo.toml"
+  if [ ! -f "$manifest" ]; then
+    continue
+  fi
+  name=$(awk -F '"' '/^name = / { print $2; exit }' "$manifest")
+  args+=(-p "$name")
+done
+if [ "${#args[@]}" -eq 0 ]; then
+  echo "windows-check: no crates" >&2
+  exit 1
+fi
+mode=${1:-}
+if [ -n "$mode" ] && [ "$mode" != test ]; then
+  echo "windows-check: unknown mode $mode" >&2
+  exit 2
+fi
+echo "windows-check: ${args[*]} --target $target"
+cargo check --target "$target" "${args[@]}" --lib --tests
+cargo clippy --target "$target" "${args[@]}" --lib --tests -- -D warnings
+if [ "$mode" != test ]; then
+  echo "windows-check: clean"
+  exit 0
+fi
+prefix="$top/tmp/wine"
+mkdir -p "$prefix"
+mingw_bin=/usr/x86_64-w64-mingw32/bin
+echo "windows-check: wine prefix $prefix"
+env -u DISPLAY -u WAYLAND_DISPLAY \
+  WINEPREFIX="$prefix" \
+  WINEDEBUG=-all \
+  WINEDLLOVERRIDES='mscoree,mshtml=' \
+  wine wineboot --init
+echo "windows-check: build tests"
+cargo test --target "$target" "${args[@]}" --lib --tests --no-run
+deps="$top/target/$target/debug/deps"
+cp -a "$mingw_bin/libstdc++-6.dll" "$mingw_bin/libgcc_s_seh-1.dll" "$mingw_bin/libwinpthread-1.dll" "$deps/"
+steam_dll=$(find "$top/target/$target/debug/build" -name steam_api64.dll -print -quit)
+if [ -n "$steam_dll" ]; then
+  cp -a "$steam_dll" "$deps/"
+fi
+echo "windows-check: cargo test under wine"
+env -u DISPLAY -u WAYLAND_DISPLAY \
+  WINEPREFIX="$prefix" \
+  WINEDEBUG=-all \
+  WINEDLLOVERRIDES='mscoree,mshtml=' \
+  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine \
+  cargo test --target "$target" "${args[@]}" --lib --tests
+echo "windows-check: clean"

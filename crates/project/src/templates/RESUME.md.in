@@ -1,0 +1,12 @@
+# Resume
+
+## State
+
+- `pfx new {{name}}` scaffolded this repo on pfx {{tag}}: an empty world with pfx's mark and wordmark standing at the origin over a floor grid, a game that does nothing yet, and the `tools` build with `edit`, `help` and `version`.
+- Nothing is committed yet.
+
+## Next
+
+1. Commit the scaffold as the repo's first commit.
+2. `cargo run --release` shows the empty world; `cargo run --release -- edit` opens it in pfx's editor.
+3. Give the game its actions and logic in `src/lib.rs`, and its world in `content/`.

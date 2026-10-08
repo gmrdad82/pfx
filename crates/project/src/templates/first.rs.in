@@ -1,0 +1,58 @@
+use pfx_gpu::screens::Device;
+use pfx_gpu::window::Size;
+
+const WIDTH: u32 = 960;
+const HEIGHT: u32 = 540;
+
+fn save(pixels: &[u8]) {
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp");
+    std::fs::create_dir_all(&folder).unwrap();
+    let file = std::fs::File::create(folder.join("first-frame.png")).unwrap();
+    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), WIDTH, HEIGHT);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(pixels)
+        .unwrap();
+}
+
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn the_first_scene_shows_the_mark_the_wordmark_and_the_axes() {
+    let project = {{crate}}::project().unwrap();
+    let config = {{crate}}::config(&project)
+        .unwrap()
+        .device(Device::Desktop)
+        .pads(pfx_game::Pads::None)
+        .sound(false);
+    let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
+    let size = Size {
+        width: WIDTH,
+        height: HEIGHT,
+    };
+    let mut run =
+        pfx_game::Headless::with_gpu({{crate}}::{{type}}::new(), config, gpu, size).unwrap();
+    let count = run.run_for(0.5).unwrap();
+    assert!(count.frames >= 10, "{count:?}");
+    let pixels = run.readback().unwrap();
+    save(&pixels);
+    let (mut light, mut violet, mut red) = (0, 0, 0);
+    for pixel in pixels.chunks_exact(4) {
+        let [r, g, b] = [pixel[0], pixel[1], pixel[2]].map(u16::from);
+        if r > 170 && g > 170 && b > 170 {
+            light += 1;
+        }
+        if b > g + 40 && b > r + 10 && b > 80 {
+            violet += 1;
+        }
+        if r > g + 60 && r > b + 50 {
+            red += 1;
+        }
+    }
+    assert!(light > 800, "the wordmark: {light} light pixels");
+    assert!(violet > 1_500, "the mark: {violet} violet pixels");
+    assert!(red > 300, "the X axis: {red} red pixels");
+}

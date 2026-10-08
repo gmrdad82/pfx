@@ -1,0 +1,24 @@
+[package]
+name = "pfx-mod"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's mod host: sandboxed, deterministic WASM components on wasmtime, metered by fuel and capped in memory, tables and stack, loaded from a content folder and fingerprinted"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+wasmtime = { version = "=49.0.2", default-features = false, features = ["cranelift", "component-model", "runtime", "std", "backtrace", "parallel-compilation"] }
+wasmparser = { version = "=0.258.3", default-features = false, features = ["std", "validate", "component-model"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+sha2 = "0.11"
+semver = "1"
+wasm-encoder = { version = "=0.258.3", default-features = false, features = ["std", "wasmparser", "component-model"] }
+wit-component = { version = "=0.258.3", default-features = false }
+pfx-core = { path = "../core" }
+
+[dev-dependencies]
+wat = "=1.258.3"
+wit-parser = "=0.258.3"

@@ -1,0 +1,24 @@
+format = 1
+
+materials = ["materials.toml"]
+
+[mesh.block]
+file = "meshes/block.gltf"
+id = "2be6q66757"
+
+[[object]]
+name = "foot"
+mesh = "block"
+at = [0.0, 0.1, 0.0]
+scale = [0.5, 0.2, 0.5]
+material = "stone"
+id = "sh40v4bdjz"
+
+[[object]]
+name = "shaft"
+mesh = "block"
+parent = "foot"
+at = [0.0, 2.5, 0.0]
+scale = [0.4, 4.0, 0.4]
+material = "grey"
+id = "ec2x5cyhnw"

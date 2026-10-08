@@ -1,0 +1,76 @@
+[materials.plain]
+base = [0.5, 0.5, 0.5]
+roughness = 0.6
+
+[materials.grey]
+base = [0.18, 0.18, 0.18]
+roughness = 0.7
+
+[materials.metal]
+family = "metal"
+base = [0.91, 0.92, 0.92]
+roughness = 0.3
+metalness = 1.0
+
+[materials.chrome]
+family = "chrome"
+base = [0.95, 0.95, 0.95]
+roughness = 0.05
+metalness = 1.0
+
+[materials.glass]
+family = "glass"
+base = [1.0, 1.0, 1.0]
+roughness = 0.02
+transmission = 1.0
+ior = 1.5
+thickness = 0.01
+
+[materials.water]
+family = "liquid"
+base = [1.0, 1.0, 1.0]
+roughness = 0.01
+transmission = 1.0
+ior = 1.333
+absorption = 0.2
+
+[materials.lacquer]
+family = "lacquer"
+base = [0.2, 0.35, 0.6]
+roughness = 0.4
+clearcoat = 1.0
+clearcoat_roughness = 0.05
+
+[materials.card]
+base = [0.8, 0.8, 0.78]
+roughness = 0.85
+sheen = 0.1
+
+[materials.wood]
+family = "wood"
+base = [0.45, 0.3, 0.18]
+roughness = 0.55
+
+[[materials.wood.layers]]
+kind = "fbm"
+frequency = 8.0
+amplitude = 0.3
+seed = 1
+
+[materials.felt]
+family = "cloth"
+base = [0.2, 0.4, 0.25]
+roughness = 0.95
+sheen = 0.6
+
+[[materials.felt.layers]]
+kind = "value"
+frequency = 400.0
+amplitude = 0.5
+seed = 2
+
+[materials.lamp]
+family = "emissive"
+base = [0.0, 0.0, 0.0]
+roughness = 1.0
+emission = [4.0, 3.6, 3.0]

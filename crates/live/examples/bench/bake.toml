@@ -1,0 +1,62 @@
+app = "bench"
+scene = "room.glb"
+materials = "materials.toml"
+fallback = "plain"
+anchors = [12.0, 16.0, 19.0]
+reference_hour = 12.0
+samples = 64
+seed = 29
+shadow_only_nodes = ["awning"]
+
+[sky]
+kind = "daylight"
+
+[sun]
+model = "solar"
+
+[[volumes]]
+name = "probes"
+min = [-3.0, 0.0, -2.4]
+max = [3.0, 3.0, 3.3000002]
+spacing = 0.3
+
+[[volumes]]
+name = "near-table"
+min = [-2.3, 0.71, -1.5000001]
+max = [1.6000001, 1.31, -0.1500001]
+spacing = 0.15
+
+[[volumes]]
+name = "cavity"
+min = [1.95, 0.0, -1.95]
+max = [2.72, 0.56, -1.1800001]
+spacing = 0.07
+
+[[reflection]]
+name = "table"
+position = [-0.4, 1.11, -0.65000004]
+min = [-2.6000001, 0.0, -1.9000001]
+max = [1.8, 1.66, 0.3]
+resolution = 128
+fade = 0.1
+priority = 1.0
+
+[[reflection]]
+name = "shelves"
+position = [0.8, 1.6, -1.4000001]
+min = [-1.2, 0.9, -2.2]
+max = [2.8, 2.4, -1.0]
+resolution = 128
+fade = 0.1
+priority = 0.0
+
+[detail]
+size = 2048
+padding = 8
+parts = ["table top", "board", "sheet aged", "back wall", "floor", "shelf 1"]
+
+[detail.view]
+position = [0.9, 1.5, 2.4]
+target = [-0.9, 0.95, -1.0]
+fov_y_deg = 52.0
+shift = [0.0, 0.0]

@@ -1,0 +1,26 @@
+[package]
+name = "pfx-assets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's asset renders: a product's logos, wordmarks, lockups, tiles, cards and icon sets from its own SVG masters and recipes, alone or as scenes, on the path tracer"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+clap = { version = "4.6", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+png = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.9"
+pfx-geom = { path = "../geom" }
+pfx-gpu = { path = "../gpu" }
+pfx-load = { path = "../load" }
+pfx-materials = { path = "../materials" }
+pfx-post = { path = "../post" }
+pfx-run = { path = "../run" }
+pfx-trace = { path = "../trace" }
+pollster = "0.4"

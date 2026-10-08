@@ -1,0 +1,32 @@
+[package]
+name = "pfx-play"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's play mode: a game run live over a runtime copy of a scene, with pause, step and an exact stop for the editor"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+pfx-core = { path = "../core" }
+pfx-load = { path = "../load" }
+pfx-live = { path = "../live" }
+pfx-materials = { path = "../materials" }
+pfx-physics = { path = "../physics", features = ["enhanced-determinism"] }
+pfx-input = { path = "../input", default-features = false }
+pfx-sound = { path = "../sound", features = ["vorbis"] }
+pfx-gpu = { path = "../gpu" }
+pfx-post = { path = "../post" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
+toml_edit = "0.25"
+
+[features]
+dev-hud = ["pfx-live/dev-hud"]
+
+[dev-dependencies]
+pfx-load = { path = "../load", features = ["fixture"] }
+pollster = "0.4"
+half = "2.7.1"
+png = "0.18"

@@ -1,0 +1,37 @@
+format = 1
+
+materials = ["content/materials/base.materials.toml"]
+
+[mesh.grid]
+file = "content/meshes/grid.glb"
+
+[[object]]
+name = "incoming"
+prefab = "content/prefabs/incoming.prefab.toml"
+at = [0.0, 0.495, 0.0]
+
+[[object]]
+name = "grid"
+mesh = "grid"
+shadow = "none"
+
+[[light]]
+name = "key"
+position = [1.4, 2.6, 2.6]
+intensity = 9.0
+radius = 0.1
+range = 12.0
+
+[camera]
+at = [2.5, 1.65, 4.0]
+look_at = [0.0, 0.495, 0.0]
+fov = 40.0
+
+[sky]
+kind = "room"
+
+[sky.room]
+width = 64
+floor = [0.05, 0.05, 0.055]
+wall = [0.08, 0.08, 0.09]
+ceiling = [0.11, 0.11, 0.12]

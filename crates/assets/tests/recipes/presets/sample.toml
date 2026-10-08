@@ -1,0 +1,29 @@
+colors = "master"
+
+[material]
+base = "#808080"
+metallic = 0.0
+roughness = 0.5
+coat = 0.0
+
+[form]
+depth = 0.1
+bevel = 0.03
+segments = 8
+voxel = 0.06
+smooth = 4
+
+[rig]
+world = "studio"
+strength = 0.6
+turn = 20.0
+key = 1.0
+fill = 0.35
+rim = 0.8
+
+[ground]
+color = "#404040"
+radius = 0.22
+mark = 0.62
+roughness = 0.6
+coat = 0.0

@@ -1,0 +1,93 @@
+[workspace]
+members = ["crates/assets", "crates/bake", "crates/bench", "crates/core", "crates/editor", "crates/editor-doc", "crates/editor-shell", "crates/editor-style", "crates/editor-toml", "crates/editor-viewport", "crates/game", "crates/geom", "crates/gpu", "crates/input", "crates/live", "crates/load", "crates/materials", "crates/mod", "crates/physics", "crates/play", "crates/post", "crates/project", "crates/run", "crates/sound", "crates/steam", "crates/text", "crates/theme", "crates/trace"]
+
+[workspace.package]
+version = "0.25.0"
+edition = "2024"
+rust-version = "1.97"
+publish = false
+license = "MIT"
+authors = ["Gamer Dad"]
+
+[package]
+name = "pfx"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx, a game and render engine: the crates games and apps link, from the game runtime and live renderer to physics, sound, input, mods and the editor, and the pfx tool that scaffolds, edits, benches and bakes games and renders offline on its path tracer"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["harness", "editor", "bench"]
+editor = ["harness", "dep:pfx-editor"]
+bench = ["harness", "dep:pfx-bench"]
+harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-report"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = { version = "0.9", optional = true }
+sha2 = { version = "0.11", optional = true }
+png = { version = "0.18", optional = true }
+hex = { version = "0.4", optional = true }
+pfx-core = { path = "crates/core", optional = true }
+pfx-run = { path = "crates/run", optional = true }
+pfx-assets = { path = "crates/assets", optional = true }
+pfx-bake = { path = "crates/bake", optional = true }
+pfx-gpu = { path = "crates/gpu", optional = true }
+pfx-load = { path = "crates/load", optional = true }
+pfx-text = { path = "crates/text", features = ["subset"], optional = true }
+pollster = { version = "0.4", optional = true }
+pfx-report = { git = "https://github.com/gmrdad82/pfx-report", tag = "v0.1.0", optional = true }
+exr = { version = "1.74", optional = true }
+pfx-editor = { path = "crates/editor", optional = true }
+pfx-bench = { path = "crates/bench", optional = true }
+pfx-project = { path = "crates/project", features = ["scaffold"], optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[[bin]]
+name = "pfx"
+path = "src/main.rs"
+required-features = ["harness"]
+
+[[example]]
+name = "checker"
+path = "examples/checker.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+debug = false
+
+[profile.dev.package.pfx]
+opt-level = 2
+
+[profile.dev.package.png]
+opt-level = 2
+
+[profile.dev.package.flate2]
+opt-level = 2
+
+[profile.dev.package.miniz_oxide]
+opt-level = 2
+
+[profile.dev.package.fdeflate]
+opt-level = 2
+
+[profile.dev.package.crc32fast]
+opt-level = 2
+
+[profile.dev.package.adler2]
+opt-level = 2
+
+[profile.dev.package.simd-adler32]
+opt-level = 2
+
+[profile.dev.package.sha2]
+opt-level = 2

@@ -1,0 +1,10 @@
+
+## The gameplay module
+
+`module/` is the game's gameplay module: logic that runs as a WebAssembly component in pfx's sandbox, so pfx's editor can swap it while the game plays, with no restart and no Rust hot-patching. `wit/gameplay.wit` is its world: `tick`, which the game calls every tick (`src/lib.rs`), and the `save` and `restore` pair that carries its state across a swap.
+
+- Build it with `cargo build -p {{name}}-module --target wasm32-unknown-unknown --release` (once: `rustup target add wasm32-unknown-unknown`). `project.toml`'s `[authoring.pfx] modules` names the built file, `target/wasm32-unknown-unknown/release/{{crate}}_module.wasm`; the game loads it at start and makes it a component itself, so no other tool is needed. Until it is built the game runs without it and says so once.
+- While `cargo run --release -- edit` plays (F5), rebuild the module: the editor sees the new file, swaps it in at the next tick and logs what happened. With `save` and `restore` the module keeps its state; a module without them restarts clean, with a notice.
+- The module gets no files, clock, network or randomness, only what the world imports. Its calls are metered by fuel and capped in memory and call depth; a module that traps or passes a cap is stopped for the run with a typed error, and the game keeps running.
+- A shipped build carries the built module at the path `project.toml` names, beside the exe.
+- pfx's docs at the tag: `docs/mods.md` (the host, the limits, swaps) and `docs/projects.md` (projects and this scaffold).
