@@ -2,7 +2,7 @@
 members = ["crates/assets", "crates/bake", "crates/bench", "crates/core", "crates/editor", "crates/editor-doc", "crates/editor-shell", "crates/editor-style", "crates/editor-toml", "crates/editor-viewport", "crates/game", "crates/geom", "crates/gpu", "crates/input", "crates/live", "crates/load", "crates/materials", "crates/mod", "crates/physics", "crates/play", "crates/post", "crates/project", "crates/run", "crates/sound", "crates/steam", "crates/text", "crates/theme", "crates/trace"]
 
 [workspace.package]
-version = "0.25.1"
+version = "0.25.2"
 edition = "2024"
 rust-version = "1.97"
 publish = false
