@@ -341,7 +341,7 @@ steamcmd +login "$STEAM_BUILDER" +run_app_build "<out>/app_build_<appid>.vdf" +q
 
 ### steam.toml
 
-Paths in `path` are relative to the directory that holds the manifest, or absolute. Every one of them must stay inside the caller's git tree or inside the `CARGO_TARGET_DIR` pfx runs with, so a build in a shared target folder outside the clone stages too. A `CARGO_TARGET_DIR` that holds the caller's tree widens nothing. A missing file, a path that leaves both, a symlink, a depot with no files, a duplicate depot id, and `setlive = "default"` without `setlive_default = true` are refused.
+Paths in `path` are relative to the directory that holds the manifest, or absolute. Every one of them must stay inside the caller's git tree, inside the folder the tree's own `target` link resolves to, or inside the `CARGO_TARGET_DIR` pfx runs with, so a build in a shared target folder outside the clone stages too, whether cargo reaches it through `CARGO_TARGET_DIR` or through a `target` symlink at the root of the tree. A target folder that holds the caller's tree widens nothing. A missing file, a path that leaves all of them, a symlink, a depot with no files, a duplicate depot id, and `setlive = "default"` without `setlive_default = true` are refused.
 
 An executable built with pfx-game's `tools` feature is refused too: every staged file that starts as an ELF, PE or Mach-O binary is scanned for pfx-game's tools marker (`docs/game.md`, "The tools feature and a Steam build"), and one that carries it stops the stage before anything is written, with an error that names the file and says to build the Steam binary with `cargo build --release --no-default-features`. A release that builds without `tools` passes.
 

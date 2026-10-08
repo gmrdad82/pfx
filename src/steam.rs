@@ -52,6 +52,7 @@ struct Staged {
 struct Root {
     named: PathBuf,
     canon: PathBuf,
+    what: String,
 }
 
 enum Dest {
@@ -161,34 +162,49 @@ fn tree_root(root: &Path) -> Root {
     Root {
         named: root.to_path_buf(),
         canon: root.to_path_buf(),
+        what: "the caller's folder".into(),
     }
 }
 
 fn roots(root: &Path, cwd: &Path, target: Option<&OsStr>) -> Vec<Root> {
     let mut roots = vec![tree_root(root)];
+    roots.extend(target_link(root));
     roots.extend(target_root(root, cwd, target));
     roots
 }
 
+fn target_link(root: &Path) -> Option<Root> {
+    let named = root.join("target");
+    let meta = fs::symlink_metadata(&named).ok()?;
+    if !meta.file_type().is_symlink() {
+        return None;
+    }
+    widening(root, named, "its target link")
+}
+
 fn target_root(root: &Path, cwd: &Path, target: Option<&OsStr>) -> Option<Root> {
     let target = target.filter(|value| !value.is_empty())?;
-    let named = normalize(cwd, Path::new(target));
+    widening(root, normalize(cwd, Path::new(target)), "CARGO_TARGET_DIR")
+}
+
+fn widening(root: &Path, named: PathBuf, what: &str) -> Option<Root> {
     let canon = named.canonicalize().ok()?;
     if root.starts_with(&canon) {
         return None;
     }
-    Some(Root { named, canon })
+    let what = format!("{what} ({})", canon.display());
+    Some(Root { named, canon, what })
 }
 
 fn escapes(raw: &Path, roots: &[Root]) -> String {
-    match roots.get(1) {
-        None => format!("{} escapes the caller's folder", raw.display()),
-        Some(target) => format!(
-            "{} escapes the caller's folder and CARGO_TARGET_DIR ({})",
-            raw.display(),
-            target.canon.display()
-        ),
-    }
+    let mut names: Vec<&str> = roots.iter().map(|root| root.what.as_str()).collect();
+    let last = names.pop().unwrap_or_default();
+    let names = if names.is_empty() {
+        last.to_string()
+    } else {
+        format!("{} and {last}", names.join(", "))
+    };
+    format!("{} escapes {names}", raw.display())
 }
 
 fn cwd() -> Result<PathBuf, String> {
@@ -1234,7 +1250,7 @@ mod tests {
     }
 
     #[test]
-    fn a_build_under_cargo_target_dir_stages_and_nothing_else_outside_the_tree_does() {
+    fn a_build_in_a_target_folder_outside_the_tree_stages_and_nothing_else_outside_does() {
         let scratch = scratch("target").canonicalize().unwrap();
         let tree = scratch.join("tree");
         let build = scratch.join("build");
@@ -1268,6 +1284,30 @@ mod tests {
             let through = roots(&tree, &tree, Some(link.as_os_str()));
             let named = link.join("release").join("game.exe");
             assert_eq!(resolve(&through, &tree, &named).unwrap(), exe);
+
+            let linked = scratch.join("linked");
+            fs::create_dir_all(&linked).unwrap();
+            std::os::unix::fs::symlink(&build, linked.join("target")).unwrap();
+            let own = roots(&linked, &linked, None);
+            let named = Path::new("target/release/game.exe");
+            assert_eq!(resolve(&own, &linked, named).unwrap(), exe);
+            let error = resolve(&own, &linked, Path::new("../other/secret")).unwrap_err();
+            assert!(
+                error.contains("escapes the caller's folder and its target link"),
+                "{error}"
+            );
+            let both = roots(&linked, &linked, Some(link.as_os_str()));
+            let error = resolve(&both, &linked, Path::new("../other/secret")).unwrap_err();
+            assert!(
+                error.contains("the caller's folder, its target link")
+                    && error.contains(" and CARGO_TARGET_DIR ("),
+                "{error}"
+            );
+
+            let wide = scratch.join("wide");
+            fs::create_dir_all(&wide).unwrap();
+            std::os::unix::fs::symlink(&scratch, wide.join("target")).unwrap();
+            assert_eq!(roots(&wide, &wide, None).len(), 1);
         }
         let _ = fs::remove_dir_all(&scratch);
     }
