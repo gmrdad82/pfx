@@ -32,8 +32,6 @@ dev-hud = ["dep:egui", "dep:egui-wgpu", "dep:pfx-input", "dep:pfx-theme"]
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 wgpu = { version = "=27.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
 
-[target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-pfx-run = { path = "../run" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { version = "=27.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
@@ -47,6 +45,7 @@ naga = { version = "27.0.3", default-features = false, features = ["wgsl-in"] }
 png = "0.17"
 serde_json = "1"
 pfx-trace = { path = "../trace" }
+pfx-run = { path = "../run" }
 
 [[test]]
 name = "dev_hud"

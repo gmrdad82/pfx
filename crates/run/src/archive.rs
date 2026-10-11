@@ -623,15 +623,23 @@ fn catalog_for(
 fn lock_path() -> Result<PathBuf, String> {
     let runtime = match std::env::var_os("XDG_RUNTIME_DIR") {
         Some(dir) => PathBuf::from(dir),
-        None => {
-            use std::os::unix::fs::MetadataExt;
-            let uid = fs::metadata("/proc/self")
-                .map_err(|e| format!("archive: no XDG_RUNTIME_DIR and no /proc/self: {e}"))?
-                .uid();
-            PathBuf::from(format!("/run/user/{uid}"))
-        }
+        None => runtime_fallback()?,
     };
     Ok(runtime.join("pito-archive/catalog.lock"))
+}
+
+#[cfg(target_os = "linux")]
+fn runtime_fallback() -> Result<PathBuf, String> {
+    use std::os::unix::fs::MetadataExt;
+    let uid = fs::metadata("/proc/self")
+        .map_err(|e| format!("archive: no XDG_RUNTIME_DIR and no /proc/self: {e}"))?
+        .uid();
+    Ok(PathBuf::from(format!("/run/user/{uid}")))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn runtime_fallback() -> Result<PathBuf, String> {
+    Ok(std::env::temp_dir())
 }
 
 fn with_lock<T>(path: &Path, action: impl FnOnce() -> Result<T, Fail>) -> Result<T, Fail> {

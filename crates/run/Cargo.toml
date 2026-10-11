@@ -17,7 +17,7 @@ chrono = "0.4"
 fs2 = "0.4"
 pfx-report = { git = "https://github.com/gmrdad82/pfx-report", tag = "v0.1.0" }
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }
 signal-hook = "0.3"

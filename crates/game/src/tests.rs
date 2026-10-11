@@ -601,12 +601,14 @@ mod launcher {
     use std::cell::Cell;
     use std::rc::Rc;
 
+    #[cfg(any(feature = "tools", not(windows)))]
     use std::process::ExitCode;
 
     #[cfg(feature = "tools")]
     use crate::{CommandError, Unmatched};
     use crate::{Commands, Decision, decide};
 
+    #[cfg(any(feature = "tools", not(windows)))]
     fn done(decision: &Decision, code: u8) -> bool {
         matches!(decision, Decision::Done(exit) if *exit == ExitCode::from(code))
     }
@@ -615,11 +617,13 @@ mod launcher {
         list.iter().map(|arg| arg.to_string()).collect()
     }
 
+    #[cfg(any(feature = "tools", not(windows)))]
     fn probe(_args: &[String]) -> Result<(), String> {
         println!("pfx-game-link-probe-6c1d");
         Ok(())
     }
 
+    #[cfg(any(feature = "tools", not(windows)))]
     fn register(commands: &mut Commands) {
         commands.add("probe", "prints the link probe", probe);
     }
