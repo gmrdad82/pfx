@@ -2,10 +2,18 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
+game_crates=(core geom gpu materials text post load physics sound trace bake live input steam mod play)
+
 steam_alone() {
   local out
   out=$(cargo tree -i pfx-steam --workspace -e normal,build,dev --prefix none 2>/dev/null)
   ! printf '%s\n' "$out" | grep -Ev "^pfx-steam( |$)"
+}
+
+report_alone() {
+  local out
+  out=$(cargo tree -i pfx-report --workspace -e normal,build --prefix none 2>/dev/null)
+  ! printf '%s\n' "$out" | grep -E "^pfx-(core|gpu|geom|materials|text|post|live|trace|bake|load|physics|sound|steam|input) "
 }
 
 fails=()
@@ -18,13 +26,54 @@ step() {
   fi
 }
 
-step fmt cargo fmt --all --check
-step clippy cargo clippy --workspace --all-targets -- -D warnings
-step build cargo build -p pfx --bins --examples
-step unit-tests cargo test --workspace --lib --bins
-step agnostic cargo test -q --test agnostic
-step licences cargo test -q --test licences
-step steam-alone steam_alone
+lint() {
+  step fmt cargo fmt --all --check
+  step clippy cargo clippy --workspace --all-targets -- -D warnings
+  step game-clippy cargo clippy -p pfx-game --all-targets --features tools,steam,dev-hud,modules -- -D warnings
+  step agnostic cargo test -q --test agnostic
+  step licences cargo test -q --test licences
+  step steam-alone steam_alone
+  step report-alone report_alone
+}
+
+tests() {
+  step build cargo build --workspace --bins --examples
+  step tests cargo test --workspace --all-targets
+  step game-tests cargo test -p pfx-game --lib --features tools,steam
+  step doc-tests cargo test --workspace --doc
+}
+
+release() {
+  step release cargo build --release -p pfx --bins
+}
+
+copy_steam_dll() {
+  local dll
+  dll=$(find target/debug/build -name steam_api64.dll -print -quit 2>/dev/null)
+  if [ -n "$dll" ]; then
+    cp "$dll" target/debug/deps/
+  fi
+}
+
+windows() {
+  local args=() crate
+  for crate in "${game_crates[@]}"; do
+    args+=(-p "pfx-$crate")
+  done
+  step windows-clippy cargo clippy "${args[@]}" --lib --tests -- -D warnings
+  step windows-build cargo test "${args[@]}" --lib --tests --no-run
+  step steam-dll copy_steam_dll
+  step windows-tests cargo test "${args[@]}" --lib --tests
+}
+
+case ${1:-} in
+  "") lint; tests ;;
+  lint | tests | release | windows) "$1" ;;
+  *)
+    echo "gate: unknown phase $1 (lint, tests, release or windows)" >&2
+    exit 2
+    ;;
+esac
 if [ ${#fails[@]} -gt 0 ]; then
   echo "gate: RED, failed: ${fails[*]}"
   exit 1

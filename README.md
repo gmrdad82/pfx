@@ -121,7 +121,7 @@ cargo build --release
 bin/gate
 ```
 
-`bin/gate` is what CI runs: formatting, clippy with warnings as errors, the binaries and examples, the unit tests, the check that keeps game content out of the engine ([docs/agnostic.md](docs/agnostic.md)) and the licence check of every dependency. The GPU tests are `#[ignore]`d and need a GPU: run a crate's with `cargo test -p <crate> -- --ignored`. `bin/windows-check test` builds the game crates for Windows and runs their tests under Wine.
+`bin/gate` is what CI runs, one phase per job in parallel: `lint` (formatting, clippy with warnings as errors, the check that keeps game content out of the engine ([docs/agnostic.md](docs/agnostic.md)) and the licence check of every dependency), `tests` (the binaries, examples, unit, integration and doc tests), `release` (the optimised `pfx` binary) and `windows` (the game crates' clippy and tests on Windows). With no phase it runs `lint` and `tests`. CI also runs nightly on main. The GPU tests are `#[ignore]`d and need a GPU: run a crate's with `cargo test -p <crate> -- --ignored`. `bin/windows-check test` builds the game crates for Windows and runs their tests under Wine.
 
 ## Contributing
 
