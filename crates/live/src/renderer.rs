@@ -686,6 +686,7 @@ pub struct Renderer {
     flat: Option<FlatPass>,
     flat_looks: Option<FlatLooks>,
     plates: Option<crate::plates::Plates>,
+    plate_kit: Option<crate::plates::PlateKit>,
     plate_casters: Vec<Instance>,
     plate_mask: bool,
     demand: Option<demand::Cache>,
@@ -1335,6 +1336,7 @@ impl Renderer {
             flat: None,
             flat_looks: None,
             plates: None,
+            plate_kit: None,
             plate_casters: Vec::new(),
             plate_mask: false,
             demand: None,
@@ -1887,17 +1889,42 @@ impl Renderer {
         plate: Option<&pfx_bake::plate::Plate>,
         settings: crate::plates::PlateSettings,
     ) -> Result<(), String> {
-        self.touch();
-        self.plates = match plate {
+        let plates = match plate {
             Some(plate) => {
-                let mut plates = crate::plates::Plates::new(&self.frame.gpu, plate, settings)?;
-                plates.set_hour(self.hour);
-                Some(plates)
+                let kit = self.plate_kit();
+                Some(crate::plates::Plates::with_kit(
+                    &self.frame.gpu,
+                    &kit,
+                    plate,
+                    settings,
+                )?)
             }
             None => None,
         };
-        self.taa.invalidate();
+        self.swap_plates(plates);
         Ok(())
+    }
+
+    pub fn plate_kit(&mut self) -> crate::plates::PlateKit {
+        let gpu = &self.frame.gpu;
+        let cache = self.frame.pipeline_cache();
+        self.plate_kit
+            .get_or_insert_with(|| crate::plates::PlateKit::new(gpu, cache))
+            .clone()
+    }
+
+    pub fn swap_plates(
+        &mut self,
+        plates: Option<crate::plates::Plates>,
+    ) -> Option<crate::plates::Plates> {
+        self.touch();
+        let plates = plates.map(|mut plates| {
+            plates.set_hour(self.hour);
+            plates
+        });
+        let old = std::mem::replace(&mut self.plates, plates);
+        self.taa.invalidate();
+        old
     }
 
     pub fn plates(&self) -> Option<&crate::plates::Plates> {

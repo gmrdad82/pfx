@@ -2288,6 +2288,10 @@ impl Frame {
         load
     }
 
+    pub(crate) fn pipeline_cache(&self) -> Option<&wgpu::PipelineCache> {
+        self.pipelines.cache.as_ref().map(PipelineCache::cache)
+    }
+
     pub fn save_pipeline_cache(&self) -> Result<Option<usize>, String> {
         self.pipelines
             .cache

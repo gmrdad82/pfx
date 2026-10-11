@@ -32,8 +32,16 @@ A plated scene takes part in frames on demand (`Renderer::set_frames_on_demand`,
 - **Still.** With a still camera and no moving part, `frame_needed` answers `None`: nothing is submitted and `present_last` re-presents the last image.
 - **Drift.** A drift inside the limits answers `Reproject`: the cached frame (plate and moving parts together) is warped by its depth, without running the composite.
 - **Moving parts.** A moving part, or a drift past the limits, answers `Full`, and the frame redraws the moving parts over a fresh composite. A camera-facing card (`face_camera`) turns with the camera, so with one in view every drift is a full frame. So does surface text laid out for another camera: `Staged::text` uses the scene's `[camera]`, so a product that moves the frame camera itself must lay its moving text out for that camera, or each drift reads as moved text.
-- **What redraws the plate.** `set_plates`, `set_plate_casters`, an hour that differs (`set_plate_hour`) and settings that differ (`Renderer::set_plate_settings`) each bump the renderer's revision, so the next frame is full. Setting the same hour or the same settings again changes nothing.
+- **What redraws the plate.** `set_plates`, `swap_plates`, `set_plate_casters`, an hour that differs (`set_plate_hour`) and settings that differ (`Renderer::set_plate_settings`) each bump the renderer's revision, so the next frame is full. Setting the same hour or the same settings again changes nothing.
 - **The test.** `a_plated_scene_on_demand_idles_still_reprojects_a_drift_and_redraws_moving_parts` checks each case.
+- **Swapping a plate without a hitch.** `set_plates` builds the plate in the frame: it uploads every layer and allocates the shadow map before it swaps. To change plates mid-animation, build the next one on a loader thread and swap it in: `Plates::with_kit` makes only the textures, buffers and bind groups from a `PlateKit` (the plate's layouts, samplers and two pipelines, made once by `Renderer::plate_kit` with the renderer's pipeline cache) and submits its uploads from the calling thread; `Renderer::swap_plates(Some(plates))` puts it in place at the renderer's hour, bumps the revision and resets TAA, and hands back the old plate. `Plates` and `PlateKit` are `Send`, and `Gpu` is `Clone`:
+
+  ```rust
+  let (gpu, kit) = (renderer.gpu().clone(), renderer.plate_kit());
+  let next = std::thread::spawn(move || Plates::with_kit(&gpu, &kit, &read_plate(&dir)?, settings));
+  ```
+
+  Once it has joined, the render thread calls `renderer.swap_plates(Some(next.join().unwrap()?))` between frames. `set_plates` is `with_kit` plus `swap_plates` on the render thread; `Plates::new` makes its own kit. `a_plate_built_on_another_thread_swaps_in_to_the_same_frame` checks that the swapped plate draws the frame `set_plates` draws, byte for byte.
 
 ## Look
 

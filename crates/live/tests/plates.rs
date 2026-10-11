@@ -3,7 +3,7 @@ mod plates_desk;
 
 use pfx_bake::plate::codec::from_rgb9e5;
 use pfx_live::demand::{Limits, Need, Next, SETTLE};
-use pfx_live::plates::PlateSettings;
+use pfx_live::plates::{PlateSettings, Plates};
 use pfx_live::scene::Override;
 use pfx_load::scene::Scene;
 
@@ -11,6 +11,11 @@ use plates_desk::{Desk, Viewer, close, luminance, off};
 
 const WIDTH: u32 = 320;
 const HEIGHT: u32 = 200;
+
+const _: () = {
+    const fn sent<T: Send>() {}
+    sent::<Plates>();
+};
 
 const BEHIND: &str = "[[object]]
 name = \"behind\"
@@ -279,6 +284,42 @@ fn a_small_drift_reprojects_the_plate_by_its_depth() {
         worst < 0.03,
         "the drifted frame samples the plate where its depth says: {worst}"
     );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_plate_built_on_another_thread_swaps_in_to_the_same_frame() {
+    let desk = Desk::new("swap", "", [WIDTH, HEIGHT]);
+    desk.bake(&[12.0, 17.0], 64);
+    let scene = desk.scene();
+    let raw = |viewer: &mut Viewer| {
+        viewer.frames(0.0, 8);
+        viewer
+            .renderer
+            .gpu()
+            .readback_rgba16(&viewer.output)
+            .unwrap()
+    };
+
+    let mut set = Viewer::new(&scene, WIDTH, HEIGHT);
+    let settings = set.renderer.plates().unwrap().settings();
+    set.renderer
+        .set_plates(Some(&desk.plate()), settings)
+        .unwrap();
+    let expected = raw(&mut set);
+
+    let mut swap = Viewer::new(&scene, WIDTH, HEIGHT);
+    let gpu = swap.renderer.gpu().clone();
+    let kit = swap.renderer.plate_kit();
+    let plate = desk.plate();
+    let plates = std::thread::spawn(move || Plates::with_kit(&gpu, &kit, &plate, settings))
+        .join()
+        .unwrap()
+        .unwrap();
+    assert!(swap.renderer.swap_plates(Some(plates)).is_some());
+    let got = raw(&mut swap);
+    assert!(swap.renderer.last_pass_order().contains(&"plate composite"));
+    assert!(got == expected, "the swapped plate draws the same frame");
 }
 
 struct OnDemand {
