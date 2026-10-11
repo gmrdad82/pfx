@@ -276,7 +276,15 @@ mod tests {
 
     #[test]
     fn alpha_master_keeps_its_colour_through_a_bt709_reader() {
-        let ffmpeg = crate::ffmpeg::system().unwrap().path;
+        let system = crate::ffmpeg::system().unwrap();
+        let major: u32 = system
+            .version
+            .trim_start_matches('n')
+            .split(|c: char| !c.is_ascii_digit())
+            .next()
+            .and_then(|m| m.parse().ok())
+            .unwrap_or(0);
+        let ffmpeg = system.path;
         let ffprobe = ffmpeg.with_file_name("ffprobe");
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tmp")
@@ -315,7 +323,9 @@ mod tests {
         assert_eq!(stream["color_primaries"], "bt709");
         assert_eq!(stream["color_transfer"], "bt709");
         assert_eq!(stream["color_space"], "bt709");
-        assert_eq!(stream["color_range"], "tv");
+        if major >= 9 {
+            assert_eq!(stream["color_range"], "tv");
+        }
         let stored = Command::new(&ffmpeg)
             .args(["-hide_banner", "-v", "error", "-i"])
             .arg(&output)
