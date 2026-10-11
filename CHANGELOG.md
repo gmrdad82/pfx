@@ -12,3 +12,21 @@
 ### Fixed
 
 - gpu: keep the pacer's last slice timing per thread.
+
+## v0.25.2 — 2026-10-08
+
+### Fixed
+
+- steam stage: accept builds under the tree's target link.
+
+## v0.25.1 — 2026-10-08
+
+### Fixed
+
+- steam stage: accept builds under CARGO_TARGET_DIR.
+
+## v0.25.0 — 2026-10-08
+
+### Added
+
+- The first public release: the engine's crates, the `pfx` tool and the game launcher, from one fresh commit.
