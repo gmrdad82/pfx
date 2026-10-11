@@ -302,6 +302,73 @@ fn device_format_features(
     }
 }
 
+const DRM_FORMAT_MODIFIER: &std::ffi::CStr = c"VK_EXT_image_drm_format_modifier";
+const IMAGE_FORMAT_LIST: &std::ffi::CStr = c"VK_KHR_image_format_list";
+const VULKAN_1_2: u32 = (1 << 22) | (2 << 12);
+
+fn device_extensions(
+    supports: impl Fn(&std::ffi::CStr) -> bool,
+    api_version: u32,
+) -> Vec<&'static std::ffi::CStr> {
+    let format_list = supports(IMAGE_FORMAT_LIST);
+    if !supports(DRM_FORMAT_MODIFIER) || !(format_list || api_version >= VULKAN_1_2) {
+        return Vec::new();
+    }
+    if format_list {
+        vec![IMAGE_FORMAT_LIST, DRM_FORMAT_MODIFIER]
+    } else {
+        vec![DRM_FORMAT_MODIFIER]
+    }
+}
+
+async fn request_device(
+    adapter: &wgpu::Adapter,
+    desc: &wgpu::DeviceDescriptor<'_>,
+) -> Result<(wgpu::Device, wgpu::Queue), String> {
+    if let Some(opened) = open_vulkan_with_extensions(adapter, desc) {
+        return opened;
+    }
+    adapter
+        .request_device(desc)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn open_vulkan_with_extensions(
+    adapter: &wgpu::Adapter,
+    desc: &wgpu::DeviceDescriptor<'_>,
+) -> Option<Result<(wgpu::Device, wgpu::Queue), String>> {
+    let opened = {
+        let hal = unsafe { adapter.as_hal::<wgpu::hal::api::Vulkan>() }?;
+        let capabilities = hal.physical_device_capabilities();
+        let wanted = device_extensions(
+            |name| capabilities.supports_extension(name),
+            capabilities.properties().api_version,
+        );
+        if wanted.is_empty() {
+            return None;
+        }
+        unsafe {
+            hal.open_with_callback(
+                desc.required_features,
+                &desc.memory_hints,
+                Some(Box::new(move |args| {
+                    for name in wanted {
+                        if !args.extensions.contains(&name) {
+                            args.extensions.push(name);
+                        }
+                    }
+                })),
+            )
+        }
+    };
+    Some(match opened {
+        Ok(opened) => unsafe { adapter.create_device_from_hal(opened, desc) }
+            .map_err(|error| error.to_string()),
+        Err(error) => Err(error.to_string()),
+    })
+}
+
 async fn open(
     instance: &wgpu::Instance,
     surface: Option<&wgpu::Surface<'static>>,
@@ -340,15 +407,17 @@ async fn open(
         Some(requested) => requested_limits(requested, &supported).map_err(refuse)?,
         None => default_limits(&supported),
     };
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
+    let (device, queue) = request_device(
+        &adapter,
+        &wgpu::DeviceDescriptor {
             label: Some("pfx"),
             required_features,
             required_limits,
             ..Default::default()
-        })
-        .await
-        .map_err(|error| refuse(GpuShortfall::Device(error.to_string())))?;
+        },
+    )
+    .await
+    .map_err(|error| refuse(GpuShortfall::Device(error)))?;
     let gpu = Gpu {
         adapter,
         device,
@@ -1190,6 +1259,25 @@ mod tests {
         );
         let at = floor.limits.clone();
         assert!(floor.limits.check_limits(&default_limits(&at)));
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn a_vulkan_device_enables_drm_format_modifiers_when_offered() {
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let offered =
+            unsafe { gpu.adapter.as_hal::<wgpu::hal::api::Vulkan>() }.is_some_and(|hal| {
+                hal.physical_device_capabilities()
+                    .supports_extension(DRM_FORMAT_MODIFIER)
+            });
+        if !offered {
+            return;
+        }
+        let device = unsafe { gpu.device.as_hal::<wgpu::hal::api::Vulkan>() }.unwrap();
+        let enabled = device.enabled_device_extensions();
+        assert!(enabled.contains(&DRM_FORMAT_MODIFIER));
+        assert!(enabled.contains(&c"VK_EXT_external_memory_dma_buf"));
+        assert!(enabled.contains(&c"VK_KHR_external_memory_fd"));
     }
 
     #[test]
