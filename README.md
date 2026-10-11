@@ -24,11 +24,36 @@ It is for people and AI agents who build games and real-time scenes as code and 
 
 ## Install
 
+Download the `pfx` binary for your system from the [latest release](https://github.com/gmrdad82/pfx/releases/latest); `SHA256SUMS` beside the archives lists their checksums. Replace `vX.Y.Z` below with the release's tag.
+
+Linux (x86_64):
+
+```
+curl -LO https://github.com/gmrdad82/pfx/releases/download/vX.Y.Z/pfx-vX.Y.Z-linux-x86_64.tar.gz
+tar -xzf pfx-vX.Y.Z-linux-x86_64.tar.gz pfx && install -m 755 pfx ~/.local/bin/pfx
+```
+
+macOS (Apple Silicon):
+
+```
+curl -LO https://github.com/gmrdad82/pfx/releases/download/vX.Y.Z/pfx-vX.Y.Z-macos-arm64.tar.gz
+tar -xzf pfx-vX.Y.Z-macos-arm64.tar.gz pfx && install -m 755 pfx /usr/local/bin/pfx
+```
+
+Windows (x86_64, PowerShell):
+
+```
+Invoke-WebRequest https://github.com/gmrdad82/pfx/releases/download/vX.Y.Z/pfx-vX.Y.Z-windows-x86_64.zip -OutFile pfx.zip
+Expand-Archive pfx.zip -DestinationPath "$env:LOCALAPPDATA\pfx"; [Environment]::SetEnvironmentVariable("Path", "$env:Path;$env:LOCALAPPDATA\pfx", "User")
+```
+
+Or build it from source, with Rust 1.97 or newer (on Debian or Ubuntu also `libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev`):
+
 ```
 cargo install --locked --git https://github.com/gmrdad82/pfx --tag vX.Y.Z pfx
 ```
 
-Replace `vX.Y.Z` with a [release](https://github.com/gmrdad82/pfx/releases) tag. Building needs Rust 1.97 or newer and, on Debian or Ubuntu, `libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev`.
+At run time pfx needs a GPU through Vulkan on Linux, Metal on macOS, and DirectX 12 or Vulkan on Windows, and, for clips, an ffmpeg 9 or later on `PATH` with libx264 and zscale (on macOS, Homebrew's `ffmpeg-full`; its plain `ffmpeg` has no zscale).
 
 A game depends on the crates it uses by the same tag:
 
