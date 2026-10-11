@@ -8,6 +8,7 @@ struct Frame {
     sun_dir: vec4f,
     sun_color: vec4f,
     lens: vec4f,
+    window: vec4u,
 }
 override TOTAL_BOUNCES: u32 = 16u;
 override DIFFUSE_BOUNCES: u32 = 4u;
@@ -1299,15 +1300,17 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_id) local
     let gid=vec3u(group.x*8u+local.x,block*8u+local.y,0u);
     if (lane<first_lane || lane>=end_lane || gid.x>=frame.size.x || gid.y>=frame.size.y) { return; }
     let index=gid.y*frame.size.x+gid.x;
+    let pixel=gid.xy+frame.window.zw;
+    let stream=pixel.y*frame.window.x+pixel.x;
     var sum=Accum(vec4f(0.0),vec4f(0.0),vec4f(0.0));
     if (frame.size.z>0u) { sum=accum[index]; }
     if (sum.color.w<0.0) { return; }
     for (var sample=0u;sample<frame.size.w;sample++) {
         var first_albedo=vec4f(0.0);
         var first_normal=vec4f(0.0);
-        var state=pcg(index*1973u+pcg(frame.counts.z*9277u+(frame.size.z+sample)*7919u+26699u));
+        var state=pcg(stream*1973u+pcg(frame.counts.z*9277u+(frame.size.z+sample)*7919u+26699u));
         let jitter=vec2f(random(&state),random(&state));
-        let ndc=(vec2f(gid.xy)+jitter)/vec2f(frame.size.xy)*2.0-1.0;
+        let ndc=(vec2f(pixel)+jitter)/vec2f(frame.window.xy)*2.0-1.0;
         let kind=u32(round(frame.origin.w));
         var direction=normalize(frame.forward.xyz+frame.right.xyz*(ndc.x+frame.lens.x)+frame.up.xyz*(-ndc.y+frame.lens.y));
         var origin=frame.origin.xyz;

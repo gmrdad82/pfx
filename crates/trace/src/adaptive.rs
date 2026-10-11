@@ -34,6 +34,10 @@ impl Adaptive {
             && self.growth > 1.0
     }
 
+    pub fn margin(&self) -> u32 {
+        self.rounds().len() as u32
+    }
+
     pub fn rounds(&self) -> Vec<u32> {
         let mut rounds = vec![(self.min_samples / 2).max(1)];
         loop {
@@ -106,7 +110,19 @@ impl Trace {
         adaptive: Adaptive,
         seed: u32,
         pacer: &mut Pacer,
+        between: impl FnMut(f64) -> T,
+    ) -> Result<Converged, String> {
+        self.sample_adaptive_with(gpu, adaptive, seed, pacer, between, |_| {})
+    }
+
+    pub fn sample_adaptive_with<T: Turned>(
+        &mut self,
+        gpu: &Gpu,
+        adaptive: Adaptive,
+        seed: u32,
+        pacer: &mut Pacer,
         mut between: impl FnMut(f64) -> T,
+        mut reached: impl FnMut(Round),
     ) -> Result<Converged, String> {
         if !adaptive.valid() {
             return Err("adaptive sampling needs a positive threshold, a growth over 1 and at least 2 samples".into());
@@ -234,10 +250,12 @@ impl Trace {
             } else {
                 pixels
             };
-            converged.rounds.push(Round {
+            let round = Round {
                 samples: target,
                 active: running,
-            });
+            };
+            converged.rounds.push(round);
+            reached(round);
             if running == 0 {
                 break;
             }

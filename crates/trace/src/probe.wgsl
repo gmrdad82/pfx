@@ -12,7 +12,7 @@ fn probe(@builtin(global_invocation_id) gid: vec3u) {
     _ = instance_surfaces[0];
     _ = content_layers[0];
     if (gid.x>=frame.size.x || gid.y>=frame.size.y) { return; }
-    let ndc=(vec2f(gid.xy)+vec2f(0.5))/vec2f(frame.size.xy)*2.0-1.0;
+    let ndc=(vec2f(gid.xy+frame.window.zw)+vec2f(0.5))/vec2f(frame.window.xy)*2.0-1.0;
     let kind=u32(round(frame.origin.w));
     var direction=normalize(frame.forward.xyz+frame.right.xyz*(ndc.x+frame.lens.x)+frame.up.xyz*(-ndc.y+frame.lens.y));
     var origin=frame.origin.xyz;

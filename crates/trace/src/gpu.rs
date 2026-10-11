@@ -109,6 +109,7 @@ pub(crate) struct Frame {
     sun_dir: [f32; 4],
     sun_color: [f32; 4],
     lens: [f32; 4],
+    window: [u32; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1426,6 +1427,7 @@ impl Trace {
                 detail.lens.aperture * 0.5,
                 detail.lens.focus_distance,
             ],
+            window: [width, height, 0, 0],
         };
         let mut base = base;
         detail.projection.place(&mut base);
@@ -1481,6 +1483,28 @@ impl Trace {
         self.base.up = vec4(camera.up, self.base.up[3]);
         self.samples = 0;
         Ok(())
+    }
+
+    pub fn set_window(&mut self, full: [u32; 2], origin: [u32; 2]) -> Result<(), String> {
+        let fits = |k: usize, side: u32| {
+            origin[k]
+                .checked_add(side)
+                .is_some_and(|end| end <= full[k])
+        };
+        if !fits(0, self.width) || !fits(1, self.height) {
+            return Err("the window must lie inside the full frame".into());
+        }
+        if u64::from(full[0]) * u64::from(full[1]) > u64::from(u32::MAX) {
+            return Err("the full frame is too large".into());
+        }
+        self.base.window = [full[0], full[1], origin[0], origin[1]];
+        self.samples = 0;
+        Ok(())
+    }
+
+    pub fn window(&self) -> ([u32; 2], [u32; 2]) {
+        let [width, height, x, y] = self.base.window;
+        ([width, height], [x, y])
     }
 
     pub fn set_lens(&mut self, lens: Lens) -> Result<(), String> {

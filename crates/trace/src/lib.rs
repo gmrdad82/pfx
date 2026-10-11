@@ -15,7 +15,7 @@ pub mod stage;
 pub mod text;
 pub const TRACE_WGSL: &str = include_str!("trace.wgsl");
 
-pub use adaptive::{Adaptive, Converged};
+pub use adaptive::{Adaptive, Converged, Round};
 pub use gpu::{Camera, Output, Projection, Scene, Sun, Trace, TraceError, equirect_direction};
 pub use matte::Matte;
 pub use probe::Probe;

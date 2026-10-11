@@ -346,6 +346,14 @@ Each pair of neighbouring pixels is one candidate edge, half-way between them:
 
 The result, `Converged`, lists each round's samples and running pixels, the mean samples per pixel and the run's `Stats`. `Trace::sample_counts(gpu)` reads every pixel's own count. The same seed and threshold stop the same pixels on the same GPU. `adaptive_sampling_stops_where_the_image_is_clean` (GPU): on the catcher scene at 0.02 the sky stops at 16 samples, the mean is 105.5 samples against a cap of 1024, regions agree with 1024 fixed samples within 3%, and a second run gives the same rounds and bytes.
 
+`Trace::sample_adaptive_with` takes one more closure, called with each `Round` as it is reached (its samples and the pixels still running), so a caller can report a real fraction while the trace runs; `sample_adaptive` is it with a closure that does nothing.
+
+### A window of a larger frame
+
+`Trace::set_window(full, origin)` makes a trace of `width × height` stand for the pixels at `origin` of a `full[0] × full[1]` frame: each pixel takes its ray (the normalised device coordinates, the lens shift and the depth of field) and its random stream (the pixel's index in the full frame) from where it sits in the full frame (`Trace::probe` too), so a window traced with the full frame's camera, seed and samples gives the full frame's pixels, bit for bit. Pass the camera made for the full frame's aspect; the window must lie inside the full frame, and setting it starts the samples again. `Trace::window()` reads it back; a new trace is its own full frame, and a full-frame trace gives the same bytes as before windows came in.
+
+With fixed samples the window needs nothing more. With adaptive sampling a pixel stops when its 3×3 neighbourhood has converged, so a pixel at the window's edge, which does not see the neighbours past it, can stop at another round than in the full frame, and the difference walks inward one pixel per round. Trace a window grown by `Adaptive::margin()` pixels on each side (one per round, clamped to the full frame) and keep its middle: those pixels match the full frame's. `a_window_traces_the_same_pixels_as_the_full_frame` (GPU) checks both cases on a 96 × 64 frame with a sun, a metal ball and depth of field.
+
 ### A clean 512 px icon
 
 `a_clean_icon_at_512` and `clean_icon_budget` (GPU, release build) render a neutral icon at 512×512: a brushed-metal rounded tile (`#8c9096`-like grey, metal, roughness 0.22) under a red clearcoated capsule on a catcher floor, the default `Rig` and its room, orthographic from 45° above. Errors are 8-bit code values of the composite over mid-grey against 16,384 fixed samples (which carry about 0.6 of noise themselves); GPU time is the sum of the paced submissions (none over 6.7 ms) on the RX 9060 XT, shared with other jobs.
