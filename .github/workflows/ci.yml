@@ -39,7 +39,9 @@ jobs:
           sudo apt-get install -y libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev ffmpeg
       - name: ffmpeg
         if: runner.os == 'macOS' && matrix.phase == 'tests'
-        run: brew install ffmpeg
+        run: |
+          brew install ffmpeg-full
+          echo "$(brew --prefix ffmpeg-full)/bin" >> "$GITHUB_PATH"
       - name: ffmpeg
         if: runner.os == 'Windows' && matrix.phase == 'tests'
         run: choco install ffmpeg -y --no-progress

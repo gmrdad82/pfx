@@ -617,13 +617,13 @@ mod launcher {
         list.iter().map(|arg| arg.to_string()).collect()
     }
 
-    #[cfg(any(feature = "tools", not(windows)))]
+    #[cfg(not(windows))]
     fn probe(_args: &[String]) -> Result<(), String> {
         println!("pfx-game-link-probe-6c1d");
         Ok(())
     }
 
-    #[cfg(any(feature = "tools", not(windows)))]
+    #[cfg(not(windows))]
     fn register(commands: &mut Commands) {
         commands.add("probe", "prints the link probe", probe);
     }

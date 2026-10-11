@@ -151,7 +151,7 @@ pub fn stop_like(signal: i32) -> ! {
 pub fn install() -> Result<(), String> {
     #[cfg(not(unix))]
     {
-        return Ok(());
+        Ok(())
     }
     #[cfg(unix)]
     {

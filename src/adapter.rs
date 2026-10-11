@@ -912,6 +912,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn turns_reach_pgpu_with_their_pacing() {
         if std::env::var_os("PFX_TURN_CHILD").is_some() {
