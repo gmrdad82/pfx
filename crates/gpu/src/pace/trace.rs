@@ -1,11 +1,15 @@
+use std::cell::Cell;
 use std::io::Write;
 use std::panic::Location;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use super::{Frozen, Moment, Timing};
+
+thread_local! {
+    static NEXT_SLICE: Cell<u8> = const { Cell::new(0) };
+}
 
 pub const TRACE_VAR: &str = "PFX_TURN_TRACE";
 
@@ -14,7 +18,6 @@ pub const COLUMNS: &str =
 
 static EPOCH: OnceLock<Instant> = OnceLock::new();
 static LAST: Mutex<Option<Moment>> = Mutex::new(None);
-static NEXT_SLICE: AtomicU8 = AtomicU8::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
@@ -77,17 +80,14 @@ pub(super) fn created(site: &Location<'_>) {
 }
 
 pub(super) fn slice_timed(timing: Timing) {
-    NEXT_SLICE.store(
-        match timing {
-            Timing::Gpu => 1,
-            Timing::Cpu => 2,
-        },
-        Ordering::Relaxed,
-    );
+    NEXT_SLICE.set(match timing {
+        Timing::Gpu => 1,
+        Timing::Cpu => 2,
+    });
 }
 
 pub(super) fn take_slice() -> Option<Timing> {
-    match NEXT_SLICE.swap(0, Ordering::Relaxed) {
+    match NEXT_SLICE.replace(0) {
         1 => Some(Timing::Gpu),
         2 => Some(Timing::Cpu),
         _ => None,
