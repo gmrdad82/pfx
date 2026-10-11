@@ -442,9 +442,8 @@ fn the_adapter_library_ends_the_process_as_soon_as_it_answers_close() {
     drop(input);
 }
 
-fn ffmpeg_pin() -> PathBuf {
-    let pin = pfx_run::ffmpeg::pin().unwrap();
-    pfx_run::ffmpeg::resolve(&pfx_run::ffmpeg::cache().unwrap(), "pfx", &pin).unwrap()
+fn system_ffmpeg() -> PathBuf {
+    pfx_run::ffmpeg::system().unwrap().path
 }
 
 fn clip_with(base: &std::path::Path, run: &str, audio: Option<&str>) -> serde_json::Value {
@@ -512,7 +511,7 @@ fn an_adapters_audio_is_muxed_into_the_x264_master_and_reproduces() {
     let base = root
         .join("tmp")
         .join(format!("e2e-audio-{}", std::process::id()));
-    let ffmpeg = ffmpeg_pin();
+    let ffmpeg = system_ffmpeg();
     let silent = clip_with(&base, "silent", None);
     assert!(silent["audio"].is_null());
     let silent_info = probe(&ffmpeg, &master_of(&base, "silent"));

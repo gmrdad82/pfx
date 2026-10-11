@@ -276,8 +276,7 @@ mod tests {
 
     #[test]
     fn alpha_master_keeps_its_colour_through_a_bt709_reader() {
-        let pin = crate::ffmpeg::pin().unwrap();
-        let ffmpeg = crate::ffmpeg::resolve(&crate::ffmpeg::cache().unwrap(), "pfx", &pin).unwrap();
+        let ffmpeg = crate::ffmpeg::system().unwrap().path;
         let ffprobe = ffmpeg.with_file_name("ffprobe");
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tmp")
@@ -367,8 +366,7 @@ mod tests {
 
     #[test]
     fn checker_master_decodes_with_tags_and_one_second_keyframes() {
-        let pin = crate::ffmpeg::pin().unwrap();
-        let ffmpeg = crate::ffmpeg::resolve(&crate::ffmpeg::cache().unwrap(), "pfx", &pin).unwrap();
+        let ffmpeg = crate::ffmpeg::system().unwrap().path;
         let ffprobe = ffmpeg.with_file_name("ffprobe");
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tmp")
@@ -427,8 +425,7 @@ mod tests {
 
     #[test]
     fn x264_master_keeps_its_colour_through_a_bt709_reader() {
-        let pin = crate::ffmpeg::pin().unwrap();
-        let ffmpeg = crate::ffmpeg::resolve(&crate::ffmpeg::cache().unwrap(), "pfx", &pin).unwrap();
+        let ffmpeg = crate::ffmpeg::system().unwrap().path;
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tmp")
             .join(format!("x264-swatch-{}", std::process::id()));
@@ -554,8 +551,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "linux")]
     fn masters_are_byte_identical_on_any_cpu_count() {
-        let pin = crate::ffmpeg::pin().unwrap();
-        let ffmpeg = crate::ffmpeg::resolve(&crate::ffmpeg::cache().unwrap(), "pfx", &pin).unwrap();
+        let ffmpeg = crate::ffmpeg::system().unwrap().path;
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tmp")
             .join(format!("master-threads-{}", std::process::id()));

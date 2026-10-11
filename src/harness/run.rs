@@ -99,7 +99,6 @@ pub struct Options {
 struct Session {
     tmp: PathBuf,
     dir: PathBuf,
-    tools_dir: PathBuf,
     started: Instant,
     made_at: String,
     stages: BTreeMap<String, f64>,
@@ -401,7 +400,8 @@ struct Target {
 
 #[derive(Serialize)]
 struct EncoderRecord {
-    url: String,
+    path: String,
+    version: String,
     sha256: String,
 }
 
@@ -718,7 +718,6 @@ fn session(o: &Options, kind: &str, job: &mut Job) -> Result<Session, String> {
     Ok(Session {
         tmp,
         dir,
-        tools_dir,
         started,
         made_at,
         stages,
@@ -1000,7 +999,6 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
     let Session {
         tmp,
         dir,
-        tools_dir,
         started,
         made_at,
         mut stages,
@@ -1156,7 +1154,7 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
     stages.insert("trace".into(), t1.elapsed().as_secs_f64());
     let t2 = Instant::now();
     let ffmpeg = if o.encode {
-        Some(tools::ffmpeg(&tools_dir)?)
+        Some(tools::ffmpeg()?)
     } else {
         None
     };
@@ -1201,7 +1199,7 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
     });
     let silent = scratch.path.join("silent.master.mp4");
     let video_out = if with_audio { &silent } else { &master };
-    let mut encoder = if let Some((ff, _)) = &ffmpeg {
+    let mut encoder = if let Some(tools::Ffmpeg { path: ff, .. }) = &ffmpeg {
         Some(encode::from_raw(ff, mw, mh, master_fps, video_out)?)
     } else {
         None
@@ -1257,7 +1255,7 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
             return Err(format!("ffmpeg failed encoding {}", master.display()));
         }
         if with_audio {
-            let ff = &ffmpeg.as_ref().ok_or("ffmpeg unavailable")?.0;
+            let ff = &ffmpeg.as_ref().ok_or("ffmpeg unavailable")?.path;
             master_encode::mux_audio(ff, &silent, &wav, clip_seconds, &master)?;
         }
         job.stage(
@@ -1275,7 +1273,7 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
         job.progress(1);
         if shot.cutouts {
             let alpha = dir.join(format!("{master_stem}.alpha.master.mov"));
-            let ff = &ffmpeg.as_ref().ok_or("ffmpeg unavailable")?.0;
+            let ff = &ffmpeg.as_ref().ok_or("ffmpeg unavailable")?.path;
             master_encode::alpha_sequence(ff, &cut_dir, master_fps, &alpha)?;
             outputs_made.push(Made {
                 path: alpha,
@@ -1337,9 +1335,10 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
             files: tools::hash_tree(&fixtures)?,
         },
         driver: opened.driver,
-        ffmpeg: ffmpeg.map(|(_, pin)| EncoderRecord {
-            url: pin.url,
-            sha256: pin.sha256,
+        ffmpeg: ffmpeg.map(|f| EncoderRecord {
+            path: f.path.display().to_string(),
+            version: f.version,
+            sha256: f.sha256,
         }),
         master: master_target.clone(),
         targets: vec![master_target],
@@ -1423,7 +1422,8 @@ fn reencode_mode(path: &Path, archive_enabled: bool) -> Result<(), String> {
             .as_u64()
             .or_else(|| manifest["params"]["fps"].as_u64())
             .unwrap_or(60) as u32;
-        let (ffmpeg, pin) = tools::ffmpeg(&tools::cache()?)?;
+        let system = tools::ffmpeg()?;
+        let ffmpeg = system.path.clone();
         let new_path = dir.join(encode::master(stem));
         job.stage(stages::ENCODE, Some(1), "outputs");
         encode::from_file(&ffmpeg, &old_path, fps, &new_path)?;
@@ -1467,7 +1467,7 @@ fn reencode_mode(path: &Path, archive_enabled: bool) -> Result<(), String> {
         }
         manifest["files"] = json!(files);
         manifest["outputs"] = outputs();
-        manifest["ffmpeg"] = json!({"url": pin.url, "sha256": pin.sha256});
+        manifest["ffmpeg"] = system.record();
         manifest["encoded_by"] = json!({"name": TOOL, "version": env!("CARGO_PKG_VERSION")});
         if let Some(value) = &converted_version {
             manifest["version"] = json!(value);
@@ -1599,7 +1599,7 @@ mod tests {
             .join(format!("ffv1-convert-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("alpha-clip-fixture-64x64-4fps.master.mkv");
-        let (ffmpeg, _) = tools::ffmpeg(&tools::cache().unwrap()).unwrap();
+        let ffmpeg = tools::ffmpeg().unwrap().path;
         let status = Command::new(&ffmpeg)
             .args([
                 "-hide_banner",

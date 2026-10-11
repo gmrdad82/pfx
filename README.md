@@ -112,7 +112,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-theme` | the colours, fonts and type the editor and the dev HUD paint with |
 | `pfx-bench` | `pfx bench` |
 | `pfx-assets` | path-traced renders of logos, icons and scenes from SVG masters and small specs |
-| `pfx-run` | the `pfx` tool's process plumbing: GPU queueing, ending children cleanly and the pinned ffmpeg |
+| `pfx-run` | the `pfx` tool's process plumbing: GPU queueing, ending children cleanly and the system ffmpeg |
 
 ## Build and test
 

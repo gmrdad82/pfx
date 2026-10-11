@@ -1,4 +1,4 @@
-pub use pfx_run::ffmpeg::Pin;
+pub use pfx_run::ffmpeg::Ffmpeg;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -206,10 +206,6 @@ fn config() -> Result<Config, String> {
     toml::from_str(CONFIG).map_err(|e| format!("render.toml: {e}"))
 }
 
-pub fn pin() -> Result<Pin, String> {
-    pfx_run::ffmpeg::pin()
-}
-
 const STAMP: &str = ".used";
 const PRUNE_DAYS: u64 = 30;
 
@@ -384,8 +380,8 @@ pub fn hash_tree(root: &Path) -> Result<BTreeMap<String, String>, String> {
     Ok(out)
 }
 
-pub fn ffmpeg(tools: &Path) -> Result<(PathBuf, Pin), String> {
-    pfx_run::ffmpeg::ffmpeg(tools, pfx_run::job::TOOL)
+pub fn ffmpeg() -> Result<Ffmpeg, String> {
+    pfx_run::ffmpeg::system()
 }
 
 pub struct Built {
@@ -938,18 +934,6 @@ source = "git+ssh://git@github.com/gmrdad82/pfx.git?tag=v0.21.0#edd84808a6a906c5
     }
 
     use super::*;
-
-    #[test]
-    fn the_config_pins_ffmpeg_for_linux_and_only_keys_the_mirror_holds() {
-        let pins = pfx_run::ffmpeg::pins().unwrap();
-        assert!(pins.contains_key("linux-x86_64"));
-        for pin in pins.values() {
-            assert!(pin.url.starts_with("https://deps.pitomd.com/ffmpeg/"));
-            assert_eq!(pin.sha256.len(), 64);
-            assert!(pin.size > 0);
-        }
-        assert!(!CONFIG.contains("[apps."));
-    }
 
     fn sample_app() -> App {
         App {

@@ -15,7 +15,7 @@ pub fn video_size(text: &str) -> Option<(u32, u32)> {
 }
 
 fn ffmpeg() -> Result<PathBuf, String> {
-    pfx_run::ffmpeg::resolve(&pfx_run::ffmpeg::cache()?, "pfx", &pfx_run::ffmpeg::pin()?)
+    Ok(pfx_run::ffmpeg::system()?.path)
 }
 
 pub struct Pipe {

@@ -1867,8 +1867,7 @@ fn clip(opts: &Opts, scene: &Scene, live: &mut Job) -> Result<(), String> {
     let mut manifest = manifest(scene, "clip", &result, params, outputs, files);
     manifest["made"] = json!(made_at);
     manifest["pinned"] = json!(pinned(opts) && recipes_pinned(scene));
-    let pin = pfx_run::ffmpeg::pin()?;
-    manifest["ffmpeg"] = json!({"url": pin.url, "sha256": pin.sha256});
+    manifest["ffmpeg"] = pfx_run::ffmpeg::system()?.record();
     let manifest_path = out_dir.join(format!("{stem}.json"));
     write_manifest(&manifest_path, &manifest)?;
     if !opts.keep_frames && !opts.no_encode {
@@ -1948,8 +1947,7 @@ fn reencode(manifest_path: &Path, live: &mut Job) -> Result<(), String> {
             .unwrap_or("unknown");
         manifest["version"] = json!(digest.chars().take(12).collect::<String>());
     }
-    let pin = pfx_run::ffmpeg::pin()?;
-    manifest["ffmpeg"] = json!({"url": pin.url, "sha256": pin.sha256});
+    manifest["ffmpeg"] = pfx_run::ffmpeg::system()?.record();
     write_manifest(manifest_path, &manifest)?;
     std::fs::remove_file(old_path).map_err(|e| e.to_string())?;
     live.progress(1);
