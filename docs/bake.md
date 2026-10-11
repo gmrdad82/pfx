@@ -308,6 +308,8 @@ shift = [0.0, -0.1]
 
 The plate ignores the camera's `fstop` and `focus`: it is traced through a pinhole, and the live renderer applies depth of field to the composite. The finish is live's too: the plate holds linear scene radiance before exposure.
 
+A plate traced with a very long lens from far away (a texel under about 10⁻⁵ rad, such as a view 0.13° wide from 160 m) can show hairline cracks along the edges triangles share: the tracer's ray–triangle test (Möller–Trumbore) is not watertight in `f32`. Keep the plate camera within about 20 m of what it frames, or widen the view.
+
 ### The plate camera
 
 The plate is `W' × H'` texels, `W' = 2·round(width · scale · (1 + overscan) / 2)` and `H'` likewise, so its centre lies on the view's centre. Its camera has the view's origin and axes, with the tangent extents widened by `W' / (width · scale)` and `H' / (height · scale)` and the shift divided by the same factors, so one texel spans `1 / scale` of a live pixel and the view's frame sits in the middle. Texel `(i, j)` (rows top to bottom) is traced around the ray `forward + right·(x + shift.x) + up·(−y + shift.y)`, `x = (i + ½)·2/W' − 1`, `y = (j + ½)·2/H' − 1`, where `right` and `up` carry the widened tangents; this is the tracer's own perspective ray (`docs/trace.md`). The manifest records that camera as it was traced.

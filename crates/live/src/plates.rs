@@ -1,6 +1,5 @@
 use pfx_bake::plate::{Depth, Plate, PlateCamera, anchor_blend};
 use pfx_gpu::{Gpu, GpuProfiler, wgpu};
-use wgpu::util::DeviceExt;
 
 use pfx_bake::plate::read_plate;
 use pfx_load::scene::{Draw, PlateCasters, ProxyShape, Scene};
@@ -368,7 +367,6 @@ pub struct Plates {
     towards: Vec<[f32; 3]>,
     has_transfer: bool,
     cascades: wgpu::Buffer,
-    cascade_layout: wgpu::BindGroupLayout,
     depth_near: f32,
     float_depth: bool,
     has_sun: bool,
@@ -378,11 +376,10 @@ pub struct Plates {
     settings: PlateSettings,
     uniform: wgpu::Buffer,
     bind: wgpu::BindGroup,
-    pipeline: wgpu::RenderPipeline,
+    kit: PlateKit,
     shadow_view: wgpu::TextureView,
     shadow_uniform: wgpu::Buffer,
     shadow_bind: wgpu::BindGroup,
-    shadow_pipeline: wgpu::RenderPipeline,
     casters: wgpu::Buffer,
     caster_capacity: u64,
     shadow_texel: f32,
@@ -394,28 +391,79 @@ fn upload(
     label: &str,
     format: wgpu::TextureFormat,
     size: [u32; 2],
-    layers: u32,
-    bytes: &[u8],
+    layers: &[&[u8]],
 ) -> wgpu::Texture {
-    gpu.device.create_texture_with_data(
-        &gpu.queue,
-        &wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: layers.len() as u32,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let row = size[0] * format.block_copy_size(None).unwrap_or(4);
+    for (layer, bytes) in layers.iter().enumerate() {
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: layer as u32,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(size[1]),
+            },
+            wgpu::Extent3d {
                 width: size[0],
                 height: size[1],
-                depth_or_array_layers: layers,
+                depth_or_array_layers: 1,
             },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        },
-        wgpu::util::TextureDataOrder::LayerMajor,
-        bytes,
-    )
+        );
+    }
+    texture
+}
+
+fn layered(gpu: &Gpu, label: &str, size: [u32; 2], layers: Option<&[Vec<u32>]>) -> wgpu::Texture {
+    let format = wgpu::TextureFormat::Rgb9e5Ufloat;
+    match layers {
+        Some(layers) => {
+            let bytes: Vec<&[u8]> = layers
+                .iter()
+                .map(|layer| bytemuck::cast_slice(layer))
+                .collect();
+            upload(gpu, label, format, size, &bytes)
+        }
+        None => upload(gpu, label, format, [1, 1], &[&[0; 4]]),
+    }
+}
+
+fn single<T: bytemuck::Pod>(
+    gpu: &Gpu,
+    label: &str,
+    format: wgpu::TextureFormat,
+    size: [u32; 2],
+    values: Option<&[T]>,
+) -> wgpu::Texture {
+    match values {
+        Some(values) => upload(gpu, label, format, size, &[bytemuck::cast_slice(values)]),
+        None => {
+            let zero = vec![0; format.block_copy_size(None).unwrap_or(4) as usize];
+            upload(gpu, label, format, [1, 1], &[&zero])
+        }
+    }
 }
 
 fn array_view(texture: &wgpu::Texture) -> wgpu::TextureView {
@@ -501,171 +549,21 @@ pub fn cascade_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
     ]
 }
 
-fn words<T: bytemuck::Pod>(values: &[T]) -> Vec<u8> {
-    bytemuck::cast_slice(values).to_vec()
+#[derive(Clone)]
+pub struct PlateKit {
+    layout: wgpu::BindGroupLayout,
+    cascade_layout: wgpu::BindGroupLayout,
+    shadow_layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::RenderPipeline,
+    shadow_pipeline: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
+    point: wgpu::Sampler,
+    compare: wgpu::Sampler,
 }
 
-impl Plates {
-    pub fn new(gpu: &Gpu, plate: &Plate, settings: PlateSettings) -> Result<Self, String> {
-        let manifest = &plate.manifest;
-        let size = [manifest.width, manifest.height];
-        let limit = gpu.device.limits().max_texture_dimension_2d;
-        if size[0] > limit || size[1] > limit {
-            return Err(format!(
-                "a {}x{} plate is larger than this device's {limit} texels",
-                size[0], size[1]
-            ));
-        }
-        let anchors = manifest.anchors.len() as u32;
-        let color_bytes: Vec<u8> = plate.color.iter().flat_map(|layer| words(layer)).collect();
-        let color = upload(
-            gpu,
-            "plate colour",
-            wgpu::TextureFormat::Rgb9e5Ufloat,
-            size,
-            anchors,
-            &color_bytes,
-        );
-        let sun = match &plate.sun {
-            Some(layers) => {
-                let bytes: Vec<u8> = layers.iter().flat_map(|layer| words(layer)).collect();
-                upload(
-                    gpu,
-                    "plate sun",
-                    wgpu::TextureFormat::Rgb9e5Ufloat,
-                    size,
-                    anchors,
-                    &bytes,
-                )
-            }
-            None => upload(
-                gpu,
-                "plate sun",
-                wgpu::TextureFormat::Rgb9e5Ufloat,
-                [1, 1],
-                1,
-                &[0; 4],
-            ),
-        };
-        let transfer = match &plate.transfer {
-            Some(layers) => {
-                let bytes: Vec<u8> = layers.iter().flat_map(|layer| words(layer)).collect();
-                upload(
-                    gpu,
-                    "plate transfer",
-                    wgpu::TextureFormat::Rgb9e5Ufloat,
-                    size,
-                    anchors,
-                    &bytes,
-                )
-            }
-            None => upload(
-                gpu,
-                "plate transfer",
-                wgpu::TextureFormat::Rgb9e5Ufloat,
-                [1, 1],
-                1,
-                &[0; 4],
-            ),
-        };
-        let (codes, floats, float_depth) = match &plate.depth {
-            Depth::Inverse(values) => (
-                upload(
-                    gpu,
-                    "plate depth",
-                    wgpu::TextureFormat::R16Uint,
-                    size,
-                    1,
-                    &words(values),
-                ),
-                upload(
-                    gpu,
-                    "plate depth",
-                    wgpu::TextureFormat::R32Float,
-                    [1, 1],
-                    1,
-                    &[0; 4],
-                ),
-                false,
-            ),
-            Depth::Float(values) => (
-                upload(
-                    gpu,
-                    "plate depth",
-                    wgpu::TextureFormat::R16Uint,
-                    [1, 1],
-                    1,
-                    &[0; 2],
-                ),
-                upload(
-                    gpu,
-                    "plate depth",
-                    wgpu::TextureFormat::R32Float,
-                    size,
-                    1,
-                    &words(values),
-                ),
-                true,
-            ),
-        };
-        let normal = match &plate.normal {
-            Some(values) => upload(
-                gpu,
-                "plate normal",
-                wgpu::TextureFormat::R32Uint,
-                size,
-                1,
-                &words(values),
-            ),
-            None => upload(
-                gpu,
-                "plate normal",
-                wgpu::TextureFormat::R32Uint,
-                [1, 1],
-                1,
-                &[0; 4],
-            ),
-        };
-        let ids = match &plate.id {
-            Some(values) => upload(
-                gpu,
-                "plate ids",
-                wgpu::TextureFormat::R16Uint,
-                size,
-                1,
-                &words(values),
-            ),
-            None => upload(
-                gpu,
-                "plate ids",
-                wgpu::TextureFormat::R16Uint,
-                [1, 1],
-                1,
-                &[0; 2],
-            ),
-        };
-        let shadow = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("plate shadow"),
-            size: wgpu::Extent3d {
-                width: SHADOW_SIZE,
-                height: SHADOW_SIZE,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let shadow_view = shadow.create_view(&Default::default());
+impl PlateKit {
+    pub fn new(gpu: &Gpu, cache: Option<&wgpu::PipelineCache>) -> Self {
         let device = &gpu.device;
-        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("plate uniform"),
-            size: UNIFORM_BYTES as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("plate"),
             entries: &composite_entries(),
@@ -673,12 +571,6 @@ impl Plates {
         let cascade_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("plate cascades"),
             entries: &cascade_entries(),
-        });
-        let cascades = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("plate cascades"),
-            size: crate::shadow::SAMPLE_UNIFORM_BYTES as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
         });
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("plate sampler"),
@@ -696,69 +588,6 @@ impl Plates {
             min_filter: wgpu::FilterMode::Linear,
             compare: Some(wgpu::CompareFunction::LessEqual),
             ..Default::default()
-        });
-        let views = [
-            array_view(&color),
-            array_view(&sun),
-            codes.create_view(&Default::default()),
-            floats.create_view(&Default::default()),
-            normal.create_view(&Default::default()),
-            ids.create_view(&Default::default()),
-            array_view(&transfer),
-        ];
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("plate"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&views[0]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&views[1]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&views[2]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(&views[3]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: wgpu::BindingResource::TextureView(&views[4]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::TextureView(&views[5]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 8,
-                    resource: wgpu::BindingResource::TextureView(&shadow_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 9,
-                    resource: wgpu::BindingResource::Sampler(&compare),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 10,
-                    resource: wgpu::BindingResource::TextureView(&views[6]),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 11,
-                    resource: wgpu::BindingResource::Sampler(&point),
-                },
-            ],
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("plate composite"),
@@ -807,13 +636,7 @@ impl Plates {
             }),
             multisample: Default::default(),
             multiview: None,
-            cache: None,
-        });
-        let shadow_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("plate shadow light"),
-            size: 64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
+            cache,
         });
         let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("plate shadow"),
@@ -826,14 +649,6 @@ impl Plates {
                     min_binding_size: None,
                 },
                 count: None,
-            }],
-        });
-        let shadow_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("plate shadow"),
-            layout: &shadow_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: shadow_uniform.as_entire_binding(),
             }],
         });
         let shadow_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -910,7 +725,181 @@ impl Plates {
             }),
             multisample: Default::default(),
             multiview: None,
-            cache: None,
+            cache,
+        });
+        Self {
+            layout,
+            cascade_layout,
+            shadow_layout,
+            pipeline,
+            shadow_pipeline,
+            sampler,
+            point,
+            compare,
+        }
+    }
+}
+
+impl Plates {
+    pub fn new(gpu: &Gpu, plate: &Plate, settings: PlateSettings) -> Result<Self, String> {
+        Self::with_kit(gpu, &PlateKit::new(gpu, None), plate, settings)
+    }
+
+    pub fn with_kit(
+        gpu: &Gpu,
+        kit: &PlateKit,
+        plate: &Plate,
+        settings: PlateSettings,
+    ) -> Result<Self, String> {
+        let manifest = &plate.manifest;
+        let size = [manifest.width, manifest.height];
+        let limit = gpu.device.limits().max_texture_dimension_2d;
+        if size[0] > limit || size[1] > limit {
+            return Err(format!(
+                "a {}x{} plate is larger than this device's {limit} texels",
+                size[0], size[1]
+            ));
+        }
+        let color = layered(gpu, "plate colour", size, Some(plate.color.as_slice()));
+        let sun = layered(gpu, "plate sun", size, plate.sun.as_deref());
+        let transfer = layered(gpu, "plate transfer", size, plate.transfer.as_deref());
+        let (inverse, float) = match &plate.depth {
+            Depth::Inverse(values) => (Some(values.as_slice()), None),
+            Depth::Float(values) => (None, Some(values.as_slice())),
+        };
+        let float_depth = float.is_some();
+        let codes = single(
+            gpu,
+            "plate depth",
+            wgpu::TextureFormat::R16Uint,
+            size,
+            inverse,
+        );
+        let floats = single(
+            gpu,
+            "plate depth",
+            wgpu::TextureFormat::R32Float,
+            size,
+            float,
+        );
+        let normal = single(
+            gpu,
+            "plate normal",
+            wgpu::TextureFormat::R32Uint,
+            size,
+            plate.normal.as_deref(),
+        );
+        let ids = single(
+            gpu,
+            "plate ids",
+            wgpu::TextureFormat::R16Uint,
+            size,
+            plate.id.as_deref(),
+        );
+        let shadow = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("plate shadow"),
+            size: wgpu::Extent3d {
+                width: SHADOW_SIZE,
+                height: SHADOW_SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let shadow_view = shadow.create_view(&Default::default());
+        let device = &gpu.device;
+        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("plate uniform"),
+            size: UNIFORM_BYTES as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let cascades = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("plate cascades"),
+            size: crate::shadow::SAMPLE_UNIFORM_BYTES as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let views = [
+            array_view(&color),
+            array_view(&sun),
+            codes.create_view(&Default::default()),
+            floats.create_view(&Default::default()),
+            normal.create_view(&Default::default()),
+            ids.create_view(&Default::default()),
+            array_view(&transfer),
+        ];
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("plate"),
+            layout: &kit.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&views[0]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&views[1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&views[2]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&views[3]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&views[4]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&views[5]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::Sampler(&kit.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&shadow_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::Sampler(&kit.compare),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&views[6]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::Sampler(&kit.point),
+                },
+            ],
+        });
+        let shadow_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("plate shadow light"),
+            size: 64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let shadow_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("plate shadow"),
+            layout: &kit.shadow_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: shadow_uniform.as_entire_binding(),
+            }],
         });
         let casters = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("plate casters"),
@@ -918,6 +907,7 @@ impl Plates {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        gpu.queue.submit([]);
         Ok(Self {
             info: PlateInfo {
                 width: size[0],
@@ -933,7 +923,6 @@ impl Plates {
             towards: manifest.suns.iter().map(|sun| sun.direction).collect(),
             has_transfer: plate.transfer.is_some(),
             cascades,
-            cascade_layout,
             depth_near: manifest.depth_near,
             float_depth,
             has_sun: plate.sun.is_some(),
@@ -942,12 +931,11 @@ impl Plates {
             hour: manifest.anchors[0],
             settings,
             uniform,
+            kit: kit.clone(),
             bind,
-            pipeline,
             shadow_view,
             shadow_uniform,
             shadow_bind,
-            shadow_pipeline,
             casters,
             caster_capacity: 64,
             shadow_texel: 0.0,
@@ -1178,7 +1166,7 @@ impl Plates {
                 timestamp_writes: profiler.as_deref().and_then(|p| p.render_writes(timing)),
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&self.shadow_pipeline);
+            pass.set_pipeline(&self.kit.shadow_pipeline);
             pass.set_bind_group(0, &self.shadow_bind, &[]);
             pass.set_vertex_buffer(1, self.casters.slice(..));
             for (index, instance) in casting.iter().enumerate() {
@@ -1197,7 +1185,7 @@ impl Plates {
             .write_buffer(&self.cascades, 0, &sun.0.sample_uniform(sun.1));
         let cascade_bind = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("plate cascades"),
-            layout: &self.cascade_layout,
+            layout: &self.kit.cascade_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1252,7 +1240,7 @@ impl Plates {
             occlusion_query_set: None,
         });
         crate::viewport::apply(&mut pass, live.viewport());
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(&self.kit.pipeline);
         pass.set_bind_group(0, &self.bind, &[]);
         pass.set_bind_group(1, &cascade_bind, &[]);
         pass.draw(0..3, 0..1);
