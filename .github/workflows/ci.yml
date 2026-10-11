@@ -35,6 +35,14 @@ jobs:
             os: ubuntu-26.04
           - phase: windows
             os: windows-latest
+          - phase: tests
+            os: windows-latest
+          - phase: tests
+            os: macos-latest
+          - phase: release
+            os: windows-latest
+          - phase: release
+            os: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,7 +58,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          key: ${{ matrix.phase }}
+          key: ${{ matrix.phase }}-${{ matrix.os }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Gate
         shell: bash
