@@ -856,7 +856,7 @@ struct Lanes {
 impl Lanes {
     fn new() -> Self {
         Self {
-            width: 1,
+            width: LANES,
             blocks: 1,
             widest: LANES * 2,
             most: u32::MAX,
@@ -913,10 +913,11 @@ impl Lanes {
 
     fn learn_dense(&mut self, spread: Spread) {
         if spread.single.is_finite() && spread.single > SAMPLE_SPAN_MS {
-            let fit = (f64::from(LANES) * SAMPLE_SPAN_MS * 0.5 / spread.single).floor() as u32;
-            self.widest = LANES;
-            self.width = floor_power_of_two(fit.clamp(1, LANES / 2));
-            self.last = Step::Held;
+            *self = Self {
+                width: 1,
+                widest: LANES,
+                ..Self::new()
+            };
         }
     }
 }
@@ -3148,7 +3149,9 @@ mod tests {
         assert_eq!(floor_power_of_two(1), 1);
         assert_eq!(floor_power_of_two(6), 4);
         assert_eq!(floor_power_of_two(64), 64);
+        assert_eq!(Lanes::new().width, LANES);
         let mut lanes = Lanes::new();
+        lanes.width = 1;
         assert_eq!(lanes.strips(6), 1);
         for blocks in [2, 4, 6, 6] {
             lanes.learn(4.3, 6);
@@ -3181,7 +3184,6 @@ mod tests {
         alone.learn(30.0, 1);
         assert_eq!(alone.width, 1);
         let mut dense = Lanes::new();
-        dense.width = LANES;
         dense.learn_dense(Spread {
             longest: 40.7,
             single: 0.0,
@@ -3191,7 +3193,7 @@ mod tests {
             longest: 40.7,
             single: 40.7,
         });
-        assert_eq!((dense.width, dense.widest), (8, LANES));
+        assert_eq!((dense.width, dense.widest, dense.blocks), (1, LANES, 1));
     }
 
     #[test]
@@ -3671,14 +3673,24 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" ")
         );
-        let mut sorted = after.milliseconds.clone();
+        let strips = height.div_ceil(BAND_STEP) as usize;
+        let (probe, rest) = after.milliseconds.split_at(strips);
+        assert!(
+            probe.iter().all(|ms| *ms <= SAMPLE_SPAN_MS * 8.0),
+            "probe {probe:?}"
+        );
+        let mut sorted = rest.to_vec();
         sorted.sort_by(f64::total_cmp);
         let p95 = sorted[(sorted.len() * 95).div_ceil(100).saturating_sub(1)];
         assert!(p95 <= SAMPLE_SPAN_MS, "p95 {p95}");
+        let longest = sorted.last().copied().unwrap_or(0.0);
+        assert!(longest <= SAMPLE_SPAN_MS * 1.5, "{longest}");
+        let sum = |stats: &Stats| stats.milliseconds.iter().sum::<f64>();
         assert!(
-            after.longest_ms() <= SAMPLE_SPAN_MS * 1.5,
-            "{}",
-            after.longest_ms()
+            sum(&after) <= sum(&before) * 1.5,
+            "paced {} against bands {}",
+            sum(&after),
+            sum(&before)
         );
         assert!(paced.readback(&gpu).unwrap() == banded.readback(&gpu).unwrap());
     }

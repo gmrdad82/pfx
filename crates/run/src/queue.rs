@@ -136,9 +136,9 @@ mod tests {
         assert_eq!(direct.command.get_program(), "adapter");
         assert_eq!(direct.command.get_args().count(), 0);
 
-        let missing = launch_with("clip", "pfx", "blender", false, false, true, None);
+        let missing = launch_with("clip", "pfx", "render", false, false, true, None);
         assert!(!missing.queued);
-        assert_eq!(missing.command.get_program(), "blender");
+        assert_eq!(missing.command.get_program(), "render");
 
         let wrapped = launch_with("clip", "pfx", "adapter", false, true, true, Some("2-3,6-7"));
         assert!(wrapped.queued);
@@ -178,7 +178,7 @@ mod tests {
             ]
         );
 
-        let bare = launch_with("truth", "pfx", "blender", false, true, false, None);
+        let bare = launch_with("truth", "pfx", "render", false, true, false, None);
         assert!(bare.queued);
         assert_eq!(bare.command.get_program(), "pgpu");
         let args: Vec<_> = bare
@@ -188,13 +188,13 @@ mod tests {
             .collect();
         assert_eq!(
             args,
-            ["run", "--class", "truth", "--as", "pfx", "--", "blender",]
+            ["run", "--class", "truth", "--as", "pfx", "--", "render",]
         );
     }
 
     #[test]
     fn the_job_runs_as_the_name_the_caller_gives() {
-        for name in ["alpha", "beta", "delta", "blender", "pfx"] {
+        for name in ["alpha", "beta", "delta", "render", "pfx"] {
             let wrapped = launch_with("clip", name, "adapter", false, true, true, Some("2-3"));
             let args: Vec<_> = wrapped
                 .command
@@ -203,7 +203,7 @@ mod tests {
                 .collect();
             let at = args.iter().position(|a| a == "--as").unwrap();
             assert_eq!(args[at + 1], name);
-            let bare = launch_with("truth", name, "blender", false, true, false, None);
+            let bare = launch_with("truth", name, "render", false, true, false, None);
             let args: Vec<_> = bare
                 .command
                 .get_args()
@@ -211,7 +211,7 @@ mod tests {
                 .collect();
             assert_eq!(
                 args,
-                ["run", "--class", "truth", "--as", name, "--", "blender"]
+                ["run", "--class", "truth", "--as", name, "--", "render"]
             );
         }
     }

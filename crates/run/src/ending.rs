@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn a_parent_is_read_past_a_name_with_spaces_and_brackets() {
         assert_eq!(parent("4242 (papp (x) y) S 17 4242 17 0 -1"), Some(17));
-        assert_eq!(parent("4242 (blender (x) y) S 17 4242 17 0 -1"), Some(17));
+        assert_eq!(parent("4242 (render (x) y) S 17 4242 17 0 -1"), Some(17));
         assert_eq!(parent("1 (systemd) S 0 1 1 0 -1"), Some(0));
         assert_eq!(parent("garbage"), None);
     }

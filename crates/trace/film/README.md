@@ -2,7 +2,7 @@
 
 `cycles.csv`, `wavelength.csv` and `cycles_sheet.csv` are frozen data: the outputs of three Blender scripts, rendered once in Cycles and kept as the references the tracer's film and sheet checks compare against. Nothing in the engine runs Blender to read them, and the scripts are gone (frozen on 2026-10-06, when Blender left the engine's tests). They are not regenerated; a new reference would need a new Cycles run and a new entry here.
 
-Every file was rendered with Blender 5.2.1 LTS (Arch package `blender 17:5.2.1-2`, installed 2026-09-27 and not upgraded since), Cycles on the CPU, headless, as a bare `blender -b --factory-startup -P <script> -- <out> …` under pgpu.
+Every file was rendered with Blender 5.2.1 LTS (Arch package `blender 17:5.2.1-2`, installed 2026-09-27 and not upgraded since), Cycles on the CPU, headless.
 
 | file | rows | made by | script commit | script sha256 | arguments |
 |---|---|---|---|---|---|
@@ -10,15 +10,7 @@ Every file was rendered with Blender 5.2.1 LTS (Arch package `blender 17:5.2.1-2
 | `wavelength.csv` | 95, `nm,r,g,b` | `crates/trace/film/wavelength.py` | `6104c8048f5cae7beb2c956db7080764b84363b1` (2026-10-03) | `5a64f30a259514aa38592d18771523c563820a787758b1cc3c02cde6d9aa125b` | `tmp/wavelength` (4 samples, 360 to 830 nm every 5 nm, no denoising) |
 | `cycles_sheet.csv` | 34, `budget,kind,albedo,ior,height,thickness,camera,tint,value,r,g,b` | `crates/trace/film/cycles_sheet.py` | `ff724fee942065afd7fe4381d2963db60da8dafe` (2026-10-05) | `e7dc92a44141dcc14808f4dae92f84c0a111a8abbed9a557f0f197a15a860353` | `tmp/cycles_sheet 4096` |
 
-The command of each, from a checkout of the script's commit:
-
-```
-pgpu run --class clip --as pfx -- blender -b --factory-startup -P crates/trace/film/cycles_film.py -- tmp/cycles
-pgpu run --class clip --as pfx -- blender -b --factory-startup -P crates/trace/film/wavelength.py -- tmp/wavelength
-pgpu run --class clip --as pfx -- blender -b --factory-startup -P crates/trace/film/cycles_sheet.py -- tmp/cycles_sheet 4096
-```
-
-Each writes `<out>.csv`; the file here is that output, unedited.
+Each script wrote `<out>.csv`; the file here is that output, unedited. Blender is no longer used: nothing here or in the engine runs it.
 
 | file | sha256 |
 |---|---|
