@@ -3738,6 +3738,21 @@ mod tests {
         }
     }
 
+    struct Software;
+
+    impl Software {
+        fn bvh() -> Self {
+            unsafe { std::env::set_var("PFX_TRACE_RT", "0") };
+            Self
+        }
+    }
+
+    impl Drop for Software {
+        fn drop(&mut self) {
+            unsafe { std::env::remove_var("PFX_TRACE_RT") };
+        }
+    }
+
     fn ortho(width: f32, height: f32) -> Detail {
         Detail {
             projection: Projection::Orthographic { width, height },
@@ -3937,6 +3952,7 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]
     fn stacked_glass_and_liquid_stay_within_the_span() {
+        let _software = Software::bvh();
         let gpu = pollster::block_on(Gpu::headless()).unwrap();
         let mut turns = Turns::default();
         let scene = dense_glass(48, 32);
@@ -4043,6 +4059,7 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]
     fn paced_traces_keep_the_bytes_of_eight_row_bands() {
+        let _software = Software::bvh();
         let gpu = pollster::block_on(Gpu::headless()).unwrap();
         let mut traced = Vec::new();
         let mut glass =
