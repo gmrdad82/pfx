@@ -4,7 +4,7 @@ pfx moved from wgpu 27.0.1 to wgpu 30.0.1, naga 30 and egui 0.36.2. An app that 
 
 ## Hardware ray queries
 
-- `pfx_gpu` asks for `wgpu::Features::EXPERIMENTAL_RAY_QUERY` whenever the adapter offers it (Vulkan with `VK_KHR_ray_query`, DX12 with raytracing tier 1.1) and opens the device with `wgpu::ExperimentalFeatures::enabled()` in that case only. wgpu 30's Metal backend offers no ray queries, so Apple GPUs keep the software path.
+- `pfx_gpu` asks for `wgpu::Features::EXPERIMENTAL_RAY_QUERY` whenever the adapter offers it (Vulkan with `VK_KHR_ray_query`, DX12 with raytracing tier 1.1, Metal where the device supports ray tracing, which Apple Silicon does even without ray-tracing hardware) and opens the device with `wgpu::ExperimentalFeatures::enabled()` in that case only.
 - `pfx-trace` traces with ray queries over a hardware TLAS when the device has the feature, and with its own BVH otherwise; `Trace::hardware_rays()` says which. `PFX_TRACE_RT=0` forces the software path. Both paths draw the same random numbers, so the same seed gives the same picture within float differences at triangle edges.
 - Analytic shapes (rounded boxes, cones, ellipsoids, capsules, smooth unions) are tested by the shader's exact loop on both paths. An AABB BLAS for them is behind `PFX_TRACE_RT_BOXES=1` and is not yet exact on RADV, which leaves some box candidates unreported. naga 30.0.1's `rayQueryGenerateIntersection` validity check reads the candidate's t instead of the committed one, so the trace never generates intersections; it keeps the nearest shape hit itself.
 - The ray-query trace shader takes the driver several seconds to compile the first time (about 8 s on RADV); the driver's shader cache keeps it after that.

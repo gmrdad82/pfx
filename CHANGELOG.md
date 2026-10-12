@@ -4,7 +4,7 @@
 
 ### Added
 
-- trace: hardware ray queries over a TLAS where the adapter offers them (Vulkan, DX12), the software BVH elsewhere (Metal included); 2.6x faster 4K finals and 2.3x faster drafts on the neutral desk.
+- trace: ray queries over a TLAS where the adapter offers them (Vulkan, DX12, Metal on Apple Silicon), the software BVH elsewhere; 2.6x faster 4K finals and 2.3x faster drafts on the neutral desk.
 - docs: wgpu30.md, the changes an app that uses wgpu or egui directly makes to move with pfx.
 
 ### Changed
