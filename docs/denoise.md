@@ -62,9 +62,9 @@ A frame of `pfx render` is traced adaptively and then denoised: a final to a noi
 
 | frame | size | time | budget | mean samples |
 |---|---|---|---|---|
-| 4K draft | 3840 × 2160 | 6.2 s | 10 s | 16 |
-| 4K final | 3840 × 2160 | 100.6 s | 120 s | 128 |
-| 5K final | 5120 × 2880 | 198.4 s | 240 s | 128 |
+| 4K draft | 3840 × 2160 | 5.8 s | 10 s | 16 |
+| 4K final | 3840 × 2160 | 40.4 s | 120 s | 128 |
+| 5K final | 5120 × 2880 | 71.5 s | 240 s | 128 |
 
-Before the tracer started at 64 lanes and aimed its bands at 10 ms, the same 4K frame at 1024 samples took about 169 minutes; a 1024-sample final now takes about 13 minutes, and the denoiser lets a final stop at 128.
+Before the tracer started at 64 lanes and aimed its bands at 10 ms, the same 4K frame at 1024 samples took about 169 minutes; a 1024-sample final now takes about 5 minutes, and the denoiser lets a final stop at 128. The figures are with the card to itself; the first run of these budgets, on a card shared with another job, read 6.2 s, 100.6 s and 198.4 s.
 
