@@ -3004,7 +3004,6 @@ dependencies = [
  "pfx-gpu",
  "pfx-load",
  "pfx-project",
- "pfx-report",
  "pfx-run",
  "pfx-text",
  "png 0.18.1",
@@ -3380,11 +3379,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pfx-report"
-version = "0.1.0"
-source = "git+https://github.com/gmrdad82/pfx-report?tag=v0.1.0#ef9e4b4411e77599e83464e1b9a4476bc298674d"
-
-[[package]]
 name = "pfx-run"
 version = "0.28.0"
 dependencies = [
@@ -3392,7 +3386,6 @@ dependencies = [
  "fs2",
  "hex",
  "libc",
- "pfx-report",
  "rustix 1.1.5",
  "serde",
  "serde_json",

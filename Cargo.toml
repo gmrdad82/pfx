@@ -23,7 +23,7 @@ authors.workspace = true
 default = ["harness", "editor", "bench"]
 editor = ["harness", "dep:pfx-editor"]
 bench = ["harness", "dep:pfx-bench"]
-harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-report"]
+harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -40,7 +40,6 @@ pfx-gpu = { path = "crates/gpu", optional = true }
 pfx-load = { path = "crates/load", optional = true }
 pfx-text = { path = "crates/text", features = ["subset"], optional = true }
 pollster = { version = "0.4", optional = true }
-pfx-report = { git = "https://github.com/gmrdad82/pfx-report", tag = "v0.1.0", optional = true }
 exr = { version = "1.74", optional = true }
 pfx-editor = { path = "crates/editor", optional = true }
 pfx-bench = { path = "crates/bench", optional = true }

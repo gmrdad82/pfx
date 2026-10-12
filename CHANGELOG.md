@@ -8,6 +8,7 @@
 
 ### Changed
 
+- pfx sends no crash reports and writes no job records: pfx-report left the engine and its CLI; a game that wants reports wires its own.
 - render: finals take 16 to 64 samples and drafts 6 to 12, PCG's noise at 32 to 128 and 8 to 16; the neutral desk's 4K final traces in 7.9 s of GPU time instead of 15.
 - trace: on scenes lit by small or narrow lights Sobol's mean sits up to 0.15% under PCG's (Manfred's workshop: 0.11%, about 0.25/255).
 

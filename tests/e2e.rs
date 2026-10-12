@@ -238,11 +238,6 @@ fn pfx_version_is_the_package_version() {
         lines.next(),
         Some(format!("pfx {}", env!("CARGO_PKG_VERSION")).as_str())
     );
-    assert!(
-        lines
-            .next()
-            .is_some_and(|line| line.starts_with("crash reports: off"))
-    );
     assert_eq!(lines.next(), None);
     let help = Command::new(env!("CARGO_BIN_EXE_pfx"))
         .arg("--help")

@@ -13,8 +13,6 @@ mod steam;
 
 const ABOUT: &str = "pfx, a game and render engine: scaffold, edit, bench and bake games and scenes, stage Steam builds, and render apps' shots, logos, icons and scenes offline on its path tracer.";
 
-const REPORTS_OFF: &str = "crash reports: off (this build sends none)";
-
 const USAGE: &str = "usage:
   pfx render --app <app> --shot <shot> (--clip | --still) --fixtures <dir> (--rev <tag|rev> | --app-dir <dir> | --adapter <bin>) [flags]
   pfx render --asset <kind> --product <product> [--recipes <dir>] [flags]
@@ -971,7 +969,7 @@ fn push_recipes(args: &mut Vec<String>, recipes: Vec<String>) {
     }
 }
 
-fn perform(plan: Plan, report: &pfx_report::Reporter) -> Result<(), String> {
+fn perform(plan: Plan) -> Result<(), String> {
     match plan {
         Plan::Help => {
             println!("{ABOUT}\n\n{USAGE}");
@@ -979,9 +977,6 @@ fn perform(plan: Plan, report: &pfx_report::Reporter) -> Result<(), String> {
         }
         Plan::Version => {
             println!("pfx {}", env!("CARGO_PKG_VERSION"));
-            if !report.armed() {
-                println!("{REPORTS_OFF}");
-            }
             Ok(())
         }
         Plan::App(render) => {
@@ -1085,18 +1080,11 @@ fn bench(_args: &[String]) -> Result<(), String> {
     Err("this pfx was built without the bench feature".into())
 }
 
-fn command(args: &[String]) -> &str {
-    args.first()
-        .map(String::as_str)
-        .filter(|word| COMMANDS.contains(word))
-        .unwrap_or("other")
-}
-
-fn pfx(work: Plan, args: &[String], report: &pfx_report::Reporter) -> Result<(), String> {
+fn pfx(work: Plan, args: &[String]) -> Result<(), String> {
     if args.first().is_some_and(|a| a == "render") {
         let _ = pfx_run::archive::retry_at_startup();
     }
-    perform(work, report).inspect_err(|error| report.capture(&format!("fatal: {error}")))
+    perform(work)
 }
 
 fn main() {
@@ -1105,8 +1093,6 @@ fn main() {
         std::process::exit(1);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let report = pfx_report::start("pfx", env!("CARGO_PKG_VERSION"));
-    report.breadcrumb("command", command(&args));
     if matches!(
         args.first().map(String::as_str),
         Some("render" | "encode" | "list" | "bake")
@@ -1121,7 +1107,7 @@ fn main() {
             std::process::exit(2);
         }
     };
-    if let Err(error) = pfx(work, &args, &report) {
+    if let Err(error) = pfx(work, &args) {
         if let Some(signal) = pfx_run::ending::stopped() {
             pfx_run::ending::stop_like(signal);
         }
@@ -1136,14 +1122,6 @@ mod tests {
 
     fn words(line: &str) -> Vec<String> {
         line.split_whitespace().map(str::to_string).collect()
-    }
-
-    #[test]
-    fn a_report_names_only_a_command_from_pfxs_own_list() {
-        assert_eq!(command(&words("render --fixtures /work/fx")), "render");
-        assert_eq!(command(&words("/work/secret render")), "other");
-        assert_eq!(command(&words("--app beta")), "other");
-        assert_eq!(command(&[]), "other");
     }
 
     fn app(line: &str) -> AppRender {

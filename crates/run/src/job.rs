@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 pub const TOOL: &str = "pfx";
 pub const HD_DETAIL: &str = "hd: ";
@@ -24,102 +23,38 @@ pub mod stages {
     pub const ARCHIVE_RETRY: &[&str] = &[ARCHIVE];
 }
 
-pub struct Job {
-    inner: Option<pfx_report::Job>,
-    rendered: AtomicU64,
-    plan: Vec<&'static str>,
-}
+pub struct Job;
 
 impl Job {
     pub fn disabled() -> Job {
-        Job {
-            inner: None,
-            rendered: AtomicU64::new(0),
-            plan: Vec::new(),
-        }
+        Job
     }
 
-    pub fn start(tool: &str, app: Option<&str>, label: &str) -> Job {
-        Job {
-            inner: Some(pfx_report::job(tool, app, label)),
-            rendered: AtomicU64::new(0),
-            plan: Vec::new(),
-        }
+    pub fn start(_tool: &str, _app: Option<&str>, _label: &str) -> Job {
+        Job
     }
 
-    pub fn plan(&mut self, names: &[&'static str]) {
-        self.plan = names.to_vec();
-        self.declare();
-    }
+    pub fn plan(&mut self, _names: &[&'static str]) {}
 
-    pub fn archiving(&mut self, runs: bool) {
-        if runs {
-            self.stage(stages::ARCHIVE, None, "outputs");
-        } else if self.plan.contains(&stages::ARCHIVE) {
-            self.plan.retain(|name| *name != stages::ARCHIVE);
-            self.declare();
-        }
-    }
+    pub fn archiving(&mut self, _runs: bool) {}
 
-    fn declare(&self) {
-        if let Some(job) = &self.inner {
-            job.stages(&self.plan);
-        }
-    }
+    pub fn detail(&mut self, _detail: String) {}
 
-    fn with(&mut self, set: impl FnOnce(pfx_report::Job) -> pfx_report::Job) {
-        self.inner = self.inner.take().map(set);
-    }
+    pub fn device(&mut self, _device: &str) {}
 
-    pub fn detail(&mut self, detail: String) {
-        self.with(|job| job.detail(&detail));
-    }
+    pub fn out(&mut self, _dir: &Path) {}
 
-    pub fn device(&mut self, device: &str) {
-        self.with(|job| job.device(device));
-    }
+    pub fn stage(&self, _name: &str, _total: Option<u64>, _unit: &str) {}
 
-    pub fn out(&mut self, dir: &Path) {
-        self.with(|job| job.out(dir));
-    }
+    pub fn note(&self, _note: &str) {}
 
-    pub fn stage(&self, name: &str, total: Option<u64>, unit: &str) {
-        self.rendered.store(0, Ordering::Relaxed);
-        if let Some(job) = &self.inner {
-            job.stage(name, total, unit);
-        }
-    }
+    pub fn progress(&self, _done: u64) {}
 
-    pub fn note(&self, note: &str) {
-        if let Some(job) = &self.inner {
-            job.stage_note(note);
-        }
-    }
+    pub fn rendered(&self) {}
 
-    pub fn progress(&self, done: u64) {
-        if let Some(job) = &self.inner {
-            job.progress(done);
-        }
-    }
-
-    pub fn rendered(&self) {
-        let done = self.rendered.fetch_add(1, Ordering::Relaxed) + 1;
-        self.progress(done);
-    }
-
-    pub fn pgpu(&self, pid: Option<u32>) {
-        if let Some(job) = &self.inner {
-            job.gpu_process(pid);
-        }
-    }
+    pub fn pgpu(&self, _pid: Option<u32>) {}
 
     pub fn end<T>(self, result: Result<T, String>) -> Result<T, String> {
-        if let Some(job) = &self.inner {
-            match &result {
-                Ok(_) => job.finish(0),
-                Err(e) => job.fail(1, e),
-            }
-        }
         result
     }
 }

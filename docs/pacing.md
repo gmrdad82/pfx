@@ -48,7 +48,7 @@ let now = pace.clock.now_ms();
 let pace = pace.with_tally(Tally::with_sink(Box::new(Mine), planned_frames, now));
 ```
 
-`progress` runs after each turn with the frames done, the frames planned and the rate since the start; `end(true)` runs when the `Tally` drops, `end(false)` when it drops during a panic. A bench that writes job records implements `Sink` over its own job; the engine's examples do it in `crates/live/examples/manners`, which also reads `GPU_QUEUE_PID` to decide whether to record at all; the record itself goes through `pfx-report`'s job hook, a no-op unless a build patches in a reporter.
+`progress` runs after each turn with the frames done, the frames planned and the rate since the start; `end(true)` runs when the `Tally` drops, `end(false)` when it drops during a panic. A bench that writes job records implements `Sink` over its own job; the engine's examples do it in `crates/live/examples/manners`, which also reads `GPU_QUEUE_PID` to decide whether to record at all. pfx writes no job records itself: a game or tool that wants them wires its own reporter into `Sink`.
 
 ## Testing a loop
 

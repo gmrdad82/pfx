@@ -15,7 +15,6 @@ hex = "0.4"
 serde_json = "1"
 chrono = "0.4"
 fs2 = "0.4"
-pfx-report = { git = "https://github.com/gmrdad82/pfx-report", tag = "v0.1.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
