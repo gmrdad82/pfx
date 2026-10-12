@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.26.0 — 2026-10-12
+
+### Added
+
+- denoise: port Open Image Denoise's RT filter to wgpu compute.
+- trace: windows of a larger frame and a per-round adaptive report.
+- live: build a plate off the render thread and swap it in.
+- gpu: enable VK_EXT_image_drm_format_modifier when the adapter offers it.
+
+### Changed
+
+- trace: start every trace at 64 lanes, ten times faster on ordinary scenes.
+- trace: aim its bands at 10 ms.
+- render: denoise finals and drafts; finals stop at 128 samples, drafts at 16.
+- ci: run the gate as a parallel matrix, nightly too.
+- check every text file out with LF line endings.
+
 ## v0.25.3 — 2026-10-11
 
 ### Changed
