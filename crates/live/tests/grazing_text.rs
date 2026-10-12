@@ -172,7 +172,7 @@ fn traced(gpu: &Gpu, paragraph: &RichParagraph, model: Transform, degrees: f32) 
         ..Placement::new(0, model, 0)
     }];
     let (_, camera, projection) = eye(degrees);
-    let staged = Stage {
+    let mut staged = Stage {
         meshes: &[carrier.mesh()],
         instances: &placements,
         materials: &materials,
@@ -192,6 +192,7 @@ fn traced(gpu: &Gpu, paragraph: &RichParagraph, model: Transform, degrees: f32) 
     }
     .build()
     .unwrap();
+    staged.detail.sampler = pfx_trace::sobol::Sampler::Pcg;
     let mut trace = staged.trace(gpu, SIZE[0], SIZE[1]).unwrap();
     let mut pacer = Pacer::default();
     let mut turns = Turns::default();

@@ -236,6 +236,7 @@ fn traced(gpu: &Gpu, setting: Setting, samples: u32, turns: &mut Turns) -> Outpu
     staged.detail.sun_radius_deg = SUN_RADIUS_DEG;
     staged.detail.clamp_indirect = setting.clamp_indirect;
     staged.detail.filter_glossy = setting.filter_glossy;
+    staged.detail.sampler = pfx_trace::sobol::Sampler::Pcg;
     let mut trace = staged.trace(gpu, WIDTH, HEIGHT).unwrap();
     let mut pacer = Pacer::default();
     let stats = trace
@@ -295,9 +296,11 @@ fn fnv(bytes: &[u8]) -> u64 {
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
 fn both_settings_off_keep_the_firefly_scene_bytes() {
+    unsafe { std::env::set_var("PFX_TRACE_RT", "0") };
     let gpu = pollster::block_on(Gpu::headless()).unwrap();
     let mut turns = Turns::default();
     let off = traced(&gpu, OFF, 16, &mut turns);
+    unsafe { std::env::remove_var("PFX_TRACE_RT") };
     let hashes = [fnv(&off.color), fnv(&off.albedo), fnv(&off.normal)];
     println!("off: {hashes:x?} outliers {}", outliers(&off));
     assert_eq!(hashes, OFF_BYTES);
