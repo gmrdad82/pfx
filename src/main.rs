@@ -22,6 +22,7 @@ const USAGE: &str = "usage:
   pfx render --scene <shot> --product <product> (--clip | --still) [--recipes <dir>] [flags]
   pfx encode --manifest <path>
   pfx archive --retry|--reindex
+  pfx archive import --app <app> --shot <shot> (--clip | --still) --rev <tag|commit> <files...>
   pfx list --shots|--presets|--scenes [flags]
   pfx bake --scene <dir> [flags]
   pfx steam stage --manifest <game>/steam.toml --out <caller tmp dir>
@@ -295,7 +296,7 @@ fn shape(command: &str) -> &'static str {
             "pfx render [OPTIONS] <--app <APP>|--asset <ASSET>|--icons <ICONS>|--scene <SCENE>>"
         }
         "encode" => "pfx encode --manifest <MANIFEST>",
-        "archive" => "pfx archive <--retry|--reindex>",
+        "archive" => "pfx archive <--retry|--reindex|import>",
         "list" => "pfx list [OPTIONS] <--shots|--presets|--scenes>",
         "bake" => "pfx bake [OPTIONS] --scene <SCENE>",
         "steam" => "pfx steam <COMMAND>",
@@ -364,6 +365,7 @@ enum Plan {
     Encode(PathBuf),
     ArchiveRetry,
     ArchiveReindex,
+    ArchiveImport(pfx_run::archive::Import),
     Shots(String, Source, String),
     Presets(Vec<String>),
     Scenes(Option<String>, Vec<String>),
@@ -795,7 +797,70 @@ fn plan_font(args: &[String]) -> Result<Plan, Refusal> {
     Ok(Plan::FontSubset(flags.to_vec()))
 }
 
+fn plan_import(args: &[String]) -> Result<Plan, String> {
+    let mut values: BTreeMap<&str, String> = BTreeMap::new();
+    let mut kind: Option<&str> = None;
+    let mut files = Vec::new();
+    let mut it = args.iter();
+    while let Some(token) = it.next() {
+        let (flag, inline) = token
+            .split_once('=')
+            .map(|(flag, value)| (flag, Some(value.to_string())))
+            .unwrap_or((token.as_str(), None));
+        match flag {
+            "--app" | "--shot" | "--rev" => {
+                if values.contains_key(flag) {
+                    return Err(cli::repeated(flag));
+                }
+                let value = match inline {
+                    Some(value) => value,
+                    None => it.next().cloned().ok_or_else(|| cli::missing_value(flag))?,
+                };
+                values.insert(flag, value);
+            }
+            "--clip" | "--still" => {
+                if let Some(value) = inline {
+                    return Err(cli::unexpected_value(&value, flag));
+                }
+                match kind {
+                    Some(seen) if seen == flag => return Err(cli::repeated(flag)),
+                    Some(seen) => return Err(cli::conflict(seen, flag)),
+                    None => kind = Some(flag),
+                }
+            }
+            other if other.starts_with('-') => return Err(cli::unexpected(other)),
+            _ => files.push(PathBuf::from(token)),
+        }
+    }
+    let mut missing: Vec<&str> = ["--app <APP>", "--shot <SHOT>", "--rev <REV>"]
+        .into_iter()
+        .filter(|wanted| !values.contains_key(wanted.split(' ').next().unwrap_or("")))
+        .collect();
+    if kind.is_none() {
+        missing.push("<--clip|--still>");
+    }
+    if files.is_empty() {
+        missing.push("<FILES>...");
+    }
+    if !missing.is_empty() {
+        return Err(cli::required(&missing));
+    }
+    Ok(Plan::ArchiveImport(pfx_run::archive::Import {
+        app: values.remove("--app").unwrap_or_default(),
+        shot: values.remove("--shot").unwrap_or_default(),
+        still: kind == Some("--still"),
+        version: values.remove("--rev").unwrap_or_default(),
+        files,
+    }))
+}
+
 fn plan_archive(args: &[String]) -> Result<Plan, String> {
+    if let Some(("import", rest)) = args
+        .split_first()
+        .map(|(first, rest)| (first.as_str(), rest))
+    {
+        return plan_import(rest);
+    }
     let mut pick: Option<&str> = None;
     for arg in args.iter().map(String::as_str) {
         match (arg, pick) {
@@ -944,6 +1009,28 @@ fn perform(plan: Plan, report: &pfx_report::Reporter) -> Result<(), String> {
                 println!("archive: {done} completed, {pending} pending");
             }
             job.end(retried).map(|_| ())
+        }
+        Plan::ArchiveImport(import) => {
+            let (manifest, state) = pfx_run::archive::import(&import)?;
+            let written: serde_json::Value = std::fs::read(&manifest)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default();
+            let leaf = written["archive"]["leaf"].as_str().unwrap_or("");
+            let why = written["archive"]["reason"]
+                .as_str()
+                .or(written["archive"]["error"].as_str())
+                .unwrap_or("");
+            println!(
+                "archive: {} {leaf} {why} ({})",
+                state.name(),
+                manifest.display()
+            );
+            match state {
+                pfx_run::archive::State::Archived | pfx_run::archive::State::Queued => Ok(()),
+                pfx_run::archive::State::Skipped if why.is_empty() => Ok(()),
+                _ => Err(format!("archive import {}: {why}", state.name())),
+            }
         }
         Plan::ArchiveReindex => {
             let count = pfx_run::archive::reindex()?;
@@ -1296,6 +1383,31 @@ mod tests {
             plan(&words("archive --reindex")).unwrap(),
             Plan::ArchiveReindex
         ));
+        match plan(&words(
+            "archive import --app splicer --shot desk --still --rev v1.2.3 a.master.png b.png",
+        ))
+        .unwrap()
+        {
+            Plan::ArchiveImport(import) => assert_eq!(
+                (
+                    import.app.as_str(),
+                    import.shot.as_str(),
+                    import.still,
+                    import.version.as_str(),
+                    import.files.len()
+                ),
+                ("splicer", "desk", true, "v1.2.3", 2)
+            ),
+            _ => panic!("expected an import"),
+        }
+        assert!(
+            refused("archive import --app splicer --shot desk --rev v1.2.3 a.master.png")
+                .contains("<--clip|--still>")
+        );
+        assert!(
+            refused("archive import --app splicer --clip --still --shot d --rev v1 a")
+                .contains("cannot be used with")
+        );
         assert!(USAGE.contains("--samples N overrides a shot's samples"));
         assert!(USAGE.contains("--class interactive|clip|truth|search"));
         assert!(matches!(plan(&words("--help")).unwrap(), Plan::Help));

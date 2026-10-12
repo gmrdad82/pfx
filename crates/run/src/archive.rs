@@ -957,6 +957,92 @@ fn archive_in(
     }
 }
 
+pub struct Import {
+    pub app: String,
+    pub shot: String,
+    pub still: bool,
+    pub version: String,
+    pub files: Vec<PathBuf>,
+}
+
+pub fn import(import: &Import) -> Result<(PathBuf, State), String> {
+    let manifest_path = import_manifest(import, &local_made())?;
+    let state = archive(&manifest_path, false);
+    Ok((manifest_path, state))
+}
+
+fn commit(version: &str) -> bool {
+    version.len() == 40 && version.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn import_manifest(import: &Import, made: &str) -> Result<PathBuf, String> {
+    for (what, part) in [("app", &import.app), ("shot", &import.shot)] {
+        if !safe(part) {
+            return Err(format!("the {what} {part:?} is not a safe folder name"));
+        }
+    }
+    if !is_tag(&import.version) && !commit(&import.version) {
+        return Err(format!(
+            "--rev {} is neither a tag vX.Y.Z nor a full commit: only pinned masters are archived",
+            import.version
+        ));
+    }
+    let folder = |path: &Path| match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let first = import.files.first().ok_or("no files to import")?;
+    let source = folder(first);
+    let kind = if import.still { "still" } else { "clip" };
+    let mut listed = Vec::new();
+    let mut master = false;
+    for path in &import.files {
+        if folder(path) != source {
+            return Err(format!(
+                "every file sits in one folder: {} is not in {}",
+                path.display(),
+                source.display()
+            ));
+        }
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| format!("{}: not a file name", path.display()))?;
+        let bytes = fs::metadata(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .len();
+        master |= if import.still {
+            name.ends_with(".master.png")
+        } else {
+            name.ends_with(".master.mp4") || name.ends_with(".alpha.master.mov")
+        };
+        listed.push(json!({"file": name, "bytes": bytes, "sha256": hash(path)?}));
+    }
+    if !master {
+        let wanted = if import.still {
+            "<name>.master.png"
+        } else {
+            "<name>.master.mp4"
+        };
+        return Err(format!("a {kind} import needs {wanted} among its files"));
+    }
+    let manifest = json!({
+        "tool": {"name": TOOL, "version": env!("CARGO_PKG_VERSION")},
+        "kind": kind,
+        "product": import.app,
+        "app": import.app,
+        "shot": import.shot,
+        "version": import.version,
+        "pinned": true,
+        "made": made,
+        "imported": true,
+        "files": listed,
+    });
+    let path = source.join(format!("{}.{kind}.import.json", import.shot));
+    write_manifest(&path, &manifest)?;
+    Ok(path)
+}
+
 pub fn retry() -> Result<(usize, usize), String> {
     retry_in(&crate::ffmpeg::cache()?, &lock_path()?)
 }
@@ -2154,5 +2240,70 @@ mod tests {
         assert_eq!(fixture.archive(), State::Conflict);
         assert_eq!(fixture.entries(), 0);
         assert_eq!(fixture.catalog_paths().len(), 0);
+    }
+
+    #[test]
+    fn an_imported_master_lands_in_the_app_s_leaf_with_its_manifest_and_catalog_line() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tmp")
+            .join(format!("archive-import-{}", std::process::id()));
+        let source = base.join("source");
+        let root = base.join("archive");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(masters(&root)).unwrap();
+        let master = source.join("desk-3840x2160.master.png");
+        let web = source.join("desk-1920x1080.png");
+        fs::write(&master, b"master").unwrap();
+        fs::write(&web, b"web").unwrap();
+        let import = |version: &str, still: bool, files: Vec<PathBuf>| Import {
+            app: "splicer".into(),
+            shot: "desk".into(),
+            still,
+            version: version.into(),
+            files,
+        };
+        let made = "2026-10-12T05:00:00+02:00";
+        let refused = |import: Import| import_manifest(&import, made).unwrap_err();
+        assert!(refused(import("aabbccddeeff", true, vec![master.clone()])).contains("pinned"));
+        assert!(refused(import("v1.2.3", true, vec![web.clone()])).contains(".master.png"));
+        assert!(refused(import("v1.2.3", false, vec![master.clone()])).contains(".master.mp4"));
+        let elsewhere = base.join("other.master.png");
+        fs::write(&elsewhere, b"other").unwrap();
+        assert!(
+            refused(import("v1.2.3", true, vec![master.clone(), elsewhere])).contains("one folder")
+        );
+        let manifest_path = import_manifest(
+            &import("v1.2.3", true, vec![master.clone(), web.clone()]),
+            made,
+        )
+        .unwrap();
+        let state = archive_in(
+            &manifest_path,
+            false,
+            &root,
+            &base.join("cache"),
+            &base.join("runtime/catalog.lock"),
+        );
+        assert_eq!(state, State::Archived);
+        let leaf = masters(&root).join("pfx/splicer/desk/2026-10-12_050000_v1.2.3_manual");
+        for name in [
+            "manifest.json",
+            "desk-3840x2160.master.png",
+            "desk-1920x1080.png",
+        ] {
+            assert!(leaf.join(name).is_file(), "{name}");
+        }
+        let catalog = fs::read_to_string(catalog_file(&root)).unwrap();
+        let line: Catalog = serde_json::from_str(catalog.trim()).unwrap();
+        assert_eq!(
+            (
+                line.product.as_str(),
+                line.shot.as_str(),
+                line.version.as_str(),
+                line.files.len()
+            ),
+            ("splicer", "desk", "v1.2.3", 2)
+        );
+        let _ = fs::remove_dir_all(&base);
     }
 }
