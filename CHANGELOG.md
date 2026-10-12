@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.27.0 — 2026-10-12
+
+### Added
+
+- trace: hardware ray queries over a TLAS where the adapter offers them (Vulkan, DX12), the software BVH elsewhere (Metal included); 2.6x faster 4K finals and 2.3x faster drafts on the neutral desk.
+- docs: wgpu30.md, the changes an app that uses wgpu or egui directly makes to move with pfx.
+
+### Changed
+
+- move to wgpu 30.0.1, naga 30 and egui 0.36.2.
+- editor: the shell's App::ui takes a Ui instead of a Context.
+- editor: drop the pgpu play hook.
+- trace: cut a dense strip into column pieces before dropping lanes.
+- bake: the batch Frame is 176 bytes with the column field.
+
 ## v0.26.0 — 2026-10-12
 
 ### Added
