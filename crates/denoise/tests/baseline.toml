@@ -1,0 +1,6 @@
+# The neutral desk's render times in seconds on the RX 9060 XT, alone on the card,
+# the best of two runs each, measured for v0.27.0 (ray queries).
+# budgets.rs fails a frame more than 5% slower than its line here.
+draft_4k = 2.7
+final_4k = 15.3
+final_5k = 29.6

@@ -77,16 +77,37 @@ fn the_desk_renders_within_the_budgets() {
         max_samples: 16,
         growth: 1.5,
     };
-    for (label, size, adaptive, budget) in [
-        ("4K draft", [3840, 2160], draft_sampling, 10.0),
-        ("4K final", [3840, 2160], final_sampling, 120.0),
-        ("5K final", [5120, 2880], final_sampling, 240.0),
+    let baseline = baseline();
+    for (label, key, size, adaptive, budget) in [
+        ("4K draft", "draft_4k", [3840, 2160], draft_sampling, 10.0),
+        ("4K final", "final_4k", [3840, 2160], final_sampling, 120.0),
+        ("5K final", "final_5k", [5120, 2880], final_sampling, 240.0),
     ] {
-        let (seconds, mean) = frame(&gpu, &scene, size, adaptive);
+        let (first, mean) = frame(&gpu, &scene, size, adaptive);
+        let (second, _) = frame(&gpu, &scene, size, adaptive);
+        let seconds = first.min(second);
+        let base = baseline[key];
         eprintln!(
-            "{label}: {}x{} in {seconds:.1} s (budget {budget} s), mean {mean:.1} samples",
+            "{label}: {}x{} in {seconds:.1} s (budget {budget} s, baseline {base} s), mean {mean:.1} samples",
             size[0], size[1]
         );
         assert!(seconds <= budget, "{label}: {seconds:.1} s");
+        assert!(
+            seconds <= base * 1.05,
+            "{label}: {seconds:.1} s is more than 5% over the baseline {base} s"
+        );
     }
+}
+
+fn baseline() -> std::collections::HashMap<String, f64> {
+    let text = include_str!("baseline.toml");
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| {
+            (
+                key.trim().to_string(),
+                value.trim().parse().expect("a baseline in seconds"),
+            )
+        })
+        .collect()
 }
