@@ -12,11 +12,23 @@ use pfx_trace::shapes::Shape;
 use pfx_trace::sobol::{self, Sampler};
 use pfx_trace::{Camera, Projection, Scene, Sun, Trace};
 
-const WIDTH: u32 = 960;
-const HEIGHT: u32 = 540;
-const COUNTS: [u32; 5] = [1, 4, 16, 64, 256];
 const SEED: u32 = 7;
-const REFERENCE_SEED: u32 = 1013;
+
+fn size(name: &str) -> (u32, u32) {
+    if name == "glass" {
+        (480, 270)
+    } else {
+        (960, 540)
+    }
+}
+
+fn ladder(name: &str) -> &'static [u32] {
+    if name == "glass" {
+        &[1, 4, 16, 64]
+    } else {
+        &[1, 4, 16, 64, 256]
+    }
+}
 
 fn say(dir: &Path, line: String) {
     println!("{line}");
@@ -29,23 +41,39 @@ fn say(dir: &Path, line: String) {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: sobol <dir> <reference spp> [desk|room|glass]...");
+    eprintln!(
+        "usage: sobol <dir> reference <scene> <spp> <seed>\n       sobol <dir> measure <scene>\n       sobol <dir> tables"
+    );
     std::process::exit(2)
 }
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (Some(dir), Some(Ok(reference_spp))) = (args.first(), args.get(1).map(|a| a.parse()))
-    else {
-        usage()
-    };
+    let Some(dir) = args.first() else { usage() };
     let dir = Path::new(dir);
     std::fs::create_dir_all(dir).unwrap();
-    let names: Vec<&str> = if args.len() > 2 {
-        args[2..].iter().map(String::as_str).collect()
-    } else {
-        vec!["desk", "room", "glass"]
+    let arg = |i: usize| {
+        args.get(i)
+            .and_then(|a| a.parse::<u32>().ok())
+            .unwrap_or_else(|| usage())
     };
+    match args.get(1).map(String::as_str) {
+        Some("tables") => tables(dir),
+        Some("reference") if args.len() == 5 => {
+            let gpu = pollster::block_on(Gpu::headless()).unwrap();
+            stage_files(dir);
+            reference(&gpu, dir, &args[2], arg(3), arg(4));
+        }
+        Some("measure") if args.len() == 3 => {
+            let gpu = pollster::block_on(Gpu::headless()).unwrap();
+            stage_files(dir);
+            measure(&gpu, dir, &args[2]);
+        }
+        _ => usage(),
+    }
+}
+
+fn tables(dir: &Path) {
     for sequence in [256, 1024, 4096, 8192] {
         let start = Instant::now();
         let table = sobol::table(sequence);
@@ -59,11 +87,6 @@ fn main() {
                 start.elapsed().as_secs_f64() * 1e3
             ),
         );
-    }
-    let gpu = pollster::block_on(Gpu::headless()).unwrap();
-    stage_files(dir);
-    for name in names {
-        measure(&gpu, dir, name, reference_spp);
     }
 }
 
@@ -90,6 +113,7 @@ fn stage_files(dir: &Path) {
 }
 
 fn trace(gpu: &Gpu, dir: &Path, name: &str, sampler: Sampler) -> Trace {
+    let (width, height) = size(name);
     if name == "glass" {
         let detail = Detail {
             projection: Projection::Orthographic {
@@ -99,13 +123,13 @@ fn trace(gpu: &Gpu, dir: &Path, name: &str, sampler: Sampler) -> Trace {
             sampler,
             ..Detail::default()
         };
-        return Trace::new_detailed(gpu, &dense_glass(48, 32), &detail, WIDTH, HEIGHT).unwrap();
+        return Trace::new_detailed(gpu, &dense_glass(48, 32), &detail, width, height).unwrap();
     }
     let path = dir.join("desk-scene").join(format!("{name}.scene.toml"));
     let scene = LoadedScene::open(&path).unwrap();
-    let mut staged = pfx_trace::stage::scene(&scene, WIDTH as f32 / HEIGHT as f32).unwrap();
+    let mut staged = pfx_trace::stage::scene(&scene, width as f32 / height as f32).unwrap();
     staged.detail.sampler = sampler;
-    staged.trace(gpu, WIDTH, HEIGHT).unwrap()
+    staged.trace(gpu, width, height).unwrap()
 }
 
 fn rgb(bytes: &[u8]) -> Vec<f32> {
@@ -143,25 +167,41 @@ fn timed(gpu: &Gpu, trace: &mut Trace, count: u32) -> f64 {
     start.elapsed().as_secs_f64()
 }
 
-fn reference(gpu: &Gpu, dir: &Path, name: &str, spp: u32) -> Vec<f32> {
-    let path = dir.join(format!("{name}.reference.{spp}.f32"));
-    if let Ok(bytes) = std::fs::read(&path) {
-        return floats(&bytes);
-    }
+fn reference(gpu: &Gpu, dir: &Path, name: &str, spp: u32, seed: u32) {
     let mut trace = trace(gpu, dir, name, Sampler::Pcg);
     let start = Instant::now();
-    trace.sample(gpu, spp, REFERENCE_SEED).unwrap();
+    trace.sample(gpu, spp, seed).unwrap();
     let color = rgb(&trace.readback_color(gpu).unwrap());
     say(
         dir,
         format!(
-            "{name}: reference {spp} spp PCG in {:.1} s",
+            "{name}: reference part {spp} spp PCG seed {seed} in {:.1} s",
             start.elapsed().as_secs_f64()
         ),
     );
     let bytes: Vec<u8> = color.iter().flat_map(|v| v.to_le_bytes()).collect();
-    std::fs::write(&path, bytes).unwrap();
-    color
+    std::fs::write(dir.join(format!("{name}.ref.{spp}.{seed}.f32")), bytes).unwrap();
+}
+
+fn references(dir: &Path, name: &str) -> (Vec<f32>, u32) {
+    let mut sum: Vec<f64> = Vec::new();
+    let mut total = 0;
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let file = entry.unwrap().file_name().into_string().unwrap();
+        let Some(rest) = file.strip_prefix(&format!("{name}.ref.")) else {
+            continue;
+        };
+        let spp: u32 = rest.split('.').next().unwrap().parse().unwrap();
+        let part = floats(&std::fs::read(dir.join(&file)).unwrap());
+        sum.resize(part.len(), 0.0);
+        for (s, v) in sum.iter_mut().zip(part) {
+            *s += f64::from(v) * f64::from(spp);
+        }
+        total += spp;
+    }
+    assert!(total > 0, "no reference parts for {name}");
+    let mean = sum.iter().map(|s| (s / f64::from(total)) as f32).collect();
+    (mean, total)
 }
 
 fn run(gpu: &Gpu, dir: &Path, name: &str, sampler: Sampler, truth: &[f32]) -> (Vec<f64>, f64) {
@@ -169,7 +209,7 @@ fn run(gpu: &Gpu, dir: &Path, name: &str, sampler: Sampler, truth: &[f32]) -> (V
     let mut done = 0;
     let mut seconds = 0.0;
     let mut errors = Vec::new();
-    for count in COUNTS {
+    for &count in ladder(name) {
         seconds += timed(gpu, &mut trace, count - done);
         done = count;
         errors.push(mse(&rgb(&trace.readback_color(gpu).unwrap()), truth));
@@ -178,12 +218,13 @@ fn run(gpu: &Gpu, dir: &Path, name: &str, sampler: Sampler, truth: &[f32]) -> (V
             format!("{name} {sampler:?}: {count} spp after {seconds:.1} s"),
         );
     }
-    let paths = f64::from(WIDTH * HEIGHT) * f64::from(done) / seconds;
+    let (width, height) = size(name);
+    let paths = f64::from(width * height) * f64::from(done) / seconds;
     (errors, paths)
 }
 
-fn spp_at(errors: &[f64], target: f64) -> f64 {
-    let points: Vec<(f64, f64)> = COUNTS
+fn spp_at(counts: &[u32], errors: &[f64], target: f64) -> f64 {
+    let points: Vec<(f64, f64)> = counts
         .iter()
         .zip(errors)
         .map(|(n, e)| (f64::from(*n).ln(), e.ln()))
@@ -201,8 +242,10 @@ fn spp_at(errors: &[f64], target: f64) -> f64 {
     (x0 + (t - y0) * (x1 - x0) / (y1 - y0)).exp()
 }
 
-fn measure(gpu: &Gpu, dir: &Path, name: &str, reference_spp: u32) {
-    let truth = reference(gpu, dir, name, reference_spp);
+fn measure(gpu: &Gpu, dir: &Path, name: &str) {
+    let (truth, reference_spp) = references(dir, name);
+    let (width, height) = size(name);
+    let counts = ladder(name);
     let (pcg, pcg_paths) = run(gpu, dir, name, Sampler::Pcg, &truth);
     let (sob, sob_paths) = run(gpu, dir, name, Sampler::Sobol { samples: 256 }, &truth);
     let floor = pcg[0] / f64::from(reference_spp);
@@ -215,13 +258,13 @@ fn measure(gpu: &Gpu, dir: &Path, name: &str, reference_spp: u32) {
     let (pcg_rmse, sob_rmse) = (corrected(&pcg), corrected(&sob));
     say(
         dir,
-        format!("{name}: {WIDTH}x{HEIGHT}, reference {reference_spp} spp PCG"),
+        format!("{name}: {width}x{height}, reference {reference_spp} spp PCG"),
     );
     say(
         dir,
         "  spp   PCG rmse    Sobol rmse  (raw PCG, raw Sobol)".to_string(),
     );
-    for (i, count) in COUNTS.iter().enumerate() {
+    for (i, count) in counts.iter().enumerate() {
         say(
             dir,
             format!(
@@ -235,8 +278,8 @@ fn measure(gpu: &Gpu, dir: &Path, name: &str, reference_spp: u32) {
     }
     let squared = |errors: &[f64]| errors.iter().map(|e| e * e).collect::<Vec<_>>();
     let sob_mse = squared(&sob_rmse);
-    for (i, count) in COUNTS.iter().enumerate().skip(2) {
-        let need = spp_at(&sob_mse, pcg_rmse[i] * pcg_rmse[i]);
+    for (i, count) in counts.iter().enumerate().skip(2) {
+        let need = spp_at(counts, &sob_mse, pcg_rmse[i] * pcg_rmse[i]);
         say(
             dir,
             format!(
