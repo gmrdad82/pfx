@@ -143,9 +143,9 @@ fn timed(gpu: &Gpu, staged: &Staged, size: [u32; 2], samples: u32) -> (Vec<[f32;
     let mut pacer = Pacer::default();
     let mut turns = Turns::default();
     let mut milliseconds = 0.0;
-    for pass in 0..samples {
+    for _ in 0..samples {
         let stats = trace
-            .sample_paced(gpu, 1, 7 + pass, &mut pacer, |ms| turns.add(ms))
+            .sample_paced(gpu, 1, 7, &mut pacer, |ms| turns.add(ms))
             .unwrap();
         milliseconds += stats.milliseconds.iter().sum::<f64>();
     }
