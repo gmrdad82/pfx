@@ -1,0 +1,26 @@
+[package]
+name = "pfx-denoise"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's denoiser: Intel Open Image Denoise's RT filter and trained weights, ported to Rust and WGSL compute on wgpu"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+bytemuck = "1"
+pfx-gpu = { path = "../gpu" }
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+wgpu = { version = "=27.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wgpu = { version = "=27.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
+
+[dev-dependencies]
+pollster = "0.4"
+naga = { version = "27", features = ["wgsl-in"] }
+pfx-load = { path = "../load" }
+pfx-materials = { path = "../materials" }
+pfx-trace = { path = "../trace" }
