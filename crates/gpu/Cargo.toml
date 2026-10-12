@@ -14,10 +14,10 @@ toml = "0.9"
 winit = { version = "=0.30.13", optional = true }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-wgpu = { version = "=27.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu = { version = "=27.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
 
 [features]
 window = ["dep:winit"]

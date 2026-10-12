@@ -15,13 +15,13 @@ pfx-gpu = { path = "../gpu" }
 pfx-materials = { path = "../materials" }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-wgpu = { version = "=27.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu = { version = "=27.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
 
 [dev-dependencies]
 pollster = "0.4"
 png = "0.18"
-naga = { version = "27.0.3", default-features = false, features = ["wgsl-in"] }
+naga = { version = "30", default-features = false, features = ["wgsl-in"] }
 half = "2.7.1"

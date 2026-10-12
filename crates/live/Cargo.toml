@@ -21,8 +21,8 @@ pfx-load = { path = "../load" }
 half = "2.7.1"
 bytemuck = { version = "1", features = ["derive"] }
 sha2 = "0.11"
-egui = { version = "=0.33.3", default-features = false, optional = true }
-egui-wgpu = { version = "=0.33.3", default-features = false, optional = true }
+egui = { version = "=0.36.2", default-features = false, optional = true }
+egui-wgpu = { version = "=0.36.2", default-features = false, optional = true }
 pfx-input = { path = "../input", default-features = false, optional = true }
 pfx-theme = { path = "../theme", optional = true }
 
@@ -30,20 +30,20 @@ pfx-theme = { path = "../theme", optional = true }
 dev-hud = ["dep:egui", "dep:egui-wgpu", "dep:pfx-input", "dep:pfx-theme"]
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-wgpu = { version = "=27.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 pfx-run = { path = "../run" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu = { version = "=27.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
 
 [dev-dependencies]
 pfx-text = { path = "../text", features = ["fixture"] }
 pfx-core = { path = "../core", features = ["fixture"] }
 pfx-load = { path = "../load", features = ["fixture"] }
 pollster = "0.4"
-naga = { version = "27.0.3", default-features = false, features = ["wgsl-in"] }
+naga = { version = "30", default-features = false, features = ["wgsl-in"] }
 png = "0.17"
 serde_json = "1"
 pfx-trace = { path = "../trace" }

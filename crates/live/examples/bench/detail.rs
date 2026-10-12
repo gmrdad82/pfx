@@ -319,14 +319,15 @@ pub fn apply(bench: &mut Bench, baked: &Baked) {
 }
 
 pub fn gpu() -> Gpu {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN | wgpu::Backends::METAL,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
-    let adapter = instance
-        .enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::METAL)
-        .into_iter()
-        .find(|adapter| adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu);
+    let adapter = pollster::block_on(
+        instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::METAL),
+    )
+    .into_iter()
+    .find(|adapter| adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu);
     let Some(adapter) = adapter.filter(|adapter| {
         adapter
             .features()

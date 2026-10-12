@@ -9,5 +9,5 @@ authors.workspace = true
 description = "pfx's look: the colours, fonts and type the editor and the dev HUD paint with"
 
 [dependencies]
-egui = { version = "=0.33.3", default-features = false }
+egui = { version = "=0.36.2", default-features = false }
 pfx-editor-style = { path = "../editor-style" }

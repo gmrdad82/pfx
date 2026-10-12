@@ -301,7 +301,7 @@ fn mapped(gpu: &Gpu, buffer: &wgpu::Buffer) -> Result<Vec<u8>, String> {
         .recv()
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
-    let bytes = slice.get_mapped_range().to_vec();
+    let bytes = slice.get_mapped_range().expect("a mapped range").to_vec();
     buffer.unmap();
     Ok(bytes)
 }

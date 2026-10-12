@@ -267,6 +267,7 @@ mod tests {
             Event::MouseWheel {
                 unit: MouseWheelUnit::Point,
                 delta: egui::vec2(0.0, -80.0),
+                phase: egui::TouchPhase::Move,
                 modifiers: egui::Modifiers::NONE,
             },
             Event::PointerGone,

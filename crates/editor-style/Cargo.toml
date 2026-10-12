@@ -9,7 +9,7 @@ authors.workspace = true
 description = "An egui editor theme every widget paints from, installed by the app, and the widgets: header, tabs, pill, keycap, number field and dotted rule"
 
 [dependencies]
-egui = { version = "=0.33.3", default-features = false }
+egui = { version = "=0.36.2", default-features = false }
 
 [features]
 fixture = []

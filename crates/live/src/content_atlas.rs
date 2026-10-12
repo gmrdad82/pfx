@@ -1386,7 +1386,7 @@ mod tests {
                     .poll(wgpu::PollType::wait_indefinitely())
                     .unwrap();
                 receiver.recv().unwrap().unwrap();
-                let mapped = buffer.slice(..).get_mapped_range();
+                let mapped = buffer.slice(..).get_mapped_range().expect("a mapped range");
                 let mut bytes = Vec::with_capacity((raw * height) as usize);
                 for padded in mapped.chunks_exact(row as usize) {
                     bytes.extend_from_slice(&padded[..raw as usize]);

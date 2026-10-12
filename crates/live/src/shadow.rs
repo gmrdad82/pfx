@@ -1063,8 +1063,8 @@ impl Shadows {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("shadow"),
-            bind_group_layouts: &[&bind_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_layout)],
+            immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shadow depth"),
@@ -1077,7 +1077,7 @@ impl Shadows {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             compare: Some(wgpu::CompareFunction::LessEqual),
             ..Default::default()
         });
@@ -1089,7 +1089,7 @@ impl Shadows {
                 entry_point: Some("vs_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: 12,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &[wgpu::VertexAttribute {
@@ -1097,8 +1097,8 @@ impl Shadows {
                             offset: 0,
                             shader_location: 0,
                         }],
-                    },
-                    wgpu::VertexBufferLayout {
+                    }),
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: 64,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &[
@@ -1123,7 +1123,7 @@ impl Shadows {
                                 shader_location: 4,
                             },
                         ],
-                    },
+                    }),
                 ],
             },
             primitive: wgpu::PrimitiveState {
@@ -1133,14 +1133,14 @@ impl Shadows {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: wgpu::MultisampleState::default(),
             fragment: None,
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let creature_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -1154,8 +1154,8 @@ impl Shadows {
         let creature_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("creature shadow depth"),
-                bind_group_layouts: &[&bind_layout, &creature_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&bind_layout), Some(&creature_layout)],
+                immediate_size: 0,
             });
         let creature_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("creature shadow depth"),
@@ -1173,14 +1173,14 @@ impl Shadows {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),
             multisample: Default::default(),
             fragment: None,
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let instance_capacity = 256 * 64;
@@ -1344,6 +1344,7 @@ impl Shadows {
         });
         for (index, layer) in self.layers.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("creature shadow cascade"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1562,6 +1563,7 @@ impl Shadows {
                         || writes.end_of_pass_write_index.is_some()
                 });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("shadow transmission"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: layer,
@@ -1623,6 +1625,7 @@ impl Shadows {
                         || writes.end_of_pass_write_index.is_some()
                 });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("light transmission"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: layer,
@@ -1678,6 +1681,7 @@ impl Shadows {
         }
         for (index, layer) in self.layers.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("impostor shadow cascade"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1710,6 +1714,7 @@ impl Shadows {
                 .as_deref_mut()
                 .and_then(|timer| timer.pass(format!("shadow cascade {}", index + 1)));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("shadow cascade"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1760,6 +1765,7 @@ impl Shadows {
                 .as_deref_mut()
                 .and_then(|timer| timer.pass(format!("shadow cascade {}", index + 1)));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("shadow cascade"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -2327,7 +2333,10 @@ mod tests {
         gpu.device
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
-        let bytes = readback.slice(..).get_mapped_range();
+        let bytes = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("a mapped range");
         let at = (32 * 256 + 32 * 4) as usize;
         let depth = f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
         assert!(depth < 1.0, "{depth}");
@@ -2960,8 +2969,8 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {{\n\
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("shadow receiver"),
-                bind_group_layouts: &[&bind_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&bind_layout)],
+                immediate_size: 0,
             });
         let pipeline = gpu
             .device
@@ -2990,7 +2999,7 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {{\n\
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         let color = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -3010,6 +3019,7 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {{\n\
         let view = color.create_view(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("shadow receiver"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -3057,7 +3067,7 @@ fn fs(@builtin(position) pixel: vec4f) -> @location(0) vec4f {{\n\
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
         receive.recv().unwrap().unwrap();
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("a mapped range");
         let mut pixels = Vec::with_capacity(64 * 64 * 4);
         for padded in mapped.chunks_exact(row as usize) {
             pixels.extend_from_slice(&padded[..256]);

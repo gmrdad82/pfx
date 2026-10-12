@@ -10,7 +10,7 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use egui::Context;
+use egui::{Context, Ui};
 use egui_wgpu::Renderer;
 use pfx_editor_style::theme;
 use pfx_gpu::Gpu;
@@ -46,7 +46,7 @@ pub struct Timing {
 }
 
 pub trait App {
-    fn ui(&mut self, ctx: &Context);
+    fn ui(&mut self, ui: &mut Ui);
 
     fn theme(&self) -> Theme;
 

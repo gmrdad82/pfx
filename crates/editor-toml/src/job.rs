@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-use egui::epaint::text::{FontsView, PlacedRow, Row};
+use egui::epaint::text::{ByteIndex, FontsView, PlacedRow, Row};
 use egui::text::{LayoutJob, LayoutSection, TextFormat, TextWrapping};
 use egui::{Align, Color32, FontId, Galley, Rect, pos2};
 
@@ -113,14 +113,14 @@ pub fn build(lexed: &Lexed, theme: &Theme, font: &FontId) -> LayoutJob {
         let color = color(theme, token.kind);
         if let Some(last) = sections.last_mut()
             && last.format.color == color
-            && last.byte_range.end == token.range.start
+            && last.byte_range.end == ByteIndex(token.range.start)
         {
-            last.byte_range.end = token.range.end;
+            last.byte_range.end = ByteIndex(token.range.end);
             continue;
         }
         sections.push(LayoutSection {
             leading_space: 0.0,
-            byte_range: token.range,
+            byte_range: ByteIndex(token.range.start)..ByteIndex(token.range.end),
             format: TextFormat {
                 font_id: font.clone(),
                 color,
@@ -131,7 +131,7 @@ pub fn build(lexed: &Lexed, theme: &Theme, font: &FontId) -> LayoutJob {
     if sections.is_empty() {
         sections.push(LayoutSection {
             leading_space: 0.0,
-            byte_range: 0..0,
+            byte_range: ByteIndex(0)..ByteIndex(0),
             format: TextFormat {
                 font_id: font.clone(),
                 color: theme.syntax.plain,
@@ -238,7 +238,7 @@ impl JobCache {
                             .iter()
                             .map(|(from, to, color)| LayoutSection {
                                 leading_space: 0.0,
-                                byte_range: *from..*to,
+                                byte_range: ByteIndex(*from)..ByteIndex(*to),
                                 format: TextFormat {
                                     font_id: font.clone(),
                                     color: *color,
@@ -254,11 +254,7 @@ impl JobCache {
                     if base.is_none() {
                         base = Some(line.clone());
                     }
-                    let mut row = line.rows[0].row.clone();
-                    if !last {
-                        Arc::make_mut(&mut row).ends_with_newline = true;
-                    }
-                    row
+                    line.rows[0].row.clone()
                 }
             };
             let y = (rect.height() * pixels_per_point).round() / pixels_per_point;
@@ -270,6 +266,7 @@ impl JobCache {
             placed.push(PlacedRow {
                 pos: at,
                 row: row.clone(),
+                ends_with_newline: !last,
             });
             kept.insert(key, row);
         }
@@ -356,8 +353,11 @@ mod tests {
         let theme = fixture::theme();
         let job = build(&Lexed::new(TEXT), &theme, &theme.font(theme.size_code));
         assert_eq!(job.text, TEXT);
-        assert_eq!(job.sections.first().unwrap().byte_range.start, 0);
-        assert_eq!(job.sections.last().unwrap().byte_range.end, TEXT.len());
+        assert_eq!(job.sections.first().unwrap().byte_range.start, ByteIndex(0));
+        assert_eq!(
+            job.sections.last().unwrap().byte_range.end,
+            ByteIndex(TEXT.len())
+        );
         for pair in job.sections.windows(2) {
             assert_eq!(pair[0].byte_range.end, pair[1].byte_range.start);
             assert_ne!(pair[0].format.color, pair[1].format.color);
@@ -366,7 +366,7 @@ mod tests {
             let at = TEXT.find(needle).unwrap();
             job.sections
                 .iter()
-                .find(|section| section.byte_range.contains(&at))
+                .find(|section| section.byte_range.contains(&ByteIndex(at)))
                 .unwrap()
                 .format
                 .color
@@ -383,7 +383,7 @@ mod tests {
         for (one, two) in ours.rows.iter().zip(&theirs.rows) {
             assert_eq!(one.pos, two.pos);
             assert_eq!(one.row.size, two.row.size);
-            assert_eq!(one.row.ends_with_newline, two.row.ends_with_newline);
+            assert_eq!(one.ends_with_newline, two.ends_with_newline);
             assert_eq!(one.row.glyphs.len(), two.row.glyphs.len());
             for (a, b) in one.row.glyphs.iter().zip(&two.row.glyphs) {
                 assert_eq!((a.chr, a.pos), (b.chr, b.pos));
@@ -410,7 +410,8 @@ mod tests {
         ];
         let mut laid_out = Vec::new();
         for text in texts {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+                let ctx = root.ctx();
                 let pixels_per_point = ctx.pixels_per_point();
                 ctx.fonts_mut(|fonts| {
                     let ours = cache.galley(fonts, pixels_per_point, text, &theme, &code);

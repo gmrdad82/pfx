@@ -376,6 +376,7 @@ fn drawn(
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
     {
         let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("traced text clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &target.view,

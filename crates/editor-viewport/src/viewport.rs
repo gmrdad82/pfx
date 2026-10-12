@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +19,43 @@ use crate::live::Live;
 use crate::overlay::{self, linear};
 use crate::pick::{Extents, Picker, Selection, matrix};
 use crate::watched::{self, Watched, worded};
+
+pub fn scrolled(
+    input: &egui::InputState,
+    line: f32,
+    horizontal: egui::Modifiers,
+    vertical: egui::Modifiers,
+) -> f32 {
+    let page = input.viewport_rect().height();
+    input
+        .events
+        .iter()
+        .map(|event| match event {
+            egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+                ..
+            } => {
+                let delta = match unit {
+                    egui::MouseWheelUnit::Point => *delta,
+                    egui::MouseWheelUnit::Line => line * *delta,
+                    egui::MouseWheelUnit::Page => page * *delta,
+                };
+                let is_horizontal = modifiers.matches_any(horizontal);
+                let is_vertical = modifiers.matches_any(vertical);
+                if is_horizontal && !is_vertical {
+                    0.0
+                } else if !is_horizontal && is_vertical {
+                    delta.x + delta.y
+                } else {
+                    delta.y
+                }
+            }
+            _ => 0.0,
+        })
+        .sum()
+}
 
 pub const SELECTED: f32 = 0.35;
 pub const HOVERED: f32 = 0.12;
@@ -144,7 +182,7 @@ pub fn posed(rest: &Scene, object: usize, pose: &Pose) -> Scene {
 }
 
 impl Viewport {
-    pub fn open(id_salt: impl Hash, path: impl Into<PathBuf>) -> Viewport {
+    pub fn open(id_salt: impl Hash + Debug, path: impl Into<PathBuf>) -> Viewport {
         let watched = Watched::open(path);
         let mut viewport = Viewport {
             id: Id::new(id_salt),
@@ -584,6 +622,13 @@ impl Viewport {
             return;
         };
         let lens = Lens::new(&view, image);
+        let (line, horizontal, vertical) = ui.ctx().options(|options| {
+            (
+                options.input_options.line_scroll_speed,
+                options.input_options.horizontal_scroll_modifier,
+                options.input_options.vertical_scroll_modifier,
+            )
+        });
         let (origin, pointer, hover, middle, shift, ctrl, scroll) = ui.input(|input| {
             (
                 input.pointer.press_origin(),
@@ -592,7 +637,7 @@ impl Viewport {
                 input.pointer.middle_down(),
                 input.modifiers.shift,
                 input.modifiers.ctrl,
-                input.raw_scroll_delta.y,
+                scrolled(input, line, horizontal, vertical),
             )
         });
         if response.drag_started() {

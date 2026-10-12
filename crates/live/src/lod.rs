@@ -498,7 +498,7 @@ mod tests {
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("LOD silhouette layout"),
                 bind_group_layouts: &[],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
         let pipeline = frame
             .gpu
@@ -509,7 +509,7 @@ mod tests {
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vertex"),
-                    buffers: &[wgpu::VertexBufferLayout {
+                    buffers: &[Some(wgpu::VertexBufferLayout {
                         array_stride: 12,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &[wgpu::VertexAttribute {
@@ -517,7 +517,7 @@ mod tests {
                             offset: 0,
                             shader_location: 0,
                         }],
-                    }],
+                    })],
                     compilation_options: Default::default(),
                 },
                 primitive: wgpu::PrimitiveState {
@@ -536,7 +536,7 @@ mod tests {
                     })],
                     compilation_options: Default::default(),
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         let mut encoder =
@@ -548,6 +548,7 @@ mod tests {
                 });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("LOD silhouette"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.view,

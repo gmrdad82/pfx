@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use egui::{Color32, Context, Rect, TextureId, Vec2};
+use egui::{Color32, Rect, TextureId, Ui, Vec2};
 use egui_wgpu::Renderer;
 use pfx_editor_shell::paint::clear;
 use pfx_editor_shell::{App, Script, Theme, Timing, context, drive, gpu_turn, shot};
@@ -18,8 +18,8 @@ struct Form {
 }
 
 impl App for Form {
-    fn ui(&mut self, ctx: &Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut Ui) {
+        egui::CentralPanel::default().show(ui, |ui| {
             ui.label("form");
             let button = ui.button(format!("pressed {}", self.clicks));
             if button.clicked() {
@@ -62,7 +62,7 @@ fn form_script(form: &Form) -> Script {
 fn laid_out() -> Form {
     let ctx = context(&fixture::theme());
     let mut form = Form::default();
-    drive(&ctx, SIZE, &Script::default(), |ctx| form.ui(ctx));
+    drive(&ctx, SIZE, &Script::default(), |ui| form.ui(ui));
     form
 }
 
@@ -79,7 +79,7 @@ fn a_script_clicks_types_and_drags_into_the_app() {
     let script = form_script(&laid_out());
     let ctx = context(&fixture::theme());
     let mut form = Form::default();
-    drive(&ctx, SIZE, &script, |ctx| form.ui(ctx));
+    drive(&ctx, SIZE, &script, |ui| form.ui(ui));
     assert_eq!(form.clicks, 2);
     assert_eq!(form.name, "typed words");
     assert!(form.level > 55.0 && form.level < 95.0, "{}", form.level);
@@ -112,9 +112,9 @@ struct Viewport {
 }
 
 impl App for Viewport {
-    fn ui(&mut self, ctx: &Context) {
-        egui::TopBottomPanel::top("bar").show(ctx, |ui| ui.label("viewport"));
-        egui::CentralPanel::default().show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut Ui) {
+        egui::Panel::top("bar").show(ui, |ui| ui.label("viewport"));
+        egui::CentralPanel::default().show(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
             self.rect = Some(rect);
             if let Some((_, id, _)) = &self.texture {
@@ -179,6 +179,7 @@ impl App for Viewport {
                 label: Some("viewport"),
             });
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("viewport"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
@@ -261,11 +262,11 @@ struct Themed {
 }
 
 impl App for Themed {
-    fn ui(&mut self, ctx: &Context) {
-        let seen = ctx.style().visuals.clone();
+    fn ui(&mut self, ui: &mut Ui) {
+        let seen = ui.ctx().global_style().visuals.clone();
         self.first
             .get_or_insert((seen.panel_fill, seen.text_color()));
-        egui::CentralPanel::default().show(ctx, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             let rect = ui.available_rect_before_wrap();
             let swatch = Rect::from_min_size(rect.min + Vec2::splat(8.0), Vec2::splat(24.0));
             ui.painter().rect_filled(swatch, 0.0, seen.text_color());
@@ -283,7 +284,7 @@ fn the_shells_context_paints_only_the_apps_colours_and_faces() {
     let ctx = context(&theme);
     assert_eq!(*Theme::of(&ctx), theme);
     let mut app = Themed::default();
-    let output = drive(&ctx, SIZE, &Script::default(), |ctx| app.ui(ctx));
+    let output = drive(&ctx, SIZE, &Script::default(), |ui| app.ui(ui));
     assert_eq!(app.first, Some((GROUND, INK)));
     let allowed = fixture::colours(&theme);
     let mut seen = Vec::new();
@@ -300,7 +301,7 @@ fn the_shells_context_paints_only_the_apps_colours_and_faces() {
     );
     let ctx = context(&theme);
     let mut form = Form::default();
-    let output = drive(&ctx, SIZE, &form_script(&laid_out()), |ctx| form.ui(ctx));
+    let output = drive(&ctx, SIZE, &form_script(&laid_out()), |ui| form.ui(ui));
     assert!(fixture::assert_faces(&ctx, &theme, &output.shapes) >= 3);
 }
 

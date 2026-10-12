@@ -22,11 +22,11 @@ parry3d = { version = "=0.31.1", default-features = false, features = ["required
 rapier3d = { version = "=0.36.0", optional = true }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
-wgpu = { version = "=27.0.1", default-features = false, features = ["std", "wgsl", "vulkan"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl", "vulkan"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wgpu = { version = "=27.0.1", default-features = false, features = ["std", "wgsl", "dx12", "vulkan"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl", "dx12", "vulkan"] }
 
 [dev-dependencies]
-naga = { version = "27.0.3", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in"] }
 pollster = "0.4"

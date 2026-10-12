@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use egui::epaint::ColorMode;
-use egui::{Color32, Context, Pos2, Shape};
+use egui::{Color32, Pos2, Shape, Ui};
 use pfx_editor_shell::{App, Script, context, drive, gpu_turn, shot};
 use pfx_editor_style::fixture::{self, colours};
 use pfx_editor_style::theme::{Caps, Diff, Syntax, Theme};
@@ -51,8 +51,8 @@ impl Shelf {
 }
 
 impl App for Shelf {
-    fn ui(&mut self, ctx: &Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut Ui) {
+        egui::CentralPanel::default().show(ui, |ui| {
             let target = match self.board {
                 Board::Header => {
                     let first = ui.add(Header::new("OU", "outliner").info("12 items"));
@@ -112,7 +112,7 @@ impl App for Shelf {
 fn target(board: Board) -> Pos2 {
     let ctx = context(&fixture::theme());
     let mut shelf = Shelf::new(board);
-    drive(&ctx, SIZE, &Script::default(), |ctx| shelf.ui(ctx));
+    drive(&ctx, SIZE, &Script::default(), |ui| shelf.ui(ui));
     shelf.target.unwrap()
 }
 
@@ -249,7 +249,7 @@ fn painted(shape: &Shape, into: &mut BTreeSet<[u8; 4]>) {
 fn shapes(theme: &Theme, board: Board, script: &Script) -> Vec<Shape> {
     let ctx = context(theme);
     let mut shelf = Shelf::new(board);
-    let output = drive(&ctx, SIZE, script, |ctx| shelf.ui(ctx));
+    let output = drive(&ctx, SIZE, script, |ui| shelf.ui(ui));
     let families = fixture::assert_faces(&ctx, theme, &output.shapes);
     assert!(families > 0 || matches!(board, Board::Dotted), "{board:?}");
     output

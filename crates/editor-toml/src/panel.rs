@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::hash::Hash;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
@@ -6,8 +7,9 @@ use std::sync::Arc;
 use egui::text::{CCursor, CCursorRange, LayoutJob, TextFormat};
 use egui::text_edit::TextEditState;
 use egui::{
-    Align, Align2, Galley, Id, InputState, Key, KeyboardShortcut, Label, Layout, Margin, Modifiers,
-    Pos2, Rect, RichText, ScrollArea, Sense, Shape, Stroke, TextBuffer, TextEdit, Ui, Vec2, pos2,
+    Align, Align2, Frame, Galley, Id, InputState, Key, KeyboardShortcut, Label, Layout, Margin,
+    Modifiers, Pos2, Rect, RichText, ScrollArea, Sense, Shape, Stroke, TextBuffer, TextEdit, Ui,
+    Vec2, pos2,
 };
 use pfx_editor_doc::{Changed, Disk, File, Files, GAP, History, TextSplice, toggle_comment};
 use pfx_editor_style::Theme;
@@ -187,7 +189,7 @@ fn shown_path(file: &Path, own: &Path) -> String {
 }
 
 impl Source {
-    pub fn new(id_salt: impl Hash, file: impl Into<PathBuf>) -> Source {
+    pub fn new(id_salt: impl Hash + Debug, file: impl Into<PathBuf>) -> Source {
         Source {
             id: Id::new(id_salt),
             file: file.into(),
@@ -1007,7 +1009,7 @@ impl Source {
             let output = TextEdit::multiline(buffer)
                 .id(text_id)
                 .code_editor()
-                .frame(false)
+                .frame(Frame::NONE)
                 .desired_width(f32::INFINITY)
                 .desired_rows(1)
                 .margin(Margin::symmetric(4, 0))
@@ -1023,7 +1025,7 @@ impl Source {
                 self.chars = None;
             }
             if let Some(range) = output.cursor_range {
-                let chars = (range.secondary.index, range.primary.index);
+                let chars = (range.secondary.index.0, range.primary.index.0);
                 if self.chars != Some(chars) {
                     self.selection =
                         byte_index(&self.text, chars.0)..byte_index(&self.text, chars.1);
@@ -1075,11 +1077,15 @@ impl Source {
             }
             if !hovered.is_empty() {
                 hovered.dedup();
-                output.response.clone().on_hover_ui_at_pointer(|ui| {
-                    for message in &hovered {
-                        ui.label(message);
-                    }
-                });
+                output
+                    .response
+                    .response
+                    .clone()
+                    .on_hover_ui_at_pointer(|ui| {
+                        for message in &hovered {
+                            ui.label(message);
+                        }
+                    });
             }
             let current = output
                 .cursor_range
@@ -1228,8 +1234,8 @@ mod tests {
                 history,
                 source,
             } = self;
-            drive(ctx, [480, 320], script, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            drive(ctx, [480, 320], script, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     changed.push(source.show(ui, files, history, &check_lamps, &mut |_, _| {}));
                 });
             });

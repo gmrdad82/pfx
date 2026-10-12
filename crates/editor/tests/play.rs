@@ -445,10 +445,10 @@ struct Typing<'a> {
 }
 
 impl App for Typing<'_> {
-    fn ui(&mut self, ctx: &egui::Context) {
+    fn ui(&mut self, ui: &mut egui::Ui) {
         self.passes += 1;
         if self.passes >= 20 {
-            ctx.input_mut(|input| {
+            ui.input_mut(|input| {
                 input.events.push(egui::Event::Key {
                     key: egui::Key::A,
                     physical_key: Some(egui::Key::Q),
@@ -459,7 +459,7 @@ impl App for Typing<'_> {
                 input.events.push(egui::Event::Text("a".into()));
             });
         }
-        self.session.ui(ctx);
+        self.session.ui(ui);
     }
 
     fn viewport(&self) -> bool {

@@ -183,6 +183,13 @@ impl Editor {
 
     fn brush_input(&mut self, ui: &mut Ui, image: Rect) {
         let response = ui.interact(image, Id::new("pfx edit brush"), Sense::click_and_drag());
+        let (line, horizontal, vertical) = ui.ctx().options(|options| {
+            (
+                options.input_options.line_scroll_speed,
+                options.input_options.horizontal_scroll_modifier,
+                options.input_options.vertical_scroll_modifier,
+            )
+        });
         let (origin, pointer, middle, shift, ctrl, scroll) = ui.input(|input| {
             (
                 input.pointer.press_origin(),
@@ -190,7 +197,7 @@ impl Editor {
                 input.pointer.middle_down(),
                 input.modifiers.shift,
                 input.modifiers.ctrl,
-                input.raw_scroll_delta.y,
+                pfx_editor_viewport::scrolled(input, line, horizontal, vertical),
             )
         });
         if response.hovered()

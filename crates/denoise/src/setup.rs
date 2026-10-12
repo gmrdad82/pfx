@@ -71,7 +71,9 @@ fn largest_tensor_per_pixel(net: &Net) -> u64 {
 pub(crate) fn build(gpu: &Gpu, model: &Model, width: u32, height: u32) -> Result<Setup, String> {
     let limits = gpu.device.limits();
     let net = &model.net;
-    let binding = u64::from(limits.max_storage_buffer_binding_size).min(limits.max_buffer_size);
+    let binding = limits
+        .max_storage_buffer_binding_size
+        .min(limits.max_buffer_size);
     let plan = tile::plan(
         height,
         width,

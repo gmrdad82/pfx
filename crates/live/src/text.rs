@@ -1227,7 +1227,7 @@ fn text_pipeline(
             module: shader,
             entry_point: Some(entries.0),
             compilation_options: Default::default(),
-            buffers: &[wgpu::VertexBufferLayout {
+            buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<PackedGlyph>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
                 attributes: &[
@@ -1238,7 +1238,7 @@ fn text_pipeline(
                     attribute(64, 4),
                     attribute(80, 5),
                 ],
-            }],
+            })],
         },
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
@@ -1247,8 +1247,8 @@ fn text_pipeline(
         },
         depth_stencil: depth.then_some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: false,
-            depth_compare: wgpu::CompareFunction::LessEqual,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: Default::default(),
             bias: Default::default(),
         }),
@@ -1271,7 +1271,7 @@ fn text_pipeline(
                 }
             })],
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
@@ -1337,8 +1337,8 @@ impl LitPipelines {
         let lighting = group("lit text lighting", &crate::frame::lighting_entries());
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("lit text pipeline layout"),
-            bind_group_layouts: &[&scene, &shadow, &own, &lighting],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&scene), Some(&shadow), Some(&own), Some(&lighting)],
+            immediate_size: 0,
         });
         Self {
             surface: text_pipeline(
@@ -1414,8 +1414,8 @@ impl TextPass {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("text pipeline layout"),
-            bind_group_layouts: &[&bind_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_layout)],
+            immediate_size: 0,
         });
         let empty_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("text empty"),
@@ -1432,8 +1432,12 @@ impl TextPass {
         });
         let deformed_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("deformed text pipeline layout"),
-            bind_group_layouts: &[&bind_layout, &empty_layout, &deformer_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                Some(&bind_layout),
+                Some(&empty_layout),
+                Some(&deformer_layout),
+            ],
+            immediate_size: 0,
         });
         let surface = text_pipeline(
             device,
@@ -1495,7 +1499,7 @@ impl TextPass {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             lod_max_clamp: 3.0,
             anisotropy_clamp: 8,
             ..Default::default()
@@ -1913,6 +1917,7 @@ impl TextPass {
             })
         });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some(if ids { "text ids" } else { "text pass" }),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
@@ -3219,8 +3224,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("legacy text layout"),
-                bind_group_layouts: &[&before.bind_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&before.bind_layout)],
+                immediate_size: 0,
             });
         before.overlay = text_pipeline(
             &gpu.device,
@@ -3236,6 +3241,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             {
                 let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("legacy clear"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &target.view,
@@ -3318,8 +3324,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("legacy text layout"),
-                bind_group_layouts: &[&before.bind_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&before.bind_layout)],
+                immediate_size: 0,
             });
         before.surface = text_pipeline(
             &gpu.device,
@@ -3352,6 +3358,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             {
                 let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("face-on clear"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &target.view,
@@ -3549,6 +3556,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
             });
         {
             let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("rich text clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.view,
@@ -3749,6 +3757,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             {
                 let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("page clear"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &target.view,
@@ -3936,6 +3945,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
                 });
             {
                 let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("text clear"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &target.view,
@@ -4028,6 +4038,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("shared text clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.view,

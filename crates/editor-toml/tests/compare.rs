@@ -91,8 +91,8 @@ impl Rig {
             source,
             ..
         } = self;
-        drive(ctx, SIZE, &script, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        drive(ctx, SIZE, &script, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 source.show(ui, files, history, &NoCheck, &mut |_, _| {});
             });
         });

@@ -17,7 +17,7 @@ toml = "0.9"
 pollster = "0.4"
 
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-wgpu = { version = "=27.0.1", default-features = false, features = ["std", "wgsl", "vulkan"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl", "vulkan"] }
 
 [target.'cfg(target_os = "windows")'.dev-dependencies]
-wgpu = { version = "=27.0.1", default-features = false, features = ["std", "wgsl", "dx12", "vulkan"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl", "dx12", "vulkan"] }

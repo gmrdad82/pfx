@@ -266,6 +266,7 @@ pub struct Trace {
     pub color: OffscreenTarget,
     pub albedo: OffscreenTarget,
     pub normal: OffscreenTarget,
+    rt: Option<crate::rt::Rt>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -292,6 +293,7 @@ pub struct SceneBuffers {
     pub shape_count: u32,
     pub emitter_count: u32,
     pub light_count: u32,
+    pub rt: crate::rt::RtGeometry,
 }
 
 impl SceneBuffers {
@@ -602,6 +604,48 @@ impl SceneBuffers {
         if candidates.len() > MAX_EMITTERS {
             return Err("trace scene has too many emitters".into());
         }
+        let solid: Vec<bool> = bvh
+            .order
+            .iter()
+            .map(|&index| {
+                let index = index as usize;
+                let surface = surfaces[index];
+                flags[index] & (SHADOW_ONLY | CASTS_NO_SHADOW | CUTOUT | ONE_SIDED) == 0
+                    && surface.clip0[..3] == [0.0; 3]
+                    && surface.clip1[..3] == [0.0; 3]
+                    && materials[detailed[index].material as usize].transmission <= 0.0
+            })
+            .collect();
+        let placed: Vec<[[f32; 3]; 3]> = bvh
+            .order
+            .iter()
+            .map(|&index| detailed[index as usize].vertices)
+            .collect();
+        let boxes = shapes
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| packed_shapes[*index].d[0] <= 0.5)
+            .map(|(index, shape)| {
+                let (center, radius) = crate::lights::bounding_sphere(*shape, shapes);
+                (
+                    index as u32,
+                    [
+                        center[0] - radius,
+                        center[1] - radius,
+                        center[2] - radius,
+                        center[0] + radius,
+                        center[1] + radius,
+                        center[2] + radius,
+                    ],
+                )
+            })
+            .collect();
+        let boxes = if crate::rt::boxes() {
+            boxes
+        } else {
+            Vec::new()
+        };
+        let rt = crate::rt::RtGeometry::new(&placed, &solid, boxes);
         let list = build_emitters(&candidates, detail.lights.len());
         let lights: Vec<_> = detail.lights.iter().map(|light| light.pack()).collect();
         packed_materials.push(effects);
@@ -622,6 +666,7 @@ impl SceneBuffers {
             shape_count: shapes.len() as u32,
             emitter_count: candidates.len() as u32,
             light_count: detail.lights.len() as u32,
+            rt,
         })
     }
 }
@@ -794,7 +839,7 @@ fn fits_buffer(gpu: &Gpu, bytes: u64) -> Result<(), TraceError> {
     [
         (
             "max_storage_buffer_binding_size",
-            u64::from(limits.max_storage_buffer_binding_size),
+            limits.max_storage_buffer_binding_size,
         ),
         ("max_buffer_size", limits.max_buffer_size),
     ]
@@ -1054,10 +1099,14 @@ fn pieces(blocks: u32, per_block: u32, start: u32, count: u32) -> Vec<Piece> {
 }
 
 pub fn shader(lit: bool) -> String {
-    shader_source(lit)
+    shader_source(lit, false)
 }
 
-fn shader_source(lit: bool) -> String {
+pub fn shader_rt(lit: bool) -> String {
+    shader_source(lit, true)
+}
+
+fn shader_source(lit: bool, rt: bool) -> String {
     let source = include_str!("trace.wgsl");
     let (start, rest) = source.split_once("fn trace_noise_start() {}\n").unwrap();
     let (_, end) = rest.split_once("fn trace_noise_end() {}\n").unwrap();
@@ -1068,7 +1117,7 @@ fn shader_source(lit: bool) -> String {
     } else {
         end.to_string()
     };
-    format!(
+    let source = format!(
         "{}\n{}\n{}\n{}\n{}\n{}",
         pfx_materials::NOISE,
         pfx_materials::BRDF,
@@ -1076,6 +1125,25 @@ fn shader_source(lit: bool) -> String {
         ENVIRONMENT_WGSL.as_str(),
         start,
         end
+    );
+    if !rt {
+        return source;
+    }
+    let source = [
+        ("fn scene(o: vec3f", "fn soft_scene(o: vec3f"),
+        ("fn occluded(o: vec3f", "fn soft_occluded(o: vec3f"),
+        (
+            "fn shadow_passed(o: vec3f",
+            "fn soft_shadow_passed(o: vec3f",
+        ),
+    ]
+    .into_iter()
+    .fold(source, |source, (from, to)| source.replacen(from, to, 1));
+    format!(
+        "enable wgpu_ray_query;\nconst RT_BOXES: bool = {};\n{}\n{}",
+        crate::rt::boxes(),
+        source,
+        crate::rt::RT_WGSL
     )
 }
 
@@ -1382,11 +1450,13 @@ impl Trace {
             ],
             lit,
         };
+        let rt = (crate::rt::wanted(gpu) && !buffers.rt.is_empty())
+            .then(|| crate::rt::Rt::build(gpu, &buffers.rt));
         let module = gpu
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("trace shader"),
-                source: wgpu::ShaderSource::Wgsl(shader_source(lit).into()),
+                source: wgpu::ShaderSource::Wgsl(shader_source(lit, rt.is_some()).into()),
             });
         let pipeline = gpu
             .device
@@ -1475,6 +1545,19 @@ impl Trace {
                 },
             ]);
         }
+        if let Some(rt) = &rt {
+            entries.retain(|entry| entry.binding != 2);
+            entries.extend([
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: rt.tlas.as_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 18,
+                    resource: rt.map.as_entire_binding(),
+                },
+            ]);
+        }
         let binding = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("trace bindings"),
             layout: &pipeline.get_bind_group_layout(0),
@@ -1521,7 +1604,12 @@ impl Trace {
             color,
             albedo,
             normal,
+            rt,
         })
+    }
+
+    pub fn hardware_rays(&self) -> bool {
+        self.rt.is_some()
     }
 
     fn banded_pacer() -> Pacer {
@@ -2191,8 +2279,8 @@ mod tests {
     }
     #[test]
     fn shader_assembles() {
-        let lit = shader_source(true);
-        let dark = shader_source(false);
+        let lit = shader_source(true, false);
+        let dark = shader_source(false, false);
         assert!(lit.contains(pfx_materials::NOISE));
         assert!(lit.contains("@binding(16)"));
         assert!(!dark.contains("@binding(14)"));
@@ -3453,9 +3541,9 @@ mod tests {
     }
 
     fn device_with(label: &'static str, limits: wgpu::Limits) -> Gpu {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN | wgpu::Backends::METAL,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -3536,7 +3624,7 @@ mod tests {
             GpuShortfall::Limit {
                 name: "max_storage_buffer_binding_size",
                 needed: u64::from(width) * u64::from(height) * 48,
-                has: u64::from(defaults.max_storage_buffer_binding_size),
+                has: defaults.max_storage_buffer_binding_size,
             }
         );
     }

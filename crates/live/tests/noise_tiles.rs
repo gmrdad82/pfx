@@ -470,7 +470,7 @@ fn read_layer(gpu: &Gpu, texture: &wgpu::Texture, layer: u32) -> Vec<u8> {
     gpu.device
         .poll(wgpu::PollType::wait_indefinitely())
         .unwrap();
-    let mapped = buffer.slice(..).get_mapped_range();
+    let mapped = buffer.slice(..).get_mapped_range().expect("a mapped range");
     mapped
         .chunks_exact(row as usize)
         .flat_map(|line| line[..(width * 4) as usize].to_vec())

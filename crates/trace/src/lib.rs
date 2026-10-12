@@ -9,6 +9,7 @@ mod math;
 pub mod matte;
 pub mod probe;
 pub mod rig;
+pub mod rt;
 pub mod shapes;
 pub mod sky;
 pub mod stage;

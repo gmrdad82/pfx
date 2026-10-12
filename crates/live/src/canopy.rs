@@ -523,8 +523,8 @@ impl Canopy {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("canopy cookie pipeline layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("canopy cookie pipeline"),
@@ -558,7 +558,7 @@ impl Canopy {
             },
             depth_stencil: None,
             multisample: Default::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let sample_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -751,6 +751,7 @@ impl Canopy {
         ];
         queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&self.current));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("canopy cookie"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &self.view,
@@ -1109,8 +1110,13 @@ mod tests {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("filter layout"),
-                bind_group_layouts: &[&empty, &empty, &empty, canopy.sample_layout()],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&empty),
+                    Some(&empty),
+                    Some(&empty),
+                    Some(canopy.sample_layout()),
+                ],
+                immediate_size: 0,
             });
         let shader = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("filter shader"),
@@ -1146,7 +1152,7 @@ mod tests {
                 primitive: Default::default(),
                 depth_stencil: None,
                 multisample: Default::default(),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         let target = gpu
@@ -1160,6 +1166,7 @@ mod tests {
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("filter sample"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &target.view,
@@ -1346,7 +1353,10 @@ mod gpu_tests {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .unwrap();
             receive.recv().unwrap().unwrap();
-            let mapped = readback.slice(..).get_mapped_range();
+            let mapped = readback
+                .slice(..)
+                .get_mapped_range()
+                .expect("a mapped range");
             let mut sum = [0.0_f32; 2];
             let mut weight = 0.0_f32;
             for (index, alpha) in mapped.iter().enumerate() {
@@ -1440,7 +1450,7 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
         device: &wgpu::Device,
         shader: &str,
         layout: &wgpu::PipelineLayout,
-        buffers: &[wgpu::VertexBufferLayout<'_>],
+        buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
         alpha: bool,
     ) -> wgpu::RenderPipeline {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1472,7 +1482,7 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
             },
             depth_stencil: None,
             multisample: Default::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         })
     }
@@ -1524,8 +1534,13 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("ground layout"),
-                bind_group_layouts: &[&empty, &empty, &empty, canopy.sample_layout()],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&empty),
+                    Some(&empty),
+                    Some(&empty),
+                    Some(canopy.sample_layout()),
+                ],
+                immediate_size: 0,
             });
         let wood_bind_layout =
             gpu.device
@@ -1554,8 +1569,8 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("wood layout"),
-                bind_group_layouts: &[&wood_bind_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&wood_bind_layout)],
+                immediate_size: 0,
             });
         let camera_layout = gpu
             .device
@@ -1609,8 +1624,8 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("cherry cards layout"),
-                bind_group_layouts: &[canopy.cookie_layout(), &camera_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(canopy.cookie_layout()), Some(&camera_layout)],
+                immediate_size: 0,
             });
         let ground = pipeline(
             &gpu.device,
@@ -1623,7 +1638,7 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
             &gpu.device,
             WOOD_WGSL,
             &wood_layout,
-            &[wgpu::VertexBufferLayout {
+            &[Some(wgpu::VertexBufferLayout {
                 array_stride: 32,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[
@@ -1648,7 +1663,7 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
                         shader_location: 3,
                     },
                 ],
-            }],
+            })],
             false,
         );
         let visible = pipeline(
@@ -1684,6 +1699,7 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
             );
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("ground and cherry"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &target.view,
@@ -1707,6 +1723,7 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
             }
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("cherry draw"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &target.view,
@@ -1819,7 +1836,7 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
         recv.recv().unwrap().unwrap();
-        let mapped = buffer.slice(..).get_mapped_range();
+        let mapped = buffer.slice(..).get_mapped_range().expect("a mapped range");
         let covered =
             mapped.iter().map(|v| *v as f32 / 255.0).sum::<f32>() * one.extent[0] * one.extent[1]
                 / (row * row) as f32;
@@ -1859,8 +1876,8 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("tree sway reference pipeline layout"),
-                bind_group_layouts: &[&layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
             });
         let pipeline = gpu
             .device
@@ -1911,7 +1928,10 @@ struct Wood { @location(0) position: vec3f, @location(1) pivot: vec3f, @location
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
         recv.recv().unwrap().unwrap();
-        let mapped = readback.slice(..).get_mapped_range();
+        let mapped = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("a mapped range");
         let expected = tree_sway(
             [1.0, 6.0, 1.0],
             [0.0, 5.0, 0.0],

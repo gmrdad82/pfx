@@ -1,6 +1,6 @@
 use egui::{
     Context, Event, FullOutput, Id, Key, Modifiers, MouseWheelUnit, PointerButton, Pos2, RawInput,
-    Rect, Vec2, ViewportId, ViewportInfo,
+    Rect, TouchPhase, Ui, Vec2, ViewportId, ViewportInfo,
 };
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
 use pfx_gpu::{Gpu, wgpu};
@@ -23,14 +23,16 @@ struct Driver<'a> {
 }
 
 impl Driver<'_> {
-    fn pass(&mut self, events: Vec<Event>, ui: &mut impl FnMut(&Context)) -> FullOutput {
+    fn pass(&mut self, events: Vec<Event>, ui: &mut impl FnMut(&mut Ui)) -> FullOutput {
+        let events: Vec<Event> = std::iter::once(Event::ModifiersChanged(self.modifiers))
+            .chain(events)
+            .collect();
         let mut input = RawInput {
             screen_rect: Some(self.screen),
             max_texture_side: Some(MAX_SIDE as usize),
             time: Some(self.passes as f64 * f64::from(DT)),
             predicted_dt: DT,
             focused: true,
-            modifiers: self.modifiers,
             events,
             ..RawInput::default()
         };
@@ -43,7 +45,7 @@ impl Driver<'_> {
             },
         );
         self.passes += 1;
-        let mut output = self.ctx.run(input, |ctx| ui(ctx));
+        let mut output = self.ctx.run_ui(input, |root| ui(root));
         self.textures
             .append(std::mem::take(&mut output.textures_delta));
         output
@@ -87,7 +89,7 @@ pub fn drive(
     ctx: &Context,
     size: [u32; 2],
     script: &Script,
-    mut ui: impl FnMut(&Context),
+    mut ui: impl FnMut(&mut Ui),
 ) -> FullOutput {
     let mut driver = Driver {
         ctx,
@@ -185,6 +187,7 @@ pub fn drive(
                 events.push(Event::MouseWheel {
                     unit: MouseWheelUnit::Line,
                     delta: Vec2::new(0.0, *lines),
+                    phase: TouchPhase::Move,
                     modifiers: Modifiers::NONE,
                 });
                 last = driver.pass(std::mem::take(&mut events), &mut ui);
@@ -221,26 +224,17 @@ pub fn pixels(app: &mut impl App, size: [u32; 2], script: &Script) -> Result<Vec
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut painter = Painter::new(&gpu, format, RendererOptions::PREDICTABLE);
     if !app.viewport() {
-        return finish(&gpu, &mut painter, size, script, &theme, |ctx, _| {
-            app.ui(ctx)
-        });
+        return finish(&gpu, &mut painter, size, script, &theme, |ui, _| app.ui(ui));
     }
     app.forget();
     let mut settled = script.clone();
     settled
         .steps
         .extend(std::iter::repeat_n(Step::Frame, SETTLE));
-    finish(
-        &gpu,
-        &mut painter,
-        size,
-        &settled,
-        &theme,
-        |ctx, painter| {
-            app.ui(ctx);
-            app.frame(&gpu, painter.renderer(), ctx.pixels_per_point());
-        },
-    )
+    finish(&gpu, &mut painter, size, &settled, &theme, |ui, painter| {
+        app.ui(ui);
+        app.frame(&gpu, painter.renderer(), ui.ctx().pixels_per_point());
+    })
 }
 
 fn finish(
@@ -249,12 +243,12 @@ fn finish(
     size: [u32; 2],
     script: &Script,
     app_theme: &Theme,
-    mut ui: impl FnMut(&Context, &mut Painter),
+    mut ui: impl FnMut(&mut Ui, &mut Painter),
 ) -> Result<Vec<u8>, Error> {
     let ctx = context(app_theme);
     let output = {
         let painter = &mut *painter;
-        drive(&ctx, size, script, |ctx| ui(ctx, painter))
+        drive(&ctx, size, script, |root| ui(root, painter))
     };
     let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
     let target = gpu
@@ -307,8 +301,8 @@ mod tests {
         let ctx = context(&fixture::theme());
         let script = Script::parse("click 5 5\nframe").unwrap();
         let mut seen = Vec::new();
-        drive(&ctx, [64, 32], &script, |ctx| {
-            seen.push(ctx.input(|input| input.pointer.primary_down()));
+        drive(&ctx, [64, 32], &script, |ui| {
+            seen.push(ui.input(|input| input.pointer.primary_down()));
         });
         assert_eq!(seen, vec![false, true, false]);
     }
@@ -319,8 +313,8 @@ mod tests {
         let script = Script::parse("click 5 5\nframe").unwrap();
         let mut times = Vec::new();
         for _ in 0..2 {
-            drive(&ctx, [64, 32], &script, |ctx| {
-                times.push(ctx.input(|input| input.time));
+            drive(&ctx, [64, 32], &script, |ui| {
+                times.push(ui.input(|input| input.time));
             });
         }
         assert_eq!(times.len(), 6);
@@ -349,7 +343,7 @@ mod tests {
     struct Blank;
 
     impl App for Blank {
-        fn ui(&mut self, _: &Context) {}
+        fn ui(&mut self, _: &mut Ui) {}
 
         fn theme(&self) -> Theme {
             fixture::theme()

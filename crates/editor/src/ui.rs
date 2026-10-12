@@ -26,34 +26,36 @@ fn linear_colour(rgb: [f32; 3]) -> Color32 {
 }
 
 impl Editor {
-    pub fn ui(&mut self, ctx: &egui::Context) {
+    pub fn ui(&mut self, ui: &mut egui::Ui) {
         self.layout.outline.clear();
         self.layout.rows.clear();
         self.layout.buttons.clear();
         self.layout.source = None;
         self.layout.version = None;
-        let theme = Theme::of(ctx);
+        let ctx = ui.ctx().clone();
+        let theme = Theme::of(&ctx);
         self.level.shift = ctx.input(|input| input.modifiers.shift);
-        self.keys(ctx);
+        self.keys(&ctx);
         self.snap_gizmo();
-        egui::TopBottomPanel::top("pfx edit toolbar")
-            .exact_height(TOOLBAR_HEIGHT)
-            .show(ctx, |ui| self.toolbar(ui));
-        egui::TopBottomPanel::bottom("pfx edit log")
+        egui::Panel::top("pfx edit toolbar")
+            .resizable(false)
+            .exact_size(TOOLBAR_HEIGHT)
+            .show(ui, |ui| self.toolbar(ui));
+        egui::Panel::bottom("pfx edit log")
             .resizable(true)
-            .default_height(LOG_HEIGHT)
-            .show(ctx, |ui| self.log_panel(ui));
-        egui::SidePanel::left("pfx edit outliner")
+            .default_size(LOG_HEIGHT)
+            .show(ui, |ui| self.log_panel(ui));
+        egui::Panel::left("pfx edit outliner")
             .resizable(true)
-            .default_width(OUTLINER_WIDTH)
-            .show(ctx, |ui| self.outliner(ui));
-        egui::SidePanel::right("pfx edit inspector")
+            .default_size(OUTLINER_WIDTH)
+            .show(ui, |ui| self.outliner(ui));
+        egui::Panel::right("pfx edit inspector")
             .resizable(true)
-            .default_width(INSPECTOR_WIDTH)
-            .show(ctx, |ui| self.inspector(ui));
+            .default_size(INSPECTOR_WIDTH)
+            .show(ui, |ui| self.inspector(ui));
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(theme.bg))
-            .show(ctx, |ui| self.viewport(ui));
+            .show(ui, |ui| self.viewport(ui));
     }
 
     fn keys(&mut self, ctx: &egui::Context) {

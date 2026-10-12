@@ -294,8 +294,8 @@ impl RippleGpu {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Ripple"),
-                    bind_group_layouts: &[&layout],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&layout)],
+                    immediate_size: 0,
                 }),
             ),
             module: &module,
@@ -375,8 +375,8 @@ impl RippleGpu {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("Caustics"),
-                    bind_group_layouts: &[&caustic_layout],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&caustic_layout)],
+                    immediate_size: 0,
                 }),
             ),
             vertex: wgpu::VertexState {
@@ -405,7 +405,7 @@ impl RippleGpu {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let frame_size = [width, height];
@@ -415,6 +415,7 @@ impl RippleGpu {
         });
         for view in &views {
             let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("Ripple clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
@@ -488,6 +489,7 @@ impl RippleGpu {
         let view = self.caustic_texture.create_view(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("Caustics"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -543,7 +545,7 @@ impl RippleGpu {
         recv.recv()
             .expect("caustic map")
             .expect("caustic buffer map");
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range().expect("a mapped range");
         let mut pixels = Vec::with_capacity((size.width * size.height) as usize);
         for y in 0..size.height as usize {
             for x in 0..size.width as usize {
@@ -791,14 +793,15 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]
     fn caustics_after_one_drop_match_the_cpu_port() {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .expect("GPU adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

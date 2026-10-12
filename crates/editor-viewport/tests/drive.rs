@@ -49,10 +49,10 @@ impl Rig {
             history,
             ..
         } = self;
-        drive(ctx, SIZE, script, |ctx| {
+        drive(ctx, SIZE, script, |ui| {
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE)
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     viewport.show(ui, files, history);
                 });
         });

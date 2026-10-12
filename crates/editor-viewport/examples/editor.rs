@@ -4,7 +4,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use clap::Parser;
-use egui::{Context, Key, KeyboardShortcut, Modifiers};
+use egui::{Key, KeyboardShortcut, Modifiers, Ui};
 use egui_wgpu::Renderer;
 use pfx_editor_doc::{Changed, Files, History};
 use pfx_editor_shell::{App, Pgpu, Script, Theme, Timing, Wake, Watch, gpu_turn, shot, window};
@@ -136,15 +136,16 @@ fn object_table(text: &str, name: &str) -> Option<Range<usize>> {
 }
 
 impl App for Editor {
-    fn ui(&mut self, ctx: &Context) {
-        let theme = Theme::of(ctx);
+    fn ui(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        let theme = Theme::of(&ctx);
         let dirty = self
             .files
             .paths()
             .any(|path| self.files.get(path).is_some_and(|file| file.dirty()));
         let objects = self.viewport.scene().map_or(0, |scene| scene.objects.len());
         let info = format!("{objects} objects");
-        egui::TopBottomPanel::top("bar").show(ctx, |ui| {
+        egui::Panel::top("bar").show(ui, |ui| {
             ui.add_space(theme.item_spacing);
             ui.horizontal(|ui| {
                 let (word, tone) = if dirty {
@@ -157,7 +158,7 @@ impl App for Editor {
             });
             ui.add_space(theme.item_spacing);
         });
-        egui::TopBottomPanel::bottom("keys").show(ctx, |ui| {
+        egui::Panel::bottom("keys").show(ui, |ui| {
             ui.add_space(theme.item_spacing);
             ui.horizontal(|ui| {
                 for (key, what) in KEYS {
@@ -169,9 +170,9 @@ impl App for Editor {
             ui.add_space(theme.item_spacing);
         });
         let width = ctx.content_rect().width() * 0.42;
-        egui::SidePanel::right("sources")
-            .default_width(width)
-            .show(ctx, |ui| {
+        egui::Panel::right("sources")
+            .default_size(width)
+            .show(ui, |ui| {
                 ui.add_space(theme.item_spacing);
                 let names: Vec<&str> = self.names.iter().map(String::as_str).collect();
                 ui.add(Tabs::new(&mut self.tab, &names));
@@ -189,7 +190,7 @@ impl App for Editor {
             });
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 self.viewport.show(ui, &mut self.files, &mut self.history);
             });
         for event in self.viewport.take_events() {

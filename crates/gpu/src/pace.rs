@@ -1314,7 +1314,7 @@ impl Timestamp {
             })
             .ok()?;
         receive.recv().ok()?.ok()?;
-        let data = timing.read.slice(..).get_mapped_range();
+        let data = timing.read.slice(..).get_mapped_range().ok()?;
         let first = u64::from_le_bytes(data[0..8].try_into().ok()?);
         let last = u64::from_le_bytes(data[8..16].try_into().ok()?);
         drop(data);
@@ -2132,7 +2132,11 @@ mod tests {
                         usage: wgpu::BufferUsages::UNIFORM,
                         mapped_at_creation: true,
                     });
-                    uniform.slice(..).get_mapped_range_mut()[0..4]
+                    uniform
+                        .slice(..)
+                        .get_mapped_range_mut()
+                        .expect("a mapped range")
+                        .slice(0..4)
                         .copy_from_slice(&start.to_le_bytes());
                     uniform.unmap();
                     let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2162,7 +2166,7 @@ mod tests {
         gpu.queue.submit(Some(encoder.finish()));
         read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-        let data = read.slice(..).get_mapped_range();
+        let data = read.slice(..).get_mapped_range().expect("a mapped range");
         for index in 0..GROUPS * 64 {
             let mut a = index;
             for _ in 0..ROUNDS {
@@ -2729,7 +2733,11 @@ mod tests {
                     mapped_at_creation: true,
                 });
                 for (at, value) in values.iter().enumerate() {
-                    buffer.slice(..).get_mapped_range_mut()[at * 4..at * 4 + 4]
+                    buffer
+                        .slice(..)
+                        .get_mapped_range_mut()
+                        .expect("a mapped range")
+                        .slice(at * 4..at * 4 + 4)
                         .copy_from_slice(&value.to_le_bytes());
                 }
                 buffer.unmap();
@@ -2794,7 +2802,11 @@ mod tests {
                 gpu.queue.submit(Some(encoder.finish()));
                 read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
                 device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-                let data = read.slice(..).get_mapped_range().to_vec();
+                let data = read
+                    .slice(..)
+                    .get_mapped_range()
+                    .expect("a mapped range")
+                    .to_vec();
                 read.unmap();
                 (stats, heights, data)
             };

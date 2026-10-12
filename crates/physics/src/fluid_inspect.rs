@@ -128,7 +128,7 @@ pub(super) fn mapped(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<u8> {
     recv.recv()
         .expect("fluid inspection callback")
         .expect("fluid inspection map");
-    slice.get_mapped_range().to_vec()
+    slice.get_mapped_range().expect("a mapped range").to_vec()
 }
 
 fn half(h: u16) -> f32 {

@@ -172,9 +172,9 @@ fn engine_backends() -> wgpu::Backends {
 }
 
 fn instance() -> wgpu::Instance {
-    wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: engine_backends(),
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     })
 }
 
@@ -194,6 +194,11 @@ fn engine_limits(supported: &wgpu::Limits) -> wgpu::Limits {
         max_storage_textures_per_shader_stage: supported
             .max_storage_textures_per_shader_stage
             .min(floors.max_storage_textures_per_shader_stage),
+        max_blas_primitive_count: supported.max_blas_primitive_count,
+        max_blas_geometry_count: supported.max_blas_geometry_count,
+        max_tlas_instance_count: supported.max_tlas_instance_count,
+        max_acceleration_structures_per_shader_stage: supported
+            .max_acceleration_structures_per_shader_stage,
         ..wgpu::Limits::default()
     }
 }
@@ -252,7 +257,7 @@ fn preferred_adapter(
     }
 }
 
-fn choose_from(
+async fn choose_from(
     instance: &wgpu::Instance,
     surface: Option<&wgpu::Surface<'static>>,
     backends: wgpu::Backends,
@@ -260,6 +265,7 @@ fn choose_from(
 ) -> Option<wgpu::Adapter> {
     let mut adapters: Vec<_> = instance
         .enumerate_adapters(backends)
+        .await
         .into_iter()
         .filter(|adapter| surface.is_none_or(|surface| adapter.is_surface_supported(surface)))
         .collect();
@@ -273,19 +279,19 @@ fn choose_from(
     preferred_adapter(&offers, windows).map(|index| adapters.swap_remove(index))
 }
 
-fn pick_adapter(
+async fn pick_adapter(
     instance: &wgpu::Instance,
     surface: Option<&wgpu::Surface<'static>>,
 ) -> Option<wgpu::Adapter> {
     if cfg!(target_os = "windows") {
         for backends in windows_backend_order() {
-            if let Some(adapter) = choose_from(instance, surface, backends, true) {
+            if let Some(adapter) = choose_from(instance, surface, backends, true).await {
                 return Some(adapter);
             }
         }
         None
     } else {
-        choose_from(instance, surface, engine_backends(), false)
+        choose_from(instance, surface, engine_backends(), false).await
     }
 }
 
@@ -357,6 +363,7 @@ fn open_vulkan_with_extensions(
         unsafe {
             hal.open_with_callback(
                 desc.required_features,
+                &desc.required_limits,
                 &desc.memory_hints,
                 Some(Box::new(move |args| {
                     for name in wanted {
@@ -381,13 +388,14 @@ async fn open(
     limits: Option<&wgpu::Limits>,
     floor: Option<&Floor>,
 ) -> Result<Gpu, GpuRefusal> {
-    let adapter = match pick_adapter(instance, surface) {
+    let adapter = match pick_adapter(instance, surface).await {
         Some(adapter) => adapter,
         None => instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: wgpu::PowerPreference::HighPerformance,
                 compatible_surface: surface,
                 force_fallback_adapter: false,
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|_| GpuRefusal::new(GpuShortfall::NoAdapter, None))?,
@@ -419,6 +427,13 @@ async fn open(
             label: Some("pfx"),
             required_features,
             required_limits,
+            experimental_features: if required_features
+                .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
+            {
+                unsafe { wgpu::ExperimentalFeatures::enabled() }
+            } else {
+                wgpu::ExperimentalFeatures::disabled()
+            },
             ..Default::default()
         },
     )
@@ -555,6 +570,7 @@ impl Gpu {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
+            color_space: wgpu::SurfaceColorSpace::Auto,
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: present.selected,
@@ -715,7 +731,9 @@ impl Gpu {
             .recv()
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|error| error.to_string())?;
         let mut bytes =
             Vec::with_capacity(image_bytes(target.width, target.height, target.format)?);
         for padded in mapped.chunks_exact(row as usize) {
@@ -957,7 +975,8 @@ impl GpuProfiler {
                         let data = slot
                             .buffer
                             .slice(..u64::from(slot.queries) * 8)
-                            .get_mapped_range();
+                            .get_mapped_range()
+                            .expect("a mapped timing slot");
                         let stamps: Vec<u64> = data
                             .chunks_exact(8)
                             .map(|bytes| u64::from_le_bytes(bytes.try_into().unwrap()))
@@ -1252,7 +1271,7 @@ mod tests {
     fn the_device_gets_the_trace_floor_wherever_the_adapter_offers_it() {
         let supported = wgpu::Limits {
             max_storage_buffers_per_shader_stage: 1_000_000,
-            max_storage_buffer_binding_size: u32::MAX,
+            max_storage_buffer_binding_size: u64::from(u32::MAX),
             max_buffer_size: 1 << 40,
             ..wgpu::Limits::default()
         };
@@ -1399,6 +1418,7 @@ mod tests {
             .unwrap();
         {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.view,
@@ -1446,6 +1466,7 @@ mod tests {
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             let index = profiler.pass("clear");
             drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.view,

@@ -126,8 +126,12 @@ impl Widget for Number<'_> {
             response.mark_changed();
         }
         match &editing {
-            Some(text) => ui.data_mut(|data| data.insert_temp(id, text.clone())),
-            None => ui.data_mut(|data| data.remove::<String>(id)),
+            Some(text) => ui.data_mut(|data| {
+                data.insert_temp(id, text.clone());
+            }),
+            None => ui.data_mut(|data| {
+                data.remove::<String>(id);
+            }),
         }
         if !ui.is_rect_visible(rect) {
             return response;

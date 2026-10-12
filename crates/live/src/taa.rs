@@ -799,8 +799,8 @@ impl Pass {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("taa resolve"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("taa resolve"),
@@ -1143,7 +1143,7 @@ fn read_rgba16(
         .recv()
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("a mapped range");
     let mut pixels = Vec::with_capacity((width * height) as usize);
     for padded in mapped.chunks_exact(row as usize) {
         for texel in padded[..raw as usize].chunks_exact(8) {
@@ -1968,7 +1968,7 @@ mod tests {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .unwrap();
             receive.recv().unwrap().unwrap();
-            let data = slice.get_mapped_range();
+            let data = slice.get_mapped_range().expect("a mapped range");
             let start = u64::from_le_bytes(data[0..8].try_into().unwrap());
             let end = u64::from_le_bytes(data[8..16].try_into().unwrap());
             timings.push((end - start) as f64 * f64::from(gpu.queue.get_timestamp_period()) / 1e6);

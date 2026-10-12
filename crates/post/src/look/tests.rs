@@ -272,7 +272,7 @@ fn the_look_shader_validates_and_fits_webgpu_defaults() {
             None
         );
     }
-    assert!(gpu::PALETTE_BYTES <= u64::from(limits.max_uniform_buffer_binding_size));
+    assert!(gpu::PALETTE_BYTES <= limits.max_uniform_buffer_binding_size);
     assert_eq!(gpu::glow_factor(2.0), 1);
     assert_eq!(gpu::glow_factor(4.0), 2);
     assert_eq!(gpu::glow_factor(12.0), 4);

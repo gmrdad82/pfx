@@ -9,8 +9,8 @@ authors.workspace = true
 description = "pfx edit: the engine's scene editor, on the pfx-editor-* crates"
 
 [dependencies]
-egui = { version = "=0.33.3", default-features = false }
-egui-wgpu = { version = "=0.33.3", default-features = false }
+egui = { version = "=0.36.2", default-features = false }
+egui-wgpu = { version = "=0.36.2", default-features = false }
 glam = "0.33"
 pfx-editor-doc = { path = "../editor-doc" }
 pfx-editor-shell = { path = "../editor-shell" }

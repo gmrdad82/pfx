@@ -2,7 +2,7 @@ mod common;
 
 use std::path::{Path, PathBuf};
 
-use egui::{Context, Pos2, Rect, Vec2};
+use egui::{Pos2, Rect, Ui, Vec2};
 use egui_wgpu::Renderer;
 use glam::DVec3;
 use pfx_editor_doc::{Files, History};
@@ -36,10 +36,10 @@ impl Editor {
 }
 
 impl App for Editor {
-    fn ui(&mut self, ctx: &Context) {
+    fn ui(&mut self, ui: &mut Ui) {
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 self.viewport.show(ui, &mut self.files, &mut self.history);
             });
         self.events.extend(self.viewport.take_events());

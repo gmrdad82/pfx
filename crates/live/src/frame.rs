@@ -1579,18 +1579,18 @@ fn layout(
     })
 }
 
-fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+fn vertex_layout() -> Option<wgpu::VertexBufferLayout<'static>> {
     const ATTRIBUTES: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
         0 => Float32x4,
         1 => Float32x4,
         2 => Float32x4,
         3 => Float32x4,
     ];
-    wgpu::VertexBufferLayout {
+    Some(wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<Vertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &ATTRIBUTES,
-    }
+    })
 }
 
 fn prepass_targets() -> [Option<wgpu::ColorTargetState>; 2] {
@@ -1629,7 +1629,7 @@ struct PipelineSpec<'a> {
     module: &'a wgpu::ShaderModule,
     vertex: &'a str,
     fragment: Option<&'a str>,
-    buffers: &'a [wgpu::VertexBufferLayout<'a>],
+    buffers: &'a [Option<wgpu::VertexBufferLayout<'a>>],
     targets: &'a [Option<wgpu::ColorTargetState>],
     cull: Option<wgpu::Face>,
     write_depth: bool,
@@ -1687,12 +1687,12 @@ fn pipeline_with(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: spec.write_depth,
-            depth_compare: if spec.write_depth {
+            depth_write_enabled: Some(spec.write_depth),
+            depth_compare: Some(if spec.write_depth {
                 wgpu::CompareFunction::Less
             } else {
                 wgpu::CompareFunction::LessEqual
-            },
+            }),
             stencil: Default::default(),
             bias: Default::default(),
         }),
@@ -1706,7 +1706,7 @@ fn pipeline_with(
                 ..Default::default()
             },
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: spec.cache,
     })
 }
@@ -1945,7 +1945,7 @@ impl Frame {
                 label: Some("live reflection sampler"),
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
                 ..Default::default()
             }),
         };
@@ -2032,18 +2032,23 @@ impl Frame {
     ) -> Pipelines {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("live frame layout"),
-            bind_group_layouts: &layouts,
-            push_constant_ranges: &[],
+            bind_group_layouts: &layouts.map(Some),
+            immediate_size: 0,
         });
         let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("live shadow layout"),
-            bind_group_layouts: &[layouts[0], cascade, layouts[2]],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(layouts[0]), Some(cascade), Some(layouts[2])],
+            immediate_size: 0,
         });
         let cut_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("live cut shadow layout"),
-            bind_group_layouts: &[layouts[0], cascade, layouts[2], layouts[3]],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[
+                Some(layouts[0]),
+                Some(cascade),
+                Some(layouts[2]),
+                Some(layouts[3]),
+            ],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("live frame shader"),
@@ -2777,12 +2782,12 @@ impl Frame {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("live cards layout"),
             bind_group_layouts: &[
-                &self.scene_layout,
-                &self.shadow_layout,
-                canopy.cookie_layout(),
-                &self.lighting_layout,
+                Some(&self.scene_layout),
+                Some(&self.shadow_layout),
+                Some(canopy.cookie_layout()),
+                Some(&self.lighting_layout),
             ],
-            push_constant_ranges: &[],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("live cards"),
@@ -3868,6 +3873,7 @@ impl Frame {
             .and_then(|timer| timer.pass("depth and velocity"));
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("depth and velocity"),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
@@ -3919,6 +3925,7 @@ impl Frame {
             .and_then(|timer| timer.pass("opaque PBR"));
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("opaque PBR"),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
@@ -4069,7 +4076,7 @@ impl Frame {
             .recv()
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?;
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("a mapped range");
         let mut values = Vec::with_capacity((width * height) as usize);
         for padded in mapped.chunks_exact(row as usize) {
             for pixel in padded[..width as usize * 4].chunks_exact(4) {
@@ -6645,7 +6652,10 @@ mod tests {
             .device
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
-        let values = bytemuck::cast_slice::<u8, f32>(&buffer.slice(..).get_mapped_range()).to_vec();
+        let values = bytemuck::cast_slice::<u8, f32>(
+            &buffer.slice(..).get_mapped_range().expect("a mapped range"),
+        )
+        .to_vec();
         buffer.unmap();
         values
     }
@@ -6791,7 +6801,7 @@ mod tests {
             .device
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
-        let mapped = buffer.slice(..).get_mapped_range();
+        let mapped = buffer.slice(..).get_mapped_range().expect("a mapped range");
         let mut out = Vec::new();
         for y in 0..size.height {
             let start = (y * row) as usize;
@@ -7269,7 +7279,7 @@ mod tests {
                 .device
                 .poll(wgpu::PollType::wait_indefinitely())
                 .unwrap();
-            let texel = buffer.slice(..).get_mapped_range()[..4].to_vec();
+            let texel = buffer.slice(..).get_mapped_range().expect("a mapped range")[..4].to_vec();
             assert_eq!(texel, colour.to_vec(), "frame {index}: the smallest mip");
         }
         println!(

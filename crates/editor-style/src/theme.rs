@@ -325,15 +325,15 @@ mod tests {
         let theme = fixture::theme();
         let ctx = Context::default();
         apply_theme(&ctx, &theme);
-        let output = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.heading("OUTLINER");
                 ui.label("mv_knob");
                 ui.monospace("0.012");
             });
         });
         assert!(!output.shapes.is_empty());
-        let style = ctx.style();
+        let style = ctx.global_style();
         assert_eq!(style.visuals.panel_fill, theme.bg);
         assert_eq!(style.visuals.extreme_bg_color, theme.well);
         assert_eq!(style.visuals.widgets.active.bg_fill, theme.accent_bright);
@@ -359,8 +359,9 @@ mod tests {
         let ctx = Context::default();
         apply_theme(&ctx, &theme);
         let mut seen = None;
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            ctx.fonts(|fonts| seen = Some(fonts.definitions().clone()));
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.ctx()
+                .fonts(|fonts| seen = Some(fonts.definitions().clone()));
         });
         let installed = seen.unwrap();
         assert_eq!(installed.font_data.len(), 2);
@@ -400,9 +401,9 @@ mod tests {
         };
         apply_theme(&ctx, &theme);
         assert_eq!(*Theme::of(&ctx), theme);
-        assert_eq!(ctx.style().text_styles[&TextStyle::Body].size, 15.0);
+        assert_eq!(ctx.global_style().text_styles[&TextStyle::Body].size, 15.0);
         assert_eq!(
-            ctx.style().visuals.text_cursor.stroke.color,
+            ctx.global_style().visuals.text_cursor.stroke.color,
             Color32::from_rgb(1, 2, 3)
         );
         apply_theme(&ctx, &first);
@@ -432,8 +433,8 @@ mod tests {
         );
         let ctx = Context::default();
         apply_theme(&ctx, &theme);
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.label(egui::RichText::new("TITLE").text_style(title()));
             });
         });

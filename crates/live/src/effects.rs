@@ -1179,8 +1179,8 @@ fn pipeline_with(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some(label),
-        bind_group_layouts: &[layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -1207,7 +1207,7 @@ fn pipeline_with(
             },
             targets,
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
@@ -1639,8 +1639,8 @@ impl Effects {
         let room_field_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("effects room haze field"),
-                bind_group_layouts: &[&room_field_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&room_field_layout)],
+                immediate_size: 0,
             });
         let room_field_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -1899,6 +1899,7 @@ impl Effects {
             let mut pass = commands
                 .encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("effects volume quarter resolution"),
                     color_attachments: &[
                         Some(color_attachment(&self.low_color_view, true)),
@@ -1977,6 +1978,7 @@ impl Effects {
             let mut pass = commands
                 .encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("effects room haze blur"),
                     color_attachments: &[Some(color_attachment(&self.low_blur_view, true))],
                     depth_stencil_attachment: None,
@@ -2026,6 +2028,7 @@ impl Effects {
         let mut pass = commands
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("effects depth aware upsample"),
                 color_attachments: &[Some(color_attachment(targets.hdr, false))],
                 depth_stencil_attachment: None,
@@ -2095,6 +2098,7 @@ impl Effects {
         let mut pass = commands
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("effects particles"),
                 color_attachments: &[Some(color_attachment(targets.hdr, false))],
                 depth_stencil_attachment: None,
@@ -2153,6 +2157,7 @@ impl Effects {
         let mut pass = commands
             .encoder
             .begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("effects creatures"),
                 color_attachments: &[Some(color_attachment(targets.hdr, false))],
                 depth_stencil_attachment: None,
@@ -2438,6 +2443,7 @@ mod tests {
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             {
                 let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("room haze test clear"),
                     color_attachments: &[
                         Some(color_attachment(&hdr.view, true)),
@@ -2549,6 +2555,7 @@ mod tests {
         let mut clear = gpu.device.create_command_encoder(&Default::default());
         {
             let _pass = clear.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("effects test clear"),
                 color_attachments: &[
                     Some(color_attachment(&hdr.view, true)),
@@ -2724,6 +2731,7 @@ mod tests {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("steam clock test clear"),
                 color_attachments: &[
                     Some(color_attachment(&hdr.view, true)),

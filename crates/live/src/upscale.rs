@@ -215,8 +215,8 @@ impl Upscale {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("upscale"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("upscale"),
@@ -349,7 +349,7 @@ impl Upscale {
                 })],
                 compilation_options: Default::default(),
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         self.pipelines.push((format, pipeline));
@@ -430,6 +430,7 @@ impl Upscale {
             .and_then(|profiler| profiler.render_writes(timing));
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("upscale"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: compose.output,

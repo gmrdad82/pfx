@@ -389,6 +389,7 @@ impl Painter {
                 label: Some("pfx game clear"),
             });
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("pfx game clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &source,

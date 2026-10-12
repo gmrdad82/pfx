@@ -81,7 +81,7 @@ fn read_ids(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<u32> {
     gpu.device
         .poll(wgpu::PollType::wait_indefinitely())
         .unwrap();
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("a mapped range");
     mapped
         .chunks_exact(row as usize)
         .flat_map(|padded| {

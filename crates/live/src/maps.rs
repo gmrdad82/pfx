@@ -1242,7 +1242,7 @@ pub fn sampler_descriptor() -> wgpu::SamplerDescriptor<'static> {
         address_mode_v: wgpu::AddressMode::Repeat,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
         anisotropy_clamp: ANISOTROPY,
         ..Default::default()
     }
@@ -1793,8 +1793,8 @@ impl Mipper {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("content mips"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("content mips"),
@@ -1823,7 +1823,7 @@ impl Mipper {
                     })],
                     compilation_options: Default::default(),
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             })
         });
@@ -1846,8 +1846,8 @@ impl Mipper {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("content compute mips"),
-                    bind_group_layouts: &[&compute_layout],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&compute_layout)],
+                    immediate_size: 0,
                 }),
             ),
             module: &compute_module,
@@ -1864,8 +1864,8 @@ impl Mipper {
             layout: Some(
                 &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                     label: Some("content compute mip region"),
-                    bind_group_layouts: &[&compute_layout, &region_layout],
-                    push_constant_ranges: &[],
+                    bind_group_layouts: &[Some(&compute_layout), Some(&region_layout)],
+                    immediate_size: 0,
                 }),
             ),
             module: &compute_module,
@@ -1904,7 +1904,7 @@ pub fn content_sampler_descriptor() -> wgpu::SamplerDescriptor<'static> {
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         mag_filter: wgpu::FilterMode::Linear,
         min_filter: wgpu::FilterMode::Linear,
-        mipmap_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
         anisotropy_clamp: ANISOTROPY,
         ..Default::default()
     }
@@ -2245,6 +2245,7 @@ impl ContentSlots {
                 let level = region.level as usize;
                 let [x, y, width, height] = region.rect;
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("content mip region"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &content.levels[level],
@@ -2369,6 +2370,7 @@ fn mip_pass(
     group: &wgpu::BindGroup,
 ) {
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        multiview_mask: None,
         label: Some("content mip"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
             view: target,
@@ -2579,7 +2581,7 @@ struct PlaneOut {
         let sampler = sampler_descriptor();
         assert_eq!(sampler.anisotropy_clamp, 16);
         assert_eq!(sampler.min_filter, wgpu::FilterMode::Linear);
-        assert_eq!(sampler.mipmap_filter, wgpu::FilterMode::Linear);
+        assert_eq!(sampler.mipmap_filter, wgpu::MipmapFilterMode::Linear);
     }
 
     #[test]
@@ -2646,6 +2648,7 @@ struct PlaneOut {
             });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("sheet plane"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -2690,7 +2693,10 @@ struct PlaneOut {
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
         receive.recv().unwrap().unwrap();
-        let mapped = readback.slice(..).get_mapped_range();
+        let mapped = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("a mapped range");
         let mut mean = [0.0; 3];
         for pixel in mapped.chunks_exact(4) {
             for c in 0..3 {
@@ -2761,8 +2767,13 @@ struct PlaneOut {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("sheet pipeline"),
-                bind_group_layouts: &[&age_layout, &empty_layout, &empty_layout, &map_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&age_layout),
+                    Some(&empty_layout),
+                    Some(&empty_layout),
+                    Some(&map_layout),
+                ],
+                immediate_size: 0,
             });
         let source = format!("{}\n{}", shader_source(), PLANE_WGSL);
         let module = gpu
@@ -2798,7 +2809,7 @@ struct PlaneOut {
                     })],
                     compilation_options: Default::default(),
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         let draw = |age: f32| {
@@ -2928,7 +2939,7 @@ struct ProbeTargets {
                 gpu.device
                     .poll(wgpu::PollType::wait_indefinitely())
                     .unwrap();
-                let mapped = buffer.slice(..).get_mapped_range();
+                let mapped = buffer.slice(..).get_mapped_range().expect("a mapped range");
                 let mut values = Vec::new();
                 for y in 0..size {
                     let start = (y * row) as usize;
@@ -3055,8 +3066,13 @@ struct ProbeTargets {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("content probe"),
-                bind_group_layouts: &[&probe_layout, &empty_layout, &empty_layout, &content_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&probe_layout),
+                    Some(&empty_layout),
+                    Some(&empty_layout),
+                    Some(&content_layout),
+                ],
+                immediate_size: 0,
             });
         let module = gpu
             .device
@@ -3091,7 +3107,7 @@ struct ProbeTargets {
                     targets: &[target_state.clone(), target_state],
                     compilation_options: Default::default(),
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         Box::new(
@@ -3155,6 +3171,7 @@ struct ProbeTargets {
                         })
                         .collect();
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        multiview_mask: None,
                         label: Some("content probe"),
                         color_attachments: &attachments,
                         depth_stencil_attachment: None,
@@ -3327,7 +3344,7 @@ struct ProbeTargets {
         gpu.device
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
-        let mapped = buffer.slice(..).get_mapped_range();
+        let mapped = buffer.slice(..).get_mapped_range().expect("a mapped range");
         mapped
             .chunks_exact(row as usize)
             .flat_map(|line| line[..(width * texel) as usize].to_vec())
@@ -3751,22 +3768,24 @@ struct DetailOut {
 
     impl DetailRig {
         fn new(features: wgpu::Features) -> Option<Self> {
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
                 backends: wgpu::Backends::VULKAN | wgpu::Backends::METAL,
-                ..Default::default()
+                ..wgpu::InstanceDescriptor::new_without_display_handle()
             });
-            let adapter = instance
-                .enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::METAL)
-                .into_iter()
-                .find(|adapter| adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu)
-                .or_else(|| {
-                    pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                        power_preference: wgpu::PowerPreference::HighPerformance,
-                        compatible_surface: None,
-                        force_fallback_adapter: false,
-                    }))
-                    .ok()
-                })?;
+            let adapter = pollster::block_on(
+                instance.enumerate_adapters(wgpu::Backends::VULKAN | wgpu::Backends::METAL),
+            )
+            .into_iter()
+            .find(|adapter| adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu)
+            .or_else(|| {
+                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: None,
+                    force_fallback_adapter: false,
+                    apply_limit_buckets: false,
+                }))
+                .ok()
+            })?;
             if !adapter.features().contains(features) {
                 return None;
             }
@@ -3803,8 +3822,13 @@ struct DetailOut {
             let maps = MapTextures::layout(&device);
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("detail probe"),
-                bind_group_layouts: &[&layout, &empty_layout, &empty_layout, &maps],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&layout),
+                    Some(&empty_layout),
+                    Some(&empty_layout),
+                    Some(&maps),
+                ],
+                immediate_size: 0,
             });
             let source = format!("{}\n{}", shader_source(), DETAIL_TEST_WGSL);
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -3836,7 +3860,7 @@ struct DetailOut {
                     })],
                     compilation_options: Default::default(),
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
             Some(Self {
@@ -3905,6 +3929,7 @@ struct DetailOut {
             let mut encoder = device.create_command_encoder(&Default::default());
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("detail probe"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &view,
@@ -3946,7 +3971,7 @@ struct DetailOut {
             let slice = readback.slice(..);
             slice.map_async(wgpu::MapMode::Read, |_| {});
             device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            let bytes = slice.get_mapped_range();
+            let bytes = slice.get_mapped_range().expect("a mapped range");
             let mut out = Vec::with_capacity((size * size * 4) as usize);
             for y in 0..size {
                 let start = (y * row) as usize;

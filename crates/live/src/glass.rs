@@ -602,11 +602,11 @@ fn pipeline(
     } = spec;
     let attributes =
         wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4];
-    let buffers = [wgpu::VertexBufferLayout {
+    let buffers = [Some(wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<Vertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &attributes,
-    }];
+    })];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(fragment),
         layout: Some(layout),
@@ -632,7 +632,7 @@ fn pipeline(
         },
         depth_stencil: depth,
         multisample: Default::default(),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
@@ -693,19 +693,19 @@ impl Pass {
         });
         let front_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("glass front pipeline layout"),
-            bind_group_layouts: &[&scene_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&scene_layout)],
+            immediate_size: 0,
         });
         let back_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("glass back pipeline layout"),
-            bind_group_layouts: &[&scene_layout, &id_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&scene_layout), Some(&id_layout)],
+            immediate_size: 0,
         });
         let compose_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("glass compose pipeline layout"),
-                bind_group_layouts: &[&scene_layout, &id_layout, &compose_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&scene_layout), Some(&id_layout), Some(&compose_layout)],
+                immediate_size: 0,
             });
         let geometry_targets = [
             Some(wgpu::ColorTargetState {
@@ -735,8 +735,8 @@ impl Pass {
                 cull: Some(wgpu::Face::Back),
                 depth: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -753,8 +753,8 @@ impl Pass {
                 cull: Some(wgpu::Face::Front),
                 depth: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Greater,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Greater),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -810,8 +810,8 @@ impl Pass {
         });
         let cast_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("glass cast pipeline layout"),
-            bind_group_layouts: &[&cast_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&cast_layout)],
+            immediate_size: 0,
         });
         let cast_pipe = pipeline(
             device,
@@ -828,8 +828,8 @@ impl Pass {
                 cull: None,
                 depth: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Less,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -843,7 +843,7 @@ impl Pass {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         Self {
@@ -1346,6 +1346,7 @@ impl Pass {
             .and_then(|p| p.pass("glass compose"));
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("glass front"),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
@@ -1400,6 +1401,7 @@ impl Pass {
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("glass back"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.back_view,
@@ -1433,6 +1435,7 @@ impl Pass {
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("glass composite"),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
@@ -1500,6 +1503,7 @@ impl Pass {
         let mut profiler = profiler;
         let timing = profiler.as_deref_mut().and_then(|p| p.pass("glass ids"));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("glass ids"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: ids,
@@ -2331,6 +2335,7 @@ mod tests {
         );
         {
             let _depth_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("glass test depth clear"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -2487,6 +2492,7 @@ mod tests {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("glass subsurface clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &output.view,
@@ -2631,6 +2637,7 @@ mod tests {
             });
         {
             let _pass = clear.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("glass budget targets"),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
@@ -2796,6 +2803,7 @@ mod tests {
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             {
                 let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("glass caustic depth clear"),
                     color_attachments: &[],
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {

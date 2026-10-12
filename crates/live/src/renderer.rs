@@ -454,8 +454,8 @@ impl ExposureMeter {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("live exposure pipeline layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("live exposure shader"),
@@ -513,7 +513,11 @@ impl ExposureMeter {
         if let Some(receiver) = &self.pending {
             match receiver.try_recv() {
                 Ok(Ok(())) => {
-                    let bytes = self.readback.slice(..).get_mapped_range();
+                    let bytes = self
+                        .readback
+                        .slice(..)
+                        .get_mapped_range()
+                        .expect("a mapped range");
                     let log_luminance = f32::from_le_bytes(bytes[..4].try_into().unwrap());
                     drop(bytes);
                     self.readback.unmap();
@@ -813,8 +817,8 @@ fn blit_pipeline(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("live output blit"),
-        bind_group_layouts: &[&layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
     });
     let source = format!(
         "{FULLSCREEN}\n@group(0) @binding(0) var source: texture_2d<f32>; @fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {{ return textureLoad(source, vec2i(position.xy), 0); }}"
@@ -862,7 +866,7 @@ fn fullscreen(
             })],
             compilation_options: Default::default(),
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
@@ -950,8 +954,8 @@ fn depth_pipeline(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::Comput
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("live linear depth"),
-        bind_group_layouts: &[&layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("live linear depth"), source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let z = textureLoad(source, id.xy, 0); let distance = limits.y / (z + limits.x); textureStore(destination, id.xy, vec4f(select(limits.z, distance, z < 1.0 && distance > 0.0), 0.0, 0.0, 0.0)); }".into()) });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -1003,8 +1007,8 @@ fn motion_pass(device: &wgpu::Device) -> Motion {
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("live background motion"),
-        bind_group_layouts: &[&layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("live background motion"),
@@ -1091,8 +1095,8 @@ fn mips(device: &wgpu::Device, width: u32, height: u32) -> Mips {
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("live scene colour mips"),
-        bind_group_layouts: &[&layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
     });
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("live scene colour mips"),
@@ -1605,7 +1609,11 @@ impl Renderer {
         let result = readback.receiver.try_recv();
         match result {
             Ok(Ok(())) => {
-                let bytes = readback.buffer.slice(..).get_mapped_range();
+                let bytes = readback
+                    .buffer
+                    .slice(..)
+                    .get_mapped_range()
+                    .expect("a mapped range");
                 let id = u32::from_le_bytes(bytes[..4].try_into().unwrap());
                 let depth = f32::from_le_bytes(bytes[256..260].try_into().unwrap());
                 drop(bytes);
@@ -2706,6 +2714,7 @@ impl Renderer {
             )?;
             let timing = self.profiler.pass("impostors");
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("impostors"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.frame.targets.hdr.view,
@@ -2761,6 +2770,7 @@ impl Renderer {
             self.plate_mask = true;
         } else if self.plate_mask {
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("plate mask clear"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.reactive_view,
@@ -2855,6 +2865,7 @@ impl Renderer {
         let timing = self.profiler.pass("background motion");
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("background motion"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.frame.targets.velocity_view,
@@ -2878,6 +2889,7 @@ impl Renderer {
         let timing = self.profiler.pass("sky");
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("sky"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.frame.targets.hdr.view,
@@ -2941,6 +2953,7 @@ impl Renderer {
                 None
             };
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("scene colour mip"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.mips.levels[level],
@@ -3564,6 +3577,7 @@ impl Renderer {
             });
             let timing = self.profiler.pass("output blit");
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("live output blit"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: output,
@@ -4592,7 +4606,7 @@ fn readback_texture(
         .recv()
         .map_err(|error| error.to_string())?
         .map_err(|error| error.to_string())?;
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("a mapped range");
     let mut bytes = Vec::with_capacity((raw_row * height) as usize);
     for padded in mapped.chunks_exact(row as usize) {
         bytes.extend_from_slice(&padded[..raw_row as usize]);
@@ -4694,6 +4708,7 @@ mod tests {
             .create_command_encoder(&Default::default());
         {
             let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("finish input"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &input.view,
@@ -5528,7 +5543,10 @@ mod tests {
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
         receive.recv().unwrap().unwrap();
-        let bytes = readback.slice(..).get_mapped_range();
+        let bytes = readback
+            .slice(..)
+            .get_mapped_range()
+            .expect("a mapped range");
         assert!(
             bytes
                 .chunks_exact(4)
@@ -5693,7 +5711,7 @@ mod tests {
                 .poll(wgpu::PollType::wait_indefinitely())
                 .unwrap();
             receive.recv().unwrap().unwrap();
-            let mapped = buffer.slice(..).get_mapped_range();
+            let mapped = buffer.slice(..).get_mapped_range().expect("a mapped range");
             let mask = mapped
                 .chunks_exact(4)
                 .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()) < 0.999)

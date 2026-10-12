@@ -198,7 +198,7 @@ impl Checker {
             .recv()
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?;
-        let data = read.slice(..).get_mapped_range();
+        let data = read.slice(..).get_mapped_range().expect("a mapped range");
         let rgba = data
             .chunks_exact(2)
             .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))

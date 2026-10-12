@@ -111,8 +111,8 @@ fn fluid_heightfield_on_gpu() {
                 &gpu.device
                     .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("Bend"),
-                        bind_group_layouts: &[&layout],
-                        push_constant_ranges: &[],
+                        bind_group_layouts: &[Some(&layout)],
+                        immediate_size: 0,
                     }),
             ),
             module: &module,
@@ -130,14 +130,15 @@ struct Gpu {
 }
 
 fn open() -> Gpu {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
+        apply_limit_buckets: false,
     }))
     .expect("gpu adapter");
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -173,7 +174,7 @@ fn read_buffer(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<u8> {
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("poll");
     recv.recv().expect("map").expect("map buffer");
-    slice.get_mapped_range().to_vec()
+    slice.get_mapped_range().expect("a mapped range").to_vec()
 }
 
 fn read_height(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<f32> {
@@ -208,7 +209,7 @@ fn read_height(gpu: &Gpu, texture: &wgpu::Texture) -> Vec<f32> {
         .poll(wgpu::PollType::wait_indefinitely())
         .expect("poll");
     recv.recv().expect("map").expect("map height");
-    let data = slice.get_mapped_range();
+    let data = slice.get_mapped_range().expect("a mapped range");
     let mut out = Vec::with_capacity((size.width * size.height) as usize);
     for y in 0..size.height as usize {
         for x in 0..size.width as usize {

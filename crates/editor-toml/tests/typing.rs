@@ -50,8 +50,8 @@ fn typing_into_ten_thousand_lines_times_each_frame() {
     let mut frame = |source: &mut Source, events: Vec<Event>| {
         time += 1.0 / 60.0;
         let start = Instant::now();
-        let output = ctx.run(input(time, events), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let output = ctx.run_ui(input(time, events), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 source.show(ui, &mut files, &mut history, &NoCheck, &mut |_, _| {});
             });
         });

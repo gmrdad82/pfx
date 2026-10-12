@@ -519,8 +519,8 @@ impl ImpostorPass {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("impostor pipeline layout"),
-                bind_group_layouts: &[&layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
             });
         let pipeline = gpu
             .device
@@ -539,8 +539,8 @@ impl ImpostorPass {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: depth_format,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -555,7 +555,7 @@ impl ImpostorPass {
                     })],
                     compilation_options: Default::default(),
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         let shadow_pipeline = gpu
@@ -575,8 +575,8 @@ impl ImpostorPass {
                 },
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: depth_format,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -587,7 +587,7 @@ impl ImpostorPass {
                     targets: &[],
                     compilation_options: Default::default(),
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         Ok(Self {
@@ -906,7 +906,7 @@ mod tests {
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
         receive.recv().unwrap().unwrap();
-        let mapped = buffer.slice(..).get_mapped_range();
+        let mapped = buffer.slice(..).get_mapped_range().expect("a mapped range");
         let pixels = mapped
             .chunks_exact(4)
             .map(|bytes| f32::from_le_bytes(bytes.try_into().unwrap()))
@@ -1196,6 +1196,7 @@ mod tests {
             let index = timer.as_mut().and_then(|t| t.pass("200 impostors"));
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("impostor benchmark"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &color.view,

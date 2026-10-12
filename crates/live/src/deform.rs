@@ -1099,8 +1099,8 @@ fn main(@builtin(local_invocation_index) index: u32) {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&result_layout, &empty, &deformers.layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&result_layout), Some(&empty), Some(&deformers.layout)],
+            immediate_size: 0,
         });
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: None,
@@ -1128,7 +1128,7 @@ fn main(@builtin(local_invocation_index) index: u32) {
         });
         device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
         receive.recv().unwrap().unwrap();
-        let mapped = slice.get_mapped_range();
+        let mapped = slice.get_mapped_range().expect("a mapped range");
         let values: &[[f32; 4]] = bytemuck::cast_slice(&mapped[..]);
         let unit = |v: [f32; 3]| {
             let length = v.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -1266,8 +1266,8 @@ struct Output {
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
-            bind_group_layouts: &[&empty, &empty, &deformers.layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&empty), Some(&empty), Some(&deformers.layout)],
+            immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("deform test pipeline"),
@@ -1276,17 +1276,17 @@ struct Output {
                 module: &shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
+                buffers: &[Some(wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<TestVertex>() as u64,
                     step_mode: wgpu::VertexStepMode::Vertex,
                     attributes: &wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4],
-                }],
+                })],
             },
             primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -1301,7 +1301,7 @@ struct Output {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let target = gpu
@@ -1341,6 +1341,7 @@ struct Output {
             let mut encoder = device.create_command_encoder(&Default::default());
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("deform test render"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &target.view,

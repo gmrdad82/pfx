@@ -1109,7 +1109,12 @@ impl Readback {
         let receiver = self.pending.as_ref()?;
         match receiver.try_recv() {
             Ok(Ok(())) => {
-                let bytes = self.buffer.slice(..).get_mapped_range().to_vec();
+                let bytes = self
+                    .buffer
+                    .slice(..)
+                    .get_mapped_range()
+                    .expect("a mapped range")
+                    .to_vec();
                 self.buffer.unmap();
                 self.pending = None;
                 Some(bytes)
@@ -1327,8 +1332,8 @@ impl Cache {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("demand warp"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("demand warp"),
@@ -1348,8 +1353,8 @@ impl Cache {
         let composite_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("demand composite"),
-                bind_group_layouts: &[&composite_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&composite_layout)],
+                immediate_size: 0,
             });
         let composite_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("demand composite"),
@@ -1361,8 +1366,8 @@ impl Cache {
         });
         let copy_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("demand copy"),
-            bind_group_layouts: &[&copy_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&copy_layout)],
+            immediate_size: 0,
         });
         let copy_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("demand copy"),
@@ -1509,6 +1514,7 @@ impl Cache {
 
     pub fn encode_clear(&self, encoder: &mut wgpu::CommandEncoder) {
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("demand overlay clear"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &self.overlay.view,
@@ -1568,6 +1574,7 @@ impl Cache {
         });
         let timing = profiler.pass("composite");
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("demand composite"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target.0,
@@ -1789,6 +1796,7 @@ impl Cache {
                 }));
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("demand reproject"),
                 color_attachments: &attachments,
                 depth_stencil_attachment: None,
@@ -1829,6 +1837,7 @@ impl Cache {
         });
         let timing = profiler.pass(label);
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some(label),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
@@ -1892,7 +1901,7 @@ fn pipeline(
             targets: &targets,
             compilation_options: Default::default(),
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }

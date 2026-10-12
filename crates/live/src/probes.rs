@@ -1120,8 +1120,13 @@ mod tests {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[&empty, &empty, &empty, lighting.layout()],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&empty),
+                    Some(&empty),
+                    Some(&empty),
+                    Some(lighting.layout()),
+                ],
+                immediate_size: 0,
             });
         let source = format!(
             "{PROBE_WGSL}\n@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {{ var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0)); return vec4f(p[i], 0.0, 1.0); }}\n@fragment fn fs() -> @location(0) vec4f {{ let indirect = sample_live_irradiance(vec3f(0.0, 0.01, 0.0), vec3f(0.0, 1.0, 0.0)) * 0.8 / 3.14159265; return vec4f(indirect + vec3f(0.1 * 0.8 / 3.14159265), 1.0); }}"
@@ -1156,7 +1161,7 @@ mod tests {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         let target = gpu
@@ -1165,6 +1170,7 @@ mod tests {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.view,
@@ -1239,8 +1245,13 @@ mod tests {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[&empty, &empty, &empty, lighting.layout()],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&empty),
+                    Some(&empty),
+                    Some(&empty),
+                    Some(lighting.layout()),
+                ],
+                immediate_size: 0,
             });
         let source = format!(
             "{PROBE_WGSL}\n@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {{ var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0)); return vec4f(p[i], 0.0, 1.0); }}\n@fragment fn fs() -> @location(0) vec4f {{ return vec4f(sample_live_irradiance(vec3f({:?}, {:?}, {:?}), vec3f({:?}, {:?}, {:?})), 1.0); }}",
@@ -1276,7 +1287,7 @@ mod tests {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         let target = gpu
@@ -1285,6 +1296,7 @@ mod tests {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.view,

@@ -1020,8 +1020,8 @@ impl Pass {
             });
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(label),
-                bind_group_layouts: &[layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(layout)],
+                immediate_size: 0,
             });
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(label),
@@ -1068,7 +1068,7 @@ impl Pass {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
         Self {
@@ -1977,7 +1977,7 @@ mod tests {
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
         receive.recv().unwrap().unwrap();
-        let mapped = buffer.slice(..).get_mapped_range();
+        let mapped = buffer.slice(..).get_mapped_range().expect("a mapped range");
         let mut out = Vec::with_capacity((width * height) as usize);
         for y in 0..height {
             let start = (y * row) as usize;

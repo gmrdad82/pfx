@@ -487,7 +487,7 @@ impl Session {
     fn feed(&mut self, ctx: &egui::Context) {
         let was = self.modifiers;
         self.modifiers = ctx.input(|input| input.modifiers);
-        if self.editor.play != Play::Playing || ctx.wants_keyboard_input() {
+        if self.editor.play != Play::Playing || ctx.egui_wants_keyboard_input() {
             return;
         }
         let Some(view) = self.view.as_deref_mut() else {
@@ -515,10 +515,11 @@ impl Session {
 }
 
 impl App for Session {
-    fn ui(&mut self, ctx: &egui::Context) {
+    fn ui(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         self.seconds = ctx.input(|input| input.unstable_dt).clamp(0.0, MAX_SECONDS);
-        self.feed(ctx);
-        self.editor.ui(ctx);
+        self.feed(&ctx);
+        self.editor.ui(ui);
     }
 
     fn viewport(&self) -> bool {

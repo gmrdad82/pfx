@@ -133,8 +133,8 @@ fn compute(
         layout: Some(
             &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some(entry),
-                bind_group_layouts: &[layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(layout)],
+                immediate_size: 0,
             }),
         ),
         module: &module,
@@ -182,7 +182,10 @@ impl Pipeline {
                 usage: wgpu::BufferUsages::UNIFORM,
                 mapped_at_creation: true,
             });
-            let mut data = buffer.slice(..).get_mapped_range_mut();
+            let mut data = buffer
+                .slice(..)
+                .get_mapped_range_mut()
+                .expect("a mapped range");
             data.copy_from_slice(bytemuck::cast_slice(&[stride, 0.0, 0.0, 0.0]));
             drop(data);
             buffer.unmap();

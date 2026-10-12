@@ -174,13 +174,13 @@ impl LookGpu {
         });
         let plain = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("look"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let with_palette = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("look palette"),
-            bind_group_layouts: &[&palette_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&palette_layout)],
+            immediate_size: 0,
         });
         let pipelines = KINDS
             .iter()
@@ -211,7 +211,7 @@ impl LookGpu {
                         })],
                         compilation_options: Default::default(),
                     }),
-                    multiview: None,
+                    multiview_mask: None,
                     cache: None,
                 });
                 (kind, pipeline)
@@ -674,6 +674,7 @@ impl LookGpu {
                 .as_deref()
                 .and_then(|profiler| profiler.render_writes(timing));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some(job.label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &job.target,

@@ -207,7 +207,7 @@ fn every_flat_layout_fits_webgpu_defaults() {
         INSTANCE_ATTRIBUTES * 16
     );
     assert!((std::mem::size_of::<Instance>() as u32) <= limits.max_vertex_buffer_array_stride);
-    assert!(INSTANCE_ATTRIBUTES * 4 <= limits.max_inter_stage_shader_components);
+    assert!(INSTANCE_ATTRIBUTES <= limits.max_inter_stage_shader_variables);
     let dynamic = text
         .iter()
         .filter(|entry| {
@@ -533,7 +533,7 @@ pub(super) fn read_ids(gpu: &Gpu, texture: &wgpu::Texture, size: [u32; 2]) -> Ve
     gpu.device
         .poll(wgpu::PollType::wait_indefinitely())
         .unwrap();
-    let bytes = buffer.slice(..).get_mapped_range();
+    let bytes = buffer.slice(..).get_mapped_range().expect("a mapped range");
     let mut ids = Vec::with_capacity((size[0] * size[1]) as usize);
     for y in 0..size[1] {
         let start = (y * row) as usize;
@@ -633,9 +633,9 @@ fn the_gpu_ids_match_the_twins_picks() {
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
 fn the_flat_pipelines_run_on_a_device_at_webgpu_defaults() {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::VULKAN | wgpu::Backends::METAL,
-        ..Default::default()
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
     });
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::HighPerformance,
@@ -650,7 +650,7 @@ fn the_flat_pipelines_run_on_a_device_at_webgpu_defaults() {
     }))
     .unwrap();
     assert_eq!(device.limits(), wgpu::Limits::default());
-    device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let mut pass = FlatPass::new(&device, &queue);
     let curve = test_curve();
     let (parsed, icons) = parsed("icons");
@@ -754,7 +754,7 @@ fn the_flat_pipelines_run_on_a_device_at_webgpu_defaults() {
     }
     queue.submit(Some(encoder.finish()));
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    let error = pollster::block_on(device.pop_error_scope());
+    let error = pollster::block_on(scope.pop());
     assert!(error.is_none(), "{error:?}");
 }
 

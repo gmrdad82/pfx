@@ -333,7 +333,8 @@ struct Case {{
     let slice = readback.slice(..);
     slice.map_async(wgpu::MapMode::Read, |_| {});
     device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-    let values: Vec<f32> = bytemuck::cast_slice(&slice.get_mapped_range()).to_vec();
+    let values: Vec<f32> =
+        bytemuck::cast_slice(&slice.get_mapped_range().expect("a mapped range")).to_vec();
     readback.unmap();
     Turns::default().turn();
     values.chunks_exact(4).map(|v| [v[0], v[1], v[2]]).collect()

@@ -45,9 +45,11 @@ impl Painter {
         primitives: &[ClippedPrimitive],
         ground: Color32,
     ) {
-        for (id, delta) in &textures.set {
-            self.renderer
-                .update_texture(&gpu.device, &gpu.queue, *id, delta);
+        for (id, deltas) in &textures.set {
+            for delta in deltas {
+                self.renderer
+                    .update_texture(&gpu.device, &gpu.queue, *id, delta);
+            }
         }
         let mut encoder = gpu
             .device
@@ -59,6 +61,7 @@ impl Painter {
                 .update_buffers(&gpu.device, &gpu.queue, &mut encoder, primitives, screen);
         {
             let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("editor ui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,

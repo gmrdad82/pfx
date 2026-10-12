@@ -44,8 +44,8 @@ impl Editor {
             selected,
             changed,
         } = self;
-        drive(ctx, [480, 360], &script, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        drive(ctx, [480, 360], &script, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 let mut select = |at: usize, table: &Table| selected.push((at, table.clone()));
                 if let Some(one) = source.show(ui, files, history, &NoCheck, &mut select) {
                     changed.push(one);

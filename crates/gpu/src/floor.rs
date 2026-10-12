@@ -50,7 +50,8 @@ pub const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY
     .union(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
     .union(wgpu::Features::FLOAT32_FILTERABLE)
     .union(wgpu::Features::TEXTURE_COMPRESSION_BC)
-    .union(wgpu::Features::PIPELINE_CACHE);
+    .union(wgpu::Features::PIPELINE_CACHE)
+    .union(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
 
 pub const SAMPLED_TEXTURES_PER_STAGE: u32 = 18;
 pub const TEXTURE_SIDE: u32 = 16_384;
@@ -415,7 +416,7 @@ mod tests {
             max_storage_textures_per_shader_stage: 8_388_606,
             max_bind_groups: 8,
             max_buffer_size: 1 << 40,
-            max_storage_buffer_binding_size: u32::MAX,
+            max_storage_buffer_binding_size: u64::from(u32::MAX),
             ..wgpu::Limits::default()
         }
     }
@@ -646,7 +647,7 @@ mod tests {
             device_type: wgpu::DeviceType::DiscreteGpu,
             driver: "driver".into(),
             driver_info: "info".into(),
-            backend,
+            ..wgpu::AdapterInfo::new(wgpu::DeviceType::DiscreteGpu, backend)
         }
     }
 

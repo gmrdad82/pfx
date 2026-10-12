@@ -16,4 +16,4 @@ roxmltree = "=0.21.1"
 svgtypes = "=0.16.1"
 
 [dev-dependencies]
-naga = { version = "27.0.3", default-features = false, features = ["wgsl-in"] }
+naga = { version = "30", default-features = false, features = ["wgsl-in"] }

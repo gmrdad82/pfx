@@ -130,7 +130,7 @@ pub(crate) fn sampler(device: &wgpu::Device, filter: SpriteFilter) -> wgpu::Samp
         address_mode_v: wgpu::AddressMode::ClampToEdge,
         mag_filter: filter,
         min_filter: filter,
-        mipmap_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::MipmapFilterMode::Nearest,
         ..Default::default()
     })
 }

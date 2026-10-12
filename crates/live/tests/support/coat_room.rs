@@ -822,7 +822,7 @@ pub fn read_ids(frame: &Frame) -> Vec<u32> {
         .device
         .poll(wgpu::PollType::wait_indefinitely())
         .unwrap();
-    let mapped = buffer.slice(..).get_mapped_range();
+    let mapped = buffer.slice(..).get_mapped_range().expect("a mapped range");
     let mut ids = Vec::new();
     for y in 0..size.height {
         let start = (y * row) as usize;

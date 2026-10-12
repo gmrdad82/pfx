@@ -595,8 +595,8 @@ impl PlateKit {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("plate composite"),
-            bind_group_layouts: &[&layout, &cascade_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout), Some(&cascade_layout)],
+            immediate_size: 0,
         });
         let target = |format| {
             Some(wgpu::ColorTargetState {
@@ -629,13 +629,13 @@ impl PlateKit {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
             multisample: Default::default(),
-            multiview: None,
+            multiview_mask: None,
             cache,
         });
         let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -658,8 +658,8 @@ impl PlateKit {
         let shadow_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("plate shadow"),
-                bind_group_layouts: &[&shadow_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&shadow_layout)],
+                immediate_size: 0,
             });
         let instance_attributes = [
             wgpu::VertexAttribute {
@@ -690,7 +690,7 @@ impl PlateKit {
                 module: &shadow_module,
                 entry_point: Some("vertex"),
                 buffers: &[
-                    wgpu::VertexBufferLayout {
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: 12,
                         step_mode: wgpu::VertexStepMode::Vertex,
                         attributes: &[wgpu::VertexAttribute {
@@ -698,12 +698,12 @@ impl PlateKit {
                             offset: 0,
                             shader_location: 0,
                         }],
-                    },
-                    wgpu::VertexBufferLayout {
+                    }),
+                    Some(wgpu::VertexBufferLayout {
                         array_stride: 64,
                         step_mode: wgpu::VertexStepMode::Instance,
                         attributes: &instance_attributes,
-                    },
+                    }),
                 ],
                 compilation_options: Default::default(),
             },
@@ -714,8 +714,8 @@ impl PlateKit {
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less),
                 stencil: Default::default(),
                 bias: wgpu::DepthBiasState {
                     constant: 2,
@@ -724,7 +724,7 @@ impl PlateKit {
                 },
             }),
             multisample: Default::default(),
-            multiview: None,
+            multiview_mask: None,
             cache,
         });
         Self {
@@ -1153,6 +1153,7 @@ impl Plates {
                 .as_deref_mut()
                 .and_then(|p| p.pass("plate shadows"));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("plate shadows"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1212,6 +1213,7 @@ impl Plates {
             })
         };
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("plate composite"),
             color_attachments: &[
                 load(&targets.hdr.view),

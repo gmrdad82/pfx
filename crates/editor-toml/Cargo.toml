@@ -9,7 +9,7 @@ authors.workspace = true
 description = "An embedded egui TOML source panel: a tolerant lexer, highlighted live editing that applies checked splices onto the shared undo history, a diff with revert, and Open in editor"
 
 [dependencies]
-egui = { version = "=0.33.3", default-features = false }
+egui = { version = "=0.36.2", default-features = false }
 pfx-editor-doc = { path = "../editor-doc" }
 pfx-editor-style = { path = "../editor-style" }
 similar = { version = "2", default-features = false, features = ["text"] }

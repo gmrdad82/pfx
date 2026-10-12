@@ -282,7 +282,7 @@ impl Denoiser {
             .map_err(|error| error.to_string())?
             .map_err(|error| error.to_string())?;
         let pixels = {
-            let bytes = slice.get_mapped_range();
+            let bytes = slice.get_mapped_range().expect("a mapped range");
             let all: &[[f32; 4]] = bytemuck::cast_slice(&bytes);
             let mut pixels = Vec::with_capacity(setup.width as usize * setup.height as usize);
             for row in all.chunks_exact(setup.stride as usize) {

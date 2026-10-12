@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::collections::HashSet;
 
 use egui::epaint::ClippedShape;
-use egui::{Color32, Context, Shape};
+use egui::{Color32, Shape, Ui};
 use pfx_editor_doc::toml_edit::DocumentMut;
 use pfx_editor_doc::{Files, History};
 use pfx_editor_shell::{App, Script, context, drive, gpu_turn, shot};
@@ -89,8 +89,8 @@ impl Panel {
 }
 
 impl App for Panel {
-    fn ui(&mut self, ctx: &Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut Ui) {
+        egui::CentralPanel::default().show(ui, |ui| {
             let Panel {
                 source,
                 files,
@@ -213,7 +213,7 @@ fn problem(panel: &Panel) -> &Diagnostic {
 fn the_panel_over_a_broken_scene_lists_its_one_problem() {
     let ctx = context(&fixture::theme());
     let mut panel = Panel::new();
-    drive(&ctx, SIZE, &Script::default(), |ctx| panel.ui(ctx));
+    drive(&ctx, SIZE, &Script::default(), |ui| panel.ui(ui));
     assert!(panel.doc().is_none());
     assert_eq!(panel.source.problems().len(), 1);
     assert_eq!(problem(&panel).line, 10);
@@ -242,7 +242,7 @@ fn a_panel_paints_only_the_installed_themes_colours() {
     assert!(allowed.is_disjoint(&colours(&fixture::theme())));
     let ctx = context(&theme);
     let mut panel = Panel::themed(theme.clone());
-    let output = drive(&ctx, SIZE, &Script::default(), |ctx| panel.ui(ctx));
+    let output = drive(&ctx, SIZE, &Script::default(), |ui| panel.ui(ui));
     let mut seen = Vec::new();
     painted(&output.shapes, &mut seen);
     assert!(seen.contains(&theme.well));
@@ -264,11 +264,11 @@ fn a_recoloured_theme_recolours_the_same_panel() {
     let mut panel = Panel::new();
     let ctx = context(&fixture::theme());
     let mut before = Vec::new();
-    let output = drive(&ctx, SIZE, &Script::default(), |ctx| panel.ui(ctx));
+    let output = drive(&ctx, SIZE, &Script::default(), |ui| panel.ui(ui));
     painted(&output.shapes, &mut before);
     theme::apply_theme(&ctx, &loud());
     let mut again = Vec::new();
-    let output = drive(&ctx, SIZE, &Script::default(), |ctx| panel.ui(ctx));
+    let output = drive(&ctx, SIZE, &Script::default(), |ui| panel.ui(ui));
     painted(&output.shapes, &mut again);
     assert!(before.contains(&fixture::theme().syntax.key));
     assert!(again.contains(&loud().syntax.key));
@@ -297,7 +297,7 @@ fn a_diff_view_paints_only_the_installed_themes_colours() {
     let allowed = colours(&theme);
     let ctx = context(&theme);
     let mut panel = Panel::diffed(theme.clone());
-    let output = drive(&ctx, SIZE, &Script::default(), |ctx| panel.ui(ctx));
+    let output = drive(&ctx, SIZE, &Script::default(), |ui| panel.ui(ui));
     let mut seen = Vec::new();
     painted(&output.shapes, &mut seen);
     assert!(seen.contains(&theme.diff.add));

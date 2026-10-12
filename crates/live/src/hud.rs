@@ -181,7 +181,9 @@ pub fn layout(
     let mut textures = TexturesDelta::default();
     let mut full = FullOutput::default();
     for _ in 0..passes.max(1) {
-        full = ctx.run(input(pixels_per_point), |ctx| rect = ui(ctx, readout));
+        full = ctx.run_ui(input(pixels_per_point), |root| {
+            rect = ui(root.ctx(), readout)
+        });
         textures.append(std::mem::take(&mut full.textures_delta));
     }
     full.textures_delta = textures;
@@ -315,8 +317,8 @@ impl Paint {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pfx dev hud composite"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("pfx dev hud composite"),
@@ -340,7 +342,7 @@ impl Paint {
             primitive: wgpu::PrimitiveState::default(),
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let place = device.create_buffer(&wgpu::BufferDescriptor {
@@ -401,9 +403,11 @@ impl Paint {
     }
 
     fn upload(&mut self, gpu: &Gpu, textures: &TexturesDelta) {
-        for (id, delta) in &textures.set {
-            self.egui
-                .update_texture(&gpu.device, &gpu.queue, *id, delta);
+        for (id, deltas) in &textures.set {
+            for delta in deltas {
+                self.egui
+                    .update_texture(&gpu.device, &gpu.queue, *id, delta);
+            }
         }
     }
 
@@ -440,6 +444,7 @@ impl Paint {
         let (view, bind) = (canvas.view.clone(), canvas.bind.clone());
         {
             let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("pfx dev hud ui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -459,6 +464,7 @@ impl Paint {
         }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("pfx dev hud composite"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: output,

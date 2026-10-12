@@ -216,21 +216,26 @@ impl Live {
             return Ok(());
         }
         let texture = match self.target.surface.get_current_texture() {
-            Ok(texture) => texture,
-            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+            wgpu::CurrentSurfaceTexture::Success(texture)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 self.target
                     .surface
                     .configure(&gpu.device, &self.target.config);
                 return Ok(());
             }
-            Err(wgpu::SurfaceError::Timeout) => return Ok(()),
-            Err(error) => return Err(format!("the window's surface: {error}")),
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                return Err("the window's surface: validation failed".to_string());
+            }
         };
         let view = texture.texture.create_view(&Default::default());
         self.painter
             .draw(&mut self.driver, &view, self.target.config.format)?;
         self.window.pre_present_notify();
-        texture.present();
+        self.painter.renderer().gpu().queue.present(texture);
         let audio = self.driver.take_audio();
         if let Some(sound) = &self.sound {
             sound.sender.push(&audio);

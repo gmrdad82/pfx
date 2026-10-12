@@ -276,7 +276,7 @@ impl<A: App> Host<A> {
         let native = live.window.scale_factor() as f32;
         ctx.set_zoom_factor(native.round().max(1.0) / native);
         let input = live.state.take_egui_input(&live.window);
-        let output = ctx.run(input, |ctx| app.ui(ctx));
+        let output = ctx.run_ui(input, |root| app.ui(root));
         if app.opened() {
             watcher.follow(app.watched(), proxy);
             retitle(&live.window, pulse.as_deref(), app);
@@ -289,18 +289,21 @@ impl<A: App> Host<A> {
             .handle_platform_output(&live.window, output.platform_output);
         let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
         let frame = match live.target.surface.get_current_texture() {
-            Ok(frame) => frame,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 let size = live.window.inner_size();
                 live.target.resize(&live.gpu, size.width, size.height);
                 live.window.request_redraw();
                 return Ok(());
             }
-            Err(wgpu::SurfaceError::Timeout) => {
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 live.window.request_redraw();
                 return Ok(());
             }
-            Err(error) => return Err(error.to_string()),
+            wgpu::CurrentSurfaceTexture::Validation => {
+                return Err("surface validation failed".to_string());
+            }
         };
         let view = frame
             .texture
@@ -318,7 +321,7 @@ impl<A: App> Host<A> {
             Theme::of(ctx).bg,
         );
         live.window.pre_present_notify();
-        frame.present();
+        live.gpu.queue.present(frame);
         let work = started.elapsed();
         let name = app.name().to_string();
         if work >= SLOW {

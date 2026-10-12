@@ -268,8 +268,8 @@ fn make_stage(
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("post pipeline layout"),
-        bind_group_layouts: &[&layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
     });
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(&label),
@@ -323,8 +323,8 @@ fn conversion_pipeline(device: &wgpu::Device) -> wgpu::ComputePipeline {
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("post geometry conversion layout"),
-        bind_group_layouts: &[&layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
     });
     let source = "@group(0) @binding(0) var src: texture_depth_2d; @group(0) @binding(1) var<storage, read_write> dst: array<f32>; @group(0) @binding(2) var<uniform> extent: vec4<u32>; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3<u32>) { let dim = min(textureDimensions(src), extent.xy); if (id.x < dim.x && id.y < dim.y) { dst[id.y * dim.x + id.x] = textureLoad(src, id.xy, 0); } }";
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1777,6 +1777,7 @@ pub(crate) mod tests {
                 });
         {
             let _pass = depth_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("post depth clear"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1890,6 +1891,7 @@ pub(crate) mod tests {
             });
         {
             let _pass = clear.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("post benchmark geometry"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &normal.view,
@@ -2249,6 +2251,7 @@ pub(crate) mod tests {
             });
         {
             let _pass = clear.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("post finish geometry"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &normal.view,
@@ -2854,8 +2857,8 @@ pub(crate) mod tests {
                 primitive: wgpu::PrimitiveState::default(),
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: wgpu::TextureFormat::Depth32Float,
-                    depth_write_enabled: true,
-                    depth_compare: wgpu::CompareFunction::Always,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
                 }),
@@ -2866,7 +2869,7 @@ pub(crate) mod tests {
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[],
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         let mut encoder = gpu
@@ -2876,6 +2879,7 @@ pub(crate) mod tests {
             });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("post viewport depth"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {

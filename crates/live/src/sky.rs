@@ -740,8 +740,8 @@ impl SkyPass {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("sky pipeline layout"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("sky pass"),
@@ -755,8 +755,8 @@ impl SkyPass {
             primitive: Default::default(),
             depth_stencil: depth.map(|format| wgpu::DepthStencilState {
                 format,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::LessEqual,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -771,7 +771,7 @@ impl SkyPass {
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1256,6 +1256,7 @@ mod tests {
                 let mut encoder = gpu.device.create_command_encoder(&Default::default());
                 {
                     let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        multiview_mask: None,
                         label: Some("sky test"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: &view,
@@ -1294,7 +1295,7 @@ mod tests {
                     .poll(wgpu::PollType::wait_indefinitely())
                     .unwrap();
                 receive.recv().unwrap().unwrap();
-                let mapped = slice.get_mapped_range();
+                let mapped = slice.get_mapped_range().expect("a mapped range");
                 let actual = [0, 1, 2].map(|i| {
                     half::f16::from_bits(u16::from_le_bytes([mapped[2 * i], mapped[2 * i + 1]]))
                         .to_f32()

@@ -971,7 +971,7 @@ impl Bench {
         gpu.device
             .poll(wgpu::PollType::wait_indefinitely())
             .unwrap();
-        let bytes = buffer.slice(..).get_mapped_range();
+        let bytes = buffer.slice(..).get_mapped_range().expect("a mapped range");
         let mut ids = Vec::with_capacity((width * height) as usize);
         for y in 0..height {
             let start = (y * row) as usize;

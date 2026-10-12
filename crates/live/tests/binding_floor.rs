@@ -172,8 +172,8 @@ fn multi_group_labels(source: &str) -> Vec<String> {
         let before = &rest[..at];
         let after = &rest[at + "bind_group_layouts:".len()..];
         let end = after
-            .find("push_constant_ranges")
-            .expect("a pipeline layout without push_constant_ranges");
+            .find("immediate_size")
+            .expect("a pipeline layout without immediate_size");
         if !single_group(&after[..end]) {
             let label = before
                 .rfind("label: Some(\"")
@@ -215,9 +215,9 @@ fn every_multi_group_layout_in_the_renderer_is_counted() {
 
 #[test]
 fn the_scan_tells_one_group_from_several() {
-    assert!(single_group(" &[&layout],\n "));
-    assert!(!single_group(" &[&scene, &shadow],\n "));
+    assert!(single_group(" &[Some(&layout)],\n "));
+    assert!(!single_group(" &[Some(&scene), Some(&shadow)],\n "));
     assert!(!single_group(" &layouts,\n "));
-    let source = "let a = x(&D {\n label: Some(\"one\"),\n bind_group_layouts: &[&a],\n push_constant_ranges: &[],\n});\nlet b = x(&D {\n label: Some(\"two\"),\n bind_group_layouts: &[&a, &b],\n push_constant_ranges: &[],\n});\n";
+    let source = "let a = x(&D {\n label: Some(\"one\"),\n bind_group_layouts: &[Some(&a)],\n immediate_size: 0,\n});\nlet b = x(&D {\n label: Some(\"two\"),\n bind_group_layouts: &[Some(&a), Some(&b)],\n immediate_size: 0,\n});\n";
     assert_eq!(multi_group_labels(source), vec!["two".to_string()]);
 }

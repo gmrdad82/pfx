@@ -422,7 +422,7 @@ fn pipeline(
     layout: &wgpu::PipelineLayout,
     module: &wgpu::ShaderModule,
     entries: (&str, &str),
-    buffers: &[wgpu::VertexBufferLayout<'_>],
+    buffers: &[Option<wgpu::VertexBufferLayout<'_>>],
     target: wgpu::ColorTargetState,
     topology: wgpu::PrimitiveTopology,
 ) -> wgpu::RenderPipeline {
@@ -448,7 +448,7 @@ fn pipeline(
             targets: &[Some(target)],
             compilation_options: Default::default(),
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }
@@ -492,31 +492,31 @@ impl FlatPass {
         });
         let main_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("flat"),
-            bind_group_layouts: &[&view_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&view_layout)],
+            immediate_size: 0,
         });
         let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("flat layer composite"),
-            bind_group_layouts: &[&view_layout, &layer_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&view_layout), Some(&layer_layout)],
+            immediate_size: 0,
         });
         let text_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("flat text"),
-            bind_group_layouts: &[&text_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&text_layout)],
+            immediate_size: 0,
         });
         let finish_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("flat finish"),
-                bind_group_layouts: &[&finish_layout],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[Some(&finish_layout)],
+                immediate_size: 0,
             });
         let attributes = instance_attributes();
-        let instance_buffers = [wgpu::VertexBufferLayout {
+        let instance_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Instance>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &attributes,
-        }];
+        })];
         let quad_attributes = [
             wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
@@ -529,22 +529,22 @@ impl FlatPass {
                 shader_location: 1,
             },
         ];
-        let quad_buffers = [wgpu::VertexBufferLayout {
+        let quad_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<LayerQuad>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &quad_attributes,
-        }];
+        })];
         let glyph_attributes: [wgpu::VertexAttribute; 6] =
             std::array::from_fn(|index| wgpu::VertexAttribute {
                 format: wgpu::VertexFormat::Float32x4,
                 offset: (index * 16) as u64,
                 shader_location: index as u32,
             });
-        let glyph_buffers = [wgpu::VertexBufferLayout {
+        let glyph_buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<PackedGlyph>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &glyph_attributes,
-        }];
+        })];
         let strip = wgpu::PrimitiveTopology::TriangleStrip;
         let list = wgpu::PrimitiveTopology::TriangleList;
         let colour = pipeline(
@@ -633,9 +633,9 @@ impl FlatPass {
                 mag_filter: wgpu::FilterMode::Linear,
                 min_filter: wgpu::FilterMode::Linear,
                 mipmap_filter: if mipmaps {
-                    wgpu::FilterMode::Linear
+                    wgpu::MipmapFilterMode::Linear
                 } else {
-                    wgpu::FilterMode::Nearest
+                    wgpu::MipmapFilterMode::Nearest
                 },
                 ..Default::default()
             })
@@ -644,7 +644,7 @@ impl FlatPass {
             label: Some("flat text"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             lod_max_clamp: 3.0,
             ..Default::default()
         });
@@ -776,11 +776,11 @@ impl FlatPass {
             return;
         }
         let attributes = instance_attributes();
-        let buffers = [wgpu::VertexBufferLayout {
+        let buffers = [Some(wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<Instance>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &attributes,
-        }];
+        })];
         let colour = pipeline(
             device,
             "flat colour lit",
@@ -1341,6 +1341,7 @@ impl FlatPass {
                      index: u32| {
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
                     label: Some("flat"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view,
@@ -1404,6 +1405,7 @@ impl FlatPass {
             .as_deref()
             .and_then(|profiler| profiler.render_writes(timing));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("flat ids"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: ids,
@@ -1475,7 +1477,7 @@ impl FlatPass {
                         targets: &[Some(colour_state(format, blend))],
                         compilation_options: Default::default(),
                     }),
-                    multiview: None,
+                    multiview_mask: None,
                     cache: None,
                 });
                 self.finishes.push(Finish {
@@ -1518,6 +1520,7 @@ impl FlatPass {
             .as_deref()
             .and_then(|profiler| profiler.render_writes(timing));
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
             label: Some("flat finish"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,

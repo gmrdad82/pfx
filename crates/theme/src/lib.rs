@@ -207,8 +207,8 @@ mod tests {
             data.sections[0].format.font_id.family,
             egui::FontFamily::Monospace
         );
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
                 ui.label(title(&theme, "pfx edit", 13.0, theme.text));
                 ui.label(label(&theme, "roughness", theme.text2));
             });

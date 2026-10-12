@@ -181,7 +181,7 @@ fn read(gpu: &Gpu, texture: &wgpu::Texture, bytes_per_pixel: u32) -> Vec<u8> {
     gpu.device
         .poll(wgpu::PollType::wait_indefinitely())
         .unwrap();
-    let mapped = slice.get_mapped_range();
+    let mapped = slice.get_mapped_range().expect("a mapped range");
     let mut out = Vec::new();
     for padded in mapped.chunks_exact(row as usize) {
         out.extend_from_slice(&padded[..raw as usize]);

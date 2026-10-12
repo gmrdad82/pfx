@@ -559,14 +559,24 @@ impl Fluid {
             max_particles as u64 * std::mem::size_of::<Particle>() as u64,
             true,
         );
-        particles.slice(..).get_mapped_range_mut().fill(0);
+        particles
+            .slice(..)
+            .get_mapped_range_mut()
+            .expect("a mapped range")
+            .slice(..)
+            .fill(0);
         particles.unmap();
         let targets_buffer = storage(
             "Targets",
             max_targets as u64 * std::mem::size_of::<Target>() as u64,
             true,
         );
-        targets_buffer.slice(..).get_mapped_range_mut().fill(0);
+        targets_buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .expect("a mapped range")
+            .slice(..)
+            .fill(0);
         targets_buffer.unmap();
         let grid = Grid {
             counts: storage("Cell counts", cell_total * 4, false),
@@ -693,8 +703,8 @@ impl Fluid {
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Sim"),
-            bind_group_layouts: &[&layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
         });
         let pipe = |name: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -1261,14 +1271,15 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]
     fn two_wires_and_small_pool_inspect() {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::VULKAN,
-            ..Default::default()
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: None,
             force_fallback_adapter: false,
+            apply_limit_buckets: false,
         }))
         .expect("adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

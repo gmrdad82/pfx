@@ -440,7 +440,7 @@ impl Lights {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             compare: Some(wgpu::CompareFunction::LessEqual),
             ..Default::default()
         });
@@ -773,6 +773,7 @@ impl Faces<'_> {
                         || writes.end_of_pass_write_index.is_some()
                 });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: Some("light shadow face"),
                 color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -1321,8 +1322,13 @@ mod tests {
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: None,
-                bind_group_layouts: &[&empty, &empty, &empty, lighting.layout()],
-                push_constant_ranges: &[],
+                bind_group_layouts: &[
+                    Some(&empty),
+                    Some(&empty),
+                    Some(&empty),
+                    Some(lighting.layout()),
+                ],
+                immediate_size: 0,
             });
         let source = format!(
             "{PROBE_WGSL}\n@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {{ var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0)); return vec4f(p[i], 0.0, 1.0); }}\n@fragment fn fs() -> @location(0) vec4f {{ return vec4f(sample_live_irradiance(vec3f(0.0), vec3f(0.0, 1.0, 0.0)), 1.0); }}"
@@ -1357,7 +1363,7 @@ mod tests {
                         write_mask: wgpu::ColorWrites::ALL,
                     })],
                 }),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
         let target = gpu
@@ -1366,6 +1372,7 @@ mod tests {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target.view,
