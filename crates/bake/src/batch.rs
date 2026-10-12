@@ -479,7 +479,7 @@ mod tests {
         assert_eq!(buffers.surfaces.len(), 64);
         assert_eq!(buffers.content_info.len(), 16);
         assert_eq!(buffers.layers.len(), 32);
-        assert_eq!(std::mem::size_of::<super::Frame>(), 160);
+        assert_eq!(std::mem::size_of::<super::Frame>(), 176);
         assert_eq!(std::mem::size_of::<super::FaceRecord>(), 80);
         assert_eq!(super::rows(1), 4);
         assert_eq!(super::rows(16), 4);
