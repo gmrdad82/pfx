@@ -201,6 +201,7 @@ pub struct Scene<E = Sky> {
 pub const SAMPLE_LABEL: &str = "trace samples";
 pub const BAND_STEP: u32 = 8;
 pub const SAMPLE_SPAN_MS: f64 = 12.0;
+pub const SAMPLE_TARGET_MS: f64 = 10.0;
 const LANES: u32 = 64;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1458,6 +1459,8 @@ impl Trace {
     fn banded_pacer() -> Pacer {
         let mut pacer = Pacer::default();
         pacer.set_step(BAND_STEP, BAND_STEP);
+        pacer.set_target_ms(SAMPLE_TARGET_MS);
+        pacer.set_ceiling_ms(SAMPLE_SPAN_MS);
         pacer
     }
 
@@ -1588,9 +1591,14 @@ impl Trace {
         between: impl FnMut(f64) -> T,
     ) -> Result<Stats, String> {
         let (rows, columns) = pacer.step();
+        let (target, ceiling) = (pacer.target_ms(), pacer.ceiling_ms());
         pacer.set_step(BAND_STEP, BAND_STEP);
+        pacer.set_target_ms(SAMPLE_TARGET_MS);
+        pacer.set_ceiling_ms(SAMPLE_SPAN_MS);
         let result = self.sample_sliced(gpu, count, seed, pacer, between);
         pacer.set_step(rows, columns);
+        pacer.set_target_ms(target);
+        pacer.set_ceiling_ms(ceiling);
         result
     }
 

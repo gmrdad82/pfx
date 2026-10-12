@@ -783,6 +783,13 @@ impl Pacer {
         std::mem::take(&mut self.pacing)
     }
 
+    pub fn set_target_ms(&mut self, target_ms: f64) {
+        if target_ms.is_finite() {
+            self.target_ms = target_ms.clamp(2.0, 100.0);
+            self.ceiling_ms = self.ceiling_ms.max(self.target_ms);
+        }
+    }
+
     pub fn set_ceiling_ms(&mut self, ceiling_ms: f64) {
         if ceiling_ms.is_finite() {
             self.ceiling_ms = ceiling_ms.clamp(self.target_ms, 100.0);
