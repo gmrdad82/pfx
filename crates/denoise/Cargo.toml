@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 description = "pfx's denoiser: Intel Open Image Denoise's RT filter and trained weights, ported to Rust and WGSL compute on wgpu"
 publish.workspace = true
-license = "MIT AND Apache-2.0"
+license.workspace = true
 authors.workspace = true
 
 [dependencies]

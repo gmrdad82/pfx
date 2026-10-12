@@ -1,6 +1,6 @@
 # The denoiser
 
-`pfx-denoise` is Intel Open Image Denoise's RT filter, ported from OIDN 2.5.1's source to Rust and WGSL compute on wgpu. It takes a path-traced HDR colour image with its albedo and normal, as `pfx-trace` writes them, and returns the denoised colour. It runs the trained weights OIDN ships for that filter (`rt_hdr_alb_nrm.tza`, OIDN's default quality), loaded as they are; it links no C++ and adds no dependency beyond wgpu and bytemuck. Its credits and licence are in [NOTICE.md](../NOTICE.md) and [INSPIRATION.md](../INSPIRATION.md); the package is `MIT AND Apache-2.0`.
+`pfx-denoise` is Intel Open Image Denoise's RT filter, ported from OIDN 2.5.1's source to Rust and WGSL compute on wgpu. It takes a path-traced HDR colour image with its albedo and normal, as `pfx-trace` writes them, and returns the denoised colour. It runs the trained weights OIDN ships for that filter (`rt_hdr_alb_nrm.tza`, OIDN's default quality), loaded as they are; it links no C++ and adds no dependency beyond wgpu and bytemuck. Its credits and licence are in [NOTICE.md](../NOTICE.md) and [INSPIRATION.md](../INSPIRATION.md); the package is MIT, and the parts ported from OIDN and its weights keep the Apache License 2.0 notice in [crates/denoise/LICENSE-APACHE](../crates/denoise/LICENSE-APACHE).
 
 ## The API
 
