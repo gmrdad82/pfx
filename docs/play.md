@@ -15,7 +15,7 @@ A game that wants pfx to own its window, pacing, input, sound and frame loop cal
 | `World` | the runtime copy of a scene the game ticks |
 | `PlaySession` | play, pause, step, resume and stop; input, queued reloads and presentation |
 | `Stopped` | what stop hands back: the game, the hooks, the scene to show and the restore |
-| `PlayHooks` | calls on play, pause, resume and stop; the editor's `PgpuPlay` tells pgpu a game is running |
+| `PlayHooks` | calls on play, pause, resume and stop |
 
 ## The game
 
@@ -234,20 +234,7 @@ stopped.restore(&mut staged, &mut renderer)?;
 
 `PlayHooks` has four calls, each with a default that does nothing: `on_play(&scene)` before `game.start`, `on_pause` and `on_resume` when the clock's state changes (a second `pause` calls nothing, and `step` calls nothing), and `on_stop` after `game.stop`. `Stopped::hooks` hands them back for the next play.
 
-The editor runs outside pgpu, never under `pgpu run` (its trace preview included), and keeps each submission short (2 to 6 ms). pgpu's play-mode contract (its README's "Play mode") is that a playing editor says so: `pfx_editor::pgpu::PgpuPlay` is the hook for it. It lives in pfx-editor, not here, because pgpu is an optional external tool and a game that links pfx-play never spawns it.
-
-```rust
-let hooks = Box::new(PgpuPlay::editor(&scene));
-let session = PlaySession::play_hooked(&scene, Some(&staged), game, Options::default(), hooks)?;
-```
-
-- On play it runs `pgpu play on --pid <this process> --name "pfx edit: <scene file>"`; `PgpuPlay::new(name)` takes any other name.
-- Pause and resume run nothing: the player is still in the game, so play stays on.
-- On stop it runs `pgpu play off --pid <pid>`, once; dropping it while on does the same, and pgpu counts the process's exit as off.
-- While it is on, pgpu freezes clip, truth and search jobs and holds gate tests to 30%.
-- A failed call never stops play: `error()` says what went wrong and `is_on()` stays false.
-
-Tests and `play`/`play_with` use `NoHooks`, so nothing calls pgpu unless the editor asks for it. The editor asks only when `pgpu` is on `PATH` and `PFX_EDIT_PGPU` is not `off` (`docs/editor.md`). `with_pid` and `with_program` point the hook elsewhere, which pfx-editor's tests use with a stand-in script.
+The editor runs outside pgpu, never under `pgpu run` (its trace preview included), and keeps each submission short (2 to 6 ms). pgpu has no play mode since 0.29.0 (it uses the GPU all the time and shares it between two jobs), so the editor plays with `NoHooks` and tells pgpu nothing; the `PgpuPlay` hook that ran `pgpu play on` and `off` is gone. A caller that needs a hook still passes its own to `PlaySession::play_hooked`.
 
 ### What play never touches
 

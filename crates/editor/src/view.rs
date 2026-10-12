@@ -17,7 +17,6 @@ use crate::audio::Audio;
 use crate::editor::{Editor, Play};
 use crate::input::Layout;
 use crate::inspect::Change;
-use crate::pgpu::PgpuPlay;
 
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 pub const SHOWN: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -167,12 +166,11 @@ pub struct View {
     hooks: Option<Box<dyn PlayHooks>>,
     trace: Option<Preview>,
     stepped: bool,
-    pgpu: bool,
     audio: Audio,
 }
 
 impl View {
-    pub fn open(gpu: Gpu, size: [u32; 2], pgpu: bool, audio: Audio) -> View {
+    pub fn open(gpu: Gpu, size: [u32; 2], audio: Audio) -> View {
         View {
             target: surface(&gpu, size),
             gpu,
@@ -181,7 +179,6 @@ impl View {
             hooks: None,
             trace: None,
             stepped: false,
-            pgpu,
             audio,
         }
     }
@@ -407,7 +404,6 @@ impl View {
         }
         let hooks: Box<dyn PlayHooks> = match self.hooks.take() {
             Some(hooks) => hooks,
-            None if self.pgpu => Box::new(PgpuPlay::editor(&edited)),
             None => Box::new(pfx_play::NoHooks),
         };
         let (audio_rate, audio_channels) = self.audio.begin(&mut editor.log);

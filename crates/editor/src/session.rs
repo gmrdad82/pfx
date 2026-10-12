@@ -365,10 +365,10 @@ impl Session {
 
     fn view(&mut self, gpu: &Gpu, pixels_per_point: f32) -> &mut View {
         let size = self.size(pixels_per_point);
-        let (pgpu, audio) = (self.setup.pgpu, self.setup.audio);
+        let audio = self.setup.audio;
         self.view.get_or_insert_with(|| {
             let audio = if audio { Audio::device() } else { Audio::off() };
-            Box::new(View::open(gpu.clone(), size, pgpu, audio))
+            Box::new(View::open(gpu.clone(), size, audio))
         })
     }
 
