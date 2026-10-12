@@ -3055,6 +3055,20 @@ name = "pfx-core"
 version = "0.25.3"
 
 [[package]]
+name = "pfx-denoise"
+version = "0.25.3"
+dependencies = [
+ "bytemuck",
+ "naga",
+ "pfx-gpu",
+ "pfx-load",
+ "pfx-materials",
+ "pfx-trace",
+ "pollster",
+ "wgpu",
+]
+
+[[package]]
 name = "pfx-editor"
 version = "0.25.3"
 dependencies = [

@@ -102,6 +102,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-steam` | achievements, stats, Cloud saves, the overlay, rich presence, leaderboards, lobbies and Steam Input |
 | `pfx-live` | the live renderer: shadows, baked light, TAA, text, effects, the flat 2D pass, frames on demand, dynamic resolution and the dev HUD |
 | `pfx-trace` | the offline path tracer |
+| `pfx-denoise` | Intel Open Image Denoise's RT filter ported to wgpu compute: a traced colour with its albedo and normal in, the denoised colour out, equal to OIDN's ([docs/denoise.md](docs/denoise.md)) |
 | `pfx-bake` | path-traced light the live renderer shows at raster cost: probe grids, lightmaps and plates |
 | `pfx-play` | play mode: a game run live over a runtime copy of a scene, with pause, step and an exact stop |
 | `pfx-game` | the game runtime and its command-line launcher |
