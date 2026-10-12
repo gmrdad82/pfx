@@ -53,9 +53,9 @@ A file that isn't there is an error naming the full path pfx looked for. `--pres
 
 ## Flags and quality
 
-Common flags: `--samples` (the adaptive cap), `--draft`, `--angle front|three-quarter|top`, `--background transparent|#rrggbb|hdri`, `--shadow on|off`, `--supersample`, `--set material.roughness=0.2`, `--recipes`, `--preset-file`, `--assets <dir>`, `--out`, `--class`.
+Common flags: `--samples` (the adaptive cap), `--draft`, `--no-denoise`, `--angle front|three-quarter|top`, `--background transparent|#rrggbb|hdri`, `--shadow on|off`, `--supersample`, `--set material.roughness=0.2`, `--recipes`, `--preset-file`, `--assets <dir>`, `--out`, `--class`.
 
-Every pixel samples adaptively until it is clean: by default to a noise threshold of 0.01 with a cap of 4096 samples, about 1,700 samples a pixel on metal. `--draft` stops at 0.03 with a cap of 256, for quick looks. `--samples N` sets the cap.
+Every pixel samples adaptively, by default to a noise threshold of 0.01 with a cap of 128 samples, and the frame then goes through the denoiser (`pfx-denoise`, Open Image Denoise's RT filter ported to wgpu, guided by the trace's albedo and normal; `docs/denoise.md`). `--draft` stops at 0.05 with a cap of 16, denoised too, for quick looks. `--samples N` sets the cap; `--no-denoise` keeps the traced pixels as they are (raise `--samples` with it). The matte's alpha (the catcher's shadow) is not denoised.
 
 ## Output
 

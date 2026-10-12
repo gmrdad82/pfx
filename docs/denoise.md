@@ -55,3 +55,16 @@ On an AMD Radeon RX 9060 XT (RDNA 4, RADV), from `compare bench <width> <height>
 | 5120×2880 | 4 of 2656×1536 | 506 ms | 732 ms |
 
 The first call at a size adds the pipeline builds: 192 ms at 1080p, 646 ms at 4K and 908 ms at 5K in all.
+
+## Budgets
+
+A frame of `pfx render` is traced adaptively and then denoised: a final to a noise threshold of 0.01 with 32 to 128 samples a pixel, a draft to 0.05 with 8 to 16. The budgets on the RX 9060 XT are a 4K draft under 10 s, a 4K final under 2 minutes and a 5K final under 4 minutes, from the start of the trace to the denoised image in memory (the trace's buffers, every sample, the denoiser's weights and pipelines, the denoise and its readback). `crates/denoise/tests/budgets.rs` (`the_desk_renders_within_the_budgets`, GPU) renders the neutral desk (`crates/bake/tests/plates/desk.scene.toml`) at each and fails over budget:
+
+| frame | size | time | budget | mean samples |
+|---|---|---|---|---|
+| 4K draft | 3840 × 2160 | 6.2 s | 10 s | 16 |
+| 4K final | 3840 × 2160 | 100.6 s | 120 s | 128 |
+| 5K final | 5120 × 2880 | 198.4 s | 240 s | 128 |
+
+Before the tracer started at 64 lanes and aimed its bands at 10 ms, the same 4K frame at 1024 samples took about 169 minutes; a 1024-sample final now takes about 13 minutes, and the denoiser lets a final stop at 128.
+

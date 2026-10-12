@@ -2997,6 +2997,7 @@ version = "0.25.3"
 dependencies = [
  "clap",
  "image",
+ "pfx-denoise",
  "pfx-geom",
  "pfx-gpu",
  "pfx-load",

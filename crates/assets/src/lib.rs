@@ -131,14 +131,19 @@ struct Opts {
     size: Option<String>,
     #[arg(
         long,
-        help = "Most samples a pixel takes before adaptive sampling stops it (default 4096, 256 for a draft)"
+        help = "Most samples a pixel takes before adaptive sampling stops it (default 128, 16 for a draft)"
     )]
     samples: Option<u32>,
     #[arg(
         long,
-        help = "A quick draft: adaptive sampling to 0.03 with a cap of 256"
+        help = "A quick draft: adaptive sampling to 0.05 with a cap of 16, denoised"
     )]
     draft: bool,
+    #[arg(
+        long,
+        help = "Keep the traced pixels as they are, without the denoiser"
+    )]
+    no_denoise: bool,
     #[arg(long, help = "front, three-quarter, top, low, side, or <tilt>,<turn>")]
     angle: Option<String>,
     #[arg(long, help = "transparent, #rrggbb or hdri (clips need an opaque one)")]
@@ -1209,7 +1214,10 @@ fn scratch() -> Result<PathBuf, String> {
 }
 
 fn sampling(opts: &Opts) -> Sampling {
-    Sampling::chosen(opts.draft, opts.samples)
+    Sampling {
+        denoise: !opts.no_denoise,
+        ..Sampling::chosen(opts.draft, opts.samples)
+    }
 }
 
 fn job(

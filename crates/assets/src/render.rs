@@ -2,6 +2,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Instant;
 
+use pfx_denoise::Denoiser;
 use pfx_gpu::Gpu;
 use pfx_gpu::pace::{Pacer, Turns};
 use pfx_load::Sky;
@@ -33,18 +34,21 @@ pub struct Sampling {
     pub threshold: f32,
     pub cap: u32,
     pub min: u32,
+    pub denoise: bool,
 }
 
 impl Sampling {
     pub const FINAL: Sampling = Sampling {
         threshold: 0.01,
-        cap: 4096,
+        cap: 128,
         min: 32,
+        denoise: true,
     };
     pub const DRAFT: Sampling = Sampling {
-        threshold: 0.03,
-        cap: 256,
-        min: 16,
+        threshold: 0.05,
+        cap: 16,
+        min: 8,
+        denoise: true,
     };
 
     pub fn chosen(draft: bool, cap: Option<u32>) -> Sampling {
@@ -69,7 +73,7 @@ impl Sampling {
     }
 
     pub fn record(self) -> Value {
-        json!({"threshold": (f64::from(self.threshold) * 1e6).round() / 1e6, "cap": self.cap, "min": self.min, "growth": GROWTH})
+        json!({"threshold": (f64::from(self.threshold) * 1e6).round() / 1e6, "cap": self.cap, "min": self.min, "growth": GROWTH, "denoise": self.denoise})
     }
 
     fn read(job: &Value) -> Sampling {
@@ -79,6 +83,10 @@ impl Sampling {
             threshold: get("threshold").unwrap_or(f64::from(Self::FINAL.threshold)) as f32,
             cap: get("cap").unwrap_or(f64::from(Self::FINAL.cap)) as u32,
             min: get("min").unwrap_or(f64::from(Self::FINAL.min)) as u32,
+            denoise: s
+                .and_then(|s| s.get("denoise"))
+                .and_then(Value::as_bool)
+                .unwrap_or(Self::FINAL.denoise),
         }
     }
 }
@@ -322,6 +330,7 @@ pub fn frames(
         view: finish.view_name.clone(),
         ..Summary::default()
     };
+    let mut denoiser = None;
     let mut current: Option<(Light, Trace, Sky)> = None;
     for (i, (view_at, light)) in views.iter().zip(&lights).enumerate() {
         if current.as_ref().is_none_or(|(l, _, _)| l != light) {
@@ -343,7 +352,20 @@ pub fn frames(
         summary.mean_samples += converged.mean_samples() / views.len() as f64;
         summary.most_samples = summary.most_samples.max(converged.max_samples());
         summary.gpu_ms += converged.stats.milliseconds.iter().sum::<f64>();
-        let mut image = texels(&trace.readback_color(gpu)?);
+        let mut image = if sampling.denoise {
+            let denoiser = match &mut denoiser {
+                Some(denoiser) => denoiser,
+                None => denoiser.insert(Denoiser::new(gpu)?),
+            };
+            denoiser.denoise_textures(
+                gpu,
+                &trace.color.texture,
+                &trace.albedo.texture,
+                &trace.normal.texture,
+            )?
+        } else {
+            texels(&trace.readback_color(gpu)?)
+        };
         if finish.lines.enabled {
             let probe = trace.probe(gpu)?;
             let ids: Vec<u32> = probe
@@ -474,12 +496,21 @@ mod tests {
     #[test]
     fn sampling_defaults_to_final_and_drafts_are_cheaper() {
         assert_eq!(Sampling::chosen(false, None), Sampling::FINAL);
+        assert_eq!(
+            [Sampling::FINAL.denoise, Sampling::DRAFT.denoise],
+            [true, true]
+        );
         assert_eq!(Sampling::chosen(true, None), Sampling::DRAFT);
         let capped = Sampling::chosen(false, Some(512));
         assert_eq!((capped.threshold, capped.cap), (0.01, 512));
         let tiny = Sampling::chosen(true, Some(8)).adaptive();
         assert!(tiny.valid() && tiny.max_samples == 8 && tiny.min_samples == 8);
-        assert_eq!(Sampling::FINAL.adaptive().max_samples, 4096);
+        assert_eq!(Sampling::FINAL.adaptive().max_samples, 128);
+        let raw = Sampling {
+            denoise: false,
+            ..Sampling::FINAL
+        };
+        assert_eq!(Sampling::read(&json!({"sampling": raw.record()})), raw);
         assert_eq!(
             Sampling::read(&json!({"sampling": Sampling::DRAFT.record()})),
             Sampling::DRAFT
