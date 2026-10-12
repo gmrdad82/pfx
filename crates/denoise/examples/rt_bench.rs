@@ -14,7 +14,7 @@ use pfx_trace::{Adaptive, Camera, Projection, Scene, Sun, Trace};
 
 fn usage() -> ! {
     eprintln!(
-        "usage: rt_bench time <desk|glass|room> <final|draft> <width> <height>\n       rt_bench still <desk|glass|room> <width> <height> <spp> <seed> <out.pfm>"
+        "usage: rt_bench time <desk|glass|room> <final|draft|final-pcg|draft-pcg> <width> <height>\n       rt_bench still <desk|glass|room> <width> <height> <spp> <seed> <out.pfm>"
     );
     std::process::exit(2)
 }
@@ -27,11 +27,23 @@ fn main() {
             let adaptive = match args[2].as_str() {
                 "final" => Adaptive {
                     threshold: 0.01,
+                    min_samples: 16,
+                    max_samples: 64,
+                    growth: 1.5,
+                },
+                "draft" => Adaptive {
+                    threshold: 0.05,
+                    min_samples: 6,
+                    max_samples: 12,
+                    growth: 1.5,
+                },
+                "final-pcg" => Adaptive {
+                    threshold: 0.01,
                     min_samples: 32,
                     max_samples: 128,
                     growth: 1.5,
                 },
-                "draft" => Adaptive {
+                "draft-pcg" => Adaptive {
                     threshold: 0.05,
                     min_samples: 8,
                     max_samples: 16,
@@ -45,9 +57,13 @@ fn main() {
             let staged_s = began.elapsed().as_secs_f64();
             let mut pacer = Pacer::default();
             let mut turns = Turns::default();
+            let mut gpu_ms = 0.0;
             let traced = Instant::now();
             let converged = trace
-                .sample_adaptive(&gpu, adaptive, 7, &mut pacer, |ms| turns.add(ms))
+                .sample_adaptive(&gpu, adaptive, 7, &mut pacer, |ms| {
+                    gpu_ms += ms;
+                    turns.add(ms)
+                })
                 .unwrap();
             let traced_s = traced.elapsed().as_secs_f64();
             let mut denoiser = Denoiser::new(&gpu).unwrap();
@@ -61,7 +77,7 @@ fn main() {
                 .unwrap();
             assert_eq!(clean.len(), (size[0] * size[1]) as usize);
             println!(
-                "{} {} {}x{} rt={} total {:.2} s stage {:.2} s trace {:.2} s mean {:.1} spp",
+                "{} {} {}x{} rt={} total {:.2} s stage {:.2} s trace {:.2} s gpu {:.2} s mean {:.1} spp",
                 args[1],
                 args[2],
                 size[0],
@@ -70,6 +86,7 @@ fn main() {
                 began.elapsed().as_secs_f64(),
                 staged_s,
                 traced_s,
+                gpu_ms / 1000.0,
                 converged.mean_samples()
             );
         }

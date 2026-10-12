@@ -3779,18 +3779,24 @@ mod tests {
         }
     }
 
-    struct Software;
+    struct Pinned;
 
-    impl Software {
-        fn bvh() -> Self {
-            unsafe { std::env::set_var("PFX_TRACE_RT", "0") };
+    impl Pinned {
+        fn software_pcg() -> Self {
+            unsafe {
+                std::env::set_var("PFX_TRACE_RT", "0");
+                std::env::set_var("PFX_TRACE_SAMPLER", "pcg");
+            }
             Self
         }
     }
 
-    impl Drop for Software {
+    impl Drop for Pinned {
         fn drop(&mut self) {
-            unsafe { std::env::remove_var("PFX_TRACE_RT") };
+            unsafe {
+                std::env::remove_var("PFX_TRACE_RT");
+                std::env::remove_var("PFX_TRACE_SAMPLER");
+            }
         }
     }
 
@@ -3993,7 +3999,7 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]
     fn stacked_glass_and_liquid_stay_within_the_span() {
-        let _software = Software::bvh();
+        let _pinned = Pinned::software_pcg();
         let gpu = pollster::block_on(Gpu::headless()).unwrap();
         let mut turns = Turns::default();
         let scene = dense_glass(48, 32);
@@ -4100,7 +4106,7 @@ mod tests {
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]
     fn paced_traces_keep_the_bytes_of_eight_row_bands() {
-        let _software = Software::bvh();
+        let _pinned = Pinned::software_pcg();
         let gpu = pollster::block_on(Gpu::headless()).unwrap();
         let mut traced = Vec::new();
         let mut glass =

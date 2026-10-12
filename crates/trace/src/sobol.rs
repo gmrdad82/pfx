@@ -4,17 +4,25 @@ pub const MIN_SAMPLES: u32 = 256;
 pub const MAX_SAMPLES: u32 = 8192;
 pub const TABLE_WIDTH: u32 = 1024;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sampler {
-    #[default]
     Pcg,
-    Sobol {
-        samples: u32,
-    },
+    Sobol { samples: u32 },
+}
+
+impl Default for Sampler {
+    fn default() -> Self {
+        Sampler::Sobol {
+            samples: MIN_SAMPLES,
+        }
+    }
 }
 
 impl Sampler {
     pub fn sequence(self) -> Option<u32> {
+        if std::env::var("PFX_TRACE_SAMPLER").is_ok_and(|value| value == "pcg") {
+            return None;
+        }
         match self {
             Sampler::Pcg => None,
             Sampler::Sobol { samples } => Some(sequence_size(samples)),
@@ -159,6 +167,7 @@ mod tests {
         assert_eq!(sequence_size(300), 512);
         assert_eq!(sequence_size(4096), 4096);
         assert_eq!(sequence_size(u32::MAX), MAX_SAMPLES);
-        assert_eq!(Sampler::default().sequence(), None);
+        assert_eq!(Sampler::default().sequence(), Some(MIN_SAMPLES));
+        assert_eq!(Sampler::Pcg.sequence(), None);
     }
 }

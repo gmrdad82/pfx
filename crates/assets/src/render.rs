@@ -40,14 +40,14 @@ pub struct Sampling {
 impl Sampling {
     pub const FINAL: Sampling = Sampling {
         threshold: 0.01,
-        cap: 128,
-        min: 32,
+        cap: 64,
+        min: 16,
         denoise: true,
     };
     pub const DRAFT: Sampling = Sampling {
         threshold: 0.05,
-        cap: 16,
-        min: 8,
+        cap: 12,
+        min: 6,
         denoise: true,
     };
 
@@ -188,6 +188,7 @@ impl Built<'_> {
         light: Light,
         size: (u32, u32),
         first: &camera::View,
+        samples: u32,
     ) -> Result<(Trace, Sky), String> {
         let meshes: Vec<Mesh> = self
             .world
@@ -247,6 +248,7 @@ impl Built<'_> {
         .build()?;
         staged.detail.lights = self.rig.lights();
         staged.detail.bounces = BOUNCES;
+        staged.detail.sampler = pfx_trace::sobol::Sampler::Sobol { samples };
         let mut trace = staged
             .trace(gpu, size.0, size.1)
             .map_err(|e| e.to_string())?;
@@ -335,7 +337,7 @@ pub fn frames(
     for (i, (view_at, light)) in views.iter().zip(&lights).enumerate() {
         if current.as_ref().is_none_or(|(l, _, _)| l != light) {
             drop(current.take());
-            let (trace, sky) = built.trace(gpu, *light, size, view_at)?;
+            let (trace, sky) = built.trace(gpu, *light, size, view_at, sampling.cap)?;
             current = Some((*light, trace, sky));
         }
         let Some((_, trace, sky)) = current.as_mut() else {
@@ -504,8 +506,8 @@ mod tests {
         let capped = Sampling::chosen(false, Some(512));
         assert_eq!((capped.threshold, capped.cap), (0.01, 512));
         let tiny = Sampling::chosen(true, Some(8)).adaptive();
-        assert!(tiny.valid() && tiny.max_samples == 8 && tiny.min_samples == 8);
-        assert_eq!(Sampling::FINAL.adaptive().max_samples, 128);
+        assert!(tiny.valid() && tiny.max_samples == 8 && tiny.min_samples == 6);
+        assert_eq!(Sampling::FINAL.adaptive().max_samples, 64);
         let raw = Sampling {
             denoise: false,
             ..Sampling::FINAL

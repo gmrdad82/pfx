@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.28.0 — 2026-10-12
+
+### Added
+
+- trace: Cycles' tabulated Sobol sampler, the default (Sampler::Pcg or PFX_TRACE_SAMPLER=pcg keeps PCG); the same noise in about half the samples.
+
+### Changed
+
+- render: finals take 16 to 64 samples and drafts 6 to 12, PCG's noise at 32 to 128 and 8 to 16; the neutral desk's 4K final traces in 7.9 s of GPU time instead of 15.
+- trace: on scenes lit by small or narrow lights Sobol's mean sits up to 0.15% under PCG's (Manfred's workshop: 0.11%, about 0.25/255).
+
 ## v0.27.0 — 2026-10-12
 
 ### Added

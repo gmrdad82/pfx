@@ -67,14 +67,14 @@ fn the_desk_renders_within_the_budgets() {
     let scene = desk();
     let final_sampling = Adaptive {
         threshold: 0.01,
-        min_samples: 32,
-        max_samples: 128,
+        min_samples: 16,
+        max_samples: 64,
         growth: 1.5,
     };
     let draft_sampling = Adaptive {
         threshold: 0.05,
-        min_samples: 8,
-        max_samples: 16,
+        min_samples: 6,
+        max_samples: 12,
         growth: 1.5,
     };
     let baseline = baseline();
