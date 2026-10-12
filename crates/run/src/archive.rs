@@ -159,13 +159,23 @@ fn catalog_file(root: &Path) -> PathBuf {
 pub const SAMPLES: &[&str] = &["checker", "sample"];
 
 pub fn is_tag(version: &str) -> bool {
-    version.strip_prefix('v').is_some_and(|numbers| {
-        let parts: Vec<&str> = numbers.split('.').collect();
-        parts.len() == 3
-            && parts
-                .iter()
-                .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
-    })
+    let Some(rest) = version.strip_prefix('v') else {
+        return false;
+    };
+    let (numbers, pre) = match rest.split_once('-') {
+        Some((numbers, pre)) => (numbers, Some(pre)),
+        None => (rest, None),
+    };
+    let parts: Vec<&str> = numbers.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
+        && pre.is_none_or(|pre| {
+            pre.split('.').all(|part| {
+                !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            })
+        })
 }
 
 pub fn pinned(manifest: &Value) -> bool {
@@ -983,7 +993,7 @@ fn import_manifest(import: &Import, made: &str) -> Result<PathBuf, String> {
     }
     if !is_tag(&import.version) && !commit(&import.version) {
         return Err(format!(
-            "--rev {} is neither a tag vX.Y.Z nor a full commit: only pinned masters are archived",
+            "--rev {} is neither a tag vX.Y.Z (or vX.Y.Z-rc.N) nor a full commit: only pinned masters are archived",
             import.version
         ));
     }
@@ -1285,6 +1295,22 @@ mod tests {
         assert!(!pinned(&json!({"version": "aabbccddeeff-dirty"})));
         assert!(!pinned(&json!({"version": "vpreview"})));
         assert!(pinned(&json!({"version": "aabbccddeeff", "pinned": true})));
+    }
+
+    #[test]
+    fn a_pre_release_tag_is_a_tag() {
+        for tag in ["v1.0.0-rc.1", "v1.0.0-alpha", "v0.27.0-beta.2.x-y"] {
+            assert!(is_tag(tag), "{tag}");
+        }
+        for not in [
+            "v1.0.0-",
+            "v1.0.0-rc..1",
+            "v1.0-rc.1",
+            "v1.0.0-rc_1",
+            "1.0.0-rc.1",
+        ] {
+            assert!(!is_tag(not), "{not}");
+        }
     }
 
     #[test]

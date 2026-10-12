@@ -554,13 +554,7 @@ fn outputs() -> Value {
 
 pub fn version(source: &Source, commit: &str) -> Result<String, String> {
     if let Source::Git(reference) = source
-        && reference.strip_prefix('v').is_some_and(|numbers| {
-            let parts: Vec<&str> = numbers.split('.').collect();
-            parts.len() == 3
-                && parts
-                    .iter()
-                    .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_digit()))
-        })
+        && pfx_run::archive::is_tag(reference)
     {
         return Ok(reference.clone());
     }

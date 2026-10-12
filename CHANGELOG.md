@@ -10,6 +10,8 @@
 ### Changed
 
 - move to wgpu 30.0.1, naga 30 and egui 0.36.2.
+- archive: a pre-release tag such as v1.0.0-rc.1 pins a master like vX.Y.Z, in archive import and render's --rev.
+- editor: clear egui's texture deltas once painted.
 - editor: the shell's App::ui takes a Ui instead of a Context.
 - editor: drop the pgpu play hook.
 - trace: cut a dense strip into column pieces before dropping lanes.
