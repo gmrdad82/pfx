@@ -50,13 +50,14 @@ fn typing_into_ten_thousand_lines_times_each_frame() {
     let mut frame = |source: &mut Source, events: Vec<Event>| {
         time += 1.0 / 60.0;
         let start = Instant::now();
-        let output = ctx.run_ui(input(time, events), |ui| {
+        let mut output = ctx.run_ui(input(time, events), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 source.show(ui, &mut files, &mut history, &NoCheck, &mut |_, _| {});
             });
         });
         let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
         std::hint::black_box(primitives);
+        output.textures_delta.clear();
         start.elapsed().as_secs_f64() * 1000.0
     };
     for _ in 0..3 {
