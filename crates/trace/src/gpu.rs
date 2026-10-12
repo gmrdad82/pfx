@@ -2649,7 +2649,11 @@ mod tests {
             camera,
             sun: Sun::from_daylight(daylight),
         };
-        let mut trace = Trace::new(&gpu, &scene, 8, 8).unwrap();
+        let pcg = Detail {
+            sampler: Sampler::Pcg,
+            ..Detail::default()
+        };
+        let mut trace = Trace::new_detailed(&gpu, &scene, &pcg, 8, 8).unwrap();
         for pass in 0..64 {
             trace.sample(&gpu, 32, pass).unwrap();
         }
