@@ -147,6 +147,22 @@ A sharp lobe reached after a diffuse bounce (polished metal, a clearcoat at its 
 
 The 4 left in every column are the sun's glint on the chrome, seen directly. Its brightest pixel reads 90.08 in all four columns at 1024 samples, and the test holds them within 2%. Off, the count grows with the samples. The test asserts that, and that each setting at 1024 leaves at most a third of off's count, with both together at most either alone. The clamp takes 2.2% of the mean luminance away and the filter 1.0%: the sun's caustics off the chrome and the panel, which the filter spreads and the clamp removes. A first sweep at 1024 samples, as outliers over 1.5, 2, 4 and 8 times the median, gave: off 50, 35, 17, 13; `filter_glossy` 0.15 gave 71, 20, 5, 5; 0.25 gave 16, 8, 5, 5; 0.4 gave 15, 9, 5, 5; `clamp_indirect` 2 and 4 gave 15, 9, 4, 4 each. The whole test takes about 17 s under pgpu, and its longest submission stays under 100 ms (the test asserts it).
 
+## Samplers
+
+`Detail::sampler` picks where the trace's random numbers come from. `Sampler::Pcg`, the default, is one PCG stream per path, as before. `Sampler::Sobol { samples }` is Cycles' tabulated Sobol (v5.2.0, Apache-2.0, NOTICE.md): 256 Owen-scrambled 4D Sobol patterns, each `samples` rounded up to a power of two between 256 and 8192 long, generated on the CPU after Helmer, Christensen and Kensler (`sobol::table`, the same bytes every time; 0.6 ms for 256 long, 2.3 ms for 8192) and bound as an `Rgba32Float` texture (binding 19; the trace floor's 15 storage buffers are all taken). A draw looks up its pattern and index with Cycles' shuffle and Owen scramble, seeded per pixel by `hash_iqnt2d(x, y) ^ seed`, so keep one seed for the whole trace.
+
+- **Dimensions, the Cycles way.** The camera draws the pixel jitter at dimension 0 and the lens at 1; each bounce adds 16 and draws Russian roulette at 0, the BSDF at 3 (direction `xy`, lobe `z`, transmission `w`; refraction takes Fresnel from `x` and the dispersion channel from `z`), the sun at 1 and the sky and each light at 4 and up (position `xy`, emitter pick `z`, the transmissive-shadow keep `w`). The shadow catcher's four sky rays keep the PCG stream.
+- **Same bytes when off.** `SOBOL` and `SOBOL_LENGTH` are pipeline-overridable constants set only for Sobol, and every draw goes through `rnd(state, value)`, which returns the PCG draw in the old order when `SOBOL` is off; `paced_traces_keep_the_bytes_of_eight_row_bands` still matches its pins. The bake's batch shader shares `trace.wgsl` with a stub lookup and no table binding.
+- **Measured** (`examples/sobol.rs`, RX 9060 XT alone under pgpu, RMSE in linear RGB against a PCG reference traced with other seeds, its own noise subtracted): the samples Sobol needs to reach PCG's RMSE at 16, 64 and 256 spp.
+
+| Scene | Size, reference | PCG 16 spp | PCG 64 spp | PCG 256 spp | Paths/s PCG, Sobol |
+|---|---|---|---|---|---|
+| neutral desk | 960x540, 4096 spp | Sobol 10.9 (×1.47) | 32.6 (×1.96) | 101.4 (×2.52) | 25.4 M, 22.7 M |
+| room | 960x540, 4096 spp | 8.0 (×1.99) | 23.6 (×2.71) | 70.9 (×3.61) | 56.3 M, 54.9 M |
+| deep glass (`dense_glass(48, 32)`) | 480x270, 2 × 256 spp | 10.9 (×1.47) | 35.1 (×1.82) | not run | 0.16 M, 0.16 M |
+
+At 1 spp the two are level (Sobol a little worse on the desk); the gain grows with the count. The desk and room paths/s were measured with the pacer turning every 2 s (`PFX_TURN_MS`), the glass with the default turns. Run it with `cargo run --release -p pfx-trace --example sobol -- <dir> reference <scene> <spp> <seed>` (one or more parts, averaged) and then `-- <dir> measure <scene>`, each under `pgpu run --class bench`.
+
 ## Text
 
 `pfx_trace::text` turns laid-out text into content on a placement. Its default is **lettering**: the glyph quads and the MSDF atlas themselves, evaluated at every hit, so an edge stays exact at any zoom and nothing is baked. `text::print` still rasterizes the same glyphs into an image for callers that want one. Text rides the content records the tracer already had: no binding is added, and a stage without text traces the same bytes on two runs (`a_stage_without_text_traces_the_same_bytes` in `crates/live/tests/traced_text.rs`, digest `162a8cf4…`). `pfx-trace` depends on `pfx-text` for it; `pfx-live` reaches the tracer only through the bake, so the text-to-content path sits here, beside `stage`.

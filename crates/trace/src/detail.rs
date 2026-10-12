@@ -266,6 +266,7 @@ pub struct Detail {
     pub transmissive_shadows: bool,
     pub clamp_indirect: f32,
     pub filter_glossy: f32,
+    pub sampler: crate::sobol::Sampler,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

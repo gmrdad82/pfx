@@ -763,6 +763,10 @@ fn pipeline_constants(detail: &Detail, height: u32) -> Vec<(&'static str, f64)> 
     if detail.filter_glossy > 0.0 {
         constants.push(("FILTER_GLOSSY", f64::from(detail.filter_glossy)));
     }
+    if let Some(sequence) = detail.sampler.sequence() {
+        constants.push(("SOBOL", 1.0));
+        constants.push(("SOBOL_LENGTH", f64::from(sequence)));
+    }
     if let Some(steam) = detail.steam {
         constants.extend(
             PlumeLook::NAMES
@@ -1107,7 +1111,11 @@ pub fn shader_rt(lit: bool) -> String {
 }
 
 fn shader_source(lit: bool, rt: bool) -> String {
-    let source = include_str!("trace.wgsl");
+    let (head, rest) = include_str!("trace.wgsl")
+        .split_once("fn trace_sobol_start() {}\n")
+        .unwrap();
+    let (_, tail) = rest.split_once("fn trace_sobol_end() {}\n").unwrap();
+    let source = format!("{head}{}{tail}", include_str!("sobol.wgsl"));
     let (start, rest) = source.split_once("fn trace_noise_start() {}\n").unwrap();
     let (_, end) = rest.split_once("fn trace_noise_end() {}\n").unwrap();
     let end = if lit {
@@ -1192,6 +1200,32 @@ fn storage(gpu: &Gpu, label: &'static str, data: &[u8], read_write: bool) -> wgp
                     wgpu::BufferUsages::empty()
                 },
         })
+}
+
+fn sobol_table(gpu: &Gpu, sampler: crate::sobol::Sampler) -> wgpu::Texture {
+    let texels = sampler
+        .sequence()
+        .map_or_else(|| vec![[0.0; 4]], crate::sobol::table);
+    let width = crate::sobol::TABLE_WIDTH.min(texels.len() as u32);
+    gpu.device.create_texture_with_data(
+        &gpu.queue,
+        &wgpu::TextureDescriptor {
+            label: Some("trace sobol table"),
+            size: wgpu::Extent3d {
+                width,
+                height: texels.len() as u32 / width,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        bytemuck::cast_slice(&texels),
+    )
 }
 
 fn environment_binding(
@@ -1471,6 +1505,8 @@ impl Trace {
                 },
                 cache: None,
             });
+        let sobol_view =
+            sobol_table(gpu, detail.sampler).create_view(&wgpu::TextureViewDescriptor::default());
         let mut entries = vec![
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -1527,6 +1563,10 @@ impl Trace {
             wgpu::BindGroupEntry {
                 binding: 13,
                 resource: layer_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 19,
+                resource: wgpu::BindingResource::TextureView(&sobol_view),
             },
         ];
         if lit {
@@ -2016,6 +2056,7 @@ impl Trace {
 mod tests {
     use super::*;
     use crate::detail::TriangleDetail;
+    use crate::sobol::Sampler;
 
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]
@@ -4079,6 +4120,33 @@ mod tests {
         }
         println!("hashes: {traced:x?}");
         assert_eq!(traced, EIGHT_ROW_BANDS);
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn the_sobol_sampler_repeats_its_bytes_and_keeps_the_pcg_mean() {
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let mean = |sampler| {
+            let detail = Detail {
+                sampler,
+                ..Detail::default()
+            };
+            let mut room = Trace::build(&gpu, &softbox_room(), &detail, 64, 48, true).unwrap();
+            room.sample(&gpu, 256, 9).unwrap();
+            let output = room.readback(&gpu).unwrap();
+            let pixels = floats(&output.color);
+            let sum: f64 = pixels.iter().map(|p| f64::from(p[0] + p[1] + p[2])).sum();
+            (fnv(&output.color), sum / pixels.len() as f64)
+        };
+        let sobol = Sampler::Sobol { samples: 256 };
+        let (first, sobol_mean) = mean(sobol);
+        let (again, _) = mean(sobol);
+        let (_, pcg_mean) = mean(Sampler::Pcg);
+        assert_eq!(first, again);
+        assert!(
+            (sobol_mean / pcg_mean - 1.0).abs() < 0.02,
+            "{sobol_mean} against {pcg_mean}"
+        );
     }
 
     #[test]

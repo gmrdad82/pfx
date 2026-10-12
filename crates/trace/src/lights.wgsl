@@ -100,16 +100,16 @@ fn shadow_ray(origin: vec3f, aim: vec3f, shadow: bool) -> vec4f {
     if (limit<=0.0) { return vec4f(0.0,0.0,1.0,0.0); }
     return vec4f(ray/distance,limit);
 }
-fn emitter_candidate(transform: mat3x3f, p: vec3f, origin: vec3f, state: ptr<function,u32>) -> Candidate {
+fn emitter_candidate(transform: mat3x3f, p: vec3f, origin: vec3f, state: ptr<function,u32>, u: vec4f) -> Candidate {
     let count=u32(emitters[0].a.x);
-    let e=emitters[find_emitter(count,random(state))+1u];
+    let e=emitters[find_emitter(count,rnd(state,u.z))+1u];
     let out=candidate_none();
     if (e.a.w>0.5) {
         let to=e.a.xyz-p;
         let distance2=dot(to,to);
         let r2=e.c.x*e.c.x;
-        let u1=random(state);
-        let u2=random(state);
+        let u1=rnd(state,u.x);
+        let u2=rnd(state,u.y);
         var direction=vec3f(0.0);
         if (distance2<=r2) {
             let z=1.0-2.0*u1;
@@ -126,8 +126,8 @@ fn emitter_candidate(transform: mat3x3f, p: vec3f, origin: vec3f, state: ptr<fun
         if (local.z<=0.0) { return out; }
         return Candidate(local,e.emission.xyz,e.emission.w*cone_pdf(p,e.a.xyz,e.c.x),0.0,direction,0.0,u32(e.b.w)+1u);
     }
-    let r1=sqrt(random(state));
-    let r2=random(state);
+    let r1=sqrt(rnd(state,u.x));
+    let r2=rnd(state,u.y);
     let x=e.a.xyz*(1.0-r1)+e.b.xyz*(r1*(1.0-r2))+e.c.xyz*(r1*r2);
     if (clipped(u32(e.b.w),x)) { return out; }
     let to=x-p;
@@ -142,13 +142,13 @@ fn emitter_candidate(transform: mat3x3f, p: vec3f, origin: vec3f, state: ptr<fun
     let ray=shadow_ray(origin,x,true);
     return Candidate(local,e.emission.xyz,e.emission.w/e.c.w*distance2/cosine,0.0,ray.xyz,ray.w,0u);
 }
-fn light_candidate(light: Light, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>) -> Candidate {
+fn light_candidate(light: Light, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>, u: vec4f) -> Candidate {
     let out=candidate_none();
     let shadow=light.d.w>0.5;
     let kind=u32(light.a.w);
     if (kind==2u || kind==3u) {
-        let u1=random(state);
-        let u2=random(state);
+        let u1=rnd(state,u.x);
+        let u2=rnd(state,u.y);
         let plane=area_frame(light);
         var x=light.a.xyz+light.c.xyz*(2.0*u1-1.0)+light.d.xyz*(2.0*u2-1.0);
         if (kind==3u) {
@@ -187,8 +187,8 @@ fn light_candidate(light: Light, transform: mat3x3f, p: vec3f, origin: vec3f, ge
     var aim=light.a.xyz;
     if (shadow && radius>0.0) {
         let disc=basis(l);
-        let r=radius*sqrt(random(state));
-        let phi=2.0*PI*random(state);
+        let r=radius*sqrt(rnd(state,u.x));
+        let phi=2.0*PI*rnd(state,u.y);
         aim+=disc[0]*(r*cos(phi))+disc[1]*(r*sin(phi));
     }
     let ratio=distance/range;
@@ -201,8 +201,8 @@ fn light_candidate(light: Light, transform: mat3x3f, p: vec3f, origin: vec3f, ge
 fn light_slots() -> u32 {
     return 1u+u32(emitters[0].a.y);
 }
-fn direct_light(slot: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>) -> Candidate {
-    if (slot>0u) { return light_candidate(lights[slot-1u],transform,p,origin,geometric,state); }
+fn direct_light(slot: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>, u: vec4f) -> Candidate {
+    if (slot>0u) { return light_candidate(lights[slot-1u],transform,p,origin,geometric,state,u); }
     if (emitters[0].a.x<0.5) { return candidate_none(); }
-    return emitter_candidate(transform,p,origin,state);
+    return emitter_candidate(transform,p,origin,state,u);
 }

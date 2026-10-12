@@ -19,6 +19,8 @@ override BLOCK_STRIDE: u32 = 1u;
 override TRANSMISSIVE_SHADOWS: bool = false;
 override CLAMP_INDIRECT: f32 = 0.0;
 override FILTER_GLOSSY: f32 = 0.0;
+override SOBOL: bool = false;
+override SOBOL_LENGTH: u32 = 256u;
 override STEAM_SPREAD_BASE: f32 = 0.7;
 override STEAM_SPREAD_GROWTH: f32 = 4.0;
 override STEAM_DRIFT_X_QUAD: f32 = -0.9;
@@ -148,6 +150,26 @@ fn trace_noise_end() {}
 fn random(state: ptr<function,u32>) -> f32 {
     *state = pcg(*state);
     return f32(*state >> 8u) / 16777216.0;
+}
+var<private> rng: vec3u;
+fn hash_iqnt2d(x: u32, y: u32) -> u32 {
+    let qx=1103515245u*((x>>1u)^y);
+    let qy=1103515245u*((y>>1u)^x);
+    return 1103515245u*(qx^(qy>>3u));
+}
+fn trace_sobol_start() {}
+fn sobol(dimension: u32) -> vec4f {
+    return vec4f(0.0);
+}
+fn trace_sobol_end() {}
+fn rnd(state: ptr<function,u32>, value: f32) -> f32 {
+    if (SOBOL) { return value; }
+    return random(state);
+}
+fn light_dim(k: u32) -> u32 {
+    if (k==0u) { return 1u; }
+    if (k<13u) { return 3u+k; }
+    return k<<16u;
 }
 fn box_hit(node: Node, o: vec3f, d: vec3f, limit: f32) -> bool {
     var near = 0.0;
@@ -955,14 +977,14 @@ fn channel_ior(s: Shaded, channel: u32) -> f32 {
 fn glossy_share(s: Shaded) -> f32 {
     return 1.0-clamp(s.transmission,0.0,1.0)*(1.0-clamp(s.metalness,0.0,1.0));
 }
-fn sample_bsdf(s: Shaded, wo: vec3f, entering: bool, carried: u32, state: ptr<function,u32>) -> LightSample {
+fn sample_bsdf(s: Shaded, wo: vec3f, entering: bool, carried: u32, state: ptr<function,u32>, u: vec4f) -> LightSample {
     let transmission=clamp(s.transmission,0.0,1.0)*(1.0-clamp(s.metalness,0.0,1.0));
-    if (random(state)<transmission) {
+    if (rnd(state,u.w)<transmission) {
         let iors=dispersed_ior(s.ior,s.dispersion);
         var channel=carried;
         var weight=vec3f(1.0);
         if (channel>2u && max(abs(iors.x-iors.y),abs(iors.z-iors.y))>IOR_SPLIT) {
-            channel=min(u32(random(state)*3.0),2u);
+            channel=min(u32(rnd(state,u.z)*3.0),2u);
             weight=channel_mask(channel)*3.0;
         }
         let ior=channel_ior(s,channel);
@@ -972,7 +994,7 @@ fn sample_bsdf(s: Shaded, wo: vec3f, entering: bool, carried: u32, state: ptr<fu
         let chance=dot(fresnel,vec3f(1.0))/dot(live,vec3f(1.0));
         let incident=-wo;
         let mirrored=reflect(incident,vec3f(0.0,0.0,1.0));
-        if (random(state)<chance) {
+        if (rnd(state,u.x)<chance) {
             return LightSample(mirrored,-1.0,channel,weight*fresnel/chance,1u);
         }
         let refracted=refract_dir(incident,vec3f(0.0,0.0,1.0),1.0/ratio);
@@ -981,20 +1003,20 @@ fn sample_bsdf(s: Shaded, wo: vec3f, entering: bool, carried: u32, state: ptr<fu
     }
     let coat_weight=clamp(s.clearcoat*(0.12+0.88*(0.04+0.96*pow(1.0-max(wo.z,0.0),5.0))),0.0,0.9);
     let spec_weight=(1.0-coat_weight)*clamp(s.metalness+s.specular,0.0,0.9);
-    let pick=random(state);
+    let pick=rnd(state,u.z);
     if (pick<coat_weight+spec_weight) {
         let coat=pick<coat_weight;
         let alpha=alpha_rough(select(s.roughness,s.clearcoat_roughness,coat));
-        let u1=random(state);
-        let u2=random(state);
+        let u1=rnd(state,u.x);
+        let u2=rnd(state,u.y);
         let phi=2.0*PI*u1;
         let cos_theta=sqrt((1.0-u2)/(1.0+(alpha*alpha-1.0)*u2));
         let h=vec3f(cos(phi)*sqrt(max(0.0,1.0-cos_theta*cos_theta)),sin(phi)*sqrt(max(0.0,1.0-cos_theta*cos_theta)),cos_theta);
         let wi=reflect(-wo,h);
         return LightSample(wi,bsdf_pdf(s,wo,wi),3u,vec3f(1.0),1u);
     }
-    let u1=random(state);
-    let u2=random(state);
+    let u1=rnd(state,u.x);
+    let u2=rnd(state,u.y);
     let phi=2.0*PI*u1;
     let r=sqrt(u2);
     let wi=vec3f(cos(phi)*r,sin(phi)*r,sqrt(1.0-u2));
@@ -1026,7 +1048,7 @@ fn light_slots() -> u32 {
 fn sampled_emitter(hit: Hit) -> bool {
     return false;
 }
-fn direct_light(slot: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>) -> Candidate {
+fn direct_light(slot: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>, u: vec4f) -> Candidate {
     return Candidate(vec3f(0.0,0.0,1.0),vec3f(0.0),0.0,0.0,vec3f(0.0,0.0,1.0),-1.0,0u);
 }
 fn trace_lights_end() {}
@@ -1040,6 +1062,7 @@ fn catcher_shadow(p: vec3f, n: vec3f, o: vec3f, t: f32, state: ptr<function,u32>
     var open=0.0;
     var seen=0.0;
     for (var k=0u;k<2u+light_slots();k++) {
+        let u=sobol(light_dim(k));
         var direction=vec3f(0.0,0.0,1.0);
         var strength=0.0;
         var limit=1e19;
@@ -1048,9 +1071,9 @@ fn catcher_shadow(p: vec3f, n: vec3f, o: vec3f, t: f32, state: ptr<function,u32>
             if (frame.sun_color.w<=0.0) { continue; }
             direction=normalize(frame.sun_dir.xyz);
             if (frame.sun_dir.w<1.0) {
-                let height=1.0-random(state)*(1.0-frame.sun_dir.w);
+                let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
                 let radius=sqrt(max(0.0,1.0-height*height));
-                let phi=2.0*PI*random(state);
+                let phi=2.0*PI*rnd(state,u.y);
                 direction=normalize(basis(direction)*vec3f(radius*cos(phi),radius*sin(phi),height));
             }
             strength=dot(frame.sun_color.xyz,vec3f(0.2126,0.7152,0.0722))*frame.sun_color.w*max(dot(direction,n),0.0);
@@ -1066,7 +1089,7 @@ fn catcher_shadow(p: vec3f, n: vec3f, o: vec3f, t: f32, state: ptr<function,u32>
             }
             continue;
         } else {
-            let picked=direct_light(k-2u,transform,p,origin,n,state);
+            let picked=direct_light(k-2u,transform,p,origin,n,state,u);
             if (picked.limit<0.0) { continue; }
             direction=picked.direction;
             limit=picked.limit;
@@ -1107,6 +1130,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
     var through=false;
     var diffused=false;
     for (var bounce=0u;bounce<=TOTAL_BOUNCES+1u;bounce++) {
+        if (SOBOL) { rng.z=16u*(bounce+1u); }
         let hit=scene(o,d,1e20,false);
         let seen=TRANSMISSIVE_SHADOWS && through;
         if (!seen) { result+=indirect_capped(throughput*light_hits(o,d,hit.t,spawn_point(o,-d,o,0.0),previous_pdf),bounce>1u); }
@@ -1188,6 +1212,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         let origin=spawn_point(p,n,o,hit.t);
         let entering=dot(hit.n,d)<0.0;
         for (var k=0u;k<2u+light_slots();k++) {
+            let u=sobol(light_dim(k));
             var local=vec3f(0.0,0.0,1.0);
             var direction=vec3f(0.0,0.0,1.0);
             var strength=vec3f(0.0);
@@ -1199,9 +1224,9 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                 if (frame.sun_color.w<=0.0) { continue; }
                 direction=normalize(frame.sun_dir.xyz);
                 if (frame.sun_dir.w<1.0) {
-                    let height=1.0-random(state)*(1.0-frame.sun_dir.w);
+                    let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
                     let radius=sqrt(max(0.0,1.0-height*height));
-                    let phi=2.0*PI*random(state);
+                    let phi=2.0*PI*rnd(state,u.y);
                     let orient=basis(direction);
                     direction=normalize(orient*vec3f(radius*cos(phi),radius*sin(phi),height));
                 }
@@ -1212,7 +1237,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                 strength=frame.sun_color.xyz*(frame.sun_color.w*shade);
             } else if (k==1u) {
                 if (sky_cdf.width==0u) { continue; }
-                let light=sky_sample(vec2f(random(state),random(state)));
+                let light=sky_sample(vec2f(rnd(state,u.x),rnd(state,u.y)));
                 direction=light.direction;
                 local=transpose(transform)*direction;
                 if (local.z<=0.0) { continue; }
@@ -1220,7 +1245,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                 pdf=light.pdf;
                 if (!(pdf>0.0)) { continue; }
             } else {
-                let picked=direct_light(k-2u,transform,p,origin,geometric,state);
+                let picked=direct_light(k-2u,transform,p,origin,geometric,state,u);
                 if (picked.limit<0.0) { continue; }
                 local=picked.wi;
                 direction=picked.direction;
@@ -1252,7 +1277,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                     let reach=throughput*strength;
                     let keep=clamp(16.0*PI*max(unshadowed.r,max(unshadowed.g,unshadowed.b))/max(max(reach.r,max(reach.g,reach.b)),1e-30),0.0,1.0);
                     if (keep<1.0) {
-                        if (random(state)>=keep) { continue; }
+                        if (rnd(state,u.w)>=keep) { continue; }
                         unshadowed/=keep;
                     }
                     result+=indirect_capped(unshadowed*shadow_passed(origin,direction,limit),bounce>0u);
@@ -1261,7 +1286,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             }
             result+=indirect_capped(throughput*eval(lit,wo,local)*select(1.0,glossy_share(s),pdf>0.0)*local.z*strength,bounce>0u);
         }
-        let sample=sample_bsdf(s,wo,entering,carried,state);
+        let sample=sample_bsdf(s,wo,entering,carried,state,sobol(3u));
         let wi=sample.dir;
         diffused=diffused || sample.lobe==0u;
         lobes+=vec3u(select(0u,1u,sample.lobe==0u),select(0u,1u,sample.lobe==1u),select(0u,1u,sample.lobe==2u));
@@ -1285,7 +1310,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         o=spawn_point(p,d,o,hit.t);
         if (bounce>=3u) {
             let keep=clamp(max(throughput.r,max(throughput.g,throughput.b)),0.05,0.95);
-            if (random(state)>keep) { break; }
+            if (rnd(state,sobol(0u).x)>keep) { break; }
             throughput/=keep;
         }
     }
@@ -1310,7 +1335,9 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_id) local
         var first_albedo=vec4f(0.0);
         var first_normal=vec4f(0.0);
         var state=pcg(stream*1973u+pcg(frame.counts.z*9277u+(frame.size.z+sample)*7919u+26699u));
-        let jitter=vec2f(random(&state),random(&state));
+        if (SOBOL) { rng=vec3u(hash_iqnt2d(pixel.x,pixel.y)^frame.counts.z,frame.size.z+sample,0u); }
+        let pixel_filter=sobol(0u);
+        let jitter=vec2f(rnd(&state,pixel_filter.x),rnd(&state,pixel_filter.y));
         let ndc=(vec2f(pixel)+jitter)/vec2f(frame.window.xy)*2.0-1.0;
         let kind=u32(round(frame.origin.w));
         var direction=normalize(frame.forward.xyz+frame.right.xyz*(ndc.x+frame.lens.x)+frame.up.xyz*(-ndc.y+frame.lens.y));
@@ -1325,8 +1352,9 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_id) local
             direction=normalize(normalize(frame.right.xyz)*local.x+normalize(frame.up.xyz)*local.y-normalize(frame.forward.xyz)*local.z);
         } else if (frame.lens.z>0.0) {
             let focus=origin+direction*(frame.lens.w/dot(direction,normalize(frame.forward.xyz)));
-            let radius=sqrt(random(&state))*frame.lens.z;
-            let phi=2.0*PI*random(&state);
+            let aperture=sobol(1u);
+            let radius=sqrt(rnd(&state,aperture.x))*frame.lens.z;
+            let phi=2.0*PI*rnd(&state,aperture.y);
             origin+=normalize(frame.right.xyz)*(radius*cos(phi))+normalize(frame.up.xyz)*(radius*sin(phi));
             direction=normalize(focus-origin);
         }
