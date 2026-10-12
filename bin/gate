@@ -66,11 +66,20 @@ windows() {
   step windows-tests cargo test "${args[@]}" --lib --tests
 }
 
+macos() {
+  local args=(-p pfx-denoise) crate
+  for crate in "${game_crates[@]}"; do
+    args+=(-p "pfx-$crate")
+  done
+  step macos-clippy cargo clippy "${args[@]}" --lib -- -D warnings
+  step macos-build cargo build "${args[@]}" --lib
+}
+
 case ${1:-} in
   "") lint; tests ;;
-  lint | tests | release | windows) "$1" ;;
+  lint | tests | release | windows | macos) "$1" ;;
   *)
-    echo "gate: unknown phase $1 (lint, tests, release or windows)" >&2
+    echo "gate: unknown phase $1 (lint, tests, release, windows or macos)" >&2
     exit 2
     ;;
 esac

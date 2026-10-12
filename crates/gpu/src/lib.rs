@@ -302,10 +302,14 @@ fn device_format_features(
     }
 }
 
+#[cfg(target_os = "linux")]
 const DRM_FORMAT_MODIFIER: &std::ffi::CStr = c"VK_EXT_image_drm_format_modifier";
+#[cfg(target_os = "linux")]
 const IMAGE_FORMAT_LIST: &std::ffi::CStr = c"VK_KHR_image_format_list";
+#[cfg(target_os = "linux")]
 const VULKAN_1_2: u32 = (1 << 22) | (2 << 12);
 
+#[cfg(target_os = "linux")]
 fn device_extensions(
     supports: impl Fn(&std::ffi::CStr) -> bool,
     api_version: u32,
@@ -325,6 +329,7 @@ async fn request_device(
     adapter: &wgpu::Adapter,
     desc: &wgpu::DeviceDescriptor<'_>,
 ) -> Result<(wgpu::Device, wgpu::Queue), String> {
+    #[cfg(target_os = "linux")]
     if let Some(opened) = open_vulkan_with_extensions(adapter, desc) {
         return opened;
     }
@@ -334,6 +339,7 @@ async fn request_device(
         .map_err(|error| error.to_string())
 }
 
+#[cfg(target_os = "linux")]
 fn open_vulkan_with_extensions(
     adapter: &wgpu::Adapter,
     desc: &wgpu::DeviceDescriptor<'_>,
@@ -1261,6 +1267,7 @@ mod tests {
         assert!(floor.limits.check_limits(&default_limits(&at)));
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]
     fn a_vulkan_device_enables_drm_format_modifiers_when_offered() {
