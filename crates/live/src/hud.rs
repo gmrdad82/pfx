@@ -593,7 +593,7 @@ impl Hud {
         let readout = stats.with_recent(Readout::from_samples);
         let passes = if self.ctx.is_none() { 2 } else { 1 };
         let ctx = self.ctx.get_or_insert_with(context);
-        let (rect, full) = layout(ctx, scale, &readout, passes);
+        let (rect, mut full) = layout(ctx, scale, &readout, passes);
         let primitives = ctx.tessellate(full.shapes, full.pixels_per_point);
         let panel = [
             ((rect.max.x * scale).ceil() as u32).clamp(1, (CANVAS * scale) as u32),
@@ -608,10 +608,12 @@ impl Hud {
             self.paint = Some(Paint::new(gpu, format));
         }
         let Some(paint) = self.paint.as_mut() else {
+            full.textures_delta.clear();
             return;
         };
         let Some(at) = placement([width, height], panel, scale) else {
             paint.upload(gpu, &full.textures_delta);
+            full.textures_delta.clear();
             self.rect = None;
             return;
         };
@@ -624,6 +626,7 @@ impl Hud {
             panel,
             at,
         );
+        full.textures_delta.clear();
         self.rect = Some(at);
     }
 }
@@ -712,7 +715,8 @@ mod tests {
         let mut rects = Vec::new();
         let mut texts = Vec::new();
         for passes in [2, 1] {
-            let (rect, full) = layout(&ctx, 1.0, &readout, passes);
+            let (rect, mut full) = layout(&ctx, 1.0, &readout, passes);
+            full.textures_delta.clear();
             rects.push(rect);
             texts = full
                 .shapes

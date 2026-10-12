@@ -89,6 +89,17 @@ pub fn drive(
     ctx: &Context,
     size: [u32; 2],
     script: &Script,
+    ui: impl FnMut(&mut Ui),
+) -> FullOutput {
+    let mut output = drive_painted(ctx, size, script, ui);
+    output.textures_delta.clear();
+    output
+}
+
+fn drive_painted(
+    ctx: &Context,
+    size: [u32; 2],
+    script: &Script,
     mut ui: impl FnMut(&mut Ui),
 ) -> FullOutput {
     let mut driver = Driver {
@@ -246,9 +257,9 @@ fn finish(
     mut ui: impl FnMut(&mut Ui, &mut Painter),
 ) -> Result<Vec<u8>, Error> {
     let ctx = context(app_theme);
-    let output = {
+    let mut output = {
         let painter = &mut *painter;
-        drive(&ctx, size, script, |root| ui(root, painter))
+        drive_painted(&ctx, size, script, |root| ui(root, painter))
     };
     let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
     let target = gpu
@@ -266,6 +277,7 @@ fn finish(
         &primitives,
         app_theme.bg,
     );
+    output.textures_delta.clear();
     gpu.readback_rgba8(&target).map_err(Error)
 }
 

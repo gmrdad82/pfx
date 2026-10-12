@@ -276,7 +276,7 @@ impl<A: App> Host<A> {
         let native = live.window.scale_factor() as f32;
         ctx.set_zoom_factor(native.round().max(1.0) / native);
         let input = live.state.take_egui_input(&live.window);
-        let output = ctx.run_ui(input, |root| app.ui(root));
+        let mut output = ctx.run_ui(input, |root| app.ui(root));
         if app.opened() {
             watcher.follow(app.watched(), proxy);
             retitle(&live.window, pulse.as_deref(), app);
@@ -320,6 +320,7 @@ impl<A: App> Host<A> {
             &primitives,
             Theme::of(ctx).bg,
         );
+        output.textures_delta.clear();
         live.window.pre_present_notify();
         live.gpu.queue.present(frame);
         let work = started.elapsed();

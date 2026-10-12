@@ -48,7 +48,7 @@ fn form_script(form: &Form) -> Script {
     let from = slider.center();
     let to = from + Vec2::new(slider.width() / 4.0, 0.0);
     Script::parse(&format!(
-        "click {button}\nframe\nclick {button}\nclick {field}\ntext typed words\nframe\ndrag {} {} {} {}\nframe\n",
+        "click {button}\nframe\nclick {button}\nclick {field}\nframe\ntext typed words\nframe\ndrag {} {} {} {}\nframe\n",
         from.x,
         from.y,
         to.x,

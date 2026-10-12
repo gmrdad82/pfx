@@ -207,12 +207,14 @@ mod tests {
             data.sections[0].format.font_id.family,
             egui::FontFamily::Monospace
         );
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.label(title(&theme, "pfx edit", 13.0, theme.text));
                 ui.label(label(&theme, "roughness", theme.text2));
             });
-        });
+        })
+        .textures_delta
+        .clear();
         assert_eq!(*Theme::of(&ctx), theme);
     }
 }

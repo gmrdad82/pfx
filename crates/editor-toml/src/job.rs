@@ -410,7 +410,7 @@ mod tests {
         ];
         let mut laid_out = Vec::new();
         for text in texts {
-            let _ = ctx.run_ui(egui::RawInput::default(), |root| {
+            ctx.run_ui(egui::RawInput::default(), |root| {
                 let ctx = root.ctx();
                 let pixels_per_point = ctx.pixels_per_point();
                 ctx.fonts_mut(|fonts| {
@@ -420,7 +420,9 @@ mod tests {
                     let theirs = fonts.layout_job(build(&Lexed::new(text), &theme, &code));
                     same_rows(&ours, &theirs);
                 });
-            });
+            })
+            .textures_delta
+            .clear();
             laid_out.push(cache.laid_out());
         }
         assert_eq!(laid_out[..3], [7, 1, 1]);

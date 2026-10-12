@@ -325,7 +325,7 @@ mod tests {
         let theme = fixture::theme();
         let ctx = Context::default();
         apply_theme(&ctx, &theme);
-        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.heading("OUTLINER");
                 ui.label("mv_knob");
@@ -333,6 +333,7 @@ mod tests {
             });
         });
         assert!(!output.shapes.is_empty());
+        output.textures_delta.clear();
         let style = ctx.global_style();
         assert_eq!(style.visuals.panel_fill, theme.bg);
         assert_eq!(style.visuals.extreme_bg_color, theme.well);
@@ -359,10 +360,12 @@ mod tests {
         let ctx = Context::default();
         apply_theme(&ctx, &theme);
         let mut seen = None;
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.ctx()
                 .fonts(|fonts| seen = Some(fonts.definitions().clone()));
-        });
+        })
+        .textures_delta
+        .clear();
         let installed = seen.unwrap();
         assert_eq!(installed.font_data.len(), 2);
         assert_eq!(installed.font_data[REGULAR_NAME].font, REGULAR);
@@ -433,11 +436,13 @@ mod tests {
         );
         let ctx = Context::default();
         apply_theme(&ctx, &theme);
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ctx.run_ui(egui::RawInput::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
                 ui.label(egui::RichText::new("TITLE").text_style(title()));
             });
-        });
+        })
+        .textures_delta
+        .clear();
     }
 
     #[test]

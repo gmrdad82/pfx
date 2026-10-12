@@ -49,6 +49,8 @@ pfx moved from wgpu 27.0.1 to wgpu 30.0.1, naga 30 and egui 0.36.2. An app that 
 - `LayoutSection.byte_range` is `Range<ByteIndex>` (`epaint::text::ByteIndex(usize)`): wrap with `ByteIndex(..)`. 7 sites (editor-toml job.rs and its tests).
 - `Row.ends_with_newline` moved to `PlacedRow.ends_with_newline`: set it where the `PlacedRow` is built, and a cached `Arc<Row>` is no longer mutated. 3 sites (editor-toml job.rs).
 - `ui.data_mut(|d| d.insert_temp(..))` and `d.remove::<T>(..)` now return values of different types, so a `match` using one in each arm needs both closures to end in `;`. 1 site (editor-style number widget).
+- A `TexturesDelta` that drops with deltas still in it trips a debug assertion: after painting a `FullOutput` (or when a test ignores one, such as `pfx_editor_shell::drive`'s), call `output.textures_delta.clear()`. `pfx_editor_shell::drive` returns its output with the deltas already cleared (its shot path paints them itself). 4 sites (editor-shell, live hud).
+- A text field takes focus one pass after the click that focuses it, so a `pfx_editor_shell` script that clicks a field and types needs a `frame` between the click and the `text`. 1 site (editor-shell shot test).
 - egui-wgpu `Renderer::update_texture` is per `ImageDelta` (see TexturesDelta). `RendererOptions`/`ScreenDescriptor` literals needed no change.
 
 ## pfx's own API
