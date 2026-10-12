@@ -53,5 +53,6 @@ fn sobol(dimension: u32) -> vec4f {
     let shuffled=nested_uniform_scramble(rng.y,hash_wang_seeded_uint(dim,seed));
     let sample=(rng.y&~mask)|(shuffled&mask);
     let index=(pattern*SOBOL_LENGTH+sample)%(SOBOL_LENGTH*256u);
-    return min(textureLoad(sobol_table,vec2u(index&1023u,index>>10u),0),vec4f(0.99999994));
+    let shift=vec4f(vec4u(hash_wang_seeded_uint(dim,seed),hash_wang_seeded_uint(dim,seed^0xca0e1151u),hash_wang_seeded_uint(dim,seed^0xbf604c5au),hash_wang_seeded_uint(dim,seed^0x99634d1du)))*2.3283064e-10;
+    return min(fract(textureLoad(sobol_table,vec2u(index&1023u,index>>10u),0)+shift),vec4f(0.99999994));
 }

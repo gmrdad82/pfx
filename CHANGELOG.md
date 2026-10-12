@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.28.1 — 2026-10-12
+
+### Fixed
+
+- trace: Sobol shifts each pixel's patterns by a random offset per dimension (Cycles' Cranley-Patterson rotation), so scenes lit by small or narrow lights match PCG's mean (Manfred's workshop: -0.11% before, +0.01% now) with the same noise gain.
+- editor: the stored shots follow egui 0.36's tighter rows.
+
 ## v0.28.0 — 2026-10-12
 
 ### Added
