@@ -87,8 +87,13 @@ fn main() {
                 .map(|p| [p[0], p[1], p[2], p[3]])
                 .collect();
             std::fs::write(&args[6], pfm::write(size[0], size[1], &pixels)).unwrap();
+            let mean = pixels
+                .iter()
+                .map(|p| f64::from(p[0] + p[1] + p[2]) / 3.0)
+                .sum::<f64>()
+                / pixels.len() as f64;
             println!(
-                "{} still {}x{} rt={} {spp} spp in {seconds:.2} s, {:.2} M samples/s",
+                "{} still {}x{} rt={} {spp} spp in {seconds:.2} s, {:.2} M samples/s, mean {mean:.5}",
                 args[1],
                 size[0],
                 size[1],
