@@ -9,6 +9,7 @@ struct Frame {
     sun_color: vec4f,
     lens: vec4f,
     window: vec4u,
+    columns: vec4u,
 }
 override TOTAL_BOUNCES: u32 = 16u;
 override DIFFUSE_BOUNCES: u32 = 4u;
@@ -1297,7 +1298,7 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_id) local
     let end_lane=frame.counts.w>>23u;
     let blocks=(frame.size.y+7u)/8u;
     let block=((frame.counts.w&0xffffu)+group.y)*BLOCK_STRIDE%blocks;
-    let gid=vec3u(group.x*8u+local.x,block*8u+local.y,0u);
+    let gid=vec3u((group.x+frame.columns.x)*8u+local.x,block*8u+local.y,0u);
     if (lane<first_lane || lane>=end_lane || gid.x>=frame.size.x || gid.y>=frame.size.y) { return; }
     let index=gid.y*frame.size.x+gid.x;
     let pixel=gid.xy+frame.window.zw;

@@ -110,6 +110,7 @@ pub(crate) struct Frame {
     sun_color: [f32; 4],
     lens: [f32; 4],
     window: [u32; 4],
+    columns: [u32; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -203,6 +204,7 @@ pub const BAND_STEP: u32 = 8;
 pub const SAMPLE_SPAN_MS: f64 = 12.0;
 pub const SAMPLE_TARGET_MS: f64 = 10.0;
 const LANES: u32 = 64;
+const PIECE_COLUMNS: u32 = 8;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TraceError {
@@ -830,6 +832,7 @@ fn fits_texture(gpu: &Gpu, width: u32, height: u32) -> Result<(), TraceError> {
 struct Pass {
     lanes: (u32, u32),
     per_block: u32,
+    columns: (u32, u32),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -843,6 +846,7 @@ enum Step {
     Held,
     Blocks,
     Lanes,
+    Pieces,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -851,6 +855,8 @@ struct Lanes {
     blocks: u32,
     widest: u32,
     most: u32,
+    pieces: u32,
+    fewest: u32,
     last: Step,
 }
 
@@ -861,6 +867,8 @@ impl Lanes {
             blocks: 1,
             widest: LANES * 2,
             most: u32::MAX,
+            pieces: 1,
+            fewest: 1,
             last: Step::Held,
         }
     }
@@ -912,15 +920,74 @@ impl Lanes {
         }
     }
 
-    fn learn_dense(&mut self, spread: Spread) {
+    fn learn_pieces(&mut self, longest: f64, blocks: u32, columns: u32) {
+        if !longest.is_finite() || longest <= 0.0 {
+            return;
+        }
+        let half = SAMPLE_SPAN_MS * 0.5;
+        let last = std::mem::replace(&mut self.last, Step::Held);
+        if longest > SAMPLE_SPAN_MS * 0.75 && last != Step::Held {
+            if last == Step::Blocks {
+                self.most = self.blocks;
+                self.blocks = (self.blocks / 2).max(1);
+            } else {
+                self.fewest = self.pieces;
+                self.pieces *= 2;
+            }
+            return;
+        }
+        if longest > SAMPLE_SPAN_MS {
+            let most = most_pieces(columns);
+            if self.blocks > 1 {
+                let fit = (f64::from(self.blocks) * half / longest).floor() as u32;
+                self.most = self.blocks;
+                self.blocks = fit.clamp(1, self.blocks / 2);
+            } else if self.pieces < most {
+                self.pieces *= 2;
+            } else {
+                *self = Self::lane_passes();
+            }
+            return;
+        }
+        if longest > half {
+            return;
+        }
+        let more = (self.blocks * 2).min(blocks).min(self.most - 1);
+        if self.blocks < blocks && more > self.blocks {
+            self.blocks = more;
+            self.last = Step::Blocks;
+        } else if self.pieces / 2 > self.fewest {
+            self.pieces /= 2;
+            self.last = Step::Pieces;
+        }
+    }
+
+    fn learn_dense(&mut self, spread: Spread, columns: u32) {
         if spread.single.is_finite() && spread.single > SAMPLE_SPAN_MS {
-            *self = Self {
-                width: 1,
-                widest: LANES,
-                ..Self::new()
+            let most = most_pieces(columns);
+            *self = if most > 1 {
+                let fit = (spread.single / (SAMPLE_SPAN_MS * 0.5)).ceil() as u32;
+                Self {
+                    pieces: fit.next_power_of_two().clamp(2, most),
+                    ..Self::new()
+                }
+            } else {
+                Self::lane_passes()
             };
         }
     }
+
+    fn lane_passes() -> Self {
+        Self {
+            width: 1,
+            widest: LANES,
+            ..Self::new()
+        }
+    }
+}
+
+fn most_pieces(columns: u32) -> u32 {
+    floor_power_of_two(columns / PIECE_COLUMNS)
 }
 
 fn floor_power_of_two(value: u32) -> u32 {
@@ -1430,6 +1497,7 @@ impl Trace {
                 detail.lens.focus_distance,
             ],
             window: [width, height, 0, 0],
+            columns: [0; 4],
         };
         let mut base = base;
         detail.projection.place(&mut base);
@@ -1634,10 +1702,11 @@ impl Trace {
         let mut stats = Stats::default();
         let fixed = pacer.fixed_units();
         let blocks = self.height.div_ceil(BAND_STEP);
+        let columns = self.width.div_ceil(8);
         let per_run = (u32::MAX / (blocks * BAND_STEP)).max(1);
         let mut done = 0;
         while done < count {
-            if fixed.is_some() || self.lanes.width >= LANES {
+            if fixed.is_some() || (self.lanes.width >= LANES && self.lanes.pieces == 1) {
                 if fixed.is_none() {
                     pacer.set_step(BAND_STEP, BAND_STEP);
                     if pacer.learned_units(SAMPLE_LABEL).is_none() {
@@ -1656,14 +1725,44 @@ impl Trace {
                 let pass = Pass {
                     lanes: (0, LANES),
                     per_block: BAND_STEP,
+                    columns: (0, columns),
                 };
                 let spread =
                     self.pass(gpu, seed, samples, pass, pacer, &mut between, &mut stats)?;
                 if fixed.is_none() {
-                    self.lanes.learn_dense(spread);
+                    self.lanes.learn_dense(spread, columns);
                 }
                 self.samples += samples;
                 done += samples;
+                continue;
+            }
+            if self.lanes.width >= LANES {
+                let mut at = 0;
+                while at < columns {
+                    let pieces = if self.lanes.width < LANES {
+                        most_pieces(columns)
+                    } else {
+                        self.lanes.pieces
+                    };
+                    let span = columns.div_ceil(pieces);
+                    let end = (at + span).min(columns);
+                    pacer.set_step(1, 1);
+                    pacer.set_fixed_units(Some(self.lanes.strips(blocks)));
+                    let pass = Pass {
+                        lanes: (0, LANES),
+                        per_block: 1,
+                        columns: (at, end),
+                    };
+                    let spread = self.pass(gpu, seed, 1, pass, pacer, &mut between, &mut stats);
+                    pacer.set_fixed_units(fixed);
+                    let spread = spread?;
+                    if end - at == span && self.lanes.width >= LANES {
+                        self.lanes.learn_pieces(spread.longest, blocks, columns);
+                    }
+                    at = end;
+                }
+                self.samples += 1;
+                done += 1;
                 continue;
             }
             let mut lane = 0;
@@ -1675,6 +1774,7 @@ impl Trace {
                 let pass = Pass {
                     lanes: (lane, lane + width),
                     per_block: 1,
+                    columns: (0, columns),
                 };
                 let spread = self.pass(gpu, seed, 1, pass, pacer, &mut between, &mut stats);
                 pacer.set_fixed_units(fixed);
@@ -1757,6 +1857,7 @@ impl Trace {
                 piece.order,
                 piece.blocks,
                 (first + piece.from * share, first + piece.to * share),
+                pass.columns,
                 accumulated + piece.sample,
                 piece.samples,
                 seed,
@@ -1772,11 +1873,13 @@ impl Trace {
         order: u32,
         blocks: u32,
         lanes: (u32, u32),
+        columns: (u32, u32),
         accumulated: u32,
         samples: u32,
         seed: u32,
     ) {
         let mut frame = self.base;
+        frame.columns[0] = columns.0;
         frame.size[2] = accumulated;
         frame.size[3] = samples;
         frame.counts[2] = seed;
@@ -1802,7 +1905,7 @@ impl Trace {
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.binding, &[]);
         pass.set_bind_group(1, &self.environment_binding, &[]);
-        pass.dispatch_workgroups(self.width.div_ceil(8), blocks, 1);
+        pass.dispatch_workgroups(columns.1 - columns.0, blocks, 1);
     }
 
     pub fn samples(&self) -> u32 {
@@ -3192,16 +3295,59 @@ mod tests {
         alone.learn(30.0, 1);
         assert_eq!(alone.width, 1);
         let mut dense = Lanes::new();
-        dense.learn_dense(Spread {
-            longest: 40.7,
-            single: 0.0,
-        });
+        dense.learn_dense(
+            Spread {
+                longest: 40.7,
+                single: 0.0,
+            },
+            12,
+        );
         assert_eq!(dense.width, LANES);
-        dense.learn_dense(Spread {
-            longest: 40.7,
-            single: 40.7,
-        });
+        dense.learn_dense(
+            Spread {
+                longest: 40.7,
+                single: 40.7,
+            },
+            12,
+        );
         assert_eq!((dense.width, dense.widest, dense.blocks), (1, LANES, 1));
+    }
+
+    #[test]
+    fn a_dense_wide_strip_splits_into_column_pieces_before_it_drops_lanes() {
+        assert_eq!(
+            (most_pieces(480), most_pieces(60), most_pieces(12)),
+            (32, 4, 1)
+        );
+        let mut wide = Lanes::new();
+        wide.learn_dense(
+            Spread {
+                longest: 14.0,
+                single: 14.0,
+            },
+            480,
+        );
+        assert_eq!((wide.width, wide.pieces, wide.blocks), (LANES, 4, 1));
+        for blocks in [2, 4, 8] {
+            wide.learn_pieces(3.0, 270, 480);
+            assert_eq!(wide.blocks, blocks);
+        }
+        wide.learn_pieces(10.0, 270, 480);
+        assert_eq!((wide.blocks, wide.most, wide.pieces), (4, 8, 4));
+        wide.learn_pieces(5.0, 270, 480);
+        assert_eq!((wide.blocks, wide.pieces), (7, 4));
+        wide.learn_pieces(5.0, 270, 480);
+        assert_eq!((wide.pieces, wide.last), (2, Step::Pieces));
+        wide.learn_pieces(10.0, 270, 480);
+        assert_eq!((wide.pieces, wide.fewest), (4, 2));
+        wide.learn_pieces(4.0, 270, 480);
+        assert_eq!((wide.pieces, wide.blocks), (4, 7));
+        wide.blocks = 1;
+        wide.learn_pieces(50.0, 270, 480);
+        assert_eq!((wide.width, wide.pieces), (LANES, 8));
+        wide.pieces = 32;
+        wide.learn_pieces(50.0, 270, 480);
+        assert_eq!((wide.width, wide.widest, wide.pieces), (1, LANES, 1));
     }
 
     #[test]
@@ -3224,6 +3370,7 @@ mod tests {
                     0,
                     height.div_ceil(BAND_STEP),
                     (0, LANES),
+                    (0, width.div_ceil(8)),
                     whole.samples,
                     count,
                     seed,
@@ -3285,6 +3432,23 @@ mod tests {
                 "lit {lit}: paced"
             );
             assert!(own.readback(&gpu).unwrap() == unsliced, "lit {lit}: sample");
+            for pieces in [2, 4] {
+                let mut split = fresh();
+                split.lanes = Lanes {
+                    pieces,
+                    ..Lanes::new()
+                };
+                let mut pacer = Pacer::default();
+                for (count, seed) in calls {
+                    split
+                        .sample_paced(&gpu, count, seed, &mut pacer, |ms| turns.add(ms))
+                        .unwrap();
+                }
+                assert!(
+                    split.readback(&gpu).unwrap() == unsliced,
+                    "lit {lit}: {pieces} column pieces"
+                );
+            }
         }
     }
 
@@ -3530,7 +3694,11 @@ mod tests {
         pacer.set_step(1, 1);
         pacer.set_fixed_units(units);
         let mut stats = Stats::default();
-        let pass = Pass { lanes, per_block };
+        let pass = Pass {
+            lanes,
+            per_block,
+            columns: (0, trace.width.div_ceil(8)),
+        };
         trace
             .pass(
                 gpu,
@@ -3642,6 +3810,40 @@ mod tests {
                 summary(&all)
             );
         }
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn a_wide_dense_frame_keeps_every_lane() {
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let mut turns = Turns::default();
+        let scene = dense_glass(4, 4);
+        let frame = ortho(3.2, 0.1);
+        let (width, height, samples) = (5120, 64, 8);
+        let mut run = |lanes: Lanes| {
+            let mut trace = Trace::new_detailed(&gpu, &scene, &frame, width, height).unwrap();
+            trace.lanes = lanes;
+            let mut pacer = Pacer::default();
+            let stats = trace
+                .sample_paced(&gpu, samples, 3, &mut pacer, |ms| turns.add(ms))
+                .unwrap();
+            let gpu_ms: f64 = stats.milliseconds.iter().sum();
+            println!(
+                "{}, lanes {}, pieces {}, {:.2} M paths/s",
+                summary(&stats),
+                trace.lanes.width,
+                trace.lanes.pieces,
+                f64::from(width * height * samples) / gpu_ms / 1e3
+            );
+            (trace.lanes.width, gpu_ms)
+        };
+        let (width_now, now) = run(Lanes::new());
+        let (_, one_lane) = run(Lanes::lane_passes());
+        assert_eq!(width_now, LANES);
+        assert!(
+            now * 2.0 < one_lane,
+            "{now:.0} ms against {one_lane:.0} ms at one lane"
+        );
     }
 
     #[test]

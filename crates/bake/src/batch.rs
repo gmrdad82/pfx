@@ -26,6 +26,7 @@ struct Frame {
     sun_color: [f32; 4],
     lens: [f32; 4],
     window: [u32; 4],
+    columns: [u32; 4],
 }
 
 #[repr(C)]
@@ -356,6 +357,7 @@ impl Batch {
             sun_color: vec4(anchor.sun.color, anchor.sun.intensity),
             lens: [0.0, 0.0, 0.0, 1.0],
             window: [WIDTH, HEIGHT, 0, 0],
+            columns: [0; 4],
         };
         Ok(Self {
             frame,
