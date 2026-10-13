@@ -20,7 +20,7 @@ pfx is the engine under the PITO MD games and apps, built as a set of crates a g
 - **The rest of a game.** Rigid bodies, characters and world queries ([docs/physics.md](docs/physics.md)), mixing and streams ([docs/sound.md](docs/sound.md)), keyboard, mouse and controllers behind one action map ([docs/input.md](docs/input.md)), sandboxed WASM mods ([docs/mods.md](docs/mods.md)), and Steam ([docs/steam.md](docs/steam.md)).
 - **Deterministic.** The same scene, inputs and seed give the same frames on the same GPU and driver, and a game's rules can run bit for bit from their seed ([docs/sim.md](docs/sim.md)).
 
-It is for people and AI agents who build games and real-time scenes as code and text. It runs on Linux with a Vulkan GPU; games also build for Windows, and run on the Steam Deck through Proton ([docs/windows.md](docs/windows.md)).
+It is for people and AI agents alike, made with agentic development in mind: building games and real-time scenes as code and text. It runs on Linux with a Vulkan GPU; games also build for Windows, and run on the Steam Deck through Proton ([docs/windows.md](docs/windows.md)).
 
 ## Install
 
