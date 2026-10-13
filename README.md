@@ -12,7 +12,7 @@ pfx is a game and render engine in Rust: a live renderer for 60 fps at 4K, an of
 
 ## What it is
 
-pfx is the engine under the PITO games and apps, built as a set of crates a game links and one command-line tool, `pfx`. It is generic: no game keeps its names, values or assets in it; each game owns its content and uses the engine.
+pfx is the engine under the PITO MD games and apps, built as a set of crates a game links and one command-line tool, `pfx`. It is generic: no game keeps its names, values or assets in it; each game owns its content and uses the engine.
 
 - **Games.** `pfx new <game>` scaffolds a repository with one binary: it plays the game, and `<game> edit` opens it in the editor. `pfx-game` runs the window, pacing, input, sound and a fixed tick in one call, and the game implements one trait ([docs/game.md](docs/game.md), [docs/projects.md](docs/projects.md)).
 - **Scenes as data.** Scenes, materials and prefabs are TOML in the [pfx-scene](https://github.com/gmrdad82/pfx-scene) format, edited in place by the editor and reloaded live while a game plays ([docs/scenes.md](docs/scenes.md)).
@@ -130,6 +130,6 @@ Issues and pull requests are welcome at [github.com/gmrdad82/pfx](https://github
 
 ## Licence
 
-The code is MIT licensed, © Catalin Ilinca ([LICENSE](LICENSE)). The MIT licence covers the code only: the PITO name, every app and game name and their logos are © Catalin Ilinca, all rights reserved ([TRADEMARKS.md](TRADEMARKS.md)). Fonts and other media keep their own licences ([NOTICE.md](NOTICE.md)).
+The code is MIT licensed, © Catalin Ilinca ([LICENSE](LICENSE)). The MIT licence covers the code only: the PITO MD name, every app and game name and their logos are © Catalin Ilinca, all rights reserved ([TRADEMARKS.md](TRADEMARKS.md)). Fonts and other media keep their own licences ([NOTICE.md](NOTICE.md)).
 
 More at [pitomd.com](https://pitomd.com).
