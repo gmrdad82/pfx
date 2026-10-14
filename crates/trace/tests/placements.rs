@@ -3,6 +3,7 @@ use pfx_gpu::pace::{Pacer, Turns};
 use pfx_load::Sky;
 use pfx_materials::Material;
 use pfx_trace::detail::{ContentFace, Lens, Transform};
+use pfx_trace::sobol::Sampler;
 use pfx_trace::stage::{ALPHA_CUTOFF, Image, Mesh, Placement, PlacementContent, Stage, Staged};
 use pfx_trace::{Camera, Projection, Sun};
 
@@ -355,7 +356,7 @@ fn paced(
     samples: u32,
     seed: u32,
     turns: &mut Turns,
-) -> (Vec<u8>, Vec<u8>, f64) {
+) -> (Vec<u8>, Vec<u8>, f64, bool) {
     let mut trace = staged.trace(gpu, width, height).unwrap();
     let mut pacer = Pacer::default();
     let stats = trace
@@ -363,7 +364,12 @@ fn paced(
         .unwrap();
     turns.turn();
     let output = trace.readback(gpu).unwrap();
-    (output.color, output.albedo, stats.longest_ms())
+    (
+        output.color,
+        output.albedo,
+        stats.longest_ms(),
+        trace.hardware_rays(),
+    )
 }
 
 #[test]
@@ -432,7 +438,7 @@ fn unset_placement_fields_trace_the_bytes_they_traced_before() {
         },
     ];
     let mut turns = Turns::default();
-    let (plain_color, _, plain_longest) = paced(
+    let (plain_color, _, plain_longest, hardware_rays) = paced(
         &gpu,
         &digest_stage(&meshes, &plain, &materials),
         48,
@@ -441,7 +447,7 @@ fn unset_placement_fields_trace_the_bytes_they_traced_before() {
         9,
         &mut turns,
     );
-    let (stated_color, _, stated_longest) = paced(
+    let (stated_color, _, stated_longest, _) = paced(
         &gpu,
         &digest_stage(&meshes, &stated, &materials),
         48,
@@ -454,7 +460,11 @@ fn unset_placement_fields_trace_the_bytes_they_traced_before() {
     println!(
         "unset fields digest {hash:016x} longest {plain_longest:.2} ms, stated {stated_longest:.2} ms"
     );
-    assert_eq!(hash, 0x6ad8_c2f3_f97b_194e);
+    if hardware_rays {
+        assert_eq!(hash, 0x8cee_f946_5f07_52ab);
+    } else {
+        assert_eq!(hash, 0x6ad8_c2f3_f97b_194e);
+    }
     assert_eq!(plain_color, stated_color);
     assert!(plain_longest < 300.0 && stated_longest < 300.0);
 }
@@ -464,7 +474,7 @@ fn digest_stage<'a>(
     placements: &'a [Placement<'a>],
     materials: &'a [Material],
 ) -> Staged {
-    Stage {
+    let mut staged = Stage {
         meshes,
         instances: placements,
         materials,
@@ -494,7 +504,9 @@ fn digest_stage<'a>(
         lens: Lens::default(),
     }
     .build()
-    .unwrap()
+    .unwrap();
+    staged.detail.sampler = Sampler::Pcg;
+    staged
 }
 
 const SOFT_SIDE: u32 = 64;
@@ -630,7 +642,7 @@ fn three_cutoffs_trace_three_ring_widths() {
             }),
             ..Placement::new(0, IDENTITY, 0)
         }];
-        let staged = Stage {
+        let mut staged = Stage {
             meshes: &meshes,
             instances: &placements,
             materials: &materials,
@@ -658,7 +670,8 @@ fn three_cutoffs_trace_three_ring_widths() {
         }
         .build()
         .unwrap();
-        let (_, albedo, longest) = paced(
+        staged.detail.sampler = Sampler::Pcg;
+        let (_, albedo, longest, _) = paced(
             &gpu,
             &staged,
             SOFT_SIDE,
