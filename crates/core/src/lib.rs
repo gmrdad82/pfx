@@ -12,3 +12,4 @@ pub mod rig;
 pub mod sim;
 pub mod sky;
 pub mod tween;
+pub mod words;
