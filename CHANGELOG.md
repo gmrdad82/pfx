@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.29.0 — 2026-10-14
+
+### Added
+
+- sound: `Output::music_heard()`, the position of the current music track the speaker plays now, latency included, so a meter or a beat-synced effect stays on the sound you hear; `Mixer::music_position()` gives the mixer's own.
+- sim: `Overlaps`, a deterministic sort-and-sweep broadphase over integer boxes; 2,000 against 400 boxes in 0.16 ms.
+- game: a world sets the cursor (`Cursor::Shown`, `Hidden` or `Captured`); the window hides or confines it and gives it back while unfocused or minimized.
+- game: `FrameTime::tick`, the frame's whole tick, so effects step on the game's clock.
+
+### Changed
+
+- docs: the brand now reads PITO MD, and the README names people and AI agents alike.
+- effects: particle drag costs one exponential per recipe per step instead of one per particle.
+
 ## v0.28.1 — 2026-10-12
 
 ### Fixed
