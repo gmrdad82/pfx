@@ -4,7 +4,7 @@ use pfx_core::clock::Tick;
 use pfx_gpu::screens::{Device, Display, ScreenPolicy, ScreenReport};
 use pfx_gpu::window::{Attention, Clock, FramePacer, Host, Pace, Point, PresentPreference, Size};
 use pfx_input::{Backend, BindingMap, InputEvent, KeyLabels, LayoutSource};
-use pfx_play::{Exit, Notice, PlaySession, Settings, Ui, UiFrame, Warm, Warmer, Warming};
+use pfx_play::{Cursor, Exit, Notice, PlaySession, Settings, Ui, UiFrame, Warm, Warmer, Warming};
 
 use crate::prompt::Part;
 
@@ -296,6 +296,10 @@ impl Driver {
         }
         self.present_changed = false;
         Some(self.applied.pacing.vrr)
+    }
+
+    pub fn cursor(&self) -> Cursor {
+        self.session.world().cursor()
     }
 
     pub fn exit(&self) -> Option<&Exit> {

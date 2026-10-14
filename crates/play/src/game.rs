@@ -17,6 +17,7 @@ pub type GameError = Box<dyn std::error::Error + Send + Sync>;
 pub struct FrameTime {
     pub alpha: f32,
     pub seconds: f32,
+    pub tick: Tick,
 }
 
 pub trait Game {

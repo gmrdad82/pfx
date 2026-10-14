@@ -3,17 +3,18 @@ use std::sync::Arc;
 use pfx_gpu::screens::{Display, SystemSource, apply_display, detect};
 use pfx_gpu::window::{self, Attention, Pace, Size, SystemClock};
 use pfx_gpu::{Gpu, WindowTarget, wgpu};
-use pfx_input::{Backend, LayoutSource, SteamPrecedence};
+use pfx_input::{Backend, InputEvent, LayoutSource, SteamPrecedence};
 use pfx_load::scene::Scene;
-use pfx_play::Game;
+use pfx_play::{Cursor, Game};
 use pfx_sound::{ChannelId, Level, Output, PcmSender};
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalSize;
-use winit::event::WindowEvent;
+use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 use crate::config::{Config, Pads, report};
+use crate::cursor::{Pointer, nudge};
 use crate::driver::{Driver, Event, present_preference};
 use crate::painter::{Painter, Warmup};
 use crate::start;
@@ -33,6 +34,9 @@ struct Live {
     sound: Option<Sound>,
     minimized: bool,
     warming: Option<Warmup>,
+    pointer: Pointer,
+    locked: bool,
+    at: [f32; 2],
 }
 
 struct App {
@@ -172,6 +176,7 @@ fn open(
             .current_monitor()
             .and_then(|monitor| window::refresh_millihertz(&monitor)),
     ));
+    let pointer = Pointer::new(window.has_focus());
     Ok(Live {
         window,
         target,
@@ -180,6 +185,9 @@ fn open(
         sound,
         minimized: false,
         warming: Some(Warmup::new(config.warm_budget)),
+        pointer,
+        locked: false,
+        at: [0.0; 2],
     })
 }
 
@@ -200,6 +208,7 @@ impl Live {
             return self.warm(now_ns);
         }
         self.driver.update(now_ns);
+        self.cursor();
         for notice in self.driver.take_notices() {
             eprintln!("{notice}");
         }
@@ -270,7 +279,46 @@ impl Live {
             self.minimized = minimized;
             self.driver
                 .feed(Event::Attention(Attention::Minimized(minimized)));
+            self.pointer.minimize(minimized);
+            self.cursor();
         }
+    }
+
+    fn cursor(&mut self) {
+        let Some(cursor) = self.pointer.change(self.driver.cursor()) else {
+            return;
+        };
+        self.locked = false;
+        let grab = match cursor {
+            Cursor::Shown | Cursor::Hidden => self.window.set_cursor_grab(CursorGrabMode::None),
+            Cursor::Captured => self
+                .window
+                .set_cursor_grab(CursorGrabMode::Confined)
+                .or_else(|_| {
+                    self.window
+                        .set_cursor_grab(CursorGrabMode::Locked)
+                        .map(|()| self.locked = true)
+                }),
+        };
+        self.window.set_cursor_visible(cursor == Cursor::Shown);
+        if let Err(error) = grab {
+            eprintln!("the pointer stays free: {error}");
+        }
+    }
+
+    fn moved_locked(&mut self, delta: (f64, f64)) {
+        let scale = if cfg!(target_os = "macos") {
+            self.window.scale_factor()
+        } else {
+            1.0
+        };
+        self.at = nudge(
+            self.at,
+            [delta.0 * scale, delta.1 * scale],
+            size_of(&self.window),
+        );
+        self.driver
+            .feed(Event::Input(InputEvent::PointerMoved { window: self.at }));
     }
 }
 
@@ -306,6 +354,13 @@ impl ApplicationHandler for App {
                 height: size.height,
             }),
             WindowEvent::Moved(_) => live.moved(),
+            WindowEvent::Focused(focused) => {
+                live.pointer.focus(focused);
+                live.cursor();
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                live.at = [position.x as f32, position.y as f32];
+            }
             WindowEvent::RedrawRequested => {
                 let now = window::Clock::now_ns(&self.clock);
                 if let Err(error) = live.frame(now) {
@@ -318,6 +373,17 @@ impl ApplicationHandler for App {
             _ => {}
         }
         live.check_minimized();
+    }
+
+    fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {
+        let Some(live) = &mut self.live else {
+            return;
+        };
+        if let DeviceEvent::MouseMotion { delta } = event
+            && live.locked
+        {
+            live.moved_locked(delta);
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {

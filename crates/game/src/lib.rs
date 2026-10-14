@@ -1,4 +1,5 @@
 mod config;
+mod cursor;
 mod driver;
 #[cfg(test)]
 mod gpu_paint_tests;
@@ -40,8 +41,8 @@ pub use pfx_live::flat;
 pub use pfx_live::renderer::Exposure;
 pub use pfx_live::renderer::Renderer;
 pub use pfx_play::{
-    Anchor, Audio, Cap, Exit, FrameTime, Game, GameError, Label, Level, Notice, Pacing, PaintFrame,
-    PcmStream, Prompt, PromptOf, Reload, RumbleRequest, SceneGame, Settings, Ui, UiFrame, UiLook,
-    Warm, Warming, World,
+    Anchor, Audio, Cap, Cursor, Exit, FrameTime, Game, GameError, Label, Level, Notice, Pacing,
+    PaintFrame, PcmStream, Prompt, PromptOf, Reload, RumbleRequest, SceneGame, Settings, Ui,
+    UiFrame, UiLook, Warm, Warming, World,
 };
 pub use prompt::Part;

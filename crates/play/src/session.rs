@@ -194,6 +194,7 @@ impl PlaySession {
         self.frame(FrameTime {
             alpha: tick.alpha,
             seconds: tick.real,
+            tick,
         });
         tick
     }
@@ -222,7 +223,10 @@ impl PlaySession {
         self.stats.sim_end();
         if self.world.exit().is_none() {
             self.world.apply_rig(1.0);
-            self.frame(FrameTime::default());
+            self.frame(FrameTime {
+                tick,
+                ..FrameTime::default()
+            });
         }
         true
     }

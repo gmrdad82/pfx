@@ -240,6 +240,8 @@ The recording serializes with serde, and serde_json round-trips each `f32` exact
 
 To replay, build a fresh `Input` with the same actions and bindings, call `begin_replay(&recording)`, then call `update(&mut recording.player())` once per step. Every action state, the pointer, the active device and the change events come back bit for bit: the test compares the `f32` bits over 600 steps of random input. That lets pfx shots and replays drive a game without a device. Rumble commands during a replay go to `Player::motors` and are not played.
 
+**What a recording is for.** It is the engine's own log: shots, the editor's play, a bug replayed tick for tick. It is not a format to ship. Its events are serde enums with `f32` pointers, so 25 minutes at 60 steps a second with the pointer moving every step is about 5.7 MB of JSON (0.9 MB deflated), it replays only through the same actions and the same bindings (a player's rebinds included), and `RECORDING_VERSION` changes whenever an event does. A game that ships replays (a leaderboard check, a 1v1) logs its own per-tick sim input instead: what its `tick` actually reads, quantized to the integers its sim runs on (the pointer in sim units, a bit per action), delta and varint coded, a few bytes a tick, with its seed and its own sim version, and re-runs its sim from that log headless with no `Input` at all.
+
 ## Real-hardware check (pending)
 
 The tests use fake layouts and fake pads; nothing here has been checked on hardware yet. It needs a pad, a window and Steam. To check, with a pad and Proton available:

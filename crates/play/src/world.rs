@@ -417,6 +417,15 @@ pub struct World {
     animations: anim::Animations,
     exit: Option<Exit>,
     display: DisplaySettings,
+    cursor: Cursor,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Cursor {
+    #[default]
+    Shown,
+    Hidden,
+    Captured,
 }
 
 impl World {
@@ -616,6 +625,7 @@ impl World {
             rumble: Vec::new(),
             exit: None,
             display: DisplaySettings::default(),
+            cursor: Cursor::Shown,
             scene,
         };
         world.physics.refresh_queries();
@@ -885,6 +895,14 @@ impl World {
             let place = self.movers[at];
             self.set_model(ObjectId(place), posed[place]);
         }
+    }
+
+    pub fn set_cursor(&mut self, cursor: Cursor) {
+        self.cursor = cursor;
+    }
+
+    pub fn cursor(&self) -> Cursor {
+        self.cursor
     }
 
     pub fn rumble(&mut self, rumble: Rumble) {
