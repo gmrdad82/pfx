@@ -22,6 +22,7 @@ pub use decode::{
     AHEAD_SECONDS, CommandLine, Decode, DecodeSpec, ahead_limit, command_line, mix_graph,
 };
 pub use envelope::{Envelope, Shape};
+pub use interp::Resample;
 pub use live::{Output, chime, chime_reversed};
 pub use mix::{FILTER_RAMP_SECONDS, Level, Mixer, Placement, Timeline, VoiceId, mixdown};
 pub use music::MusicTrack;

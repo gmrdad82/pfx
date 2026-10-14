@@ -1,4 +1,5 @@
 use crate::clip::Clip;
+use crate::synth::sine;
 
 #[derive(Clone, Debug)]
 pub struct MusicTrack {
@@ -100,11 +101,10 @@ impl Curve {
                 Direction::Out => 0.0,
             };
         }
-        let t = past as f64 / self.len as f64;
-        let angle = t * std::f64::consts::FRAC_PI_2;
+        let quarter = past as f64 / self.len as f64 * 0.25;
         match self.direction {
-            Direction::In => angle.sin() as f32,
-            Direction::Out => angle.cos() as f32,
+            Direction::In => sine(quarter),
+            Direction::Out => sine(quarter + 0.25),
         }
     }
 

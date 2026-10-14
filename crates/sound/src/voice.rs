@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::channel::{ChannelId, Ramp};
 use crate::envelope::EnvState;
-use crate::interp::{Kernel, MAX_RATIO, MIN_RATIO};
+use crate::interp::{Kernel, MAX_RATIO, MIN_RATIO, Resample, hermite};
 use crate::mix::{Level, PcmQueue, VoiceId};
 use crate::music::{Curve, Direction};
 use crate::pcm::PcmVoice;
@@ -25,6 +25,8 @@ pub(crate) struct Voice {
     pub(crate) laps: u64,
     pub(crate) rendered: bool,
     pub(crate) envelope: Option<EnvState>,
+    pub(crate) resample: Resample,
+    pub(crate) ends: Option<(u64, u64)>,
     pub(crate) source: Source,
 }
 
@@ -142,11 +144,76 @@ impl Voice {
             laps: 0,
             rendered: false,
             envelope: None,
+            resample: Resample::Sinc,
+            ends: None,
             source,
         }
     }
 
+    fn plain(&self, block: &Block<'_>) -> bool {
+        matches!(self.source, Source::Buffer { looping: None, .. })
+            && self.curve.is_none()
+            && self.envelope.is_none()
+            && self.ends.is_none()
+            && self.level.fade_in == 0
+            && self.level.fade_out == 0
+            && self.pitch.is_settled()
+            && self.gain.is_settled()
+            && block.pitch.is_none()
+    }
+
+    fn mix_plain(&mut self, out: &mut [f32], block: &Block<'_>) {
+        let Source::Buffer {
+            samples,
+            channels,
+            frames: total,
+            ..
+        } = &self.source
+        else {
+            return;
+        };
+        let ratio = self.pitch.current().clamp(MIN_RATIO, MAX_RATIO);
+        let plan = Plain {
+            first: self
+                .start
+                .saturating_sub(block.clock)
+                .min(block.frames as u64) as usize,
+            frames: block.frames,
+            out_channels: block.out_channels,
+            src_channels: *channels,
+            value: self.level.volume * self.gain.current(),
+            pan: balance(self.level.pan),
+            step: f64::from(ratio),
+            total: *total as f64,
+        };
+        let (samples, channels, total) = (samples.as_slice(), *channels, *total);
+        let cursor = self.cursor;
+        let end = if ratio == 1.0 && cursor.fract() == 0.0 {
+            plan.run(out, cursor, |at| source_pair(samples, channels, at as u64))
+        } else {
+            match self.resample {
+                Resample::Sinc => plan.run(out, cursor, |at| {
+                    sinc_pair(block.kernel, samples, channels, total, None, at, ratio)
+                }),
+                Resample::Cubic => plan.run(out, cursor, |at| {
+                    cubic_pair(samples, channels, total, None, at)
+                }),
+                Resample::Linear => plan.run(out, cursor, |at| {
+                    linear_pair(samples, channels, total, None, at)
+                }),
+            }
+        };
+        if end != cursor {
+            self.rendered = true;
+        }
+        self.cursor = end;
+    }
+
     pub(crate) fn mix_into(&mut self, out: &mut [f32], block: &Block<'_>) {
+        if self.plain(block) {
+            self.mix_plain(out, block);
+            return;
+        }
         let (pan_l, pan_r) = balance(self.level.pan);
         let mut span = Span {
             out,
@@ -162,6 +229,8 @@ impl Voice {
             laps,
             rendered,
             envelope: shaping,
+            resample,
+            ends,
             source,
             ..
         } = self;
@@ -181,6 +250,21 @@ impl Voice {
             if at < *start {
                 continue;
             }
+            if let Some((when, fade)) = *ends
+                && at >= when
+            {
+                *ends = None;
+                match shaping.as_mut() {
+                    Some(state) => state.release(fade),
+                    None => {
+                        *curve = Some(Curve {
+                            start: at,
+                            len: fade.max(1),
+                            direction: Direction::Out,
+                        })
+                    }
+                }
+            }
             let ratio = (pitch.next() * block.pitch.map_or(1.0, |curve| curve[i]))
                 .clamp(MIN_RATIO, MAX_RATIO);
             let played = match source {
@@ -197,21 +281,23 @@ impl Voice {
                     let (left, right) = if direct {
                         source_pair(samples, *channels, *cursor as u64)
                     } else {
-                        let taps = block.kernel.taps(*cursor, ratio.max(1.0));
-                        let mut left = 0.0f32;
-                        let mut right = 0.0f32;
-                        for (j, weight) in taps.weights[..taps.count].iter().enumerate() {
-                            let (a, b) = buffer_pair(
+                        match resample {
+                            Resample::Sinc => sinc_pair(
+                                block.kernel,
                                 samples,
                                 *channels,
                                 *total,
                                 *looping,
-                                taps.first + j as i64,
-                            );
-                            left += a * weight;
-                            right += b * weight;
+                                *cursor,
+                                ratio,
+                            ),
+                            Resample::Cubic => {
+                                cubic_pair(samples, *channels, *total, *looping, *cursor)
+                            }
+                            Resample::Linear => {
+                                linear_pair(samples, *channels, *total, *looping, *cursor)
+                            }
                         }
-                        (left, right)
                     };
                     let (local, length) = match looping {
                         Some(_) => (at - *start, None),
@@ -401,6 +487,121 @@ impl Voice {
             * self.curve.map_or(1.0, |c| c.gain(clock))
             * self.envelope.as_ref().map_or(1.0, EnvState::level)
     }
+}
+
+struct Plain {
+    first: usize,
+    frames: usize,
+    out_channels: usize,
+    src_channels: u16,
+    value: f32,
+    pan: (f32, f32),
+    step: f64,
+    total: f64,
+}
+
+impl Plain {
+    fn run(&self, out: &mut [f32], mut cursor: f64, fetch: impl Fn(f64) -> (f32, f32)) -> f64 {
+        let (pan_l, pan_r) = self.pan;
+        let value = self.value;
+        if self.out_channels <= 1 {
+            let mono = self.src_channels <= 1;
+            for slot in out.iter_mut().take(self.frames).skip(self.first) {
+                if cursor >= self.total {
+                    break;
+                }
+                let (left, right) = fetch(cursor);
+                cursor += self.step;
+                let sample = if mono { left } else { (left + right) * 0.5 };
+                *slot += sample * value;
+            }
+            return cursor;
+        }
+        for frame in out
+            .chunks_exact_mut(self.out_channels)
+            .take(self.frames)
+            .skip(self.first)
+        {
+            if cursor >= self.total {
+                break;
+            }
+            let (left, right) = fetch(cursor);
+            cursor += self.step;
+            frame[0] += left * value * pan_l;
+            frame[1] += right * value * pan_r;
+        }
+        cursor
+    }
+}
+
+fn sinc_pair(
+    kernel: &Kernel,
+    samples: &[f32],
+    channels: u16,
+    total: u64,
+    looping: Option<(u64, u64)>,
+    cursor: f64,
+    ratio: f32,
+) -> (f32, f32) {
+    let taps = kernel.taps(cursor, ratio.max(1.0));
+    let mut left = 0.0f32;
+    let mut right = 0.0f32;
+    for (j, weight) in taps.weights[..taps.count].iter().enumerate() {
+        let (a, b) = buffer_pair(samples, channels, total, looping, taps.first + j as i64);
+        left += a * weight;
+        right += b * weight;
+    }
+    (left, right)
+}
+
+fn cubic_pair(
+    samples: &[f32],
+    channels: u16,
+    total: u64,
+    looping: Option<(u64, u64)>,
+    cursor: f64,
+) -> (f32, f32) {
+    let floor = cursor.floor();
+    let t = (cursor - floor) as f32;
+    let k = floor as i64;
+    let width = usize::from(channels);
+    if looping.is_none() && k >= 1 && (k as u64).saturating_add(2) < total && width > 0 {
+        let base = k as usize * width;
+        let left = &samples[base - width..];
+        let l = hermite(left[0], left[width], left[2 * width], left[3 * width], t);
+        if width == 1 {
+            return (l, l);
+        }
+        let right = &left[1..];
+        let r = hermite(
+            right[0],
+            right[width],
+            right[2 * width],
+            right[3 * width],
+            t,
+        );
+        return (l, r);
+    }
+    let (pl, pr) = buffer_pair(samples, channels, total, looping, k - 1);
+    let (cl, cr) = buffer_pair(samples, channels, total, looping, k);
+    let (nl, nr) = buffer_pair(samples, channels, total, looping, k + 1);
+    let (al, ar) = buffer_pair(samples, channels, total, looping, k + 2);
+    (hermite(pl, cl, nl, al, t), hermite(pr, cr, nr, ar, t))
+}
+
+fn linear_pair(
+    samples: &[f32],
+    channels: u16,
+    total: u64,
+    looping: Option<(u64, u64)>,
+    cursor: f64,
+) -> (f32, f32) {
+    let floor = cursor.floor();
+    let t = (cursor - floor) as f32;
+    let k = floor as i64;
+    let (al, ar) = buffer_pair(samples, channels, total, looping, k);
+    let (bl, br) = buffer_pair(samples, channels, total, looping, k + 1);
+    (al + (bl - al) * t, ar + (br - ar) * t)
 }
 
 fn buffer_pair(

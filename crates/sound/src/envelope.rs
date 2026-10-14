@@ -133,7 +133,10 @@ impl EnvState {
         let p = (pos as f64 / len.max(1) as f64) as f32;
         match self.shape {
             Shape::Linear => p,
-            Shape::Exponential => (1.0 - (-CURVE_RATE * p).exp()) / (1.0 - (-CURVE_RATE).exp()),
+            Shape::Exponential => {
+                (1.0 - pfx_core::sim::expf(-CURVE_RATE * p))
+                    / (1.0 - pfx_core::sim::expf(-CURVE_RATE))
+            }
         }
     }
 

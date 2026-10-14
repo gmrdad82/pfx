@@ -70,7 +70,9 @@ mixer.glide_channel_pitch(ChannelId::EFFECTS, intensity, 0.5);
 - Changes ramp linearly per frame: `set_*` over `RAMP_SECONDS` (10 ms), `glide_*` over the seconds you give. The read position is continuous, so there is no click, only the pitch moving.
 - Fades and loop points are in the clip's own frames, so a pitched sound fades and loops in step with its pitch.
 - At exactly 1 the clip's samples are read as they are, so the output, and every render's mixdown, is unchanged.
-- Any other ratio resamples with a Kaiser-windowed sinc, 16 zero crossings each side, its cutoff at 0.9 of Nyquist. Above 1 the kernel widens by the ratio so the source's top octaves are filtered out before they can fold back, which is the aliasing of cheaper interpolators. Measured at 48 kHz, a tone that would fold back sits at **-80 dB** or lower below the source at 2x (17 kHz source: -80 dB, 21 kHz: -98 dB) and **-91 dB** or lower at 4x (11 kHz: -91 dB, 21 kHz: -106 dB); a tone in the passband comes out within 0.001 dB of its level at both. The cost grows with the ratio (32 taps a channel at 1x, 128 at 4x).
+- Any other ratio resamples in the voice's `Resample` mode. `Resample::Sinc` (the default for `play`, music and streams) is a Kaiser-windowed sinc, 16 zero crossings each side, its cutoff at 0.9 of Nyquist. Above 1 the kernel widens by the ratio so the source's top octaves are filtered out before they can fold back, which is the aliasing of cheaper interpolators. Measured at 48 kHz, a tone that would fold back sits at **-80 dB** or lower below the source at 2x (17 kHz source: -80 dB, 21 kHz: -98 dB) and **-91 dB** or lower at 4x (11 kHz: -91 dB, 21 kHz: -106 dB); a tone in the passband comes out within 0.001 dB of its level at both. The cost grows with the ratio (32 taps a channel at 1x, 128 at 4x).
+- `Resample::Cubic` (the default for `sound` and `tone_sound`) is a 4-point, third-order Hermite interpolation ported from kira's `interpolate_frame` (MIT or Apache-2.0); `Resample::Linear` reads between two frames. Both read only the frames around the cursor and allocate nothing, about 9 ns a frame against the sinc's 200 or more. They do not widen with the ratio, so a large pitch-up folds its top octaves back: keep them for short effects and small ratios (a few semitones of jitter), and the sinc for music and long sounds.
+- `SoundSpec::resample` picks the mode for every trigger of a sound; `Mixer::set_resample(id, mode)` (and `Output::set_resample`) changes any voice.
 
 ## Voice limiting, stealing and jitter
 
@@ -90,8 +92,10 @@ mixer.trigger(hit);
 ```
 
 - `sound` registers a clip once, resampled to the mixer's rate and shared by every voice. `trigger` and `trigger_at` play one.
+- `tone_sound(wave, hz, seconds, spec)` registers a tone the same way, so tones take the same cap, stealing, jitter, envelope and channel through the same code: a trigger plays the wave at `hz` times its drawn pitch for `seconds`, then releases (through its envelope, or a `steal_fade` fade without one). `None` plays until stopped or stolen. Each trigger's noise seed comes from the mixer's generator.
+- `trigger_in(offset, sound)` and `tone_in(offset, channel, wave, hz, volume)` start the voice `offset` frames after the mixer's clock (`Mixer::clock()`), so hits fired on fast ticks spread through the next block instead of all landing on its first frame. `trigger_at` takes an absolute frame. The output from the start frame on is the same, bit for bit, as the voice started at the block's edge.
 - At `max_voices` live voices of the sound, `trigger` steals one first: `Steal::Oldest` takes the earliest started, `Steal::Quietest` the one with the lowest level times its fade times how much of the clip is left. A stolen voice that has already played fades out over `steal_fade` (3 ms by default); one that never reached the mixer is dropped. `max_voices: 0` plays nothing; the default is no cap.
-- Each trigger draws a pitch of up to `pitch_jitter` semitones either way and a volume of up to `volume_jitter` (a fraction) either way, from the mixer's own seeded generator. `set_seed` starts it; the same seed and the same triggers give the same samples, bit for bit. The mixer never reads the clock or the system's randomness.
+- Each trigger draws a pitch of up to `pitch_jitter` semitones either way and a volume of up to `volume_jitter` (a fraction) either way, from the mixer's own seeded generator. `set_seed` starts it; the same seed and the same triggers give the same samples, bit for bit, on every platform: the mixer's sines, cosines, exponentials and powers (the jitter's pitch, fades, envelopes, filter coefficients, the sinc table) go through pfx-core's bit-exact `sim` functions or the sine table below, never the platform's libm, and a golden test pins the bits of a seeded mix of tones and jittered hits. The mixer never reads the clock or the system's randomness.
 - 10,000 triggers in a second leave at most `max_voices` live plus those fading out.
 - `set_limiter(Some(threshold))` puts a soft limiter on the master: below the threshold the signal is untouched, above it a smooth knee bends towards full scale without reaching it. It is off by default, and the hard clamp stays behind it.
 
@@ -106,7 +110,8 @@ mixer.glide_gain(alarm, 0.0, 0.5);
 mixer.stop(alarm, 0.05);
 ```
 
-- `Wave::Sine`, `Square` and `Saw`. Square and saw are band-limited with PolyBLEP, so their edges do not fold back at high notes.
+- `Wave::Sine` reads a 2,049-entry table (one cycle, built at compile time from a Taylor series) with linear interpolation: within 1.2e-6 of a true sine (about -118 dB), the same bits on every platform, and cheaper than a libm call. Equal-power fades read the same table.
+- `Wave::Square` and `Saw`. Square and saw are band-limited with PolyBLEP, so their edges do not fold back at high notes.
 - `Wave::White` and `Wave::Pink` are noise (see Noise below).
 - The game drives the frequency (`set_tone_frequency`, `glide_tone_frequency`), the pitch ratio (`set_pitch`, which multiplies the frequency, as the channel's pitch does) and the volume (`set_gain`, `glide_gain`, a ramped gain on top of the level). All ramp.
 - The phase is a 64-bit accumulator: the measured frequency is within 0.1 % of what was asked, for every wave.
@@ -199,6 +204,22 @@ mixer.stream_vorbis(ChannelId::DIALOG, &source, None, Level::default())?;
 - `VorbisSource` is bytes held in memory or a file path.
 - Stereo and mono play as they are; a file with more channels plays its first two.
 
+## Cost
+
+`crates/sound/tests/bench.rs` (`cargo test --release -p pfx-sound --test bench -- --ignored --nocapture`): a 48 kHz stereo mixer rendering 800-frame ticks (60 a second), a 0.1 s mono hit triggered 2,000 times a second with `max_voices: 20`, `Steal::Oldest`, 2 semitones of pitch jitter and 0.2 of volume jitter (about 20 live voices plus the stolen ones fading), and 20 live sine tones. Release build, Ryzen 9 9950X, CPU time a tick:
+
+| Case | Before | After |
+|---|---|---|
+| Hits, no pitch jitter | 0.40 ms | 0.16 ms |
+| Hits, jitter, sinc | 5.00 ms | 3.55 ms |
+| Hits, jitter, cubic (the `SoundSpec` default) | - | 0.30 ms |
+| Hits, jitter, linear | - | 0.27 ms |
+| Hits, jitter, cubic, spread through the tick with `trigger_in` | - | 0.23 ms |
+| 20 sine tones (`tone`) | 0.22 ms | 0.10 ms |
+| 20 sine tones from one `tone_sound` with jitter | - | 0.10 ms |
+
+Before, 92 % of the jittered case was the sinc: for every pitched frame `Kernel::taps` built 33 weights (a distance in f64, a table read and a lerp each, then a normalising divide over all of them) and the voice read 33 frames through bounds and loop checks. Now a voice with no ramp, curve, envelope or fade in flight renders its block in one tight loop with its gain, pan and step worked out once, and the cubic read is four loads and a Horner polynomial. The fades of stolen voices read the sine table instead of a libm cosine.
+
 ## Tests
 
-No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The crate's own tests turn `vorbis` on through a self dev-dependency, so the workspace gate runs them.
+No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The crate's own tests turn `vorbis` on through a self dev-dependency, so the workspace gate runs them.
