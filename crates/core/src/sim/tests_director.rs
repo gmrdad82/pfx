@@ -1,6 +1,6 @@
 use super::director::{
-    Anchor, Director, DirectorError, Entry, Line, Lull, NO_SPOT, ONE, Phase, Ramp, Region,
-    Schedule, SpawnLull, SpawnOrder, Spots, Table, Window,
+    Anchor, Cycle, DIRECTOR_PLAIN_VERSION, DIRECTOR_VERSION, Director, DirectorError, Entry, Line,
+    Lull, NO_SPOT, ONE, Phase, Ramp, Region, Schedule, SpawnLull, SpawnOrder, Spots, Table, Window,
 };
 use super::{Rng, mix64};
 
@@ -804,3 +804,291 @@ fn a_saved_director_with_lines_resumes_exactly() {
     assert_eq!(play(&mut resumed, 100, 300, &spots), rest);
     assert_eq!(resumed.save(), whole.save());
 }
+
+#[test]
+fn a_saved_plain_director_keeps_its_bytes() {
+    let points = [[0, 0, 0], [5, 6, 7]];
+    let regions = [Region::new([0, 0, 0], [50, 60, 70])];
+    let spots = Spots {
+        points: &points,
+        regions: &regions,
+    };
+    let mut d = Director::new(rich(), 42).unwrap();
+    play(&mut d, 0, 250, &spots);
+    let bytes = d.save();
+    let mut h = 0u64;
+    for b in &bytes {
+        h = mix64(h ^ *b as u64);
+    }
+    assert_eq!(bytes[..4], DIRECTOR_PLAIN_VERSION.to_le_bytes());
+    assert_eq!((bytes.len(), h), (302, 6047554393857968352));
+}
+
+fn windowed(lulls: Vec<Window>, cycles: Vec<Cycle>) -> Schedule {
+    let entries: Vec<Entry> = (0..20).map(|i| Entry::new(i, 1 + i % 4)).collect();
+    let phases = (0..4)
+        .map(|i| {
+            let mut p = Phase::new(0, 10_000_000, 0);
+            p.rate = Ramp::flat((30 + 10 * i) * ONE);
+            p
+        })
+        .collect();
+    Schedule {
+        cap: 40,
+        allow_overlap: true,
+        tables: vec![Table::new(entries)],
+        phases,
+        lulls,
+        cycles,
+        ..Schedule::default()
+    }
+}
+
+#[test]
+#[ignore = "bench; run with --release"]
+fn bench_one_tick_with_a_hundred_and_eighty_quiet_windows() {
+    let spaced: Vec<Window> = (0..180u64)
+        .map(|k| Window {
+            start: k * 600 + 300,
+            end: k * 600 + 360,
+        })
+        .collect();
+    for (label, schedule) in [
+        ("no windows", windowed(Vec::new(), Vec::new())),
+        ("180 windows", windowed(spaced, Vec::new())),
+        (
+            "one cycle",
+            windowed(Vec::new(), vec![Cycle::new(300, 600, 60)]),
+        ),
+    ] {
+        let mut d = Director::new(schedule, 5).unwrap();
+        let mut out = Vec::new();
+        let ticks = 108_000u32;
+        let mut orders = 0usize;
+        let start = std::time::Instant::now();
+        for t in 0..ticks {
+            if t % 3 == 0 {
+                d.died(t % 20, 1);
+            }
+            d.tick(&Spots::EMPTY, &mut out);
+            orders += out.len();
+        }
+        let each = start.elapsed().as_secs_f64() * 1e9 / ticks as f64;
+        println!(
+            "{label}: {each:.1} ns per tick, {:.3} orders per tick",
+            orders as f64 / ticks as f64
+        );
+    }
+}
+
+#[test]
+fn the_new_options_are_checked_at_load() {
+    let ok = || plain(three(), vec![steady(0, 100)]);
+    for (i, cycle) in [
+        Cycle::new(0, 0, 0),
+        Cycle::new(0, 10, 0),
+        Cycle::new(0, 10, 10),
+        Cycle::new(5, 10, 3).until(5),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut s = ok();
+        s.cycles = vec![Cycle::new(0, 10, 3), cycle];
+        assert_eq!(s.check(), Err(DirectorError::BadCycle { cycle: 1 }), "{i}");
+    }
+    let mut s = ok();
+    s.phases[0].rate_jitter = ONE;
+    assert_eq!(s.check(), Err(DirectorError::BadJitter { phase: 0 }));
+    s.phases[0].rate_jitter = -1;
+    assert_eq!(s.check(), Err(DirectorError::BadJitter { phase: 0 }));
+    let mut s = plain(vec![Entry::new(4, 1).at_spots(1)], vec![steady(0, 10)]);
+    s.spot_sets = vec![vec![0]];
+    assert_eq!(
+        s.check(),
+        Err(DirectorError::UnknownSpots { id: 4, set: 1 })
+    );
+    s.spot_sets.push(Vec::new());
+    assert_eq!(s.check(), Err(DirectorError::EmptySpots { set: 1 }));
+}
+
+#[test]
+fn quiet_windows_and_cycles_match_a_plain_scan() {
+    let lulls = vec![
+        Window { start: 5, end: 15 },
+        Window {
+            start: 100,
+            end: 140,
+        },
+        Window { start: 10, end: 30 },
+        Window { start: 30, end: 31 },
+        Window { start: 60, end: 70 },
+        Window { start: 62, end: 65 },
+    ];
+    let cycles = vec![Cycle::new(40, 50, 7), Cycle::new(3, 11, 2).until(200)];
+    let mut s = plain(three(), vec![steady(0, 400)]);
+    s.lulls = lulls.clone();
+    s.cycles = cycles.clone();
+    let mut d = Director::new(s, 4).unwrap();
+    let mut out = Vec::new();
+    for t in 0..400u64 {
+        let want = lulls.iter().any(|w| w.start <= t && t < w.end)
+            || cycles
+                .iter()
+                .any(|c| t >= c.start && t < c.end && (t - c.start) % c.every < c.length);
+        assert_eq!(d.is_quiet(), want, "{t}");
+        if t == 120 || t == 251 {
+            let bytes = d.save();
+            d = Director::new(d.schedule().clone(), 1).unwrap();
+            d.restore(&bytes).unwrap();
+        }
+        d.tick(&Spots::EMPTY, &mut out);
+        assert_eq!(out.is_empty(), want, "{t}");
+    }
+}
+
+#[test]
+fn a_weight_changed_mid_run_is_saved_and_resumes_exactly() {
+    let points = [[0, 0, 0], [5, 6, 7]];
+    let spots = Spots::points(&points);
+    let mut whole = Director::new(rich(), 42).unwrap();
+    play(&mut whole, 0, 120, &spots);
+    let plain_bytes = whole.save();
+    assert_eq!(whole.set_weight(1, 0), Some(6));
+    assert_eq!(whole.set_weight(4, 9), Some(1));
+    assert_eq!(whole.set_weight(99, 1), None);
+    assert_eq!((whole.weight(4), whole.weight(99)), (9, 0));
+    let bytes = whole.save();
+    assert_eq!(bytes[..4], DIRECTOR_VERSION.to_le_bytes());
+    let rest = play(&mut whole, 120, 600, &spots);
+    assert!(rest.iter().flatten().all(|o| o.entry != 1));
+    assert!(rest.iter().flatten().any(|o| o.entry == 4));
+
+    let mut resumed = Director::new(rich(), 1).unwrap();
+    resumed.restore(&bytes).unwrap();
+    assert_eq!(resumed.weight(4), 9);
+    assert_eq!(play(&mut resumed, 120, 600, &spots), rest);
+    assert_eq!(resumed.save(), whole.save());
+
+    resumed.restore(&plain_bytes).unwrap();
+    assert_eq!((resumed.weight(1), resumed.weight(4)), (6, 1));
+    assert_eq!(resumed.save(), plain_bytes);
+}
+
+#[test]
+fn an_entry_spawns_only_at_its_own_spots() {
+    let entries = vec![
+        Entry::new(1, 1).at_spots(0),
+        Entry::new(2, 1).at_spots(1),
+        Entry::new(3, 1),
+    ];
+    let mut s = plain(entries, vec![steady(0, 300)]);
+    s.spot_sets = vec![vec![0, 2], vec![3, 9]];
+    let points = [[0, 0, 0], [1, 1, 1], [2, 2, 2]];
+    let regions = [Region::flat([10, 10], [20, 20])];
+    let spots = Spots {
+        points: &points,
+        regions: &regions,
+    };
+    let all = run(&mut Director::new(s.clone(), 3).unwrap(), 300, &spots);
+    let mut seen = [[false; 4]; 4];
+    for o in all.iter().flatten() {
+        seen[o.entry as usize][o.spot as usize] = true;
+        match o.spot {
+            3 => assert!((10..20).contains(&o.position[0]) && o.position[2] == 0),
+            spot => assert_eq!(o.position, points[spot as usize]),
+        }
+    }
+    assert_eq!(seen[1], [true, false, true, false]);
+    assert_eq!(seen[2], [false, false, false, true]);
+    assert_eq!(seen[3], [true; 4]);
+
+    let all = run(
+        &mut Director::new(s, 3).unwrap(),
+        60,
+        &Spots::points(&points),
+    );
+    for o in all.iter().flatten() {
+        if o.entry == 2 {
+            assert_eq!((o.spot, o.position), (NO_SPOT, [0; 3]));
+        }
+    }
+}
+
+#[test]
+fn a_jittered_rate_varies_the_gaps_and_keeps_the_pace() {
+    let mut phase = Phase::new(0, 60_000, 0);
+    phase.rate = Ramp::flat(60 * ONE);
+    let calm = plain(three(), vec![phase.clone()]);
+    phase.rate_jitter = ONE / 2;
+    let jittery = plain(three(), vec![phase]);
+    let a = run(&mut Director::new(calm, 8).unwrap(), 60_000, &Spots::EMPTY);
+    let b = run(
+        &mut Director::new(jittery, 8).unwrap(),
+        60_000,
+        &Spots::EMPTY,
+    );
+    let gaps = |all: &[Vec<SpawnOrder>]| -> Vec<usize> {
+        spawn_ticks(all).windows(2).map(|w| w[1] - w[0]).collect()
+    };
+    assert!(gaps(&a).iter().all(|&g| g == 60));
+    let jittered = gaps(&b);
+    assert!(jittered.iter().all(|g| (29..=91).contains(g)));
+    let mut sizes = jittered.clone();
+    sizes.sort_unstable();
+    sizes.dedup();
+    assert!(sizes.len() > 40, "{}", sizes.len());
+    let count = b.iter().map(Vec::len).sum::<usize>();
+    assert!((950..1050).contains(&count), "{count}");
+    let picks = |all: &[Vec<SpawnOrder>]| -> Vec<u32> {
+        all.iter().flatten().map(|o| o.entry).take(900).collect()
+    };
+    assert_eq!(picks(&a), picks(&b));
+}
+
+fn extended() -> Schedule {
+    let mut s = rich();
+    s.phases[0].rate_jitter = ONE / 3;
+    s.phases[1].rate_jitter = ONE / 5;
+    s.tables[0].entries[1] = s.tables[0].entries[1].at_spots(0);
+    s.tables[0].entries[3] = s.tables[0].entries[3].at_spots(1);
+    s.spot_sets = vec![vec![1, 2], vec![0, 3, 3]];
+    s.cycles = vec![Cycle::new(100, 90, 12).until(420)];
+    s
+}
+
+#[test]
+fn the_new_options_give_the_same_bytes_and_resume_exactly() {
+    let points = [[0, 0, 0], [5, 6, 7], [-3, 9, 2]];
+    let regions = [Region::new([0, 0, 0], [50, 60, 70])];
+    let spots = Spots {
+        points: &points,
+        regions: &regions,
+    };
+    let all = play(&mut Director::new(extended(), 42).unwrap(), 0, 600, &spots);
+    assert_ne!(digest(&all), GOLDEN);
+    assert_eq!(digest(&all), EXTENDED_GOLDEN);
+
+    let mut whole = Director::new(extended(), 42).unwrap();
+    play(&mut whole, 0, 250, &spots);
+    whole.set_weight(2, 7);
+    let bytes = whole.save();
+    let rest = play(&mut whole, 250, 600, &spots);
+    let mut resumed = Director::new(extended(), 1).unwrap();
+    resumed.restore(&bytes).unwrap();
+    assert_eq!(play(&mut resumed, 250, 600, &spots), rest);
+    assert_eq!(resumed.save(), whole.save());
+
+    let mut d = Director::new(extended(), 42).unwrap();
+    assert!(matches!(
+        d.restore(&bytes[..bytes.len() - 1]),
+        Err(DirectorError::Length { .. })
+    ));
+    let mut wrong = Director::new(rich(), 42).unwrap();
+    assert!(wrong.restore(&bytes).is_err());
+    let plain = Director::new(rich(), 42).unwrap().save();
+    assert!(d.restore(&plain).is_err());
+    assert_eq!(d.now(), 0);
+}
+
+const EXTENDED_GOLDEN: u64 = 14128981565193489242;
