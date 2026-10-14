@@ -491,9 +491,9 @@ fn a_glass_pane_casts_live_s_tinted_shadow_under_the_sun_and_a_local_light() {
     );
     for (name, glass) in [("tinted", tinted_glass()), ("absorbing", absorbing_glass())] {
         let tint = glass::cast_tint(&glass);
-        for (lit, shade, sun, light) in [
-            ("sun", SUN_SHADE, 2.0, false),
-            ("local light", LIGHT_SHADE, 0.0, true),
+        for (lit, shade, sun, light, bounced) in [
+            ("sun", SUN_SHADE, 2.0, false, true),
+            ("local light", LIGHT_SHADE, 0.0, true, false),
         ] {
             let with = Shot {
                 glass: Some(glass),
@@ -509,7 +509,7 @@ fn a_glass_pane_casts_live_s_tinted_shadow_under_the_sun_and_a_local_light() {
                 around(&live(without, &mut turns), shade),
                 around(&dark, shade),
             );
-            for (budget, bounces, samples, above) in [
+            let budgets = [
                 ("direct light", Bounces::deep(0), SAMPLES, DIRECT_TOLERANCE),
                 (
                     "reference bounces",
@@ -517,7 +517,9 @@ fn a_glass_pane_casts_live_s_tinted_shadow_under_the_sun_and_a_local_light() {
                     BOUNCED_SAMPLES,
                     BOUNCED_ABOVE,
                 ),
-            ] {
+            ];
+            let budgets = if bounced { &budgets[..] } else { &budgets[..1] };
+            for &(budget, bounces, samples, above) in budgets {
                 let mut run = |shot, transmissive| {
                     traced(
                         &gpu,

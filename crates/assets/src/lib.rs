@@ -131,12 +131,12 @@ struct Opts {
     size: Option<String>,
     #[arg(
         long,
-        help = "Most samples a pixel takes before adaptive sampling stops it (default 128, 16 for a draft)"
+        help = "Most samples a pixel takes before adaptive sampling stops it (default 64, 12 for a draft)"
     )]
     samples: Option<u32>,
     #[arg(
         long,
-        help = "A quick draft: adaptive sampling to 0.05 with a cap of 16, denoised"
+        help = "A quick draft: adaptive sampling to 0.05 with a cap of 12, denoised"
     )]
     draft: bool,
     #[arg(
