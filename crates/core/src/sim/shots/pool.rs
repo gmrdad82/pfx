@@ -1,4 +1,4 @@
-use super::super::{Aabb, Aabb3};
+use super::super::{Aabb, Aabb3, Hit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Span<const N: usize> {
@@ -48,12 +48,25 @@ impl From<Span<3>> for Aabb3 {
     }
 }
 
+impl From<Aabb> for Span<2> {
+    fn from(aabb: Aabb) -> Self {
+        Span::new(aabb.min, aabb.max)
+    }
+}
+
+impl From<Aabb3> for Span<3> {
+    fn from(aabb: Aabb3) -> Self {
+        Span::new(aabb.min, aabb.max)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Shot<const N: usize> {
     pub pos: [i32; N],
     pub vel: [i32; N],
     pub half: [i32; N],
     pub life: Option<u32>,
+    pub pierce: u32,
     pub tag: u32,
 }
 
@@ -67,6 +80,13 @@ pub struct ShotId {
 pub enum End {
     Expired,
     Left,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Strike {
+    pub shot: ShotId,
+    pub target: u32,
+    pub gone: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -83,6 +103,8 @@ pub struct Shots<const N: usize> {
     free: Vec<u32>,
     len: usize,
     ended: Vec<(ShotId, End)>,
+    order: Vec<(f64, u32)>,
+    strikes: Vec<Strike>,
 }
 
 impl<const N: usize> Shots<N> {
@@ -94,6 +116,7 @@ impl<const N: usize> Shots<N> {
                 vel: [0; N],
                 half: [0; N],
                 life: None,
+                pierce: 0,
                 tag: 0,
             },
             prev: [0; N],
@@ -105,6 +128,8 @@ impl<const N: usize> Shots<N> {
             free: (0..capacity).rev().collect(),
             len: 0,
             ended: Vec::new(),
+            order: Vec::new(),
+            strikes: Vec::new(),
         }
     }
 
@@ -231,6 +256,62 @@ impl<const N: usize> Shots<N> {
         }
     }
 
+    pub fn resolve<B: Copy + Into<Span<N>>>(
+        &mut self,
+        ids: &[ShotId],
+        hits: &[Hit],
+        targets: &[B],
+        mut accept: impl FnMut(ShotId, u32) -> bool,
+    ) -> &[Strike] {
+        self.strikes.clear();
+        let mut at = 0;
+        while at < hits.len() {
+            let a = hits[at].a;
+            let mut end = at;
+            while end < hits.len() && hits[end].a == a {
+                end += 1;
+            }
+            let group = &hits[at..end];
+            at = end;
+            let Some(&id) = ids.get(a as usize) else {
+                continue;
+            };
+            let Some(slot) = self.slot(id).copied() else {
+                continue;
+            };
+            self.order.clear();
+            for hit in group {
+                if let Some(target) = targets.get(hit.b as usize) {
+                    self.order.push((entry(&slot, &(*target).into()), hit.b));
+                }
+            }
+            self.order
+                .sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+            let mut pierce = slot.shot.pierce;
+            for index in 0..self.order.len() {
+                let target = self.order[index].1;
+                if !accept(id, target) {
+                    continue;
+                }
+                let gone = pierce == 0;
+                self.strikes.push(Strike {
+                    shot: id,
+                    target,
+                    gone,
+                });
+                if gone {
+                    self.release(id.index);
+                    break;
+                }
+                pierce -= 1;
+            }
+            if let Some(shot) = self.get_mut(id) {
+                shot.pierce = pierce;
+            }
+        }
+        &self.strikes
+    }
+
     pub fn clear(&mut self) {
         for index in (0..self.slots.len()).rev() {
             if self.slots[index].alive {
@@ -254,4 +335,25 @@ impl<const N: usize> Shots<N> {
         self.free.push(index);
         self.len -= 1;
     }
+}
+
+fn entry<const N: usize>(slot: &Slot<N>, target: &Span<N>) -> f64 {
+    let mut first = 0.0_f64;
+    for axis in 0..N {
+        let from = i64::from(slot.prev[axis]);
+        let half = i64::from(slot.shot.half[axis]);
+        let moved = i64::from(slot.shot.pos[axis]) - from;
+        let gap = if moved > 0 {
+            i64::from(target.min[axis]) - (from + half)
+        } else if moved < 0 {
+            i64::from(target.max[axis]) - (from - half)
+        } else {
+            continue;
+        };
+        let at = gap as f64 / moved as f64;
+        if at > first {
+            first = at;
+        }
+    }
+    if first > 1.0 { 1.0 } else { first }
 }

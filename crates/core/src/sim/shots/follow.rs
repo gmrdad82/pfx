@@ -27,8 +27,16 @@ impl<const N: usize> Member<N> {
         std::array::from_fn(|i| leader[i].saturating_add(self.offset[i]))
     }
 
+    pub fn slot_scaled(&self, leader: [i32; N], num: i32, den: i32) -> [i32; N] {
+        std::array::from_fn(|i| leader[i].saturating_add(scale(self.offset[i], num, den)))
+    }
+
     pub fn step(&mut self, leader: [i32; N]) {
-        let slot = self.slot(leader);
+        self.step_scaled(leader, 1, 1);
+    }
+
+    pub fn step_scaled(&mut self, leader: [i32; N], num: i32, den: i32) {
+        let slot = self.slot_scaled(leader, num, den);
         self.pos = match self.limit {
             Some(limit) => toward(self.pos, slot, limit),
             None => slot,
@@ -37,9 +45,35 @@ impl<const N: usize> Member<N> {
 }
 
 pub fn follow<const N: usize>(members: &mut [Member<N>], leader: [i32; N]) {
+    follow_scaled(members, leader, 1, 1);
+}
+
+pub fn follow_scaled<const N: usize>(
+    members: &mut [Member<N>],
+    leader: [i32; N],
+    num: i32,
+    den: i32,
+) {
     for member in members {
-        member.step(leader);
+        member.step_scaled(leader, num, den);
     }
+}
+
+fn scale(offset: i32, num: i32, den: i32) -> i32 {
+    if den == 0 {
+        return offset;
+    }
+    let (mut p, mut q) = (i64::from(offset) * i64::from(num), i64::from(den));
+    if q < 0 {
+        p = -p;
+        q = -q;
+    }
+    let near = if p >= 0 {
+        (2 * p + q) / (2 * q)
+    } else {
+        -((-2 * p + q) / (2 * q))
+    };
+    near.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
