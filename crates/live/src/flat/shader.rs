@@ -236,9 +236,55 @@ fn flat_pattern_field(kind: u32, params: vec4f, p: vec2f) -> vec3f {
     return vec3f(d * scale, flat_turn(g, params.y));
 }
 
-fn flat_pattern_over(base: vec4f, kind: u32, params: vec4f, packed: u32, p: vec2f, inverse: mat2x2f) -> vec4f {
+const FLAT_GRAIN: u32 = 5u;
+const FLAT_FIBRE: u32 = 6u;
+const FLAT_FIBRE_STRETCH: f32 = 8.0;
+const FLAT_GRAIN_HARDEST: f32 = 0.015625;
+const FLAT_GRAIN_TURN: f32 = 0.5;
+
+fn flat_hash12(p: vec2f) -> f32 {
+    var p3 = fract(vec3f(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+fn flat_value_noise(q: vec2f) -> f32 {
+    let i = floor(q);
+    let f = q - i;
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = flat_hash12(i);
+    let b = flat_hash12(i + vec2f(1.0, 0.0));
+    let c = flat_hash12(i + vec2f(0.0, 1.0));
+    let d = flat_hash12(i + vec2f(1.0, 1.0));
+    let top = a + (b - a) * u.x;
+    let bottom = c + (d - c) * u.x;
+    return top + (bottom - top) * u.y;
+}
+
+fn flat_grain(kind: u32, params: vec4f, p: vec2f, inverse: mat2x2f) -> f32 {
+    let scale = params.x;
+    let turned = flat_turn(p, -params.y);
+    var q = turned / scale;
+    if (kind == FLAT_FIBRE) {
+        q.x = turned.x / (scale * FLAT_FIBRE_STRETCH);
+    }
+    let gain = 1.0 / max(1.0 - params.z, FLAT_GRAIN_HARDEST);
+    let fine = flat_turn(q * 2.0, FLAT_GRAIN_TURN);
+    let n = (flat_value_noise(q) + 0.5 * flat_value_noise(fine + vec2f(17.0, 31.0))) / 1.5;
+    let cover = clamp((n - 0.5) * gain + 0.5, 0.0, 1.0);
+    let pixels = scale / max(sqrt(abs(determinant(inverse))), 1e-6);
+    let fade = clamp(pixels - 0.5, 0.0, 1.0);
+    return 0.5 + (cover - 0.5) * fade;
+}
+
+fn flat_pattern_over(base: vec4f, kind: u32, params: vec4f, shift: vec2f, packed: u32, p: vec2f, inverse: mat2x2f) -> vec4f {
     let colour = unpack4x8unorm(packed);
-    let cover = flat_coverage(flat_pattern_field(kind, params, p), inverse);
+    var cover = 0.0;
+    if (kind >= FLAT_GRAIN) {
+        cover = flat_grain(kind, params, p - shift, inverse);
+    } else {
+        cover = flat_coverage(flat_pattern_field(kind, params, p - shift), inverse);
+    }
     let paint = vec4f(colour.rgb * colour.a, colour.a) * cover;
     return paint + base * (1.0 - paint.a);
 }
@@ -344,7 +390,7 @@ fn flat_vertex(instance: FlatInstance, @builtin(vertex_index) index: u32) -> Fla
 @vertex
 fn flat_id_vertex(instance: FlatInstance, @builtin(vertex_index) index: u32) -> FlatVaryings {
     var out = flat_place(instance, index);
-    if ((instance.info.x & 15u) == FLAT_SHADOW) {
+    if ((instance.info.x & 15u) >= FLAT_SHADOW) {
         out.position = vec4f(2.0, 2.0, 2.0, 1.0);
     }
     return out;
@@ -353,6 +399,31 @@ fn flat_id_vertex(instance: FlatInstance, @builtin(vertex_index) index: u32) -> 
 struct FlatPaint {
     colour: vec4f,
     footprint: f32,
+}
+
+const FLAT_ICON_SHADOW: u32 = 7u;
+
+const FLAT_ICON_TAP: f32 = 0.7;
+const FLAT_ICON_REST: f32 = 0.7141428;
+
+fn flat_icon_cast(v: FlatVaryings, q: vec2f, sigma: f32) -> f32 {
+    let spread = FLAT_ICON_TAP * sigma;
+    let rest = FLAT_ICON_REST * sigma;
+    return 0.25 * (flat_icon_edge(v, q + vec2f(-spread, -spread), rest)
+        + flat_icon_edge(v, q + vec2f(spread, -spread), rest)
+        + flat_icon_edge(v, q + vec2f(-spread, spread), rest)
+        + flat_icon_edge(v, q + vec2f(spread, spread), rest));
+}
+
+fn flat_icon_edge(v: FlatVaryings, q: vec2f, sigma: f32) -> f32 {
+    let c = clamp(q, v.shape.xy - v.shape.zw, v.shape.xy + v.shape.zw);
+    let d = textureSampleLevel(flat_icons, flat_icon_sampler, v.icon.xy + c * v.icon.zw, 0.0).r + length(q - c);
+    let k = 0.70710678 / sigma;
+    let grow = v.material.w;
+    if (v.corners.x > 0.5) {
+        return 0.5 * (flat_erf((grow - d) * k) + flat_erf((grow + d) * k));
+    }
+    return 0.5 - 0.5 * flat_erf((d - grow) * k);
 }
 
 fn flat_field(v: FlatVaryings, kind: u32, p: vec2f) -> vec3f {
@@ -438,7 +509,23 @@ fn flat_paint(v: FlatVaryings) -> FlatPaint {
     let kind = v.info.x & 15u;
     if (kind == FLAT_SHADOW) {
         let cover = flat_rounded_shadow(p - v.icon.zw, v.shape.xy, v.corners, v.icon.xy);
-        return FlatPaint(vec4f(v.fill_top.rgb * v.fill_top.a, v.fill_top.a) * cover, 0.0);
+        var shade = vec4f(v.fill_top.rgb * v.fill_top.a, v.fill_top.a) * cover;
+        if (v.fill_bottom.a > 0.0) {
+            let near = flat_rounded_shadow(p - v.stroke.zw, v.shape.xy, v.corners, v.stroke.xy);
+            let contact = vec4f(v.fill_bottom.rgb * v.fill_bottom.a, v.fill_bottom.a) * near;
+            shade = contact + shade * (1.0 - contact.a);
+        }
+        return FlatPaint(shade, 0.0);
+    }
+    if (kind == FLAT_ICON_SHADOW) {
+        let cover = flat_icon_cast(v, p - v.material.yz, v.material.x);
+        var shade = vec4f(v.fill_top.rgb * v.fill_top.a, v.fill_top.a) * cover;
+        if (v.fill_bottom.a > 0.0) {
+            let near = flat_icon_cast(v, p - v.corners.zw, v.corners.y);
+            let contact = vec4f(v.fill_bottom.rgb * v.fill_bottom.a, v.fill_bottom.a) * near;
+            shade = contact + shade * (1.0 - contact.a);
+        }
+        return FlatPaint(shade, 0.0);
     }
     let fill_mode = (v.info.x >> FLAT_FILL_SHIFT) & 15u;
     let opacity = bitcast<f32>(v.info.w);
@@ -451,7 +538,7 @@ fn flat_paint(v: FlatVaryings) -> FlatPaint {
         var base = flat_fill_base(v, fill_mode, p);
         let pattern = (v.info.x >> 12u) & 7u;
         if (pattern != 0u) {
-            base = flat_pattern_over(base, pattern, v.icon, v.info.z, p, inverse);
+            base = flat_pattern_over(base, pattern, v.icon, vec2f(v.icon.w, v.frame_z.w), v.info.z, p, inverse);
         }
         fill = base * fill_cover;
         fill = flat_bevel_over(v, kind, p, field, inverse, fill, fill_cover);
@@ -661,7 +748,7 @@ fn flat_lit(v: FlatVaryings) -> FlatPaint {
         var base = flat_fill_base(v, fill_mode, p);
         let pattern = (v.info.x >> 12u) & 7u;
         if (pattern != 0u) {
-            base = flat_pattern_over(base, pattern, v.icon, v.info.z, p, inverse);
+            base = flat_pattern_over(base, pattern, v.icon, vec2f(v.icon.w, v.frame_z.w), v.info.z, p, inverse);
         }
         fill = base * fill_cover;
     }
@@ -755,7 +842,7 @@ const FLAT_BLUR_FLOOR: f32 = 0.35;
 @vertex
 fn flat_id_vertex_rich(instance: FlatInstance, @builtin(vertex_index) index: u32) -> FlatVaryings {
     var out = flat_place(instance, index);
-    if ((instance.info.x & 15u) == FLAT_SHADOW || (instance.info.x & FLAT_UNPICKED) != 0u) {
+    if ((instance.info.x & 15u) >= FLAT_SHADOW || (instance.info.x & FLAT_UNPICKED) != 0u) {
         out.position = vec4f(2.0, 2.0, 2.0, 1.0);
     }
     return out;
@@ -985,7 +1072,7 @@ fn flat_blur(v: FlatVaryings) -> FlatPaint {
         var base = flat_fill_base(v, fill_mode, p);
         let pattern = (v.info.x >> 12u) & 7u;
         if (pattern != 0u) {
-            base = flat_pattern_over(base, pattern, v.icon, v.info.z, p, inverse);
+            base = flat_pattern_over(base, pattern, v.icon, vec2f(v.icon.w, v.frame_z.w), v.info.z, p, inverse);
         }
         fill = base * fill_cover;
     }

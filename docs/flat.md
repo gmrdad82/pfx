@@ -67,7 +67,7 @@ All primitives are instances of one shared quad: four vertices, a triangle strip
 | `Circle { radius }` | circle on the origin | the disc |
 | `Ring { radius, width }` | band of `width` on the circle | the band |
 | `Arc { radius, width, start, sweep }` | the band from `start` through `sweep` radians, measured from +x toward +y (clockwise on screen), with round caps | the band |
-| `Icon(Icon)` | a field from the scene's icon atlas, in the icon's own path units | a filled icon's inside; a line icon has no fill |
+| `Icon(Icon)` | a field from the scene's icon atlas, in the icon's own path units | a filled icon's inside; a line icon has no fill, and without a stroke it packs no instance at all |
 | `Text(index)` | `scene.text[index]`, placed by the transform | |
 
 **Corners.** `Shape::Rect` carries one radius per corner, clockwise from the top left (y runs down, so top is −y). `Draw::rect(centre, size, radius)` and `Shape::rounded(half, radius)` give all four the same radius; `Draw::rect_corners(centre, size, radii)` and `Shape::corners(half, radii)` take four.
@@ -113,13 +113,21 @@ An SVG progress meter is an `Arc`. A circle with `stroke-dasharray="L C"`, `stro
 
 **Opacity.** Per instance, as above. Per group, a group's members draw into a layer, and the layer composites at the group's opacity. A stack at 0.5 therefore reads as one faded card, with no darker overlap, and its shadow fades with it, as SVG's `<g opacity=".5" filter="…">` does.
 
-**Patterns.** `Draw::pattern(Pattern { kind, scale, angle, width, colour })` lays a second paint over the fill, so colour need not be the only cue. The kinds are `Stripes`, `Dots`, `CrossHatch` and `Chevrons`.
-- Each is a signed distance field in the shape's own plane. `scale` is the period in local units, `angle` turns the pattern, and `width` is the line or dot size as a fraction of the period.
+**Patterns.** `Draw::pattern(Pattern { kind, scale, angle, width, colour, offset })` lays a second paint over the fill, so colour need not be the only cue. The kinds are `Stripes`, `Dots`, `CrossHatch` and `Chevrons`, which are lattices, and `Grain` and `Fibre`, which are noise.
+- Each lattice is a signed distance field in the shape's own plane. `scale` is the period in local units, `angle` turns the pattern, and `width` is the line or dot size as a fraction of the period.
+- `offset` slides the pattern inside the shape, in local units: the pattern draws as if moved by it while the shape stays put, so a parallax texture needs no oversized draw. `Pattern::offset([x, y])` sets it; at `[0, 0]` the pattern is the one it was before.
 - `colour` is the second colour or alpha, packed as RGBA8.
 - The pattern composites over the fill, inside the shape's own analytic edge. It is anti-aliased by its screen gradient like every edge, so it stays crisp at any size.
 - It works on rects, circles, rings and arcs. On icons it is ignored.
 - A pattern on a shape with no fill paints over transparent.
-- Unused, it costs nothing. The kind lives in three flag bits, and the parameters ride in the instance's icon slot and spare `info` word. A shape without a pattern packs the same bytes and skips the evaluation.
+- Unused, it costs nothing. The kind lives in three flag bits, and the parameters ride in the instance's icon slot, the spare `w` of its third frame row (the offset's y) and the spare `info` word. A shape without a pattern packs the same bytes and skips the evaluation.
+
+**Grain and fibre.** `Pattern::grain(scale, contrast, colour)` and `Pattern::fibre(scale, angle, contrast, colour)` are hashed value noise, for cloth, wood, stone or a worn surface that a lattice would turn into a mesh up close.
+- `scale` is the noise cell in local units (for `Fibre`, across the fibres; along them the cell is 8 times longer), `angle` turns it, and `width` is the contrast, 0 to 1: at 0 the colour's alpha follows the noise softly, and toward 1 it splits into hard speckle. Either way the mean cover is one half, so the colour's alpha sets the strength.
+- The noise is two octaves of value noise, the second at twice the frequency, turned by half a radian and at half the weight, so no cell grid shows. Each corner of a cell is hashed with David Hoskins' "Hash without Sine" (`hash12`, MIT, in [NOTICE.md](../NOTICE.md)), with its constants.
+- A cell smaller than a pixel fades to the mean instead of sparkling: below 1.5 px per cell the contrast falls linearly, and at half a pixel it is gone.
+- The CPU twin runs the same arithmetic. GPUs may fuse the hash's multiply-adds, so about one hashed corner in two thousand can land on the other side of a wrap and shade its cells differently: `the_gpu_draws_grain_offsets_and_cast_icons_like_the_twin` measures a mean of 0.05/255 against the twin with 0.05 % of pixels more than 2/255 apart (all inside grain), and holds it under 0.15/255 and 0.1 %.
+- Cost, from `a_swarm_of_shots_and_particles_fits_a_120_hz_frame_on_the_gpu_at_4k` at 3840×2160 on the RX 9060 XT: 2,000 60×40 chips take 0.34 ms of GPU with a solid fill and 0.55 ms with grain, so grain adds about 0.1 µs a chip, 0.04 ns a pixel. Packing adds nothing measurable.
 
 `patterns_match_their_reference_renders` compares each kind with a Chromium render of the same geometry, drawn as explicit paths clipped to the shape, at 1× and 2×.
 
@@ -158,9 +166,18 @@ This is the known fast rounded-rect shadow (Evan Wallace's), with exact interval
 - the worst error over six casters is 0.007 of full shadow, for a 40-unit circle at σ 4;
 - a 180×60 card at σ 5 is within 0.0022.
 
-The erf is Abramowitz and Stegun 7.1.26 (error under 1.5e-7). Rings and arcs cast as their outer circle; icons and text cast nothing.
+The erf is Abramowitz and Stegun 7.1.26 (error under 1.5e-7). Rings and arcs cast as their outer circle; text casts nothing.
 
-**The curve.** `ShadowCurve::new(colour, points)` takes `CurvePoint { elevation, offset, sigma, alpha }`, in layout units.
+**Icons cast** from their own outline, so lifting an icon works as lifting a card does: an icon at an elevation with `Shadow::Cast`, `Turned` or `Glow` draws the curve's shadow, or the glow, under it. An icon on a card that shares the card's elevation casts too, so give it `Shadow::None` when it is printed on the card rather than lifted off it.
+- The shadow is the blurred coverage of the icon's distance field at the offset: a filled icon (and its stroke) is its signed distance less half the stroke width through `erf`, a line icon is a band of the stroke's width around its centre lines through two `erf`s, each exact for a straight edge.
+- It takes four taps of that edge, 0.7 σ along each diagonal, each blurred by the remaining 0.71 σ, so sharp tips and notches stay close to a true blur: against a brute-force Gaussian blur of the icon at σ 5, the worst error is 0.108 of full shadow (at the pointer's inner notch) and 0.081 for the tick, where one `erf` alone was off by 0.28 and 0.17 (`icon_shadows_match_a_brute_force_blur_of_the_icon`).
+- Beyond its atlas cell the field is the cell edge's distance plus the way out, so a wide σ fades smoothly.
+- σ is the geometric mean of the two local axes' σ, since the field is one distance; a squashed icon's shadow is approximated.
+- The pass and the CPU twin need the scene's icons to cast: `pack_shadow_with(draw, fit, curve, light, icons)` packs it, and `pack_shadow` without icons casts nothing for an icon, as before.
+- A line icon with no stroke draws nothing and casts nothing.
+- Cost, from the swarm test at 3840×2160: 2,000 tick icons at 0.35 take 0.14 ms of GPU without shadows and 0.56 ms casting, so a small icon's shadow costs about 0.2 µs of GPU; packing them added 0.4 µs a draw in the unoptimised test build.
+
+**The curve.** `ShadowCurve::new(colour, points)` takes `CurvePoint { elevation, offset, sigma, alpha, contact }`, in layout units; `CurvePoint::new(elevation, offset, sigma, alpha)` leaves `contact` at `None`.
 - Between points it is piecewise linear.
 - Below the first point it falls linearly to nothing at elevation 0. Above the last it holds.
 - Elevation 0 and below cast nothing.
@@ -176,6 +193,12 @@ An example, the one the engine's tests use:
 | 2 | sheets | 12 | 16 | 0.26 |
 
 Its colour is `#2b3442`. Layout units scale with the fit, so the curve is the same at every resolution.
+
+**Contact layer.** A card resting on a surface reads best with a tight dark shadow at its edge under the wide soft one. `CurvePoint::new(1.0, 6.0, 12.0, 0.2).contact(1.0, 1.5, 0.45)` gives the point a second layer, `Contact { offset, sigma, alpha }`, in the curve's colour:
+- It packs into the same shadow instance as the wide layer, so a card still costs one shadow draw. Its σ and offset ride in the instance's stroke slot (for an icon, its corners slot), its colour in `fill_bottom`, and the bounds grow to hold both.
+- It composites over the wide layer exactly as a second shadow draw would (`a_contact_layer_composites_like_a_second_shadow` checks rects and icons to 1e-6).
+- It follows the light and the frame like the wide layer, and it interpolates along the curve with the other values; a point without one counts as a zero contact, so a layer fades in from the point below. Past the last point it holds.
+- A curve with no contact packs the bytes it packed before, and the shader skips the second layer.
 
 **Direction.** `Light::shadow` is the layout direction the offset falls in. Moving it moves every `Cast` shadow; an effect can animate it. `Shadow::Turned` takes the direction in the shape's own frame instead, so the offset turns with the shape, as SVG does for a filter on a rotated group.
 
@@ -262,11 +285,12 @@ Every field, its unit and its default. Defaults are zero or off: an unset field 
 | | `id`, `group` | u32; `Option<u16>` index into `groups` | 0; none |
 | | `style` | `Option<Style>`, see `docs/flat-styles.md` | none |
 | `Dash` | `on`, `off`, `phase` | local units along the perimeter | — |
-| `Pattern` | `kind` | `Stripes`, `Dots`, `CrossHatch`, `Chevrons` | — |
-| | `scale` | period, in the shape's local units | — |
+| `Pattern` | `kind` | `Stripes`, `Dots`, `CrossHatch`, `Chevrons`, `Grain`, `Fibre` | — |
+| | `scale` | period, or the noise cell, in the shape's local units | — |
 | | `angle` | radians, turning the pattern in the shape's plane | — |
-| | `width` | line or dot size as a fraction of the period, clamped 0..=1 | — |
+| | `width` | line or dot size as a fraction of the period, clamped 0..=1; for `Grain` and `Fibre`, the contrast | — |
 | | `colour` | sRGB plus alpha, packed to RGBA8 | — |
+| | `offset` | local units the pattern slides by inside the shape; non-finite counts as 0 | `[0, 0]` |
 | `Material` | `thickness` | layout units, slab depth | 0 |
 | | `bevel` | layout units, edge radius; capped at thickness/2 and the shape's half size | 0 |
 | | `gloss` | GGX scale, 0 and up | 0 |
@@ -275,7 +299,8 @@ Every field, its unit and its default. Defaults are zero or off: an unset field 
 | `Light` | `shadow` | layout direction shadows fall in | `[0, 1]` |
 | | `key` | key light direction (x right, y down, z toward the viewer) | `normalize(0, −0.5, 1)` |
 | | `ambient` | slab shading floor, 0..=1 | 0.55 |
-| `ShadowCurve` | points | `CurvePoint { elevation > 0, offset, sigma ≥ 0, alpha 0..=1 }`, layout units; piecewise linear, from zero at elevation 0, held past the last | `ShadowCurve::none()` casts nothing |
+| `ShadowCurve` | points | `CurvePoint { elevation > 0, offset, sigma ≥ 0, alpha 0..=1, contact }`, layout units; piecewise linear, from zero at elevation 0, held past the last | `ShadowCurve::none()` casts nothing |
+| | `contact` | `Option<Contact { offset, sigma ≥ 0, alpha 0..=1 }>`, a second, tight layer in the same instance | `None` |
 | `Environment` | texels, `intensity` | linear equirect up to 4096 a side, box-filtered mips; intensity ≥ 0 | none: reflection has nothing to sample |
 | `Group` | `opacity` | 0..=1, the layer's opacity | — |
 
@@ -490,4 +515,4 @@ let id = flat::cpu::pick_with_text(&scene, None, &texts, [3840, 2160], [x, y])?;
 
 - Text in the board comparison: the references carry no text. Glyphs are the existing text shader's, unchanged. The CPU twin does not draw colour-glyph atlases (emoji), and a text draw's lit and deformed passes are not twinned.
 - A real measurement on a Deck-class device.
-- Strokes dash only on rounded rects and circles, and on rings and arcs under an outline style; icons and text cast no shadow.
+- Strokes dash only on rounded rects and circles, and on rings and arcs under an outline style; text casts no shadow.

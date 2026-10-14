@@ -40,12 +40,14 @@ pub(super) fn test_curve() -> ShadowCurve {
                 offset: 4.0,
                 sigma: 5.0,
                 alpha: 0.22,
+                contact: None,
             },
             CurvePoint {
                 elevation: 2.0,
                 offset: 12.0,
                 sigma: 16.0,
                 alpha: 0.26,
+                contact: None,
             },
         ],
     )
@@ -1844,6 +1846,7 @@ fn patterns_hold_their_shape_at_deck_size() {
                 width.min(1.0 - width) * period * std::f32::consts::FRAC_1_SQRT_2,
                 period * 0.5,
             ),
+            PatternKind::Grain | PatternKind::Fibre => unreachable!(),
         };
         let kept = modulation(kind, angle, width, rgb, minimum);
         report += &format!(

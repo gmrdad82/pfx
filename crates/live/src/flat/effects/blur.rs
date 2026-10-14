@@ -315,7 +315,13 @@ pub fn paint(instance: &Instance, icons: Option<&Icons>, p: [f32; 2]) -> Paint {
         if pattern != 0 {
             let packed = instance.info[2];
             let colour = std::array::from_fn(|i| ((packed >> (8 * i)) & 255) as f32 / 255.0);
-            let cover = sdf::coverage(sdf::pattern(pattern, instance.icon, p), inverse);
+            let cover = sdf::pattern_cover(
+                pattern,
+                instance.icon,
+                [instance.icon[3], instance.frame[2][3]],
+                p,
+                inverse,
+            );
             let paint = premultiply(colour, cover);
             base = std::array::from_fn(|i| paint[i] + base[i] * (1.0 - paint[3]));
         }

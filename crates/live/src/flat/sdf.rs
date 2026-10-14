@@ -210,6 +210,72 @@ pub fn pattern(kind: u32, params: [f32; 4], p: [f32; 2]) -> Field {
     [d * scale, g[0], g[1]]
 }
 
+pub const GRAIN: u32 = 5;
+pub const FIBRE: u32 = 6;
+pub const FIBRE_STRETCH: f32 = 8.0;
+pub const GRAIN_HARDEST: f32 = 1.0 / 64.0;
+pub const GRAIN_TURN: f32 = 0.5;
+
+fn fract(value: f32) -> f32 {
+    value - value.floor()
+}
+
+pub fn hash12(p: [f32; 2]) -> f32 {
+    let mut p3 = [
+        fract(p[0] * 0.1031),
+        fract(p[1] * 0.1031),
+        fract(p[0] * 0.1031),
+    ];
+    let lean = p3[0] * (p3[1] + 33.33) + p3[1] * (p3[2] + 33.33) + p3[2] * (p3[0] + 33.33);
+    p3 = p3.map(|value| value + lean);
+    fract((p3[0] + p3[1]) * p3[2])
+}
+
+pub fn value_noise(q: [f32; 2]) -> f32 {
+    let i = [q[0].floor(), q[1].floor()];
+    let f = [q[0] - i[0], q[1] - i[1]];
+    let u = f.map(|t| t * t * (3.0 - 2.0 * t));
+    let a = hash12(i);
+    let b = hash12([i[0] + 1.0, i[1]]);
+    let c = hash12([i[0], i[1] + 1.0]);
+    let d = hash12([i[0] + 1.0, i[1] + 1.0]);
+    let top = a + (b - a) * u[0];
+    let bottom = c + (d - c) * u[0];
+    top + (bottom - top) * u[1]
+}
+
+pub fn grain(kind: u32, params: [f32; 4], p: [f32; 2], inverse: [[f32; 2]; 2]) -> f32 {
+    let scale = params[0];
+    let turned = turn(p, -params[1]);
+    let q = if kind == FIBRE {
+        [turned[0] / (scale * FIBRE_STRETCH), turned[1] / scale]
+    } else {
+        [turned[0] / scale, turned[1] / scale]
+    };
+    let gain = 1.0 / (1.0 - params[2]).max(GRAIN_HARDEST);
+    let fine = turn([q[0] * 2.0, q[1] * 2.0], GRAIN_TURN);
+    let n = (value_noise(q) + 0.5 * value_noise([fine[0] + 17.0, fine[1] + 31.0])) / 1.5;
+    let cover = ((n - 0.5) * gain + 0.5).clamp(0.0, 1.0);
+    let determinant = inverse[0][0] * inverse[1][1] - inverse[1][0] * inverse[0][1];
+    let pixels = scale / determinant.abs().sqrt().max(1e-6);
+    let fade = (pixels - 0.5).clamp(0.0, 1.0);
+    0.5 + (cover - 0.5) * fade
+}
+
+pub fn pattern_cover(
+    kind: u32,
+    params: [f32; 4],
+    shift: [f32; 2],
+    p: [f32; 2],
+    inverse: [[f32; 2]; 2],
+) -> f32 {
+    let p = [p[0] - shift[0], p[1] - shift[1]];
+    if kind >= GRAIN {
+        return grain(kind, params, p, inverse);
+    }
+    coverage(pattern(kind, params, p), inverse)
+}
+
 pub fn coverage(field: Field, inverse: [[f32; 2]; 2]) -> f32 {
     let screen = [
         inverse[0][0] * field[1] + inverse[0][1] * field[2],

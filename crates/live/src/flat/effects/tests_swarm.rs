@@ -1,6 +1,17 @@
 use super::super::tests::test_curve;
-use super::super::{FlatIcons, FlatScene, Icon, Icons, icons, scaling, translation};
+use super::super::{
+    FlatIcons, FlatScene, Icon, Icons, Pattern, Stroke, icons, scaling, translation,
+};
 use super::*;
+
+#[derive(Clone, Copy, PartialEq)]
+enum Shots {
+    None,
+    Ticks,
+    CastingTicks,
+    Chips,
+    GrainChips,
+}
 
 fn percentile(values: &mut [f64], at: usize) -> f64 {
     values.sort_by(f64::total_cmp);
@@ -68,11 +79,18 @@ fn a_swarm_of_shots_and_particles_fits_a_120_hz_frame_on_the_gpu_at_4k() {
     let mut solo = super::super::FlatPass::new(&renderer.gpu().device, &renderer.gpu().queue);
     let mut report = String::new();
     let mut worst = 0.0f64;
-    for (variant, [bursting, shooting]) in [
-        ("warm-up", [true, true]),
-        ("2,000 icon shots", [false, true]),
-        ("20,000 particles", [true, false]),
-        ("2,000 icon shots and 20,000 particles", [true, true]),
+    for (variant, bursting, shots) in [
+        ("warm-up", true, Shots::Ticks),
+        ("2,000 icon shots", false, Shots::Ticks),
+        (
+            "2,000 icon shots casting shadows",
+            false,
+            Shots::CastingTicks,
+        ),
+        ("2,000 chips", false, Shots::Chips),
+        ("2,000 grain chips", false, Shots::GrainChips),
+        ("20,000 particles", true, Shots::None),
+        ("2,000 icon shots and 20,000 particles", true, Shots::Ticks),
     ] {
         turns.poll();
         let mut effects = Effects::new(EffectsDesc {
@@ -107,19 +125,33 @@ fn a_swarm_of_shots_and_particles_fits_a_120_hz_frame_on_the_gpu_at_4k() {
             effects.step(&tick);
             let stepped = stepping.elapsed().as_secs_f64() * 1000.0;
             game.clear();
-            if shooting {
+            if shots != Shots::None {
                 let t = clock.time() as f32;
                 for s in 0..2000u32 {
                     let x = 40.0 + ((s * 97) % 3760) as f32;
                     let y = 2120.0 - ((s as f32 * 0.618_034) + t * 0.8).fract() * 2080.0;
-                    game.push(
-                        Draw::new(Shape::Icon(Icon(0)))
+                    let colour = colours[s as usize % 5];
+                    let draw = match shots {
+                        Shots::Chips | Shots::GrainChips => {
+                            let chip = Draw::rect([x, y], [60.0, 40.0], 6.0)
+                                .fill(colour)
+                                .shadow(Shadow::None);
+                            if shots == Shots::GrainChips {
+                                chip.pattern(Pattern::grain(2.0, 0.5, Srgba::WHITE.alpha(0.3)))
+                            } else {
+                                chip
+                            }
+                        }
+                        _ => Draw::new(Shape::Icon(Icon(0)))
                             .transform(multiply(translation(x, y), scaling(0.35, 0.35)))
-                            .fill(colours[s as usize % 5])
-                            .elevation(1.0)
-                            .shadow(Shadow::None)
-                            .unpicked(),
-                    );
+                            .stroke(Stroke::solid(colour, 7.0))
+                            .shadow(if shots == Shots::CastingTicks {
+                                Shadow::Cast
+                            } else {
+                                Shadow::None
+                            }),
+                    };
+                    game.push(draw.elevation(1.0).unpicked());
                 }
             }
             live = effects.live();

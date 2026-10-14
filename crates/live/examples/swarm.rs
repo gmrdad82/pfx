@@ -6,7 +6,7 @@ use pfx_gpu::{Gpu, wgpu};
 use pfx_live::flat::effects::{Burst, Curve, Effects, EffectsDesc};
 use pfx_live::flat::{
     CurvePoint, Draw, Fill, FlatIcons, FlatScene, Icon, Icons, Light, Shadow, ShadowCurve, Shape,
-    Srgba, icons, multiply, scaling, translation,
+    Srgba, Stroke, icons, multiply, scaling, translation,
 };
 use pfx_live::renderer::Renderer;
 
@@ -38,6 +38,7 @@ fn main() {
             offset: 4.0,
             sigma: 5.0,
             alpha: 0.22,
+            contact: None,
         }],
     )
     .unwrap();
@@ -123,7 +124,7 @@ fn main() {
             game.push(
                 Draw::new(Shape::Icon(Icon(0)))
                     .transform(multiply(translation(x, y), scaling(scale, scale)))
-                    .fill(colours[s as usize % 5])
+                    .stroke(Stroke::solid(colours[s as usize % 5], 7.0))
                     .elevation(1.0)
                     .shadow(Shadow::None)
                     .unpicked(),

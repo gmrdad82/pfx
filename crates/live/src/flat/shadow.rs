@@ -3,12 +3,50 @@ use super::Srgba;
 pub const SHADOW_STEPS: u32 = 8;
 pub const SHADOW_REACH: f32 = 4.0;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Contact {
+    pub offset: f32,
+    pub sigma: f32,
+    pub alpha: f32,
+}
+
+impl Contact {
+    fn valid(&self) -> bool {
+        self.offset.is_finite()
+            && self.sigma >= 0.0
+            && self.sigma.is_finite()
+            && (0.0..=1.0).contains(&self.alpha)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CurvePoint {
     pub elevation: f32,
     pub offset: f32,
     pub sigma: f32,
     pub alpha: f32,
+    pub contact: Option<Contact>,
+}
+
+impl CurvePoint {
+    pub fn new(elevation: f32, offset: f32, sigma: f32, alpha: f32) -> Self {
+        Self {
+            elevation,
+            offset,
+            sigma,
+            alpha,
+            contact: None,
+        }
+    }
+
+    pub fn contact(mut self, offset: f32, sigma: f32, alpha: f32) -> Self {
+        self.contact = Some(Contact {
+            offset,
+            sigma,
+            alpha,
+        });
+        self
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -29,6 +67,16 @@ impl ShadowCurve {
         }) {
             return Err(
                 "curve points need a positive elevation, a finite offset, a nonnegative sigma and an alpha in 0..=1"
+                    .into(),
+            );
+        }
+        if points
+            .iter()
+            .filter_map(|point| point.contact)
+            .any(|contact| !contact.valid())
+        {
+            return Err(
+                "a contact layer needs a finite offset, a nonnegative sigma and an alpha in 0..=1"
                     .into(),
             );
         }
@@ -54,22 +102,29 @@ impl ShadowCurve {
             return None;
         }
         let first = *self.points.first()?;
-        let zero = CurvePoint {
-            elevation: 0.0,
-            offset: 0.0,
-            sigma: 0.0,
-            alpha: 0.0,
-        };
+        let zero = CurvePoint::new(0.0, 0.0, 0.0, 0.0);
         let mut low = zero;
         for &point in &self.points {
             if elevation <= point.elevation {
                 let t = (elevation - low.elevation) / (point.elevation - low.elevation);
                 let mix = |a: f32, b: f32| a + (b - a) * t;
+                let contact = match (low.contact, point.contact) {
+                    (None, None) => None,
+                    (a, b) => {
+                        let (a, b) = (a.unwrap_or_default(), b.unwrap_or_default());
+                        Some(Contact {
+                            offset: mix(a.offset, b.offset),
+                            sigma: mix(a.sigma, b.sigma),
+                            alpha: mix(a.alpha, b.alpha),
+                        })
+                    }
+                };
                 return Some(CurvePoint {
                     elevation,
                     offset: mix(low.offset, point.offset),
                     sigma: mix(low.sigma, point.sigma),
                     alpha: mix(low.alpha, point.alpha),
+                    contact,
                 });
             }
             low = point;
@@ -231,12 +286,14 @@ mod tests {
                     offset: 12.0,
                     sigma: 16.0,
                     alpha: 0.26,
+                    contact: None,
                 },
                 CurvePoint {
                     elevation: 1.0,
                     offset: 4.0,
                     sigma: 5.0,
                     alpha: 0.22,
+                    contact: None,
                 },
             ],
         )
@@ -258,7 +315,8 @@ mod tests {
                     elevation: 0.0,
                     offset: 0.0,
                     sigma: 1.0,
-                    alpha: 0.5
+                    alpha: 0.5,
+                    contact: None,
                 }]
             )
             .is_err()

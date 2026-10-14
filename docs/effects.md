@@ -214,13 +214,17 @@ GPU time per pass on this machine (RX 9060 XT, RADV), medians of 80 frames after
 
 The scene draws 5,761 instances. The GPU was shared with other jobs while this ran, so the full 4K row is above the sum of its parts (about 3.3 ms in an earlier run). Blurring a check costs most: an icon stroke is stepped along its field on four lines. Particles, whose fills blur in closed form, cost little more blurred than still. Unpicked instances never reach the ids pass, and a blurred draw's id costs what a still draw's does.
 
-**A shooter's swarm at 4K.** `a_swarm_of_shots_and_particles_fits_a_120_hz_frame_on_the_gpu_at_4k` (`tests_swarm.rs`) draws 2,000 small icon shots (the tick icon at 0.35 scale, solid fills, unpicked, no shadow, all at one elevation, so they batch into one instanced run) and keeps about 20,300 particles alive (a pool of 22,000; small discs, rounded rects and additive rings, four bursts of each recipe a frame) over a dark clear, 3840×2160, medians of 120 frames after a warm-up. The particles' size doesn't change the cost much; their count does.
+**A shooter's swarm at 4K.** `a_swarm_of_shots_and_particles_fits_a_120_hz_frame_on_the_gpu_at_4k` (`tests_swarm.rs`) draws 2,000 small icon shots (the tick icon at 0.35 scale with a 7-unit stroke, unpicked, no shadow, all at one elevation, so they batch into one instanced run) and keeps about 20,300 particles alive (a pool of 22,000; small discs, rounded rects and additive rings, four bursts of each recipe a frame) over a dark clear, 3840×2160, medians of 120 frames after a warm-up. The particles' size doesn't change the cost much; their count does.
 
 | Variant | GPU (p99) | `step` | `compose` | `prepare` (CPU, packing and upload) |
 |---|---|---|---|---|
 | 2,000 icon shots | 0.14 ms (0.19) | 0.00 ms | 0.02 ms | 0.16 ms |
 | 20,000 particles | 0.37 ms (0.61) | 0.06 ms | 1.8 ms | 3.7 ms |
 | both | 0.40 ms (0.72) | 0.06 ms | 2.7 ms | 7.2 ms |
+
+The tick is a line icon, which has no fill: until the shots took a stroke they were filled ticks that drew nothing, at 0.13 ms of GPU for 2,000 empty quads. A line icon without a stroke now packs no instance. Stroked and visible, the 2,000 shots cost 0.14 ms of GPU (p99 0.14).
+
+Three more variants price the flat pass's newer paints on the same frame, GPU medians: the 2,000 shots casting the curve's shadow from their outline take 0.56 ms; 2,000 60×40 chips take 0.34 ms with a solid fill and 0.55 ms with a `Grain` pattern ([flat.md](flat.md)).
 
 The GPU has room to spare: 22,000 instances cost 0.4 ms of it. The CPU is where a swarm costs: `compose` turns each particle into a `Draw`, and the flat pass's `prepare` packs every draw into its 240-byte instance and uploads them, about 180 ns a particle draw. These CPU numbers were taken on a machine at a load of 57 on 32 threads, so they read high; a quiet run normalises them. The bench asserts only the GPU's p99 under 8.3 ms and prints the CPU split, since the CPU side swings with the machine's load.
 

@@ -7,8 +7,8 @@ use super::style;
 use super::{
     ADDITIVE, BLUR, DASHED, FILL_GRADIENT, FILL_IMAGE, FILL_MASK, FILL_VERTICAL, Fill, Fit,
     FlatScene, Gradient, Instance, KIND_ARC, KIND_CIRCLE, KIND_ICON_FILL, KIND_ICON_LINE,
-    KIND_RECT, KIND_RING, KIND_SHADOW, Order, PATTERN_MASK, PATTERN_SHIFT, Shape, Step, UNPICKED,
-    pack_shadow, pack_shape, placed, positive, shadow,
+    KIND_ICON_SHADOW, KIND_RECT, KIND_RING, KIND_SHADOW, Order, PATTERN_MASK, PATTERN_SHIFT, Shape,
+    Step, UNPICKED, pack_shadow_with, pack_shape, placed, positive, shadow,
 };
 
 pub struct Paint {
@@ -30,6 +30,44 @@ pub(crate) fn field(instance: &Instance, icons: Option<&Icons>, p: [f32; 2]) -> 
             });
             [distance, 0.0, 0.0]
         }
+    }
+}
+
+pub const ICON_TAP: f32 = 0.7;
+pub const ICON_REST: f32 = 0.714_142_8;
+
+pub fn icon_cast(instance: &Instance, icons: Option<&Icons>, q: [f32; 2], sigma: f32) -> f32 {
+    let spread = ICON_TAP * sigma;
+    let rest = ICON_REST * sigma;
+    let mut total = 0.0;
+    for tap in [[-1.0, -1.0], [1.0, -1.0], [-1.0, 1.0], [1.0, 1.0]] {
+        total += icon_edge(
+            instance,
+            icons,
+            [q[0] + tap[0] * spread, q[1] + tap[1] * spread],
+            rest,
+        );
+    }
+    total * 0.25
+}
+
+fn icon_edge(instance: &Instance, icons: Option<&Icons>, q: [f32; 2], sigma: f32) -> f32 {
+    let cell = instance.shape;
+    let c = [
+        q[0].clamp(cell[0] - cell[2], cell[0] + cell[2]),
+        q[1].clamp(cell[1] - cell[3], cell[1] + cell[3]),
+    ];
+    let outside = ((q[0] - c[0]).powi(2) + (q[1] - c[1]).powi(2)).sqrt();
+    let uv = instance.icon;
+    let d = icons.map_or(1.0e4, |icons| {
+        icons.sample([uv[0] + c[0] * uv[2], uv[1] + c[1] * uv[3]])
+    }) + outside;
+    let k = std::f32::consts::FRAC_1_SQRT_2 / sigma;
+    let grow = instance.material[3];
+    if instance.corners[0] > 0.5 {
+        0.5 * (shadow::erf((grow - d) * k) + shadow::erf((grow + d) * k))
+    } else {
+        0.5 - 0.5 * shadow::erf((d - grow) * k)
     }
 }
 
@@ -88,15 +126,54 @@ fn plain(
     let inverse = instance.inverse();
     let kind = instance.kind();
     if kind == KIND_SHADOW {
-        let centre = [p[0] - instance.icon[2], p[1] - instance.icon[3]];
-        let cover = shadow::rounded_box(
-            centre,
-            [instance.shape[0], instance.shape[1]],
-            instance.corners,
+        let cast = |sigma: [f32; 2], offset: [f32; 2]| {
+            shadow::rounded_box(
+                [p[0] - offset[0], p[1] - offset[1]],
+                [instance.shape[0], instance.shape[1]],
+                instance.corners,
+                sigma,
+            )
+        };
+        let main = cast(
             [instance.icon[0], instance.icon[1]],
+            [instance.icon[2], instance.icon[3]],
         );
+        let mut colour = premultiply(instance.fill_top, main);
+        if instance.fill_bottom[3] > 0.0 {
+            let near = cast(
+                [instance.stroke[0], instance.stroke[1]],
+                [instance.stroke[2], instance.stroke[3]],
+            );
+            let contact = premultiply(instance.fill_bottom, near);
+            colour = std::array::from_fn(|i| contact[i] + colour[i] * (1.0 - contact[3]));
+        }
         return Paint {
-            colour: premultiply(instance.fill_top, cover),
+            colour,
+            footprint: 0.0,
+        };
+    }
+    if kind == KIND_ICON_SHADOW {
+        let material = instance.material;
+        let main = icon_cast(
+            instance,
+            icons,
+            [p[0] - material[1], p[1] - material[2]],
+            material[0],
+        );
+        let mut colour = premultiply(instance.fill_top, main);
+        if instance.fill_bottom[3] > 0.0 {
+            let corners = instance.corners;
+            let near = icon_cast(
+                instance,
+                icons,
+                [p[0] - corners[2], p[1] - corners[3]],
+                corners[1],
+            );
+            let contact = premultiply(instance.fill_bottom, near);
+            colour = std::array::from_fn(|i| contact[i] + colour[i] * (1.0 - contact[3]));
+        }
+        return Paint {
+            colour,
             footprint: 0.0,
         };
     }
@@ -138,7 +215,13 @@ fn plain(
         if pattern != 0 {
             let packed = instance.info[2];
             let colour = std::array::from_fn(|i| ((packed >> (8 * i)) & 255) as f32 / 255.0);
-            let cover = sdf::coverage(sdf::pattern(pattern, instance.icon, p), inverse);
+            let cover = sdf::pattern_cover(
+                pattern,
+                instance.icon,
+                [instance.icon[3], instance.frame[2][3]],
+                p,
+                inverse,
+            );
             let paint = premultiply(colour, cover);
             base = std::array::from_fn(|i| paint[i] + base[i] * (1.0 - paint[3]));
         }
@@ -318,7 +401,9 @@ fn render_scene(
                     Fill::Gradient(gradient) => Some(gradient),
                     _ => None,
                 };
-                if let Some(instance) = pack_shadow(draw, &fit, scene.curve, &scene.light) {
+                if let Some(instance) =
+                    pack_shadow_with(draw, &fit, scene.curve, &scene.light, icons)
+                {
                     blend(target, size, &instance, icons, None, None);
                 }
                 if let Some(instance) = pack_shape(draw, &fit, icons) {

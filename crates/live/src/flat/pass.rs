@@ -1,7 +1,7 @@
 use super::icons::{FORMAT as ICON_FORMAT, GpuIcons, Icons};
 use super::{
     Draw, FX, Fill, Fit, FlatScene, Glyphs, INSTANCE_ATTRIBUTES, Instance, KIND_SHADOW, LIT, Order,
-    Shape, Step, pack_shadow, pack_shape, shader,
+    Shape, Step, pack_shadow_with, pack_shape, shader,
 };
 use crate::text::{GpuAtlas, PackedGlyph, TextSpace, pack_glyphs, pack_quads, screen_bounds};
 use bytemuck::{Pod, Zeroable};
@@ -1116,7 +1116,7 @@ impl FlatPass {
             return Ok(bounds);
         }
         let mut bounds = None;
-        if let Some(shadow) = pack_shadow(draw, fit, scene.curve, &scene.light) {
+        if let Some(shadow) = pack_shadow_with(draw, fit, scene.curve, &scene.light, icons) {
             bounds = Some(shadow.pixel_bounds());
             self.push_instance(shadow);
         }
@@ -1436,7 +1436,7 @@ impl FlatPass {
         self.instances
             .items
             .iter()
-            .any(|instance| instance.kind() != KIND_SHADOW)
+            .any(|instance| instance.kind() < KIND_SHADOW)
             || self
                 .ops
                 .iter()

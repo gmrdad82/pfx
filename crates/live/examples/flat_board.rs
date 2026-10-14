@@ -306,12 +306,14 @@ fn main() -> Result<(), String> {
                 offset: 4.0,
                 sigma: 5.0,
                 alpha: 0.22,
+                contact: None,
             },
             CurvePoint {
                 elevation: 2.0,
                 offset: 12.0,
                 sigma: 16.0,
                 alpha: 0.26,
+                contact: None,
             },
         ],
     )?;

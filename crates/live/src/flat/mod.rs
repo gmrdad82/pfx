@@ -1,4 +1,6 @@
 #[cfg(test)]
+mod cast_tests;
+#[cfg(test)]
 mod corner_tests;
 pub mod cpu;
 pub mod cpu_text;
@@ -35,7 +37,7 @@ use pfx_gpu::window::{Letterbox, Size, letterbox_nearest};
 pub use pfx_post::look::{Gradient, GradientShape, Interpolation};
 use pfx_text::Paragraph;
 pub use roles::{Roles, TokenKey};
-pub use shadow::{CurvePoint, ShadowCurve};
+pub use shadow::{Contact, CurvePoint, ShadowCurve};
 pub use sprites::{FlatSprites, SpriteFilter, SpriteImage};
 pub use style::{Bevel, Outline, Style};
 
@@ -348,6 +350,8 @@ pub enum PatternKind {
     Dots,
     CrossHatch,
     Chevrons,
+    Grain,
+    Fibre,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -357,6 +361,7 @@ pub struct Pattern {
     pub angle: f32,
     pub width: f32,
     pub colour: Srgba,
+    pub offset: [f32; 2],
 }
 
 impl Pattern {
@@ -367,7 +372,21 @@ impl Pattern {
             angle,
             width,
             colour,
+            offset: [0.0; 2],
         }
+    }
+
+    pub fn grain(scale: f32, contrast: f32, colour: Srgba) -> Self {
+        Self::new(PatternKind::Grain, scale, 0.0, contrast, colour)
+    }
+
+    pub fn fibre(scale: f32, angle: f32, contrast: f32, colour: Srgba) -> Self {
+        Self::new(PatternKind::Fibre, scale, angle, contrast, colour)
+    }
+
+    pub fn offset(mut self, offset: [f32; 2]) -> Self {
+        self.offset = offset;
+        self
     }
 
     fn bits(&self) -> u32 {
@@ -376,6 +395,8 @@ impl Pattern {
             PatternKind::Dots => 2,
             PatternKind::CrossHatch => 3,
             PatternKind::Chevrons => 4,
+            PatternKind::Grain => sdf::GRAIN,
+            PatternKind::Fibre => sdf::FIBRE,
         };
         code << PATTERN_SHIFT
     }
@@ -616,6 +637,7 @@ pub const KIND_ARC: u32 = 3;
 pub const KIND_ICON_FILL: u32 = 4;
 pub const KIND_ICON_LINE: u32 = 5;
 pub const KIND_SHADOW: u32 = 6;
+pub const KIND_ICON_SHADOW: u32 = 7;
 pub const FILL_SOLID: u32 = 1 << 4;
 pub const FILL_VERTICAL: u32 = 2 << 4;
 pub const FILL_GRADIENT: u32 = 3 << 4;
@@ -944,9 +966,11 @@ pub(crate) fn pack_plain(draw: &Draw, fit: &Fit, icons: Option<&Icons>) -> Optio
         }
     };
     if kind == KIND_ICON_LINE {
+        stroke?;
         flags &= !FILL_MASK;
     }
     let mut pattern_colour = 0;
+    let mut pattern_offset = None;
     if let Some(pattern) = draw.pattern
         && matches!(kind, KIND_RECT | KIND_CIRCLE | KIND_RING | KIND_ARC)
         && flags & FILL_MASK != FILL_IMAGE
@@ -959,12 +983,18 @@ pub(crate) fn pack_plain(draw: &Draw, fit: &Fit, icons: Option<&Icons>) -> Optio
         if flags & (FILL_SOLID | FILL_VERTICAL) == 0 {
             flags |= FILL_SOLID;
         }
+        let offset = if pattern.offset.iter().all(|value| value.is_finite()) {
+            pattern.offset
+        } else {
+            [0.0; 2]
+        };
         icon = [
             pattern.scale,
             pattern.angle,
             pattern.width.clamp(0.0, 1.0),
-            0.0,
+            offset[0],
         ];
+        pattern_offset = Some(offset[1]);
         pattern_colour = pattern.packed_colour();
     }
     let mut stroke_params = [0.0; 4];
@@ -1032,6 +1062,9 @@ pub(crate) fn pack_plain(draw: &Draw, fit: &Fit, icons: Option<&Icons>) -> Optio
             flat_bounds[3] + shift[1].abs() * 0.5,
         ];
     }
+    if let Some(offset) = pattern_offset {
+        frame[2][3] = offset;
+    }
     kind |= flags;
     let opacity = draw.opacity.min(1.0);
     let mut instance = Instance {
@@ -1074,22 +1107,94 @@ fn blur_shift(draw: &Draw, placed: &Placed, fit: &Fit) -> Option<[f32; 2]> {
 }
 
 pub fn pack_shadow(draw: &Draw, fit: &Fit, curve: &ShadowCurve, light: &Light) -> Option<Instance> {
+    pack_shadow_with(draw, fit, curve, light, None)
+}
+
+enum Cast {
+    Box {
+        half: [f32; 2],
+        radii: [f32; 4],
+    },
+    Icon {
+        cell: [f32; 4],
+        uv: [f32; 4],
+        grow: f32,
+        line: bool,
+    },
+}
+
+fn cast_of(draw: &Draw, icons: Option<&Icons>) -> Option<(Cast, f32)> {
+    let Shape::Icon(handle) = draw.shape else {
+        let (half, radii) = caster(draw)?;
+        return Some((Cast::Box { half, radii }, paint_alpha(draw)));
+    };
+    let entry = icons?.entry(handle)?;
+    let stroke = draw
+        .stroke
+        .filter(|stroke| stroke.width > 0.0 && stroke.width.is_finite());
+    let line = entry.kind == IconKind::Line;
+    let paint = if line {
+        stroke?.colour.0[3].clamp(0.0, 1.0)
+    } else {
+        paint_alpha(draw)
+    };
+    let [x0, y0, x1, y1] = entry.bounds;
+    Some((
+        Cast::Icon {
+            cell: [
+                (x0 + x1) * 0.5,
+                (y0 + y1) * 0.5,
+                (x1 - x0) * 0.5,
+                (y1 - y0) * 0.5,
+            ],
+            uv: entry.uv,
+            grow: stroke.map_or(0.0, |stroke| stroke.width * 0.5),
+            line,
+        },
+        paint,
+    ))
+}
+
+fn box_union(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    let low = [
+        (a[0] - a[2]).min(b[0] - b[2]),
+        (a[1] - a[3]).min(b[1] - b[3]),
+    ];
+    let high = [
+        (a[0] + a[2]).max(b[0] + b[2]),
+        (a[1] + a[3]).max(b[1] + b[3]),
+    ];
+    [
+        (low[0] + high[0]) * 0.5,
+        (low[1] + high[1]) * 0.5,
+        (high[0] - low[0]) * 0.5,
+        (high[1] - low[1]) * 0.5,
+    ]
+}
+
+pub fn pack_shadow_with(
+    draw: &Draw,
+    fit: &Fit,
+    curve: &ShadowCurve,
+    light: &Light,
+    icons: Option<&Icons>,
+) -> Option<Instance> {
     if draw.style.is_some() {
-        return pack_shadow(&style::resolve(draw), fit, curve, light);
+        return pack_shadow_with(&style::resolve(draw), fit, curve, light, icons);
     }
-    let (half, radii) = caster(draw)?;
+    let (cast, paint) = cast_of(draw, icons)?;
     let placed = placed(&draw.transform, fit)?;
     let opacity = draw.opacity.min(1.0);
     let alpha = match draw.shadow {
         Shadow::Glow(_) => opacity,
-        _ => paint_alpha(draw) * opacity,
+        _ => paint * opacity,
     };
     if !positive(alpha) {
         return None;
     }
-    let (colour, sigma, offset_local) = match draw.shadow {
+    let (colour, sigma, offset_local, contact) = match draw.shadow {
         Shadow::None => return None,
-        Shadow::Glow(glow) => (glow.colour, glow.sigma, [0.0, 0.0]),
+        Shadow::Glow(glow) => (glow.colour, glow.sigma, [0.0, 0.0], None),
         Shadow::Cast | Shadow::Turned => {
             let point = curve.at(draw.elevation)?;
             let direction = light.shadow;
@@ -1099,57 +1204,134 @@ pub fn pack_shadow(draw: &Draw, fit: &Fit, curve: &ShadowCurve, light: &Light) -
             } else {
                 [0.0, 1.0]
             };
-            let offset = [direction[0] * point.offset, direction[1] * point.offset];
-            let local = if draw.shadow == Shadow::Turned {
-                offset
-            } else {
-                let [a, b, c, d] = placed.layout_axes;
-                let det = a * d - c * b;
-                [
-                    (d * offset[0] - c * offset[1]) / det,
-                    (-b * offset[0] + a * offset[1]) / det,
-                ]
+            let local = |distance: f32| {
+                let offset = [direction[0] * distance, direction[1] * distance];
+                if draw.shadow == Shadow::Turned {
+                    offset
+                } else {
+                    let [a, b, c, d] = placed.layout_axes;
+                    let det = a * d - c * b;
+                    [
+                        (d * offset[0] - c * offset[1]) / det,
+                        (-b * offset[0] + a * offset[1]) / det,
+                    ]
+                }
             };
+            let contact = point.contact.map(|contact| {
+                (
+                    curve.colour.alpha(curve.colour.0[3] * contact.alpha),
+                    contact.sigma,
+                    local(contact.offset),
+                )
+            });
             (
                 curve.colour.alpha(curve.colour.0[3] * point.alpha),
                 point.sigma,
-                local,
+                local(point.offset),
+                contact,
             )
         }
     };
+    let contact = contact
+        .map(|(colour, sigma, offset)| (colour.alpha(alpha * colour.0[3]), sigma, offset))
+        .filter(|(colour, sigma, _)| positive(colour.0[3]) && *sigma >= 0.0 && sigma.is_finite());
     let alpha = alpha * colour.0[3];
-    if !(sigma >= 0.0 && sigma.is_finite() && alpha > 0.0) {
+    if !(sigma >= 0.0 && sigma.is_finite() && (alpha > 0.0 || contact.is_some())) {
         return None;
     }
     let [a, b, c, d] = placed.layout_axes;
     let unit = [length2([a, b]), length2([c, d])];
-    let sigma_local = [(sigma / unit[0]).max(1e-4), (sigma / unit[1]).max(1e-4)];
+    let local_sigma = |sigma: f32| [(sigma / unit[0]).max(1e-4), (sigma / unit[1]).max(1e-4)];
+    let sigma_local = local_sigma(sigma);
     let reach = [4.0 * sigma_local[0], 4.0 * sigma_local[1]];
-    Some(Instance {
-        axes: placed.axes,
-        origin: [placed.origin[0], placed.origin[1], 0.0, 0.0],
-        bounds: [
-            offset_local[0],
-            offset_local[1],
-            half[0] + reach[0],
-            half[1] + reach[1],
-        ],
-        shape: [half[0], half[1], 0.0, 0.0],
-        stroke: [0.0; 4],
-        fill_top: colour.alpha(alpha).0,
-        fill_bottom: [0.0; 4],
-        stroke_colour: [0.0; 4],
-        icon: [
-            sigma_local[0],
-            sigma_local[1],
-            offset_local[0],
-            offset_local[1],
-        ],
-        info: [KIND_SHADOW, 0, 0, 1.0f32.to_bits()],
-        material: [0.0; 4],
-        frame: [[0.0; 4]; 3],
-        corners: radii,
-    })
+    match cast {
+        Cast::Box { half, radii } => {
+            let mut instance = Instance {
+                axes: placed.axes,
+                origin: [placed.origin[0], placed.origin[1], 0.0, 0.0],
+                bounds: [
+                    offset_local[0],
+                    offset_local[1],
+                    half[0] + reach[0],
+                    half[1] + reach[1],
+                ],
+                shape: [half[0], half[1], 0.0, 0.0],
+                stroke: [0.0; 4],
+                fill_top: colour.alpha(alpha).0,
+                fill_bottom: [0.0; 4],
+                stroke_colour: [0.0; 4],
+                icon: [
+                    sigma_local[0],
+                    sigma_local[1],
+                    offset_local[0],
+                    offset_local[1],
+                ],
+                info: [KIND_SHADOW, 0, 0, 1.0f32.to_bits()],
+                material: [0.0; 4],
+                frame: [[0.0; 4]; 3],
+                corners: radii,
+            };
+            if let Some((colour, sigma, offset)) = contact {
+                let near = local_sigma(sigma);
+                instance.stroke = [near[0], near[1], offset[0], offset[1]];
+                instance.fill_bottom = colour.0;
+                instance.bounds = box_union(
+                    instance.bounds,
+                    [
+                        offset[0],
+                        offset[1],
+                        half[0] + 4.0 * near[0],
+                        half[1] + 4.0 * near[1],
+                    ],
+                );
+            }
+            Some(instance)
+        }
+        Cast::Icon {
+            cell,
+            uv,
+            grow,
+            line,
+        } => {
+            let even = (sigma_local[0] * sigma_local[1]).sqrt();
+            let mut instance = Instance {
+                axes: placed.axes,
+                origin: [placed.origin[0], placed.origin[1], 0.0, 0.0],
+                bounds: [
+                    cell[0] + offset_local[0],
+                    cell[1] + offset_local[1],
+                    cell[2] + grow + 4.0 * even,
+                    cell[3] + grow + 4.0 * even,
+                ],
+                shape: cell,
+                stroke: [0.0; 4],
+                fill_top: colour.alpha(alpha).0,
+                fill_bottom: [0.0; 4],
+                stroke_colour: [0.0; 4],
+                icon: uv,
+                info: [KIND_ICON_SHADOW, 0, 0, 1.0f32.to_bits()],
+                material: [even, offset_local[0], offset_local[1], grow],
+                frame: [[0.0; 4]; 3],
+                corners: [if line { 1.0 } else { 0.0 }, 0.0, 0.0, 0.0],
+            };
+            if let Some((colour, sigma, offset)) = contact {
+                let near = local_sigma(sigma);
+                let near = (near[0] * near[1]).sqrt();
+                instance.corners = [instance.corners[0], near, offset[0], offset[1]];
+                instance.fill_bottom = colour.0;
+                instance.bounds = box_union(
+                    instance.bounds,
+                    [
+                        cell[0] + offset[0],
+                        cell[1] + offset[1],
+                        cell[2] + grow + 4.0 * near,
+                        cell[3] + grow + 4.0 * near,
+                    ],
+                );
+            }
+            Some(instance)
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
