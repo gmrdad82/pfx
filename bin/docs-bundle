@@ -283,6 +283,7 @@ def rewrite_prose(text, source, page_out, moved_from):
         alt = attr(match.group(0), "alt").replace("[", "(").replace("]", ")")
         return f"![{alt}]({attr(match.group(0), 'src')})"
 
+    text = re.sub(r"<picture>.*?</picture>\n*", "", text, flags=re.S)
     text = IMG.sub(html_image, text)
 
     def code_doc(match):

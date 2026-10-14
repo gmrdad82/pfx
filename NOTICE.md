@@ -54,7 +54,7 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 
 pfx's mark and wordmark are © Catalin Ilinca, all rights reserved, and not covered by the MIT licence ([TRADEMARKS.md](TRADEMARKS.md)):
 
-- `assets/marks/` and `.github/icon.png`;
+- `assets/marks/` and `.github/icon.png`, copied by `bin/marks` from the PITO MD brand masters at `aa3aee8b232a1b848995bf3d9a012a01d4aff8ec`; the README shows the lockup at its Licence section, `lockup.svg` on a dark theme and `lockup-light.svg` on a light one;
 - `crates/project/src/templates/badge.glb` and `crates/project/src/templates/wordmark.glb`, the mark and wordmark in 3D that `pfx new` places in a new game's first scene.
 
 ## Fonts, under the SIL Open Font License 1.1

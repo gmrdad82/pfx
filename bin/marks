@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+assets="${PITO_ASSETS:?PITO_ASSETS names the checkout of the PITO MD brand masters}"
+rev=aa3aee8b232a1b848995bf3d9a012a01d4aff8ec
+mkdir -p assets/marks .github
+for file in pfx.svg wordmark.svg lockup.svg lockup-light.svg pfx-icon.png; do
+  git -C "$assets" show "$rev:exports/pfx/assets/marks/$file" > "assets/marks/$file"
+done
+git -C "$assets" show "$rev:exports/pfx/.github/icon.png" > .github/icon.png

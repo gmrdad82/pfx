@@ -101,3 +101,4 @@ e053f7c7e9175e506ee3eb9fcf44bcf7689904771814500d1c150fcc82c53a3d  docs/images/ne
 fddd62fccfdee787a5e6e3d1debee76dede905112bec0d31f2a9846f8d2f863a  docs/images/size-binary.png  generated: the README's chart of empty-game binary sizes, drawn with pito-compare
 24208ca427935f93c2714f691a0184e4f515c5467c99719624f8080e3bc4bcea  docs/images/size-deps.png  generated: the README's chart of empty-game dependency counts, drawn with pito-compare
 256da1e4cc462a82209d85e9e12900c92caac1b62b9d54536a9d2a8419d4a322  docs/images/size-build.png  generated: the README's chart of empty-game cold build times, drawn with pito-compare
+4d205792368f4610bc1e3054cc3be6c8e10fb9f7c9afe956de67d07beebebd53  assets/marks/lockup-light.svg  generated: pfx's lockup for light backgrounds, exported from pfx's brand masters (a logo, see TRADEMARKS.md)

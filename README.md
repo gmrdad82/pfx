@@ -198,4 +198,6 @@ Issues and pull requests are welcome at [github.com/gmrdad82/pfx](https://github
 
 ## Licence
 
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/marks/lockup.svg"><img src="assets/marks/lockup-light.svg" width="320" alt="The pfx lockup: the pfx mark, a violet sphere with a comet tail, beside the word pfx"></picture>
+
 The code is MIT licensed, © Catalin Ilinca ([LICENSE](LICENSE)). The MIT licence covers the code only: the PITO MD name, every app and game name and their logos are © Catalin Ilinca, all rights reserved ([TRADEMARKS.md](TRADEMARKS.md)). Fonts and other media keep their own licences ([NOTICE.md](NOTICE.md)).
