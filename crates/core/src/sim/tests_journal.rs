@@ -1,6 +1,7 @@
 use std::time::Instant;
 
-use super::{Digest, Field, Journal, JournalError, JournalWriter, Rng, STREAM_VERSION, Schema};
+use super::journal::{Digest, Field, Journal, JournalError, JournalWriter, Schema};
+use super::{Rng, STREAM_VERSION};
 
 const SIM_VERSION: u32 = 3;
 

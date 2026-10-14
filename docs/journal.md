@@ -9,7 +9,7 @@ pfx-play's `Recording` stays the engine's own log of a session. The journal is t
 The game declares its per-tick input as a fixed list of fields, each a bit flag or an integer of a declared width:
 
 ```rust
-use pfx_core::sim::{Digest, Field, Journal, JournalWriter, Schema};
+use pfx_core::sim::journal::{Digest, Field, Journal, JournalWriter, Schema};
 
 const SIM_VERSION: u32 = 4;
 
