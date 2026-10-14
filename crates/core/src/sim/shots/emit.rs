@@ -125,9 +125,13 @@ pub struct Emitter {
 
 impl Emitter {
     pub fn new(fire: Fire) -> Self {
+        Self::with_charge(fire, 0)
+    }
+
+    pub fn with_charge(fire: Fire, charge: u32) -> Self {
         Self {
             fire,
-            charge: 0,
+            charge,
             phase: Phase::Ready,
             telegraph: Telegraph::new(),
             spin: 0,

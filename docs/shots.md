@@ -6,13 +6,14 @@ Pooled projectiles and the emitters that fire them, in 2D and 3D, for a shoot-'e
 
 ```rust
 let mut shots = Shots::<2>::new(4096);
-let id = shots.spawn(Shot { pos, vel, half: [4, 8], life: Some(240), tag: owner });
+let id = shots.spawn(Shot { pos, vel, half: [4, 8], life: Some(240), pierce: 0, tag: owner });
 for &(id, end) in shots.step(arena) {
     if end == End::Expired { pop(id) }
 }
 shots.boxes(&mut ids, &mut boxes);
-for hit in overlaps.find(&boxes, &targets) {
-    hurt(ids[hit.a as usize], hit.b);
+let hits = overlaps.find(&boxes, &targets);
+for strike in shots.resolve(&ids, hits, &targets, |shot, target| alive[target as usize]) {
+    hurt(strike.shot, strike.target);
 }
 ```
 
@@ -20,6 +21,7 @@ for hit in overlaps.find(&boxes, &targets) {
 - Free slots are reused last-freed first, and `iter`, `step` and `boxes` walk the slots in index order, so the order of shots depends only on what the game did, and replays.
 - `step(bounds)` moves every live shot by its velocity once (saturating at the `i32` edge). `life: Some(n)` lets a shot make `n` moves; the step after its last move removes it as `End::Expired`. A shot whose swept box no longer overlaps `bounds` is removed as `End::Left` in the same step, so a shot on the edge still gets its last box tested. `life: None` lives until it leaves or is despawned. The returned list (also `ended()`) is in slot order.
 - `Span<N>` is a half-open integer box like `Aabb`. `swept(id)` is the box a shot covered over its last step: its half-extents around every point from where it was to where it is, the union of its start and end boxes, as Box2D builds a moving body's AABB. A shot fresh from `spawn` has its own box. `boxes` fills `Vec<Aabb>` in 2D and `Vec<Aabb3>` in 3D (anything `From<Span<N>>`), with the matching ids, ready for `Overlaps::find` / `Overlaps3::find`.
+- **Pierce:** `resolve(ids, hits, targets, accept)` applies `find`'s hits to the pool. Each shot takes its targets in the order its swept box reached them over the step (ties by target index), skips any `accept` refuses (a dead target, friendly fire, one this shot already struck), and strikes the rest: the first strike with no `pierce` left despawns the shot, each earlier one spends a pierce. It returns `Strike { shot, target, gone }` in shot order, then path order; the game resolves damage from it. A piercing shot overlapping a target over several ticks is offered it every tick, so a game that wants one strike per target remembers the pairs and refuses them in `accept`. `targets` is the same list given to `find` (`Aabb`, `Aabb3` or `Span<N>`).
 
 ## Emitters
 
@@ -45,6 +47,7 @@ for &vel in &out { shots.spawn(Shot { pos: origin, vel, half, life, tag }); }
 - **Aim, 2D:** `Aim2::Angle(a)` (0 along +x, positive toward +y) or `Aim2::At { target, vel }`, which leads a constant-velocity target: `intercept(from, target, vel, speed)` solves `|D + V t| = s t` for the first positive `t` in ticks; with no solution (the target outruns the shot) it aims straight at the target. `vel: [0, 0]` is plain aiming.
 - **Aim, 3D:** `Aim3::Basis { forward, up }` or `Aim3::At { target, vel, up }`. The basis is the aim axis, `side = forward × up` and `forward`'s own up; fans, rings and spirals lie in the forward–side plane (positive angles toward `side`), crowns roll around the aim axis. An `up` parallel to `forward` falls back to +z, +y, +x in that order.
 - **Spread:** `spread` jitters each shot from the `Rng` the caller passes: in 2D a whole millidegree in `[-spread, spread]` (one draw), in 3D a direction uniform over the cone cap of half-angle `spread` around the shot (two draws). With `spread: 0` the rng is never touched. Fork it per emitter or per wave (`rng.fork(label)`) so emitters don't shift each other's streams.
+- **Staggered guns:** `Emitter::with_charge(fire, charge)` starts with `charge` already banked, so guns sharing one `Fire` fire out of step: with cost 4, charges 0, 1, 2 and 3 put four guns on four different ticks.
 - `tick(trigger)` alone returns the volleys due this tick and `volley2` / `volley3` make one; `tick2` / `tick3` are the two together.
 
 ## Followers and kinematic follow
@@ -58,7 +61,7 @@ walker.step(goal);
 ```
 
 - `toward(from, to, step)` moves at most `step` units in a straight line (Euclidean length, each component rounded once), and lands exactly on `to` when it is within reach. Generic over `N`.
-- `Member { pos, offset, limit }` holds `offset` from its leader; `limit: None` snaps to the slot, `Some(l)` catches up at most `l` units a tick. `follow` steps a slice in order. To turn a formation with its leader, set the offsets from the leader's facing.
+- `Member { pos, offset, limit }` holds `offset` from its leader; `limit: None` snaps to the slot, `Some(l)` catches up at most `l` units a tick. `follow` steps a slice in order. `follow_scaled(members, leader, num, den)` and `Member::step_scaled` use `offset * num / den` (rounded to nearest, halves away from zero, so a mirrored formation stays mirrored) for a formation that tightens or spreads with a state, such as closing in while firing: ease `num` toward its target with `toward([num], [goal], step)` each tick. `slot_scaled` gives the same point for a gun's muzzle. To turn a formation with its leader, set the offsets from the leader's facing.
 - `Mover { pos, top }` walks toward a target at `top` units a tick. `stun(n)` stops it for `n` steps; a second stun keeps the longer of the two. `slow(num, den, n)` keeps `num/den` of `top` (floored) for `n` steps; the same ratio again keeps the longer time, a different ratio is tracked on its own, and the strongest live slow is the one that applies. A stun beats every slow. Modifiers apply on the step they count down in.
 
 ## Cost

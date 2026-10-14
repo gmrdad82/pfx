@@ -7,6 +7,7 @@ fn shot<const N: usize>(pos: [i32; N], vel: [i32; N], life: Option<u32>) -> Shot
         vel,
         half: [2; N],
         life,
+        pierce: 0,
         tag: 0,
     }
 }
@@ -83,6 +84,56 @@ fn a_fast_shot_hits_a_thin_target_inside_its_step() {
     let floor = [Aabb3::new([-10, -10, -60], [10, 10, -59])];
     assert_eq!(Overlaps3::new().find(&boxes, &floor).len(), 1);
     assert_eq!(ids, [id]);
+}
+
+#[test]
+fn a_shot_strikes_targets_along_its_path_until_its_pierce_runs_out() {
+    let mut shots = Shots::<2>::new(2);
+    let fast = shots
+        .spawn(Shot {
+            pierce: 1,
+            ..shot([0, 0], [100, 0], None)
+        })
+        .unwrap();
+    let still = shots.spawn(shot([500, 500], [0, 0], None)).unwrap();
+    shots.step(WIDE);
+    let walls = [
+        Aabb::new([60, -10], [61, 10]),
+        Aabb::new([20, -10], [21, 10]),
+        Aabb::new([40, -10], [41, 10]),
+        Aabb::new([490, 490], [510, 510]),
+    ];
+    let mut ids = Vec::new();
+    let mut boxes: Vec<Aabb> = Vec::new();
+    shots.boxes(&mut ids, &mut boxes);
+    let hits = Overlaps::new().find(&boxes, &walls).to_vec();
+    let mut probe = shots.clone();
+    let strikes = probe.resolve(&ids, &hits, &walls, |_, _| true).to_vec();
+    let strike = |shot, target, gone| Strike { shot, target, gone };
+    assert_eq!(
+        strikes,
+        [
+            strike(fast, 1, false),
+            strike(fast, 2, true),
+            strike(still, 3, true)
+        ]
+    );
+    assert!(probe.is_empty());
+    let strikes = shots
+        .resolve(&ids, &hits, &walls, |id, target| id == fast && target != 1)
+        .to_vec();
+    assert_eq!(strikes, [strike(fast, 2, false), strike(fast, 0, true)]);
+    assert_eq!(shots.get(still).unwrap().pierce, 0);
+    assert!(!shots.contains(fast));
+}
+
+#[test]
+fn staggered_guns_keep_their_offsets() {
+    let mut early = Emitter::with_charge(fire(Pattern::Single, 1, 4), 2);
+    let mut late = Emitter::new(fire(Pattern::Single, 1, 4));
+    let ticks = |e: &mut Emitter| (0..12).filter(|_| e.tick(true) == 1).collect::<Vec<_>>();
+    assert_eq!(ticks(&mut early), [1, 5, 9]);
+    assert_eq!(ticks(&mut late), [3, 7, 11]);
 }
 
 #[test]
@@ -284,6 +335,15 @@ fn followers_catch_up_at_their_limit() {
         },
     ];
     follow(&mut members, [100, 0]);
+    let wing = |x| Member {
+        pos: [0, 0],
+        offset: [x, 7],
+        limit: None,
+    };
+    let mut wings = [wing(-10), wing(10)];
+    follow_scaled(&mut wings, [0, 0], 1, 4);
+    assert_eq!([wings[0].pos, wings[1].pos], [[-3, 2], [3, 2]]);
+    assert_eq!(wings[0].slot_scaled([0, 0], 3, 0), [-10, 7]);
     assert_eq!(members[0].pos, [90, 0]);
     assert_eq!(members[1].pos, [3, 0]);
     assert_eq!(toward([0, 0, 0], [3, 4, 0], 5), [3, 4, 0]);
@@ -376,6 +436,7 @@ fn flat_scene(ticks: u32) -> (Shots<2>, Vec<Emitter>, Vec<u64>) {
                     vel,
                     half: [4, 8],
                     life: Some(400),
+                    pierce: 0,
                     tag: i as u32,
                 });
             }
@@ -440,6 +501,7 @@ fn deep_scene(ticks: u32) -> (Shots<3>, Vec<u64>) {
                     vel,
                     half: [6; 3],
                     life: Some(500),
+                    pierce: 0,
                     tag: i as u32,
                 });
             }
