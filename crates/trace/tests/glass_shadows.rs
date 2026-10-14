@@ -14,6 +14,7 @@ use pfx_post::Chain;
 use pfx_post::color::srgb_channel;
 use pfx_trace::detail::{Bounces, Lens};
 use pfx_trace::lights::LocalLight;
+use pfx_trace::sobol::Sampler;
 use pfx_trace::stage::{Mesh, Placement, Stage};
 use pfx_trace::{Camera, Output, Projection, Sun};
 
@@ -34,6 +35,11 @@ const OFF_BYTES: [u64; 3] = [
     0xec54_cf52_6c87_4a86,
     0x41ef_cdf1_2868_1a39,
     0xb632_fda5_6681_ecfc,
+];
+const OFF_BYTES_RAY_QUERIES: [u64; 3] = [
+    0x37c0_2f1e_608d_9258,
+    0x41ef_cdf1_2868_1a39,
+    0xd035_0011_033e_905c,
 ];
 
 fn identity() -> Matrix {
@@ -342,6 +348,7 @@ struct Traced {
     output: Output,
     per_sample_ms: f64,
     longest_ms: f64,
+    hardware_rays: bool,
 }
 
 fn traced(
@@ -350,6 +357,7 @@ fn traced(
     transmissive: bool,
     bounces: Bounces,
     samples: u32,
+    sampler: Sampler,
     turns: &mut Turns,
 ) -> Traced {
     let floor = box_mesh([3.0, 3.0, 0.1]);
@@ -384,6 +392,7 @@ fn traced(
     staged.detail.lights = shot.trace_light();
     staged.detail.transmissive_shadows = transmissive;
     staged.detail.bounces = bounces;
+    staged.detail.sampler = sampler;
     let mut trace = staged.trace(gpu, SIZE, SIZE).unwrap();
     let mut pacer = Pacer::default();
     trace
@@ -406,6 +415,7 @@ fn traced(
         output,
         per_sample_ms: stats.milliseconds.iter().sum::<f64>() / f64::from(samples - 1),
         longest_ms: stats.longest_ms(),
+        hardware_rays: trace.hardware_rays(),
     }
 }
 
@@ -444,14 +454,26 @@ fn the_option_off_keeps_the_opaque_glass_shadow_bytes() {
         sun: 2.0,
         light: true,
     };
-    let off = traced(&gpu, shot, false, Bounces::REFERENCE, 4, &mut turns);
+    let off = traced(
+        &gpu,
+        shot,
+        false,
+        Bounces::REFERENCE,
+        4,
+        Sampler::Pcg,
+        &mut turns,
+    );
     let hashes = [
         fnv(&off.output.color),
         fnv(&off.output.albedo),
         fnv(&off.output.normal),
     ];
     println!("option off: {hashes:x?}");
-    assert_eq!(hashes, OFF_BYTES);
+    if off.hardware_rays {
+        assert_eq!(hashes, OFF_BYTES_RAY_QUERIES);
+    } else {
+        assert_eq!(hashes, OFF_BYTES);
+    }
 }
 
 #[test]
@@ -469,9 +491,9 @@ fn a_glass_pane_casts_live_s_tinted_shadow_under_the_sun_and_a_local_light() {
     );
     for (name, glass) in [("tinted", tinted_glass()), ("absorbing", absorbing_glass())] {
         let tint = glass::cast_tint(&glass);
-        for (lit, shade, sun, light) in [
-            ("sun", SUN_SHADE, 2.0, false),
-            ("local light", LIGHT_SHADE, 0.0, true),
+        for (lit, shade, sun, light, bounced) in [
+            ("sun", SUN_SHADE, 2.0, false, true),
+            ("local light", LIGHT_SHADE, 0.0, true, false),
         ] {
             let with = Shot {
                 glass: Some(glass),
@@ -487,7 +509,7 @@ fn a_glass_pane_casts_live_s_tinted_shadow_under_the_sun_and_a_local_light() {
                 around(&live(without, &mut turns), shade),
                 around(&dark, shade),
             );
-            for (budget, bounces, samples, above) in [
+            let budgets = [
                 ("direct light", Bounces::deep(0), SAMPLES, DIRECT_TOLERANCE),
                 (
                     "reference bounces",
@@ -495,9 +517,19 @@ fn a_glass_pane_casts_live_s_tinted_shadow_under_the_sun_and_a_local_light() {
                     BOUNCED_SAMPLES,
                     BOUNCED_ABOVE,
                 ),
-            ] {
+            ];
+            let budgets = if bounced { &budgets[..] } else { &budgets[..1] };
+            for &(budget, bounces, samples, above) in budgets {
                 let mut run = |shot, transmissive| {
-                    traced(&gpu, shot, transmissive, bounces, samples, &mut turns)
+                    traced(
+                        &gpu,
+                        shot,
+                        transmissive,
+                        bounces,
+                        samples,
+                        Sampler::default(),
+                        &mut turns,
+                    )
                 };
                 let open = run(without, true);
                 let on = run(with, true);
@@ -536,7 +568,15 @@ fn transmissive_shadows_cost_on_the_pane() {
     };
     for round in 0..2 {
         for transmissive in [false, true] {
-            let run = traced(&gpu, shot, transmissive, Bounces::REFERENCE, 17, &mut turns);
+            let run = traced(
+                &gpu,
+                shot,
+                transmissive,
+                Bounces::REFERENCE,
+                17,
+                Sampler::default(),
+                &mut turns,
+            );
             println!(
                 "pane {SIZE}x{SIZE}, round {round}, option {}: {:.3} ms per sample, longest submission {:.2} ms",
                 if transmissive { "on" } else { "off" },

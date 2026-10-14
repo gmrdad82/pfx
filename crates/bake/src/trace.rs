@@ -3,8 +3,9 @@ use pfx_gpu::{Gpu, wgpu};
 use pfx_load::Sky;
 use pfx_materials::Material;
 use pfx_trace::bvh::{Bvh, Hit, Ray, Triangle};
+use pfx_trace::detail::Detail;
 use pfx_trace::shapes::{Shape, intersect};
-use pfx_trace::{Camera, Scene, Sun, Trace};
+use pfx_trace::{Camera, Sampler, Scene, Sun, Trace};
 use serde::{Deserialize, Serialize};
 
 use crate::batch::{Batch, FACES_PER_BATCH, FaceRecord};
@@ -917,7 +918,11 @@ pub fn bake_anchor_slow(
         },
         sun: anchor.sun,
     };
-    let mut trace = Trace::new(gpu, &trace_scene, FACE as u32, FACE as u32)?;
+    let detail = Detail {
+        sampler: Sampler::Pcg,
+        ..Detail::default()
+    };
+    let mut trace = Trace::new_detailed(gpu, &trace_scene, &detail, FACE as u32, FACE as u32)?;
     let per_round = samples.div_ceil(ROUNDS);
     let enabled: Vec<bool> = extras.iter().map(|extra| extra.enabled).collect();
     let (estimates, _) = converge(&enabled, |round, active| {
