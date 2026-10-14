@@ -59,7 +59,7 @@ let bytes: [u8; 44] = rng.save(); let rng = Rng::restore(&bytes)?;
 - `save()` and `restore(&[u8])` write and read a versioned byte form of the state, for a run that quits and resumes on any machine (see below).
 - `mix64` is the SplitMix64 finalizer, usable as a plain integer hash for per-cell or per-entity values: `mix64(seed ^ cell)`.
 
-## Overlaps: a 2D broadphase
+## Overlaps: a 2D and 3D broadphase
 
 `Overlaps` finds every overlapping pair between two lists of integer boxes, such as a game's shots and its targets, once per tick:
 
@@ -71,12 +71,14 @@ for hit in overlaps.find(&shots, &targets) {
 ```
 
 - `Aabb { min, max }` is half-open in `i32` (game units, sub-pixels or whatever the sim counts in): `min` inside, `max` outside, so two boxes that only touch don't overlap, and an empty box (`max <= min` on either axis) hits nothing. `Aabb::point(at)` is the 1×1 box at a point, `Aabb::around(centre, half)` a box of `2 * half` around a centre.
-- `find(a, b)` returns each overlapping pair once as `Hit { a, b }`, the indices into the two lists, sorted by `a` then `b`, the order a nested loop over the two lists would give. It sweeps the two lists together along the axis where the boxes' corners spread wider and tests the other axis exactly. Only integers and sorts on unique keys touch the result, so it replays bit for bit on every platform.
+- `find(a, b)` returns each overlapping pair once as `Hit { a, b }`, the indices into the two lists, sorted by `a` then `b`, the order a nested loop over the two lists would give. Only integers touch the result, so it replays bit for bit on every platform.
+- How: when the boxes are small next to the field it bins `b` into a uniform grid (cells about the boxes' mean size, no more cells than four per box) and walks each `a` over its cells in order, reporting a pair only in the cell holding the low corner of their overlap, so hits come out already sorted. When a few boxes would cover too many cells (one huge box among many small ones), it sweeps both lists along the axis where the corners spread wider instead. Both paths give the same hits.
+- `Aabb3` and `Overlaps3` do the same in 3D with `[i32; 3]` corners.
 - It keeps its buffers between calls: after the first tick at a given size it allocates nothing. Keep one `Overlaps` in the sim, not in a thread-shared place.
 - A fast shot can pass through a thin target between two ticks; give such a shot the box of its whole step (from where it was to where it is) and test the segment in the game.
-- Cost, release build on a Ryzen 9 9950X: 2,000 shots (8×16) against 400 targets of 32 to 192 units on a 3840×2160 field, about 8,000 hits a tick, take 0.16 ms. The work grows with the hits found: all of it in one column, 48,000 hits, takes 0.6 ms.
+- Cost, release build on a Ryzen 9 9950X (`bench_shots_against_targets_on_a_wide_field`, the fastest of 400 runs): 2,000 shots swept to 7,000 × 34,000 against 400 targets of half-extent 22,000 to 120,000 on a 1,900,000 × 1,000,000 field, 9,240 hits a tick, take 0.12 ms (the sweep alone took 0.34 ms); 2,000 shots against 400 targets on a 3840 × 2160 field take 0.04 ms.
 
-`tests_overlap.rs` checks `find` against every pair tested in order, both ways round, on random scenes with ties, points, empty boxes and negative corners.
+`tests_overlap.rs` checks `find` against every pair tested in order, both ways round, on random scenes with ties, points, empty boxes, negative corners, a box over the whole `i32` range and a few huge boxes among many small ones (the sweep path), and `Overlaps3` the same way.
 
 ## Stream version and saved state
 
