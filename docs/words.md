@@ -33,15 +33,32 @@ let cast = words.cast("name", &rng, 12)?;
 - Weights: `PoolSpec::weighted` gives each entry a `u32` weight; 0 removes it.
 - The same slot twice in one entry draws twice, independently.
 
+## One person, several forms
+
+`{boss=person}` draws the pool `person`, remembers it as `boss` and prints it. Later in the same entry `{boss}` prints the same text again, and `{boss.first}` prints the part that came from the `first` slot of the entry that was drawn, so a full name and a first name are one draw. `{boss=person|hide}` binds without printing. A form is any pool named by a direct slot of the bound pool's entries; at load every entry of the bound pool must hold that slot (`MissingForm` names the pool, the entry and the binding). A binding lasts for the entry that makes it, and a bound name shadows a pool of the same name from there on. Modifiers on a recall apply as usual (`{boss.first|upper}`); `once`, `sticky` and `hide` are refused there (`Misplaced`).
+
+## Fixed for the run, fresh on every use
+
+- `{theme|once}` draws that pool from the seed alone, not the request: every use in a run prints the same thing, and everything nested inside it is fixed too. A different seed picks differently.
+- `{ladder|sticky}` fixes only which entry of `ladder` is taken (say the guild branch or the army branch) and draws what is inside it fresh on every use, so one run climbs one theme's titles.
+- Both work with a binding (`{t=theme|once}`). They are refused together on one slot.
+
 ## Avoid
 
 - `PoolSpec::avoiding([...])`: this pool never produces these texts (matched ignoring case, after expansion). A plain entry on the list is dropped at load; a template that expands to one is redrawn.
+- A pool that builds the composite holds composite avoids: `PoolSpec::new("person", ["{first} {last}"]).avoiding(["Ada Stone"])` never returns that pair, whether drawn by `generate`, nested in another entry or bound with `{p=person}`.
 - The second argument to `Words::new` lists whole results never returned by `generate` or `cast`, from any pool.
 - Redraws stop after 32 attempts per level with `WordsError::Exhausted`.
 
 ## No repeats
 
 `cast(pool, rng, n)` returns `n` distinct results, in draw order. `WordsError::NotEnoughDistinct { pool, wanted, got }` when the pool cannot: at once when `n` exceeds `capacity(pool)` (an upper bound: entries summed, slots multiplied), after a bounded number of redraws when duplicate entries or modifiers make the real count smaller.
+
+`cast_distinct(pool, rng, n, &["first", "last"])` also keeps each listed pool's results out of two members: no repeated first name and no repeated last name across the cast, not just no repeated full name. It returns a `Cast` (the members' text plus the component text that was drawn, plain data a game can save). It errors with `NotEnoughDistinct` when `n` exceeds the capacity of the pool or of a listed pool.
+
+## Re-drawing one member
+
+`redraw(&mut cast, rng, index, counter)` replaces member `index` in place and returns its new text. The draw is keyed from the seed and `counter` (say a hire count) alone, so it does not depend on how many other draws happened or on any stream; the same seed, cast and counter give the same member. The new member differs from every current member, the one it replaces included, and shares no listed component with the others.
 
 ## Determinism
 
@@ -59,5 +76,5 @@ Release build on the dev machine (Ryzen 9 9950X), `cargo test --release -p pfx-c
 
 | work | time |
 | --- | --- |
-| 10,000 `generate` draws | 6.6 ms (about 660 ns each) |
-| `cast` of 10,000 distinct names | 6.3 ms |
+| 10,000 `generate` draws | 3.3 ms (about 330 ns each) |
+| `cast` of 10,000 distinct names | 4.6 ms |
