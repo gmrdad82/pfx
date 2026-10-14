@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.30.0 — 2026-10-14
+
+### Added
+
+- sim: `shots`, pooled projectiles in 2D and 3D with swept boxes, emitters with integer fire charge (single, spread, ring, aimed with lead, burst, spiral), wind-ups, pierce, formations that widen or narrow, and a kinematic follow with slow and stun.
+- sim: `director`, a spawn director from data: phases, ramps, lulls, weighted tables by tag, caps, groups in a line, per-entry start times, saved as bytes.
+- sim: `journal`, a compact per-tick input log (about 3 bytes a tick for a moving pointer and four buttons) with seed, versions and checkpoints, and a headless verify that replays it.
+- sim: `Overlaps3`, the broadphase in 3D.
+- numbers: game number formatting with grouping, scientific, engineering and short suffixes, per-style thresholds, ceil and truncate rounding, and a policy for NaN and infinity.
+- words: a seeded text generator for names, titles and barks: templates with slots, weights, avoid lists, linked name forms, run-fixed draws, casts with no repeated parts and keyed redraws.
+
+### Changed
+
+- sim: `Overlaps` bins small boxes in a uniform grid, about three times faster on a wide field of small boxes.
+- the asset look checks render at 128 samples, the count their floors were set at.
+
 ## v0.29.0 — 2026-10-14
 
 ### Added
