@@ -7,6 +7,7 @@ use crate::channel::{
 use crate::clip::Clip;
 use crate::envelope::{EnvState, Envelope};
 use crate::filter::Kind;
+use crate::heard::{Bounds, MusicPlace};
 use crate::interp::{Kernel, MAX_RATIO, MIN_RATIO};
 use crate::music::{Curve, Direction, MusicTrack};
 use crate::pcm::{PcmSender, pcm_pair};
@@ -421,6 +422,42 @@ impl Mixer {
     pub fn music(&self) -> Option<VoiceId> {
         self.music
             .filter(|id| self.voices.iter().any(|voice| voice.id == *id))
+    }
+
+    pub fn music_position(&self) -> Option<f64> {
+        let place = self.music_place()?;
+        Some(place.frame_after(0.0) / f64::from(self.rate.max(1)))
+    }
+
+    pub(crate) fn music_place(&self) -> Option<MusicPlace> {
+        let id = self.music?;
+        let voice = self.voices.iter().find(|voice| voice.id == id)?;
+        let bounds = match &voice.source {
+            Source::Buffer {
+                frames,
+                looping: Some((start, end)),
+                ..
+            } if *end > *start => Bounds::Loop(*start, *end),
+            Source::Buffer { frames, .. } => Bounds::Once(*frames),
+            _ => Bounds::Open,
+        };
+        let played = match bounds {
+            Bounds::Loop(start, end) if voice.laps > 0 => {
+                end as f64 + (voice.laps - 1) as f64 * (end - start) as f64 + voice.cursor
+                    - start as f64
+            }
+            _ => voice.cursor,
+        };
+        let bus = self
+            .buses
+            .get(&voice.channel)
+            .map_or(1.0, |bus| bus.pitch.current());
+        let ratio = (voice.pitch.current() * bus).clamp(MIN_RATIO, MAX_RATIO);
+        Some(MusicPlace {
+            played,
+            ratio: f64::from(ratio),
+            bounds,
+        })
     }
 
     pub fn stop(&mut self, id: VoiceId, fade_seconds: f32) {
@@ -1224,6 +1261,24 @@ mod tests {
         assert_eq!(*up.last().unwrap(), 1.0);
         assert!(down[0] > 0.0 && down[0] < 1.0);
         assert_eq!(*master.last().unwrap(), 0.0);
+    }
+
+    #[test]
+    fn the_music_position_follows_the_loop_and_unwraps_for_the_latency() {
+        let track = MusicTrack::with_loop(constant(0.5, 1000), 200, 800);
+        let mut mixer = Mixer::new(48_000, 1);
+        assert_eq!(mixer.music_position(), None);
+        mixer.play_music(&track, 0.0, Level::default());
+        assert_eq!(mixer.music_position(), Some(0.0));
+        mixer.render(1000);
+        assert_eq!(mixer.music_position(), Some(400.0 / 48_000.0));
+        let place = mixer.music_place().unwrap();
+        assert_eq!(place.frame_after(-300.0), 700.0);
+        assert_eq!(place.frame_after(-1200.0), 0.0);
+        mixer.render(1200);
+        assert_eq!(mixer.music_place().unwrap().frame_after(-300.0), 700.0);
+        mixer.stop_music(0.0);
+        assert_eq!(mixer.music_position(), None);
     }
 
     #[test]

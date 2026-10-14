@@ -3,6 +3,7 @@ mod clip;
 mod decode;
 mod envelope;
 mod filter;
+mod heard;
 mod interp;
 mod live;
 mod mix;

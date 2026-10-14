@@ -7,6 +7,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crate::channel::{ChannelId, Ducking};
 use crate::clip::Clip;
 use crate::decode::{Decode, DecodeSpec, spec_at_output};
+use crate::heard::Heard;
 use crate::mix::{Level, Mixer, VoiceId, lock};
 use crate::music::MusicTrack;
 use crate::pcm::PcmSender;
@@ -16,6 +17,7 @@ use crate::synth::Wave;
 pub struct Output {
     stream: Option<cpal::Stream>,
     mixer: Arc<Mutex<Mixer>>,
+    heard: Arc<Heard>,
     decodes: Mutex<Vec<Decode>>,
     rate: u32,
     channels: u16,
@@ -38,13 +40,17 @@ impl Output {
             return Err("output device has no channels".into());
         }
         let mixer = Arc::new(Mutex::new(Mixer::new(rate, channels)));
+        let heard = Arc::new(Heard::new(rate));
         let stream = match format {
             cpal::SampleFormat::F32 => {
                 let shared = Arc::clone(&mixer);
+                let clock = Arc::clone(&heard);
                 device
                     .build_output_stream(
                         config,
-                        move |data: &mut [f32], _| fill_f32(data, &shared),
+                        move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
+                            fill(data, info, &shared, &clock, Mixer::render_into)
+                        },
                         |_| {},
                         None,
                     )
@@ -52,10 +58,13 @@ impl Output {
             }
             cpal::SampleFormat::I16 => {
                 let shared = Arc::clone(&mixer);
+                let clock = Arc::clone(&heard);
                 device
                     .build_output_stream(
                         config,
-                        move |data: &mut [i16], _| fill_i16(data, &shared),
+                        move |data: &mut [i16], info: &cpal::OutputCallbackInfo| {
+                            fill(data, info, &shared, &clock, Mixer::render_i16)
+                        },
                         |_| {},
                         None,
                     )
@@ -67,6 +76,7 @@ impl Output {
         Ok(Output {
             stream: Some(stream),
             mixer,
+            heard,
             decodes: Mutex::new(Vec::new()),
             rate,
             channels,
@@ -199,6 +209,10 @@ impl Output {
         lock(&self.mixer).stop_music(fade_seconds);
     }
 
+    pub fn music_heard(&self) -> Option<f64> {
+        self.heard.seconds(Instant::now())
+    }
+
     #[cfg(feature = "vorbis")]
     pub fn stream_vorbis(
         &self,
@@ -302,12 +316,23 @@ fn play_chime(clip: Clip) -> Result<(), String> {
     Ok(())
 }
 
-fn fill_f32(data: &mut [f32], mixer: &Mutex<Mixer>) {
-    lock(mixer).render_into(data);
-}
-
-fn fill_i16(data: &mut [i16], mixer: &Mutex<Mixer>) {
-    lock(mixer).render_i16(data);
+fn fill<T>(
+    data: &mut [T],
+    info: &cpal::OutputCallbackInfo,
+    mixer: &Mutex<Mixer>,
+    heard: &Heard,
+    render: fn(&mut Mixer, &mut [T]),
+) {
+    let now = Instant::now();
+    let stamp = info.timestamp();
+    let latency = stamp.playback.duration_since(stamp.callback);
+    let mut mixer = lock(mixer);
+    let place = mixer.music_place();
+    render(&mut mixer, data);
+    let frames = data.len() / usize::from(mixer.channels().max(1));
+    let block = Duration::from_secs_f64(frames as f64 / f64::from(mixer.rate().max(1)));
+    drop(mixer);
+    heard.publish(place, now + latency, block);
 }
 
 #[cfg(test)]

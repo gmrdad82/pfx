@@ -42,6 +42,8 @@ mixer.play_music(&track, 2.0, Level::default());
 - The loop is a hard wrap from `loop_end` back to `loop_start`, sample exact. Author the points on a zero crossing or a bar line; the engine adds no smoothing.
 - `play_music` while a track is playing crossfades: the old track fades out as the new fades in over the given seconds, **equal power** (cos and sin curves, so the squared gains always sum to 1; two unrelated tracks keep their summed power within 0.5 dB). Zero seconds switches at once.
 - `stop_music(fade)` fades the current track out. `music()` is the playing track's voice, if any.
+- `Mixer::music_position()` is the current track's render position in seconds into the track: the next frame the mixer renders, loop-aware (a looped track reads back inside its loop). `None` when no track plays.
+- `Output::music_heard()` is the frame reaching the speaker now, in seconds into the track, for a meter or a playhead read every UI frame. The audio callback records the track's position at the start of each block it renders and when that block plays (the callback's time plus the latency cpal reports, playback minus callback) in a few atomics, without a lock; the read extrapolates from there by the elapsed time and the track's pitch, at most one block ahead (so it holds still if callbacks stop), and steps back across a loop point to the end of the loop. It reads `0.0` until a new track's start is heard, and `None` once no track plays (the old track's fade-out is not followed). A decoded music stream (`play_music_vorbis`) reads the frames its stream has delivered, not wrapped by its loop.
 
 ## Ducking
 

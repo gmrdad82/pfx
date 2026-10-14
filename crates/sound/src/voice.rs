@@ -22,6 +22,7 @@ pub(crate) struct Voice {
     pub(crate) gain: Ramp,
     pub(crate) pitch: Ramp,
     pub(crate) cursor: f64,
+    pub(crate) laps: u64,
     pub(crate) rendered: bool,
     pub(crate) envelope: Option<EnvState>,
     pub(crate) source: Source,
@@ -138,6 +139,7 @@ impl Voice {
             gain: Ramp::new(1.0),
             pitch: Ramp::new(1.0),
             cursor: 0.0,
+            laps: 0,
             rendered: false,
             envelope: None,
             source,
@@ -157,6 +159,7 @@ impl Voice {
             gain,
             pitch,
             cursor,
+            laps,
             rendered,
             envelope: shaping,
             source,
@@ -219,7 +222,9 @@ impl Voice {
                         && *cursor >= loop_end as f64
                     {
                         let span = (loop_end - loop_start) as f64;
-                        *cursor = loop_start as f64 + (*cursor - loop_start as f64) % span;
+                        let over = *cursor - loop_start as f64;
+                        *laps += (over / span) as u64;
+                        *cursor = loop_start as f64 + over % span;
                     }
                     Played {
                         left,
