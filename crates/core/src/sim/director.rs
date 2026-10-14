@@ -6,11 +6,13 @@ pub const ONE: i32 = 1 << 16;
 pub const UNCAPPED: u32 = u32::MAX;
 pub const NO_SPOT: u32 = u32::MAX;
 pub const MAX_ORDERS_PER_TICK: usize = 16;
-pub const DIRECTOR_VERSION: u32 = 1;
+pub const DIRECTOR_VERSION: u32 = 2;
 
 pub const TIMING: u64 = 1;
 pub const PICKS: u64 = 2;
 pub const POSITIONS: u64 = 3;
+pub const FORMS: u64 = 4;
+pub const SPREADS: u64 = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
@@ -112,6 +114,8 @@ pub struct Entry {
     pub weight: u32,
     pub tags: u32,
     pub cost: u32,
+    pub from: u64,
+    pub line: Option<Line>,
 }
 
 impl Entry {
@@ -121,6 +125,8 @@ impl Entry {
             weight,
             tags: 0,
             cost: 1,
+            from: 0,
+            line: None,
         }
     }
 
@@ -132,6 +138,67 @@ impl Entry {
     pub const fn costing(mut self, cost: u32) -> Self {
         self.cost = cost;
         self
+    }
+
+    pub const fn from_tick(mut self, tick: u64) -> Self {
+        self.from = tick;
+        self
+    }
+
+    pub const fn in_line(mut self, line: Line) -> Self {
+        self.line = Some(line);
+        self
+    }
+
+    const fn least_members(&self) -> u32 {
+        match self.line {
+            Some(line) => line.min,
+            None => 1,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Anchor {
+    Start,
+    Centre,
+    End,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Line {
+    pub min: u32,
+    pub max: u32,
+    pub direction: [i32; 3],
+    pub gap: i32,
+    pub spread: [i32; 3],
+    pub anchor: Anchor,
+}
+
+impl Line {
+    pub const fn new(min: u32, max: u32, direction: [i32; 3], gap: i32) -> Self {
+        Self {
+            min,
+            max,
+            direction,
+            gap,
+            spread: [0; 3],
+            anchor: Anchor::Start,
+        }
+    }
+
+    pub const fn spread(mut self, spread: [i32; 3]) -> Self {
+        self.spread = spread;
+        self
+    }
+
+    pub const fn anchored(mut self, anchor: Anchor) -> Self {
+        self.anchor = anchor;
+        self
+    }
+
+    fn step(&self, axis: usize) -> i64 {
+        self.direction[axis] as i64 * self.gap as i64
     }
 }
 
@@ -215,6 +282,7 @@ pub enum DirectorError {
     Unspawnable { phase: u32 },
     BadRamp { phase: u32 },
     BadLull { phase: u32 },
+    BadLine { id: u32 },
     BadWindow { window: u32 },
     Length { found: usize, expected: usize },
     Version { found: u32 },
@@ -259,6 +327,10 @@ impl fmt::Display for DirectorError {
             Self::BadLull { phase } => write!(
                 f,
                 "phase {phase} has a lull whose minimum exceeds its maximum"
+            ),
+            Self::BadLine { id } => write!(
+                f,
+                "entry {id} has a line with no members, a minimum above its maximum or a negative spread"
             ),
             Self::BadWindow { window } => {
                 write!(f, "quiet window {window} ends at or before its start")
@@ -334,6 +406,9 @@ pub struct SpawnOrder {
     pub speed: i32,
     pub position: [i32; 3],
     pub spot: u32,
+    pub group: u32,
+    pub member: u32,
+    pub members: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -360,6 +435,9 @@ pub struct Director {
     timing: Rng,
     picks: Rng,
     positions: Rng,
+    forms: Rng,
+    spreads: Rng,
+    next_group: u32,
 }
 
 impl Schedule {
@@ -375,6 +453,13 @@ impl Schedule {
             let total: u64 = table.entries.iter().map(|e| e.weight as u64).sum();
             if total == 0 {
                 return Err(DirectorError::ZeroWeight { table: t as u32 });
+            }
+            for e in &table.entries {
+                if let Some(line) = e.line
+                    && (line.min == 0 || line.min > line.max || line.spread.iter().any(|&v| v < 0))
+                {
+                    return Err(DirectorError::BadLine { id: e.id });
+                }
             }
             ids.extend(table.entries.iter().map(|e| e.id));
         }
@@ -446,7 +531,8 @@ impl Schedule {
         let fits = table.entries.iter().any(|e| {
             e.weight > 0
                 && (phase.tag_filter == 0 || e.tags & phase.tag_filter != 0)
-                && e.cost <= room
+                && e.from < phase.end
+                && e.cost as u64 * e.least_members() as u64 <= room as u64
         });
         if !fits {
             return Err(DirectorError::Unspawnable { phase: p });
@@ -469,6 +555,20 @@ impl Schedule {
                 put(e.weight as u64);
                 put(e.tags as u64);
                 put(e.cost as u64);
+                put(e.from);
+                match e.line {
+                    Some(l) => {
+                        put(1 + l.min as u64);
+                        put(l.max as u64);
+                        for axis in 0..3 {
+                            put(l.direction[axis] as u32 as u64);
+                            put(l.spread[axis] as u32 as u64);
+                        }
+                        put(l.gap as u32 as u64);
+                        put(l.anchor as u64);
+                    }
+                    None => put(0),
+                }
             }
         }
         put(self.phases.len() as u64);
@@ -537,6 +637,9 @@ impl Director {
             timing: root.fork(TIMING),
             picks: root.fork(PICKS),
             positions: root.fork(POSITIONS),
+            forms: root.fork(FORMS),
+            spreads: root.fork(SPREADS),
+            next_group: 0,
             schedule,
         })
     }
@@ -648,13 +751,14 @@ impl Director {
             while self.states[p].charge >= threshold && fired < MAX_ORDERS_PER_TICK {
                 let group_now = (group.at(elapsed, duration) >> 16).max(1) as u32;
                 let speed_now = speed.at(elapsed, duration).max(0);
-                let Some(order) = self.build(table, tag_filter, group_now, speed_now, spots) else {
+                let Some(members) =
+                    self.build(now, table, tag_filter, group_now, speed_now, spots, out)
+                else {
                     break;
                 };
                 self.states[p].charge -= threshold;
                 self.states[p].wave_open = true;
-                self.states[p].spawned = self.states[p].spawned.saturating_add(order.count);
-                out.push(order);
+                self.states[p].spawned = self.states[p].spawned.saturating_add(members);
                 fired += 1;
                 if let Some(after) = after
                     && after.spawns > 0
@@ -670,20 +774,26 @@ impl Director {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build(
         &mut self,
+        now: u64,
         table: usize,
         tag_filter: u32,
         group: u32,
         speed: i32,
         spots: &Spots,
-    ) -> Option<SpawnOrder> {
+        out: &mut Vec<SpawnOrder>,
+    ) -> Option<u32> {
         let tbl = &self.schedule.tables[table];
         let room_table = (tbl.cap as u64).saturating_sub(self.table_load[table]);
         let room_all = (self.schedule.cap as u64).saturating_sub(self.load);
         let room = room_table.min(room_all);
         let eligible = |e: &Entry| {
-            e.weight > 0 && (tag_filter == 0 || e.tags & tag_filter != 0) && e.cost as u64 <= room
+            e.weight > 0
+                && now >= e.from
+                && (tag_filter == 0 || e.tags & tag_filter != 0)
+                && e.cost as u64 * e.least_members() as u64 <= room
         };
         let total: u64 = tbl
             .entries
@@ -707,23 +817,78 @@ impl Director {
             target -= e.weight as u64;
         }
         let (index, entry) = chosen?;
-        let count = if entry.cost == 0 {
-            group
+        let fit = if entry.cost == 0 {
+            u32::MAX
         } else {
-            (group as u64).min(room / entry.cost as u64) as u32
+            (room / entry.cost as u64).min(u32::MAX as u64) as u32
         };
-        let cost = count as u64 * entry.cost as u64;
-        self.alive[self.bases[table] as usize + index] += count;
+        let (position, spot) = self.pick_position(spots);
+        let id = self.next_group;
+        self.next_group = self.next_group.wrapping_add(1);
+        let members = match entry.line {
+            None => group.min(fit),
+            Some(line) => {
+                let wanted = if line.max > line.min {
+                    self.forms.range_u64(line.min as u64, line.max as u64 + 1) as u32
+                } else {
+                    line.min
+                };
+                wanted.min(fit)
+            }
+        };
+        let cost = members as u64 * entry.cost as u64;
+        self.alive[self.bases[table] as usize + index] += members;
         self.table_load[table] += cost;
         self.load += cost;
-        let (position, spot) = self.pick_position(spots);
-        Some(SpawnOrder {
-            entry: entry.id,
-            count,
-            speed,
-            position,
-            spot,
-        })
+        match entry.line {
+            None => out.push(SpawnOrder {
+                entry: entry.id,
+                count: members,
+                speed,
+                position,
+                spot,
+                group: id,
+                member: 0,
+                members,
+            }),
+            Some(line) => {
+                for member in 0..members {
+                    let at = self.place(&line, position, member, members);
+                    out.push(SpawnOrder {
+                        entry: entry.id,
+                        count: 1,
+                        speed,
+                        position: at,
+                        spot,
+                        group: id,
+                        member,
+                        members,
+                    });
+                }
+            }
+        }
+        Some(members)
+    }
+
+    fn place(&mut self, line: &Line, base: [i32; 3], member: u32, members: u32) -> [i32; 3] {
+        let mut at = base;
+        for (axis, slot) in at.iter_mut().enumerate() {
+            let step = line.step(axis);
+            let along = match line.anchor {
+                Anchor::Start => step * member as i64,
+                Anchor::End => step * (member as i64 - (members as i64 - 1)),
+                Anchor::Centre => step * (2 * member as i64 - (members as i64 - 1)) / 2,
+            };
+            let jitter = if line.spread[axis] > 0 {
+                self.spreads
+                    .range_i64(-(line.spread[axis] as i64), line.spread[axis] as i64 + 1)
+            } else {
+                0
+            };
+            *slot =
+                (base[axis] as i64 + along + jitter).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        }
+        at
     }
 
     fn pick_position(&mut self, spots: &Spots) -> ([i32; 3], u32) {
@@ -748,7 +913,7 @@ impl Director {
     }
 
     fn state_len(&self) -> usize {
-        4 + 8 + 8 + self.states.len() * PHASE_BYTES + self.alive.len() * 4 + 3 * STATE_BYTES
+        4 + 8 + 8 + 4 + self.states.len() * PHASE_BYTES + self.alive.len() * 4 + 5 * STATE_BYTES
     }
 
     #[must_use]
@@ -757,6 +922,7 @@ impl Director {
         out.extend_from_slice(&DIRECTOR_VERSION.to_le_bytes());
         out.extend_from_slice(&self.fingerprint.to_le_bytes());
         out.extend_from_slice(&self.now.to_le_bytes());
+        out.extend_from_slice(&self.next_group.to_le_bytes());
         for s in &self.states {
             out.extend_from_slice(&s.charge.to_le_bytes());
             out.extend_from_slice(&s.spawned.to_le_bytes());
@@ -769,6 +935,8 @@ impl Director {
         out.extend_from_slice(&self.timing.save());
         out.extend_from_slice(&self.picks.save());
         out.extend_from_slice(&self.positions.save());
+        out.extend_from_slice(&self.forms.save());
+        out.extend_from_slice(&self.spreads.save());
         out
     }
 
@@ -789,7 +957,7 @@ impl Director {
         if u64_at(4) != self.fingerprint {
             return Err(DirectorError::Mismatch);
         }
-        let mut at = 20;
+        let mut at = 24;
         let mut states = Vec::with_capacity(self.states.len());
         for _ in 0..self.states.len() {
             states.push(PhaseState {
@@ -811,12 +979,17 @@ impl Director {
         let timing = rng(at)?;
         let picks = rng(at + STATE_BYTES)?;
         let positions = rng(at + 2 * STATE_BYTES)?;
+        let forms = rng(at + 3 * STATE_BYTES)?;
+        let spreads = rng(at + 4 * STATE_BYTES)?;
         self.now = u64_at(12);
+        self.next_group = u32_at(20);
         self.states = states;
         self.alive = alive;
         self.timing = timing;
         self.picks = picks;
         self.positions = positions;
+        self.forms = forms;
+        self.spreads = spreads;
         self.table_load.iter_mut().for_each(|l| *l = 0);
         self.load = 0;
         for (t, table) in self.schedule.tables.iter().enumerate() {
