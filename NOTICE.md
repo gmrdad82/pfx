@@ -31,6 +31,18 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 
 `crates/trace/src/sobol.rs` and `crates/trace/src/sobol.wgsl` (in the package `pfx-trace`) are a port of Cycles' tabulated Sobol sampler (https://github.com/blender/cycles, tag `v5.2.0`, commit `3b97e190c5ff1a2ed2160d879ad5bf95bea7b8ba`), SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0. Its text ships in [crates/trace/LICENSE-APACHE](crates/trace/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Cycles. The port is a translation into Rust and WGSL, changed by pfx's authors: the 4D table generator after Helmer, Christensen and Kensler's "Stochastic Generation of (t, s) Sample Sequences" with its xor tables (`scene/tabulated_sobol.cpp`), the shuffled lookup (`kernel/sample/tabulated_sobol.h`), the Owen scramble (`kernel/sample/util.h`), the hashes (`util/hash.h`), the per-pixel seed and the table sizes (`kernel/sample/pattern.h`, `kernel/types.h`, `scene/integrator.cpp`).
 
+## kira, under the MIT licence
+
+`hermite` in `crates/sound/src/interp.rs` (in the package `pfx-sound`), the 4-point, 3rd-order Hermite behind `Resample::Cubic`, is ported from kira's `interpolate_frame` (https://github.com/tesselode/kira, `crates/kira/src/frame.rs`, commit `74b3ef0fd8bd15f90e3b469208ee741f04374a62`), Copyright 2021 Andrew Minnich, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+
+> Copyright 2021 Andrew Minnich
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 
 
 pfx's mark and wordmark are © Catalin Ilinca, all rights reserved, and not covered by the MIT licence ([TRADEMARKS.md](TRADEMARKS.md)):

@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.31.0 — 2026-10-14
+
+### Added
+
+- sound: `Resample::Cubic` and `Linear` beside `Sinc`: short pitched clips read through a cubic Hermite in one tight loop per block; jittered hits drop from 5.0 to 0.3 ms of CPU a tick.
+- sound: tones as sounds (`Mixer::tone_sound`), sharing the clips' voice cap, stealing and pitch jitter, with an optional length.
+- sound: `trigger_in` and `tone_in` start a sound at a frame offset inside the block, so rapid triggers spread through it.
+
+### Changed
+
+- sound: `SoundSpec` defaults to cubic resampling; music, streams and `play` keep the sinc.
+- sound: sines read a table, and the mixer's envelopes, filters, fades and jitter use the bit-exact sim math, so the mix is the same bits on every platform; 20 sine tones cost 0.1 ms a tick instead of 0.22.
+
 ## v0.30.0 — 2026-10-14
 
 ### Added
