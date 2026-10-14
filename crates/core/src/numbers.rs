@@ -68,6 +68,7 @@ pub struct Format<'a> {
     pub precision: Precision,
     pub big_precision: Option<Precision>,
     pub rounding: Rounding,
+    pub sci_rounding: Option<Rounding>,
     pub trim_zeros: bool,
     pub group_sep: Option<char>,
     pub group_size: u8,
@@ -87,6 +88,7 @@ impl Default for Format<'_> {
             precision: Precision::Decimals(2),
             big_precision: None,
             rounding: Rounding::HalfAway,
+            sci_rounding: None,
             trim_zeros: false,
             group_sep: Some(','),
             group_size: 3,
@@ -491,7 +493,7 @@ impl Format<'_> {
                     }
                 }
                 Style::Scientific => {
-                    dec.round_to(keep_for(big, 1), self.rounding);
+                    dec.round_to(keep_for(big, 1), self.sci_rounding.unwrap_or(self.rounding));
                     self.shifted_layout(big, &dec, 1)
                 }
                 Style::Engineering | Style::Short => {

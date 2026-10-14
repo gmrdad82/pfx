@@ -6,6 +6,7 @@ const PI: f64 = f64::from_bits(0x4009_21FB_5444_2D18);
 const RADIANS: f64 = PI / 180_000.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Pattern {
     Single,
     Fan { count: u32, arc: i32 },
@@ -15,12 +16,14 @@ pub enum Pattern {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Rate {
     pub charge: u32,
     pub cost: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Burst {
     pub count: u32,
     pub gap: u32,
@@ -28,6 +31,7 @@ pub struct Burst {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fire {
     pub pattern: Pattern,
     pub rate: Rate,
@@ -38,6 +42,7 @@ pub struct Fire {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Telegraph {
     left: u32,
     total: u32,
@@ -87,6 +92,7 @@ impl Telegraph {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Phase {
     Ready,
     Winding { left: u32, total: u32 },
@@ -95,12 +101,14 @@ pub enum Phase {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Aim2 {
     Angle(i32),
     At { target: [i32; 2], vel: [i32; 2] },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Aim3 {
     Basis {
         forward: [i32; 3],
@@ -114,12 +122,14 @@ pub enum Aim3 {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Emitter {
     pub fire: Fire,
     charge: u32,
     phase: Phase,
     telegraph: Telegraph,
     spin: i32,
+    #[cfg_attr(feature = "serde", serde(skip))]
     locals: Vec<(f64, f64)>,
 }
 

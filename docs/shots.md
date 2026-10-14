@@ -21,7 +21,7 @@ for strike in shots.resolve(&ids, hits, &targets, |shot, target| alive[target as
 - Free slots are reused last-freed first, and `iter`, `step` and `boxes` walk the slots in index order, so the order of shots depends only on what the game did, and replays.
 - `step(bounds)` moves every live shot by its velocity once (saturating at the `i32` edge). `life: Some(n)` lets a shot make `n` moves; the step after its last move removes it as `End::Expired`. A shot whose swept box no longer overlaps `bounds` is removed as `End::Left` in the same step, so a shot on the edge still gets its last box tested. `life: None` lives until it leaves or is despawned. The returned list (also `ended()`) is in slot order.
 - `Span<N>` is a half-open integer box like `Aabb`. `swept(id)` is the box a shot covered over its last step: its half-extents around every point from where it was to where it is, the union of its start and end boxes, as Box2D builds a moving body's AABB. A shot fresh from `spawn` has its own box. `boxes` fills `Vec<Aabb>` in 2D and `Vec<Aabb3>` in 3D (anything `From<Span<N>>`), with the matching ids, ready for `Overlaps::find` / `Overlaps3::find`.
-- **Pierce:** `resolve(ids, hits, targets, accept)` applies `find`'s hits to the pool. Each shot takes its targets in the order its swept box reached them over the step (ties by target index), skips any `accept` refuses (a dead target, friendly fire, one this shot already struck), and strikes the rest: the first strike with no `pierce` left despawns the shot, each earlier one spends a pierce. It returns `Strike { shot, target, gone }` in shot order, then path order; the game resolves damage from it. A piercing shot overlapping a target over several ticks is offered it every tick, so a game that wants one strike per target remembers the pairs and refuses them in `accept`. `targets` is the same list given to `find` (`Aabb`, `Aabb3` or `Span<N>`).
+- **Pierce:** `resolve(ids, hits, targets, accept)` applies `find`'s hits to the pool. Each shot takes its targets in the order its swept box reached them over the step (ties by target index), skips any `accept` refuses (a dead target, friendly fire, one this shot already struck), and strikes the rest: the first strike with no `pierce` left despawns the shot, each earlier one spends a pierce. It returns `Strike { shot, target, gone, pos }` (`pos` the shot's position at the strike, kept after a gone shot is freed) in shot order, then path order; the game resolves damage from it. A piercing shot overlapping a target over several ticks is offered it every tick, so a game that wants one strike per target remembers the pairs and refuses them in `accept`. `targets` is the same list given to `find` (`Aabb`, `Aabb3` or `Span<N>`).
 
 ## Emitters
 
@@ -64,6 +64,10 @@ walker.step(goal);
 - `Member { pos, offset, limit }` holds `offset` from its leader; `limit: None` snaps to the slot, `Some(l)` catches up at most `l` units a tick. `follow` steps a slice in order. `follow_scaled(members, leader, num, den)` and `Member::step_scaled` use `offset * num / den` (rounded to nearest, halves away from zero, so a mirrored formation stays mirrored) for a formation that tightens or spreads with a state, such as closing in while firing: ease `num` toward its target with `toward([num], [goal], step)` each tick. `slot_scaled` gives the same point for a gun's muzzle. To turn a formation with its leader, set the offsets from the leader's facing.
 - `Mover { pos, top }` walks toward a target at `top` units a tick. `stun(n)` stops it for `n` steps; a second stun keeps the longer of the two. `slow(num, den, n)` keeps `num/den` of `top` (floored) for `n` steps; the same ratio again keeps the longer time, a different ratio is tracked on its own, and the strongest live slow is the one that applies. A stun beats every slow. Modifiers apply on the step they count down in.
 
+## Saving
+
+With pfx-core's `serde` feature, `Shots`, `Shot`, `ShotId`, `Span`, `Strike`, `End`, `Emitter` (with `Fire`, `Pattern`, `Rate`, `Burst`, `Phase`, `Aim2`, `Aim3`), `Telegraph`, `Mover`, `Slow` and `Member` derive `Serialize` and `Deserialize`. A pool saves its slots, generations, free list and live count; the per-step outputs (`ended`, the last `resolve`'s strikes) and scratch buffers are not saved. A reloaded arena steps on the same bits as the one that was saved, and `Shots` compares equal (`PartialEq`) on its saved state, which a test pins.
+
 ## Cost
 
 Release build, Ryzen 9 9950X, `bench_two_thousand_shots_and_fifty_emitters` under `pgpu run --class bench`: one tick of 50 emitters (aimed, leading a target), the pool step and every swept box, with about 2,000 live shots:
@@ -72,6 +76,8 @@ Release build, Ryzen 9 9950X, `bench_two_thousand_shots_and_fifty_emitters` unde
 | --- | --- |
 | 2D, 4,096 slots, ~2,060 live | 22 µs |
 | 3D, 4,096 slots, ~1,980 live, crowns with cone spread | 21 µs |
+
+`bench_two_thousand_shots_against_four_hundred_targets`: 2,000 live shots in 4,096 slots against 400 targets, about 1,080 hits a tick, nearly all one target per shot: `step` and `boxes` 18 µs (24 before the walks stopped at the highest live slot), `resolve` 3.5 µs (15 before a shot with one candidate skipped the entry time and the sort), under a load average of about 22.
 
 Those runs shared the machine with a load average of about 31 on 32 threads (at 94 they took 47 and 52 µs), so an idle machine should take less; rerun the bench before quoting it as a budget. The pool allocates nothing after `new`; `boxes` and the emitters' buffers allocate only while they grow.
 

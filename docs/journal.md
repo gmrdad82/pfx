@@ -42,7 +42,9 @@ let last = journal.verify(&schema, SIM_VERSION, |input| {
 })?;
 ```
 
-`verify` refuses a journal from another sim version, another rng stream version or another input schema before it steps anything, replays every tick, and stops with `JournalError::Checkpoint { tick, found, expected }` at the first checkpoint whose digest differs, so a forged or diverged run fails within one checkpoint interval. It returns the digest of the last tick (`None` for a journal with no ticks); the game compares it, or the state it reached, with the claimed result.
+`verify` refuses a journal from another sim version, another rng stream version or another input schema before it steps anything, replays every tick, and stops with `JournalError::Checkpoint { tick, found, expected }` at the first checkpoint whose digest differs, so a forged or diverged run fails within one checkpoint interval. It returns the digest of the last tick (`None` for a journal with no ticks); the game compares it, or the state it reached, with the claimed result. `verify_sparse(schema, sim_version, |input, wanted| ...)` replays the same way but tells the step when its digest is read, on checkpoint ticks and the last tick only; on other ticks the value it returns is ignored, so a game with a costly digest computes it only there.
+
+`JournalWriter::bytes()` (or `bytes_into(&mut buf)`, reusing the buffer) returns the journal so far without consuming the writer, the same bytes `finish` would return at that tick, so a game can flush a running journal every second and keep recording.
 
 `Digest` is FNV-1a 64 over little-endian bytes, the hash the format itself uses. A game builds its state digest with it from integers and from `sim`'s bit-exact outputs:
 

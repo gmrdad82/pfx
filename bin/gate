@@ -30,6 +30,7 @@ lint() {
   step fmt cargo fmt --all --check
   step clippy cargo clippy --workspace --all-targets -- -D warnings
   step game-clippy cargo clippy -p pfx-game --all-targets --features tools,steam,dev-hud,modules -- -D warnings
+  step core-serde-clippy cargo clippy -p pfx-core --all-targets --features serde -- -D warnings
   step agnostic cargo test -q --test agnostic
   step licences cargo test -q --test licences
   step steam-alone steam_alone
@@ -40,6 +41,7 @@ tests() {
   step build cargo build --workspace --bins --examples
   step tests cargo test --workspace --all-targets
   step game-tests cargo test -p pfx-game --lib --features tools,steam
+  step core-serde cargo test -p pfx-core --lib --features serde
   step doc-tests cargo test --workspace --doc
 }
 

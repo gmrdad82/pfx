@@ -31,6 +31,7 @@ assert_eq!(line, "1,234,567.00");
 | `precision` | `Decimals(2)` | for plain numbers: `Decimals(d)` fixed places after the point; `Significant(s)` that many digits (0 counts as 1); `AtLeast(s)` that many digits but never fewer integer digits (`s` = 2 gives `1.2`, `12`, `123`) |
 | `big_precision` | `None` | the same choice for the numbers past `from_exp` (scientific, engineering, short); `None` reuses `precision`. This is how plain stays exact (`Decimals(0)`) while `1.0e12` has two significant digits |
 | `rounding` | `HalfAway` | `HalfAway` (2.5 is 3, -2.5 is -3), `HalfEven` (2.5 is 2, 3.5 is 4), `Ceil` (toward +infinity: 0.0001 is 1 with no decimals, so a live count never reads 0; -2.9 is -2) or `Truncate` (toward zero, never carries: 999,999 is `999K`, not `1.0M`) |
+| `sci_rounding` | `None` | the rounding the scientific form uses, `Style::Scientific` or `Short` past `sci_from` (`Some(HalfEven)` with `rounding: Ceil`: counts below the threshold round up, scientific ones to even); `None` uses `rounding` |
 | `trim_zeros` | `false` | drop trailing zeros of the fraction, and the mark when nothing is left |
 | `group_sep`, `group_size` | `Some(',')`, `3` | digit grouping of the plain integer part; `None` or size 0 turns it off. `Some(' ')` gives `1 234 567` |
 | `decimal_mark` | `'.'` | the mark before the fraction |

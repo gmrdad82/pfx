@@ -274,6 +274,42 @@ fn verify_replays_and_fails_at_the_first_checkpoint_that_disagrees() {
 }
 
 #[test]
+fn a_writer_hands_out_its_bytes_and_verify_asks_only_for_the_digests_it_checks() {
+    let schema = every_kind();
+    let mut rng = Rng::new(12);
+    let inputs = scripted(&mut rng, &schema, 301);
+    let mut writer = JournalWriter::new(&schema, 77, SIM_VERSION, 32);
+    let mut state = 77;
+    let mut flushed = Vec::new();
+    for (tick, input) in inputs.iter().enumerate() {
+        let digest = step(&mut state, input);
+        writer.push(input, || digest).unwrap();
+        if tick % 60 == 59 {
+            writer.bytes_into(&mut flushed);
+            assert_eq!(flushed, record(&schema, &inputs[..=tick], 32));
+        }
+    }
+    let bytes = writer.bytes();
+    assert_eq!(writer.finish(), bytes);
+    let journal = Journal::open(&bytes).unwrap();
+    let mut state = 77;
+    let mut asked = Vec::new();
+    let mut tick = 0;
+    let last = journal.verify_sparse(&schema, SIM_VERSION, |input, wanted| {
+        tick += 1;
+        let digest = step(&mut state, input);
+        if wanted {
+            asked.push(tick);
+        }
+        digest
+    });
+    assert_eq!(last, Ok(Some(state)));
+    let mut expected: Vec<u64> = (1..=9).map(|k| k * 32).collect();
+    expected.push(301);
+    assert_eq!(asked, expected);
+}
+
+#[test]
 fn mismatched_versions_and_schemas_are_refused() {
     let schema = every_kind();
     let bytes = record(&schema, &[vec![0; 8]], 0);

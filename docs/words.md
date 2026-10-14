@@ -29,6 +29,7 @@ let cast = words.cast("name", &rng, 12)?;
 
 - `{pool}` expands that pool; entries may themselves hold slots, nested as deep as the pools go.
 - `{pool|mod|mod}` applies modifiers left to right: `cap` (first letter), `title` (each word, after a space or hyphen), `upper`, `lower`, `a` (prepends "a" or "an": vowels, with `hour`/`honest`/`heir` taking "an" and `uni`/`use`/`one` taking "a").
+- `{$name}` is a context slot: the game supplies its text at draw time with `generate_with(pool, rng, request, &[("company", "Acme"), ("contact", "Dov")])`. Modifiers apply (`{$company|upper}`); bindings, `once`, `sticky` and `hide` are refused on it. A context value draws nothing from the seed, so it shifts no other result. A draw that meets a context slot with no value given errors with `WordsError::MissingContext { name }` (`generate`, `cast` and `redraw` give none).
 - `{{` and `}}` are a literal `{` and `}`.
 - Weights: `PoolSpec::weighted` gives each entry a `u32` weight; 0 removes it.
 - The same slot twice in one entry draws twice, independently.
@@ -54,7 +55,7 @@ let cast = words.cast("name", &rng, 12)?;
 
 `cast(pool, rng, n)` returns `n` distinct results, in draw order. `WordsError::NotEnoughDistinct { pool, wanted, got }` when the pool cannot: at once when `n` exceeds `capacity(pool)` (an upper bound: entries summed, slots multiplied), after a bounded number of redraws when duplicate entries or modifiers make the real count smaller.
 
-`cast_distinct(pool, rng, n, &["first", "last"])` also keeps each listed pool's results out of two members: no repeated first name and no repeated last name across the cast, not just no repeated full name. It returns a `Cast` (the members' text plus the component text that was drawn, plain data a game can save). It errors with `NotEnoughDistinct` when `n` exceeds the capacity of the pool or of a listed pool.
+`cast_distinct(pool, rng, n, &["first", "last"])` also keeps each listed pool's results out of two members: no repeated first name and no repeated last name across the cast, not just no repeated full name. It returns a `Cast` (the members' text plus the component text that was drawn, as it was printed, plain data a game can save; distinctness compares the components ignoring case). It errors with `NotEnoughDistinct` when `n` exceeds the capacity of the pool or of a listed pool.
 
 ## Re-drawing one member
 

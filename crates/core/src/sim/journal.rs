@@ -331,15 +331,26 @@ impl JournalWriter {
     }
 
     #[must_use]
-    pub fn finish(mut self) -> Vec<u8> {
-        flush_run(&mut self.stream, &mut self.run);
+    pub fn finish(self) -> Vec<u8> {
+        self.bytes()
+    }
+
+    #[must_use]
+    pub fn bytes(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        self.bytes_into(&mut out);
+        out
+    }
+
+    pub fn bytes_into(&self, out: &mut Vec<u8>) {
+        let mut tail = Vec::new();
+        let mut run = self.run;
+        flush_run(&mut tail, &mut run);
         let codes = self.schema.fields.len();
-        let mut out = Vec::with_capacity(
-            HEADER_BYTES
-                + codes
-                + self.stream.len()
-                + self.checkpoints.len() * CHECKPOINT_BYTES
-                + 8,
+        let stream_len = self.stream.len() + tail.len();
+        out.clear();
+        out.reserve(
+            HEADER_BYTES + codes + stream_len + self.checkpoints.len() * CHECKPOINT_BYTES + 8,
         );
         out.extend_from_slice(&JOURNAL_MAGIC);
         out.extend_from_slice(&JOURNAL_FORMAT.to_le_bytes());
@@ -351,17 +362,17 @@ impl JournalWriter {
         out.extend_from_slice(&self.ticks.to_le_bytes());
         out.extend_from_slice(&self.every.to_le_bytes());
         out.extend_from_slice(&(self.checkpoints.len() as u32).to_le_bytes());
-        out.extend_from_slice(&(self.stream.len() as u64).to_le_bytes());
+        out.extend_from_slice(&(stream_len as u64).to_le_bytes());
         out.extend(self.schema.fields.iter().map(|field| field.code()));
         out.extend_from_slice(&self.stream);
+        out.extend_from_slice(&tail);
         for checkpoint in &self.checkpoints {
             out.extend_from_slice(&checkpoint.tick.to_le_bytes());
             out.extend_from_slice(&checkpoint.digest.to_le_bytes());
             out.extend_from_slice(&checkpoint.offset.to_le_bytes());
         }
-        let sum = Digest::new().bytes(&out).value();
+        let sum = Digest::new().bytes(out).value();
         out.extend_from_slice(&sum.to_le_bytes());
-        out
     }
 }
 
@@ -536,14 +547,30 @@ impl<'a> Journal<'a> {
         sim_version: u32,
         mut step: impl FnMut(&[i64]) -> u64,
     ) -> Result<Option<u64>, JournalError> {
+        self.verify_sparse(schema, sim_version, |input, _| step(input))
+    }
+
+    pub fn verify_sparse(
+        &self,
+        schema: &Schema,
+        sim_version: u32,
+        mut step: impl FnMut(&[i64], bool) -> u64,
+    ) -> Result<Option<u64>, JournalError> {
         self.check(schema, sim_version)?;
         let mut reader = self.reader();
         let mut last = None;
         let mut next = self.checkpoints.iter().peekable();
+        let total = self.header.ticks;
+        let mut tick = 0;
         while let Some(input) = reader.read()? {
-            let digest = step(input);
-            last = Some(digest);
-            if let Some(checkpoint) = next.next_if(|checkpoint| checkpoint.tick == reader.tick)
+            tick += 1;
+            let checkpoint = next.next_if(|checkpoint| checkpoint.tick == tick);
+            let wanted = checkpoint.is_some() || tick == total;
+            let digest = step(input, wanted);
+            if tick == total {
+                last = Some(digest);
+            }
+            if let Some(checkpoint) = checkpoint
                 && checkpoint.digest != digest
             {
                 return Err(JournalError::Checkpoint {

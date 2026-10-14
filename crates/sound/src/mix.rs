@@ -647,6 +647,23 @@ impl Mixer {
     }
 
     pub fn trigger_at(&mut self, at: u64, sound: SoundId) -> Option<VoiceId> {
+        self.trigger_at_with(at, sound, 1.0)
+    }
+
+    pub fn trigger_with(&mut self, sound: SoundId, volume: f32) -> Option<VoiceId> {
+        self.trigger_at_with(self.clock, sound, volume)
+    }
+
+    pub fn trigger_in_with(&mut self, offset: u64, sound: SoundId, volume: f32) -> Option<VoiceId> {
+        self.trigger_at_with(self.clock.saturating_add(offset), sound, volume)
+    }
+
+    pub fn trigger_at_with(&mut self, at: u64, sound: SoundId, volume: f32) -> Option<VoiceId> {
+        let volume = if volume.is_nan() {
+            0.0
+        } else {
+            volume.max(0.0)
+        };
         let spec = self.sounds.get(sound.0)?.spec;
         if spec.max_voices == 0 {
             return None;
@@ -675,7 +692,7 @@ impl Mixer {
             ),
         };
         let mut level = spec.level;
-        level.volume *= drawn.volume;
+        level.volume *= drawn.volume * volume;
         let id = self.push_voice(spec.channel, at, source, level);
         if let Some(voice) = self.voices.last_mut() {
             voice.sound = Some(sound);

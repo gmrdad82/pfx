@@ -98,6 +98,26 @@ fn rounding_modes() {
 }
 
 #[test]
+fn the_scientific_form_rounds_its_own_way() {
+    let f = Format {
+        style: Style::Short,
+        sci_from: Some(12),
+        precision: Precision::Decimals(1),
+        rounding: Rounding::Ceil,
+        sci_rounding: Some(Rounding::HalfEven),
+        ..base()
+    };
+    assert_eq!(f64s(&f, 1_210_000.0), "1.3M");
+    assert_eq!(f64s(&f, 1.25e12), "1.2e12");
+    assert_eq!(f64s(&f, 1.35e12), "1.4e12");
+    let ceil = Format {
+        sci_rounding: None,
+        ..f
+    };
+    assert_eq!(f64s(&ceil, 1.25e12), "1.3e12");
+}
+
+#[test]
 fn significant_digits_and_trim() {
     let sig = |s, trim| Format {
         precision: Precision::Significant(s),

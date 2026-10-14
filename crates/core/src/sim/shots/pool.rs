@@ -1,8 +1,11 @@
 use super::super::{Aabb, Aabb3, Hit};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Span<const N: usize> {
+    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
     pub min: [i32; N],
+    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
     pub max: [i32; N],
 }
 
@@ -61,9 +64,13 @@ impl From<Aabb3> for Span<3> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Shot<const N: usize> {
+    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
     pub pos: [i32; N],
+    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
     pub vel: [i32; N],
+    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
     pub half: [i32; N],
     pub life: Option<u32>,
     pub pierce: u32,
@@ -71,41 +78,64 @@ pub struct Shot<const N: usize> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ShotId {
     pub index: u32,
     pub generation: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum End {
     Expired,
     Left,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Strike {
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Strike<const N: usize> {
     pub shot: ShotId,
     pub target: u32,
     pub gone: bool,
+    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
+    pub pos: [i32; N],
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct Slot<const N: usize> {
     shot: Shot<N>,
+    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
     prev: [i32; N],
     generation: u32,
     alive: bool,
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Shots<const N: usize> {
     slots: Vec<Slot<N>>,
     free: Vec<u32>,
     len: usize,
+    high: usize,
+    #[cfg_attr(feature = "serde", serde(skip))]
     ended: Vec<(ShotId, End)>,
+    #[cfg_attr(feature = "serde", serde(skip))]
     order: Vec<(f64, u32)>,
-    strikes: Vec<Strike>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    strikes: Vec<Strike<N>>,
 }
+
+impl<const N: usize> PartialEq for Shots<N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.slots == other.slots
+            && self.free == other.free
+            && self.len == other.len
+            && self.high == other.high
+    }
+}
+
+impl<const N: usize> Eq for Shots<N> {}
 
 impl<const N: usize> Shots<N> {
     pub fn new(capacity: usize) -> Self {
@@ -127,6 +157,7 @@ impl<const N: usize> Shots<N> {
             slots: vec![idle; capacity as usize],
             free: (0..capacity).rev().collect(),
             len: 0,
+            high: 0,
             ended: Vec::new(),
             order: Vec::new(),
             strikes: Vec::new(),
@@ -156,6 +187,7 @@ impl<const N: usize> Shots<N> {
         slot.prev = shot.pos;
         slot.alive = true;
         self.len += 1;
+        self.high = self.high.max(index as usize + 1);
         Some(ShotId {
             index,
             generation: slot.generation,
@@ -188,7 +220,7 @@ impl<const N: usize> Shots<N> {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (ShotId, &Shot<N>)> {
-        self.slots
+        self.slots[..self.high]
             .iter()
             .enumerate()
             .filter(|(_, slot)| slot.alive)
@@ -205,7 +237,7 @@ impl<const N: usize> Shots<N> {
 
     pub fn step(&mut self, bounds: Span<N>) -> &[(ShotId, End)] {
         self.ended.clear();
-        for index in 0..self.slots.len() {
+        for index in 0..self.high {
             let slot = &mut self.slots[index];
             if !slot.alive {
                 continue;
@@ -241,7 +273,7 @@ impl<const N: usize> Shots<N> {
     pub fn boxes<B: From<Span<N>>>(&self, ids: &mut Vec<ShotId>, boxes: &mut Vec<B>) {
         ids.clear();
         boxes.clear();
-        for (index, slot) in self.slots.iter().enumerate() {
+        for (index, slot) in self.slots[..self.high].iter().enumerate() {
             if slot.alive {
                 ids.push(ShotId {
                     index: index as u32,
@@ -262,7 +294,7 @@ impl<const N: usize> Shots<N> {
         hits: &[Hit],
         targets: &[B],
         mut accept: impl FnMut(ShotId, u32) -> bool,
-    ) -> &[Strike] {
+    ) -> &[Strike<N>] {
         self.strikes.clear();
         let mut at = 0;
         while at < hits.len() {
@@ -280,13 +312,19 @@ impl<const N: usize> Shots<N> {
                 continue;
             };
             self.order.clear();
-            for hit in group {
-                if let Some(target) = targets.get(hit.b as usize) {
-                    self.order.push((entry(&slot, &(*target).into()), hit.b));
+            if let [hit] = group {
+                if (hit.b as usize) < targets.len() {
+                    self.order.push((0.0, hit.b));
                 }
+            } else {
+                for hit in group {
+                    if let Some(target) = targets.get(hit.b as usize) {
+                        self.order.push((entry(&slot, &(*target).into()), hit.b));
+                    }
+                }
+                self.order
+                    .sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
             }
-            self.order
-                .sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
             let mut pierce = slot.shot.pierce;
             for index in 0..self.order.len() {
                 let target = self.order[index].1;
@@ -298,6 +336,7 @@ impl<const N: usize> Shots<N> {
                     shot: id,
                     target,
                     gone,
+                    pos: slot.shot.pos,
                 });
                 if gone {
                     self.release(id.index);
@@ -313,13 +352,14 @@ impl<const N: usize> Shots<N> {
     }
 
     pub fn clear(&mut self) {
-        for index in (0..self.slots.len()).rev() {
+        for index in (0..self.high).rev() {
             if self.slots[index].alive {
                 self.release(index as u32);
             }
         }
         self.free.clear();
         self.free.extend((0..self.slots.len() as u32).rev());
+        self.high = 0;
         self.ended.clear();
     }
 
@@ -334,6 +374,9 @@ impl<const N: usize> Shots<N> {
         slot.generation = slot.generation.wrapping_add(1);
         self.free.push(index);
         self.len -= 1;
+        while self.high > 0 && !self.slots[self.high - 1].alive {
+            self.high -= 1;
+        }
     }
 }
 

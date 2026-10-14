@@ -109,7 +109,12 @@ fn a_shot_strikes_targets_along_its_path_until_its_pierce_runs_out() {
     let hits = Overlaps::new().find(&boxes, &walls).to_vec();
     let mut probe = shots.clone();
     let strikes = probe.resolve(&ids, &hits, &walls, |_, _| true).to_vec();
-    let strike = |shot, target, gone| Strike { shot, target, gone };
+    let strike = |shot, target, gone| Strike {
+        shot,
+        target,
+        gone,
+        pos: if shot == fast { [100, 0] } else { [500, 500] },
+    };
     assert_eq!(
         strikes,
         [
@@ -620,5 +625,120 @@ fn bench_two_thousand_shots_and_fifty_emitters() {
         "2D: {flat_cost:.1} us a tick, {} live on average; 3D: {deep_cost:.1} us a tick, {} live on average",
         live / ticks as usize,
         live3 / ticks as usize
+    );
+}
+
+#[test]
+#[ignore = "bench; run with --release"]
+fn bench_two_thousand_shots_against_four_hundred_targets() {
+    use std::time::Instant;
+    let mut rng = Rng::new(11);
+    let mut shots = Shots::<2>::new(4096);
+    let targets: Vec<Aabb> = (0..400)
+        .map(|i| {
+            let x = (i % 20) * 9_000 - 90_000;
+            let y = (i / 20) * 9_000 - 90_000;
+            Aabb::new([x, y], [x + 8_000, y + 8_000])
+        })
+        .collect();
+    let spawn = |shots: &mut Shots<2>, rng: &mut Rng| {
+        let _ = shots.spawn(Shot {
+            half: [40, 40],
+            ..shot(
+                [
+                    rng.range_i32(-100_000, 100_000),
+                    rng.range_i32(-100_000, 100_000),
+                ],
+                [rng.range_i32(-300, 301), rng.range_i32(-300, 301)],
+                Some(rng.range_i32(100, 600) as u32),
+            )
+        });
+    };
+    let bounds = Span::new([-120_000; 2], [120_000; 2]);
+    let mut ids = Vec::new();
+    let mut boxes: Vec<Aabb> = Vec::new();
+    let mut overlaps = Overlaps::new();
+    let mut hits = Vec::new();
+    let (mut walk, mut resolve, mut strikes, mut seen) = (0.0, 0.0, 0, 0);
+    let ticks = 3_000;
+    for tick in 0..ticks + 200 {
+        while shots.len() < 2_000 {
+            spawn(&mut shots, &mut rng);
+        }
+        let start = Instant::now();
+        shots.step(bounds);
+        shots.boxes(&mut ids, &mut boxes);
+        let walked = start.elapsed().as_secs_f64();
+        hits.clear();
+        hits.extend_from_slice(overlaps.find(&boxes, &targets));
+        let start = Instant::now();
+        let struck = shots
+            .resolve(&ids, &hits, &targets, |id, _| id.index % 8 == 0)
+            .len();
+        let resolved = start.elapsed().as_secs_f64();
+        if tick >= 200 {
+            walk += walked;
+            resolve += resolved;
+            strikes += struck;
+            seen += hits.len();
+        }
+    }
+    let per = |s: f64| s * 1e6 / f64::from(ticks);
+    println!(
+        "step+boxes {:.1} us, resolve {:.1} us a tick, {} strikes and {} hits a tick",
+        per(walk),
+        per(resolve),
+        strikes / ticks as usize,
+        seen / ticks as usize
+    );
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn a_saved_arena_reloads_and_runs_on_the_same_bits() {
+    let (mut shots, mut emitters, _) = flat_scene(150);
+    let mut mover = Mover::new([3, -4], 9);
+    mover.slow(1, 2, 30);
+    mover.stun(4);
+    let mut telegraph = Telegraph::new();
+    telegraph.start(12);
+    let saved = serde_json::to_string(&(&shots, &emitters, &mover, &telegraph)).unwrap();
+    let (mut shots2, mut emitters2, mut mover2, mut telegraph2): (
+        Shots<2>,
+        Vec<Emitter>,
+        Mover<2>,
+        Telegraph,
+    ) = serde_json::from_str(&saved).unwrap();
+    assert_eq!(shots2, shots);
+    let mut rng = Rng::new(5);
+    let mut rng2 = Rng::new(5);
+    let (mut out, mut out2) = (Vec::new(), Vec::new());
+    for tick in 0..60 {
+        let aim = Aim2::At {
+            target: [tick * 50, 0],
+            vel: [50, 0],
+        };
+        for (a, b) in emitters.iter_mut().zip(&mut emitters2) {
+            a.tick2([0, 0], aim, true, &mut rng, &mut out);
+            b.tick2([0, 0], aim, true, &mut rng2, &mut out2);
+        }
+        for &vel in &out {
+            let _ = shots.spawn(shot([0, 0], vel, Some(90)));
+        }
+        for &vel in &out2 {
+            let _ = shots2.spawn(shot([0, 0], vel, Some(90)));
+        }
+        out.clear();
+        out2.clear();
+        let bounds = Span::new([-200_000, -120_000], [200_000, 120_000]);
+        assert_eq!(shots.step(bounds), shots2.step(bounds));
+        mover.step([100, 100]);
+        mover2.step([100, 100]);
+        assert_eq!(telegraph.tick(), telegraph2.tick());
+    }
+    assert_eq!(shots2, shots);
+    assert_eq!(
+        serde_json::to_string(&(&shots2, &emitters2, &mover2, &telegraph2)).unwrap(),
+        serde_json::to_string(&(&shots, &emitters, &mover, &telegraph)).unwrap()
     );
 }

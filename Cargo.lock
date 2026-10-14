@@ -3077,6 +3077,10 @@ dependencies = [
 [[package]]
 name = "pfx-core"
 version = "0.31.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "pfx-denoise"

@@ -16,8 +16,11 @@ pub fn toward<const N: usize>(from: [i32; N], to: [i32; N], step: i32) -> [i32; 
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Member<const N: usize> {
+    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
     pub pos: [i32; N],
+    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
     pub offset: [i32; N],
     pub limit: Option<i32>,
 }
@@ -77,6 +80,7 @@ fn scale(offset: i32, num: i32, den: i32) -> i32 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Slow {
     pub num: u32,
     pub den: u32,
@@ -84,7 +88,9 @@ pub struct Slow {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Mover<const N: usize> {
+    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
     pub pos: [i32; N],
     pub top: i32,
     stun: u32,

@@ -89,6 +89,9 @@ pub enum WordsError {
         index: usize,
         len: usize,
     },
+    MissingContext {
+        name: String,
+    },
 }
 
 impl fmt::Display for WordsError {
@@ -151,6 +154,9 @@ impl fmt::Display for WordsError {
             ),
             Self::NoSuchMember { index, len } => {
                 write!(f, "member {index} asked for, the cast has {len}")
+            }
+            Self::MissingContext { name } => {
+                write!(f, "no context value named `${name}` was given")
             }
         }
     }
@@ -246,6 +252,10 @@ enum Part {
         form: Option<usize>,
         mods: Vec<Modifier>,
     },
+    Context {
+        name: String,
+        mods: Vec<Modifier>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -265,6 +275,7 @@ struct Bound {
 struct Run<'a> {
     base: &'a Rng,
     trace: Trace,
+    context: &'a [(&'a str, &'a str)],
 }
 
 struct Used {
@@ -289,7 +300,7 @@ impl Trace {
 
     fn note(&mut self, pool: usize, text: &str) {
         if self.any && self.watch[pool] {
-            self.seen.push((pool, text.to_lowercase()));
+            self.seen.push((pool, text.to_string()));
         }
     }
 }
@@ -401,7 +412,13 @@ fn compile(
                 if slot.is_empty() {
                     return Err(parse_err(i, ParseReason::EmptySlot));
                 }
-                if !valid_name(slot)
+                let context = slot.strip_prefix('$');
+                if let Some(name) = context
+                    && (bind_name.is_some() || name.is_empty() || !valid_name(name))
+                {
+                    return Err(parse_err(i, ParseReason::BadSlotName));
+                }
+                if context.is_none() && !valid_name(slot)
                     || bind_name.is_some_and(|n| n.is_empty() || n.contains('.') || !valid_name(n))
                 {
                     return Err(parse_err(i, ParseReason::BadSlotName));
@@ -411,7 +428,7 @@ fn compile(
                     entry,
                     slot: name.to_string(),
                 };
-                let recall = if bind_name.is_some() {
+                let recall = if bind_name.is_some() || context.is_some() {
                     None
                 } else if let Some(at) = bound.iter().rposition(|(n, _)| n == slot) {
                     Some((at, None))
@@ -425,9 +442,9 @@ fn compile(
                 } else {
                     None
                 };
-                let target = match recall {
-                    Some(_) => 0,
-                    None => *index.get(slot).ok_or_else(|| unknown(slot))?,
+                let target = match (recall, context) {
+                    (None, None) => *index.get(slot).ok_or_else(|| unknown(slot))?,
+                    _ => 0,
                 };
                 let mut mods = Vec::new();
                 let mut draw = Draw::Fresh;
@@ -447,7 +464,10 @@ fn compile(
                                 "sticky" => Draw::Sticky,
                                 _ => draw,
                             };
-                            if recall.is_some() || (field != "hide" && draw != Draw::Fresh) {
+                            if recall.is_some()
+                                || context.is_some()
+                                || (field != "hide" && draw != Draw::Fresh)
+                            {
                                 return Err(misplaced());
                             }
                             draw = wanted;
@@ -467,6 +487,10 @@ fn compile(
                     parts.push(Part::Text(std::mem::take(&mut lit)));
                 }
                 match recall {
+                    None if context.is_some() => parts.push(Part::Context {
+                        name: context.unwrap_or_default().to_string(),
+                        mods,
+                    }),
                     Some((at, form)) => parts.push(Part::Recall {
                         name: bound[at].0.clone(),
                         bind: at,
@@ -838,6 +862,12 @@ impl Words {
                             apply(mods, text.clone(), out);
                         }
                     }
+                    Part::Context { name, mods } => {
+                        let Some(&(_, value)) = run.context.iter().find(|(n, _)| n == name) else {
+                            return Err(WordsError::MissingContext { name: name.clone() });
+                        };
+                        apply(mods, value.to_string(), out);
+                    }
                 }
             }
             if entry.literal || !pool.avoids(&out[start..]) {
@@ -886,10 +916,21 @@ impl Words {
     }
 
     pub fn generate(&self, pool: &str, rng: &Rng, request: u64) -> Result<String, WordsError> {
+        self.generate_with(pool, rng, request, &[])
+    }
+
+    pub fn generate_with(
+        &self,
+        pool: &str,
+        rng: &Rng,
+        request: u64,
+        context: &[(&str, &str)],
+    ) -> Result<String, WordsError> {
         let at = self.lookup(pool)?;
         let mut run = Run {
             base: rng,
             trace: Trace::none(),
+            context,
         };
         self.draw(at, request, &mut run)
     }
@@ -923,6 +964,7 @@ impl Words {
         let mut run = Run {
             base,
             trace: self.watcher(distinct),
+            context: &[],
         };
         let mut request = first_request;
         for _ in 0..tries {
@@ -932,7 +974,12 @@ impl Words {
             if used.text.contains(&text) {
                 continue;
             }
-            if run.trace.seen.iter().any(|p| used.parts.contains(p)) {
+            if run
+                .trace
+                .seen
+                .iter()
+                .any(|(p, t)| used.parts.contains(&(*p, t.to_lowercase())))
+            {
                 continue;
             }
             let parts = run
@@ -949,7 +996,7 @@ impl Words {
     fn remember(&self, used: &mut Used, member: &Member) -> Result<(), WordsError> {
         used.text.insert(member.text.clone());
         for (name, text) in &member.parts {
-            used.parts.insert((self.lookup(name)?, text.clone()));
+            used.parts.insert((self.lookup(name)?, text.to_lowercase()));
         }
         Ok(())
     }
@@ -1507,6 +1554,47 @@ mod tests {
             words.redraw(&mut c, &rng, 9, 0),
             Err(WordsError::NoSuchMember { index: 9, len: 3 })
         );
+    }
+
+    #[test]
+    fn parts_keep_their_case_and_context_fills_at_draw_time() {
+        let words = people();
+        let cast = words
+            .cast_distinct("person", &Rng::new(6), 4, &["first", "last"])
+            .unwrap();
+        for member in &cast.members {
+            let joined: Vec<&str> = member.parts.iter().map(|(_, t)| t.as_str()).collect();
+            assert_eq!(joined.join(" "), member.text);
+        }
+        let mail = Words::new(
+            &[
+                PoolSpec::new("first", ["Ada", "Bram"]),
+                PoolSpec::new(
+                    "line",
+                    ["{first} from {$company|upper} wrote to {$contact}."],
+                ),
+            ],
+            [] as [&str; 0],
+        )
+        .unwrap();
+        let rng = Rng::new(3);
+        let plain = mail.generate_with("line", &rng, 4, &[("company", "Acme"), ("contact", "Dov")]);
+        let first = plain
+            .as_deref()
+            .unwrap()
+            .split(' ')
+            .next()
+            .unwrap()
+            .to_string();
+        assert_eq!(plain.unwrap(), format!("{first} from ACME wrote to Dov."));
+        assert_eq!(
+            mail.generate("line", &rng, 4),
+            Err(WordsError::MissingContext {
+                name: "company".into()
+            })
+        );
+        assert!(Words::new(&[PoolSpec::new("x", ["{$a|once}"])], [] as [&str; 0]).is_err());
+        assert!(Words::new(&[PoolSpec::new("x", ["{b=$a}"])], [] as [&str; 0]).is_err());
     }
 
     #[test]

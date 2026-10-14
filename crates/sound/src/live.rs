@@ -209,6 +209,14 @@ impl Output {
         lock(&self.mixer).trigger_in(offset, sound)
     }
 
+    pub fn trigger_with(&self, sound: SoundId, volume: f32) -> Option<VoiceId> {
+        lock(&self.mixer).trigger_with(sound, volume)
+    }
+
+    pub fn trigger_in_with(&self, offset: u64, sound: SoundId, volume: f32) -> Option<VoiceId> {
+        lock(&self.mixer).trigger_in_with(offset, sound, volume)
+    }
+
     pub fn set_resample(&self, id: VoiceId, resample: Resample) {
         lock(&self.mixer).set_resample(id, resample);
     }
