@@ -8,6 +8,7 @@ pfx reaches 1.0.0.
 
 - journal: `JournalWriter::snapshot` hands out the journal so far in about 5 µs after 25 minutes of input, and `seal()` adds its checksum later, off the game's thread.
 - live: two examples, `clip` and `swarm`, that write the live renderer's and the flat pass's frames as PNGs.
+- docs: every release carries its documentation as `docs-vX.Y.Z.tar.gz` (guides, install, the CLI and format references, the API reference and the changelog), built by `bin/docs-bundle`, with three new first-task guides: make your first game, benchmark a scene, render a still.
 
 ### Changed
 
