@@ -1,4 +1,4 @@
-use super::super::Aabb;
+use super::super::{Aabb, Aabb3};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Span<const N: usize> {
@@ -39,6 +39,12 @@ impl<const N: usize> Span<N> {
 impl From<Span<2>> for Aabb {
     fn from(span: Span<2>) -> Self {
         Aabb::new(span.min, span.max)
+    }
+}
+
+impl From<Span<3>> for Aabb3 {
+    fn from(span: Span<3>) -> Self {
+        Aabb3::new(span.min, span.max)
     }
 }
 

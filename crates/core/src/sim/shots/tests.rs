@@ -1,4 +1,4 @@
-use super::super::{Aabb, Overlaps, Rng, mix64};
+use super::super::{Aabb, Aabb3, Overlaps, Overlaps3, Rng, mix64};
 use super::*;
 
 fn shot<const N: usize>(pos: [i32; N], vel: [i32; N], life: Option<u32>) -> Shot<N> {
@@ -75,6 +75,14 @@ fn a_fast_shot_hits_a_thin_target_inside_its_step() {
     let hits = Overlaps::new().find(&boxes, &wall).to_vec();
     assert_eq!(hits.len(), 1);
     assert_eq!(ids[hits[0].a as usize], id);
+    let mut deep = Shots::<3>::new(1);
+    let id = deep.spawn(shot([0, 0, 0], [0, 0, -100], None)).unwrap();
+    deep.step(Span::new([-1_000; 3], [1_000; 3]));
+    let mut boxes: Vec<Aabb3> = Vec::new();
+    deep.boxes(&mut ids, &mut boxes);
+    let floor = [Aabb3::new([-10, -10, -60], [10, 10, -59])];
+    assert_eq!(Overlaps3::new().find(&boxes, &floor).len(), 1);
+    assert_eq!(ids, [id]);
 }
 
 #[test]
@@ -519,7 +527,7 @@ fn bench_two_thousand_shots_and_fifty_emitters() {
         })
         .collect();
     let mut out3 = Vec::new();
-    let mut boxes3: Vec<Span<3>> = Vec::new();
+    let mut boxes3: Vec<Aabb3> = Vec::new();
     let bounds3 = Span::new([-300_000; 3], [300_000; 3]);
     let mut live3 = 0;
     let mut start = Instant::now();

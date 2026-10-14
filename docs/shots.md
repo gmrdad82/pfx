@@ -67,9 +67,9 @@ Release build, Ryzen 9 9950X, `bench_two_thousand_shots_and_fifty_emitters` unde
 
 | | per tick |
 | --- | --- |
-| 2D, 4,096 slots, ~2,060 live | 47 µs |
-| 3D, 4,096 slots, ~1,980 live, crowns with cone spread | 52 µs |
+| 2D, 4,096 slots, ~2,060 live | 22 µs |
+| 3D, 4,096 slots, ~1,980 live, crowns with cone spread | 21 µs |
 
-Those runs shared the machine with a load average of 94 on 32 threads, so an idle machine should take a fraction of that; rerun the bench before quoting it as a budget. The pool allocates nothing after `new`; `boxes` and the emitters' buffers allocate only while they grow.
+Those runs shared the machine with a load average of about 31 on 32 threads (at 94 they took 47 and 52 µs), so an idle machine should take less; rerun the bench before quoting it as a budget. The pool allocates nothing after `new`; `boxes` and the emitters' buffers allocate only while they grow.
 
 `tests.rs` pins two 300-tick scenes (50 emitters of every pattern, bursts, wind-ups, spread, led aim) by a hash of every shot's slot, generation, position and velocity, so a change to any output bit fails it.
