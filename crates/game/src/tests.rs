@@ -132,6 +132,20 @@ fn each_cap_paces_the_frames_while_the_tick_stays_at_its_rate() {
 }
 
 #[test]
+fn a_headless_run_is_focused_until_its_script_says_otherwise() {
+    let (mut run, _, _) = headless(Settings::default());
+    let focused = |run: &Headless| run.driver.session().world().focused();
+    assert!(focused(&run));
+    run.set_focused(false);
+    assert!(!focused(&run));
+    run.set_focused(true);
+    run.feed(Event::Attention(Attention::Minimized(true)));
+    assert!(!focused(&run));
+    run.feed(Event::Attention(Attention::Minimized(false)));
+    assert!(focused(&run));
+}
+
+#[test]
 fn focus_loss_applies_the_background_cap_and_minimizing_pauses_without_a_burst() {
     let (mut run, _, _) = headless(capped(Cap::Fps120, Cap::Fps30));
     run.run_for(1.0).unwrap();

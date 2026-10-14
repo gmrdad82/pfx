@@ -6,6 +6,7 @@ use pfx_core::clock::{Clock, HitStop};
 use pfx_core::fx::{Comfort, Shake, ShakeTuning};
 use pfx_core::sim::Rng;
 use pfx_gpu::screens::DisplaySettings;
+use pfx_gpu::window::Attention;
 use pfx_input::{PadId, Rumble};
 use pfx_live::renderer::invert;
 use pfx_load::scene::{
@@ -419,6 +420,14 @@ pub struct World {
     display: DisplaySettings,
     cursor: Cursor,
     warp: Option<[f32; 2]>,
+    focus: Focus,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct Focus {
+    lost: bool,
+    occluded: bool,
+    minimized: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -627,6 +636,7 @@ impl World {
             exit: None,
             display: DisplaySettings::default(),
             cursor: Cursor::Shown,
+            focus: Focus::default(),
             warp: None,
             scene,
         };
@@ -905,6 +915,18 @@ impl World {
 
     pub fn cursor(&self) -> Cursor {
         self.cursor
+    }
+
+    pub fn focused(&self) -> bool {
+        !(self.focus.lost || self.focus.occluded || self.focus.minimized)
+    }
+
+    pub(crate) fn attend(&mut self, attention: Attention) {
+        match attention {
+            Attention::Focused(focused) => self.focus.lost = !focused,
+            Attention::Occluded(occluded) => self.focus.occluded = occluded,
+            Attention::Minimized(minimized) => self.focus.minimized = minimized,
+        }
     }
 
     pub fn warp_pointer(&mut self, point: [f32; 2]) {

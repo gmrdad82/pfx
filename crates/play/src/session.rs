@@ -410,6 +410,10 @@ impl PlaySession {
         self.world.set_display(display);
     }
 
+    pub fn attend(&mut self, attention: pfx_gpu::window::Attention) {
+        self.world.attend(attention);
+    }
+
     pub fn take_recording(&mut self) -> Option<Recording> {
         self.input.stop_recording()
     }

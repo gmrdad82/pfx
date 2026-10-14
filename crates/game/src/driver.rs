@@ -99,7 +99,10 @@ impl Driver {
     pub fn feed(&mut self, event: Event) {
         match event {
             Event::Input(event) => self.session.feed(event),
-            Event::Attention(attention) => self.pacer.on(attention),
+            Event::Attention(attention) => {
+                self.pacer.on(attention);
+                self.session.attend(attention);
+            }
             Event::Resized(size) => {
                 self.window = size;
                 self.display.resized(size);

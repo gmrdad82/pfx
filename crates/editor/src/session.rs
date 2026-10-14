@@ -6,6 +6,7 @@ use egui_wgpu::Renderer;
 use pfx_editor_shell::{App, Pgpu, Theme, Timing, Wake, Watch};
 use pfx_game::Config;
 use pfx_gpu::screens::ScreenPolicy;
+use pfx_gpu::window::Attention;
 use pfx_gpu::{Gpu, OffscreenTarget};
 use pfx_input::{InputEvent, KeyLabels};
 use pfx_play::{Level, Reload};
@@ -487,12 +488,18 @@ impl Session {
     fn feed(&mut self, ctx: &egui::Context) {
         let was = self.modifiers;
         self.modifiers = ctx.input(|input| input.modifiers);
-        if self.editor.play != Play::Playing || ctx.egui_wants_keyboard_input() {
+        if self.editor.play != Play::Playing {
             return;
         }
         let Some(view) = self.view.as_deref_mut() else {
             return;
         };
+        if let Some(play) = view.session() {
+            play.attend(Attention::Focused(ctx.input(|input| input.focused)));
+        }
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
         let (events, ppp) = ctx.input(|input| (input.events.clone(), input.pixels_per_point));
         if let Some(driver) = view.driver()
             && crate::input::learn(driver.labels_mut(), &events)

@@ -2,8 +2,8 @@ use pfx_core::clock::Tick;
 use pfx_gpu::pace::{Pace, WallClock};
 use pfx_gpu::screens::{Device, Display};
 use pfx_gpu::window::{
-    FakeClock, FullscreenPlan, Host, Monitor, Monitors, Pace as Due, PlatformCaps, Point,
-    PresentPreference, Size, WindowOps,
+    Attention, FakeClock, FullscreenPlan, Host, Monitor, Monitors, Pace as Due, PlatformCaps,
+    Point, PresentPreference, Size, WindowOps,
 };
 use pfx_gpu::{Gpu, OffscreenTarget, wgpu};
 use pfx_play::{Game, NoWarmer, Warming};
@@ -182,6 +182,11 @@ impl Headless {
 
     pub fn feed(&mut self, event: Event) {
         self.driver.feed(event);
+    }
+
+    pub fn set_focused(&mut self, focused: bool) {
+        self.driver
+            .feed(Event::Attention(Attention::Focused(focused)));
     }
 
     pub fn frame(&mut self) -> Result<Option<Tick>, String> {
