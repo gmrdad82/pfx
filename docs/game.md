@@ -318,6 +318,24 @@ let count = run.run_for(1.0)?;
 - `warm()` runs the game's warm-up now and returns the calls it made (`warm_passes`); the first frame runs it otherwise. `painter()` reaches the GPU painter: its text engine, glyph pages, last prompt quads and upscale.
 - A `Pads::Backend` is polled each frame; `Pads::Gilrs` is never opened headless.
 
+## Shot adapters
+
+`pfx render` (stills and clips) and `pfx bake` start their adapter and every child render process headless: they remove `WAYLAND_DISPLAY`, `WAYLAND_SOCKET`, `DISPLAY` and `XAUTHORITY` from its environment and set `PFX_HEADLESS=1` (`pfx_run::queue::headless`, `pfx_gpu::HEADLESS_VAR`). While `PFX_HEADLESS` is set to anything but empty or `0`, the engine's window paths refuse with an error naming it: `pfx_game::run` and `pfx_game::launch` playing the game, `Gpu::window*` making a surface, and the editor's window. `pfx_gpu::refuse_window(what)` is the same check for an app's own window code.
+
+So a game's adapter is its own binary that never calls `pfx_game::launch` or `pfx_game::run`. It implements `pfx::adapter::Adapter` and serves it, and draws through `Headless` on a surface-less GPU (`Gpu::headless` makes the instance without a display handle and asks for an adapter with no compatible surface):
+
+```rust
+fn open(&mut self, shot: &str, fixtures: &Path, scale: f32, app: &Value) -> Result<Opened, String> {
+    let gpu = pollster::block_on(pfx_gpu::Gpu::headless())?;
+    self.run = Some(pfx_game::Headless::with_gpu(MyGame::for_shot(shot, fixtures), config, gpu, size)?);
+}
+fn advance(&mut self, to: f64) -> Result<(), String> { run.run_for(to - self.at)?; self.at = to; Ok(()) }
+fn frame(&mut self, _: Option<[f32; 3]>, _: bool) -> Result<Image, String> {
+    Ok(Image::from_rgba8(size.width, size.height, &run.readback()?))
+}
+fn main() { pfx::adapter::serve(&mut MyAdapter::default()).unwrap() }
+```
+
 ## Tests
 
 - `crates/game/src/tests.rs` (headless, in the gate): frames per second at each cap with the tick held at 60 per second, the background cap on focus loss and occlusion, the pause while minimized with no catch-up burst, the interpolation alpha reaching `frame` and `ui` and advancing by the frame's share of a tick, a volume change in the settings changing the mix (per channel, and muted), a bind change remapping an action and the defaults coming back, display and pacing changes reaching the stand-in window and the pacer, the Deck's fixed mode, the UI frame following the aspect fit and the safe area, the pointer through the bars, the settings' TOML and JSON, and a missing scene refused.

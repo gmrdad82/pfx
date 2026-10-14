@@ -58,6 +58,7 @@ pub fn run<G: Game + 'static>(game: G, mut config: Config) -> Result<u8, String>
 }
 
 fn play(game: Box<dyn Game>, config: Config) -> Result<u8, String> {
+    pfx_gpu::refuse_window("the game window")?;
     let scene = start::scene(&config)?;
     let event_loop = EventLoop::new().map_err(|error| format!("the event loop: {error}"))?;
     let mut app = App {
