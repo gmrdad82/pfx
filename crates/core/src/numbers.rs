@@ -16,17 +16,21 @@ pub enum Style {
 pub enum Precision {
     Decimals(u8),
     Significant(u8),
+    AtLeast(u8),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rounding {
     HalfAway,
     HalfEven,
+    Ceil,
+    Truncate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NonFinite {
     Text,
+    OneText,
     Clamp,
     Error,
 }
@@ -60,7 +64,9 @@ impl std::error::Error for NumberError {}
 pub struct Format<'a> {
     pub style: Style,
     pub from_exp: i32,
+    pub sci_from: Option<i32>,
     pub precision: Precision,
+    pub big_precision: Option<Precision>,
     pub rounding: Rounding,
     pub trim_zeros: bool,
     pub group_sep: Option<char>,
@@ -77,7 +83,9 @@ impl Default for Format<'_> {
         Self {
             style: Style::Plain,
             from_exp: 0,
+            sci_from: None,
             precision: Precision::Decimals(2),
+            big_precision: None,
             rounding: Rounding::HalfAway,
             trim_zeros: false,
             group_sep: Some(','),
@@ -263,22 +271,31 @@ impl Decimal {
         if self.len == 0 || keep >= self.len as i32 {
             return;
         }
+        let up = if keep < 0 {
+            rounding == Rounding::Ceil && !self.negative
+        } else {
+            let keep = keep as usize;
+            let next = self.digits[keep];
+            match rounding {
+                Rounding::Truncate => false,
+                Rounding::Ceil => !self.negative,
+                _ if next != 5 => next > 5,
+                _ if self.len > keep + 1 => true,
+                Rounding::HalfEven => keep > 0 && self.digits[keep - 1] % 2 == 1,
+                _ => true,
+            }
+        };
         if keep < 0 {
-            *self = Self::zero(false);
+            if up {
+                self.digits[0] = 1;
+                self.len = 1;
+                self.exp = self.exp - keep + 1;
+            } else {
+                *self = Self::zero(false);
+            }
             return;
         }
         let keep = keep as usize;
-        let next = self.digits[keep];
-        let up = if next != 5 {
-            next > 5
-        } else if self.len > keep + 1 {
-            true
-        } else {
-            match rounding {
-                Rounding::HalfAway => true,
-                Rounding::HalfEven => keep > 0 && self.digits[keep - 1] % 2 == 1,
-            }
-        };
         self.len = keep;
         if up {
             let mut i = keep;
@@ -301,6 +318,23 @@ impl Decimal {
         self.strip();
         if self.len == 0 {
             *self = Self::zero(false);
+        }
+    }
+}
+
+fn keep_for(precision: Precision, int_len: i32) -> i32 {
+    match precision {
+        Precision::Decimals(d) => int_len + i32::from(d),
+        Precision::Significant(s) => i32::from(s.max(1)),
+        Precision::AtLeast(s) => i32::from(s.max(1)).max(int_len),
+    }
+}
+
+fn frac_for(precision: Precision, int_digits: i32) -> usize {
+    match precision {
+        Precision::Decimals(d) => usize::from(d),
+        Precision::Significant(s) | Precision::AtLeast(s) => {
+            (i32::from(s.max(1)) - int_digits).max(0) as usize
         }
     }
 }
@@ -404,8 +438,8 @@ impl Format<'_> {
                 NumberError::Infinite
             }),
             NonFinite::Clamp => Ok(if nan { Special::Zero } else { Special::Largest }),
-            NonFinite::Text => {
-                let written = if nan {
+            NonFinite::Text | NonFinite::OneText => {
+                let written = if nan || self.non_finite == NonFinite::OneText {
                     out.write_str(self.nan_text)
                 } else {
                     if negative {
@@ -432,42 +466,43 @@ impl Format<'_> {
     }
 
     fn render_inner<W: fmt::Write>(&self, out: &mut W, original: Decimal) -> fmt::Result {
+        let big = self.big_precision.unwrap_or(self.precision);
         let mut style = self.style;
         if original.is_zero() || original.exp < self.big_from() {
             style = Style::Plain;
         }
         loop {
+            if style == Style::Short && self.sci_from.is_some_and(|e| original.exp >= e) {
+                style = Style::Scientific;
+            }
             let mut dec = original;
             let layout = match style {
                 Style::Plain => {
-                    let keep = match self.precision {
-                        Precision::Decimals(d) => dec.exp + 1 + i32::from(d),
-                        Precision::Significant(s) => i32::from(s.max(1)),
-                    };
-                    dec.round_to(keep, self.rounding);
+                    dec.round_to(keep_for(self.precision, dec.exp + 1), self.rounding);
                     if self.style != Style::Plain && !dec.is_zero() && dec.exp >= self.big_from() {
                         style = self.style;
                         continue;
                     }
-                    self.plain_layout(&dec)
+                    let int_digits = if dec.is_zero() { 1 } else { dec.exp + 1 };
+                    Layout {
+                        int_digits,
+                        frac_len: frac_for(self.precision, int_digits),
+                        grouped: true,
+                    }
                 }
                 Style::Scientific => {
-                    let keep = match self.precision {
-                        Precision::Decimals(d) => 1 + i32::from(d),
-                        Precision::Significant(s) => i32::from(s.max(1)),
-                    };
-                    dec.round_to(keep, self.rounding);
-                    self.shifted_layout(&dec, 1)
+                    dec.round_to(keep_for(big, 1), self.rounding);
+                    self.shifted_layout(big, &dec, 1)
                 }
                 Style::Engineering | Style::Short => {
                     let int_len = original.exp - 3 * original.exp.div_euclid(3) + 1;
-                    let keep = match self.precision {
-                        Precision::Decimals(d) => int_len + i32::from(d),
-                        Precision::Significant(s) => i32::from(s.max(1)),
-                    };
-                    dec.round_to(keep, self.rounding);
+                    dec.round_to(keep_for(big, int_len), self.rounding);
+                    if style == Style::Short && self.sci_from.is_some_and(|e| dec.exp >= e) {
+                        style = Style::Scientific;
+                        continue;
+                    }
                     let int_len = dec.exp - 3 * dec.exp.div_euclid(3) + 1;
-                    self.shifted_layout(&dec, int_len)
+                    self.shifted_layout(big, &dec, int_len)
                 }
             };
             let mut letters = [0u8; 4];
@@ -497,27 +532,10 @@ impl Format<'_> {
         }
     }
 
-    fn plain_layout(&self, dec: &Decimal) -> Layout {
-        let int_digits = if dec.is_zero() { 1 } else { dec.exp + 1 };
-        let frac_len = match self.precision {
-            Precision::Decimals(d) => usize::from(d),
-            Precision::Significant(s) => (i32::from(s.max(1)) - int_digits).max(0) as usize,
-        };
-        Layout {
-            int_digits,
-            frac_len,
-            grouped: true,
-        }
-    }
-
-    fn shifted_layout(&self, dec: &Decimal, int_digits: i32) -> Layout {
-        let frac_len = match self.precision {
-            Precision::Decimals(d) => usize::from(d),
-            Precision::Significant(s) => (i32::from(s.max(1)) - int_digits).max(0) as usize,
-        };
+    fn shifted_layout(&self, precision: Precision, dec: &Decimal, int_digits: i32) -> Layout {
         Layout {
             int_digits: if dec.is_zero() { 1 } else { int_digits },
-            frac_len,
+            frac_len: frac_for(precision, int_digits),
             grouped: false,
         }
     }
