@@ -6,6 +6,7 @@ use pfx_gpu::window::{Attention, Clock, FramePacer, Host, Pace, Point, PresentPr
 use pfx_input::{Backend, BindingMap, InputEvent, KeyLabels, LayoutSource};
 use pfx_play::{Cursor, Exit, Notice, PlaySession, Settings, Ui, UiFrame, Warm, Warmer, Warming};
 
+use crate::cursor::{self, Warp};
 use crate::prompt::Part;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -52,6 +53,7 @@ pub struct Driver {
     frames: u64,
     seconds: f32,
     notices: Vec<Notice>,
+    warp: Option<Warp>,
 }
 
 impl Driver {
@@ -86,6 +88,7 @@ impl Driver {
             frames: 0,
             seconds: 0.0,
             notices: Vec::new(),
+            warp: None,
         };
         driver.apply(&settings, true);
         driver.refit();
@@ -178,6 +181,7 @@ impl Driver {
         if let Some(layout) = &mut self.layout {
             self.labels.refresh(layout.as_mut());
         }
+        self.warp_pointer();
         if let Some(modules) = self.session.game_mut().modules() {
             self.notices.extend(modules.notices());
         }
@@ -300,6 +304,22 @@ impl Driver {
 
     pub fn cursor(&self) -> Cursor {
         self.session.world().cursor()
+    }
+
+    fn warp_pointer(&mut self) {
+        let Some(point) = self.session.world_mut().take_warp() else {
+            return;
+        };
+        let viewport = self.report.as_ref().and_then(ScreenReport::viewport);
+        let warp = cursor::warp(point, viewport, self.window);
+        for event in warp.events() {
+            self.session.feed(event);
+        }
+        self.warp = Some(warp);
+    }
+
+    pub fn take_warp(&mut self) -> Option<[f32; 2]> {
+        self.warp.take().map(|warp| warp.window)
     }
 
     pub fn exit(&self) -> Option<&Exit> {

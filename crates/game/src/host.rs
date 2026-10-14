@@ -8,7 +8,7 @@ use pfx_load::scene::Scene;
 use pfx_play::{Cursor, Game};
 use pfx_sound::{ChannelId, Level, Output, PcmSender};
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{CursorGrabMode, Window, WindowId};
@@ -209,6 +209,9 @@ impl Live {
         }
         self.driver.update(now_ns);
         self.cursor();
+        if let Some(window) = self.driver.take_warp() {
+            self.warp(window);
+        }
         for notice in self.driver.take_notices() {
             eprintln!("{notice}");
         }
@@ -303,6 +306,17 @@ impl Live {
         self.window.set_cursor_visible(cursor == Cursor::Shown);
         if let Err(error) = grab {
             eprintln!("the pointer stays free: {error}");
+        }
+    }
+
+    fn warp(&mut self, window: [f32; 2]) {
+        self.at = window;
+        if self.locked {
+            return;
+        }
+        let position = PhysicalPosition::new(f64::from(window[0]), f64::from(window[1]));
+        if let Err(error) = self.window.set_cursor_position(position) {
+            eprintln!("the pointer stays where it is: {error}");
         }
     }
 

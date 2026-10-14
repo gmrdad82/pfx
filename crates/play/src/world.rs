@@ -418,6 +418,7 @@ pub struct World {
     exit: Option<Exit>,
     display: DisplaySettings,
     cursor: Cursor,
+    warp: Option<[f32; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -626,6 +627,7 @@ impl World {
             exit: None,
             display: DisplaySettings::default(),
             cursor: Cursor::Shown,
+            warp: None,
             scene,
         };
         world.physics.refresh_queries();
@@ -903,6 +905,16 @@ impl World {
 
     pub fn cursor(&self) -> Cursor {
         self.cursor
+    }
+
+    pub fn warp_pointer(&mut self, point: [f32; 2]) {
+        if point.iter().all(|value| value.is_finite()) {
+            self.warp = Some(point);
+        }
+    }
+
+    pub fn take_warp(&mut self) -> Option<[f32; 2]> {
+        self.warp.take()
     }
 
     pub fn rumble(&mut self, rumble: Rumble) {
