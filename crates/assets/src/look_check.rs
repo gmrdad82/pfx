@@ -122,6 +122,8 @@ pub fn traced(gpu: &Gpu, command: &str, extra: &[&str], name: &str) -> Traced {
     }
 }
 
+pub const LOOK_SAMPLES: &str = "128";
+
 pub const REFERENCES: &[(&str, &str, &str)] = &[
     ("logo", "logo sample", "--size 512"),
     ("wordmark", "wordmark sample", "--size 512"),
@@ -169,7 +171,10 @@ fn record(name: &str, s: &Score, t: &Traced) {
 pub fn check(name: &str, mean: f64, p95: f64, ssim: f64) {
     let (_, command, extra) = REFERENCES.iter().find(|(n, _, _)| *n == name).unwrap();
     let gpu = pollster::block_on(Gpu::headless()).unwrap();
-    let extra: Vec<&str> = extra.split_whitespace().collect();
+    let extra: Vec<&str> = extra
+        .split_whitespace()
+        .chain(["--samples", LOOK_SAMPLES])
+        .collect();
     let t = traced(&gpu, command, &extra, name);
     let s = score(&reference(name), &t.picture).unwrap();
     record(name, &s, &t);
