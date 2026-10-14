@@ -1,6 +1,17 @@
 use std::ffi::OsStr;
 use std::process::Command;
 
+pub const HEADLESS_VAR: &str = "PFX_HEADLESS";
+
+pub const DISPLAY_VARS: [&str; 4] = ["WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY", "XAUTHORITY"];
+
+pub fn headless(command: &mut Command) -> &mut Command {
+    for name in DISPLAY_VARS {
+        command.env_remove(name);
+    }
+    command.env(HEADLESS_VAR, "1")
+}
+
 pub struct Launch {
     pub command: Command,
     pub queued: bool,
@@ -40,7 +51,9 @@ fn launch_with(
             crate::job::TOOL
         );
     }
-    prepare(picked, class, as_name, program, cpus)
+    let mut launch = prepare(picked, class, as_name, program, cpus);
+    headless(&mut launch.command);
+    launch
 }
 
 enum Choice {
@@ -133,8 +146,19 @@ mod tests {
 
         let direct = launch_with("clip", "pfx", "adapter", true, true, true, None);
         assert!(!direct.queued);
+        let envs: Vec<_> = direct.command.get_envs().collect();
+        for name in DISPLAY_VARS {
+            assert!(envs.contains(&(OsStr::new(name), None)), "{name} kept");
+        }
+        assert!(envs.contains(&(OsStr::new(HEADLESS_VAR), Some(OsStr::new("1")))));
         assert_eq!(direct.command.get_program(), "adapter");
         assert_eq!(direct.command.get_args().count(), 0);
+        assert!(
+            launch_with("clip", "pfx", "adapter", false, true, true, None)
+                .command
+                .get_envs()
+                .any(|pair| pair == (OsStr::new(HEADLESS_VAR), Some(OsStr::new("1"))))
+        );
 
         let missing = launch_with("clip", "pfx", "render", false, false, true, None);
         assert!(!missing.queued);

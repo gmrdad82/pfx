@@ -13,6 +13,26 @@ pub use floor::{
 };
 pub use wgpu;
 
+pub const HEADLESS_VAR: &str = "PFX_HEADLESS";
+
+pub fn headless_only() -> bool {
+    headless_set(std::env::var_os(HEADLESS_VAR).as_deref())
+}
+
+fn headless_set(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| !value.is_empty() && value != "0")
+}
+
+pub fn refuse_window(what: &str) -> Result<(), String> {
+    if headless_only() {
+        Err(format!(
+            "{what}: refused, {HEADLESS_VAR} is set, so this is a headless render and no window or surface may open; render offscreen through Gpu::headless (pfx_game::Headless::with_gpu for a game)"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 const QUERY_PAIRS: u32 = 64;
 const QUERY_COUNT: u32 = QUERY_PAIRS * 2;
 const READ_SLOTS: usize = 3;
@@ -539,6 +559,8 @@ impl Gpu {
         floor: Option<&Floor>,
         preference: &window::PresentPreference,
     ) -> Result<(Self, WindowTarget), GpuRefusal> {
+        refuse_window("a window surface")
+            .map_err(|error| GpuRefusal::new(GpuShortfall::Surface(error), None))?;
         let instance = instance();
         let surface = instance
             .create_surface(window.clone())
@@ -1009,6 +1031,16 @@ impl GpuProfiler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_headless_render_is_any_value_but_empty_or_zero() {
+        use std::ffi::OsStr;
+        assert!(headless_set(Some(OsStr::new("1"))));
+        assert!(headless_set(Some(OsStr::new("yes"))));
+        assert!(!headless_set(Some(OsStr::new("0"))));
+        assert!(!headless_set(Some(OsStr::new(""))));
+        assert!(!headless_set(None));
+    }
 
     #[test]
     fn windows_takes_vulkan_before_dx12_and_other_targets_keep_the_first_discrete() {

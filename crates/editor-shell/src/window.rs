@@ -436,6 +436,7 @@ impl<A: App> ApplicationHandler<Signal> for Host<A> {
 }
 
 pub fn window(mut app: impl App, pulse: Option<Box<dyn Pulse>>) -> Result<(), Error> {
+    pfx_gpu::refuse_window("the editor window").map_err(Error)?;
     let event_loop = EventLoop::<Signal>::with_user_event()
         .build()
         .map_err(|error| Error(error.to_string()))?;
