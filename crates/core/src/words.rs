@@ -8,6 +8,9 @@ const CAST_BASE_TRIES: u64 = 256;
 const CAST_TRIES_PER_NAME: u64 = 32;
 const CAST_TRIES_MAX: u64 = 100_000;
 const CAST_TAG: u64 = 0x7f4a_7c15_9e37_79b9;
+const REDRAW_TAG: u64 = 0x2545_f491_4f6c_dd1d;
+const ONCE_TAG: u64 = 0x1b87_3593_cc9e_2d51;
+const STICKY_TAG: u64 = 0x85eb_ca6b_c2b2_ae35;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParseReason {
@@ -53,6 +56,18 @@ pub enum WordsError {
         slot: String,
         modifier: String,
     },
+    Misplaced {
+        pool: String,
+        entry: usize,
+        slot: String,
+        modifier: String,
+    },
+    MissingForm {
+        pool: String,
+        entry: usize,
+        binding: String,
+        form: String,
+    },
     Recursion {
         cycle: Vec<String>,
     },
@@ -69,6 +84,10 @@ pub enum WordsError {
         pool: String,
         wanted: usize,
         got: usize,
+    },
+    NoSuchMember {
+        index: usize,
+        len: usize,
     },
 }
 
@@ -94,7 +113,25 @@ impl fmt::Display for WordsError {
                 modifier,
             } => write!(
                 f,
-                "pool `{pool}`, entry {entry}, slot `{slot}`: unknown modifier `{modifier}` (cap, title, upper, lower, a)"
+                "pool `{pool}`, entry {entry}, slot `{slot}`: unknown modifier `{modifier}` (cap, title, upper, lower, a, once, sticky, hide)"
+            ),
+            Self::Misplaced {
+                pool,
+                entry,
+                slot,
+                modifier,
+            } => write!(
+                f,
+                "pool `{pool}`, entry {entry}, slot `{slot}`: `{modifier}` only belongs on a slot that draws a pool, not on a recalled one"
+            ),
+            Self::MissingForm {
+                pool,
+                entry,
+                binding,
+                form,
+            } => write!(
+                f,
+                "pool `{pool}`, entry {entry}: `{binding}.{form}` needs every entry of the bound pool to hold a `{{{form}}}` slot"
             ),
             Self::Recursion { cycle } => {
                 write!(f, "pools recurse forever: {}", cycle.join(" -> "))
@@ -112,6 +149,9 @@ impl fmt::Display for WordsError {
                 f,
                 "pool `{pool}` gave {got} distinct results of the {wanted} asked for"
             ),
+            Self::NoSuchMember { index, len } => {
+                write!(f, "member {index} asked for, the cast has {len}")
+            }
         }
     }
 }
@@ -182,16 +222,76 @@ enum Modifier {
     Article,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Draw {
+    Fresh,
+    Once,
+    Sticky,
+}
+
 #[derive(Clone, Debug)]
 enum Part {
     Text(String),
-    Slot { pool: usize, mods: Vec<Modifier> },
+    Slot {
+        pool: usize,
+        mods: Vec<Modifier>,
+        bind: Option<usize>,
+        draw: Draw,
+        hide: bool,
+    },
+    Recall {
+        name: String,
+        bind: usize,
+        bound: usize,
+        form: Option<usize>,
+        mods: Vec<Modifier>,
+    },
 }
 
 #[derive(Clone, Debug)]
 struct Compiled {
     parts: Vec<Part>,
     literal: bool,
+    binds: usize,
+    source: usize,
+}
+
+#[derive(Clone, Debug)]
+struct Bound {
+    text: String,
+    forms: Vec<(usize, String)>,
+}
+
+struct Run<'a> {
+    base: &'a Rng,
+    trace: Trace,
+}
+
+struct Used {
+    text: HashSet<String>,
+    parts: HashSet<(usize, String)>,
+}
+
+struct Trace {
+    watch: Vec<bool>,
+    any: bool,
+    seen: Vec<(usize, String)>,
+}
+
+impl Trace {
+    fn none() -> Self {
+        Self {
+            watch: Vec::new(),
+            any: false,
+            seen: Vec::new(),
+        }
+    }
+
+    fn note(&mut self, pool: usize, text: &str) {
+        if self.any && self.watch[pool] {
+            self.seen.push((pool, text.to_lowercase()));
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -273,6 +373,7 @@ fn compile(
     };
     let b = text.as_bytes();
     let mut parts = Vec::new();
+    let mut bound: Vec<(String, usize)> = Vec::new();
     let mut lit = String::new();
     let mut i = 0;
     while i < b.len() {
@@ -292,34 +393,101 @@ fn compile(
                     _ => return Err(parse_err(i, ParseReason::UnclosedBrace)),
                 };
                 let mut fields = text[i + 1..close].split('|');
-                let slot = fields.next().unwrap_or("").trim();
+                let head = fields.next().unwrap_or("").trim();
+                let (bind_name, slot) = match head.split_once('=') {
+                    Some((n, p)) => (Some(n.trim()), p.trim()),
+                    None => (None, head),
+                };
                 if slot.is_empty() {
                     return Err(parse_err(i, ParseReason::EmptySlot));
                 }
-                if !valid_name(slot) {
+                if !valid_name(slot)
+                    || bind_name.is_some_and(|n| n.is_empty() || n.contains('.') || !valid_name(n))
+                {
                     return Err(parse_err(i, ParseReason::BadSlotName));
                 }
-                let target = *index.get(slot).ok_or_else(|| WordsError::UnknownSlot {
+                let unknown = |name: &str| WordsError::UnknownSlot {
                     pool: pool.to_string(),
                     entry,
-                    slot: slot.to_string(),
-                })?;
+                    slot: name.to_string(),
+                };
+                let recall = if bind_name.is_some() {
+                    None
+                } else if let Some(at) = bound.iter().rposition(|(n, _)| n == slot) {
+                    Some((at, None))
+                } else if let Some((head, form)) = slot.split_once('.') {
+                    match bound.iter().rposition(|(n, _)| n == head) {
+                        Some(at) => {
+                            Some((at, Some(*index.get(form).ok_or_else(|| unknown(slot))?)))
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+                let target = match recall {
+                    Some(_) => 0,
+                    None => *index.get(slot).ok_or_else(|| unknown(slot))?,
+                };
                 let mut mods = Vec::new();
+                let mut draw = Draw::Fresh;
+                let mut hide = false;
                 for field in fields {
                     let field = field.trim();
-                    mods.push(parse_modifier(field).ok_or_else(|| {
-                        WordsError::UnknownModifier {
-                            pool: pool.to_string(),
-                            entry,
-                            slot: slot.to_string(),
-                            modifier: field.to_string(),
+                    let misplaced = || WordsError::Misplaced {
+                        pool: pool.to_string(),
+                        entry,
+                        slot: slot.to_string(),
+                        modifier: field.to_string(),
+                    };
+                    match field {
+                        "once" | "sticky" | "hide" => {
+                            let wanted = match field {
+                                "once" => Draw::Once,
+                                "sticky" => Draw::Sticky,
+                                _ => draw,
+                            };
+                            if recall.is_some() || (field != "hide" && draw != Draw::Fresh) {
+                                return Err(misplaced());
+                            }
+                            draw = wanted;
+                            hide |= field == "hide";
                         }
-                    })?);
+                        _ => mods.push(parse_modifier(field).ok_or_else(|| {
+                            WordsError::UnknownModifier {
+                                pool: pool.to_string(),
+                                entry,
+                                slot: slot.to_string(),
+                                modifier: field.to_string(),
+                            }
+                        })?),
+                    }
                 }
                 if !lit.is_empty() {
                     parts.push(Part::Text(std::mem::take(&mut lit)));
                 }
-                parts.push(Part::Slot { pool: target, mods });
+                match recall {
+                    Some((at, form)) => parts.push(Part::Recall {
+                        name: bound[at].0.clone(),
+                        bind: at,
+                        bound: bound[at].1,
+                        form,
+                        mods,
+                    }),
+                    None => {
+                        let bind = bind_name.map(|n| {
+                            bound.push((n.to_string(), target));
+                            bound.len() - 1
+                        });
+                        parts.push(Part::Slot {
+                            pool: target,
+                            mods,
+                            bind,
+                            draw,
+                            hide,
+                        });
+                    }
+                }
                 i = close + 1;
             }
             _ => {
@@ -333,7 +501,12 @@ fn compile(
         parts.push(Part::Text(lit));
     }
     let literal = parts.iter().all(|p| matches!(p, Part::Text(_)));
-    Ok(Compiled { parts, literal })
+    Ok(Compiled {
+        parts,
+        literal,
+        binds: bound.len(),
+        source: entry,
+    })
 }
 
 fn literal_text(entry: &Compiled) -> String {
@@ -472,6 +645,7 @@ impl Words {
                 .collect(),
         };
         words.check_recursion()?;
+        words.check_forms()?;
         words.fill_capacity();
         Ok(words)
     }
@@ -555,49 +729,149 @@ impl Words {
         self.index.get(pool).map(|&i| self.pools[i].capacity)
     }
 
-    fn expand(&self, at: usize, path: u64, base: &Rng, out: &mut String) -> Result<(), WordsError> {
+    fn check_forms(&self) -> Result<(), WordsError> {
+        for pool in &self.pools {
+            for entry in &pool.entries {
+                for part in &entry.parts {
+                    let Part::Recall {
+                        name,
+                        bound,
+                        form: Some(form),
+                        ..
+                    } = part
+                    else {
+                        continue;
+                    };
+                    let direct = |e: &Compiled| {
+                        e.parts
+                            .iter()
+                            .any(|p| matches!(p, Part::Slot { pool, .. } if pool == form))
+                    };
+                    if !self.pools[*bound].entries.iter().all(direct) {
+                        return Err(WordsError::MissingForm {
+                            pool: pool.name.clone(),
+                            entry: entry.source,
+                            binding: name.clone(),
+                            form: self.pools[*form].name.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn expand(
+        &self,
+        at: usize,
+        path: u64,
+        sticky: bool,
+        run: &mut Run,
+        out: &mut String,
+        mut forms: Option<&mut Vec<(usize, String)>>,
+    ) -> Result<(), WordsError> {
         let pool = &self.pools[at];
         let start = out.len();
+        let trace_mark = run.trace.seen.len();
+        let forms_mark = forms.as_ref().map_or(0, |f| f.len());
         for attempt in 0..ATTEMPTS {
             let attempt_path = step(path, 0, attempt);
-            let mut rng = base.fork(attempt_path);
+            let pick_path = if sticky {
+                step(STICKY_TAG, pool.hash, attempt)
+            } else {
+                attempt_path
+            };
+            let mut rng = run.base.fork(pick_path);
             let entry = &pool.entries[pool.pick(&mut rng)];
+            let mut bound: Vec<Option<Bound>> = vec![None; entry.binds];
             for (j, part) in entry.parts.iter().enumerate() {
                 match part {
                     Part::Text(t) => out.push_str(t),
-                    Part::Slot { pool: child, mods } => {
-                        let child_path = step(attempt_path, j as u64 + 1, self.pools[*child].hash);
+                    Part::Slot {
+                        pool: child,
+                        mods,
+                        bind,
+                        draw,
+                        hide,
+                    } => {
+                        let hash = self.pools[*child].hash;
+                        let child_path = match draw {
+                            Draw::Once => step(ONCE_TAG, hash, 0),
+                            _ => step(attempt_path, j as u64 + 1, hash),
+                        };
                         let from = out.len();
-                        self.expand(*child, child_path, base, out)?;
+                        let mut child_forms = Vec::new();
+                        self.expand(
+                            *child,
+                            child_path,
+                            *draw == Draw::Sticky,
+                            run,
+                            out,
+                            bind.map(|_| &mut child_forms),
+                        )?;
                         if !mods.is_empty() {
                             let piece = out.split_off(from);
                             apply(mods, piece, out);
+                        }
+                        if let Some(f) = forms.as_deref_mut() {
+                            f.push((*child, out[from..].to_string()));
+                        }
+                        if let Some(b) = bind {
+                            bound[*b] = Some(Bound {
+                                text: out[from..].to_string(),
+                                forms: child_forms,
+                            });
+                        }
+                        if *hide {
+                            out.truncate(from);
+                        }
+                    }
+                    Part::Recall {
+                        bind, form, mods, ..
+                    } => {
+                        let Some(b) = &bound[*bind] else { continue };
+                        let text = match form {
+                            None => Some(&b.text),
+                            Some(f) => b.forms.iter().find(|(p, _)| p == f).map(|(_, t)| t),
+                        };
+                        if let Some(text) = text {
+                            apply(mods, text.clone(), out);
                         }
                     }
                 }
             }
             if entry.literal || !pool.avoids(&out[start..]) {
+                run.trace.note(at, &out[start..]);
                 return Ok(());
             }
             out.truncate(start);
+            run.trace.seen.truncate(trace_mark);
+            if let Some(f) = forms.as_deref_mut() {
+                f.truncate(forms_mark);
+            }
         }
         Err(WordsError::Exhausted {
             pool: pool.name.clone(),
         })
     }
 
-    pub fn generate(&self, pool: &str, rng: &Rng, request: u64) -> Result<String, WordsError> {
-        let at = *self
-            .index
+    fn lookup(&self, pool: &str) -> Result<usize, WordsError> {
+        self.index
             .get(pool)
+            .copied()
             .ok_or_else(|| WordsError::UnknownPool {
                 pool: pool.to_string(),
-            })?;
+            })
+    }
+
+    fn draw(&self, at: usize, request: u64, run: &mut Run) -> Result<String, WordsError> {
         let root = step(self.pools[at].hash, request, 0);
         let mut out = String::new();
+        let mark = run.trace.seen.len();
         for attempt in 0..ATTEMPTS {
             out.clear();
-            self.expand(at, step(root, attempt, 1), rng, &mut out)?;
+            run.trace.seen.truncate(mark);
+            self.expand(at, step(root, attempt, 1), false, run, &mut out, None)?;
             if self.avoid_results.is_empty() {
                 return Ok(out);
             }
@@ -607,49 +881,184 @@ impl Words {
             }
         }
         Err(WordsError::Exhausted {
-            pool: pool.to_string(),
+            pool: self.pools[at].name.clone(),
         })
     }
 
+    pub fn generate(&self, pool: &str, rng: &Rng, request: u64) -> Result<String, WordsError> {
+        let at = self.lookup(pool)?;
+        let mut run = Run {
+            base: rng,
+            trace: Trace::none(),
+        };
+        self.draw(at, request, &mut run)
+    }
+
     pub fn cast(&self, pool: &str, rng: &Rng, count: usize) -> Result<Vec<String>, WordsError> {
-        let at = *self
-            .index
-            .get(pool)
-            .ok_or_else(|| WordsError::UnknownPool {
-                pool: pool.to_string(),
-            })?;
-        if (count as u64) > self.pools[at].capacity {
-            return Err(WordsError::NotEnoughDistinct {
-                pool: pool.to_string(),
-                wanted: count,
-                got: 0,
-            });
+        let cast = self.cast_distinct(pool, rng, count, &[] as &[&str])?;
+        Ok(cast.members.into_iter().map(|m| m.text).collect())
+    }
+
+    fn watcher(&self, distinct: &[usize]) -> Trace {
+        let mut watch = vec![false; self.pools.len()];
+        for &d in distinct {
+            watch[d] = true;
+        }
+        Trace {
+            watch,
+            any: !distinct.is_empty(),
+            seen: Vec::new(),
+        }
+    }
+
+    fn search(
+        &self,
+        at: usize,
+        distinct: &[usize],
+        base: &Rng,
+        tries: u64,
+        first_request: u64,
+        used: &Used,
+    ) -> Result<Option<(Member, u64)>, WordsError> {
+        let mut run = Run {
+            base,
+            trace: self.watcher(distinct),
+        };
+        let mut request = first_request;
+        for _ in 0..tries {
+            run.trace.seen.clear();
+            let text = self.draw(at, request, &mut run)?;
+            request += 1;
+            if used.text.contains(&text) {
+                continue;
+            }
+            if run.trace.seen.iter().any(|p| used.parts.contains(p)) {
+                continue;
+            }
+            let parts = run
+                .trace
+                .seen
+                .iter()
+                .map(|(p, t)| (self.pools[*p].name.clone(), t.clone()))
+                .collect();
+            return Ok(Some((Member { text, parts }, request)));
+        }
+        Ok(None)
+    }
+
+    fn remember(&self, used: &mut Used, member: &Member) -> Result<(), WordsError> {
+        used.text.insert(member.text.clone());
+        for (name, text) in &member.parts {
+            used.parts.insert((self.lookup(name)?, text.clone()));
+        }
+        Ok(())
+    }
+
+    pub fn cast_distinct<S: AsRef<str>>(
+        &self,
+        pool: &str,
+        rng: &Rng,
+        count: usize,
+        distinct: &[S],
+    ) -> Result<Cast, WordsError> {
+        let at = self.lookup(pool)?;
+        let watched = distinct
+            .iter()
+            .map(|d| self.lookup(d.as_ref()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let short = |got: usize| WordsError::NotEnoughDistinct {
+            pool: pool.to_string(),
+            wanted: count,
+            got,
+        };
+        if (count as u64) > self.pools[at].capacity
+            || watched
+                .iter()
+                .any(|&w| (count as u64) > self.pools[w].capacity)
+        {
+            return Err(short(0));
         }
         let tries = (CAST_BASE_TRIES + CAST_TRIES_PER_NAME * count as u64).min(CAST_TRIES_MAX);
         let base = rng.fork(CAST_TAG);
-        let mut seen: HashSet<String> = HashSet::with_capacity(count);
-        let mut names = Vec::with_capacity(count);
+        let mut used = Used {
+            text: HashSet::with_capacity(count),
+            parts: HashSet::new(),
+        };
+        let mut members = Vec::with_capacity(count);
         let mut request = 0u64;
-        while names.len() < count {
-            let mut found = false;
-            for _ in 0..tries {
-                let name = self.generate(pool, &base, request)?;
-                request += 1;
-                if seen.insert(name.clone()) {
-                    names.push(name);
-                    found = true;
-                    break;
-                }
-            }
-            if !found {
-                return Err(WordsError::NotEnoughDistinct {
-                    pool: pool.to_string(),
-                    wanted: count,
-                    got: names.len(),
-                });
-            }
+        while members.len() < count {
+            let Some((member, next)) = self.search(at, &watched, &base, tries, request, &used)?
+            else {
+                return Err(short(members.len()));
+            };
+            request = next;
+            self.remember(&mut used, &member)?;
+            members.push(member);
         }
-        Ok(names)
+        Ok(Cast {
+            pool: pool.to_string(),
+            distinct: distinct.iter().map(|d| d.as_ref().to_string()).collect(),
+            members,
+        })
+    }
+
+    pub fn redraw<'a>(
+        &self,
+        cast: &'a mut Cast,
+        rng: &Rng,
+        index: usize,
+        counter: u64,
+    ) -> Result<&'a str, WordsError> {
+        if index >= cast.members.len() {
+            return Err(WordsError::NoSuchMember {
+                index,
+                len: cast.members.len(),
+            });
+        }
+        let at = self.lookup(&cast.pool)?;
+        let watched = cast
+            .distinct
+            .iter()
+            .map(|d| self.lookup(d))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut used = Used {
+            text: HashSet::new(),
+            parts: HashSet::new(),
+        };
+        for member in &cast.members {
+            self.remember(&mut used, member)?;
+        }
+        let tries =
+            (CAST_BASE_TRIES + CAST_TRIES_PER_NAME * cast.members.len() as u64).min(CAST_TRIES_MAX);
+        let base = rng.fork(step(REDRAW_TAG, counter, 0));
+        let Some((member, _)) = self.search(at, &watched, &base, tries, 0, &used)? else {
+            return Err(WordsError::NotEnoughDistinct {
+                pool: cast.pool.clone(),
+                wanted: cast.members.len(),
+                got: cast.members.len() - 1,
+            });
+        };
+        cast.members[index] = member;
+        Ok(&cast.members[index].text)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub text: String,
+    pub parts: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cast {
+    pub pool: String,
+    pub distinct: Vec<String>,
+    pub members: Vec<Member>,
+}
+
+impl Cast {
+    pub fn texts(&self) -> impl Iterator<Item = &str> {
+        self.members.iter().map(|m| m.text.as_str())
     }
 }
 
@@ -951,6 +1360,185 @@ mod tests {
             })
         );
         assert_eq!(words.capacity("name"), Some(5 * 4 + 5 * 4 * 2));
+    }
+
+    fn people() -> Words {
+        Words::new(
+            &[
+                PoolSpec::new("first", ["Ada", "Bram", "Cleo", "Dov", "Edda", "Finn"]),
+                PoolSpec::new("last", ["Stone", "Vale", "Marsh", "Holt", "Reed", "Cole"]),
+                PoolSpec::new("person", ["{first} {last}"]).avoiding(["Ada Stone"]),
+                PoolSpec::new("rank", ["Scout", "Lead", "Chief"]),
+                PoolSpec::new("guild_rank", ["Apprentice", "Journeyman", "Master"]),
+                PoolSpec::new("army_rank", ["Private", "Sergeant", "Major"]),
+                PoolSpec::new("ladder", ["{guild_rank}", "{army_rank}"]),
+                PoolSpec::new("theme", ["guild", "army", "choir", "order", "crew"]),
+                PoolSpec::new(
+                    "memo",
+                    [
+                        "{m=person|hide}{m.first} reports to {m}; ask {m.last}",
+                        "{p=person} / {p.first} / {p}",
+                    ],
+                ),
+                PoolSpec::new("who", ["{person}"]),
+                PoolSpec::new("badge", ["{theme|once} {ladder|sticky}"]),
+            ],
+            [] as [&str; 0],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn bound_draw_feeds_every_form_consistently() {
+        let words = people();
+        let rng = Rng::new(21);
+        for i in 0..200 {
+            let memo = words.generate("memo", &rng, i).unwrap();
+            if let Some((a, b)) = memo.split_once(" / ") {
+                let (first, full) = b.split_once(" / ").unwrap();
+                assert_eq!(a, full);
+                assert!(full.starts_with(first));
+            } else {
+                let (head, tail) = memo.split_once(" reports to ").unwrap();
+                let (full, ask) = tail.split_once("; ask ").unwrap();
+                assert!(full.starts_with(head) && full.ends_with(ask), "{memo}");
+            }
+            assert!(!memo.contains("Ada Stone"));
+        }
+    }
+
+    #[test]
+    fn once_is_fixed_for_the_run_and_sticky_picks_a_branch_once() {
+        let words = people();
+        let rng = Rng::new(8);
+        let badges: Vec<String> = (0..60)
+            .map(|i| words.generate("badge", &rng, i).unwrap())
+            .collect();
+        let theme = badges[0].split(' ').next().unwrap();
+        assert!(badges.iter().all(|b| b.starts_with(theme)));
+        let guild = ["Apprentice", "Journeyman", "Master"];
+        let first_is_guild = guild.iter().any(|g| badges[0].ends_with(g));
+        let ranks: HashSet<&str> = badges
+            .iter()
+            .map(|b| b.split(' ').nth(1).unwrap())
+            .collect();
+        assert!(ranks.len() > 1);
+        assert!(ranks.iter().all(|r| guild.contains(r) == first_is_guild));
+        let other = Rng::new(9);
+        let themes: HashSet<String> = (0..20)
+            .map(|s| {
+                let w = words.generate("badge", &Rng::new(100 + s), 0).unwrap();
+                w.split(' ').next().unwrap().to_string()
+            })
+            .collect();
+        assert!(themes.len() > 1);
+        assert_eq!(
+            words.generate("badge", &other, 5).unwrap(),
+            words.generate("badge", &other, 5).unwrap()
+        );
+    }
+
+    #[test]
+    fn composite_avoid_reaches_a_bound_draw() {
+        let words = people();
+        let rng = Rng::new(2);
+        for i in 0..2000 {
+            assert_ne!(words.generate("who", &rng, i).unwrap(), "Ada Stone");
+            assert!(
+                !words
+                    .generate("memo", &rng, i)
+                    .unwrap()
+                    .contains("Ada Stone")
+            );
+        }
+    }
+
+    #[test]
+    fn cast_keeps_every_component_unique() {
+        let words = people();
+        let cast = words
+            .cast_distinct("person", &Rng::new(6), 6, &["first", "last"])
+            .unwrap();
+        let firsts: HashSet<&str> = cast.texts().map(|t| t.split(' ').next().unwrap()).collect();
+        let lasts: HashSet<&str> = cast.texts().map(|t| t.split(' ').nth(1).unwrap()).collect();
+        assert_eq!((firsts.len(), lasts.len()), (6, 6));
+        assert!(matches!(
+            words.cast_distinct("person", &Rng::new(6), 7, &["first"]),
+            Err(WordsError::NotEnoughDistinct { wanted: 7, .. })
+        ));
+    }
+
+    #[test]
+    fn redraw_is_keyed_by_counter_and_keeps_the_cast_distinct() {
+        let words = people();
+        let rng = Rng::new(6);
+        let cast = words
+            .cast_distinct("person", &rng, 3, &["first", "last"])
+            .unwrap();
+        let mut a = cast.clone();
+        let mut b = cast.clone();
+        for noise in 0..37 {
+            words.generate("person", &rng, noise).unwrap();
+        }
+        let x = words.redraw(&mut a, &rng, 2, 11).unwrap().to_string();
+        let y = words
+            .redraw(&mut b, &Rng::new(6), 2, 11)
+            .unwrap()
+            .to_string();
+        assert_eq!(x, y);
+        assert_eq!(a, b);
+        let old = &cast.members[2];
+        assert_ne!(a.members[2].text, old.text);
+        let firsts: HashSet<&str> = a.texts().map(|t| t.split(' ').next().unwrap()).collect();
+        let lasts: HashSet<&str> = a.texts().map(|t| t.split(' ').nth(1).unwrap()).collect();
+        assert_eq!((firsts.len(), lasts.len()), (3, 3));
+        for i in [0, 1] {
+            assert_eq!(a.members[i], cast.members[i]);
+        }
+        let mut c = cast.clone();
+        let varied: HashSet<String> = (0..12)
+            .map(|k| {
+                let mut d = cast.clone();
+                words.redraw(&mut d, &rng, 2, k).unwrap().to_string()
+            })
+            .collect();
+        assert!(varied.len() > 1);
+        assert_eq!(
+            words.redraw(&mut c, &rng, 9, 0),
+            Err(WordsError::NoSuchMember { index: 9, len: 3 })
+        );
+    }
+
+    #[test]
+    fn binding_errors_are_clear() {
+        let err = |specs: &[PoolSpec]| Words::new(specs, [] as [&str; 0]).unwrap_err();
+        assert_eq!(
+            err(&[
+                PoolSpec::new("first", ["x"]),
+                PoolSpec::new("p", ["{first}", "y"]),
+                PoolSpec::new("t", ["{b=p} {b.first}"]),
+            ]),
+            WordsError::MissingForm {
+                pool: "t".into(),
+                entry: 0,
+                binding: "b".into(),
+                form: "first".into()
+            }
+        );
+        assert!(matches!(
+            err(&[
+                PoolSpec::new("p", ["x"]),
+                PoolSpec::new("t", ["{b=p} {b|once}"]),
+            ]),
+            WordsError::Misplaced { .. }
+        ));
+        assert!(matches!(
+            err(&[
+                PoolSpec::new("p", ["x"]),
+                PoolSpec::new("t", ["{p|once|sticky}"])
+            ]),
+            WordsError::Misplaced { .. }
+        ));
     }
 
     #[test]
