@@ -344,3 +344,105 @@ fn bench_styles() {
         );
     }
 }
+
+fn long_style() -> Format<'static> {
+    Format {
+        style: Style::Scientific,
+        from_exp: 12,
+        precision: Precision::Decimals(0),
+        big_precision: Some(Precision::Significant(2)),
+        rounding: Rounding::Truncate,
+        ..base()
+    }
+}
+
+fn card_style() -> Format<'static> {
+    Format {
+        style: Style::Short,
+        from_exp: 4,
+        sci_from: Some(12),
+        precision: Precision::Decimals(0),
+        big_precision: Some(Precision::AtLeast(2)),
+        rounding: Rounding::Truncate,
+        ..base()
+    }
+}
+
+#[test]
+fn long_style_groups_then_goes_scientific() {
+    let f = long_style();
+    assert_eq!(f.format(999_999_999_999u64).unwrap(), "999,999,999,999");
+    assert_eq!(f.format(0).unwrap(), "0");
+    assert_eq!(f.format(1_000_000_000_000u64).unwrap(), "1.0e12");
+    assert_eq!(f.format(1_990_000_000_000u64).unwrap(), "1.9e12");
+    assert_eq!(f.format(-2_500_000_000_000i64).unwrap(), "-2.5e12");
+    assert_eq!(f64s(&f, 1.5e30), "1.5e30");
+}
+
+#[test]
+fn card_style_truncates_to_short_names() {
+    let f = card_style();
+    assert_eq!(f.format(999).unwrap(), "999");
+    assert_eq!(f.format(9_999).unwrap(), "9,999");
+    assert_eq!(f.format(12_000).unwrap(), "12K");
+    assert_eq!(f.format(12_999).unwrap(), "12K");
+    assert_eq!(f.format(999_999).unwrap(), "999K");
+    assert_eq!(f.format(3_450_000).unwrap(), "3.4M");
+    assert_eq!(f.format(34_500_000).unwrap(), "34M");
+    assert_eq!(f.format(999_999_999_999u64).unwrap(), "999B");
+    assert_eq!(f.format(1_234_000_000_000u64).unwrap(), "1.2e12");
+    assert_eq!(f.format(1_000_000_000).unwrap(), "1.0B");
+    let trim = Format {
+        trim_zeros: true,
+        ..f
+    };
+    assert_eq!(trim.format(3_000_000).unwrap(), "3M");
+    assert_eq!(f64s(&f, 9_999.9), "9,999");
+}
+
+#[test]
+fn ceil_and_truncate() {
+    let ceil = Format {
+        rounding: Rounding::Ceil,
+        precision: Precision::Decimals(0),
+        ..base()
+    };
+    let cut = Format {
+        rounding: Rounding::Truncate,
+        ..ceil
+    };
+    assert_eq!(f64s(&ceil, 0.0001), "1");
+    assert_eq!(f64s(&ceil, 0.0), "0");
+    assert_eq!(f64s(&ceil, 2.0), "2");
+    assert_eq!(f64s(&ceil, 2.01), "3");
+    assert_eq!(f64s(&ceil, -2.9), "-2");
+    assert_eq!(f64s(&ceil, -0.5), "0");
+    assert_eq!(f64s(&cut, 2.99), "2");
+    assert_eq!(f64s(&cut, -2.99), "-2");
+    assert_eq!(f64s(&cut, 0.99), "0");
+    let two = Format {
+        precision: Precision::Decimals(2),
+        ..ceil
+    };
+    assert_eq!(f64s(&two, 0.0004), "0.01");
+    assert_eq!(f64s(&two, 1.231), "1.24");
+    assert_eq!(f64s(&two, 1.23), "1.23");
+    let live = Format {
+        style: Style::Short,
+        from_exp: 4,
+        ..ceil
+    };
+    assert_eq!(f64s(&live, 9_999.2), "10K");
+}
+
+#[test]
+fn one_text_for_every_non_finite() {
+    let f = Format {
+        non_finite: NonFinite::OneText,
+        ..base()
+    };
+    assert_eq!(f64s(&f, f64::NAN), "NaN");
+    assert_eq!(f64s(&f, f64::INFINITY), "NaN");
+    assert_eq!(f64s(&f, f64::NEG_INFINITY), "NaN");
+    assert_eq!(f.format(f32::NEG_INFINITY).unwrap(), "NaN");
+}
