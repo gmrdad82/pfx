@@ -11,7 +11,7 @@ The window layer underneath (`docs/window.md`) is unchanged in what it does. Thi
 | Mode | Window layer | What the player gets |
 |---|---|---|
 | `Windowed` | `DisplayMode::Windowed` at the stored size | decorations on, resizable |
-| `Borderless` | `DisplayMode::BorderlessFullscreen` on the stored monitor | the desktop's own resolution, no mode change |
+| `Borderless` | `DisplayMode::BorderlessFullscreen` on the stored monitor, or with none stored on the output the window opens on (the focused one under Wayland) | the desktop's own resolution, no mode change |
 | `Fullscreen` | `DisplayMode::ExclusiveFullscreen` with `VideoModeChoice::Native` | exclusive where the platform allows it (Windows, macOS, X11), else borderless with `Fallback::ExclusiveUnsupported` |
 
 `VideoModeChoice::Native` is the monitor's own size at its current refresh (within 1 Hz), the deepest bit depth first; with no known refresh it takes the highest. `ModePlan::resizable` is true for a decorated window, and `apply_plan` calls `WindowOps::set_resizable` before the size. `set_resizable` has a default that does nothing, so an existing `WindowOps` keeps compiling.

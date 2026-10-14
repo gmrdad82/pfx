@@ -143,7 +143,7 @@ pub enum Fallback {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FullscreenPlan {
     Windowed,
-    Borderless { monitor: usize },
+    Borderless { monitor: Option<usize> },
     Exclusive { monitor: usize, mode: VideoMode },
 }
 
@@ -244,12 +244,12 @@ fn placed(
 fn resolve(
     choice: &MonitorChoice,
     monitors: &Monitors,
-) -> Result<(usize, Option<Fallback>), PlanError> {
+) -> Result<(Option<usize>, Option<Fallback>), PlanError> {
     if monitors.list.is_empty() {
         return Err(PlanError::NoMonitor);
     }
     let found = match choice {
-        MonitorChoice::Current => monitors.current,
+        MonitorChoice::Current => return Ok((None, None)),
         MonitorChoice::Primary => monitors.primary,
         MonitorChoice::Index(index) => (*index < monitors.list.len()).then_some(*index),
         MonitorChoice::Name(name) => monitors
@@ -257,22 +257,25 @@ fn resolve(
             .iter()
             .position(|monitor| monitor.name.as_deref() == Some(name.as_str())),
     };
-    if let Some(index) = found {
-        return Ok((index, None));
-    }
-    let index = monitors.current.or(monitors.primary).unwrap_or(0);
-    Ok((index, Some(Fallback::MonitorMissing)))
+    Ok(match found {
+        Some(index) => (Some(index), None),
+        None => (None, Some(Fallback::MonitorMissing)),
+    })
 }
 
-fn borderless_plan(monitor: usize, fallback: Option<Fallback>) -> ModePlan {
+fn borderless_plan(
+    target: Option<usize>,
+    fallback: Option<Fallback>,
+    monitors: &Monitors,
+) -> ModePlan {
     ModePlan {
-        fullscreen: FullscreenPlan::Borderless { monitor },
+        fullscreen: FullscreenPlan::Borderless { monitor: target },
         decorations: false,
         resizable: false,
         inner_size: None,
         outer_position: None,
         fallback,
-        monitor: Some(monitor),
+        monitor: target.or(monitors.current),
     }
 }
 
@@ -281,8 +284,8 @@ fn borderless(
     monitors: &Monitors,
     fallback: Option<Fallback>,
 ) -> Result<ModePlan, PlanError> {
-    let (monitor, missed) = resolve(choice, monitors)?;
-    Ok(borderless_plan(monitor, fallback.or(missed)))
+    let (target, missed) = resolve(choice, monitors)?;
+    Ok(borderless_plan(target, fallback.or(missed), monitors))
 }
 
 fn exclusive(
@@ -291,14 +294,26 @@ fn exclusive(
     platform: PlatformCaps,
     monitors: &Monitors,
 ) -> Result<ModePlan, PlanError> {
-    let (monitor, missed) = resolve(choice, monitors)?;
+    let (target, missed) = resolve(choice, monitors)?;
     if !platform.exclusive {
         return Ok(borderless_plan(
-            monitor,
+            target,
             missed.or(Some(Fallback::ExclusiveUnsupported)),
+            monitors,
         ));
     }
-    if let Some(mode) = find_video_mode(&monitors.list[monitor], video_mode) {
+    let Some(monitor) = target.or(monitors.current) else {
+        return Ok(borderless_plan(
+            None,
+            missed.or(Some(Fallback::MonitorMissing)),
+            monitors,
+        ));
+    };
+    if let Some(mode) = monitors
+        .list
+        .get(monitor)
+        .and_then(|found| find_video_mode(found, video_mode))
+    {
         return Ok(ModePlan {
             fullscreen: FullscreenPlan::Exclusive { monitor, mode },
             decorations: false,
@@ -310,8 +325,9 @@ fn exclusive(
         });
     }
     Ok(borderless_plan(
-        monitor,
+        target,
         missed.or(Some(Fallback::VideoModeMissing)),
+        monitors,
     ))
 }
 
@@ -1015,7 +1031,7 @@ mod glue {
             match fullscreen {
                 FullscreenPlan::Windowed => self.window.set_fullscreen(None),
                 FullscreenPlan::Borderless { monitor } => {
-                    let handle = self.handles.get(*monitor).cloned();
+                    let handle = monitor.and_then(|monitor| self.handles.get(monitor).cloned());
                     self.window
                         .set_fullscreen(Some(Fullscreen::Borderless(handle)));
                 }
@@ -1062,7 +1078,9 @@ mod glue {
             if self.missed
                 && let FullscreenPlan::Exclusive { monitor, .. } = plan.fullscreen
             {
-                plan.fullscreen = FullscreenPlan::Borderless { monitor };
+                plan.fullscreen = FullscreenPlan::Borderless {
+                    monitor: Some(monitor),
+                };
                 if plan.fallback.is_none() {
                     plan.fallback = Some(Fallback::VideoModeMissing);
                 }
@@ -1244,14 +1262,14 @@ mod tests {
         .unwrap();
         assert_eq!(
             borderless.fullscreen,
-            FullscreenPlan::Borderless { monitor: 0 }
+            FullscreenPlan::Borderless { monitor: Some(0) }
         );
         assert_eq!(borderless.fallback, None);
         assert_eq!(
             applied(&borderless),
             vec![
                 Call::Decorations(false),
-                Call::Fullscreen(FullscreenPlan::Borderless { monitor: 0 }),
+                Call::Fullscreen(FullscreenPlan::Borderless { monitor: Some(0) }),
             ]
         );
 
@@ -1321,12 +1339,13 @@ mod tests {
         .unwrap();
         assert_eq!(
             wayland.fullscreen,
-            FullscreenPlan::Borderless { monitor: 0 }
+            FullscreenPlan::Borderless { monitor: Some(0) }
         );
         assert_eq!(wayland.fallback, Some(Fallback::ExclusiveUnsupported));
         assert!(
-            applied(&wayland)
-                .contains(&Call::Fullscreen(FullscreenPlan::Borderless { monitor: 0 }))
+            applied(&wayland).contains(&Call::Fullscreen(FullscreenPlan::Borderless {
+                monitor: Some(0)
+            }))
         );
 
         let missing_mode = plan_display_mode(
@@ -1340,7 +1359,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             missing_mode.fullscreen,
-            FullscreenPlan::Borderless { monitor: 0 }
+            FullscreenPlan::Borderless { monitor: Some(0) }
         );
         assert_eq!(missing_mode.fallback, Some(Fallback::VideoModeMissing));
 
@@ -1354,8 +1373,9 @@ mod tests {
         .unwrap();
         assert_eq!(
             missing_monitor.fullscreen,
-            FullscreenPlan::Borderless { monitor: 1 }
+            FullscreenPlan::Borderless { monitor: None }
         );
+        assert_eq!(missing_monitor.monitor, Some(1));
         assert_eq!(missing_monitor.fallback, Some(Fallback::MonitorMissing));
 
         let missing_index = plan_display_mode(
@@ -1388,6 +1408,44 @@ mod tests {
             ),
             Err(PlanError::NoMonitor)
         ));
+    }
+
+    #[test]
+    fn the_current_monitor_is_left_to_the_compositor() {
+        let unmapped = Monitors {
+            current: None,
+            primary: None,
+            ..desk()
+        };
+        let current = MonitorChoice::Current;
+        let borderless = plan_display_mode(
+            &DisplayMode::BorderlessFullscreen {
+                monitor: current.clone(),
+            },
+            WAYLAND,
+            &unmapped,
+        )
+        .unwrap();
+        assert_eq!(
+            borderless.fullscreen,
+            FullscreenPlan::Borderless { monitor: None }
+        );
+        assert_eq!((borderless.fallback, borderless.monitor), (None, None));
+        for platform in [WAYLAND, X11] {
+            let exclusive = plan_display_mode(
+                &DisplayMode::ExclusiveFullscreen {
+                    monitor: current.clone(),
+                    video_mode: VideoModeChoice::Native,
+                },
+                platform,
+                &unmapped,
+            )
+            .unwrap();
+            assert_eq!(
+                exclusive.fullscreen,
+                FullscreenPlan::Borderless { monitor: None }
+            );
+        }
     }
 
     #[test]

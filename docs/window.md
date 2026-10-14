@@ -14,7 +14,7 @@ The types live in `pfx_gpu::window`. The functions that take a winit `Window` (`
 |---|---|---|---|
 | `Windowed { size, position }` | cleared | on | `set_outer_position` when a position is set, then `request_inner_size` |
 | `BorderlessWindowed { size, position }` | cleared | off | the same optional position and size, not a fullscreen mode |
-| `BorderlessFullscreen { monitor }` | `Fullscreen::Borderless(Some(monitor))` | off | the compositor owns the size |
+| `BorderlessFullscreen { monitor }` | `Fullscreen::Borderless(Some(monitor))`, or `Fullscreen::Borderless(None)` for `Current` | off | the compositor owns the size |
 | `ExclusiveFullscreen { monitor, video_mode }` | `Fullscreen::Exclusive(video_mode)` | off | the video mode owns the size |
 
 A zero width or height is `PlanError::EmptySize`. Fullscreen with an empty monitor list is `PlanError::NoMonitor`.
@@ -31,7 +31,9 @@ Leaving fullscreen happens before the decoration, position, and size calls, so a
 
 `MonitorChoice` is `Current`, `Primary`, `Index`, or `Name`. A name matches `Monitor::name` exactly. `Current` and `Primary` come from the window. `apply_display_mode` numbers monitors in `Window::available_monitors` order and uses that same order for the winit handles.
 
-When the choice misses, the plan uses the current monitor, then the primary, then the first, and sets `Fallback::MonitorMissing`. An exclusive mode can still use a video mode of that fallback monitor. The result says the requested monitor was missing.
+`Current` names no monitor: the plan is `FullscreenPlan::Borderless { monitor: None }` and winit's `Fullscreen::Borderless(None)`, so the window goes fullscreen on the output it is on. On Wayland the current monitor is unknown until the window maps, and the compositor puts a new window on the focused output (Hyprland, sway, GNOME), so the game opens on the display it was launched from rather than the first one; on Windows, macOS and X11 winit takes the window's current monitor. `ModePlan::monitor` still reports the current monitor where it is known.
+
+When the choice misses, the plan does the same as `Current` and sets `Fallback::MonitorMissing`. An exclusive mode needs a video mode of a known monitor: it uses the chosen one, else the current one, and with neither it is borderless with `None` and `Fallback::MonitorMissing`. The result says the requested monitor was missing.
 
 ## What each platform does
 

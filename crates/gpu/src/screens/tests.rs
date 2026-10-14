@@ -541,12 +541,15 @@ fn modes_switch_at_run_time_on_a_stand_in_window() {
     assert_eq!(display.mode(), WindowMode::Borderless);
     let mut window = StandIn::default();
     let plan = display.apply(WAYLAND, &monitors, &mut window).unwrap();
-    assert_eq!(plan.fullscreen, FullscreenPlan::Borderless { monitor: 0 });
+    assert_eq!(
+        plan.fullscreen,
+        FullscreenPlan::Borderless { monitor: None }
+    );
     assert_eq!(
         window.calls,
         vec![
             Call::Decorations(false),
-            Call::Fullscreen(FullscreenPlan::Borderless { monitor: 0 }),
+            Call::Fullscreen(FullscreenPlan::Borderless { monitor: None }),
         ]
     );
 
@@ -586,7 +589,10 @@ fn modes_switch_at_run_time_on_a_stand_in_window() {
         .switch(WindowMode::Fullscreen, WAYLAND, &monitors, &mut window)
         .unwrap();
     let plan = plan.unwrap();
-    assert_eq!(plan.fullscreen, FullscreenPlan::Borderless { monitor: 0 });
+    assert_eq!(
+        plan.fullscreen,
+        FullscreenPlan::Borderless { monitor: None }
+    );
     assert_eq!(plan.fallback, Some(Fallback::ExclusiveUnsupported));
     display.resized(size(800, 600));
     assert_eq!(display.settings().size, size(1280, 720));
@@ -653,7 +659,10 @@ fn the_deck_stays_fullscreen_and_says_so() {
     );
     let mut window = StandIn::default();
     let plan = display.apply(WAYLAND, &monitors, &mut window).unwrap();
-    assert_eq!(plan.fullscreen, FullscreenPlan::Borderless { monitor: 0 });
+    assert_eq!(
+        plan.fullscreen,
+        FullscreenPlan::Borderless { monitor: None }
+    );
     assert_eq!(plan.fallback, None);
     for mode in [
         WindowMode::Windowed,
