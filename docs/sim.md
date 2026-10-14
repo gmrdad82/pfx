@@ -12,6 +12,7 @@ For the same inputs, every function below returns the same bits on every support
 | `sinf`, `cosf`, `expf`, `lnf`, `powf`, `atan2f` (f32) | the f64 result rounded to f32: within 0.501 ulp of the exact result in every tested case |
 | `sqrt`, `sqrtf` | exact (IEEE rounds it correctly), so std's is used |
 | `Rng` | xoshiro256\*\* seeded through SplitMix64; the stream of every method is frozen by golden tests |
+| `Overlaps` | integer boxes and integer compares only, so its hits are exact; their order is fixed (see below) |
 
 Special values follow C99 Annex F. Every NaN result is the canonical `f64::NAN` (or `f32::NAN`), whatever payload came in, so even NaN bits replay. `sin` and `cos` take any finite argument: below 1e6 a Cody-Waite reduction by four parts of pi/2, above it a Payne-Hanek reduction from 1,280 bits of 2/pi, so the accuracy above holds at `f64::MAX` too. `sin(±inf)` and `cos(±inf)` are NaN. `pow(x, y)` takes `ln x` as a double-double and multiplies it by `y` in double-double before `exp`, so large exponents do not amplify the error; a power-of-two base with an integer exponent is exact.
 
@@ -57,6 +58,25 @@ let bytes: [u8; 44] = rng.save(); let rng = Rng::restore(&bytes)?;
 - `state()` and `from_state()` snapshot and resume a stream (a save, a rollback, a peer resync). `RngState` carries the fork root as well as the four state words, so a resumed generator forks exactly as the original would.
 - `save()` and `restore(&[u8])` write and read a versioned byte form of the state, for a run that quits and resumes on any machine (see below).
 - `mix64` is the SplitMix64 finalizer, usable as a plain integer hash for per-cell or per-entity values: `mix64(seed ^ cell)`.
+
+## Overlaps: a 2D broadphase
+
+`Overlaps` finds every overlapping pair between two lists of integer boxes, such as a game's shots and its targets, once per tick:
+
+```rust
+let mut overlaps = Overlaps::new();
+for hit in overlaps.find(&shots, &targets) {
+    hit_target(hit.a, hit.b);
+}
+```
+
+- `Aabb { min, max }` is half-open in `i32` (game units, sub-pixels or whatever the sim counts in): `min` inside, `max` outside, so two boxes that only touch don't overlap, and an empty box (`max <= min` on either axis) hits nothing. `Aabb::point(at)` is the 1×1 box at a point, `Aabb::around(centre, half)` a box of `2 * half` around a centre.
+- `find(a, b)` returns each overlapping pair once as `Hit { a, b }`, the indices into the two lists, sorted by `a` then `b`, the order a nested loop over the two lists would give. It sweeps the two lists together along the axis where the boxes' corners spread wider and tests the other axis exactly. Only integers and sorts on unique keys touch the result, so it replays bit for bit on every platform.
+- It keeps its buffers between calls: after the first tick at a given size it allocates nothing. Keep one `Overlaps` in the sim, not in a thread-shared place.
+- A fast shot can pass through a thin target between two ticks; give such a shot the box of its whole step (from where it was to where it is) and test the segment in the game.
+- Cost, release build on a Ryzen 9 9950X: 2,000 shots (8×16) against 400 targets of 32 to 192 units on a 3840×2160 field, about 8,000 hits a tick, take 0.16 ms. The work grows with the hits found: all of it in one column, 48,000 hits, takes 0.6 ms.
+
+`tests_overlap.rs` checks `find` against every pair tested in order, both ways round, on random scenes with ties, points, empty boxes and negative corners.
 
 ## Stream version and saved state
 
