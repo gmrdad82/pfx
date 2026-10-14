@@ -8,10 +8,10 @@ use crate::clip::Clip;
 use crate::envelope::{EnvState, Envelope};
 use crate::filter::Kind;
 use crate::heard::{Bounds, MusicPlace};
-use crate::interp::{Kernel, MAX_RATIO, MIN_RATIO};
+use crate::interp::{Kernel, MAX_RATIO, MIN_RATIO, Resample};
 use crate::music::{Curve, Direction, MusicTrack};
 use crate::pcm::{PcmSender, pcm_pair};
-use crate::sound::{Rng, SoundDef, SoundId, SoundSpec, Steal};
+use crate::sound::{Body, Rng, SoundDef, SoundId, SoundSpec, Steal, draw};
 use crate::synth::{Synth, Wave};
 use crate::voice::{Block, History, Source, Voice};
 
@@ -215,6 +215,10 @@ impl Mixer {
 
     pub fn channels(&self) -> u16 {
         self.channels
+    }
+
+    pub fn clock(&self) -> u64 {
+        self.clock
     }
 
     pub fn set_seed(&mut self, seed: u64) {
@@ -463,6 +467,9 @@ impl Mixer {
     pub fn stop(&mut self, id: VoiceId, fade_seconds: f32) {
         let len = seconds_to_frames(fade_seconds, self.rate);
         let clock = self.clock;
+        if let Some(voice) = self.voices.iter_mut().find(|voice| voice.id == id) {
+            voice.ends = None;
+        }
         if let Some(voice) = self.voices.iter_mut().find(|voice| voice.id == id)
             && let Some(state) = voice.envelope.as_mut()
         {
@@ -516,6 +523,12 @@ impl Mixer {
             .map(|voice| voice.pitch.current())
     }
 
+    pub fn set_resample(&mut self, id: VoiceId, resample: Resample) {
+        if let Some(voice) = self.voices.iter_mut().find(|voice| voice.id == id) {
+            voice.resample = resample;
+        }
+    }
+
     pub fn set_gain(&mut self, id: VoiceId, gain: f32) {
         self.glide_gain(id, gain, RAMP_SECONDS);
     }
@@ -529,6 +542,17 @@ impl Mixer {
     }
 
     pub fn tone(&mut self, channel: ChannelId, wave: Wave, hz: f32, volume: f32) -> VoiceId {
+        self.tone_in(0, channel, wave, hz, volume)
+    }
+
+    pub fn tone_in(
+        &mut self,
+        offset: u64,
+        channel: ChannelId,
+        wave: Wave,
+        hz: f32,
+        volume: f32,
+    ) -> VoiceId {
         let level = Level {
             volume,
             ..Level::default()
@@ -536,7 +560,7 @@ impl Mixer {
         let seed = self.rng.seed();
         self.push_voice(
             channel,
-            self.clock,
+            self.clock.saturating_add(offset),
             Source::Tone(Synth::new(wave, hz, seed)),
             level,
         )
@@ -588,9 +612,27 @@ impl Mixer {
         let frames = prepared.frames();
         let channels = prepared.channels;
         self.sounds.push(SoundDef {
-            samples: Arc::new(prepared.samples),
-            channels,
-            frames,
+            body: Body::Clip {
+                samples: Arc::new(prepared.samples),
+                channels,
+                frames,
+            },
+            spec,
+        });
+        SoundId(self.sounds.len() - 1)
+    }
+
+    pub fn tone_sound(
+        &mut self,
+        wave: Wave,
+        hz: f32,
+        seconds: Option<f32>,
+        spec: SoundSpec,
+    ) -> SoundId {
+        let hz = if hz.is_nan() { 0.0 } else { hz.max(0.0) };
+        let frames = seconds.map(|seconds| seconds_to_frames(seconds, self.rate));
+        self.sounds.push(SoundDef {
+            body: Body::Tone { wave, hz, frames },
             spec,
         });
         SoundId(self.sounds.len() - 1)
@@ -600,28 +642,46 @@ impl Mixer {
         self.trigger_at(self.clock, sound)
     }
 
+    pub fn trigger_in(&mut self, offset: u64, sound: SoundId) -> Option<VoiceId> {
+        self.trigger_at(self.clock.saturating_add(offset), sound)
+    }
+
     pub fn trigger_at(&mut self, at: u64, sound: SoundId) -> Option<VoiceId> {
-        let def = self.sounds.get(sound.0)?;
-        let spec = def.spec;
-        let rate = self.rate;
-        let source = Source::Buffer {
-            samples: Arc::clone(&def.samples),
-            channels: def.channels,
-            frames: def.frames,
-            looping: None,
-        };
+        let spec = self.sounds.get(sound.0)?.spec;
         if spec.max_voices == 0 {
             return None;
         }
+        let rate = self.rate;
+        let fade = seconds_to_frames(spec.steal_fade, rate);
         self.make_room(sound, &spec);
-        let pitch = 2f32.powf(self.rng.signed() * spec.pitch_jitter / 12.0);
-        let volume = (1.0 + self.rng.signed() * spec.volume_jitter).max(0.0);
+        let drawn = draw(&spec, &mut self.rng);
+        let (source, ends) = match &self.sounds[sound.0].body {
+            Body::Clip {
+                samples,
+                channels,
+                frames,
+            } => (
+                Source::Buffer {
+                    samples: Arc::clone(samples),
+                    channels: *channels,
+                    frames: *frames,
+                    looping: None,
+                },
+                None,
+            ),
+            &Body::Tone { wave, hz, frames } => (
+                Source::Tone(Synth::new(wave, hz, self.rng.seed())),
+                frames.map(|frames| (at.saturating_add(frames), fade)),
+            ),
+        };
         let mut level = spec.level;
-        level.volume *= volume;
+        level.volume *= drawn.volume;
         let id = self.push_voice(spec.channel, at, source, level);
-        if let Some(voice) = self.voices.iter_mut().find(|voice| voice.id == id) {
+        if let Some(voice) = self.voices.last_mut() {
             voice.sound = Some(sound);
-            voice.pitch.snap(clamp_ratio(pitch));
+            voice.pitch.snap(clamp_ratio(drawn.pitch));
+            voice.resample = spec.resample;
+            voice.ends = ends;
             voice.envelope = spec
                 .envelope
                 .map(|envelope| EnvState::new(envelope, rate, false));
@@ -642,33 +702,28 @@ impl Mixer {
 
     fn make_room(&mut self, sound: SoundId, spec: &SoundSpec) {
         let clock = self.clock;
-        let mut live: Vec<usize> = self
-            .voices
-            .iter()
-            .enumerate()
-            .filter(|(_, voice)| voice.sound == Some(sound) && !voice.fading())
-            .map(|(index, _)| index)
-            .collect();
-        let mut gone = Vec::new();
         let fade = seconds_to_frames(spec.steal_fade, self.rate);
-        while live.len() >= spec.max_voices {
+        let mut live = self.voices_of(sound);
+        while live >= spec.max_voices {
+            let candidates = self
+                .voices
+                .iter()
+                .enumerate()
+                .filter(|(_, voice)| voice.sound == Some(sound) && !voice.fading());
             let pick = match spec.steal {
-                Steal::Oldest => live.iter().enumerate().min_by_key(|(_, index)| {
-                    let voice = &self.voices[**index];
-                    (voice.start, voice.id)
-                }),
-                Steal::Quietest => live.iter().enumerate().min_by(|(_, a), (_, b)| {
-                    let (a, b) = (&self.voices[**a], &self.voices[**b]);
+                Steal::Oldest => candidates.min_by_key(|(_, voice)| (voice.start, voice.id)),
+                Steal::Quietest => candidates.min_by(|(_, a), (_, b)| {
                     a.loudness(clock)
                         .total_cmp(&b.loudness(clock))
                         .then(a.id.cmp(&b.id))
                 }),
             };
-            let Some((position, _)) = pick else {
+            let Some((index, _)) = pick else {
                 break;
             };
-            let index = live.swap_remove(position);
+            live -= 1;
             let voice = &mut self.voices[index];
+            voice.ends = None;
             if voice.rendered && fade > 0 {
                 voice.curve = Some(Curve {
                     start: clock,
@@ -676,11 +731,8 @@ impl Mixer {
                     direction: Direction::Out,
                 });
             } else {
-                gone.push(voice.id);
+                self.voices.remove(index);
             }
-        }
-        if !gone.is_empty() {
-            self.voices.retain(|voice| !gone.contains(&voice.id));
         }
     }
 
@@ -1904,5 +1956,121 @@ mod tests {
         mixer.render(480);
         let out = mixer.render(1000);
         assert!(out.iter().all(|sample| (sample - 0.5).abs() < 0.01));
+    }
+
+    fn plain_hits() -> Clip {
+        Clip {
+            rate: 48_000,
+            channels: 2,
+            samples: (0..4800)
+                .map(|i| {
+                    let frame = i / 2;
+                    let decay = 1.0 - frame as f32 / 2400.0;
+                    let phase = (frame % 80) as f32 / 80.0;
+                    let side = if i % 2 == 0 { 0.5 } else { 0.4 };
+                    side * decay * (1.0 - 4.0 * (phase - 0.5).abs())
+                })
+                .collect(),
+        }
+    }
+
+    fn fnv(samples: &[f32]) -> u64 {
+        samples
+            .iter()
+            .fold(0xcbf2_9ce4_8422_2325u64, |hash, sample| {
+                (hash ^ u64::from(sample.to_bits())).wrapping_mul(0x0100_0000_01b3)
+            })
+    }
+
+    fn hit_spec() -> SoundSpec {
+        SoundSpec {
+            max_voices: 6,
+            pitch_jitter: 2.0,
+            volume_jitter: 0.25,
+            ..SoundSpec::default()
+        }
+    }
+
+    #[test]
+    fn sine_tones_and_jittered_hits_keep_their_bits_on_every_platform() {
+        let mut mixer = Mixer::new(48_000, 2);
+        mixer.set_seed(9);
+        mixer.tone(ChannelId::EFFECTS, Wave::Sine, 440.0, 0.5);
+        let beep = mixer.tone_sound(Wave::Sine, 700.0, Some(0.02), hit_spec());
+        let hit = mixer.sound(&plain_hits(), hit_spec());
+        let mut out = Vec::new();
+        for tick in 0..60u64 {
+            for k in 0..9 {
+                mixer.trigger_in(k * 88, hit);
+            }
+            if tick % 3 == 0 {
+                mixer.trigger_in(tick % 400, beep);
+            }
+            out.extend(mixer.render(800));
+        }
+        assert_eq!(fnv(&out), 12_859_396_616_140_308_833);
+    }
+
+    #[test]
+    fn a_tone_or_a_hit_starts_at_its_frame_offset_inside_the_block() {
+        let mut reference = Mixer::new(48_000, 1);
+        reference.tone(ChannelId::EFFECTS, Wave::Saw, 330.0, 0.5);
+        let want = reference.render(2000);
+        let mut mixer = Mixer::new(48_000, 1);
+        mixer.render(100);
+        mixer.tone_in(37, ChannelId::EFFECTS, Wave::Saw, 330.0, 0.5);
+        let mut got = mixer.render(800);
+        got.extend(mixer.render(800));
+        assert!(got[..37].iter().all(|sample| *sample == 0.0));
+        assert_eq!(bits(&got[37..]), bits(&want[..1600 - 37]));
+
+        let mut reference = Mixer::new(48_000, 2);
+        reference.set_seed(5);
+        let hit = reference.sound(&plain_hits(), hit_spec());
+        reference.trigger(hit);
+        let want = reference.render(2000);
+        let mut mixer = Mixer::new(48_000, 2);
+        mixer.set_seed(5);
+        let hit = mixer.sound(&plain_hits(), hit_spec());
+        mixer.trigger_in(900, hit);
+        let mut got = mixer.render(800);
+        got.extend(mixer.render(800));
+        assert!(got[..1800].iter().all(|sample| *sample == 0.0));
+        assert_eq!(bits(&got[1800..]), bits(&want[..1400]));
+    }
+
+    #[test]
+    fn tone_sounds_share_the_cap_stealing_and_jitter_of_clip_sounds() {
+        let mut mixer = Mixer::new(48_000, 1);
+        let beep = mixer.tone_sound(
+            Wave::Sine,
+            500.0,
+            Some(0.01),
+            SoundSpec {
+                max_voices: 2,
+                pitch_jitter: 2.0,
+                ..SoundSpec::default()
+            },
+        );
+        let first = mixer.trigger(beep).unwrap();
+        let second = mixer.trigger(beep).unwrap();
+        mixer.render(10);
+        let third = mixer.trigger(beep).unwrap();
+        assert_eq!(mixer.voices_of(beep), 2);
+        let fading: Vec<VoiceId> = mixer
+            .voices
+            .iter()
+            .filter(|voice| voice.fading())
+            .map(|voice| voice.id)
+            .collect();
+        assert_eq!(fading, vec![first]);
+        let pitches = [mixer.pitch(second).unwrap(), mixer.pitch(third).unwrap()];
+        assert_ne!(pitches[0], pitches[1]);
+        let low = 2f32.powf(-2.0 / 12.0) * 0.999;
+        let high = 2f32.powf(2.0 / 12.0) * 1.001;
+        assert!(pitches.iter().all(|p| *p > low && *p < high));
+        let out = mixer.render(1000);
+        assert_eq!(mixer.voice_count(), 0);
+        assert!(out[700..].iter().all(|sample| *sample == 0.0));
     }
 }

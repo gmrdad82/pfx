@@ -59,19 +59,19 @@ impl Filter {
                 };
                 if !self.on {
                     self.on = true;
-                    self.cutoff.snap(self.open(rate).ln());
+                    self.cutoff.snap(pfx_core::sim::lnf(self.open(rate)));
                     self.applied = f32::NAN;
                     self.primed = false;
                 }
                 self.closing = false;
                 self.target = Some(hz);
-                self.cutoff.to(hz.ln(), frames);
+                self.cutoff.to(pfx_core::sim::lnf(hz), frames);
             }
             None => {
                 self.target = None;
                 if self.on {
                     self.closing = true;
-                    self.cutoff.to(self.open(rate).ln(), frames);
+                    self.cutoff.to(pfx_core::sim::lnf(self.open(rate)), frames);
                 }
             }
         }
@@ -128,9 +128,9 @@ impl Filter {
 
     fn recompute(&mut self, cutoff: f32, rate: u32) {
         self.applied = cutoff;
-        let hz = f64::from(cutoff).exp().min(f64::from(rate) * 0.49);
+        let hz = pfx_core::sim::exp(f64::from(cutoff)).min(f64::from(rate) * 0.49);
         let w0 = std::f64::consts::TAU * hz / f64::from(rate);
-        let (sin, cos) = w0.sin_cos();
+        let (sin, cos) = (pfx_core::sim::sin(w0), pfx_core::sim::cos(w0));
         let alpha = sin / std::f64::consts::SQRT_2;
         let a0 = 1.0 + alpha;
         let (b0, b1, b2) = match self.kind {

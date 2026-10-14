@@ -8,6 +8,7 @@ use crate::channel::{ChannelId, Ducking};
 use crate::clip::Clip;
 use crate::decode::{Decode, DecodeSpec, spec_at_output};
 use crate::heard::Heard;
+use crate::interp::Resample;
 use crate::mix::{Level, Mixer, VoiceId, lock};
 use crate::music::MusicTrack;
 use crate::pcm::PcmSender;
@@ -181,6 +182,35 @@ impl Output {
 
     pub fn tone(&self, channel: ChannelId, wave: Wave, hz: f32, volume: f32) -> VoiceId {
         lock(&self.mixer).tone(channel, wave, hz, volume)
+    }
+
+    pub fn tone_in(
+        &self,
+        offset: u64,
+        channel: ChannelId,
+        wave: Wave,
+        hz: f32,
+        volume: f32,
+    ) -> VoiceId {
+        lock(&self.mixer).tone_in(offset, channel, wave, hz, volume)
+    }
+
+    pub fn tone_sound(
+        &self,
+        wave: Wave,
+        hz: f32,
+        seconds: Option<f32>,
+        spec: SoundSpec,
+    ) -> SoundId {
+        lock(&self.mixer).tone_sound(wave, hz, seconds, spec)
+    }
+
+    pub fn trigger_in(&self, offset: u64, sound: SoundId) -> Option<VoiceId> {
+        lock(&self.mixer).trigger_in(offset, sound)
+    }
+
+    pub fn set_resample(&self, id: VoiceId, resample: Resample) {
+        lock(&self.mixer).set_resample(id, resample);
     }
 
     pub fn set_tone_frequency(&self, id: VoiceId, hz: f32) {

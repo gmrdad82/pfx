@@ -7,6 +7,22 @@ const STEPS: usize = 256;
 const CUTOFF: f64 = 0.9;
 const BETA: f64 = 7.0;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Resample {
+    #[default]
+    Sinc,
+    Cubic,
+    Linear,
+}
+
+pub(crate) fn hermite(previous: f32, current: f32, next: f32, after: f32, t: f32) -> f32 {
+    let c0 = current;
+    let c1 = (next - previous) * 0.5;
+    let c2 = previous - current * 2.5 + next * 2.0 - after * 0.5;
+    let c3 = (after - previous) * 0.5 + (current - next) * 1.5;
+    ((c3 * t + c2) * t + c1) * t + c0
+}
+
 pub(crate) struct Kernel {
     table: Vec<f32>,
 }
@@ -80,7 +96,7 @@ fn windowed_sinc(x: f64) -> f64 {
     let sinc = if y == 0.0 {
         1.0
     } else {
-        (std::f64::consts::PI * y).sin() / (std::f64::consts::PI * y)
+        pfx_core::sim::sin(std::f64::consts::PI * y) / (std::f64::consts::PI * y)
     };
     let t = x / half;
     let window = bessel_i0(BETA * (1.0 - t * t).max(0.0).sqrt()) / bessel_i0(BETA);
@@ -218,6 +234,13 @@ mod tests {
                 assert!((sum - 1.0).abs() < 1e-5, "{sum}");
             }
         }
+    }
+
+    #[test]
+    fn cubic_hermite_passes_through_its_points_and_keeps_a_line() {
+        assert_eq!(hermite(1.0, 2.0, 3.0, 4.0, 0.0), 2.0);
+        assert_eq!(hermite(1.0, 2.0, 3.0, 4.0, 1.0), 3.0);
+        assert_eq!(hermite(1.0, 2.0, 3.0, 4.0, 0.25), 2.25);
     }
 
     #[test]

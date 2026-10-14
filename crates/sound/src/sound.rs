@@ -4,7 +4,9 @@ use pfx_core::sim::splitmix64;
 
 use crate::channel::ChannelId;
 use crate::envelope::Envelope;
+use crate::interp::Resample;
 use crate::mix::Level;
+use crate::synth::Wave;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SoundId(pub(crate) usize);
@@ -25,6 +27,7 @@ pub struct SoundSpec {
     pub volume_jitter: f32,
     pub steal_fade: f32,
     pub envelope: Option<Envelope>,
+    pub resample: Resample,
 }
 
 impl Default for SoundSpec {
@@ -38,15 +41,38 @@ impl Default for SoundSpec {
             volume_jitter: 0.0,
             steal_fade: 0.003,
             envelope: None,
+            resample: Resample::Cubic,
         }
     }
 }
 
 pub(crate) struct SoundDef {
-    pub(crate) samples: Arc<Vec<f32>>,
-    pub(crate) channels: u16,
-    pub(crate) frames: u64,
+    pub(crate) body: Body,
     pub(crate) spec: SoundSpec,
+}
+
+pub(crate) enum Body {
+    Clip {
+        samples: Arc<Vec<f32>>,
+        channels: u16,
+        frames: u64,
+    },
+    Tone {
+        wave: Wave,
+        hz: f32,
+        frames: Option<u64>,
+    },
+}
+
+pub(crate) struct Draw {
+    pub(crate) pitch: f32,
+    pub(crate) volume: f32,
+}
+
+pub(crate) fn draw(spec: &SoundSpec, rng: &mut Rng) -> Draw {
+    let pitch = pfx_core::sim::powf(2.0, rng.signed() * spec.pitch_jitter / 12.0);
+    let volume = (1.0 + rng.signed() * spec.volume_jitter).max(0.0);
+    Draw { pitch, volume }
 }
 
 pub(crate) struct Rng(u64);

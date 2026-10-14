@@ -35,7 +35,7 @@ impl Synth {
         let dt = hz / rate;
         let phase = self.phase;
         let sample = match self.wave {
-            Wave::Sine => (std::f64::consts::TAU * phase).sin(),
+            Wave::Sine => f64::from(sine(phase)),
             Wave::White => f64::from(self.rng.signed()),
             Wave::Pink => f64::from(self.pink_sample()),
             Wave::Saw => 2.0 * phase - 1.0 - poly_blep(phase, dt),
@@ -69,6 +69,49 @@ impl Synth {
 }
 
 const PINK_SCALE: f32 = 0.11;
+
+const SINE_STEPS: usize = 2048;
+
+static SINE: [f32; SINE_STEPS + 1] = sine_table();
+
+const fn sine_table() -> [f32; SINE_STEPS + 1] {
+    let mut table = [0.0f32; SINE_STEPS + 1];
+    let mut i = 0;
+    while i <= SINE_STEPS {
+        table[i] = taylor_sine(std::f64::consts::TAU * i as f64 / SINE_STEPS as f64) as f32;
+        i += 1;
+    }
+    table
+}
+
+const fn taylor_sine(x: f64) -> f64 {
+    let pi = std::f64::consts::PI;
+    let x = if x > 1.5 * pi {
+        x - 2.0 * pi
+    } else if x > 0.5 * pi {
+        pi - x
+    } else {
+        x
+    };
+    let square = x * x;
+    let mut term = x;
+    let mut sum = x;
+    let mut n = 1;
+    while n < 14 {
+        term = -term * square / ((2 * n) * (2 * n + 1)) as f64;
+        sum += term;
+        n += 1;
+    }
+    sum
+}
+
+pub(crate) fn sine(phase: f64) -> f32 {
+    let x = phase * SINE_STEPS as f64;
+    let index = (x as usize).min(SINE_STEPS - 1);
+    let frac = (x - index as f64) as f32;
+    let a = SINE[index];
+    a + (SINE[index + 1] - a) * frac
+}
 
 fn poly_blep(t: f64, dt: f64) -> f64 {
     if dt <= 0.0 {
