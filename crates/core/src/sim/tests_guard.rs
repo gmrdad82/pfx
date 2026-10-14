@@ -54,6 +54,8 @@ const FORBIDDEN_TEXT: &[&str] = &[
 
 const SOURCES: &[(&str, &str)] = &[
     ("mod.rs", include_str!("mod.rs")),
+    ("director.rs", include_str!("director.rs")),
+    ("journal.rs", include_str!("journal.rs")),
     ("math.rs", include_str!("math.rs")),
     ("overlap.rs", include_str!("overlap.rs")),
     ("rng.rs", include_str!("rng.rs")),

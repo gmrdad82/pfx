@@ -13,6 +13,8 @@ For the same inputs, every function below returns the same bits on every support
 | `sqrt`, `sqrtf` | exact (IEEE rounds it correctly), so std's is used |
 | `Rng` | xoshiro256\*\* seeded through SplitMix64; the stream of every method is frozen by golden tests |
 | `Overlaps` | integer boxes and integer compares only, so its hits are exact; their order is fixed (see below) |
+| `director` | integers and `Rng` forks only; its orders and saved bytes are frozen by a digest test (docs/director.md) |
+| `journal` | integers only; its bytes are specified exactly and frozen by a golden test (docs/journal.md) |
 
 Special values follow C99 Annex F. Every NaN result is the canonical `f64::NAN` (or `f32::NAN`), whatever payload came in, so even NaN bits replay. `sin` and `cos` take any finite argument: below 1e6 a Cody-Waite reduction by four parts of pi/2, above it a Payne-Hanek reduction from 1,280 bits of 2/pi, so the accuracy above holds at `f64::MAX` too. `sin(±inf)` and `cos(±inf)` are NaN. `pow(x, y)` takes `ln x` as a double-double and multiplies it by `y` in double-double before `exp`, so large exponents do not amplify the error; a power-of-two base with an integer exponent is exact.
 
