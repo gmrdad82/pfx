@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.32.0 — 2026-10-14
+
+### Added
+
+- shots: with pfx-core's `serde` feature, shot pools, emitters, telegraphs and movers save and load, and a reloaded arena runs on the same bits.
+- shots: each `Strike` carries the shot's position when it struck.
+- director: `set_weight` changes a kind's weight mid-run and saves with the run; `Cycle` repeats a quiet window every N ticks; spot sets let a kind spawn only at its own spots; `rate_jitter` varies the gaps between spawns while keeping the average rate.
+- numbers: `sci_rounding` gives the scientific form its own rounding.
+- words: `{$name}` context slots take text the game passes at draw time with `generate_with`.
+- journal: `JournalWriter::bytes` returns the journal so far without ending it; `Journal::verify_sparse` asks for the state digest only on checkpoint ticks and the last tick.
+- sound: `trigger_with`, `trigger_in_with` and `trigger_at_with` start a sound at its own volume.
+
+### Changed
+
+- shots: `resolve` is about 4x faster when a shot overlaps one target (15 to 3.5 µs a tick at 1,080 hits), and the pool walks stop at the highest live slot (24 to 18 µs a tick at 2,000 shots).
+- director: quiet windows cost nothing between their edges: 180 windows take about 40 ns a tick instead of about 200.
+
+### Fixed
+
+- words: a cast member's parts keep the case they were printed in instead of coming back lowercased.
+
 ## v0.31.0 — 2026-10-14
 
 ### Added
