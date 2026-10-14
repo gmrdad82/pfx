@@ -10,6 +10,7 @@
 - sim: `Overlaps3`, the broadphase in 3D.
 - numbers: game number formatting with grouping, scientific, engineering and short suffixes, per-style thresholds, ceil and truncate rounding, and a policy for NaN and infinity.
 - words: a seeded text generator for names, titles and barks: templates with slots, weights, avoid lists, linked name forms, run-fixed draws, casts with no repeated parts and keyed redraws.
+- game: `World::warp_pointer` puts the pointer back at a layout point after a menu, read as no motion.
 
 ### Changed
 
