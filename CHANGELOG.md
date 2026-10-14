@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.0.0 — 2026-10-14
+
+pfx reaches 1.0.0.
+
+### Added
+
+- journal: `JournalWriter::snapshot` hands out the journal so far in about 5 µs after 25 minutes of input, and `seal()` adds its checksum later, off the game's thread.
+- live: two examples, `clip` and `swarm`, that write the live renderer's and the flat pass's frames as PNGs.
+
+### Changed
+
+- shots: a saved arena keeps only its live shots, so a churned arena of 205 live shots saves as 23 KB in about 22 µs. The save format changed: saves from v0.32.0 don't load.
+- render: stills and clips start the app's adapter with no display, and while `PFX_HEADLESS` is set no game, editor or GPU window can open, so a render never puts a window on the desktop.
+- The README shows every feature with a picture or a clip and the engine's measured numbers: frame times, render times, denoise time, per-tick costs, and an empty game's size against Bevy's.
+
 ## v0.32.0 — 2026-10-14
 
 ### Added
