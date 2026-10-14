@@ -2,6 +2,8 @@ pub mod blur;
 pub mod shards;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_swarm;
 
 use super::{Draw, Fill, IDENTITY, Light, Matrix, Shadow, Shape, Srgba, Stroke, multiply, place};
 use pfx_core::clock::{Clock, HitStop, Tick};
@@ -230,6 +232,7 @@ pub struct Effects {
     real: f64,
     dropped: u64,
     out: Vec<Draw>,
+    keep: Vec<f32>,
 }
 
 impl Effects {
@@ -251,6 +254,7 @@ impl Effects {
             real: 0.0,
             dropped: 0,
             out: Vec::new(),
+            keep: Vec::new(),
         }
     }
 
@@ -396,6 +400,12 @@ impl Effects {
         if dt <= 0.0 {
             return;
         }
+        self.keep.clear();
+        self.keep.extend(
+            self.recipes
+                .iter()
+                .map(|recipe| (-recipe.drag.max(0.0) * dt).exp()),
+        );
         let mut index = 0;
         while index < self.particles.len() {
             let particle = &mut self.particles[index];
@@ -405,7 +415,7 @@ impl Effects {
                 continue;
             }
             let recipe = &self.recipes[usize::from(particle.recipe)];
-            let keep = (-recipe.drag.max(0.0) * dt).exp();
+            let keep = self.keep[usize::from(particle.recipe)];
             for axis in 0..2 {
                 particle.velocity[axis] =
                     (particle.velocity[axis] + recipe.gravity[axis] * dt) * keep;
