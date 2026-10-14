@@ -1,6 +1,6 @@
 use super::director::{
-    Director, DirectorError, Entry, Lull, NO_SPOT, ONE, Phase, Ramp, Region, Schedule, SpawnLull,
-    SpawnOrder, Spots, Table, Window,
+    Anchor, Director, DirectorError, Entry, Line, Lull, NO_SPOT, ONE, Phase, Ramp, Region,
+    Schedule, SpawnLull, SpawnOrder, Spots, Table, Window,
 };
 use super::{Rng, mix64};
 
@@ -635,4 +635,172 @@ fn bench_one_tick_with_twenty_phases_two_hundred_entries_and_five_hundred_alive(
             d.load()
         );
     }
+}
+
+fn lined(line: Line) -> Schedule {
+    plain(vec![Entry::new(7, 1).in_line(line)], vec![steady(0, 60)])
+}
+
+#[test]
+fn a_kind_can_spawn_as_a_line_with_a_gap_a_direction_and_an_anchor() {
+    let spots_at = [[100, 200, 0]];
+    let spots = Spots::points(&spots_at);
+    let line = Line::new(3, 6, [1, 0, 0], 10);
+    let all = run(&mut Director::new(lined(line), 3).unwrap(), 60, &spots);
+    let mut sizes = [false; 7];
+    let mut groups = 0;
+    for tick in &all {
+        for (i, o) in tick.iter().enumerate() {
+            assert_eq!(o.count, 1);
+            assert_eq!(o.member as usize, i);
+            assert!((3..=6).contains(&o.members));
+            assert_eq!(o.position, [100 + 10 * i as i32, 200, 0]);
+            assert_eq!(o.group, tick[0].group);
+            sizes[o.members as usize] = true;
+        }
+        if !tick.is_empty() {
+            assert_eq!(tick.len() as u32, tick[0].members);
+            groups += 1;
+        }
+    }
+    assert_eq!(groups, 60);
+    assert!(sizes[3..].iter().all(|&s| s));
+    let ids: Vec<u32> = all
+        .iter()
+        .filter_map(|t| t.first())
+        .map(|o| o.group)
+        .collect();
+    assert!(ids.windows(2).all(|w| w[1] == w[0] + 1));
+
+    let back = Line::new(4, 4, [0, -1, 1], 5).anchored(Anchor::End);
+    let all = run(&mut Director::new(lined(back), 3).unwrap(), 1, &spots);
+    let at: Vec<[i32; 3]> = all[0].iter().map(|o| o.position).collect();
+    assert_eq!(
+        at,
+        vec![
+            [100, 215, -15],
+            [100, 210, -10],
+            [100, 205, -5],
+            [100, 200, 0]
+        ]
+    );
+
+    let mid = Line::new(5, 5, [2, 0, 0], 3).anchored(Anchor::Centre);
+    let all = run(&mut Director::new(lined(mid), 3).unwrap(), 1, &spots);
+    let xs: Vec<i32> = all[0].iter().map(|o| o.position[0]).collect();
+    assert_eq!(xs, vec![88, 94, 100, 106, 112]);
+}
+
+#[test]
+fn a_lines_spread_stays_in_bounds_and_its_own_stream() {
+    let spots_at = [[0, 0, 0]];
+    let spots = Spots::points(&spots_at);
+    let tight = Line::new(3, 6, [1, 0, 0], 10);
+    let loose = tight.spread([0, 4, 2]);
+    let a = run(&mut Director::new(lined(tight), 5).unwrap(), 60, &spots);
+    let b = run(&mut Director::new(lined(loose), 5).unwrap(), 60, &spots);
+    let c = run(&mut Director::new(lined(loose), 5).unwrap(), 60, &spots);
+    assert_eq!(b, c);
+    let mut moved = false;
+    for (ta, tb) in a.iter().zip(&b) {
+        assert_eq!(ta.len(), tb.len());
+        for (x, y) in ta.iter().zip(tb) {
+            assert_eq!(x.entry, y.entry);
+            assert_eq!(x.members, y.members);
+            assert_eq!(y.position[0], x.position[0]);
+            assert!((-4..=4).contains(&y.position[1]));
+            assert!((-2..=2).contains(&y.position[2]));
+            moved |= y.position != x.position;
+        }
+    }
+    assert!(moved);
+}
+
+#[test]
+fn a_line_never_spawns_fewer_than_its_minimum_and_counts_its_members() {
+    let mut s = lined(Line::new(3, 3, [1, 0, 0], 1));
+    s.cap = 8;
+    let mut d = Director::new(s, 2).unwrap();
+    let all = run(&mut d, 20, &Spots::EMPTY);
+    let groups = all.iter().filter(|t| !t.is_empty()).count();
+    assert_eq!(groups, 2);
+    assert_eq!(d.load(), 6);
+    assert_eq!(d.alive(7), 6);
+    assert_eq!(d.died(7, 3), 3);
+    let more = run(&mut d, 20, &Spots::EMPTY);
+    assert_eq!(more.iter().filter(|t| !t.is_empty()).count(), 1);
+
+    let mut s = lined(Line::new(3, 3, [1, 0, 0], 1));
+    s.phases[0].after_spawns = Some(SpawnLull {
+        spawns: 6,
+        lull: Lull::fixed(10),
+    });
+    let all = run(&mut Director::new(s, 2).unwrap(), 30, &Spots::EMPTY);
+    assert_eq!(spawn_ticks(&all)[..3], [0, 1, 12]);
+}
+
+#[test]
+fn an_entry_is_never_picked_before_its_from_tick() {
+    let entries = vec![
+        Entry::new(1, 1),
+        Entry::new(2, 1).from_tick(100),
+        Entry::new(3, 1)
+            .from_tick(200)
+            .in_line(Line::new(2, 2, [1, 0, 0], 4)),
+    ];
+    let mut d = Director::new(plain(entries, vec![steady(0, 400)]), 12).unwrap();
+    let all = run(&mut d, 400, &Spots::EMPTY);
+    let mut first = [u64::MAX; 4];
+    for (t, tick) in all.iter().enumerate() {
+        for o in tick {
+            let slot = &mut first[o.entry as usize];
+            *slot = (*slot).min(t as u64);
+        }
+    }
+    assert_eq!(first[1], 0);
+    assert!((100..140).contains(&first[2]), "{}", first[2]);
+    assert!((200..240).contains(&first[3]), "{}", first[3]);
+    assert!(all[..100].iter().flatten().all(|o| o.entry == 1));
+
+    let late = vec![Entry::new(1, 1).from_tick(50)];
+    let s = plain(late, vec![steady(0, 50)]);
+    assert_eq!(s.check(), Err(DirectorError::Unspawnable { phase: 0 }));
+    let ok = plain(vec![Entry::new(1, 1).from_tick(49)], vec![steady(0, 50)]);
+    assert_eq!(ok.check(), Ok(()));
+}
+
+#[test]
+fn a_bad_line_is_rejected_and_a_line_must_fit_its_cap() {
+    for line in [
+        Line::new(0, 3, [1, 0, 0], 1),
+        Line::new(4, 3, [1, 0, 0], 1),
+        Line::new(3, 4, [1, 0, 0], 1).spread([0, -1, 0]),
+    ] {
+        assert_eq!(lined(line).check(), Err(DirectorError::BadLine { id: 7 }));
+    }
+    let mut s = lined(Line::new(3, 5, [1, 0, 0], 1));
+    s.cap = 2;
+    assert_eq!(s.check(), Err(DirectorError::Unspawnable { phase: 0 }));
+}
+
+#[test]
+fn a_saved_director_with_lines_resumes_exactly() {
+    let mut s = plain(
+        vec![
+            Entry::new(1, 2),
+            Entry::new(2, 1).in_line(Line::new(3, 6, [1, 1, 0], 6).spread([2, 2, 2])),
+        ],
+        vec![steady(0, 300)],
+    );
+    s.cap = 15;
+    let spots_at = [[0, 0, 0], [9, 9, 9]];
+    let spots = Spots::points(&spots_at);
+    let mut whole = Director::new(s.clone(), 21).unwrap();
+    play(&mut whole, 0, 100, &spots);
+    let bytes = whole.save();
+    let rest = play(&mut whole, 100, 300, &spots);
+    let mut resumed = Director::new(s, 1).unwrap();
+    resumed.restore(&bytes).unwrap();
+    assert_eq!(play(&mut resumed, 100, 300, &spots), rest);
+    assert_eq!(resumed.save(), whole.save());
 }

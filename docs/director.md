@@ -45,19 +45,21 @@ director.died(entry, 1);
   - `speed`: a multiplier the game applies as it likes, handed back in each order.
 - **`Lull { min, max }`**: a quiet span in ticks, drawn from the timing stream between `min` and `max` inclusive (`Lull::fixed(n)` for no jitter). `after_spawns` starts one once a phase has spawned that many entities; `on_clear` starts one when everything the director spawned is dead after the phase has spawned something. A lulled phase builds no charge, so it never bursts when the lull ends.
 - **`Table { entries, cap }`** and **`Entry { id, weight, tags, cost }`**: the id is the game's own, unique across all tables; the weight is relative; `tags` is the bit mask a phase filters on; `cost` is what one alive member counts against a cap (1 is a head count, 0 is free, a boss may cost 10). `cap` bounds the table's alive cost, `Schedule::cap` bounds all of it; `UNCAPPED` is the default.
+- **`Entry::from_tick(t)`**: the entry's earliest tick. Before tick `t` it is never picked, whatever the phase says, so a kind can arrive partway through a phase (a tougher enemy at minute three) beside the phase windows. A table whose every entry starts at or after a phase's end fails the load check for that phase.
+- **`Entry::in_line(Line)`**: the kind spawns as a group placed in a line. `Line::new(min, max, direction, gap)` draws the member count from `min..=max` (at least 1; the phase's group ramp does not apply to a line kind) and places member `i` at the spot plus `direction * gap * i` on each axis: `direction` is a small integer vector (`[1, 0, 0]` along x, `[0, -1, 0]` down a 2D field, `[1, 0, 1]` a 3D diagonal that steps `gap` on both axes) and `gap` the distance between neighbours in the game's units. `.anchored(Anchor)` says which member sits on the picked spot: `Start` (the line runs away from it), `Centre` (the line is centred on it) or `End` (the line runs up to it). `.spread([x, y, z])` jitters each member by a uniform amount of at most that on each axis (put it on the axes across the line for a ragged file; 0 draws nothing). Motion along the way, such as zigzags and dives, stays in the game.
 
 ## What comes out
 
 `tick(&Spots, &mut Vec<SpawnOrder>)` clears the list and fills it with `SpawnOrder { entry, count, speed, position, spot }`:
 
-- `entry`, `count`: what and how many. The director counts them alive at once, so the game does not report spawns, only `died(entry, count)` (it returns how many it removed, never more than are alive, 0 for an unknown id).
+- `entry`, `count`: what and how many. A plain kind is one order with its `count`; a line kind is one order per member with `count` 1, each at its own `position`. `group` numbers the spawn (consecutive from 0, saved with the state), `member` is the member's index and `members` the size of the group, so a game can keep a line together (a formation, a shared leader, a bonus for clearing all of it). The director counts them alive at once, so the game does not report spawns, only `died(entry, count)` (it returns how many it removed, never more than are alive, 0 for an unknown id).
 - `speed`: the speed ramp's value at that tick.
 - `position`, `spot`: `Spots { points, regions }` are the game's spawn points (`[i32; 3]`) and boxes (`Region { min, max }`, half-open). The director picks one of them uniformly and, for a region, a uniform point in it. `spot` indexes the points then the regions. With no spots, `position` is `[0; 3]` and `spot` is `NO_SPOT`. A 2D game uses `z = 0` (`Region::flat` makes a flat box) and reads the first two axes.
-- The pick only considers entries that pass the tag filter, have weight above zero and whose cost fits what the table and overall caps have left. A group is cut to fit the room. When nothing fits, the charge waits (held at one order) and the spawn fires on the first tick after a death makes room.
+- The pick only considers entries that have reached their `from` tick, pass the tag filter, have weight above zero and whose cost for the smallest group they can spawn (a line's `min`, otherwise 1) fits what the table and overall caps have left. A plain group is cut to fit the room; a line is never cut below its minimum and is cut above it only when the room is short. A line's members all count toward `after_spawns`. When nothing fits, the charge waits (held at one order) and the spawn fires on the first tick after a death makes room.
 
 ## Streams
 
-`Rng::new(seed)` is forked three times by label: `TIMING` (lull lengths), `PICKS` (which entry) and `POSITIONS` (which spot, where in a region). Adding a lull range never shifts a pick, and a different number of spawn points never changes which entries come out; tests guard both.
+`Rng::new(seed)` is forked five times by label: `TIMING` (lull lengths), `PICKS` (which entry), `POSITIONS` (which spot, where in a region), `FORMS` (how many members a line has) and `SPREADS` (each member's jitter). Adding a lull range never shifts a pick, a different number of spawn points never changes which entries come out, and adding spread to a line never changes how many members it has; tests guard all three.
 
 ## Load-time checks
 
@@ -66,11 +68,11 @@ director.died(entry, 1);
 - a zero tick rate, phases with no tables, a table with no weight above zero, a duplicate entry id, a phase that ends at or before its start, a phase naming a table that does not exist, a quiet window that ends at or before its start;
 - overlapping phases, unless `allow_overlap` is set (overlapping phases each keep their own charge and lull and fire in phase order);
 - a phase that schedules spawns (a rate above zero anywhere on its ramp) while its table's cap or the overall cap is zero, or while no entry can ever spawn (all filtered out, or each costing more than a cap);
-- a ramp with a negative value, a stepped ramp with fewer than two steps, a lull with `min > max`.
+- a ramp with a negative value, a stepped ramp with fewer than two steps, a lull with `min > max`, a line with no members, `min > max` or a negative spread (`BadLine`).
 
 ## Save and restore
 
-`save()` returns bytes and `restore(&bytes)` loads them into a director built from the same schedule: the tick, each phase's charge, spawn count and lull, every entry's alive count and the three streams. It refuses another length, version or schedule (a hash of all its data is in the header) with `Length`, `Version` or `Mismatch`, and leaves the director untouched when it does. Alive costs are recomputed from the counts, so a restored director continues exactly as the saved one would have.
+`save()` returns bytes and `restore(&bytes)` loads them into a director built from the same schedule: the tick, each phase's charge, spawn count and lull, every entry's alive count, the next group number and the five streams. It refuses another length, version or schedule (a hash of all its data is in the header) with `Length`, `Version` or `Mismatch`, and leaves the director untouched when it does. Alive costs are recomputed from the counts, so a restored director continues exactly as the saved one would have.
 
 ## Cost
 
