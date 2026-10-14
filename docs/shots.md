@@ -1,4 +1,4 @@
-# `pfx_core::sim` shots: projectiles, emitters and followers
+# `pfx_core::sim::shots`: projectiles, emitters and followers
 
 Pooled projectiles and the emitters that fire them, in 2D and 3D, for a shoot-'em-up, a twin-stick, an FPS's bullets or a tower defence. Everything is in integer game units (positions and velocities in `[i32; N]`, velocity per tick) or goes through `sim::math`, so it stays inside sim's promise (`docs/sim.md`): the same inputs give the same bytes on every platform.
 
