@@ -6,13 +6,15 @@ pub const ONE: i32 = 1 << 16;
 pub const UNCAPPED: u32 = u32::MAX;
 pub const NO_SPOT: u32 = u32::MAX;
 pub const MAX_ORDERS_PER_TICK: usize = 16;
-pub const DIRECTOR_VERSION: u32 = 2;
+pub const DIRECTOR_VERSION: u32 = 3;
+pub const DIRECTOR_PLAIN_VERSION: u32 = 2;
 
 pub const TIMING: u64 = 1;
 pub const PICKS: u64 = 2;
 pub const POSITIONS: u64 = 3;
 pub const FORMS: u64 = 4;
 pub const SPREADS: u64 = 5;
+pub const JITTERS: u64 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
@@ -109,6 +111,30 @@ pub struct Window {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cycle {
+    pub start: u64,
+    pub every: u64,
+    pub length: u64,
+    pub end: u64,
+}
+
+impl Cycle {
+    pub const fn new(start: u64, every: u64, length: u64) -> Self {
+        Self {
+            start,
+            every,
+            length,
+            end: u64::MAX,
+        }
+    }
+
+    pub const fn until(mut self, end: u64) -> Self {
+        self.end = end;
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Entry {
     pub id: u32,
     pub weight: u32,
@@ -116,6 +142,7 @@ pub struct Entry {
     pub cost: u32,
     pub from: u64,
     pub line: Option<Line>,
+    pub spots: Option<u32>,
 }
 
 impl Entry {
@@ -127,6 +154,7 @@ impl Entry {
             cost: 1,
             from: 0,
             line: None,
+            spots: None,
         }
     }
 
@@ -147,6 +175,11 @@ impl Entry {
 
     pub const fn in_line(mut self, line: Line) -> Self {
         self.line = Some(line);
+        self
+    }
+
+    pub const fn at_spots(mut self, set: u32) -> Self {
+        self.spots = Some(set);
         self
     }
 
@@ -224,6 +257,7 @@ pub struct Phase {
     pub table: u32,
     pub tag_filter: u32,
     pub rate: Ramp,
+    pub rate_jitter: i32,
     pub group: Ramp,
     pub speed: Ramp,
     pub after_spawns: Option<SpawnLull>,
@@ -238,6 +272,7 @@ impl Phase {
             table,
             tag_filter: 0,
             rate: Ramp::flat(0),
+            rate_jitter: 0,
             group: Ramp::flat(ONE),
             speed: Ramp::flat(ONE),
             after_spawns: None,
@@ -254,6 +289,8 @@ pub struct Schedule {
     pub tables: Vec<Table>,
     pub phases: Vec<Phase>,
     pub lulls: Vec<Window>,
+    pub cycles: Vec<Cycle>,
+    pub spot_sets: Vec<Vec<u32>>,
 }
 
 impl Default for Schedule {
@@ -265,6 +302,8 @@ impl Default for Schedule {
             tables: Vec::new(),
             phases: Vec::new(),
             lulls: Vec::new(),
+            cycles: Vec::new(),
+            spot_sets: Vec::new(),
         }
     }
 }
@@ -284,6 +323,10 @@ pub enum DirectorError {
     BadLull { phase: u32 },
     BadLine { id: u32 },
     BadWindow { window: u32 },
+    BadCycle { cycle: u32 },
+    BadJitter { phase: u32 },
+    UnknownSpots { id: u32, set: u32 },
+    EmptySpots { set: u32 },
     Length { found: usize, expected: usize },
     Version { found: u32 },
     Mismatch,
@@ -335,6 +378,21 @@ impl fmt::Display for DirectorError {
             Self::BadWindow { window } => {
                 write!(f, "quiet window {window} ends at or before its start")
             }
+            Self::BadCycle { cycle } => write!(
+                f,
+                "quiet cycle {cycle} has a zero period, a length of zero or of at least its period, or ends at or before its start"
+            ),
+            Self::BadJitter { phase } => write!(
+                f,
+                "phase {phase} has a rate jitter below zero or of at least ONE"
+            ),
+            Self::UnknownSpots { id, set } => {
+                write!(
+                    f,
+                    "entry {id} spawns at spot set {set}, which does not exist"
+                )
+            }
+            Self::EmptySpots { set } => write!(f, "spot set {set} lists no spots"),
             Self::Length { found, expected } => {
                 write!(
                     f,
@@ -343,7 +401,7 @@ impl fmt::Display for DirectorError {
             }
             Self::Version { found } => write!(
                 f,
-                "saved director state is version {found}, this build reads {DIRECTOR_VERSION}"
+                "saved director state is version {found}, this build reads {DIRECTOR_PLAIN_VERSION} and {DIRECTOR_VERSION}"
             ),
             Self::Mismatch => write!(f, "saved director state belongs to a different schedule"),
             Self::Corrupt => write!(f, "saved director state holds an invalid generator state"),
@@ -417,6 +475,7 @@ struct PhaseState {
     spawned: u32,
     wave_open: bool,
     lull_until: u64,
+    need: u64,
 }
 
 const PHASE_BYTES: usize = 8 + 4 + 1 + 8;
@@ -437,7 +496,13 @@ pub struct Director {
     positions: Rng,
     forms: Rng,
     spreads: Rng,
+    jitters: Rng,
     next_group: u32,
+    weights: Vec<u32>,
+    jittered: bool,
+    windows: Vec<Window>,
+    quiet_now: bool,
+    quiet_next: u64,
 }
 
 impl Schedule {
@@ -455,6 +520,11 @@ impl Schedule {
                 return Err(DirectorError::ZeroWeight { table: t as u32 });
             }
             for e in &table.entries {
+                if let Some(set) = e.spots
+                    && set as usize >= self.spot_sets.len()
+                {
+                    return Err(DirectorError::UnknownSpots { id: e.id, set });
+                }
                 if let Some(line) = e.line
                     && (line.min == 0 || line.min > line.max || line.spread.iter().any(|&v| v < 0))
                 {
@@ -473,6 +543,16 @@ impl Schedule {
                     window: window as u32,
                 });
             }
+        }
+        for (cycle, c) in self.cycles.iter().enumerate() {
+            if c.every == 0 || c.length == 0 || c.length >= c.every || c.end <= c.start {
+                return Err(DirectorError::BadCycle {
+                    cycle: cycle as u32,
+                });
+            }
+        }
+        if let Some(set) = self.spot_sets.iter().position(Vec::is_empty) {
+            return Err(DirectorError::EmptySpots { set: set as u32 });
         }
         for (p, phase) in self.phases.iter().enumerate() {
             self.check_phase(p as u32, phase)?;
@@ -521,6 +601,9 @@ impl Schedule {
                 return Err(DirectorError::BadLull { phase: p });
             }
         }
+        if !(0..ONE).contains(&phase.rate_jitter) {
+            return Err(DirectorError::BadJitter { phase: p });
+        }
         if phase.rate.top() == 0 {
             return Ok(());
         }
@@ -541,7 +624,7 @@ impl Schedule {
     }
 
     fn fingerprint(&self) -> u64 {
-        let mut hash = mix64(DIRECTOR_VERSION as u64);
+        let mut hash = mix64(DIRECTOR_PLAIN_VERSION as u64);
         let mut put = |value: u64| hash = mix64(hash ^ value).wrapping_add(value);
         put(self.tick_rate as u64);
         put(self.cap as u64);
@@ -606,7 +689,53 @@ impl Schedule {
             put(w.start);
             put(w.end);
         }
+        if self.extended() {
+            put(DIRECTOR_VERSION as u64);
+            put(self.cycles.len() as u64);
+            for c in &self.cycles {
+                put(c.start);
+                put(c.every);
+                put(c.length);
+                put(c.end);
+            }
+            put(self.spot_sets.len() as u64);
+            for set in &self.spot_sets {
+                put(set.len() as u64);
+                for &spot in set {
+                    put(spot as u64);
+                }
+            }
+            for e in self.tables.iter().flat_map(|t| &t.entries) {
+                put(e.spots.map_or(0, |s| 1 + s as u64));
+            }
+            for phase in &self.phases {
+                put(phase.rate_jitter as u32 as u64);
+            }
+        }
         hash
+    }
+
+    fn extended(&self) -> bool {
+        !self.cycles.is_empty()
+            || !self.spot_sets.is_empty()
+            || self.jittered()
+            || self
+                .tables
+                .iter()
+                .flat_map(|t| &t.entries)
+                .any(|e| e.spots.is_some())
+    }
+
+    fn jittered(&self) -> bool {
+        self.phases.iter().any(|p| p.rate_jitter != 0)
+    }
+
+    fn weights(&self) -> Vec<u32> {
+        self.tables
+            .iter()
+            .flat_map(|t| &t.entries)
+            .map(|e| e.weight)
+            .collect()
     }
 }
 
@@ -625,6 +754,15 @@ impl Director {
             flat += table.entries.len() as u32;
         }
         ids.sort_unstable();
+        let mut sorted = schedule.lulls.clone();
+        sorted.sort_unstable_by_key(|w| w.start);
+        let mut windows: Vec<Window> = Vec::with_capacity(sorted.len());
+        for w in sorted {
+            match windows.last_mut() {
+                Some(last) if w.start <= last.end => last.end = last.end.max(w.end),
+                _ => windows.push(w),
+            }
+        }
         Ok(Self {
             fingerprint: schedule.fingerprint(),
             ids,
@@ -639,7 +777,13 @@ impl Director {
             positions: root.fork(POSITIONS),
             forms: root.fork(FORMS),
             spreads: root.fork(SPREADS),
+            jitters: root.fork(JITTERS),
             next_group: 0,
+            weights: schedule.weights(),
+            jittered: schedule.jittered(),
+            windows,
+            quiet_now: false,
+            quiet_next: 0,
             schedule,
         })
     }
@@ -672,7 +816,18 @@ impl Director {
 
     #[must_use]
     pub fn is_quiet(&self) -> bool {
-        self.in_window(self.now)
+        self.quiet_span(self.now).0
+    }
+
+    #[must_use]
+    pub fn weight(&self, id: u32) -> u32 {
+        self.slot(id)
+            .map_or(0, |(flat, _)| self.weights[flat as usize])
+    }
+
+    pub fn set_weight(&mut self, id: u32, weight: u32) -> Option<u32> {
+        let (flat, _) = self.slot(id)?;
+        Some(std::mem::replace(&mut self.weights[flat as usize], weight))
     }
 
     fn slot(&self, id: u32) -> Option<(u32, u32)> {
@@ -682,11 +837,37 @@ impl Director {
             .map(|i| (self.ids[i].1, self.ids[i].2))
     }
 
-    fn in_window(&self, now: u64) -> bool {
-        self.schedule
-            .lulls
-            .iter()
-            .any(|w| w.start <= now && now < w.end)
+    fn quiet_span(&self, now: u64) -> (bool, u64) {
+        let i = self.windows.partition_point(|w| w.end <= now);
+        let (mut quiet, mut next) = match self.windows.get(i) {
+            Some(w) if w.start <= now => (true, w.end),
+            Some(w) => (false, w.start),
+            None => (false, u64::MAX),
+        };
+        for c in &self.schedule.cycles {
+            if now < c.start {
+                next = next.min(c.start);
+                continue;
+            }
+            if now >= c.end {
+                continue;
+            }
+            let into = (now - c.start) % c.every;
+            let edge = if into < c.length {
+                quiet = true;
+                c.length - into
+            } else {
+                c.every - into
+            };
+            next = next.min(now.saturating_add(edge)).min(c.end);
+        }
+        (quiet, next)
+    }
+
+    fn draw_need(&mut self, threshold: u64, jitter: i32) -> u64 {
+        let jitter = jitter as i64;
+        let scale = (ONE as i64 + self.jitters.range_i64(-jitter, jitter + 1)) as u128;
+        ((threshold as u128 * scale / ONE as u128) as u64).max(1)
     }
 
     pub fn died(&mut self, id: u32, count: u32) -> u32 {
@@ -716,7 +897,10 @@ impl Director {
         out.clear();
         let now = self.now;
         self.now += 1;
-        let quiet = self.in_window(now);
+        if now >= self.quiet_next {
+            (self.quiet_now, self.quiet_next) = self.quiet_span(now);
+        }
+        let quiet = self.quiet_now;
         for p in 0..self.schedule.phases.len() {
             let phase = &self.schedule.phases[p];
             if now < phase.start || now >= phase.end {
@@ -730,6 +914,7 @@ impl Director {
             let (tag_filter, on_clear, after) =
                 (phase.tag_filter, phase.on_clear, phase.after_spawns);
             let (rate, group, speed) = (phase.rate, phase.group, phase.speed);
+            let jitter = phase.rate_jitter;
             if let Some(lull) = on_clear
                 && self.load == 0
                 && self.states[p].wave_open
@@ -746,9 +931,17 @@ impl Director {
             let elapsed = now - start;
             let rate_now = rate.at(elapsed, duration).max(0) as u64;
             let threshold = 60 * self.schedule.tick_rate as u64 * ONE as u64;
+            if jitter > 0 && self.states[p].need == 0 {
+                self.states[p].need = self.draw_need(threshold, jitter);
+            }
+            let mut need = if jitter > 0 {
+                self.states[p].need
+            } else {
+                threshold
+            };
             self.states[p].charge += rate_now;
             let mut fired = 0;
-            while self.states[p].charge >= threshold && fired < MAX_ORDERS_PER_TICK {
+            while self.states[p].charge >= need && fired < MAX_ORDERS_PER_TICK {
                 let group_now = (group.at(elapsed, duration) >> 16).max(1) as u32;
                 let speed_now = speed.at(elapsed, duration).max(0);
                 let Some(members) =
@@ -756,7 +949,11 @@ impl Director {
                 else {
                     break;
                 };
-                self.states[p].charge -= threshold;
+                self.states[p].charge -= need;
+                if jitter > 0 {
+                    need = self.draw_need(threshold, jitter);
+                    self.states[p].need = need;
+                }
                 self.states[p].wave_open = true;
                 self.states[p].spawned = self.states[p].spawned.saturating_add(members);
                 fired += 1;
@@ -770,7 +967,7 @@ impl Director {
                     break;
                 }
             }
-            self.states[p].charge = self.states[p].charge.min(threshold);
+            self.states[p].charge = self.states[p].charge.min(need);
         }
     }
 
@@ -789,8 +986,10 @@ impl Director {
         let room_table = (tbl.cap as u64).saturating_sub(self.table_load[table]);
         let room_all = (self.schedule.cap as u64).saturating_sub(self.load);
         let room = room_table.min(room_all);
-        let eligible = |e: &Entry| {
-            e.weight > 0
+        let base = self.bases[table] as usize;
+        let weights = &self.weights[base..base + tbl.entries.len()];
+        let eligible = |e: &Entry, weight: u32| {
+            weight > 0
                 && now >= e.from
                 && (tag_filter == 0 || e.tags & tag_filter != 0)
                 && e.cost as u64 * e.least_members() as u64 <= room
@@ -798,23 +997,24 @@ impl Director {
         let total: u64 = tbl
             .entries
             .iter()
-            .filter(|e| eligible(e))
-            .map(|e| e.weight as u64)
+            .zip(weights)
+            .filter(|(e, w)| eligible(e, **w))
+            .map(|(_, &w)| w as u64)
             .sum();
         if total == 0 {
             return None;
         }
         let mut target = self.picks.below(total);
         let mut chosen = None;
-        for (i, e) in tbl.entries.iter().enumerate() {
-            if !eligible(e) {
+        for (i, (e, &w)) in tbl.entries.iter().zip(weights).enumerate() {
+            if !eligible(e, w) {
                 continue;
             }
-            if target < e.weight as u64 {
+            if target < w as u64 {
                 chosen = Some((i, *e));
                 break;
             }
-            target -= e.weight as u64;
+            target -= w as u64;
         }
         let (index, entry) = chosen?;
         let fit = if entry.cost == 0 {
@@ -822,7 +1022,7 @@ impl Director {
         } else {
             (room / entry.cost as u64).min(u32::MAX as u64) as u32
         };
-        let (position, spot) = self.pick_position(spots);
+        let (position, spot) = self.pick_position(spots, entry.spots);
         let id = self.next_group;
         self.next_group = self.next_group.wrapping_add(1);
         let members = match entry.line {
@@ -837,7 +1037,7 @@ impl Director {
             }
         };
         let cost = members as u64 * entry.cost as u64;
-        self.alive[self.bases[table] as usize + index] += members;
+        self.alive[base + index] += members;
         self.table_load[table] += cost;
         self.load += cost;
         match entry.line {
@@ -891,12 +1091,22 @@ impl Director {
         at
     }
 
-    fn pick_position(&mut self, spots: &Spots) -> ([i32; 3], u32) {
+    fn pick_position(&mut self, spots: &Spots, set: Option<u32>) -> ([i32; 3], u32) {
         let total = spots.points.len() + spots.regions.len();
-        if total == 0 {
-            return ([0; 3], NO_SPOT);
-        }
-        let pick = self.positions.index(total);
+        let pick = match set {
+            None if total == 0 => return ([0; 3], NO_SPOT),
+            None => self.positions.index(total),
+            Some(set) => {
+                let members = &self.schedule.spot_sets[set as usize];
+                let open = members.iter().filter(|&&m| (m as usize) < total);
+                let count = open.clone().count();
+                if count == 0 {
+                    return ([0; 3], NO_SPOT);
+                }
+                let nth = self.positions.index(count);
+                open.copied().nth(nth).unwrap_or(NO_SPOT) as usize
+            }
+        };
         if pick < spots.points.len() {
             return (spots.points[pick], pick as u32);
         }
@@ -912,14 +1122,38 @@ impl Director {
         (at, pick as u32)
     }
 
-    fn state_len(&self) -> usize {
-        4 + 8 + 8 + 4 + self.states.len() * PHASE_BYTES + self.alive.len() * 4 + 5 * STATE_BYTES
+    fn state_len(&self, version: u32) -> usize {
+        let plain = 4
+            + 8
+            + 8
+            + 4
+            + self.states.len() * PHASE_BYTES
+            + self.alive.len() * 4
+            + 5 * STATE_BYTES;
+        if version == DIRECTOR_PLAIN_VERSION {
+            return plain;
+        }
+        let jitter = if self.jittered {
+            self.states.len() * 8 + STATE_BYTES
+        } else {
+            0
+        };
+        plain + self.weights.len() * 4 + jitter
+    }
+
+    fn save_version(&self) -> u32 {
+        if self.jittered || self.weights != self.schedule.weights() {
+            DIRECTOR_VERSION
+        } else {
+            DIRECTOR_PLAIN_VERSION
+        }
     }
 
     #[must_use]
     pub fn save(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.state_len());
-        out.extend_from_slice(&DIRECTOR_VERSION.to_le_bytes());
+        let version = self.save_version();
+        let mut out = Vec::with_capacity(self.state_len(version));
+        out.extend_from_slice(&version.to_le_bytes());
         out.extend_from_slice(&self.fingerprint.to_le_bytes());
         out.extend_from_slice(&self.now.to_le_bytes());
         out.extend_from_slice(&self.next_group.to_le_bytes());
@@ -937,11 +1171,37 @@ impl Director {
         out.extend_from_slice(&self.positions.save());
         out.extend_from_slice(&self.forms.save());
         out.extend_from_slice(&self.spreads.save());
+        if version == DIRECTOR_VERSION {
+            for w in &self.weights {
+                out.extend_from_slice(&w.to_le_bytes());
+            }
+            if self.jittered {
+                for s in &self.states {
+                    out.extend_from_slice(&s.need.to_le_bytes());
+                }
+                out.extend_from_slice(&self.jitters.save());
+            }
+        }
         out
     }
 
     pub fn restore(&mut self, bytes: &[u8]) -> Result<(), DirectorError> {
-        let expected = self.state_len();
+        let Some(head) = bytes.get(..4) else {
+            return Err(DirectorError::Length {
+                found: bytes.len(),
+                expected: self.state_len(self.save_version()),
+            });
+        };
+        let version = u32::from_le_bytes(head.try_into().unwrap());
+        if version != DIRECTOR_PLAIN_VERSION && version != DIRECTOR_VERSION {
+            return Err(DirectorError::Version { found: version });
+        }
+        let layout = if self.jittered {
+            DIRECTOR_VERSION
+        } else {
+            version
+        };
+        let expected = self.state_len(layout);
         if bytes.len() != expected {
             return Err(DirectorError::Length {
                 found: bytes.len(),
@@ -950,10 +1210,6 @@ impl Director {
         }
         let u32_at = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
         let u64_at = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
-        let version = u32_at(0);
-        if version != DIRECTOR_VERSION {
-            return Err(DirectorError::Version { found: version });
-        }
         if u64_at(4) != self.fingerprint {
             return Err(DirectorError::Mismatch);
         }
@@ -965,6 +1221,7 @@ impl Director {
                 spawned: u32_at(at + 8),
                 wave_open: bytes[at + 12] != 0,
                 lull_until: u64_at(at + 13),
+                need: 0,
             });
             at += PHASE_BYTES;
         }
@@ -981,6 +1238,22 @@ impl Director {
         let positions = rng(at + 2 * STATE_BYTES)?;
         let forms = rng(at + 3 * STATE_BYTES)?;
         let spreads = rng(at + 4 * STATE_BYTES)?;
+        at += 5 * STATE_BYTES;
+        let mut weights = self.schedule.weights();
+        let mut jitters = self.jitters.clone();
+        if layout == DIRECTOR_VERSION {
+            for w in &mut weights {
+                *w = u32_at(at);
+                at += 4;
+            }
+            if self.jittered {
+                for s in &mut states {
+                    s.need = u64_at(at);
+                    at += 8;
+                }
+                jitters = rng(at)?;
+            }
+        }
         self.now = u64_at(12);
         self.next_group = u32_at(20);
         self.states = states;
@@ -990,6 +1263,10 @@ impl Director {
         self.positions = positions;
         self.forms = forms;
         self.spreads = spreads;
+        self.jitters = jitters;
+        self.weights = weights;
+        self.quiet_now = false;
+        self.quiet_next = 0;
         self.table_load.iter_mut().for_each(|l| *l = 0);
         self.load = 0;
         for (t, table) in self.schedule.tables.iter().enumerate() {
