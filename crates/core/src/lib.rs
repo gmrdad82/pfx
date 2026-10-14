@@ -7,6 +7,7 @@ pub mod ease;
 pub mod fx;
 pub mod modules;
 pub mod motion;
+pub mod numbers;
 pub mod rig;
 pub mod sim;
 pub mod sky;
