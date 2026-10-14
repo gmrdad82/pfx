@@ -102,36 +102,53 @@ pub struct Strike<const N: usize> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-struct Slot<const N: usize> {
-    shot: Shot<N>,
-    #[cfg_attr(feature = "serde", serde(with = "super::arr"))]
-    prev: [i32; N],
-    generation: u32,
-    alive: bool,
+pub(super) struct Slot<const N: usize> {
+    pub(super) shot: Shot<N>,
+    pub(super) prev: [i32; N],
+    pub(super) generation: u32,
+    pub(super) alive: bool,
+}
+
+impl<const N: usize> Slot<N> {
+    pub(super) const IDLE: Self = Self {
+        shot: Shot {
+            pos: [0; N],
+            vel: [0; N],
+            half: [0; N],
+            life: None,
+            pierce: 0,
+            tag: 0,
+        },
+        prev: [0; N],
+        generation: 0,
+        alive: false,
+    };
+
+    fn same(&self, other: &Self) -> bool {
+        self.generation == other.generation
+            && self.alive == other.alive
+            && (!self.alive || (self.shot == other.shot && self.prev == other.prev))
+    }
 }
 
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Shots<const N: usize> {
-    slots: Vec<Slot<N>>,
-    free: Vec<u32>,
-    len: usize,
-    high: usize,
-    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(super) slots: Vec<Slot<N>>,
+    pub(super) free: Vec<u32>,
+    pub(super) len: usize,
+    pub(super) high: usize,
     ended: Vec<(ShotId, End)>,
-    #[cfg_attr(feature = "serde", serde(skip))]
     order: Vec<(f64, u32)>,
-    #[cfg_attr(feature = "serde", serde(skip))]
     strikes: Vec<Strike<N>>,
 }
 
 impl<const N: usize> PartialEq for Shots<N> {
     fn eq(&self, other: &Self) -> bool {
-        self.slots == other.slots
-            && self.free == other.free
+        self.free == other.free
             && self.len == other.len
             && self.high == other.high
+            && self.slots.len() == other.slots.len()
+            && self.slots.iter().zip(&other.slots).all(|(a, b)| a.same(b))
     }
 }
 
@@ -140,24 +157,20 @@ impl<const N: usize> Eq for Shots<N> {}
 impl<const N: usize> Shots<N> {
     pub fn new(capacity: usize) -> Self {
         let capacity = u32::try_from(capacity).expect("at most u32::MAX shots");
-        let idle = Slot {
-            shot: Shot {
-                pos: [0; N],
-                vel: [0; N],
-                half: [0; N],
-                life: None,
-                pierce: 0,
-                tag: 0,
-            },
-            prev: [0; N],
-            generation: 0,
-            alive: false,
-        };
+        Self::from_parts(
+            vec![Slot::IDLE; capacity as usize],
+            (0..capacity).rev().collect(),
+            0,
+            0,
+        )
+    }
+
+    pub(super) fn from_parts(slots: Vec<Slot<N>>, free: Vec<u32>, len: usize, high: usize) -> Self {
         Self {
-            slots: vec![idle; capacity as usize],
-            free: (0..capacity).rev().collect(),
-            len: 0,
-            high: 0,
+            slots,
+            free,
+            len,
+            high,
             ended: Vec::new(),
             order: Vec::new(),
             strikes: Vec::new(),

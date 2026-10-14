@@ -66,7 +66,7 @@ walker.step(goal);
 
 ## Saving
 
-With pfx-core's `serde` feature, `Shots`, `Shot`, `ShotId`, `Span`, `Strike`, `End`, `Emitter` (with `Fire`, `Pattern`, `Rate`, `Burst`, `Phase`, `Aim2`, `Aim3`), `Telegraph`, `Mover`, `Slow` and `Member` derive `Serialize` and `Deserialize`. A pool saves its slots, generations, free list and live count; the per-step outputs (`ended`, the last `resolve`'s strikes) and scratch buffers are not saved. A reloaded arena steps on the same bits as the one that was saved, and `Shots` compares equal (`PartialEq`) on its saved state, which a test pins.
+With pfx-core's `serde` feature, `Shots`, `Shot`, `ShotId`, `Span`, `Strike`, `End`, `Emitter` (with `Fire`, `Pattern`, `Rate`, `Burst`, `Phase`, `Aim2`, `Aim3`), `Telegraph`, `Mover`, `Slow` and `Member` derive `Serialize` and `Deserialize`. A pool saves only what it needs to come back: its capacity, its live slots (`index`, `shot`, `prev`), each slot's generation up to the last one that is not 0, and its free list as `fresh` (the length of the untouched run `capacity - 1, capacity - 2, …` it starts with) plus the rest in order. A dead slot's old shot is not saved, so a 4,096-slot pool with 205 live shots saves in 23 KB of JSON (22 µs with serde_json) instead of every slot. Loading refuses a save that lists a slot twice, misses one or reaches past the capacity. The per-step outputs (`ended`, the last `resolve`'s strikes) and scratch buffers are not saved. A reloaded arena hands out the same ids and steps on the same bits as the one that was saved, and `Shots` compares equal (`PartialEq`) on that state: generations, free list and live slots, which tests pin.
 
 ## Cost
 

@@ -742,3 +742,97 @@ fn a_saved_arena_reloads_and_runs_on_the_same_bits() {
         serde_json::to_string(&(&shots, &emitters, &mover, &telegraph)).unwrap()
     );
 }
+
+#[cfg(feature = "serde")]
+fn churned() -> Shots<2> {
+    let mut rng = Rng::new(21);
+    let mut shots = Shots::<2>::new(4096);
+    let mut ids = Vec::new();
+    for _ in 0..3_000 {
+        for _ in 0..rng.range_i32(0, 4) {
+            if let Some(id) = shots.spawn(shot(
+                [0, 0],
+                [rng.range_i32(-9, 10), 1],
+                Some(rng.range_i32(1, 300) as u32),
+            )) {
+                ids.push(id);
+            }
+        }
+        if !ids.is_empty() && rng.range_i32(0, 3) == 0 {
+            let at = rng.range_i32(0, ids.len() as i32) as usize;
+            let _ = shots.despawn(ids.swap_remove(at));
+        }
+        shots.step(Span::new([-200_000; 2], [200_000; 2]));
+    }
+    shots
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn a_saved_arena_keeps_only_its_live_slots_and_reloads_its_ids() {
+    let mut shots = churned();
+    assert!(shots.len() > 100 && shots.len() < 1_000, "{}", shots.len());
+    let saved = serde_json::to_string(&shots).unwrap();
+    let mut back: Shots<2> = serde_json::from_str(&saved).unwrap();
+    assert_eq!(back, shots);
+    assert_eq!(serde_json::to_string(&back).unwrap(), saved);
+    assert!(
+        saved.len() < 128 * shots.len() + 8 * 1_024,
+        "{} bytes",
+        saved.len()
+    );
+    let empty = serde_json::to_string(&Shots::<2>::new(4096)).unwrap();
+    assert!(empty.len() < 80, "{empty}");
+    assert_eq!(
+        serde_json::from_str::<Shots<2>>(&empty).unwrap(),
+        Shots::<2>::new(4096)
+    );
+    for tick in 0..400 {
+        let a = shots.spawn(shot([0, 0], [tick % 7, 1], Some(50)));
+        let b = back.spawn(shot([0, 0], [tick % 7, 1], Some(50)));
+        assert_eq!(a, b);
+        if tick % 3 == 0 {
+            let first = shots.iter().next().map(|(id, _)| id).unwrap();
+            assert_eq!(shots.despawn(first), back.despawn(first));
+        }
+        let bounds = Span::new([-200_000; 2], [200_000; 2]);
+        assert_eq!(shots.step(bounds), back.step(bounds));
+    }
+    assert_eq!(back, shots);
+}
+
+#[cfg(feature = "serde")]
+#[test]
+fn a_saved_arena_with_a_slot_twice_or_missing_is_refused() {
+    let shots = churned();
+    let mut saved: serde_json::Value = serde_json::to_value(&shots).unwrap();
+    let live = saved["live"][0]["index"].clone();
+    saved["free"].as_array_mut().unwrap().push(live);
+    assert!(serde_json::from_value::<Shots<2>>(saved.clone()).is_err());
+    saved["free"].as_array_mut().unwrap().pop();
+    saved["free"].as_array_mut().unwrap().pop();
+    assert!(serde_json::from_value::<Shots<2>>(saved.clone()).is_err());
+    saved["capacity"] = 9_999.into();
+    assert!(serde_json::from_value::<Shots<2>>(saved).is_err());
+}
+
+#[cfg(feature = "serde")]
+#[test]
+#[ignore = "bench; run with --release"]
+fn bench_saving_a_churned_arena() {
+    use std::time::Instant;
+    let shots = churned();
+    let mut out = Vec::new();
+    let rounds = 2_000;
+    let start = Instant::now();
+    for _ in 0..rounds {
+        out.clear();
+        serde_json::to_writer(&mut out, &shots).unwrap();
+    }
+    let cost = start.elapsed().as_secs_f64() * 1e6 / f64::from(rounds);
+    println!(
+        "{} live of 4096: {} bytes, {cost:.1} us a save",
+        shots.len(),
+        out.len()
+    );
+}

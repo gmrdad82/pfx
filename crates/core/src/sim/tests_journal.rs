@@ -290,6 +290,9 @@ fn a_writer_hands_out_its_bytes_and_verify_asks_only_for_the_digests_it_checks()
         }
     }
     let bytes = writer.bytes();
+    let reused = writer.snapshot_into(vec![9; 3]);
+    assert_eq!(writer.snapshot().seal(), bytes);
+    assert_eq!(reused.seal(), bytes);
     assert_eq!(writer.finish(), bytes);
     let journal = Journal::open(&bytes).unwrap();
     let mut state = 77;
@@ -442,14 +445,27 @@ fn bench_twenty_five_minutes_of_pointer_and_buttons() {
     let digest = Digest::new().value();
     let mut best_write = f64::MAX;
     let mut best_read = f64::MAX;
+    let mut best_snapshot = f64::MAX;
+    let mut best_bytes = f64::MAX;
     let mut bytes = Vec::new();
+    let mut buffer = Vec::new();
     for _ in 0..5 {
         let start = Instant::now();
         let mut writer = JournalWriter::new(&schema, 1, 1, 600);
         for input in &inputs {
             writer.push(input, || digest).unwrap();
         }
+        let wrote = start.elapsed().as_secs_f64();
+        let start = Instant::now();
+        let unsealed = writer.snapshot_into(std::mem::take(&mut buffer));
+        best_snapshot = best_snapshot.min(start.elapsed().as_secs_f64());
+        let start = Instant::now();
+        writer.bytes_into(&mut buffer);
+        best_bytes = best_bytes.min(start.elapsed().as_secs_f64());
+        assert_eq!(unsealed.seal(), buffer);
+        let start = Instant::now();
         bytes = writer.finish();
+        best_write = best_write.min(wrote + start.elapsed().as_secs_f64());
         best_write = best_write.min(start.elapsed().as_secs_f64());
         let start = Instant::now();
         let journal = Journal::open(&bytes).unwrap();
@@ -467,5 +483,10 @@ fn bench_twenty_five_minutes_of_pointer_and_buttons() {
         bytes.len() as f64 / ticks as f64,
         best_write * 1e6 / ticks as f64,
         best_read * 1e6 / ticks as f64,
+    );
+    println!(
+        "at the end: snapshot {:.1} µs, bytes {:.1} µs",
+        best_snapshot * 1e6,
+        best_bytes * 1e6
     );
 }

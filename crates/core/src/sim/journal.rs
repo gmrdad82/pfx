@@ -343,6 +343,18 @@ impl JournalWriter {
     }
 
     pub fn bytes_into(&self, out: &mut Vec<u8>) {
+        let mut unsealed = self.snapshot_into(std::mem::take(out));
+        unsealed.seal_in_place();
+        *out = unsealed.0;
+    }
+
+    #[must_use]
+    pub fn snapshot(&self) -> Unsealed {
+        self.snapshot_into(Vec::new())
+    }
+
+    #[must_use]
+    pub fn snapshot_into(&self, mut out: Vec<u8>) -> Unsealed {
         let mut tail = Vec::new();
         let mut run = self.run;
         flush_run(&mut tail, &mut run);
@@ -371,8 +383,23 @@ impl JournalWriter {
             out.extend_from_slice(&checkpoint.digest.to_le_bytes());
             out.extend_from_slice(&checkpoint.offset.to_le_bytes());
         }
-        let sum = Digest::new().bytes(out).value();
-        out.extend_from_slice(&sum.to_le_bytes());
+        Unsealed(out)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Unsealed(Vec<u8>);
+
+impl Unsealed {
+    #[must_use]
+    pub fn seal(mut self) -> Vec<u8> {
+        self.seal_in_place();
+        self.0
+    }
+
+    fn seal_in_place(&mut self) {
+        let sum = Digest::new().bytes(&self.0).value();
+        self.0.extend_from_slice(&sum.to_le_bytes());
     }
 }
 
