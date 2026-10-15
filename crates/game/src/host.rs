@@ -366,10 +366,12 @@ impl Live {
             .draw(&mut self.driver, &view, self.target.config.format)?;
         self.window.pre_present_notify();
         self.painter.renderer().gpu().queue.present(texture);
-        let audio = self.driver.take_audio();
-        if let Some(sound) = &self.sound {
-            sound.sender.push(&audio);
-        }
+        let sound = &self.sound;
+        self.driver.drain_audio(|audio| {
+            if let Some(sound) = sound {
+                sound.sender.push(audio);
+            }
+        });
         Ok(())
     }
 

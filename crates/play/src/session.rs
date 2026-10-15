@@ -452,6 +452,10 @@ impl PlaySession {
         self.world.sounds.take_audio()
     }
 
+    pub fn drain_audio(&mut self, f: impl FnOnce(&[f32])) {
+        self.world.sounds.drain_audio(f);
+    }
+
     pub fn time(&self) -> f32 {
         let rate = self.world.clock().tick_rate();
         let alpha = if self.paused() {

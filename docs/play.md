@@ -222,7 +222,7 @@ stopped.restore(&mut staged, &mut renderer)?;
 | `edit(edit)` | a live edit from the inspector (below); refused by name when it does not apply |
 | `edits()`, `pending()` | the live edits so far, stamped by tick, and the pending patch |
 | `present(staged, renderer, aspect, seed)` | the frame to render: the staged meshes posed by the world |
-| `take_audio()`, `take_recording()` | the audio rendered so far, the input recorded so far |
+| `take_audio()`, `take_recording()` | the audio rendered so far, the input recorded so far; `drain_audio(f)` hands the audio to `f` as a slice and keeps the buffer, for a player that pushes every frame |
 | `stop()` | runs `game.stop`, drops the world and returns `Stopped` |
 | `game()`, `game_mut()` | the running game, for a runtime that reads its settings |
 | `ui(frame)` | the game's UI for this frame (`Game::ui` over the world) |

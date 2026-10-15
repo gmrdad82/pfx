@@ -426,4 +426,8 @@ impl Driver {
     pub fn take_audio(&mut self) -> Vec<f32> {
         self.session.take_audio()
     }
+
+    pub fn drain_audio(&mut self, f: impl FnOnce(&[f32])) {
+        self.session.drain_audio(f);
+    }
 }

@@ -1,35 +1,65 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, MutexGuard};
-
-use crate::mix::lock;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 pub const PCM_EDGE_SECONDS: f32 = 0.002;
 
-struct Inner {
-    samples: VecDeque<f32>,
-    closed: bool,
-}
+const LOCAL_FRAMES: usize = 4_096;
 
 pub(crate) struct PcmRing {
-    inner: Mutex<Inner>,
+    slots: Box<[AtomicU32]>,
+    head: AtomicUsize,
+    tail: AtomicUsize,
+    closed: AtomicBool,
     capacity: usize,
     channels: usize,
 }
 
 impl PcmRing {
     fn new(channels: usize, capacity_frames: usize) -> Arc<Self> {
+        let capacity = capacity_frames.max(1);
+        let channels = channels.max(1);
+        let slots = (0..capacity.saturating_mul(channels))
+            .map(|_| AtomicU32::new(0))
+            .collect();
         Arc::new(Self {
-            inner: Mutex::new(Inner {
-                samples: VecDeque::new(),
-                closed: false,
-            }),
-            capacity: capacity_frames.max(1),
-            channels: channels.max(1),
+            slots,
+            head: AtomicUsize::new(0),
+            tail: AtomicUsize::new(0),
+            closed: AtomicBool::new(false),
+            capacity,
+            channels,
         })
     }
 
-    fn lock(&self) -> MutexGuard<'_, Inner> {
-        lock(&self.inner)
+    fn queued(&self, head: usize, tail: usize) -> usize {
+        let len = self.slots.len();
+        if tail >= head {
+            tail - head
+        } else {
+            tail + 2 * len - head
+        }
+    }
+
+    fn advance(&self, position: usize, by: usize) -> usize {
+        let wrap = 2 * self.slots.len();
+        let next = position + by;
+        if next >= wrap { next - wrap } else { next }
+    }
+
+    fn slot(&self, position: usize) -> usize {
+        let len = self.slots.len();
+        if position >= len {
+            position - len
+        } else {
+            position
+        }
+    }
+
+    fn queued_frames(&self) -> usize {
+        let head = self.head.load(Ordering::Acquire);
+        let tail = self.tail.load(Ordering::Acquire);
+        self.queued(head, tail) / self.channels
     }
 }
 
@@ -40,17 +70,29 @@ pub struct PcmSender {
 
 impl PcmSender {
     pub fn push(&self, samples: &[f32]) -> usize {
-        let channels = self.ring.channels;
-        let mut inner = self.ring.lock();
-        let queued = inner.samples.len() / channels;
-        let room = self.ring.capacity.saturating_sub(queued);
+        let ring = &*self.ring;
+        let channels = ring.channels;
+        let tail = ring.tail.load(Ordering::Acquire);
+        let head = ring.head.load(Ordering::Acquire);
+        let queued = ring.queued(head, tail) / channels;
+        let room = ring.capacity.saturating_sub(queued);
         let frames = (samples.len() / channels).min(room);
-        inner.samples.extend(&samples[..frames * channels]);
+        let count = frames * channels;
+        let mut slot = ring.slot(tail);
+        for sample in &samples[..count] {
+            ring.slots[slot].store(sample.to_bits(), Ordering::Relaxed);
+            slot += 1;
+            if slot == ring.slots.len() {
+                slot = 0;
+            }
+        }
+        ring.tail
+            .store(ring.advance(tail, count), Ordering::Release);
         frames
     }
 
     pub fn queued_frames(&self) -> usize {
-        self.ring.lock().samples.len() / self.ring.channels
+        self.ring.queued_frames()
     }
 
     pub fn capacity_frames(&self) -> usize {
@@ -74,7 +116,7 @@ impl PcmSender {
     }
 
     pub fn finish(&self) {
-        self.ring.lock().closed = true;
+        self.ring.closed.store(true, Ordering::Release);
     }
 }
 
@@ -89,7 +131,7 @@ pub(crate) fn pcm_pair(channels: u16, capacity_frames: usize, rate: u32) -> (Pcm
     let edge = ((f64::from(PCM_EDGE_SECONDS) * f64::from(rate)).round() as u32).max(1);
     let voice = PcmVoice {
         ring: Arc::clone(&ring),
-        local: VecDeque::new(),
+        local: VecDeque::with_capacity(LOCAL_FRAMES),
         level: 0.0,
         step: 1.0 / edge as f32,
         last: (0.0, 0.0),
@@ -114,21 +156,30 @@ impl PcmVoice {
         if self.local.len() >= frames {
             return;
         }
-        let channels = self.ring.channels;
-        let mut inner = self.ring.lock();
-        let take = (inner.samples.len() / channels).min(frames - self.local.len());
+        let ring = &*self.ring;
+        let channels = ring.channels;
+        let head = ring.head.load(Ordering::Acquire);
+        let tail = ring.tail.load(Ordering::Acquire);
+        let take = (ring.queued(head, tail) / channels).min(frames - self.local.len());
+        let mut slot = ring.slot(head);
+        let mut read = || {
+            let sample = f32::from_bits(ring.slots[slot].load(Ordering::Relaxed));
+            slot += 1;
+            if slot == ring.slots.len() {
+                slot = 0;
+            }
+            sample
+        };
         for _ in 0..take {
-            let left = inner.samples.pop_front().unwrap_or(0.0);
-            let right = if channels > 1 {
-                inner.samples.pop_front().unwrap_or(0.0)
-            } else {
-                left
-            };
+            let left = read();
+            let right = if channels > 1 { read() } else { left };
             for _ in 2..channels {
-                inner.samples.pop_front();
+                read();
             }
             self.local.push_back((left, right));
         }
+        ring.head
+            .store(ring.advance(head, take * channels), Ordering::Release);
     }
 
     pub(crate) fn next(&mut self) -> (f32, f32) {
@@ -149,7 +200,6 @@ impl PcmVoice {
         if self.level > 0.0 || !self.local.is_empty() {
             return false;
         }
-        let inner = self.ring.lock();
-        inner.closed && inner.samples.is_empty()
+        self.ring.closed.load(Ordering::Acquire) && self.ring.queued_frames() == 0
     }
 }

@@ -17,7 +17,7 @@ use pfx_physics::rigid::{
     self, BodyDesc, BodyId, Character, CharacterDesc, ColliderDesc, ColliderId, Combine, Event,
     Filter, Friction, Pose, Shape, WorldDesc,
 };
-use pfx_sound::{ChannelId, Clip, Level, Mixer, MusicTrack, PcmSender, VoiceId};
+use pfx_sound::{ChannelId, Clip, Level, Mixer, MusicTrack, PcmSender, Prepared, VoiceId};
 
 use crate::PlayError;
 use crate::events::{Phase, TriggerEvent, WorldEvent};
@@ -250,9 +250,11 @@ impl PcmStream {
     }
 }
 
+const SOUND_LOG: usize = 4_096;
+
 pub struct Sounds {
     mixer: Mixer,
-    clips: BTreeMap<String, Clip>,
+    clips: BTreeMap<String, Prepared>,
     voices: BTreeMap<String, VoiceId>,
     log: Vec<(u64, String)>,
     audio: Vec<f32>,
@@ -282,7 +284,8 @@ impl Sounds {
                     ))
                 })?
             };
-            clips.insert(name.clone(), clip);
+            let track = MusicTrack::looping(clip);
+            clips.insert(name.clone(), Prepared::track(&track, mixer.rate()));
         }
         Ok(Self {
             keep: rate.max(1) as usize * channels.max(1) as usize * 2,
@@ -301,12 +304,19 @@ impl Sounds {
             return false;
         };
         let voice = if looping {
-            self.mixer
-                .play_music(&MusicTrack::looping(clip.clone()), 0.0, level)
+            self.mixer.play_music_prepared(clip, 0.0, level)
         } else {
-            self.mixer.play(clip, level)
+            self.mixer.play_prepared(ChannelId::EFFECTS, clip, level)
         };
-        self.voices.insert(name.to_string(), voice);
+        match self.voices.get_mut(name) {
+            Some(slot) => *slot = voice,
+            None => {
+                self.voices.insert(name.to_string(), voice);
+            }
+        }
+        if self.log.len() >= SOUND_LOG {
+            self.log.drain(..SOUND_LOG / 2);
+        }
         self.log.push((self.now, name.to_string()));
         true
     }
@@ -361,6 +371,11 @@ impl Sounds {
 
     pub fn take_audio(&mut self) -> Vec<f32> {
         std::mem::take(&mut self.audio)
+    }
+
+    pub fn drain_audio(&mut self, f: impl FnOnce(&[f32])) {
+        f(&self.audio);
+        self.audio.clear();
     }
 
     fn render_until(&mut self, frame: u64) {

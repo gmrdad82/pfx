@@ -26,7 +26,7 @@ pub use drive::{DRIVE_MAX_DB, DRIVE_MIN_DB, Drive, DriveCurve};
 pub use envelope::{Envelope, Shape};
 pub use interp::Resample;
 pub use live::{Output, chime, chime_reversed};
-pub use mix::{FILTER_RAMP_SECONDS, Level, Mixer, Placement, Timeline, VoiceId, mixdown};
+pub use mix::{FILTER_RAMP_SECONDS, Level, Mixer, Placement, Prepared, Timeline, VoiceId, mixdown};
 pub use music::MusicTrack;
 pub use pcm::{PCM_EDGE_SECONDS, PcmSender};
 pub use sound::{SoundId, SoundSpec, Steal};

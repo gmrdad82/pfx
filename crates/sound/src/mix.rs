@@ -10,7 +10,7 @@ use crate::envelope::{EnvState, Envelope};
 use crate::filter::Kind;
 use crate::heard::{Bounds, MusicPlace};
 use crate::interp::{Kernel, MAX_RATIO, MIN_RATIO, Resample};
-use crate::music::{Curve, Direction, MusicTrack};
+use crate::music::{Curve, Direction, MusicTrack, scale_loop};
 use crate::pcm::{PcmSender, pcm_pair};
 use crate::sound::{Body, Rng, SoundDef, SoundId, SoundSpec, Steal, draw};
 use crate::synth::{Synth, Wave};
@@ -74,17 +74,71 @@ pub fn mixdown(timeline: &Timeline) -> Vec<f32> {
     let mut mixer = Mixer::new(timeline.rate, timeline.channels);
     let mut end = 0u64;
     for placement in &timeline.placements {
-        let matched = placement.clip.for_rate(timeline.rate);
-        end = end.max(placement.at.saturating_add(matched.frames()));
-        mixer.play_prepared(
+        let matched = Prepared::new(&placement.clip, timeline.rate);
+        end = end.max(placement.at.saturating_add(matched.frames));
+        mixer.play_prepared_at(
             ChannelId::EFFECTS,
             placement.at,
-            matched,
-            None,
+            &matched,
+            false,
             placement.level,
         );
     }
     mixer.render(usize::try_from(end).unwrap_or(usize::MAX))
+}
+
+#[derive(Clone, Debug)]
+pub struct Prepared {
+    samples: Arc<Vec<f32>>,
+    rate: u32,
+    channels: u16,
+    frames: u64,
+    looping: Option<(u64, u64)>,
+}
+
+impl Prepared {
+    pub fn new(clip: &Clip, rate: u32) -> Self {
+        Self::with_loop(clip, rate, None)
+    }
+
+    pub fn track(track: &MusicTrack, rate: u32) -> Self {
+        Self::with_loop(&track.clip, rate, track.loop_frames(rate))
+    }
+
+    fn with_loop(clip: &Clip, rate: u32, looping: Option<(u64, u64)>) -> Self {
+        let clip = clip.for_rate(rate);
+        Self {
+            frames: clip.frames(),
+            channels: clip.channels,
+            samples: Arc::new(clip.samples),
+            rate,
+            looping,
+        }
+    }
+
+    fn at_rate(&self, rate: u32) -> Self {
+        let clip = Clip {
+            rate: self.rate,
+            channels: self.channels,
+            samples: self.samples.as_ref().clone(),
+        };
+        let looping = self
+            .looping
+            .and_then(|(start, end)| scale_loop(start, end, self.frames, self.rate, rate));
+        Self::with_loop(&clip, rate, looping)
+    }
+
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    pub fn channels(&self) -> u16 {
+        self.channels
+    }
+
+    pub fn frames(&self) -> u64 {
+        self.frames
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -143,12 +197,57 @@ impl PcmQueue {
         lock(&self.inner).ended
     }
 
+    pub(crate) fn waiting_if_ended(&self) -> Option<usize> {
+        let guard = lock(&self.inner);
+        guard.ended.then_some(guard.samples.len())
+    }
+
+    pub(crate) fn pop_into(
+        &self,
+        dst: &mut VecDeque<(f32, f32)>,
+        frames: usize,
+        channels: usize,
+    ) -> Popped {
+        let mut guard = lock(&self.inner);
+        let ended = guard.ended;
+        if channels == 0 || frames == 0 {
+            return Popped {
+                real: 0,
+                available: 0,
+                left: guard.samples.len(),
+                ended,
+            };
+        }
+        let available = guard.samples.len() / channels;
+        let real = available.min(frames);
+        let mut drained = guard.samples.drain(..real * channels);
+        for _ in 0..real {
+            let left = drained.next().unwrap_or(0.0);
+            let right = if channels > 1 {
+                drained.next().unwrap_or(0.0)
+            } else {
+                left
+            };
+            for _ in 2..channels {
+                drained.next();
+            }
+            dst.push_back((left, right));
+        }
+        drop(drained);
+        Popped {
+            real,
+            available,
+            left: guard.samples.len(),
+            ended,
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn pop_frames(&self, frames: usize, channels: usize) -> Pop {
         if channels == 0 || frames == 0 {
             return Pop {
                 samples: Vec::new(),
                 real: 0,
-                available: 0,
                 ended: lock(&self.inner).ended,
             };
         }
@@ -165,7 +264,6 @@ impl PcmQueue {
         Pop {
             samples,
             real,
-            available,
             ended,
         }
     }
@@ -176,10 +274,17 @@ impl PcmQueue {
     }
 }
 
+pub(crate) struct Popped {
+    pub(crate) real: usize,
+    pub(crate) available: usize,
+    pub(crate) left: usize,
+    pub(crate) ended: bool,
+}
+
+#[cfg(test)]
 pub(crate) struct Pop {
     pub(crate) samples: Vec<f32>,
     pub(crate) real: usize,
-    pub(crate) available: usize,
     pub(crate) ended: bool,
 }
 
@@ -193,7 +298,7 @@ pub struct Mixer {
     master: Channel,
     limiter: Option<f32>,
     duck: Option<DuckState>,
-    scheduled: Vec<Scheduled>,
+    scheduled: VecDeque<Scheduled>,
     music: Option<VoiceId>,
     sounds: Vec<SoundDef>,
     rng: Rng,
@@ -201,6 +306,7 @@ pub struct Mixer {
     scratch: Vec<f32>,
     duck_gains: Vec<f32>,
     activity: Vec<bool>,
+    retired: Vec<Voice>,
 }
 
 impl Mixer {
@@ -219,7 +325,7 @@ impl Mixer {
             master: Channel::new(),
             limiter: None,
             duck: None,
-            scheduled: Vec::new(),
+            scheduled: VecDeque::new(),
             music: None,
             sounds: Vec::new(),
             rng: Rng::new(DEFAULT_SEED),
@@ -227,6 +333,7 @@ impl Mixer {
             scratch: Vec::new(),
             duck_gains: Vec::new(),
             activity: Vec::new(),
+            retired: Vec::new(),
         }
     }
 
@@ -539,14 +646,7 @@ impl Mixer {
     }
 
     fn apply_due(&mut self) {
-        let due = self
-            .scheduled
-            .partition_point(|event| event.at <= self.clock);
-        if due == 0 {
-            return;
-        }
-        let events: Vec<Scheduled> = self.scheduled.drain(..due).collect();
-        for event in events {
+        while let Some(event) = self.scheduled.pop_front_if(|event| event.at <= self.clock) {
             let seconds = event.seconds;
             match event.action {
                 Action::ChannelLowpass(channel, hz) => {
@@ -597,13 +697,26 @@ impl Mixer {
         clip: &Clip,
         level: Level,
     ) -> VoiceId {
-        self.play_prepared(channel, at, clip.for_rate(self.rate), None, level)
+        let prepared = Prepared::new(clip, self.rate);
+        self.play_prepared_at(channel, at, &prepared, false, level)
+    }
+
+    pub fn play_prepared(&mut self, channel: ChannelId, clip: &Prepared, level: Level) -> VoiceId {
+        self.play_prepared_at(channel, self.clock, clip, false, level)
     }
 
     pub fn play_music(&mut self, track: &MusicTrack, fade_seconds: f32, level: Level) -> VoiceId {
-        let looping = track.loop_frames(self.rate);
-        let clip = track.clip.for_rate(self.rate);
-        let id = self.play_prepared(ChannelId::MUSIC, self.clock, clip, looping, level);
+        let prepared = Prepared::track(track, self.rate);
+        self.play_music_prepared(&prepared, fade_seconds, level)
+    }
+
+    pub fn play_music_prepared(
+        &mut self,
+        track: &Prepared,
+        fade_seconds: f32,
+        level: Level,
+    ) -> VoiceId {
+        let id = self.play_prepared_at(ChannelId::MUSIC, self.clock, track, true, level);
         self.begin_music(id, fade_seconds);
         id
     }
@@ -667,12 +780,12 @@ impl Mixer {
             if voice.rendered {
                 state.release(len);
             } else {
-                self.voices.retain(|voice| voice.id != id);
+                self.remove_voice(id);
             }
             return;
         }
         if len == 0 {
-            self.voices.retain(|voice| voice.id != id);
+            self.remove_voice(id);
             return;
         }
         if let Some(voice) = self.voices.iter_mut().find(|voice| voice.id == id) {
@@ -799,14 +912,21 @@ impl Mixer {
     }
 
     pub fn sound(&mut self, clip: &Clip, spec: SoundSpec) -> SoundId {
-        let prepared = clip.for_rate(self.rate);
-        let frames = prepared.frames();
-        let channels = prepared.channels;
+        let prepared = Prepared::new(clip, self.rate);
+        self.sound_prepared(prepared, spec)
+    }
+
+    pub(crate) fn sound_prepared(&mut self, clip: Prepared, spec: SoundSpec) -> SoundId {
+        let clip = if clip.rate == self.rate {
+            clip
+        } else {
+            clip.at_rate(self.rate)
+        };
         self.sounds.push(SoundDef {
             body: Body::Clip {
-                samples: Arc::new(prepared.samples),
-                channels,
-                frames,
+                samples: clip.samples,
+                channels: clip.channels,
+                frames: clip.frames,
             },
             spec,
         });
@@ -939,7 +1059,8 @@ impl Mixer {
                     direction: Direction::Out,
                 });
             } else {
-                self.voices.remove(index);
+                let voice = self.voices.remove(index);
+                self.retire(voice);
             }
         }
     }
@@ -964,7 +1085,7 @@ impl Mixer {
         while done < frames {
             self.apply_due();
             let remaining = frames - done;
-            let len = self.scheduled.first().map_or(remaining, |event| {
+            let len = self.scheduled.front().map_or(remaining, |event| {
                 usize::try_from(event.at - self.clock).map_or(remaining, |gap| gap.min(remaining))
             });
             let from = done * out_channels;
@@ -1045,7 +1166,38 @@ impl Mixer {
         }
         self.clock = self.clock.saturating_add(frames as u64);
         let clock = self.clock;
-        self.voices.retain(|voice| !voice.finished(clock));
+        let retired = &mut self.retired;
+        for voice in self.voices.extract_if(.., |voice| voice.finished(clock)) {
+            if retired.len() < retired.capacity() {
+                retired.push(voice);
+            }
+        }
+    }
+
+    pub(crate) fn hold_retired(&mut self, voices: usize) {
+        self.retired.reserve_exact(voices);
+    }
+
+    pub(crate) fn has_retired(&self) -> bool {
+        !self.retired.is_empty()
+    }
+
+    pub(crate) fn swap_retired(&mut self, spare: &mut Vec<Voice>) {
+        spare.clear();
+        std::mem::swap(&mut self.retired, spare);
+    }
+
+    fn retire(&mut self, voice: Voice) {
+        if self.retired.len() < self.retired.capacity() {
+            self.retired.push(voice);
+        }
+    }
+
+    fn remove_voice(&mut self, id: VoiceId) {
+        if let Some(index) = self.voices.iter().position(|voice| voice.id == id) {
+            let voice = self.voices.remove(index);
+            self.retire(voice);
+        }
     }
 
     pub(crate) fn render_i16(&mut self, out: &mut [i16]) {
@@ -1143,23 +1295,29 @@ impl Mixer {
         }
     }
 
-    fn play_prepared(
+    fn play_prepared_at(
         &mut self,
         channel: ChannelId,
         at: u64,
-        clip: Clip,
-        looping: Option<(u64, u64)>,
+        clip: &Prepared,
+        looped: bool,
         level: Level,
     ) -> VoiceId {
-        let frames = clip.frames();
+        let converted;
+        let clip = if clip.rate == self.rate {
+            clip
+        } else {
+            converted = clip.at_rate(self.rate);
+            &converted
+        };
         self.push_voice(
             channel,
             at,
             Source::Buffer {
-                samples: Arc::new(clip.samples),
+                samples: Arc::clone(&clip.samples),
                 channels: clip.channels,
-                frames,
-                looping,
+                frames: clip.frames,
+                looping: if looped { clip.looping } else { None },
             },
             level,
         )
