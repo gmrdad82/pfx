@@ -36,6 +36,8 @@ pub struct Painter {
     environment: Option<Environment>,
     fallbacks: BTreeMap<String, Vec<String>>,
     prompts: Vec<PromptQuads>,
+    draws: Vec<Draw>,
+    span: Span,
     uploads: usize,
     waits: bool,
 }
@@ -56,9 +58,15 @@ enum Sheet {
     Glyphs,
 }
 
+enum Quads {
+    Own(Vec<RichQuad>),
+    Glyphs(usize),
+    Label(usize, usize),
+}
+
 struct Run {
     sheet: Sheet,
-    quads: Vec<RichQuad>,
+    quads: Quads,
     colour: Srgba,
     elevation: f32,
     id: u32,
@@ -149,6 +157,19 @@ impl Painter {
             environment,
             fallbacks: BTreeMap::new(),
             prompts: Vec::new(),
+            draws: Vec::new(),
+            span: Span {
+                text: String::new(),
+                face: Face {
+                    family: String::new(),
+                    size: 0.0,
+                    line: 0.0,
+                    weight: 400,
+                    italic: false,
+                    spacing: 0.0,
+                },
+                color: [1.0; 4],
+            },
             uploads: 0,
             waits: false,
         })
@@ -290,23 +311,16 @@ impl Painter {
                     "the game's UI has labels but the config names no font (Config::font)".into(),
                 );
             };
-            let span = Span {
-                text: label.text.clone(),
-                face: Face {
-                    family: label.family.clone(),
-                    size: label.size,
-                    line: label.line_height(),
-                    weight: label.weight,
-                    italic: false,
-                    spacing: 0.0,
-                },
-                color: [1.0; 4],
-            };
-            let spans = [span];
+            self.span.text.clone_from(&label.text);
+            self.span.face.family.clone_from(&label.family);
+            self.span.face.size = label.size;
+            self.span.face.line = label.line_height();
+            self.span.face.weight = label.weight;
+            let spans = std::slice::from_ref(&self.span);
             let drop = match label.height {
                 Some(height) => {
                     let block = engine
-                        .layout_spans(&spans, label.wrap, placement.scale, anchor(label.anchor))
+                        .layout_spans(spans, label.wrap, placement.scale, anchor(label.anchor))
                         .map_err(|error| format!("label {:?}: {error:?}", label.text))?;
                     (height - block.height) * share(label.vertical)
                 }
@@ -317,7 +331,7 @@ impl Painter {
                 ..placement
             };
             let placed = engine
-                .place_spans(&spans, label.wrap, anchor(label.anchor), &at)
+                .place_spans(spans, label.wrap, anchor(label.anchor), &at)
                 .map_err(|error| format!("label {:?}: {error:?}", label.text))?;
             let transform = label.transform.map_or(IDENTITY, |turn| {
                 let [x, y] = label.at;
@@ -326,7 +340,7 @@ impl Painter {
             for (page, quads) in page_quads(&placed.quads) {
                 runs.push(Run {
                     sheet: Sheet::Page(page),
-                    quads,
+                    quads: Quads::Own(quads),
                     colour: label.colour,
                     elevation: label.elevation,
                     id: label.id,
@@ -348,18 +362,19 @@ impl Painter {
                     &Style::of(prompt, pixels_per_unit),
                     &mut sources,
                 )?;
+                let index = self.prompts.len();
                 runs.push(Run {
                     sheet: Sheet::Glyphs,
-                    quads: quads.glyphs.clone(),
+                    quads: Quads::Glyphs(index),
                     colour: prompt.colour,
                     elevation: prompt.elevation,
                     id: prompt.id,
                     transform: IDENTITY,
                 });
-                for (page, quads) in &quads.labels {
+                for (part, (page, _)) in quads.labels.iter().enumerate() {
                     runs.push(Run {
                         sheet: Sheet::Page(*page),
-                        quads: quads.clone(),
+                        quads: Quads::Label(index, part),
                         colour: prompt.colour,
                         elevation: prompt.elevation,
                         id: prompt.id,
@@ -538,7 +553,9 @@ impl Painter {
             driver.labels(),
             report.pixels_per_unit(),
         )?;
-        let mut draws = ui.draws.clone();
+        let mut draws = std::mem::take(&mut self.draws);
+        draws.clear();
+        draws.extend_from_slice(&ui.draws);
         let mut texts = Vec::with_capacity(runs.len());
         for run in &runs {
             let atlas = match run.sheet {
@@ -552,9 +569,14 @@ impl Painter {
                     .map(|(_, atlas)| atlas)
                     .ok_or("the input glyph atlas is missing")?,
             };
+            let quads: &[RichQuad] = match &run.quads {
+                Quads::Own(quads) => quads,
+                Quads::Glyphs(index) => &self.prompts[*index].glyphs,
+                Quads::Label(index, part) => &self.prompts[*index].labels[*part].1,
+            };
             texts.push(FlatText {
                 atlas,
-                glyphs: Glyphs::Quads(&run.quads),
+                glyphs: Glyphs::Quads(quads),
                 colour: run.colour,
             });
             draws.push(
@@ -604,6 +626,7 @@ impl Painter {
             )?;
             gpu.queue.submit([encoder.finish()]);
         }
+        self.draws = draws;
         driver
             .session_mut()
             .draw_hud_on(&mut self.renderer, output, format, output_size);

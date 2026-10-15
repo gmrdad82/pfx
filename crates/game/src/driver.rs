@@ -203,16 +203,18 @@ impl Driver {
         }
         let frame = self.ui_frame(alpha);
         self.ui = Rc::new(self.session.ui(&frame));
-        self.parts = self.resolve();
+        self.resolve();
     }
 
-    fn resolve(&self) -> Vec<Vec<Part>> {
+    fn resolve(&mut self) {
         let input = self.session.input();
-        self.ui
-            .prompts
-            .iter()
-            .map(|prompt| crate::prompt::parts(input, &prompt.of))
-            .collect()
+        self.parts.clear();
+        self.parts.extend(
+            self.ui
+                .prompts
+                .iter()
+                .map(|prompt| crate::prompt::parts(input, &prompt.of)),
+        );
     }
 
     fn apply(&mut self, settings: &Settings, first: bool) {
