@@ -46,6 +46,8 @@ let last = journal.verify(&schema, SIM_VERSION, |input| {
 
 `JournalWriter::bytes()` (or `bytes_into(&mut buf)`, reusing the buffer) returns the journal so far without consuming the writer, the same bytes `finish` would return at that tick, so a game can flush a running journal every second and keep recording. Most of `bytes()` is the checksum over the whole file; `snapshot()` (or `snapshot_into(buf)`, reusing a buffer) copies the same bytes without it, a few microseconds at 25 minutes against about 200 µs, and hands back an `Unsealed` that a worker thread turns into the file with `seal()`, byte for byte what `bytes()` returns at that tick.
 
+A running journal needs no copy of the writer to flush: `snapshot_into` borrows it, so the game thread keeps one buffer, takes a snapshot every second or so, and hands the `Unsealed` to a worker that seals it and replaces the file (write a temporary file, then rename it over the old one, so a crash leaves the last whole journal). The file cannot be appended to instead: the tick count, the checkpoint count and the stream length lead it, the checkpoint table follows the stream, and the checksum runs over every byte from the first, so each flush is a new file of the whole run, about 270 KB at 25 minutes (below).
+
 `Digest` is FNV-1a 64 over little-endian bytes, the hash the format itself uses. A game builds its state digest with it from integers and from `sim`'s bit-exact outputs:
 
 ```rust
