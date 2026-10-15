@@ -42,6 +42,47 @@ impl SpriteImage {
         })
     }
 
+    pub fn from_premultiplied(
+        width: u32,
+        height: u32,
+        pixels: &[[f32; 4]],
+        filter: SpriteFilter,
+    ) -> Result<Self, String> {
+        if pixels.len() != width as usize * height as usize {
+            return Err(format!(
+                "a {width}x{height} sprite atlas needs {} pixels, not {}",
+                width as usize * height as usize,
+                pixels.len()
+            ));
+        }
+        let (w, h) = (width as usize, height as usize);
+        let byte = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let mut rgba = Vec::with_capacity(pixels.len() * 4);
+        for y in 0..h {
+            for x in 0..w {
+                let [r, g, b, a] = pixels[y * w + x];
+                let (colour, alpha) = if a > 0.0 {
+                    ([r, g, b], a)
+                } else {
+                    let mut sum = [0.0f32; 4];
+                    for ny in y.saturating_sub(1)..(y + 2).min(h) {
+                        for nx in x.saturating_sub(1)..(x + 2).min(w) {
+                            let near = pixels[ny * w + nx];
+                            for k in 0..4 {
+                                sum[k] += near[k];
+                            }
+                        }
+                    }
+                    ([sum[0], sum[1], sum[2]], sum[3])
+                };
+                let scale = if alpha > 0.0 { 1.0 / alpha } else { 0.0 };
+                rgba.extend(colour.map(|value| byte(value * scale)));
+                rgba.push(byte(a));
+            }
+        }
+        Self::new(width, height, rgba, filter)
+    }
+
     fn texel(&self, x: i64, y: i64) -> [f32; 4] {
         let x = x.clamp(0, i64::from(self.width) - 1) as usize;
         let y = y.clamp(0, i64::from(self.height) - 1) as usize;
