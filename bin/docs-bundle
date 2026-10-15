@@ -104,6 +104,7 @@ GUIDES = [
     ("words", 215, None),
     ("easings", 216, None),
     ("mods", 217, None),
+    ("film", 218, "pfx-film: scripted films rendered offline from a game at a fixed frame rate, with a camera, looks, captions, marks and a synthesised score, the same bytes every run."),
     ("live-renderer", 301, "The live renderer's design: its frame budget at 4K, passes, shadows, baked light, TAA, text, frames on demand and dynamic resolution."),
     ("benchmark-a-scene", 302, None),
     ("frame-stats", 303, None),

@@ -1,0 +1,88 @@
+[film]
+bars = 2.39
+grain = 0.05
+vignette = 0.4
+glow = 0.4
+seed = 3
+
+[style.big]
+size = 96
+weight = 800
+caps = true
+outline = 4
+smash = 0.5
+
+[[scene]]
+name = "open"
+seconds = 0.5
+
+[[scene.key]]
+at = 0.0
+zoom = 1.0
+black = 1.0
+
+[[scene.key]]
+at = 0.4
+ease = "cubic_out"
+zoom = 1.4
+roll = 2.0
+black = 0.0
+speed = 0.5
+desat = 0.5
+tint = "#80a0ff"
+
+[[scene.text]]
+text = "a {thing}"
+style = "big"
+at = 0.1
+
+[[scene.art]]
+kind = "dot"
+at = 0.0
+radius = 30
+
+[[scene.sound]]
+at = 0.0
+sound = "pad"
+
+[[scene]]
+name = "close"
+seconds = 0.5
+from = 1.0
+still = "close"
+
+[[scene.art]]
+kind = "mark"
+file = "mark.svg"
+label = "Label"
+check = true
+at = 0.0
+
+[[scene.art]]
+kind = "band"
+at = 0.0
+height = 200
+soft = 30
+alpha = 0.6
+
+[[scene.art]]
+kind = "spot"
+at = 0.1
+
+[[scene.flash]]
+at = 0.2
+colour = "#ffffff"
+
+[[scene.shake]]
+at = 0.1
+amount = 0.7
+
+[[scene.sound]]
+at = 0.0
+sound = "thump"
+every = 0.1
+accel = 0.9
+
+[[scene.input]]
+at = 0.2
+key = "enter"

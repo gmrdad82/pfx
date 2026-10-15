@@ -5,7 +5,7 @@ top=$(pwd)
 export CARGO_NET_GIT_FETCH_WITH_CLI=true
 target=x86_64-pc-windows-gnu
 args=()
-for crate in core geom gpu materials text post load physics sound trace bake live input steam mod play; do
+for crate in core geom gpu materials text post load physics sound trace bake live input steam mod play film; do
   manifest="crates/$crate/Cargo.toml"
   if [ ! -f "$manifest" ]; then
     continue
