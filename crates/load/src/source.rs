@@ -61,7 +61,7 @@ impl Source {
     }
 }
 
-fn normalize(name: &str) -> Result<String, String> {
+pub(crate) fn normalize(name: &str) -> Result<String, String> {
     if name.is_empty() {
         return Err("asset name is empty".into());
     }

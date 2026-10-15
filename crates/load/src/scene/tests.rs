@@ -404,6 +404,30 @@ fn refusals_name_what_is_wrong() {
 }
 
 #[test]
+fn a_gltf_buffer_uri_outside_the_mesh_folder_is_refused() {
+    let folder = Folder::new("buffer-escape");
+    folder.write("secret.bin", "abcd");
+    std::fs::create_dir_all(folder.path("meshes")).unwrap();
+    for uri in ["../secret.bin", "meshes/../../secret.bin"] {
+        folder.write(
+            "meshes/escape.gltf",
+            &format!(
+                "{{\"asset\":{{\"version\":\"2.0\"}},\"buffers\":[{{\"uri\":\"{uri}\",\"byteLength\":4}}],\"nodes\":[{{\"name\":\"n\"}}],\"scenes\":[{{\"nodes\":[0]}}]}}"
+            ),
+        );
+        let scene = folder.write(
+            "escape.scene.toml",
+            "[mesh.e]\nfile = \"meshes/escape.gltf\"\n\n[[object]]\nname = \"x\"\nmesh = \"e\"\n",
+        );
+        let error = Scene::open(&scene).expect_err("the buffer is refused");
+        assert!(
+            error.to_string().contains("is outside the asset folder"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn an_include_cycle_and_a_second_singleton_are_refused() {
     let folder = Folder::new("include-cycle");
     folder.write("a.scene.toml", "include = [\"b.scene.toml\"]\n");
