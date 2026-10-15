@@ -587,9 +587,10 @@ impl Staged {
                     spare
                         .iter()
                         .rposition(|old| {
-                            self.meshes
-                                .get(old)
-                                .is_some_and(|handle| !renderer.frame().skinned(*handle))
+                            self.meshes.get(old).is_some_and(|handle| {
+                                !renderer.frame().skinned(*handle)
+                                    && !renderer.frame().morphed(*handle)
+                            })
                         })
                         .map(|at| spare.remove(at))
                 } else {

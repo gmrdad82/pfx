@@ -145,7 +145,23 @@ renderer.set_poses(&[InstancePose { instance: 0, joints: &palette, previous: &la
 - `Staged` uploads skinned scene geometry with `upload_skinned_mesh` and shows a sprite object's still frame.
 - Not covered: a skinned mesh does not also take a deformer or tree sway, cannot be replaced in place (`replace_mesh` refuses it; the staged path uploads a new mesh), and a skinned part with a glass material draws its bind pose in the glass pass. LOD sets, impostors and baked plates have not been tried with skinned meshes.
 
-The binding floor holds: the shadow casters' vertex stage now binds 6 storage buffers of the default 8 ([gpu-floor.md](gpu-floor.md)), and `tests/binding_floor.rs` checks the layouts.
+The binding floor holds: the shadow casters' vertex stage now binds 7 storage buffers of the default 8, morph targets included ([gpu-floor.md](gpu-floor.md)), and `tests/binding_floor.rs` checks the layouts.
+
+## Morph targets on the GPU (`pfx-live`)
+
+```rust
+let targets = [MorphTargetData { positions: &smile, normals: Some(&smile_normals) }, MorphTargetData { positions: &blink, normals: None }];
+let mesh = renderer.upload_morphed_mesh(data, None, MorphData { targets: &targets })?;
+renderer.set_weights(&[InstanceWeights { instance: 0, current: &[0.8, 0.0], previous: &[0.6, 0.0] }])?;
+```
+
+- Each target holds a position delta per vertex and, optionally, a normal delta per vertex, as glTF 2.0's morph targets do. The deltas live in their own storage buffer (`morph::MorphStore`, group 0 binding 5), vertex by vertex, one 16-byte record per target (two when any target has normals; a target without them adds none), allocated with a free list as skin records are. Every weighted instance's weights follow them.
+- The vertex stage adds the sum of each weight times its target's delta to the rest position and normal before skinning, a deformer, tree sway and the instance's model, in the opaque, prepass (velocity and ids), sun and local-light shadow, cut shadow and transmissive passes. So a mesh can be morphed, skinned (`upload_morphed_mesh(data, Some(skin), morph)`), or both; the blended normal is normalised after skinning.
+- Each instance's weights are current and previous: the prepass blends the previous weights for the previous position, so a changing weight writes its own motion vector and TAA holds; unchanged weights write none.
+- Only weights that are not zero now or before reach the GPU: the instance's morph word is the delta base, the mesh's target count, its weights' offset and their count, and the vertex loops over those weights alone. An instance whose weights are all zero, or that has none, draws exactly the plain mesh, byte for byte. Fewer weights than targets leave the rest at 0; more is an error from `render`.
+- `set_weights` holds until the next call; through `Renderer` the same weights again are a no-op and do not count as a change for frames on demand.
+- Morphed instances are moving batches, as skinned ones are: they never enter the static shadow cache.
+- Not covered: tangent deltas (the rest tangent is kept), replacing a morphed mesh in place (`replace_mesh` refuses it), the glass pass (a morphed part with a glass material draws its rest shape there) and `Staged` (it does not yet upload a scene's morph targets).
 
 ## Sprites on 3D cards and on the flat pass
 
@@ -161,7 +177,7 @@ The binding floor holds: the shadow casters' vertex stage now binds 6 storage bu
 - `pfx-core` (`anim::tests`, `anim::tests_sprite`): linear, step, cubic-spline and slerp samples against hand-computed values; refusals; the rest palette; parent chains; blends, shared weights, crossfades, events in loops, once, ping-pong, skipped ticks and after a start offset; speed changes; CPU skinning; atlases, sprite steps, events and ping-pong; the golden hash; the source guard.
 - `pfx-load` (`rig_tests`): a generated skinned glb round-trips to the engine fixture's rig; joints listed children first are reordered and remapped; a scene mesh carries its rig and skin.
 - `pfx-play` (`tests::animation`): scene objects play their clips and fire events at fixed ticks; a sprite card steps its frames and a game switches its clip; a game's blends and crossfades match a reference animator; refused calls; the loader's refusals with their lines; the golden run natively and under Wine; the posed snapshot.
-- `pfx-live`, GPU: `tests/skinning.rs` (the skinned fixture against its CPU-skinned twin within 1/255 with its shadow and ids, its bind pose without a pose, and motion vectors on a moving joint and none on a still one); `tests/posed_trace.rs` (the live silhouette against the traced snapshot in the same pose); `flat::sprite_tests` (the GPU against the CPU twin and its picks, and a sprite clip stepping a flat draw by tick).
+- `pfx-live`, GPU: `tests/morphing.rs` (a generated sphere with two targets, one with normals, against its CPU-blended twin within 1/255 with its shadow and ids and no motion at unchanged weights; two instances of one mesh with their own weights; zero and missing weights byte for byte the plain mesh; motion vectors on a changing weight); `tests/skinning.rs` (the skinned fixture against its CPU-skinned twin within 1/255 with its shadow and ids, its bind pose without a pose, and motion vectors on a moving joint and none on a still one); `tests/posed_trace.rs` (the live silhouette against the traced snapshot in the same pose); `flat::sprite_tests` (the GPU against the CPU twin and its picks, and a sprite clip stepping a flat draw by tick).
 
 The fixtures are generated: `pfx_core::anim::fixture` (a chain of bones, a skinned square column and four clips, one per interpolation), `pfx_load::fixture::skinned_column` (that rig and column written as a glb with its skin and animations) and `pfx_load::fixture::atlas_png` (a grid of flat cells).
 
@@ -169,11 +185,11 @@ The fixtures are generated: `pfx_core::anim::fixture` (a chain of bones, a skinn
 cargo test -p pfx-core --lib anim
 cargo test -p pfx-load --lib rig_tests
 cargo test -p pfx-play --lib animation
-cargo test -p pfx-live --test skinning --test posed_trace --lib --no-run
-pgpu run --class clip --as pfx -- cargo test -p pfx-live --test skinning --test posed_trace -- --ignored --test-threads=1
+cargo test -p pfx-live --test skinning --test morphing --test posed_trace --lib --no-run
+pgpu run --class clip --as pfx -- cargo test -p pfx-live --test skinning --test morphing --test posed_trace -- --ignored --test-threads=1
 pgpu run --class clip --as pfx -- cargo test -p pfx-live --lib flat::sprite_tests -- --ignored --test-threads=1
 ```
 
 ## Not covered
 
-Morph targets, root motion, inverse kinematics, additive layers and joint masks, more than four influences per vertex, more than one skin per scene mesh, and interpolating poses between ticks.
+Morph target tangent deltas, root motion, inverse kinematics, additive layers and joint masks, more than four influences per vertex, more than one skin per scene mesh, and interpolating poses between ticks.

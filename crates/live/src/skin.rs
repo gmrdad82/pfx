@@ -37,14 +37,14 @@ fn skin_unit(v: vec3f) -> vec3f {
 fn skin_position(position: vec3f, vertex: u32, skin: vec4u) -> vec3f {
     return (skin_blend(skin, vertex, skin.y) * vec4f(position, 1.0)).xyz;
 }
-fn skin_shape(position: vec3f, normal: vec3f, tangent: vec4f, vertex: u32, skin: vec4u) -> DeformedVertex {
+fn skin_shape(position: vec3f, previous_position: vec3f, normal: vec3f, tangent: vec4f, vertex: u32, skin: vec4u) -> DeformedVertex {
     let current = skin_blend(skin, vertex, skin.y);
     let previous = skin_blend(skin, vertex, skin.z);
     var out: DeformedVertex;
     out.position = (current * vec4f(position, 1.0)).xyz;
     out.normal = skin_unit((current * vec4f(normal, 0.0)).xyz);
     out.tangent = vec4f(skin_unit((current * vec4f(tangent.xyz, 0.0)).xyz), tangent.w);
-    out.previous_position = (previous * vec4f(position, 1.0)).xyz;
+    out.previous_position = (previous * vec4f(previous_position, 1.0)).xyz;
     return out;
 }
 "#;

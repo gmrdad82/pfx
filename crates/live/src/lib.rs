@@ -14,6 +14,7 @@ pub mod lacquer;
 pub mod lights;
 pub mod lod;
 pub mod maps;
+pub mod morph;
 pub mod noise_tiles;
 pub mod pipeline_cache;
 pub mod plates;
