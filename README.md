@@ -104,6 +104,10 @@ Each of these costs a small slice of a frame:
 
 <p align="center"><img src="docs/images/systems.png" width="540" alt="Bar chart, game systems' cost per tick in microseconds, lower is better: spawn director with 20 phases and 500 alive 11.5; 2,000 shots step and boxes 22.4; 2,000 shots against 400 targets at 4K, overlaps 32.0; resolve 1,079 hits 5.0; journal snapshot after 25 minutes of input 23.4; save a churned arena of 205 live shots 63.7; 20 sine tones 239; 20 jittered hits mixed 495. A 60 fps frame is 16,667 microseconds."></p>
 
+## Film
+
+pfx-film renders scripted films offline from a game, at a fixed frame rate ([docs/film.md](docs/film.md)). A TOML script of scenes drives the game's own frames through one trait, and the film adds a camera (focus, zoom, roll, follow, shake), looks (grade, tint, vignette, grain, bloom, letterbox, flashes), captions, SVG marks and a synthesised score mixed under the game's audio, then writes PNG frames, stills and a 48 kHz stereo WAV. The same script and seed give the same bytes every run, and it runs no external tool.
+
 ## Small and light
 
 An empty game made by `pfx new`, against an empty Bevy app with its default plugins, both built cold with `cargo build --release` on the same machine:
@@ -114,7 +118,7 @@ An empty game made by `pfx new`, against an empty Bevy app with its default plug
 <img src="docs/images/size-build.png" width="32%" alt="Bar chart, cold release build of an empty game in seconds, lower is better: pfx 366.8, Bevy 472.0.">
 </p>
 
-That pfx game carries the editor; built without it (`--no-default-features`, what a Steam build ships) it is 25.3 MB stripped with 251 dependency crates. Bevy's starter brings its full renderer, UI and audio, so this compares the two starters as they ship, not equal features. The engine is 30 crates and about 278,000 lines of Rust, and the domain code it needs (the denoiser, the Sobol sampler, the resampler) is ported into it rather than linked.
+That pfx game carries the editor; built without it (`--no-default-features`, what a Steam build ships) it is 25.3 MB stripped with 251 dependency crates. Bevy's starter brings its full renderer, UI and audio, so this compares the two starters as they ship, not equal features. The engine is 31 crates and about 278,000 lines of Rust, and the domain code it needs (the denoiser, the Sobol sampler, the resampler) is ported into it rather than linked.
 
 ## The numbers
 
@@ -151,6 +155,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-trace` | the offline path tracer |
 | `pfx-denoise` | Intel Open Image Denoise's RT filter ported to wgpu compute |
 | `pfx-bake` | path-traced light the live renderer shows at raster cost: probe grids, lightmaps and plates |
+| `pfx-film` | scripted films rendered offline from a game: timeline, camera, looks, captions, marks, a synthesised score and the frame and audio writer |
 | `pfx-play` | play mode: a game run live over a runtime copy of a scene, with pause, step and an exact stop |
 | `pfx-game` | the game runtime and its command-line launcher |
 | `pfx-project` | a game's `project.toml`, scenes and content folders, and `pfx new`'s scaffold |

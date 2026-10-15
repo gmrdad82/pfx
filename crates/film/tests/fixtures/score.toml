@@ -1,0 +1,47 @@
+limiter = 0.95
+master = 0.9
+
+[recipe.thump]
+length = 400
+lowpass = [[0, 3000], [120, 400]]
+
+[[recipe.thump.layer]]
+wave = "sine"
+hz = 60.0
+volume = 0.6
+attack = 1
+decay = 380
+bend = -12
+glide = 100
+
+[[recipe.thump.layer]]
+wave = "white"
+volume = 0.1
+attack = 1
+decay = 15
+
+[recipe.pad]
+length = 1500
+highpass = [[0, 80]]
+drive = { curve = "tanh", mix = 0.4, output = -6.0, sweep = [[0, 4.0], [1500, 10.0]] }
+
+[[recipe.pad.layer]]
+wave = "saw"
+note = 45
+cents = -6
+volume = 0.12
+attack = 200
+sustain = 0.8
+hold = 600
+release = 700
+pan = -0.3
+
+[[recipe.pad.layer]]
+wave = "square"
+note = 57
+volume = 0.05
+attack = 200
+sustain = 0.8
+hold = 600
+release = 700
+pan = 0.3

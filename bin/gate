@@ -2,7 +2,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 2
 
-game_crates=(core geom gpu materials text post load physics sound trace bake live input steam mod play)
+game_crates=(core geom gpu materials text post load physics sound trace bake live input steam mod play film)
 
 steam_alone() {
   local out
@@ -13,7 +13,7 @@ steam_alone() {
 report_alone() {
   local out
   out=$(cargo tree -i pfx-report --workspace -e normal,build --prefix none 2>/dev/null)
-  ! printf '%s\n' "$out" | grep -E "^pfx-(core|gpu|geom|materials|text|post|live|trace|bake|load|physics|sound|steam|input) "
+  ! printf '%s\n' "$out" | grep -E "^pfx-(core|gpu|geom|materials|text|post|live|trace|bake|load|physics|sound|steam|input|film) "
 }
 
 fails=()

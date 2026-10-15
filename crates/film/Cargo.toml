@@ -1,0 +1,18 @@
+[package]
+name = "pfx-film"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's films: scripted films rendered offline at a fixed frame rate from any app behind the Show trait, with a scene timeline, a camera, looks, captions, SVG marks, a synthesised score and the frame and audio writer"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+pfx-core = { path = "../core" }
+pfx-input = { path = "../input", default-features = false }
+pfx-live = { path = "../live" }
+pfx-sound = { path = "../sound" }
+png = "0.18"
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
