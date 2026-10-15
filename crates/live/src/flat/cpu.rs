@@ -7,8 +7,8 @@ use super::style;
 use super::{
     ADDITIVE, BLUR, DASHED, FILL_GRADIENT, FILL_IMAGE, FILL_MASK, FILL_VERTICAL, Fill, Fit,
     FlatScene, Gradient, Instance, KIND_ARC, KIND_CIRCLE, KIND_ICON_FILL, KIND_ICON_LINE,
-    KIND_ICON_SHADOW, KIND_RECT, KIND_RING, KIND_SHADOW, Order, PATTERN_MASK, PATTERN_SHIFT, Shape,
-    Step, UNPICKED, pack_shadow_with, pack_shape, placed, positive, shadow,
+    KIND_ICON_SHADOW, KIND_RECT, KIND_RING, KIND_SHADOW, Matrix, Order, PATTERN_MASK,
+    PATTERN_SHIFT, Shape, Step, UNPICKED, pack_shadow_with, pack_shape, placed, positive, shadow,
 };
 
 pub struct Paint {
@@ -324,7 +324,7 @@ pub fn render(
     icons: Option<&Icons>,
     size: [u32; 2],
 ) -> Result<Vec<[f32; 4]>, String> {
-    render_scene(scene, icons, None, size)
+    render_scene(scene, icons, None, size, None)
 }
 
 pub fn render_with_text(
@@ -333,7 +333,17 @@ pub fn render_with_text(
     texts: &[CpuText<'_>],
     size: [u32; 2],
 ) -> Result<Vec<[f32; 4]>, String> {
-    render_scene(scene, icons, Some(texts), size)
+    render_scene(scene, icons, Some(texts), size, None)
+}
+
+pub fn render_viewed(
+    scene: &FlatScene<'_>,
+    icons: Option<&Icons>,
+    texts: Option<&[CpuText<'_>]>,
+    size: [u32; 2],
+    view: Option<Matrix>,
+) -> Result<Vec<[f32; 4]>, String> {
+    render_scene(scene, icons, texts, size, view)
 }
 
 fn label<'a>(
@@ -357,8 +367,9 @@ fn render_scene(
     icons: Option<&Icons>,
     texts: Option<&[CpuText<'_>]>,
     size: [u32; 2],
+    view: Option<Matrix>,
 ) -> Result<Vec<[f32; 4]>, String> {
-    let fit = Fit::new(scene.layout, size)?;
+    let fit = Fit::new(scene.layout, size)?.viewed(view)?;
     let sprites = scene.sprites.map(|sprites| &sprites.image);
     let mut order = Order::default();
     order.build(scene.draws, scene.groups.len())?;
@@ -421,7 +432,7 @@ pub fn pick(
     size: [u32; 2],
     pixel: [u32; 2],
 ) -> Result<u32, String> {
-    pick_scene(scene, icons, None, size, pixel)
+    pick_scene(scene, icons, None, size, pixel, None)
 }
 
 pub fn pick_with_text(
@@ -431,7 +442,18 @@ pub fn pick_with_text(
     size: [u32; 2],
     pixel: [u32; 2],
 ) -> Result<u32, String> {
-    pick_scene(scene, icons, Some(texts), size, pixel)
+    pick_scene(scene, icons, Some(texts), size, pixel, None)
+}
+
+pub fn pick_viewed(
+    scene: &FlatScene<'_>,
+    icons: Option<&Icons>,
+    texts: Option<&[CpuText<'_>]>,
+    size: [u32; 2],
+    pixel: [u32; 2],
+    view: Option<Matrix>,
+) -> Result<u32, String> {
+    pick_scene(scene, icons, texts, size, pixel, view)
 }
 
 fn pick_scene(
@@ -440,8 +462,9 @@ fn pick_scene(
     texts: Option<&[CpuText<'_>]>,
     size: [u32; 2],
     pixel: [u32; 2],
+    view: Option<Matrix>,
 ) -> Result<u32, String> {
-    let fit = Fit::new(scene.layout, size)?;
+    let fit = Fit::new(scene.layout, size)?.viewed(view)?;
     let mut order = Order::default();
     order.build(scene.draws, scene.groups.len())?;
     let centre = [pixel[0] as f32 + 0.5, pixel[1] as f32 + 0.5];

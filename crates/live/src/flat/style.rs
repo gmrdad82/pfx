@@ -246,8 +246,8 @@ pub(super) fn pack(
             {
                 let [a, b, c, d] = axes(&draw.transform);
                 let det = a * d - c * b;
-                let unit = det.abs().sqrt() * fit.scale;
-                let pixels = (bevel.width * fit.scale).round().max(1.0);
+                let unit = det.abs().sqrt() * fit.unit_pixels();
+                let pixels = (bevel.width * fit.unit_pixels()).round().max(1.0);
                 let toward = unit_or(bevel.toward, [0.0, -1.0]);
                 let local = unit_or(
                     [

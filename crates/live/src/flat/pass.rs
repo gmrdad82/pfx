@@ -288,6 +288,7 @@ pub struct FlatPass {
     size: [u32; 2],
     capacity: Option<[u32; 2]>,
     clip: Option<[u32; 4]>,
+    view: Option<super::Matrix>,
     ground: wgpu::Buffer,
     passes: u32,
     made: usize,
@@ -711,6 +712,7 @@ impl FlatPass {
             size: [0, 0],
             capacity: None,
             clip: None,
+            view: None,
             ground,
             passes: 0,
             made: BASE_PIPELINES,
@@ -727,6 +729,14 @@ impl FlatPass {
 
     pub fn set_clip(&mut self, clip: Option<[u32; 4]>) {
         self.clip = clip;
+    }
+
+    pub fn set_view(&mut self, view: Option<super::Matrix>) {
+        self.view = view;
+    }
+
+    pub fn view(&self) -> Option<super::Matrix> {
+        self.view
     }
 
     pub fn set_ground(&mut self, queue: &wgpu::Queue, ground: Option<Srgba>) {
@@ -881,7 +891,7 @@ impl FlatPass {
         scene: &FlatScene<'_>,
         size: [u32; 2],
     ) -> Result<Fit, String> {
-        let fit = Fit::new(scene.layout, size)?;
+        let fit = Fit::new(scene.layout, size)?.viewed(self.view)?;
         self.size = size;
         self.instances.items.clear();
         self.quads.items.clear();

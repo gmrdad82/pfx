@@ -801,16 +801,20 @@ impl<'a> SceneCopy<'a> {
     }
 
     fn place_text(&mut self, layout_axes: [f32; 2], shift: [f32; 2]) {
-        let affine = super::multiply(
-            super::translation(shift[0], shift[1]),
-            super::scaling(layout_axes[0], layout_axes[1]),
-        );
+        let affine = text_affine(layout_axes, shift);
         for draw in &mut self.draws {
             if matches!(draw.shape, Shape::Text(_)) {
                 draw.transform = super::multiply(affine, draw.transform);
             }
         }
     }
+}
+
+fn text_affine(layout_axes: [f32; 2], shift: [f32; 2]) -> super::Matrix {
+    super::multiply(
+        super::translation(shift[0], shift[1]),
+        super::scaling(layout_axes[0], layout_axes[1]),
+    )
 }
 
 fn place_of(fit: &Fit) -> Place {
@@ -1127,7 +1131,9 @@ impl FlatLooks {
                 colour.keep(false);
             }
             flat_scene = colour;
+            let view = main.view();
             let pass = self.pass(device, queue, index * 2);
+            pass.set_view(view);
             pass.prepare(device, queue, &flat_scene.scene(scene), render)?;
             pass
         };
@@ -1246,7 +1252,7 @@ impl FlatLooks {
                     };
                     if crisp {
                         text.keep(true);
-                        text.place_text(
+                        let placement = (
                             [
                                 low_fit.scale * k[0] / fit.scale,
                                 low_fit.scale * k[1] / fit.scale,
@@ -1258,7 +1264,14 @@ impl FlatLooks {
                                     / fit.scale,
                             ],
                         );
+                        let view = fit.view.map(|view| {
+                            super::multiply(text_affine(placement.0, placement.1), view)
+                        });
+                        if view.is_none() {
+                            text.place_text(placement.0, placement.1);
+                        }
                         let pass = self.pass(device, queue, index * 2 + 1);
+                        pass.set_view(view);
                         pass.prepare(device, queue, &text.scene(scene), size)?;
                     }
                 }

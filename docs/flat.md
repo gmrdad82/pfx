@@ -57,6 +57,21 @@ For example, 1920×1080 into 3840×2160 is scale 2, offset 0. Into 1280×800 it 
 
 A shape's transform reaches the screen as the 2D affine map of its local plane, since the projection drops z. A shape tipped out of the plane is foreshortened, its edges stay analytic, and it casts from that projected footprint.
 
+### The view
+
+A view moves the whole finished board on the screen: zoom, pan and roll, so a film or a game can push in without rendering the board offscreen first. It is a 2D affine `Matrix` in layout units, applied after every draw's own transform and before the letterbox:
+
+- `View { centre, zoom, roll, pan }` builds one: it scales by `zoom` and turns by `roll` (radians, clockwise on screen, as `rotation`) about `centre`, then shifts by `pan` in layout units. `View::about(centre).zoom(2.0).roll(0.1).pan([40.0, 0.0])`, then `.matrix()` (or `Matrix::from(view)`). Any other invertible 2D affine matrix works too; only its x and y parts are read.
+- `FlatPass::set_view(Some(matrix))` sets it for the frames that follow, as `set_clip` does; `None` (the default) turns it off. `Renderer::set_flat_view` sets it for the renderer's own flat frames and HUDs, and `Upscale::set_view` for `encode_overlay`, where pfx-game's painter passes `Ui::view` (`docs/game.md`, "The UI").
+- The whole board follows, as if the finished frame were transformed: every shape, stroke, dash, pattern, gradient, icon, sprite and text run, and every shadow. A shadow's offset, σ and direction turn and scale with the board; the light, the key and the reflections stay in board space, so a lit slab keeps its shading as it rolls. A blur's displacement turns and scales with it, and effects composed into the draws (`docs/effects.md`) are draws, so they follow too.
+- Picking follows: the ids pass draws the same instances, so `Renderer::pick` reports what is under a pixel on the viewed board. The `Fit` that `prepare` returns carries the view: `to_target` maps a board point to its pixel and `to_layout` maps a pixel back to the board, through the view. `view_point` and `unview_point` do the same between layout and board units, for a game that hit-tests the pointer itself.
+- Looks follow (`docs/flat-looks.md`): a low-resolution side draws the viewed board at its own size, and crisp text lands where the upscaled board puts it. A look's backdrop, vignette and CRT stay on the screen.
+- The view can carry the board past the letterbox; `set_clip` (or the HUD's clip to the content rect) keeps it inside.
+- `Fit::viewed(Some(matrix))` refuses a matrix that is not finite or not invertible, so `prepare` returns that error.
+- With no view, or an identity one, nothing changes: the pass packs exactly the instances it packed before the view existed. `flat::cpu::render_viewed` and `pick_viewed` are the CPU twin's view-aware forms.
+
+`a_view_draws_the_board_as_if_its_matrix_were_folded_into_every_draw` renders a board on the CPU twin under a zoomed, rolled and panned view, and the same board with the view folded into every draw's transform, the shadow curve, the light's direction, the blurs and the glows: they agree within 2/255 at every pixel. It also requires an identity view to change no byte and the pointer map to round-trip. `the_gpu_draws_and_picks_a_viewed_board_like_its_twin` (`--ignored`, under pgpu) draws it on the GPU, text and an icon included: within 0.06/255 mean and 1/255 worst of the twin, the ids matching the twin's picks, and an identity view byte-identical. `crisp_text_follows_a_view_over_a_low_resolution_board` holds the crisp-text placement under a view.
+
 ## Primitives
 
 All primitives are instances of one shared quad: four vertices, a triangle strip, one 240-byte instance each (15 `vec4` attributes). Each is evaluated as a signed distance field in its local plane, in the fragment stage.
@@ -405,6 +420,8 @@ That is 1,881 draws and 1,938 instances.
 | 1280×800 | gloss 0.4, roughness 0.3 | 0.18 ms | 0.06 ms | 0.24 ms |
 | 1280×800 | reflection 0.5, roughness 0.3 | 0.18 ms | 0.06 ms | 0.24 ms |
 | 1280×800 | 40 patterned cards | 0.16 ms | 0.05 ms | 0.21 ms |
+
+A view costs nothing on the CPU beyond a few multiplies a draw, and nothing at all when it is off. On the GPU a zoomed board costs what its larger shapes cover: zoomed 1.5× and rolled 0.2, the spike scene's 4K frame went from 1.71 to 2.52 ms (dials at zero, flat and ids together, one run under pgpu's bench class), since every shape covers 2.25 times the pixels and overlaps more. That is still far below drawing the board at twice the size offscreen and compositing it.
 
 Each dial's cost, applied to every shape in the scene, over dials at zero:
 

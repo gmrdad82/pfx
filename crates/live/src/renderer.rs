@@ -689,6 +689,7 @@ pub struct Renderer {
     text_bounds: Vec<TextBounds>,
     flat: Option<FlatPass>,
     flat_looks: Option<FlatLooks>,
+    flat_view: Option<Matrix>,
     plates: Option<crate::plates::Plates>,
     plate_kit: Option<crate::plates::PlateKit>,
     plate_casters: Vec<Instance>,
@@ -1339,6 +1340,7 @@ impl Renderer {
             text_bounds: Vec::new(),
             flat: None,
             flat_looks: None,
+            flat_view: None,
             plates: None,
             plate_kit: None,
             plate_casters: Vec::new(),
@@ -2194,6 +2196,10 @@ impl Renderer {
         self.flat.as_ref()
     }
 
+    pub fn set_flat_view(&mut self, view: Option<Matrix>) {
+        self.flat_view = view;
+    }
+
     pub fn warm_flat<'a>(
         &mut self,
         format: wgpu::TextureFormat,
@@ -2260,6 +2266,7 @@ impl Renderer {
             .take()
             .unwrap_or_else(|| FlatPass::new(device, &queue));
         flat.set_capacity(Some([capacity_width, capacity_height]));
+        flat.set_view(self.flat_view);
         if look.is_none() {
             let prepared = flat.prepare(device, &queue, scene, [width, height]);
             if let Err(error) = prepared {
@@ -3515,6 +3522,7 @@ impl Renderer {
                 .unwrap_or_else(|| FlatPass::new(device, &queue));
             let (capacity_width, capacity_height) = self.capacity();
             flat.set_capacity(Some([capacity_width, capacity_height]));
+            flat.set_view(self.flat_view);
             let prepared = flat.prepare(device, &queue, hud, [width, height]);
             if let Err(error) = prepared {
                 self.flat = Some(flat);
@@ -4268,6 +4276,7 @@ impl Renderer {
                 .flat
                 .take()
                 .unwrap_or_else(|| FlatPass::new(device, queue));
+            flat.set_view(self.flat_view);
             let prepared = flat.prepare(device, queue, hud, [width, height]);
             if let Err(error) = prepared {
                 self.flat = Some(flat);

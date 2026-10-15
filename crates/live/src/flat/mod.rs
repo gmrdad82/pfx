@@ -24,6 +24,8 @@ mod style_tests;
 pub mod svg;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod view_tests;
 pub mod viewport;
 
 use crate::text::{GpuAtlas, RichQuad};
@@ -83,6 +85,102 @@ pub struct Fit {
     pub scale: f32,
     pub offset: [f32; 2],
     pub letterbox: Letterbox,
+    pub view: Option<Matrix>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View {
+    pub centre: [f32; 2],
+    pub zoom: f32,
+    pub roll: f32,
+    pub pan: [f32; 2],
+}
+
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            centre: [0.0; 2],
+            zoom: 1.0,
+            roll: 0.0,
+            pan: [0.0; 2],
+        }
+    }
+}
+
+impl View {
+    pub fn about(centre: [f32; 2]) -> Self {
+        Self {
+            centre,
+            ..Self::default()
+        }
+    }
+
+    pub fn zoom(mut self, zoom: f32) -> Self {
+        self.zoom = zoom;
+        self
+    }
+
+    pub fn roll(mut self, radians: f32) -> Self {
+        self.roll = radians;
+        self
+    }
+
+    pub fn pan(mut self, pan: [f32; 2]) -> Self {
+        self.pan = pan;
+        self
+    }
+
+    pub fn is_identity(&self) -> bool {
+        self.zoom == 1.0 && self.roll == 0.0 && self.pan == [0.0; 2]
+    }
+
+    pub fn matrix(&self) -> Matrix {
+        let (s, c) = self.roll.sin_cos();
+        let [a, b] = [c * self.zoom, s * self.zoom];
+        let [x, y] = self.centre;
+        let mut m = IDENTITY;
+        m[0][0] = a;
+        m[0][1] = b;
+        m[1][0] = -b;
+        m[1][1] = a;
+        m[3][0] = x + self.pan[0] - (a * x - b * y);
+        m[3][1] = y + self.pan[1] - (b * x + a * y);
+        m
+    }
+}
+
+impl From<View> for Matrix {
+    fn from(view: View) -> Self {
+        view.matrix()
+    }
+}
+
+pub fn view_point(view: &Matrix, point: [f32; 2]) -> [f32; 2] {
+    [
+        view[0][0] * point[0] + view[1][0] * point[1] + view[3][0],
+        view[0][1] * point[0] + view[1][1] * point[1] + view[3][1],
+    ]
+}
+
+pub fn unview_point(view: &Matrix, point: [f32; 2]) -> Option<[f32; 2]> {
+    let [a, b, c, d] = [view[0][0], view[0][1], view[1][0], view[1][1]];
+    let det = a * d - c * b;
+    if !det.is_finite() || det.abs() < 1e-12 {
+        return None;
+    }
+    let p = [point[0] - view[3][0], point[1] - view[3][1]];
+    Some([(d * p[0] - c * p[1]) / det, (a * p[1] - b * p[0]) / det])
+}
+
+fn plane(view: &Matrix) -> Matrix {
+    let mut m = IDENTITY;
+    m[0][0] = view[0][0];
+    m[0][1] = view[0][1];
+    m[1][0] = view[1][0];
+    m[1][1] = view[1][1];
+    m[3][0] = view[3][0];
+    m[3][1] = view[3][1];
+    m
 }
 
 impl Fit {
@@ -105,15 +203,63 @@ impl Fit {
             scale: letterbox.matrix[0],
             offset: [letterbox.matrix[12], letterbox.matrix[13]],
             letterbox,
+            view: None,
         })
     }
 
+    pub fn viewed(mut self, view: Option<Matrix>) -> Result<Self, String> {
+        self.view = match view.map(|view| plane(&view)) {
+            None => None,
+            Some(view) if view == IDENTITY => None,
+            Some(view) => {
+                if view.iter().flatten().any(|value| !value.is_finite())
+                    || unview_point(&view, [0.0; 2]).is_none()
+                {
+                    return Err("the view must be finite and invertible".into());
+                }
+                Some(view)
+            }
+        };
+        Ok(self)
+    }
+
     pub fn to_target(&self, point: [f32; 2]) -> [f32; 2] {
+        let point = self.view.map_or(point, |view| view_point(&view, point));
         self.letterbox.map(point[0], point[1])
     }
 
     pub fn to_layout(&self, pixel: [f32; 2]) -> [f32; 2] {
-        self.letterbox.unmap(pixel[0], pixel[1])
+        let point = self.letterbox.unmap(pixel[0], pixel[1]);
+        self.view
+            .and_then(|view| unview_point(&view, point))
+            .unwrap_or(point)
+    }
+
+    pub fn zoom(&self) -> f32 {
+        self.view.map_or(1.0, |view| {
+            (view[0][0] * view[1][1] - view[1][0] * view[0][1])
+                .abs()
+                .sqrt()
+        })
+    }
+
+    pub(crate) fn unit_pixels(&self) -> f32 {
+        match self.view {
+            None => self.scale,
+            Some(_) => self.scale * self.zoom(),
+        }
+    }
+
+    pub(crate) fn pixel_length(&self, vector: [f32; 2]) -> f32 {
+        match self.view {
+            None => length2(vector) * self.scale,
+            Some(view) => {
+                length2([
+                    view[0][0] * vector[0] + view[1][0] * vector[1],
+                    view[0][1] * vector[0] + view[1][1] * vector[1],
+                ]) * self.scale
+            }
+        }
     }
 
     pub fn viewport(&self) -> [f32; 4] {
@@ -128,7 +274,7 @@ impl Fit {
     pub fn clip_from_layout(&self) -> Matrix {
         let sx = 2.0 * self.scale / self.target[0] as f32;
         let sy = -2.0 * self.scale / self.target[1] as f32;
-        [
+        let clip = [
             [sx, 0.0, 0.0, 0.0],
             [0.0, sy, 0.0, 0.0],
             [0.0, 0.0, 0.0, 0.0],
@@ -138,7 +284,11 @@ impl Fit {
                 0.5,
                 1.0,
             ],
-        ]
+        ];
+        match self.view {
+            None => clip,
+            Some(view) => multiply(clip, view),
+        }
     }
 }
 
@@ -765,8 +915,20 @@ pub(crate) fn placed(transform: &Matrix, fit: &Fit) -> Option<Placed> {
     if transform.iter().flatten().any(|value| !value.is_finite()) {
         return None;
     }
+    let axes = match fit.view {
+        None => layout_axes,
+        Some(view) => {
+            let [a, b, c, d] = layout_axes;
+            [
+                view[0][0] * a + view[1][0] * b,
+                view[0][1] * a + view[1][1] * b,
+                view[0][0] * c + view[1][0] * d,
+                view[0][1] * c + view[1][1] * d,
+            ]
+        }
+    };
     Some(Placed {
-        axes: layout_axes.map(|value| value * fit.scale),
+        axes: axes.map(|value| value * fit.scale),
         origin: fit.to_target([transform[3][0], transform[3][1]]),
         layout_axes,
     })
@@ -1101,7 +1263,7 @@ fn blur_shift(draw: &Draw, placed: &Placed, fit: &Fit) -> Option<[f32; 2]> {
     if !(blur[0].is_finite() && blur[1].is_finite()) {
         return None;
     }
-    if length2(blur) * fit.scale < BLUR_MIN_PIXELS {
+    if fit.pixel_length(blur) < BLUR_MIN_PIXELS {
         return None;
     }
     let [a, b, c, d] = placed.layout_axes;

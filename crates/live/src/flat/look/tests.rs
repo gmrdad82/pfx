@@ -849,6 +849,85 @@ fn crisp_text_stays_sharp_over_a_low_resolution_board() {
 
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
+fn crisp_text_follows_a_view_over_a_low_resolution_board() {
+    let mut engine = pfx_text::TextEngine::new(pfx_text::fixture::DM_SANS).unwrap();
+    let rich = engine
+        .render_spans(
+            &[pfx_text::Span {
+                text: "Sixty one".into(),
+                face: pfx_text::Face {
+                    family: "DM Sans".into(),
+                    size: 64.0,
+                    line: 80.0,
+                    weight: 700,
+                    italic: false,
+                    spacing: 0.0,
+                },
+                color: [1.0; 4],
+            }],
+            None,
+            1.0,
+            pfx_text::Anchor::Start,
+            pfx_text::Representation::Msdf,
+            [0.0, 0.0],
+            1.0,
+            [-f32::MAX, -f32::MAX, f32::MAX, f32::MAX],
+            [0.0; 3],
+        )
+        .unwrap();
+    let quads = crate::text::rich_quads(&rich);
+    let size = [1280u32, 800u32];
+    let mut rig = Rig::new(size);
+    let atlas = crate::text::GpuAtlas::new(
+        &rig.renderer.gpu().device,
+        &rig.renderer.gpu().queue,
+        &rich.atlas,
+    )
+    .unwrap();
+    let text = [FlatText {
+        atlas: &atlas,
+        glyphs: Glyphs::Quads(&quads),
+        colour: Srgba::hex(0x30363f),
+    }];
+    let draws = [Draw::new(Shape::Text(0))
+        .transform(translation(620.0, 380.0))
+        .elevation(1.0)];
+    let curve = test_curve();
+    let base = scene(&draws, &curve, &text);
+    let view = super::super::View::about([960.0, 540.0])
+        .zoom(1.4)
+        .roll(0.35)
+        .pan([-120.0, 60.0]);
+    rig.renderer.set_flat_view(Some(view.matrix()));
+    let tokens = TokenSet::new();
+    let low = |text| Look::new().with(LookPass::LowRes(LowRes::new([480, 270]).text(text)));
+    let centroid = |pixels: &[[u16; 4]]| {
+        let mut sum = [0.0f64; 3];
+        for (index, pixel) in f32s(pixels).into_iter().enumerate() {
+            let ink = (0.5 - pixel[0]).max(0.0) as f64;
+            sum[0] += ink * (index as u32 % size[0]) as f64;
+            sum[1] += ink * (index as u32 / size[0]) as f64;
+            sum[2] += ink;
+        }
+        assert!(sum[2] > 500.0, "the label is missing");
+        [sum[0] / sum[2], sum[1] / sum[2]]
+    };
+    let pixelated =
+        centroid(&rig.look(&base, &LookFrame::still(&low(LowText::Pixelated), &tokens)));
+    let crisp = centroid(&rig.look(&base, &LookFrame::still(&low(LowText::Crisp), &tokens)));
+    let plain = centroid(&rig.plain(&base));
+    rig.renderer.set_flat_view(None);
+    let unviewed = centroid(&rig.plain(&base));
+    let apart = |a: [f64; 2], b: [f64; 2]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+    assert!(
+        apart(pixelated, crisp) < 2.0,
+        "{pixelated:?} against {crisp:?}"
+    );
+    assert!(apart(plain, unviewed) > 50.0);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
 fn grouped_scenes_render_through_the_renderer_with_timings() {
     let mut turns = pfx_gpu::pace::Turns::default();
     let mut draws = board_draws();
