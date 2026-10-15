@@ -7,7 +7,9 @@ use crate::effects::{
 };
 use crate::flat::look::{FlatLooks, Look, LookFrame};
 use crate::flat::{FlatPass, FlatScene};
-use crate::frame::{self, Frame, Instance, Matrix, MeshData, MeshHandle, OpaqueKey, Scene};
+use crate::frame::{
+    self, CachedGroup, Frame, Instance, Matrix, MeshData, MeshHandle, OpaqueKey, Scene,
+};
 use crate::glass;
 use crate::impostor::{ImpostorInstance, ImpostorParams, ImpostorPass};
 use crate::lights::{LightQuality, LocalLight};
@@ -328,6 +330,7 @@ struct Motion {
     layout: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
     uniform: wgpu::Buffer,
+    group: CachedGroup,
 }
 
 struct Mips {
@@ -660,12 +663,16 @@ pub struct Renderer {
     output_format: wgpu::TextureFormat,
     display: Option<(wgpu::Texture, wgpu::TextureView)>,
     blit: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
+    blit_group: CachedGroup,
     depths: [(wgpu::Texture, wgpu::TextureView); 2],
     depth_index: usize,
     reactive: wgpu::Texture,
     reactive_view: wgpu::TextureView,
     depth_layout: wgpu::BindGroupLayout,
     depth_pipeline: wgpu::ComputePipeline,
+    depth_limits: wgpu::Buffer,
+    depth_groups: [CachedGroup; 2],
+    demand_shadow: wgpu::Buffer,
     motion: Motion,
     mips: Mips,
     black: wgpu::TextureView,
@@ -1032,6 +1039,7 @@ fn motion_pass(device: &wgpu::Device) -> Motion {
         layout,
         pipeline,
         uniform,
+        group: CachedGroup::default(),
     }
 }
 
@@ -1311,12 +1319,26 @@ impl Renderer {
             output_format,
             display,
             blit,
+            blit_group: CachedGroup::default(),
             depths: linear_depths(device, width, height),
             depth_index: 0,
             reactive,
             reactive_view,
             depth_layout,
             depth_pipeline,
+            depth_limits: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("live depth limits"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            depth_groups: Default::default(),
+            demand_shadow: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("demand sun cascades"),
+                size: crate::shadow::SAMPLE_UNIFORM_BYTES as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
             motion: motion_pass(device),
             mips: mips(device, width, height),
             black,
@@ -2796,20 +2818,21 @@ impl Renderer {
         }
         self.depth_index = 1 - self.depth_index;
         let current_depth = &self.depths[self.depth_index].1;
-        let depth_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("live depth limits"),
-            contents: bytemuck::cast_slice(&[
+        queue.write_buffer(
+            &self.depth_limits,
+            0,
+            bytemuck::cast_slice(&[
                 scene.camera.projection[2][2],
                 scene.camera.projection[3][2],
                 view.far,
                 0.0,
             ]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("live linear depth"),
-            layout: &self.depth_layout,
-            entries: &[
+        );
+        let bind = self.depth_groups[self.depth_index].get(
+            device,
+            "live linear depth",
+            &self.depth_layout,
+            &[
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(&self.frame.targets.depth_view),
@@ -2820,10 +2843,10 @@ impl Renderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: depth_uniform.as_entire_binding(),
+                    resource: self.depth_limits.as_entire_binding(),
                 },
             ],
-        });
+        );
         let timing = self.profiler.pass("linear depth");
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -2831,30 +2854,37 @@ impl Renderer {
                 timestamp_writes: self.profiler.compute_writes(timing),
             });
             pass.set_pipeline(&self.depth_pipeline);
-            pass.set_bind_group(0, &bind, &[]);
+            pass.set_bind_group(0, bind, &[]);
             pass.dispatch_workgroups(width.div_ceil(8), height.div_ceil(8), 1);
         }
         self.pass_log.push("linear depth");
         let inverse = invert(jittered).ok_or("camera projection is singular")?;
-        let mut motion = Vec::with_capacity(52);
-        for matrix in [
-            inverse,
-            view_projection,
-            scene.camera.previous_view_projection,
-        ] {
-            motion.extend(matrix.iter().flatten().copied());
+        let mut motion = [0.0f32; 52];
+        for (out, value) in motion.iter_mut().zip(
+            [
+                inverse,
+                view_projection,
+                scene.camera.previous_view_projection,
+            ]
+            .iter()
+            .flatten()
+            .flatten()
+            .copied()
+            .chain([
+                width as f32,
+                height as f32,
+                1.0 / width as f32,
+                1.0 / height as f32,
+            ]),
+        ) {
+            *out = value;
         }
-        motion.extend([
-            width as f32,
-            height as f32,
-            1.0 / width as f32,
-            1.0 / height as f32,
-        ]);
         queue.write_buffer(&self.motion.uniform, 0, bytemuck::cast_slice(&motion));
-        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("live background motion"),
-            layout: &self.motion.layout,
-            entries: &[
+        let bind = self.motion.group.get(
+            device,
+            "live background motion",
+            &self.motion.layout,
+            &[
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(&self.frame.targets.depth_view),
@@ -2868,7 +2898,7 @@ impl Renderer {
                     resource: self.motion.uniform.as_entire_binding(),
                 },
             ],
-        });
+        );
         let timing = self.profiler.pass("background motion");
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -2889,7 +2919,7 @@ impl Renderer {
             });
             crate::viewport::apply(&mut pass, [width, height]);
             pass.set_pipeline(&self.motion.pipeline);
-            pass.set_bind_group(0, &bind, &[]);
+            pass.set_bind_group(0, bind, &[]);
             pass.draw(0..3, 0..1);
         }
         self.pass_log.push("background motion");
@@ -3067,15 +3097,11 @@ impl Renderer {
             scene.sun.colour[2],
             scene.sun.intensity,
         ];
-        let shadow_data = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("effects sun cascades"),
-            contents: &self.shadows.sample_uniform(&fit),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let shadow_data = self.frame.shadow_uniform();
         let targets = EffectTargets {
             hdr: &self.frame.targets.hdr.view,
             depth: current_depth,
-            shadow: Some((self.shadows.atlas_view(), &shadow_data)),
+            shadow: Some((self.shadows.atlas_view(), shadow_data)),
         };
         if let Some(haze) = self.haze {
             let mut room_frame = effect_frame;
@@ -3288,7 +3314,7 @@ impl Renderer {
                     EffectTargets {
                         hdr: &layer,
                         depth: current_depth,
-                        shadow: Some((self.shadows.atlas_view(), &shadow_data)),
+                        shadow: Some((self.shadows.atlas_view(), shadow_data)),
                     },
                     &mut self.pass_log,
                 );
@@ -3575,14 +3601,15 @@ impl Renderer {
         output: &wgpu::TextureView,
     ) {
         if let Some((layout, pipeline)) = &self.blit {
-            let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("live output blit"),
+            let bind = self.blit_group.get(
+                device,
+                "live output blit",
                 layout,
-                entries: &[wgpu::BindGroupEntry {
+                &[wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::TextureView(post_output),
                 }],
-            });
+            );
             let timing = self.profiler.pass("output blit");
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 multiview_mask: None,
@@ -3603,7 +3630,7 @@ impl Renderer {
             let [width, height] = self.frame.viewport();
             crate::viewport::apply(&mut pass, [width, height]);
             pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &bind, &[]);
+            pass.set_bind_group(0, bind, &[]);
             pass.draw(0..3, 0..1);
             self.pass_log.push("output blit");
         }
@@ -4153,11 +4180,10 @@ impl Renderer {
         let view_projection = frame::multiply(camera.projection, camera.view);
         let layer_frame = self.layer_frame(next.scene, view_projection);
         let layer = cache.layer.view.clone();
-        let shadow_data = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("demand sun cascades"),
-            contents: &cached.shadow,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        self.gpu()
+            .queue
+            .write_buffer(&self.demand_shadow, 0, &cached.shadow);
+        let shadow_data = &self.demand_shadow;
         let (frame_number, exposure) = (cached.frame_number, cached.exposure);
         draw_layers(
             device,
@@ -4169,7 +4195,7 @@ impl Renderer {
             EffectTargets {
                 hdr: &layer,
                 depth,
-                shadow: Some((self.shadows.atlas_view(), &shadow_data)),
+                shadow: Some((self.shadows.atlas_view(), shadow_data)),
             },
             &mut self.pass_log,
         );
