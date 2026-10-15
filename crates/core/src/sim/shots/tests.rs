@@ -818,6 +818,18 @@ fn a_saved_arena_with_a_slot_twice_or_missing_is_refused() {
 
 #[cfg(feature = "serde")]
 #[test]
+fn a_saved_capacity_past_the_limit_or_what_the_save_carries_is_refused() {
+    let huge = r#"{"capacity":4294967295,"generations":[],"fresh":4294967295,"free":[],"live":[]}"#;
+    let error = serde_json::from_str::<Shots<2>>(huge).err().unwrap();
+    assert!(error.to_string().contains("1048576 slots"), "{error}");
+    let hollow = r#"{"capacity":1000000,"generations":[],"fresh":0,"free":[],"live":[]}"#;
+    assert!(serde_json::from_str::<Shots<2>>(hollow).is_err());
+    let fresh = r#"{"capacity":4,"generations":[],"fresh":4,"free":[],"live":[]}"#;
+    assert!(serde_json::from_str::<Shots<2>>(fresh).unwrap() == Shots::new(4));
+}
+
+#[cfg(feature = "serde")]
+#[test]
 #[ignore = "bench; run with --release"]
 fn bench_saving_a_churned_arena() {
     use std::time::Instant;
