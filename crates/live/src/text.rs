@@ -823,13 +823,16 @@ impl GpuAtlas {
             {
                 return Err(AtlasError::InvalidLevel);
             }
-            let bytes = if channels == 3 {
-                cell.bytes
+            let converted;
+            let bytes: &[u8] = if channels == 3 {
+                converted = cell
+                    .bytes
                     .chunks_exact(3)
                     .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                &converted
             } else {
-                cell.bytes.clone()
+                &cell.bytes
             };
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
@@ -838,7 +841,7 @@ impl GpuAtlas {
                     origin: wgpu::Origin3d { x, y, z: 0 },
                     aspect: wgpu::TextureAspect::All,
                 },
-                &bytes,
+                bytes,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(width * pixel_bytes as u32),
@@ -1188,6 +1191,8 @@ pub struct TextPass {
     lit: OnceCell<LitPipelines>,
     gobo: Gobo,
     viewport: Option<[u32; 2]>,
+    arena: Arena,
+    staged: Staged,
 }
 
 struct LitPipelines {
@@ -1276,6 +1281,20 @@ fn text_pipeline(
     })
 }
 
+fn dynamic(
+    mut entries: Vec<wgpu::BindGroupLayoutEntry>,
+    binding: u32,
+) -> Vec<wgpu::BindGroupLayoutEntry> {
+    for entry in entries.iter_mut().filter(|entry| entry.binding == binding) {
+        entry.ty = wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: true,
+            min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<Uniform>() as u64),
+        };
+    }
+    entries
+}
+
 pub fn lit_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
     let storage = |binding: u32| wgpu::BindGroupLayoutEntry {
         binding,
@@ -1333,7 +1352,7 @@ impl LitPipelines {
         };
         let scene = group("lit text scene", &crate::frame::scene_entries());
         let shadow = group("lit text shadows", &crate::frame::shadow_entries());
-        let own = group("lit text bindings", &lit_entries());
+        let own = group("lit text bindings", &dynamic(lit_entries(), 2));
         let lighting = group("lit text lighting", &crate::frame::lighting_entries());
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("lit text pipeline layout"),
@@ -1410,7 +1429,7 @@ impl TextPass {
         });
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("text bindings"),
-            entries: &text_entries(),
+            entries: &dynamic(text_entries(), 0),
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("text pipeline layout"),
@@ -1518,6 +1537,8 @@ impl TextPass {
             lit: OnceCell::new(),
             gobo: Gobo::default(),
             viewport: None,
+            arena: Arena::default(),
+            staged: Staged::default(),
         }
     }
 
@@ -1533,6 +1554,7 @@ impl TextPass {
         if gobo != self.gobo {
             self.gobo = gobo;
             self.lit = OnceCell::new();
+            self.arena.binds.clear();
         }
     }
 
@@ -1612,54 +1634,24 @@ impl TextPass {
         id: Option<u32>,
         profiler: Option<&mut pfx_gpu::GpuProfiler>,
     ) -> Result<(), &'static str> {
-        let TextDraw {
-            target,
-            depth,
-            atlas,
-            paragraph,
-            space,
-            color,
-            deformers,
-        } = draw;
-        if paragraph.glyphs.is_empty() {
-            return Ok(());
-        }
-        if atlas.format
-            != match paragraph.atlas.channels {
-                1 => wgpu::TextureFormat::R8Unorm,
-                3 => wgpu::TextureFormat::Rgba8Unorm,
-                _ => return Err("invalid atlas channels"),
-            }
-        {
-            return Err("atlas format does not match paragraph");
-        }
-        if atlas.size()
-            != [
-                paragraph.atlas.levels[0].width,
-                paragraph.atlas.levels[0].height,
-            ]
-        {
-            return Err("atlas size does not match paragraph");
-        }
-        let mut packed = pack_glyphs(&paragraph.glyphs);
-        for glyph in &mut packed {
-            for (channel, tint) in glyph.color.iter_mut().zip(color) {
-                *channel *= tint;
-            }
-        }
-        self.encode_packed(
+        let items = [BatchItem {
+            atlas: draw.atlas,
+            glyphs: BatchGlyphs::Paragraph {
+                paragraph: draw.paragraph,
+                color: draw.color,
+            },
+            space: draw.space,
+            lit,
+            id,
+        }];
+        self.encode_transient(
             device,
             encoder,
-            Packed {
-                target,
-                depth,
-                atlas,
-                space,
-                deformers,
-                lit,
-                mode: u32::from(paragraph.atlas.channels == 3),
-                id,
-                glyphs: &packed,
+            &TextBatch {
+                target: draw.target,
+                depth: draw.depth,
+                deformers: draw.deformers,
+                items: &items,
             },
             profiler,
         )
@@ -1719,140 +1711,180 @@ impl TextPass {
         id: Option<u32>,
         profiler: Option<&mut pfx_gpu::GpuProfiler>,
     ) -> Result<(), &'static str> {
-        if draw.quads.is_empty() {
-            return Ok(());
-        }
-        let mode = if draw.icons {
-            2
-        } else if draw.atlas.format == wgpu::TextureFormat::Rgba8Unorm {
-            1
-        } else {
-            0
-        };
-        if draw.icons != (draw.atlas.format == wgpu::TextureFormat::Rgba16Float) {
-            return Err("icon atlas format does not match draw mode");
-        }
-        let packed = pack_quads(draw.quads);
-        self.encode_packed(
+        let items = [BatchItem {
+            atlas: draw.atlas,
+            glyphs: BatchGlyphs::Quads {
+                quads: draw.quads,
+                icons: draw.icons,
+            },
+            space: draw.space,
+            lit,
+            id,
+        }];
+        self.encode_transient(
             device,
             encoder,
-            Packed {
+            &TextBatch {
                 target: draw.target,
                 depth: draw.depth,
-                atlas: draw.atlas,
-                space: draw.space,
                 deformers: draw.deformers,
-                lit,
-                mode,
-                id,
-                glyphs: &packed,
+                items: &items,
             },
             profiler,
         )
     }
 
-    fn encode_packed(
+    fn encode_transient(
         &self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        packed: Packed<'_>,
-        mut profiler: Option<&mut pfx_gpu::GpuProfiler>,
+        batch: &TextBatch<'_>,
+        profiler: Option<&mut pfx_gpu::GpuProfiler>,
     ) -> Result<(), &'static str> {
-        let Packed {
-            target,
-            depth,
-            atlas,
-            space,
-            deformers,
-            lit,
-            mode,
-            id,
-            glyphs: packed,
-        } = packed;
-        let deformed = matches!(
-            space,
-            TextSpace::Deformed { .. } | TextSpace::LitDeformed { .. }
-        );
-        if space.is_lit() != lit.is_some() {
-            return Err(if space.is_lit() {
-                "lit text needs the frame's lighting bindings"
-            } else {
-                "lighting bindings need lit text"
-            });
-        }
-        if !matches!(space, TextSpace::Overlay { .. }) && depth.is_none() {
-            return Err("surface text needs a depth view");
-        }
-        if deformed && !space.is_lit() && deformers.is_none() {
-            return Err("deformed text needs the deformer bindings");
-        }
-        if matches!(
-            space,
-            TextSpace::Overlay { width: 0, .. } | TextSpace::Overlay { height: 0, .. }
-        ) {
-            return Err("overlay size must be positive");
+        let mut staged = Staged::default();
+        staged.stage(batch)?;
+        if staged.slots.is_empty() {
+            return Ok(());
         }
         let instances = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("text instances"),
-            contents: bytemuck::cast_slice(packed),
+            contents: bytemuck::cast_slice(&staged.glyphs),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        let identity = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-        let (view_projection, model, rest_normal, deformer) = match space {
-            TextSpace::Deformed {
-                view_projection,
-                model,
-                normal,
-                lift,
-                deformer,
-                ..
-            }
-            | TextSpace::LitDeformed {
-                view_projection,
-                model,
-                normal,
-                lift,
-                deformer,
-                ..
-            } => (
-                view_projection,
-                model,
-                [normal[0], normal[1], normal[2], lift],
-                deformer.0,
-            ),
-            TextSpace::LitSurface { model, .. } => {
-                (identity, model, [0.0, 0.0, 1.0, 0.0], DeformerId::NONE.0)
-            }
-            _ => (identity, identity, [0.0, 0.0, 1.0, 0.0], DeformerId::NONE.0),
-        };
-        let uniform = Uniform {
-            matrix: space.matrix(),
-            view_projection,
-            model,
-            rest_normal,
-            atlas_size: [atlas.width as f32, atlas.height as f32],
-            mode,
-            deformer,
-            cells: [DEFORMED_CELLS, id.unwrap_or(0), 0, 0],
-        };
-        let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let uniforms = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("text uniform"),
-            contents: bytemuck::bytes_of(&uniform),
+            contents: &staged.uniforms,
             usage: wgpu::BufferUsages::UNIFORM,
         });
-        let lit_pipelines = lit.map(|_| {
-            self.lit
-                .get_or_init(|| LitPipelines::new(device, &self.gobo))
+        for slot in &staged.slots {
+            let item = &batch.items[slot.item];
+            let group = self.bind_group(device, &uniforms, item.atlas, item.lit);
+            staged.binds.push(group);
+        }
+        self.record(encoder, batch, &staged, (&instances, 0), 0, profiler);
+        Ok(())
+    }
+
+    pub(crate) fn encode_batch(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        batch: &TextBatch<'_>,
+        profiler: Option<&mut pfx_gpu::GpuProfiler>,
+    ) -> Result<(), &'static str> {
+        let mut staged = std::mem::take(&mut self.staged);
+        let result = self.encode_staged(device, queue, encoder, batch, &mut staged, profiler);
+        self.staged = staged;
+        result
+    }
+
+    fn encode_staged(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        batch: &TextBatch<'_>,
+        staged: &mut Staged,
+        profiler: Option<&mut pfx_gpu::GpuProfiler>,
+    ) -> Result<(), &'static str> {
+        staged.stage(batch)?;
+        if staged.slots.is_empty() {
+            return Ok(());
+        }
+        let glyphs: &[u8] = bytemuck::cast_slice(&staged.glyphs);
+        let arena = &mut self.arena;
+        reserve(
+            device,
+            &mut arena.instances,
+            &mut arena.instance_cursor,
+            glyphs.len() as u64,
+            ("text instances", wgpu::BufferUsages::VERTEX),
+        );
+        if reserve(
+            device,
+            &mut arena.uniforms,
+            &mut arena.uniform_cursor,
+            staged.uniforms.len() as u64,
+            ("text uniforms", wgpu::BufferUsages::UNIFORM),
+        ) {
+            arena.binds.clear();
+        }
+        let (Some(instances), Some(uniforms)) = (arena.instances.clone(), arena.uniforms.clone())
+        else {
+            return Err("text buffers are missing");
+        };
+        let instance_base = arena.instance_cursor;
+        let uniform_base = arena.uniform_cursor;
+        queue.write_buffer(&instances, instance_base, glyphs);
+        queue.write_buffer(&uniforms, uniform_base, &staged.uniforms);
+        arena.instance_cursor += glyphs.len() as u64;
+        arena.uniform_cursor += staged.uniforms.len() as u64;
+        for slot in &staged.slots {
+            let item = &batch.items[slot.item];
+            let view = item.atlas.view();
+            let buffers = item.lit.map(|lit| (lit.deformers, lit.plan));
+            let found = self.arena.binds.iter_mut().find(|bind| {
+                bind.atlas == *view
+                    && bind.lit.as_ref().map(|[deformers, plan]| (deformers, plan)) == buffers
+            });
+            let group = match found {
+                Some(bind) => {
+                    bind.used = true;
+                    bind.group.clone()
+                }
+                None => {
+                    let group = self.bind_group(device, &uniforms, item.atlas, item.lit);
+                    self.arena.binds.push(CachedBind {
+                        atlas: view.clone(),
+                        lit: item
+                            .lit
+                            .map(|lit| [lit.deformers.clone(), lit.plan.clone()]),
+                        group: group.clone(),
+                        used: true,
+                    });
+                    group
+                }
+            };
+            staged.binds.push(group);
+        }
+        self.record(
+            encoder,
+            batch,
+            staged,
+            (&instances, instance_base),
+            uniform_base,
+            profiler,
+        );
+        Ok(())
+    }
+
+    pub(crate) fn recycle(&mut self) {
+        let arena = &mut self.arena;
+        arena.instance_cursor = 0;
+        arena.uniform_cursor = 0;
+        arena.binds.retain(|bind| bind.used);
+        for bind in &mut arena.binds {
+            bind.used = false;
+        }
+    }
+
+    fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        uniforms: &wgpu::Buffer,
+        atlas: &GpuAtlas,
+        lit: Option<&LitBindings<'_>>,
+    ) -> wgpu::BindGroup {
+        let uniform = wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+            buffer: uniforms,
+            offset: 0,
+            size: wgpu::BufferSize::new(std::mem::size_of::<Uniform>() as u64),
         });
-        let bind = match (lit, lit_pipelines) {
-            (Some(lit), Some(pipelines)) => device.create_bind_group(&wgpu::BindGroupDescriptor {
+        match lit {
+            Some(lit) => device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("lit text bind group"),
-                layout: &pipelines.layout,
+                layout: &self.lit_pipelines(device).layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -1864,7 +1896,7 @@ impl TextPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: uniform.as_entire_binding(),
+                        resource: uniform,
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
@@ -1876,13 +1908,13 @@ impl TextPass {
                     },
                 ],
             }),
-            _ => device.create_bind_group(&wgpu::BindGroupDescriptor {
+            None => device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("text bind group"),
                 layout: &self.bind_layout,
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: uniform.as_entire_binding(),
+                        resource: uniform,
                     },
                     wgpu::BindGroupEntry {
                         binding: 1,
@@ -1894,100 +1926,351 @@ impl TextPass {
                     },
                 ],
             }),
-        };
-        let surface = !matches!(space, TextSpace::Overlay { .. });
-        let depth_attachment =
-            depth
-                .filter(|_| surface)
-                .map(|view| wgpu::RenderPassDepthStencilAttachment {
+        }
+    }
+
+    fn lit_pipelines(&self, device: &wgpu::Device) -> &LitPipelines {
+        self.lit
+            .get_or_init(|| LitPipelines::new(device, &self.gobo))
+    }
+
+    fn record(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        batch: &TextBatch<'_>,
+        staged: &Staged,
+        (instances, instance_base): (&wgpu::Buffer, u64),
+        uniform_base: u64,
+        mut profiler: Option<&mut pfx_gpu::GpuProfiler>,
+    ) {
+        let stride = std::mem::size_of::<PackedGlyph>() as u64;
+        let surface =
+            |slot: &Slot| !matches!(batch.items[slot.item].space, TextSpace::Overlay { .. });
+        let mut start = 0;
+        while start < staged.slots.len() {
+            let first = &staged.slots[start];
+            let on_surface = surface(first);
+            let end = start
+                + staged.slots[start..]
+                    .iter()
+                    .take_while(|slot| surface(slot) == on_surface)
+                    .count();
+            let ids = batch.items[first.item].id.is_some();
+            let lit = staged.slots[start..end]
+                .iter()
+                .any(|slot| batch.items[slot.item].lit.is_some());
+            let depth_attachment = batch.depth.filter(|_| on_surface).map(|view| {
+                wgpu::RenderPassDepthStencilAttachment {
                     view,
                     depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
-                });
-        let ids = id.is_some();
-        let timing = profiler.as_deref_mut().and_then(|timer| {
-            timer.pass(match (ids, surface, lit.is_some()) {
-                (true, _, _) => "text ids",
-                (false, false, _) => "overlay text",
-                (false, true, true) => "lit surface text",
-                (false, true, false) => "surface text",
-            })
-        });
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            multiview_mask: None,
-            label: Some(if ids { "text ids" } else { "text pass" }),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: depth_attachment,
-            timestamp_writes: profiler
-                .as_deref()
-                .and_then(|timer| timer.render_writes(timing)),
-            occlusion_query_set: None,
-        });
-        if let Some(viewport) = self.viewport {
-            crate::viewport::apply(&mut pass, viewport);
-        }
-        if let (Some(lit), Some(pipelines)) = (lit, lit_pipelines) {
-            pass.set_pipeline(match (deformed, ids) {
-                (true, false) => &pipelines.deformed,
-                (false, false) => &pipelines.surface,
-                (true, true) => &pipelines.deformed_ids,
-                (false, true) => &pipelines.surface_ids,
+                }
             });
-            pass.set_bind_group(0, lit.scene, &[]);
-            pass.set_bind_group(1, lit.shadow, &[]);
-            pass.set_bind_group(2, &bind, &[]);
-            pass.set_bind_group(3, lit.lighting, &[]);
-        } else {
-            pass.set_pipeline(match (deformed, surface, ids) {
-                (true, _, false) => &self.deformed,
-                (false, true, false) => &self.surface,
-                (false, false, false) => &self.overlay,
-                (true, _, true) => &self.deformed_ids,
-                (false, true, true) => &self.surface_ids,
-                (false, false, true) => &self.overlay_ids,
+            let timing = profiler.as_deref_mut().and_then(|timer| {
+                timer.pass(match (ids, on_surface, lit) {
+                    (true, _, _) => "text ids",
+                    (false, false, _) => "overlay text",
+                    (false, true, true) => "lit surface text",
+                    (false, true, false) => "surface text",
+                })
             });
-            pass.set_bind_group(0, &bind, &[]);
-            if let Some(group) = deformers.filter(|_| deformed) {
-                pass.set_bind_group(1, &self.empty_group, &[]);
-                pass.set_bind_group(2, group, &[]);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                multiview_mask: None,
+                label: Some(if ids { "text ids" } else { "text pass" }),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: batch.target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: depth_attachment,
+                timestamp_writes: profiler
+                    .as_deref()
+                    .and_then(|timer| timer.render_writes(timing)),
+                occlusion_query_set: None,
+            });
+            if let Some(viewport) = self.viewport {
+                crate::viewport::apply(&mut pass, viewport);
             }
+            for (index, slot) in staged.slots.iter().enumerate().take(end).skip(start) {
+                let item = &batch.items[slot.item];
+                let deformed = matches!(
+                    item.space,
+                    TextSpace::Deformed { .. } | TextSpace::LitDeformed { .. }
+                );
+                let ids = item.id.is_some();
+                let offset = [(uniform_base + index as u64 * UNIFORM_SLOT) as u32];
+                let bind = &staged.binds[index];
+                if let (Some(lit), Some(pipelines)) = (item.lit, self.lit.get()) {
+                    pass.set_pipeline(match (deformed, ids) {
+                        (true, false) => &pipelines.deformed,
+                        (false, false) => &pipelines.surface,
+                        (true, true) => &pipelines.deformed_ids,
+                        (false, true) => &pipelines.surface_ids,
+                    });
+                    pass.set_bind_group(0, lit.scene, &[]);
+                    pass.set_bind_group(1, lit.shadow, &[]);
+                    pass.set_bind_group(2, bind, &offset);
+                    pass.set_bind_group(3, lit.lighting, &[]);
+                } else {
+                    pass.set_pipeline(match (deformed, on_surface, ids) {
+                        (true, _, false) => &self.deformed,
+                        (false, true, false) => &self.surface,
+                        (false, false, false) => &self.overlay,
+                        (true, _, true) => &self.deformed_ids,
+                        (false, true, true) => &self.surface_ids,
+                        (false, false, true) => &self.overlay_ids,
+                    });
+                    pass.set_bind_group(0, bind, &offset);
+                    if let Some(group) = batch.deformers.filter(|_| deformed) {
+                        pass.set_bind_group(1, &self.empty_group, &[]);
+                        pass.set_bind_group(2, group, &[]);
+                    }
+                }
+                let low = instance_base + u64::from(slot.first) * stride;
+                let high = low + u64::from(slot.count) * stride;
+                pass.set_vertex_buffer(0, instances.slice(low..high));
+                let vertices = if deformed {
+                    6 * DEFORMED_CELLS * DEFORMED_CELLS
+                } else {
+                    6
+                };
+                pass.draw(0..vertices, 0..slot.count);
+            }
+            drop(pass);
+            start = end;
         }
-        pass.set_vertex_buffer(0, instances.slice(..));
-        let vertices = if deformed {
-            6 * DEFORMED_CELLS * DEFORMED_CELLS
-        } else {
-            6
-        };
-        pass.draw(0..vertices, 0..packed.len() as u32);
+    }
+}
+
+const UNIFORM_SLOT: u64 = 256;
+
+pub(crate) enum BatchGlyphs<'a> {
+    Paragraph {
+        paragraph: &'a Paragraph,
+        color: [f32; 4],
+    },
+    Quads {
+        quads: &'a [RichQuad],
+        icons: bool,
+    },
+}
+
+pub(crate) struct BatchItem<'a> {
+    pub atlas: &'a GpuAtlas,
+    pub glyphs: BatchGlyphs<'a>,
+    pub space: TextSpace,
+    pub lit: Option<&'a LitBindings<'a>>,
+    pub id: Option<u32>,
+}
+
+pub(crate) struct TextBatch<'a> {
+    pub target: &'a wgpu::TextureView,
+    pub depth: Option<&'a wgpu::TextureView>,
+    pub deformers: Option<&'a wgpu::BindGroup>,
+    pub items: &'a [BatchItem<'a>],
+}
+
+#[derive(Default)]
+struct Arena {
+    instances: Option<wgpu::Buffer>,
+    uniforms: Option<wgpu::Buffer>,
+    instance_cursor: u64,
+    uniform_cursor: u64,
+    binds: Vec<CachedBind>,
+}
+
+struct CachedBind {
+    atlas: wgpu::TextureView,
+    lit: Option<[wgpu::Buffer; 2]>,
+    group: wgpu::BindGroup,
+    used: bool,
+}
+
+struct Slot {
+    item: usize,
+    first: u32,
+    count: u32,
+}
+
+#[derive(Default)]
+struct Staged {
+    glyphs: Vec<PackedGlyph>,
+    uniforms: Vec<u8>,
+    slots: Vec<Slot>,
+    binds: Vec<wgpu::BindGroup>,
+}
+
+impl Staged {
+    fn stage(&mut self, batch: &TextBatch<'_>) -> Result<(), &'static str> {
+        self.glyphs.clear();
+        self.uniforms.clear();
+        self.slots.clear();
+        self.binds.clear();
+        for (index, item) in batch.items.iter().enumerate() {
+            let start = self.glyphs.len();
+            let mode = match item.glyphs {
+                BatchGlyphs::Paragraph { paragraph, color } => {
+                    if paragraph.glyphs.is_empty() {
+                        continue;
+                    }
+                    if item.atlas.format
+                        != match paragraph.atlas.channels {
+                            1 => wgpu::TextureFormat::R8Unorm,
+                            3 => wgpu::TextureFormat::Rgba8Unorm,
+                            _ => return Err("invalid atlas channels"),
+                        }
+                    {
+                        return Err("atlas format does not match paragraph");
+                    }
+                    if item.atlas.size()
+                        != [
+                            paragraph.atlas.levels[0].width,
+                            paragraph.atlas.levels[0].height,
+                        ]
+                    {
+                        return Err("atlas size does not match paragraph");
+                    }
+                    self.glyphs
+                        .extend(paragraph.glyphs.iter().map(PackedGlyph::from));
+                    for glyph in &mut self.glyphs[start..] {
+                        for (channel, tint) in glyph.color.iter_mut().zip(color) {
+                            *channel *= tint;
+                        }
+                    }
+                    u32::from(paragraph.atlas.channels == 3)
+                }
+                BatchGlyphs::Quads { quads, icons } => {
+                    if quads.is_empty() {
+                        continue;
+                    }
+                    let mode = if icons {
+                        2
+                    } else if item.atlas.format == wgpu::TextureFormat::Rgba8Unorm {
+                        1
+                    } else {
+                        0
+                    };
+                    if icons != (item.atlas.format == wgpu::TextureFormat::Rgba16Float) {
+                        return Err("icon atlas format does not match draw mode");
+                    }
+                    self.glyphs.extend(quads.iter().map(PackedGlyph::from));
+                    mode
+                }
+            };
+            let space = item.space;
+            let deformed = matches!(
+                space,
+                TextSpace::Deformed { .. } | TextSpace::LitDeformed { .. }
+            );
+            if space.is_lit() != item.lit.is_some() {
+                return Err(if space.is_lit() {
+                    "lit text needs the frame's lighting bindings"
+                } else {
+                    "lighting bindings need lit text"
+                });
+            }
+            if !matches!(space, TextSpace::Overlay { .. }) && batch.depth.is_none() {
+                return Err("surface text needs a depth view");
+            }
+            if deformed && !space.is_lit() && batch.deformers.is_none() {
+                return Err("deformed text needs the deformer bindings");
+            }
+            if matches!(
+                space,
+                TextSpace::Overlay { width: 0, .. } | TextSpace::Overlay { height: 0, .. }
+            ) {
+                return Err("overlay size must be positive");
+            }
+            let uniform = uniform(space, item.atlas, mode, item.id);
+            self.uniforms
+                .extend_from_slice(bytemuck::bytes_of(&uniform));
+            self.uniforms
+                .resize((self.slots.len() + 1) * UNIFORM_SLOT as usize, 0);
+            self.slots.push(Slot {
+                item: index,
+                first: start as u32,
+                count: (self.glyphs.len() - start) as u32,
+            });
+        }
         Ok(())
     }
 }
 
-struct Packed<'a> {
-    target: &'a wgpu::TextureView,
-    depth: Option<&'a wgpu::TextureView>,
-    atlas: &'a GpuAtlas,
-    space: TextSpace,
-    deformers: Option<&'a wgpu::BindGroup>,
-    lit: Option<&'a LitBindings<'a>>,
-    mode: u32,
-    id: Option<u32>,
-    glyphs: &'a [PackedGlyph],
+fn reserve(
+    device: &wgpu::Device,
+    buffer: &mut Option<wgpu::Buffer>,
+    cursor: &mut u64,
+    needed: u64,
+    (label, usage): (&'static str, wgpu::BufferUsages),
+) -> bool {
+    let capacity = buffer.as_ref().map_or(0, wgpu::Buffer::size);
+    if *cursor + needed <= capacity {
+        return false;
+    }
+    *buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: (*cursor + needed).next_power_of_two().max(4096),
+        usage: usage | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    }));
+    *cursor = 0;
+    true
 }
 
-fn turned(angle: f32, pivot: [f32; 2], point: [f32; 2]) -> [f32; 2] {
-    let (sin, cos) = angle.sin_cos();
+fn uniform(space: TextSpace, atlas: &GpuAtlas, mode: u32, id: Option<u32>) -> Uniform {
+    let identity = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ];
+    let (view_projection, model, rest_normal, deformer) = match space {
+        TextSpace::Deformed {
+            view_projection,
+            model,
+            normal,
+            lift,
+            deformer,
+            ..
+        }
+        | TextSpace::LitDeformed {
+            view_projection,
+            model,
+            normal,
+            lift,
+            deformer,
+            ..
+        } => (
+            view_projection,
+            model,
+            [normal[0], normal[1], normal[2], lift],
+            deformer.0,
+        ),
+        TextSpace::LitSurface { model, .. } => {
+            (identity, model, [0.0, 0.0, 1.0, 0.0], DeformerId::NONE.0)
+        }
+        _ => (identity, identity, [0.0, 0.0, 1.0, 0.0], DeformerId::NONE.0),
+    };
+    Uniform {
+        matrix: space.matrix(),
+        view_projection,
+        model,
+        rest_normal,
+        atlas_size: [atlas.width as f32, atlas.height as f32],
+        mode,
+        deformer,
+        cells: [DEFORMED_CELLS, id.unwrap_or(0), 0, 0],
+    }
+}
+
+fn turned((sin, cos): (f32, f32), pivot: [f32; 2], point: [f32; 2]) -> [f32; 2] {
     let offset = [point[0] - pivot[0], point[1] - pivot[1]];
     [
         pivot[0] + cos * offset[0] - sin * offset[1],
@@ -2038,6 +2321,7 @@ pub fn screen_bounds(
     let mut high = [f32::NEG_INFINITY; 2];
     for glyph in glyphs {
         let [x, y, angle, scale] = glyph.pose;
+        let spin = angle.sin_cos();
         let mut box_low = [f32::INFINITY; 2];
         let mut box_high = [f32::NEG_INFINITY; 2];
         for corner in [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]] {
@@ -2045,7 +2329,7 @@ pub fn screen_bounds(
                 (glyph.rect[0] + corner[0] * glyph.rect[2]) * scale,
                 (glyph.rect[1] + corner[1] * glyph.rect[3]) * scale,
             ];
-            let point = turned(angle, [0.0, 0.0], local);
+            let point = turned(spin, [0.0, 0.0], local);
             for (axis, offset) in [x, y].into_iter().enumerate() {
                 box_low[axis] = box_low[axis].min(point[axis] + offset);
                 box_high[axis] = box_high[axis].max(point[axis] + offset);
@@ -2058,8 +2342,9 @@ pub fn screen_bounds(
         if !(left < right && top < bottom) {
             continue;
         }
+        let turn = glyph.turn[2].sin_cos();
         for point in [[left, top], [right, top], [left, bottom], [right, bottom]] {
-            let [u, v] = turned(glyph.turn[2], [glyph.turn[0], glyph.turn[1]], point);
+            let [u, v] = turned(turn, [glyph.turn[0], glyph.turn[1]], point);
             let placed = crate::frame::transform(rest, [u, v, 0.0, 1.0]);
             let clip = crate::frame::transform(
                 clip_from_rest,

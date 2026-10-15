@@ -20,7 +20,10 @@ use crate::shadow::{Quality, Shadows, View};
 use crate::sky::SkySource;
 use crate::stats::{FrameKind, FrameStats};
 use crate::taa::{self, GpuInputs};
-use crate::text::{GpuAtlas, PackedGlyph, QuadDraw, RichQuad, TextDraw, TextPass, TextSpace};
+use crate::text::{
+    BatchGlyphs, BatchItem, GpuAtlas, LitBindings, PackedGlyph, RichQuad, TextBatch, TextPass,
+    TextSpace,
+};
 use crate::warm::Warming;
 use pfx_geom::mesh::Mesh;
 use pfx_geom::tree::{PetalSource, Tree, tree_sway};
@@ -2508,7 +2511,7 @@ impl Renderer {
         self.pass_log.clear();
         let (width, height) = self.size();
         self.text.set_viewport(Some([width, height]));
-        self.text_bounds = text_bounds(text, [width, height]);
+        text_bounds(&mut self.text_bounds, text, [width, height]);
         if !scene.time.is_finite() || scene.time < 0.0 {
             return Err("scene time must be finite and nonnegative".into());
         }
@@ -3190,6 +3193,7 @@ impl Renderer {
                 &self.frame,
                 &mut self.profiler,
                 device,
+                &queue,
                 &mut encoder,
                 text,
                 &deformers,
@@ -3241,6 +3245,7 @@ impl Renderer {
                     &self.frame,
                     &mut self.profiler,
                     device,
+                    &queue,
                     &mut encoder,
                     text,
                     &deformers,
@@ -3373,42 +3378,21 @@ impl Renderer {
             Some(cache) => cache.overlay.view.clone(),
             None => post_output.clone(),
         };
-        for item in &text.overlay {
-            self.text
-                .encode_timed(
-                    device,
-                    &mut encoder,
-                    TextDraw {
-                        target: &overlay_target,
-                        depth: None,
-                        atlas: item.atlas,
-                        paragraph: item.paragraph,
-                        space: item.space,
-                        color: item.color,
-                        deformers: None,
-                    },
-                    Some(&mut self.profiler),
-                )
-                .map_err(str::to_owned)?;
-        }
-        for item in &text.overlay_quads {
-            self.text
-                .encode_quads_timed(
-                    device,
-                    &mut encoder,
-                    QuadDraw {
-                        target: &overlay_target,
-                        depth: None,
-                        atlas: item.atlas,
-                        quads: item.quads,
-                        space: item.space,
-                        deformers: None,
-                        icons: item.icons,
-                    },
-                    Some(&mut self.profiler),
-                )
-                .map_err(str::to_owned)?;
-        }
+        let items = batch_items(text, false, false, None)?;
+        self.text
+            .encode_batch(
+                device,
+                &queue,
+                &mut encoder,
+                &TextBatch {
+                    target: &overlay_target,
+                    depth: None,
+                    deformers: None,
+                    items: &items,
+                },
+                Some(&mut self.profiler),
+            )
+            .map_err(str::to_owned)?;
         if !text.overlay.is_empty() || !text.overlay_quads.is_empty() {
             self.pass_log.push("overlay text");
         }
@@ -3419,95 +3403,22 @@ impl Renderer {
             self.pass_log.push("glass ids");
         }
         let lit = self.frame.lit_bindings();
-        let lit_for = |space: &TextSpace| {
-            if space.is_lit() {
-                lit.as_ref()
-                    .map(Some)
-                    .ok_or("frame lighting is not prepared")
-            } else {
-                Ok(None)
-            }
-        };
-        for item in text.surface.iter().filter(|item| item.id != 0) {
-            self.text
-                .encode_ids(
-                    device,
-                    &mut encoder,
-                    TextDraw {
-                        target: ids,
-                        depth: Some(&self.frame.targets.depth_view),
-                        atlas: item.atlas,
-                        paragraph: item.paragraph,
-                        space: item.space,
-                        color: item.color,
-                        deformers: Some(&deformers),
-                    },
-                    lit_for(&item.space)?,
-                    item.id,
-                    Some(&mut self.profiler),
-                )
-                .map_err(str::to_owned)?;
-        }
-        for item in text.surface_quads.iter().filter(|item| item.id != 0) {
-            self.text
-                .encode_quad_ids(
-                    device,
-                    &mut encoder,
-                    QuadDraw {
-                        target: ids,
-                        depth: Some(&self.frame.targets.depth_view),
-                        atlas: item.atlas,
-                        quads: item.quads,
-                        space: item.space,
-                        deformers: Some(&deformers),
-                        icons: item.icons,
-                    },
-                    lit_for(&item.space)?,
-                    item.id,
-                    Some(&mut self.profiler),
-                )
-                .map_err(str::to_owned)?;
-        }
-        for item in text.overlay.iter().filter(|item| item.id != 0) {
-            self.text
-                .encode_ids(
-                    device,
-                    &mut encoder,
-                    TextDraw {
-                        target: ids,
-                        depth: None,
-                        atlas: item.atlas,
-                        paragraph: item.paragraph,
-                        space: item.space,
-                        color: item.color,
-                        deformers: None,
-                    },
-                    None,
-                    item.id,
-                    Some(&mut self.profiler),
-                )
-                .map_err(str::to_owned)?;
-        }
-        for item in text.overlay_quads.iter().filter(|item| item.id != 0) {
-            self.text
-                .encode_quad_ids(
-                    device,
-                    &mut encoder,
-                    QuadDraw {
-                        target: ids,
-                        depth: None,
-                        atlas: item.atlas,
-                        quads: item.quads,
-                        space: item.space,
-                        deformers: None,
-                        icons: item.icons,
-                    },
-                    None,
-                    item.id,
-                    Some(&mut self.profiler),
-                )
-                .map_err(str::to_owned)?;
-        }
+        let mut items = batch_items(text, true, true, lit.as_ref())?;
+        items.extend(batch_items(text, false, true, None)?);
+        self.text
+            .encode_batch(
+                device,
+                &queue,
+                &mut encoder,
+                &TextBatch {
+                    target: ids,
+                    depth: Some(&self.frame.targets.depth_view),
+                    deformers: Some(&deformers),
+                    items: &items,
+                },
+                Some(&mut self.profiler),
+            )
+            .map_err(str::to_owned)?;
         if text.surface.iter().any(|item| item.id != 0)
             || text.surface_quads.iter().any(|item| item.id != 0)
             || text.overlay.iter().any(|item| item.id != 0)
@@ -3663,6 +3574,7 @@ impl Renderer {
         self.gather_timings(number);
         let slot = self.profiler.finish_frame(&mut encoder, number);
         let index = queue.submit(Some(encoder.finish()));
+        self.text.recycle();
         let (width, height) = self.size();
         self.stats.submitted(number, [width, height]);
         if std::mem::take(&mut self.resolution_frame)
@@ -4232,42 +4144,21 @@ impl Renderer {
     ) -> Result<(), String> {
         let (width, height) = self.size();
         let text = next.text;
-        for item in &text.overlay {
-            self.text
-                .encode_timed(
-                    device,
-                    encoder,
-                    TextDraw {
-                        target,
-                        depth: None,
-                        atlas: item.atlas,
-                        paragraph: item.paragraph,
-                        space: item.space,
-                        color: item.color,
-                        deformers: None,
-                    },
-                    Some(&mut self.profiler),
-                )
-                .map_err(str::to_owned)?;
-        }
-        for item in &text.overlay_quads {
-            self.text
-                .encode_quads_timed(
-                    device,
-                    encoder,
-                    QuadDraw {
-                        target,
-                        depth: None,
-                        atlas: item.atlas,
-                        quads: item.quads,
-                        space: item.space,
-                        deformers: None,
-                        icons: item.icons,
-                    },
-                    Some(&mut self.profiler),
-                )
-                .map_err(str::to_owned)?;
-        }
+        let items = batch_items(text, false, false, None)?;
+        self.text
+            .encode_batch(
+                device,
+                queue,
+                encoder,
+                &TextBatch {
+                    target,
+                    depth: None,
+                    deformers: None,
+                    items: &items,
+                },
+                Some(&mut self.profiler),
+            )
+            .map_err(str::to_owned)?;
         if !text.overlay.is_empty() || !text.overlay_quads.is_empty() {
             self.pass_log.push("overlay text");
         }
@@ -4308,7 +4199,7 @@ impl Renderer {
     ) -> Result<u64, String> {
         self.pass_log.clear();
         let (width, height) = self.size();
-        self.text_bounds = text_bounds(next.text, [width, height]);
+        text_bounds(&mut self.text_bounds, next.text, [width, height]);
         let owned_device = self.frame.gpu.device.clone();
         let device = &owned_device;
         let queue = self.frame.gpu.queue.clone();
@@ -4363,7 +4254,7 @@ impl Renderer {
     ) -> Result<u64, String> {
         self.pass_log.clear();
         let (width, height) = self.size();
-        self.text_bounds = text_bounds(next.text, [width, height]);
+        text_bounds(&mut self.text_bounds, next.text, [width, height]);
         let owned_device = self.frame.gpu.device.clone();
         let device = &owned_device;
         let queue = self.frame.gpu.queue.clone();
@@ -4471,98 +4362,109 @@ fn draw_surface_text(
     frame: &Frame,
     profiler: &mut GpuProfiler,
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     encoder: &mut wgpu::CommandEncoder,
     text: &Text<'_>,
     deformers: &wgpu::BindGroup,
     target: &wgpu::TextureView,
 ) -> Result<(), String> {
-    for item in &text.surface {
-        let draw = TextDraw {
+    let lit = frame.lit_bindings();
+    let items = batch_items(text, true, false, lit.as_ref())?;
+    pass.encode_batch(
+        device,
+        queue,
+        encoder,
+        &TextBatch {
             target,
             depth: Some(&frame.targets.depth_view),
-            atlas: item.atlas,
-            paragraph: item.paragraph,
-            space: item.space,
-            color: item.color,
             deformers: Some(deformers),
-        };
-        if item.space.is_lit() {
-            let lit = frame
-                .lit_bindings()
-                .ok_or("frame lighting is not prepared")?;
-            pass.encode_lit_timed(device, encoder, draw, &lit, Some(&mut *profiler))
-        } else {
-            pass.encode_timed(device, encoder, draw, Some(&mut *profiler))
-        }
-        .map_err(str::to_owned)?;
-    }
-    for item in &text.surface_quads {
-        let draw = QuadDraw {
-            target,
-            depth: Some(&frame.targets.depth_view),
-            atlas: item.atlas,
-            quads: item.quads,
-            space: item.space,
-            deformers: Some(deformers),
-            icons: item.icons,
-        };
-        if item.space.is_lit() {
-            let lit = frame
-                .lit_bindings()
-                .ok_or("frame lighting is not prepared")?;
-            pass.encode_quads_lit_timed(device, encoder, draw, &lit, Some(&mut *profiler))
-        } else {
-            pass.encode_quads_timed(device, encoder, draw, Some(&mut *profiler))
-        }
-        .map_err(str::to_owned)?;
-    }
-    Ok(())
+            items: &items,
+        },
+        Some(profiler),
+    )
+    .map_err(str::to_owned)
 }
 
-fn text_bounds(text: &Text<'_>, size: [u32; 2]) -> Vec<TextBounds> {
-    let paragraphs = |list: TextList, items: &[TextItem<'_>]| {
-        items
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| {
-                crate::text::screen_bounds(
-                    &item.space,
-                    item.paragraph.glyphs.iter().map(PackedGlyph::from),
-                    size,
-                )
-                .map(|rect| TextBounds {
-                    list,
-                    index,
-                    id: item.id,
-                    rect,
-                })
-            })
-            .collect::<Vec<_>>()
+fn batch_items<'a>(
+    text: &'a Text<'a>,
+    surface: bool,
+    ids: bool,
+    lit: Option<&'a LitBindings<'a>>,
+) -> Result<Vec<BatchItem<'a>>, String> {
+    let (paragraphs, quads) = if surface {
+        (&text.surface, &text.surface_quads)
+    } else {
+        (&text.overlay, &text.overlay_quads)
     };
-    let quads = |list: TextList, items: &[TextQuadItem<'_>]| {
-        items
-            .iter()
-            .enumerate()
-            .filter_map(|(index, item)| {
-                crate::text::screen_bounds(
-                    &item.space,
-                    item.quads.iter().map(PackedGlyph::from),
-                    size,
-                )
-                .map(|rect| TextBounds {
-                    list,
-                    index,
-                    id: item.id,
-                    rect,
-                })
-            })
-            .collect::<Vec<_>>()
+    let lit_for = |space: &TextSpace| {
+        if surface && space.is_lit() {
+            lit.map(Some).ok_or("frame lighting is not prepared")
+        } else {
+            Ok(None)
+        }
     };
-    let mut bounds = paragraphs(TextList::Surface, &text.surface);
-    bounds.extend(quads(TextList::SurfaceQuads, &text.surface_quads));
-    bounds.extend(paragraphs(TextList::Overlay, &text.overlay));
-    bounds.extend(quads(TextList::OverlayQuads, &text.overlay_quads));
-    bounds
+    let mut items = Vec::with_capacity(paragraphs.len() + quads.len());
+    for item in paragraphs.iter().filter(|item| !ids || item.id != 0) {
+        items.push(BatchItem {
+            atlas: item.atlas,
+            glyphs: BatchGlyphs::Paragraph {
+                paragraph: item.paragraph,
+                color: item.color,
+            },
+            space: item.space,
+            lit: lit_for(&item.space)?,
+            id: ids.then_some(item.id),
+        });
+    }
+    for item in quads.iter().filter(|item| !ids || item.id != 0) {
+        items.push(BatchItem {
+            atlas: item.atlas,
+            glyphs: BatchGlyphs::Quads {
+                quads: item.quads,
+                icons: item.icons,
+            },
+            space: item.space,
+            lit: lit_for(&item.space)?,
+            id: ids.then_some(item.id),
+        });
+    }
+    Ok(items)
+}
+
+fn text_bounds(bounds: &mut Vec<TextBounds>, text: &Text<'_>, size: [u32; 2]) {
+    bounds.clear();
+    let mut push = |list: TextList, index: usize, id: u32, rect: Option<[f32; 4]>| {
+        if let Some(rect) = rect {
+            bounds.push(TextBounds {
+                list,
+                index,
+                id,
+                rect,
+            });
+        }
+    };
+    let paragraph = |item: &TextItem<'_>| {
+        crate::text::screen_bounds(
+            &item.space,
+            item.paragraph.glyphs.iter().map(PackedGlyph::from),
+            size,
+        )
+    };
+    let quads = |item: &TextQuadItem<'_>| {
+        crate::text::screen_bounds(&item.space, item.quads.iter().map(PackedGlyph::from), size)
+    };
+    for (index, item) in text.surface.iter().enumerate() {
+        push(TextList::Surface, index, item.id, paragraph(item));
+    }
+    for (index, item) in text.surface_quads.iter().enumerate() {
+        push(TextList::SurfaceQuads, index, item.id, quads(item));
+    }
+    for (index, item) in text.overlay.iter().enumerate() {
+        push(TextList::Overlay, index, item.id, paragraph(item));
+    }
+    for (index, item) in text.overlay_quads.iter().enumerate() {
+        push(TextList::OverlayQuads, index, item.id, quads(item));
+    }
 }
 
 fn readback_texture(
