@@ -85,6 +85,10 @@ Objects keep the scene's hierarchy: a transform is local to the parent (`local`)
 
 A `Look` swaps an object's material for a library one (`material`), replaces its base colour (`color`) or its emission (`emission`), for every part of the object, without touching the library.
 
+### Morph targets
+
+A mesh with glTF morph targets (a face's expressions) plays its weights channels like any clip, and a game sets an expression per frame with `world.set_morph_weights(id, "head", &[jaw, smile, brow])`: the morph set is named after the glTF node, the weights are the first ones of that set in target order (the rest keep what the clips sample, or the mesh's defaults), and they hold until `clear_morph_weights(id, "head")`. `morph_weights(id)` reads what will draw. Each presented frame hands the weights to the renderer with the previous tick's, so a changing expression keeps its motion vectors and TAA holds; unchanged weights cost nothing ([animation.md](animation.md)).
+
 ### Bodies and sound per tick
 
 Each tick runs in this order:
