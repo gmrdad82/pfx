@@ -10,6 +10,7 @@ use pfx_live::stats::FrameStats;
 use pfx_load::scene::{Reload, Scene, SceneDiff, SceneError};
 
 use crate::PlayError;
+use crate::events::WorldEvent;
 use crate::game::{FrameTime, Game};
 use crate::hooks::{NoHooks, PlayHooks};
 use crate::live::{Edit, Pending, Stamped};
@@ -17,7 +18,7 @@ use crate::present::{self, Presenter, Touched};
 use crate::rigs::Rigs;
 use crate::tunables::Tunables;
 use crate::ui::{Ui, UiFrame};
-use crate::world::{Exit, RumbleRequest, World};
+use crate::world::{AnimationEvent, Exit, RumbleRequest, World};
 
 pub const MOTORS_KEPT: usize = 256;
 
@@ -68,6 +69,8 @@ pub struct PlaySession {
     presenter: Presenter,
     motors: Vec<MotorCommand>,
     stats: FrameStats,
+    world_events: Vec<WorldEvent>,
+    animation_events: Vec<AnimationEvent>,
     #[cfg(feature = "dev-hud")]
     hud: pfx_live::hud::Hud,
 }
@@ -157,6 +160,8 @@ impl PlaySession {
             stats: FrameStats::off(),
             presenter: Presenter::default(),
             motors: Vec::new(),
+            world_events: Vec::new(),
+            animation_events: Vec::new(),
             #[cfg(feature = "dev-hud")]
             hud: pfx_live::hud::Hud::new(),
         })
@@ -269,13 +274,19 @@ impl PlaySession {
         }
         self.world.step_physics();
         if !self.world.events().is_empty() {
-            let events = self.world.events().to_vec();
+            let mut events = std::mem::take(&mut self.world_events);
+            events.clear();
+            events.extend_from_slice(self.world.events());
             self.game.events(&mut self.world, &events);
+            self.world_events = events;
         }
         self.world.step_animations();
         if !self.world.animation_events().is_empty() {
-            let events = self.world.animation_events().to_vec();
+            let mut events = std::mem::take(&mut self.animation_events);
+            events.clear();
+            events.extend_from_slice(self.world.animation_events());
             self.game.animated(&mut self.world, &events);
+            self.animation_events = events;
         }
         self.world.step_rigs(&self.input);
         self.world.render_audio();

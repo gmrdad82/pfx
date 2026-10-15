@@ -34,6 +34,14 @@ pub(crate) struct Animations {
     defaults: BTreeMap<usize, Defaults>,
     events: Vec<AnimationEvent>,
     errors: Vec<AnimError>,
+    revision: u64,
+}
+
+impl Animations {
+    fn animator_mut(&mut self, index: usize) -> Option<&mut Animator> {
+        self.revision += 1;
+        self.animators.get_mut(&index)
+    }
 }
 
 fn object_error(name: &str, error: AnimError) -> String {
@@ -120,7 +128,7 @@ impl Animate<'_> {
         self.each(|world, id| {
             let tick = world.ticks;
             let defaults = world.defaults(id);
-            match world.animations.animators.get_mut(&id.index()) {
+            match world.animations.animator_mut(id.index()) {
                 Some(animator) => {
                     animator.blend(clip, weight, tick)?;
                     animator.set_playback(clip, defaults.playback)?;
@@ -133,7 +141,7 @@ impl Animate<'_> {
 
     pub fn fade(self, seconds: f32) -> Self {
         self.each(
-            |world, id| match world.animations.animators.get_mut(&id.index()) {
+            |world, id| match world.animations.animator_mut(id.index()) {
                 Some(animator) => animator.set_fade(seconds),
                 None => Err(world.not_animated(id, "crossfades only skeletal clips")),
             },
@@ -146,7 +154,7 @@ impl Animate<'_> {
             if let Some(player) = world.animations.sprites.get_mut(&id.index()) {
                 return player.set_speed(speed, tick);
             }
-            let Some(animator) = world.animations.animators.get_mut(&id.index()) else {
+            let Some(animator) = world.animations.animator_mut(id.index()) else {
                 return Err(world.not_animated(id, "has no animation"));
             };
             for clip in playing(animator) {
@@ -165,7 +173,7 @@ impl Animate<'_> {
                 };
                 return player.play_from(&clip, seconds, tick);
             }
-            let Some(animator) = world.animations.animators.get_mut(&id.index()) else {
+            let Some(animator) = world.animations.animator_mut(id.index()) else {
                 return Err(world.not_animated(id, "has no animation"));
             };
             for clip in playing(animator) {
@@ -177,7 +185,7 @@ impl Animate<'_> {
 
     pub fn playback(self, playback: Playback) -> Self {
         self.each(|world, id| {
-            let Some(animator) = world.animations.animators.get_mut(&id.index()) else {
+            let Some(animator) = world.animations.animator_mut(id.index()) else {
                 return Err(world.not_animated(id, "sets a sprite clip's loop in the scene"));
             };
             for clip in playing(animator) {
@@ -231,7 +239,7 @@ impl World {
         if let Some(player) = self.animations.sprites.get_mut(&id.index()) {
             return player.play(clip, tick);
         }
-        let Some(animator) = self.animations.animators.get_mut(&id.index()) else {
+        let Some(animator) = self.animations.animator_mut(id.index()) else {
             return Err(self.not_animated(id, "has no animation"));
         };
         animator.play(clip, tick)?;
@@ -261,7 +269,7 @@ impl World {
             player.stop();
             return true;
         }
-        match self.animations.animators.get_mut(&id.index()) {
+        match self.animations.animator_mut(id.index()) {
             Some(animator) => {
                 animator.stop();
                 true
@@ -275,7 +283,7 @@ impl World {
     }
 
     pub fn animator_mut(&mut self, id: ObjectId) -> Option<&mut Animator> {
-        self.animations.animators.get_mut(&id.index())
+        self.animations.animator_mut(id.index())
     }
 
     pub fn sprite(&self, id: ObjectId) -> Option<&SpritePlayer> {
@@ -304,6 +312,10 @@ impl World {
 
     pub fn animation_errors(&self) -> &[AnimError] {
         &self.animations.errors
+    }
+
+    pub(crate) fn palette_key(&self) -> (u64, u64) {
+        (self.ticks, self.animations.revision)
     }
 
     pub(crate) fn palettes(&self) -> BTreeMap<usize, Vec<Matrix>> {
@@ -349,6 +361,7 @@ impl World {
     pub(crate) fn step_animations(&mut self) {
         let tick = self.ticks;
         let mut fired: Vec<(usize, Fired)> = Vec::new();
+        self.animations.revision += 1;
         for (&index, animator) in &mut self.animations.animators {
             fired.extend(animator.advance(tick).into_iter().map(|one| (index, one)));
         }
