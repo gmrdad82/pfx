@@ -323,7 +323,7 @@ Inner viewports, shape styles and the character grid are in `docs/flat-styles.md
 
 ## Picking
 
-Every shape instance writes its `id` to the renderer's ids target (R32Uint) in a second pass, "flat ids", in painter's order. It writes wherever its footprint's coverage reaches 0.5 and it has a visible paint.
+Every shape instance writes its `id` to the renderer's ids target (R32Uint) in a second pass, "flat ids", in painter's order. A flat scene drawn alone runs that pass only on a frame that reads a pending pick; a HUD runs it every frame. It writes wherever its footprint's coverage reaches 0.5 and it has a visible paint.
 - Shadows write nothing.
 - An id of 0 still covers what is beneath.
 - Text draws with a nonzero id write it where their glyphs cover.
@@ -340,9 +340,9 @@ Every shape instance writes its `id` to the renderer's ids target (R32Uint) in a
 A frame through `render` is byte-identical before and after this pass existed: ten frames of a test scene, Rgba16Float and sRGB, hash the same on the base commit and here. An empty HUD leaves a 3D frame's bytes unchanged.
 
 Pass order, as `last_pass_order` reports it:
-- alone, Rgba16Float output: `flat`, `flat ids`;
-- alone, sRGB output: `flat`, `flat finish`, `flat ids`;
-- alone with post: `flat`, `flat finish`, `post`, `flat ids`;
+- alone, Rgba16Float output: `flat`, then `flat ids` when a pick is pending;
+- alone, sRGB output: `flat`, `flat finish`, then `flat ids` when a pick is pending;
+- alone with post: `flat`, `flat finish`, `post`, then `flat ids` when a pick is pending;
 - as a HUD: the 3D frame's passes, then `flat`, `flat finish`, `flat ids`.
 
 **Warming.** `Renderer::warm_flat(format, size, looks)` builds what the first flat frame would otherwise build, without drawing a frame:

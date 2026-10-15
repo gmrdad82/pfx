@@ -43,6 +43,8 @@ struct Live {
     ground: Srgba,
     grounded: bool,
     schemes: Option<Receiver<Option<Scheme>>>,
+    resize: Option<Size>,
+    stale: bool,
 }
 
 struct App {
@@ -270,6 +272,8 @@ fn open(
         ground,
         grounded,
         schemes,
+        resize: None,
+        stale: false,
     };
     live.schemes();
     Ok(live)
@@ -301,6 +305,20 @@ impl Live {
     }
 
     fn frame(&mut self, now_ns: u64) -> Result<(), String> {
+        if let Some(size) = self.resize.take() {
+            let config = &mut self.target.config;
+            if (config.width, config.height) != (size.width, size.height) {
+                config.width = size.width;
+                config.height = size.height;
+                self.stale = true;
+            }
+        }
+        if std::mem::take(&mut self.stale) {
+            let gpu = self.painter.renderer().gpu();
+            self.target
+                .surface
+                .configure(&gpu.device, &self.target.config);
+        }
         if self.warming.is_some() {
             return self.warm(now_ns);
         }
@@ -325,8 +343,11 @@ impl Live {
             return Ok(());
         }
         let texture = match self.target.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Success(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                self.stale = true;
+                texture
+            }
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
                 self.target
                     .surface
@@ -354,21 +375,28 @@ impl Live {
 
     fn resized(&mut self, size: Size) {
         if size.width > 0 && size.height > 0 {
-            self.target
-                .resize(self.painter.renderer().gpu(), size.width, size.height);
+            self.resize = Some(size);
             self.driver.feed(Event::Resized(size));
             self.grounded = false;
         }
     }
 
     fn moved(&mut self) {
-        if let Some((monitor, position)) = window::placement(&self.window) {
-            self.driver.feed(Event::Moved { monitor, position });
-        }
         let monitor = self.window.current_monitor();
-        self.driver.feed(Event::Monitor(
-            monitor.as_ref().and_then(|monitor| monitor.name()),
-        ));
+        let name = monitor.as_ref().and_then(|monitor| monitor.name());
+        if let Some(handle) = &monitor
+            && let Ok(outer) = self.window.outer_position()
+        {
+            let origin = handle.position();
+            self.driver.feed(Event::Moved {
+                monitor: name.clone(),
+                position: window::Point {
+                    x: outer.x - origin.x,
+                    y: outer.y - origin.y,
+                },
+            });
+        }
+        self.driver.feed(Event::Monitor(name));
         self.driver.feed(Event::Refresh(
             monitor.as_ref().and_then(window::refresh_millihertz),
         ));
@@ -465,6 +493,14 @@ impl ApplicationHandler for App {
         if let Some(input) = pfx_input::winit::event(&event) {
             live.driver.feed(Event::Input(input));
         }
+        let minimizing = matches!(
+            event,
+            WindowEvent::Resized(_)
+                | WindowEvent::Moved(_)
+                | WindowEvent::Occluded(_)
+                | WindowEvent::Focused(_)
+                | WindowEvent::RedrawRequested
+        );
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => live.resized(Size {
@@ -493,7 +529,9 @@ impl ApplicationHandler for App {
             }
             _ => {}
         }
-        live.check_minimized();
+        if minimizing {
+            live.check_minimized();
+        }
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {

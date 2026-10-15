@@ -275,6 +275,7 @@ pub struct FlatPass {
         wgpu::BindGroup,
     )>,
     text_binds: Vec<(wgpu::TextureView, wgpu::BindGroup)>,
+    finish_bind: Option<(wgpu::TextureView, wgpu::BindGroup)>,
     instances: Pool<Instance>,
     quads: Pool<LayerQuad>,
     glyphs: Pool<PackedGlyph>,
@@ -699,6 +700,7 @@ impl FlatPass {
             uploaded_rows: Vec::new(),
             bind: None,
             text_binds: Vec::new(),
+            finish_bind: None,
             instances: Pool::new("flat instances", wgpu::BufferUsages::VERTEX),
             quads: Pool::new("flat layer quads", wgpu::BufferUsages::VERTEX),
             glyphs: Pool::new("flat glyphs", wgpu::BufferUsages::VERTEX),
@@ -1069,7 +1071,12 @@ impl FlatPass {
         {
             self.ensure_lit(device);
         }
-        self.passes = 1 + 2 * self.quads.items.len() as u32;
+        self.passes = 1 + 2 * self
+            .quads
+            .items
+            .iter()
+            .filter(|quad| quad.opacity[0] > 0.0)
+            .count() as u32;
         Ok(fit)
     }
 
@@ -1419,8 +1426,13 @@ impl FlatPass {
         });
         let mut pass = begin(encoder, target, load, index);
         let layer_view = self.layer.as_ref().map(|layer| &layer.1);
+        let mut hidden = false;
         for op in &self.ops {
             match op {
+                Op::Layer { quad } if self.quads.items[*quad as usize].opacity[0] <= 0.0 => {
+                    hidden = true;
+                }
+                Op::EndLayer { .. } if hidden => hidden = false,
                 Op::Layer { quad } => {
                     drop(pass);
                     index += 1;
@@ -1433,6 +1445,7 @@ impl FlatPass {
                     pass = begin(encoder, target, wgpu::LoadOp::Load, index);
                     self.quad(&mut pass, *quad, true);
                 }
+                _ if hidden => {}
                 op => self.draw_op(&mut pass, op, false),
             }
         }
@@ -1552,20 +1565,28 @@ impl FlatPass {
         mut profiler: Option<&mut GpuProfiler>,
     ) {
         let index = self.finish_index(device, format, linear, blend);
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("flat finish"),
-            layout: &self.finish_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(source),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.ground.as_entire_binding(),
-                },
-            ],
-        });
+        if self
+            .finish_bind
+            .as_ref()
+            .is_none_or(|(view, _)| view != source)
+        {
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("flat finish"),
+                layout: &self.finish_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.ground.as_entire_binding(),
+                    },
+                ],
+            });
+            self.finish_bind = Some((source.clone(), group));
+        }
+        let group = &self.finish_bind.as_ref().unwrap().1;
         let timing = profiler
             .as_deref_mut()
             .and_then(|profiler| profiler.pass("flat finish"));
@@ -1599,7 +1620,7 @@ impl FlatPass {
             pass.set_scissor_rect(x, y, width, height);
         }
         pass.set_pipeline(&self.finishes[index].pipeline);
-        pass.set_bind_group(0, &group, &[]);
+        pass.set_bind_group(0, group, &[]);
         pass.draw(0..3, 0..1);
     }
 

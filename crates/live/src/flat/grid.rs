@@ -233,6 +233,7 @@ pub struct CharGrid {
     pub grid: Grid,
     pub rules: Rules,
     cells: Vec<Cell>,
+    order: Order,
 }
 
 #[derive(Clone, Copy)]
@@ -264,6 +265,7 @@ impl CharGrid {
             grid,
             rules,
             cells: vec![Cell::default(); (grid.columns * grid.rows) as usize],
+            order: Order::default(),
         }
     }
 
@@ -508,9 +510,9 @@ impl CharGrid {
         groups: usize,
         labels: &[(&str, Srgba)],
     ) -> Result<(), String> {
-        let mut order = Order::default();
-        order.build(draws, groups)?;
-        for step in &order.steps {
+        let mut order = std::mem::take(&mut self.order);
+        let built = order.build(draws, groups);
+        for step in order.steps.iter().filter(|_| built.is_ok()) {
             let Step::Draw(index) = *step else {
                 continue;
             };
@@ -532,7 +534,8 @@ impl CharGrid {
                 _ => self.shape(draw),
             }
         }
-        Ok(())
+        self.order = order;
+        built
     }
 
     pub fn char_at(&self, c: u32, r: u32) -> char {
@@ -661,26 +664,23 @@ impl CharGrid {
     fn close(
         &self,
         open: &mut BTreeMap<Run, (i64, Srgba)>,
-        keep: &[Run],
+        keep: &[(Run, Srgba)],
         last_row: i64,
         out: &mut Vec<Draw>,
     ) {
-        let done = open
-            .keys()
-            .filter(|run| !keep.contains(run))
-            .copied()
-            .collect::<Vec<_>>();
-        for run in done {
-            if let Some((first_row, colour)) = open.remove(&run) {
-                let (centre, size) = self.rect([run.0, run.1], [first_row, last_row]);
-                out.push(
-                    Draw::rect(centre, size, 0.0)
-                        .fill(colour)
-                        .shadow(Shadow::None)
-                        .id(run.3),
-                );
+        open.retain(|run, &mut (first_row, colour)| {
+            if keep.iter().any(|(kept, _)| kept == run) {
+                return true;
             }
-        }
+            let (centre, size) = self.rect([run.0, run.1], [first_row, last_row]);
+            out.push(
+                Draw::rect(centre, size, 0.0)
+                    .fill(colour)
+                    .shadow(Shadow::None)
+                    .id(run.3),
+            );
+            false
+        });
     }
 
     fn blocks(&self, of: impl Fn(&Cell) -> Option<(Srgba, u32)>, out: &mut Vec<Draw>) {
@@ -700,8 +700,7 @@ impl CharGrid {
                     _ => runs.push(((c, c, key(colour), id), colour)),
                 }
             }
-            let current = runs.iter().map(|(run, _)| *run).collect::<Vec<_>>();
-            self.close(&mut open, &current, r - 1, out);
+            self.close(&mut open, &runs, r - 1, out);
             for &(run, colour) in &runs {
                 open.entry(run).or_insert((r, colour));
             }
@@ -807,6 +806,7 @@ impl CharGrid {
         let [ox, oy] = self.grid.origin;
         let columns = i64::from(self.grid.columns);
         let rows = i64::from(self.grid.rows);
+        let mut runs: Vec<(i64, i64, Weight, [u32; 4], u32, Srgba)> = Vec::new();
         for horizontal in [true, false] {
             let (outer, inner) = if horizontal {
                 (rows, columns)
@@ -819,7 +819,7 @@ impl CharGrid {
                 (UP, DOWN)
             };
             for fixed in 0..outer {
-                let mut runs: Vec<(i64, i64, Weight, [u32; 4], u32, Srgba)> = Vec::new();
+                runs.clear();
                 for at in 0..inner {
                     let (c, r) = if horizontal { (at, fixed) } else { (fixed, at) };
                     let Some((arms, _)) = self.arms_at(c, r) else {
@@ -840,13 +840,13 @@ impl CharGrid {
                         }
                     }
                 }
-                for (from, to, weight, _, id, ink) in runs {
-                    let lines: Vec<(f32, f32)> = match weight {
-                        Weight::Light => vec![(0.0, t)],
-                        Weight::Heavy => vec![(0.0, 2.0 * t)],
-                        Weight::Double => vec![(-t, t), (t, t)],
+                for &(from, to, weight, _, id, ink) in &runs {
+                    let (lines, count) = match weight {
+                        Weight::Light => ([(0.0, t), (0.0, 0.0)], 1),
+                        Weight::Heavy => ([(0.0, 2.0 * t), (0.0, 0.0)], 1),
+                        Weight::Double => ([(-t, t), (t, t)], 2),
                     };
-                    for (offset, width) in lines {
+                    for &(offset, width) in &lines[..count] {
                         let along = |lattice: i64, start: bool| {
                             let cell = lattice.div_euclid(2);
                             let base = if horizontal {
