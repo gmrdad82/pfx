@@ -311,7 +311,10 @@ pub struct TextEngine {
     context: ScaleContext,
     blocks: HashMap<u64, Block>,
     rasters: BTreeMap<RasterKey, CachedRaster>,
-    atlases: BTreeMap<Vec<RasterKey>, CachedAtlas>,
+    atlases: BTreeMap<Vec<u64>, CachedAtlas>,
+    atlas_cells: Vec<u64>,
+    axes: HashMap<fontdb::ID, Axes>,
+    spots: Vec<Spot>,
     shared: SharedAtlas,
     numbers: HashMap<u64, number::NumberFace>,
     fallbacks: fallback::Fallbacks,
@@ -375,6 +378,9 @@ impl TextEngine {
             blocks: HashMap::new(),
             rasters: BTreeMap::new(),
             atlases: BTreeMap::new(),
+            atlas_cells: Vec::new(),
+            axes: HashMap::new(),
+            spots: Vec::new(),
             shared: SharedAtlas::new(),
             numbers: HashMap::new(),
             fallbacks: fallback::Fallbacks::default(),
@@ -394,6 +400,7 @@ impl TextEngine {
         self.blocks.clear();
         self.rasters.clear();
         self.atlases.clear();
+        self.axes.clear();
         self.shared.clear();
         self.numbers.clear();
         Ok(())
@@ -651,23 +658,25 @@ impl TextEngine {
                 let pen_x =
                     (glyph.x + glyph.x_offset * glyph.font_size).mul_add(1.0, origin[0] * scale);
                 let pen_y = glyph.y - glyph.y_offset * glyph.font_size + origin[1] * scale + line_y;
-                let font = self
-                    .fonts
-                    .get_font(glyph.font_id, glyph.font_weight)
-                    .ok_or(Error::UnsupportedGlyph)?;
+                let axes = font_axes(
+                    &mut self.axes,
+                    &mut self.fonts,
+                    glyph.font_id,
+                    glyph.font_weight,
+                )?;
                 let flags = raster_flags(
                     glyph.cache_key_flags,
                     spans.get(span_index).is_some_and(|span| span.face.italic),
                     self.fonts.db().face(glyph.font_id).map(|face| face.style),
                 );
-                let key = raster_key(
+                let key = keyed(
                     glyph.font_id,
                     glyph.glyph_id,
                     ppem,
                     glyph.font_weight,
                     glyph.font_size / scale,
                     flags,
-                    font.as_swash(),
+                    axes,
                 );
                 pending.push(PendingGlyph {
                     key: RasterKey {
@@ -687,17 +696,11 @@ impl TextEngine {
                 });
             }
         }
-        let atlas_key = pending
-            .iter()
-            .map(|glyph| glyph.key.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        for key in &atlas_key {
+        for glyph in &pending {
+            let key = &glyph.key;
             if let Some(raster) = self.rasters.get_mut(key) {
                 raster.used = true;
             } else {
-                let glyph = pending.iter().find(|glyph| &glyph.key == key).unwrap();
                 let font = self
                     .fonts
                     .get_font(glyph.font_id, glyph.font_weight)
@@ -738,9 +741,20 @@ impl TextEngine {
                 );
             }
         }
-        if let Some(cached) = self.atlases.get_mut(&atlas_key) {
+        let mut atlas_cells = std::mem::take(&mut self.atlas_cells);
+        atlas_cells.clear();
+        atlas_cells.extend(pending.iter().map(|glyph| glyph.key.cell_key()));
+        atlas_cells.sort_unstable();
+        atlas_cells.dedup();
+        if let Some(cached) = self.atlases.get_mut(atlas_cells.as_slice()) {
             cached.used = true;
         } else {
+            let atlas_key = pending
+                .iter()
+                .map(|glyph| glyph.key.clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
             let images = atlas_key
                 .iter()
                 .map(|key| (key.clone(), self.rasters[key].mono.clone()))
@@ -781,7 +795,7 @@ impl TextEngine {
                 cells.insert(key.cell_key(), cell);
             }
             self.atlases.insert(
-                atlas_key.clone(),
+                atlas_cells.clone(),
                 CachedAtlas {
                     used: true,
                     mono,
@@ -791,7 +805,7 @@ impl TextEngine {
                 },
             );
         }
-        let cached = &self.atlases[&atlas_key];
+        let cached = &self.atlases[atlas_cells.as_slice()];
         let mut quads = Vec::with_capacity(pending.len());
         for glyph in pending {
             let Some(&cell) = cached.rects.get(&glyph.key) else {
@@ -839,12 +853,14 @@ impl TextEngine {
                 color: [color[0], color[1], color[2], color[3] * alpha],
             });
         }
-        Ok(RichParagraph {
+        let paragraph = RichParagraph {
             atlas: cached.mono.clone(),
             color_atlas: cached.color.clone(),
             cells: cached.cells.clone(),
             quads,
-        })
+        };
+        self.atlas_cells = atlas_cells;
+        Ok(paragraph)
     }
 
     pub fn place_spans(
@@ -874,9 +890,10 @@ impl TextEngine {
         let scale = placement.scale;
         let block = &self.blocks[&key];
         let (width, height, baseline) = (block.width, block.height, block.baseline);
-        let spots = self.block_spots(key, spans);
+        let mut spots = std::mem::take(&mut self.spots);
+        self.block_spots(key, spans, &mut spots);
         let mut quads = Vec::with_capacity(spots.len());
-        for spot in &spots {
+        let placed = spots.iter().try_for_each(|spot| {
             let pen = Pen::new(spot, placement);
             let key = self.spot_key(spot, placement.representation, scale)?;
             let key = match placement.representation {
@@ -886,8 +903,10 @@ impl TextEngine {
                 },
                 Representation::Msdf => key,
             };
-            self.place_glyph(spot, &key, pen, placement, &mut quads)?;
-        }
+            self.place_glyph(spot, &key, pen, placement, &mut quads)
+        });
+        self.spots = spots;
+        placed?;
         Ok(Placed {
             quads,
             width,
@@ -896,9 +915,9 @@ impl TextEngine {
         })
     }
 
-    fn block_spots(&self, key: u64, spans: &[Span]) -> Vec<Spot> {
+    fn block_spots(&self, key: u64, spans: &[Span], spots: &mut Vec<Spot>) {
         let block = &self.blocks[&key];
-        let mut spots = Vec::new();
+        spots.clear();
         let mut shifts = block.shifts.iter();
         for (run, &line_y) in block.buffer.layout_runs().zip(&block.lines) {
             for glyph in run.glyphs {
@@ -925,7 +944,6 @@ impl TextEngine {
                 });
             }
         }
-        spots
     }
 
     fn spot_key(
@@ -941,20 +959,22 @@ impl TextEngine {
         if !(1.0..=4096.0).contains(&ppem) {
             return Err(Error::InvalidStyle);
         }
-        let font = self
-            .fonts
-            .get_font(spot.font_id, spot.font_weight)
-            .ok_or(Error::UnsupportedGlyph)?;
+        let axes = font_axes(
+            &mut self.axes,
+            &mut self.fonts,
+            spot.font_id,
+            spot.font_weight,
+        )?;
         Ok(RasterKey {
             representation,
-            ..raster_key(
+            ..keyed(
                 spot.font_id,
                 spot.glyph_id,
                 ppem,
                 spot.font_weight,
                 spot.font_size / scale,
                 spot.flags,
-                font.as_swash(),
+                axes,
             )
         })
     }
@@ -1074,7 +1094,7 @@ impl TextEngine {
         }
         let mut images = BTreeMap::new();
         for (font_id, glyph_id, weight, _, _, _) in &pending {
-            let key = (format!("{font_id:?}"), *glyph_id);
+            let key = (*font_id, *glyph_id);
             if images.contains_key(&key) {
                 continue;
             }
@@ -1102,7 +1122,7 @@ impl TextEngine {
         let (atlas, rects) = pack(&images, channels, None)?;
         let mut glyphs = Vec::new();
         for (font_id, glyph_id, _, cluster, position, rotation) in pending {
-            let key = (format!("{font_id:?}"), glyph_id);
+            let key = (font_id, glyph_id);
             let Some(image) = images.get(&key).and_then(Option::as_ref) else {
                 continue;
             };
@@ -1300,9 +1320,6 @@ fn span_key(
         span.face.weight.hash(&mut hasher);
         span.face.italic.hash(&mut hasher);
         span.face.spacing.to_bits().hash(&mut hasher);
-        for channel in span.color {
-            channel.to_bits().hash(&mut hasher);
-        }
     }
     width.map(f32::to_bits).hash(&mut hasher);
     scale.to_bits().hash(&mut hasher);
@@ -1437,7 +1454,7 @@ pub fn baseline(block: &Block) -> f32 {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct RasterKey {
-    font_id: String,
+    font_id: fontdb::ID,
     glyph_id: u16,
     representation: Representation,
     ppem: u32,
@@ -1459,9 +1476,9 @@ impl RasterKey {
             }
         }
 
-        let mut hash = 0xcbf29ce484222325;
-        write(&mut hash, &(self.font_id.len() as u64).to_le_bytes());
-        write(&mut hash, self.font_id.as_bytes());
+        let mut font = Fnv(0xcbf29ce484222325);
+        self.font_id.hash(&mut font);
+        let mut hash = font.0;
         write(&mut hash, &self.glyph_id.to_le_bytes());
         write(&mut hash, &[self.representation as u8]);
         write(&mut hash, &self.ppem.to_le_bytes());
@@ -1493,6 +1510,58 @@ impl RasterKey {
     }
 }
 
+struct Fnv(u64);
+
+impl Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 = (self.0 ^ u64::from(*byte)).wrapping_mul(0x100000001b3);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Axes {
+    wght: Option<(f32, f32)>,
+    opsz: Option<(f32, f32)>,
+}
+
+impl Axes {
+    fn of(font: swash::FontRef<'_>) -> Self {
+        let variations = font.variations();
+        let range = |tag: &[u8; 4]| {
+            variations
+                .find_by_tag(swash::Tag::from_be_bytes(*tag))
+                .map(|axis| (axis.min_value(), axis.max_value()))
+        };
+        Self {
+            wght: range(b"wght"),
+            opsz: range(b"opsz"),
+        }
+    }
+}
+
+fn font_axes(
+    cache: &mut HashMap<fontdb::ID, Axes>,
+    fonts: &mut FontSystem,
+    font_id: fontdb::ID,
+    weight: fontdb::Weight,
+) -> Result<Axes, Error> {
+    if let Some(&axes) = cache.get(&font_id) {
+        return Ok(axes);
+    }
+    let font = fonts
+        .get_font(font_id, weight)
+        .ok_or(Error::UnsupportedGlyph)?;
+    let axes = Axes::of(font.as_swash());
+    cache.insert(font_id, axes);
+    Ok(axes)
+}
+
 fn raster_key(
     font_id: fontdb::ID,
     glyph_id: u16,
@@ -1502,23 +1571,34 @@ fn raster_key(
     flags: CacheKeyFlags,
     font: swash::FontRef<'_>,
 ) -> RasterKey {
-    let variations = font.variations();
-    let wght = variations
-        .find_by_tag(swash::Tag::from_be_bytes(*b"wght"))
-        .map(|axis| {
-            f32::from(weight.0)
-                .clamp(axis.min_value(), axis.max_value())
-                .to_bits()
-        });
-    let opsz = variations
-        .find_by_tag(swash::Tag::from_be_bytes(*b"opsz"))
-        .map(|axis| {
-            size_points
-                .clamp(axis.min_value(), axis.max_value())
-                .to_bits()
-        });
+    keyed(
+        font_id,
+        glyph_id,
+        ppem,
+        weight,
+        size_points,
+        flags,
+        Axes::of(font),
+    )
+}
+
+fn keyed(
+    font_id: fontdb::ID,
+    glyph_id: u16,
+    ppem: f32,
+    weight: fontdb::Weight,
+    size_points: f32,
+    flags: CacheKeyFlags,
+    axes: Axes,
+) -> RasterKey {
+    let wght = axes
+        .wght
+        .map(|(min, max)| f32::from(weight.0).clamp(min, max).to_bits());
+    let opsz = axes
+        .opsz
+        .map(|(min, max)| size_points.clamp(min, max).to_bits());
     RasterKey {
-        font_id: format!("{font_id:?}"),
+        font_id,
         glyph_id,
         representation: Representation::Coverage,
         ppem: ppem.to_bits(),

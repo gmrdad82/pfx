@@ -45,12 +45,13 @@ impl Filter {
             filter = filter.exclude_rigid_body(body_handle(body));
         }
         let physics = &world.physics;
-        let pipeline = world.queries.as_query_pipeline(
-            physics.narrow_phase.query_dispatcher(),
-            &physics.bodies,
-            &physics.colliders,
+        let pipeline = QueryPipeline {
+            dispatcher: physics.narrow_phase.query_dispatcher(),
+            bvh: &world.queries,
+            bodies: &physics.bodies,
+            colliders: &physics.colliders,
             filter,
-        );
+        };
         run(&pipeline)
     }
 }

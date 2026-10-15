@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use cosmic_text::fontdb;
+
 use crate::{ATLAS_CELL_ALIGN, ATLAS_PADDING, Atlas, Error, GlyphImage, MipLevel, RasterKey};
 
 pub const DEFAULT_ATLAS_BUDGET: u64 = 32 << 20;
@@ -207,7 +209,7 @@ impl Shelves {
 
 struct Page {
     kind: PageKind,
-    face: String,
+    face: fontdb::ID,
     atlas: Atlas,
     shelves: Shelves,
 }
@@ -352,8 +354,7 @@ impl SharedAtlas {
             return Err(Error::AtlasTooLarge);
         }
         let units = [width / ATLAS_CELL_ALIGN, height / ATLAS_CELL_ALIGN];
-        let face = key.font_id.clone();
-        let (page, origin) = self.place(&face, kind, units)?;
+        let (page, origin) = self.place(key.font_id, kind, units)?;
         let slot = [
             origin[0] * ATLAS_CELL_ALIGN,
             origin[1] * ATLAS_CELL_ALIGN,
@@ -392,7 +393,7 @@ impl SharedAtlas {
 
     fn place(
         &mut self,
-        face: &str,
+        face: fontdb::ID,
         kind: PageKind,
         units: [u32; 2],
     ) -> Result<(u32, [u32; 2]), Error> {
@@ -452,7 +453,7 @@ impl SharedAtlas {
         }
     }
 
-    fn create_page(&mut self, face: &str, kind: PageKind) -> u32 {
+    fn create_page(&mut self, face: fontdb::ID, kind: PageKind) -> u32 {
         let id = self.next_page;
         self.next_page += 1;
         let channels = kind.channels();
@@ -470,7 +471,7 @@ impl SharedAtlas {
             id,
             Page {
                 kind,
-                face: face.to_owned(),
+                face,
                 atlas: Atlas { channels, levels },
                 shelves: Shelves::new(self.size / ATLAS_CELL_ALIGN),
             },

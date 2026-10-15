@@ -28,6 +28,8 @@ pub(crate) struct Presenter {
     materials: Vec<Material>,
     previous: Vec<Matrix>,
     previous_palettes: BTreeMap<usize, Vec<Matrix>>,
+    palettes: BTreeMap<usize, Vec<Matrix>>,
+    palette_key: Option<(u64, u64)>,
     surfaces: Vec<InstanceSurface>,
     last_view_projection: Option<Matrix>,
     lens_camera: Option<Camera>,
@@ -145,9 +147,15 @@ impl Presenter {
         }
         let posed = world.faced_models(&camera);
         let draws = staged.draws();
-        let palettes = world.palettes();
+        let key = world.palette_key();
+        let fresh = self.palette_key != Some(key);
+        if fresh {
+            self.previous_palettes = std::mem::replace(&mut self.palettes, world.palettes());
+            self.palette_key = Some(key);
+        }
+        let palettes = &self.palettes;
         let frames = world.sprite_frames();
-        let models = draws.models_posed(&posed, &palettes);
+        let models = draws.models_posed(&posed, palettes);
         let mut skinned: Vec<(usize, usize)> = Vec::new();
         self.surfaces.clear();
         self.surfaces.extend_from_slice(staged.surfaces());
@@ -256,11 +264,14 @@ impl Presenter {
                 InstancePose {
                     instance: *instance,
                     joints,
-                    previous: self
-                        .previous_palettes
-                        .get(owner)
-                        .filter(|previous| previous.len() == joints.len())
-                        .unwrap_or(joints),
+                    previous: if fresh {
+                        self.previous_palettes
+                            .get(owner)
+                            .filter(|previous| previous.len() == joints.len())
+                            .unwrap_or(joints)
+                    } else {
+                        joints
+                    },
                 }
             })
             .collect();
@@ -269,7 +280,6 @@ impl Presenter {
             self.touched.posed = true;
         }
         drop(poses);
-        self.previous_palettes = palettes;
         if !frames.is_empty() {
             renderer
                 .set_surfaces(&self.surfaces)

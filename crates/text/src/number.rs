@@ -522,19 +522,7 @@ impl TextEngine {
         let bytes = (std::mem::size_of::<NumberFace>()
             + count * std::mem::size_of::<char>()
             + kern.len() * std::mem::size_of::<Option<f32>>()
-            + glyphs.len() * std::mem::size_of::<Option<NumberGlyph>>()
-            + glyphs
-                .iter()
-                .flatten()
-                .map(|glyph| {
-                    glyph
-                        .coverage
-                        .iter()
-                        .chain([&glyph.msdf])
-                        .map(|key| key.font_id.capacity())
-                        .sum::<usize>()
-                })
-                .sum::<usize>()) as u64;
+            + glyphs.len() * std::mem::size_of::<Option<NumberGlyph>>()) as u64;
         self.numbers.insert(
             key,
             NumberFace {

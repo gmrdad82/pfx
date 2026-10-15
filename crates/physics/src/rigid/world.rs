@@ -1,9 +1,11 @@
 use rapier3d::parry::mass_properties::MassProperties;
+use rapier3d::parry::partitioning::{BvhBuildStrategy, BvhWorkspace};
 use rapier3d::prelude::{
-    ActiveCollisionTypes, ActiveEvents, ActiveHooks, BroadPhaseBvh, ColliderBuilder,
-    ColliderHandle, CollisionEvent, CollisionEventFlags, ContactModificationContext, LockedAxes,
-    PhysicsHooks, PhysicsWorld, RigidBodyBuilder, RigidBodyHandle,
+    Aabb, ActiveCollisionTypes, ActiveEvents, ActiveHooks, Bvh, ColliderBuilder, ColliderHandle,
+    CollisionEvent, CollisionEventFlags, ContactModificationContext, LockedAxes, PhysicsHooks,
+    PhysicsWorld, RigidBodyBuilder, RigidBodyHandle,
 };
+use std::collections::BTreeMap;
 
 use super::convert::{
     Iso, Quat, Vec3, body_handle, body_id, collider_handle, collider_id, iso, lerp_iso, pose, vec,
@@ -56,7 +58,11 @@ struct Surface {
 
 pub struct World {
     pub(super) physics: PhysicsWorld,
-    pub(super) queries: BroadPhaseBvh,
+    pub(super) queries: Bvh,
+    placed: Vec<Option<(u32, Iso)>>,
+    moved: Vec<(ColliderHandle, Iso)>,
+    changed: Vec<(u32, Aabb)>,
+    workspace: BvhWorkspace,
     rate: f32,
     substeps: u32,
     extras: Vec<Option<Extra>>,
@@ -66,6 +72,11 @@ pub struct World {
     forced: Vec<RigidBodyHandle>,
     collector: Collector,
     events: Vec<Event>,
+    motions: Vec<(RigidBodyHandle, Iso, Iso)>,
+    started: Vec<(ColliderHandle, ColliderHandle, usize)>,
+    collisions: Vec<CollisionEvent>,
+    impulses: Vec<(ColliderHandle, ColliderHandle, f32)>,
+    impulse_at: BTreeMap<(ColliderId, ColliderId), usize>,
     steps: u64,
 }
 
@@ -90,7 +101,11 @@ impl World {
         physics.integration_parameters.max_ccd_substeps = usize::from(desc.ccd);
         Self {
             physics,
-            queries: BroadPhaseBvh::new(),
+            queries: Bvh::new(),
+            placed: Vec::new(),
+            moved: Vec::new(),
+            changed: Vec::new(),
+            workspace: BvhWorkspace::default(),
             rate,
             substeps,
             extras: Vec::new(),
@@ -100,6 +115,11 @@ impl World {
             forced: Vec::new(),
             collector: Collector::default(),
             events: Vec::new(),
+            motions: Vec::new(),
+            started: Vec::new(),
+            collisions: Vec::new(),
+            impulses: Vec::new(),
+            impulse_at: BTreeMap::new(),
             steps: 0,
         }
     }
@@ -276,7 +296,7 @@ impl World {
             return false;
         };
         for collider in rb.colliders().to_vec() {
-            self.forget_surface(collider);
+            self.forget_collider(collider);
         }
         self.physics.remove_body(handle);
         self.extras[body.index as usize] = None;
@@ -288,7 +308,7 @@ impl World {
         let handle = collider_handle(collider);
         let removed = self.physics.remove_collider(handle).is_some();
         if removed {
-            self.forget_surface(handle);
+            self.forget_collider(handle);
         }
         removed
     }
@@ -494,10 +514,13 @@ impl World {
 
     pub fn step(&mut self) {
         self.events.clear();
+        self.impulse_at.clear();
         let dt = 1.0 / self.rate;
         let n = self.substeps;
-        let motions = self.motions(dt);
-        let mut started: Vec<(ColliderHandle, ColliderHandle, usize)> = Vec::new();
+        let mut motions = std::mem::take(&mut self.motions);
+        self.motions(dt, &mut motions);
+        let mut started = std::mem::take(&mut self.started);
+        started.clear();
         for i in 0..n {
             self.apply_forces(dt / n as f32);
             for (handle, from, to) in &motions {
@@ -517,6 +540,8 @@ impl World {
             self.collect(&mut started);
             self.enforce_locks();
         }
+        self.motions = motions;
+        self.started = started;
         for extra in self.extras.iter_mut().flatten() {
             extra.force = Vec3::ZERO;
             extra.torque = Vec3::ZERO;
@@ -527,29 +552,47 @@ impl World {
 
     pub fn refresh_queries(&mut self) {
         let physics = &mut self.physics;
-        let moved: Vec<(ColliderHandle, Iso)> = physics
-            .colliders
-            .iter()
-            .filter_map(|(handle, collider)| {
+        self.moved.clear();
+        self.moved
+            .extend(physics.colliders.iter().filter_map(|(handle, collider)| {
                 let parent = physics.bodies.get(collider.parent()?)?;
                 let at = *parent.position() * *collider.position_wrt_parent()?;
                 (at != *collider.position()).then_some((handle, at))
-            })
-            .collect();
-        for (handle, at) in moved {
+            }));
+        for &(handle, at) in &self.moved {
             if let Some(collider) = physics.colliders.get_mut(handle) {
                 collider.set_position(at);
             }
         }
-        let mut queries = BroadPhaseBvh::new();
+        self.changed.clear();
         for (handle, collider) in physics.colliders.iter() {
-            queries.set_aabb(
-                &physics.integration_parameters,
-                handle,
-                collider.compute_aabb(),
-            );
+            let (index, generation) = handle.into_raw_parts();
+            let slot = index as usize;
+            if self.placed.len() <= slot {
+                self.placed.resize(slot + 1, None);
+            }
+            let at = *collider.position();
+            if self.placed[slot] != Some((generation, at)) {
+                self.placed[slot] = Some((generation, at));
+                self.changed.push((index, collider.compute_aabb()));
+            }
         }
-        self.queries = queries;
+        if self.changed.is_empty() {
+            return;
+        }
+        let skin = QUERY_SKIN * physics.integration_parameters.length_unit;
+        if self.changed.len() * 16 < self.queries.leaf_count() as usize {
+            for &(index, aabb) in &self.changed {
+                self.queries
+                    .reinsert_or_update_with_change_detection(aabb, index, skin);
+            }
+        } else {
+            for &(index, aabb) in &self.changed {
+                self.queries.insert_or_update_partially(aabb, index, skin);
+            }
+            self.queries
+                .rebuild(&mut self.workspace, BvhBuildStrategy::Binned);
+        }
     }
 
     pub fn run(&mut self, steps: u32) {
@@ -599,17 +642,23 @@ impl World {
         }
     }
 
-    fn forget_surface(&mut self, handle: ColliderHandle) {
+    fn forget_collider(&mut self, handle: ColliderHandle) {
         let (index, generation) = handle.into_raw_parts();
         if let Some(slot) = self.surfaces.get_mut(index as usize)
             && slot.is_some_and(|s| s.generation == generation)
         {
             *slot = None;
         }
+        if let Some(slot) = self.placed.get_mut(index as usize)
+            && slot.is_some_and(|(placed, _)| placed == generation)
+        {
+            *slot = None;
+            self.queries.remove(index);
+        }
     }
 
-    fn motions(&mut self, dt: f32) -> Vec<(RigidBodyHandle, Iso, Iso)> {
-        let mut motions = Vec::new();
+    fn motions(&mut self, dt: f32, motions: &mut Vec<(RigidBodyHandle, Iso, Iso)>) {
+        motions.clear();
         for (index, slot) in self.extras.iter_mut().enumerate() {
             let Some(extra) = slot else {
                 continue;
@@ -629,7 +678,6 @@ impl World {
             };
             motions.push((handle, from, locked(extra.locks, &extra.anchor, &to)));
         }
-        motions
     }
 
     fn apply_forces(&mut self, h: f32) {
@@ -675,13 +723,11 @@ impl World {
     }
 
     fn collect(&mut self, started: &mut Vec<(ColliderHandle, ColliderHandle, usize)>) {
-        let collisions = self
-            .collector
-            .collisions
-            .lock()
-            .map(|mut events| std::mem::take(&mut *events))
-            .unwrap_or_default();
-        for event in collisions {
+        let mut collisions = std::mem::take(&mut self.collisions);
+        if let Ok(mut events) = self.collector.collisions.lock() {
+            std::mem::swap(&mut *events, &mut collisions);
+        }
+        for event in collisions.drain(..) {
             let (c1, c2, flags, entered) = match event {
                 CollisionEvent::Started(c1, c2, flags) => (c1, c2, flags, true),
                 CollisionEvent::Stopped(c1, c2, flags) => (c1, c2, flags, false),
@@ -721,29 +767,27 @@ impl World {
                 *impulse += add;
             }
         }
-        let impulses = self
-            .collector
-            .impulses
-            .lock()
-            .map(|mut impulses| std::mem::take(&mut *impulses))
-            .unwrap_or_default();
-        for (c1, c2, add) in impulses {
+        self.collisions = collisions;
+        let mut impulses = std::mem::take(&mut self.impulses);
+        if let Ok(mut pending) = self.collector.impulses.lock() {
+            std::mem::swap(&mut *pending, &mut impulses);
+        }
+        for (c1, c2, add) in impulses.drain(..) {
             let (a, b) = (collider_id(c1), collider_id(c2));
-            let existing = self.events.iter_mut().find_map(|event| match event {
-                Event::ContactImpulse {
-                    a: ea,
-                    b: eb,
-                    impulse,
-                } if *ea == a && *eb == b => Some(impulse),
-                _ => None,
-            });
-            match existing {
-                Some(impulse) => *impulse += add,
-                None => self
-                    .events
-                    .push(Event::ContactImpulse { a, b, impulse: add }),
+            match self.impulse_at.get(&(a, b)) {
+                Some(&at) => {
+                    if let Some(Event::ContactImpulse { impulse, .. }) = self.events.get_mut(at) {
+                        *impulse += add;
+                    }
+                }
+                None => {
+                    self.impulse_at.insert((a, b), self.events.len());
+                    self.events
+                        .push(Event::ContactImpulse { a, b, impulse: add });
+                }
             }
         }
+        self.impulses = impulses;
     }
 
     fn enforce_locks(&mut self) {
@@ -834,6 +878,8 @@ impl PhysicsHooks for Hooks<'_> {
         *rigid.friction = Combine::apply(a, b, f1.combine, f2.combine);
     }
 }
+
+const QUERY_SKIN: f32 = 4.0e-2;
 
 fn masked(v: Vec3, locks: [bool; 3]) -> Vec3 {
     Vec3::new(

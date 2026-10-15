@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use pfx_core::clock::{Clock, HitStop};
@@ -408,7 +408,8 @@ pub struct World {
     owners: BTreeMap<ColliderId, usize>,
     sensors: BTreeMap<usize, Sensor>,
     sensor_owners: BTreeMap<ColliderId, usize>,
-    inside: BTreeSet<(usize, usize)>,
+    inside: Vec<(usize, usize)>,
+    now_inside: Vec<(usize, usize)>,
     movers: Vec<usize>,
     layers: Layers,
     events: Vec<WorldEvent>,
@@ -644,7 +645,8 @@ impl World {
             owners,
             sensors,
             sensor_owners,
-            inside: BTreeSet::new(),
+            inside: Vec::new(),
+            now_inside: Vec::new(),
             layers,
             events: Vec::new(),
             contacts: Vec::new(),
@@ -1037,7 +1039,8 @@ impl World {
                 });
             }
         }
-        let mut now = BTreeSet::new();
+        let mut now = std::mem::take(&mut self.now_inside);
+        now.clear();
         for (&place, sensor) in &self.sensors {
             let Some(pose) = self.physics.pose(sensor.body) else {
                 continue;
@@ -1057,7 +1060,7 @@ impl World {
                     .get(&collider)
                     .or_else(|| self.sensor_owners.get(&collider))
                 {
-                    now.insert((place, other));
+                    now.push((place, other));
                 }
             }
         }
@@ -1072,13 +1075,24 @@ impl World {
                 })
             }
         };
+        now.sort_unstable();
+        now.dedup();
+        let inside = &self.inside;
+        let was = |pair: &&(usize, usize)| inside.binary_search(pair).is_ok();
+        self.events.extend(
+            now.iter()
+                .filter(|pair| !was(pair))
+                .map(event(Phase::Enter)),
+        );
         self.events
-            .extend(now.difference(&self.inside).map(event(Phase::Enter)));
-        self.events
-            .extend(now.intersection(&self.inside).map(event(Phase::Stay)));
-        self.events
-            .extend(self.inside.difference(&now).map(event(Phase::Exit)));
-        self.inside = now;
+            .extend(now.iter().filter(was).map(event(Phase::Stay)));
+        self.events.extend(
+            inside
+                .iter()
+                .filter(|pair| now.binary_search(pair).is_err())
+                .map(event(Phase::Exit)),
+        );
+        self.now_inside = std::mem::replace(&mut self.inside, now);
     }
 
     pub fn events(&self) -> &[WorldEvent] {

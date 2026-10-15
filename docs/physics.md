@@ -86,7 +86,7 @@ A kinematic body moves to a target pose each step and pushes the dynamic bodies 
 
 ### Queries
 
-Queries see the colliders as `step` left them, and as `refresh_queries()` leaves them: it moves each collider to its body's current pose and rebuilds the query structure without stepping, so a collider added or a body placed with `set_pose` shows in queries at once, before any step. A `Filter { mask, sensors, exclude }` keeps colliders whose member bits meet `mask` (the query's own mask decides, whatever the collider's collision mask is, so a layer that collides with nothing is still found), skips sensors unless `sensors` is set, and can leave out one body.
+Queries see the colliders as `step` left them, and as `refresh_queries()` leaves them: it moves each collider to its body's current pose and updates the query structure for the colliders that moved or were added, without stepping (a removed collider leaves it at once), so a collider added or a body placed with `set_pose` shows in queries at once, before any step. A `Filter { mask, sensors, exclude }` keeps colliders whose member bits meet `mask` (the query's own mask decides, whatever the collider's collision mask is, so a layer that collides with nothing is still found), skips sensors unless `sensors` is set, and can leave out one body.
 
 - `raycast(origin, direction, max_distance, filter)` returns the first `Hit { collider, body, distance, point, normal }`.
 - `shape_cast(shape, pose, direction, max_distance, filter)` sweeps a shape and returns the first `Hit`, with the point on the swept shape at impact.
