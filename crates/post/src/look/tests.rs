@@ -211,6 +211,51 @@ fn a_vignette_pools_light() {
 }
 
 #[test]
+fn post_passes_at_rest_keep_every_bit_and_grain_follows_frame_and_seed() {
+    let size = [64u32, 40u32];
+    let place = Place {
+        layout: [96.0, 60.0],
+        scale: 64.0 / 96.0,
+        offset: [0.0, 0.0],
+    };
+    let pixels = test_image(size);
+    let grain = Grain::new(0.0, 1.5);
+    assert!(grain.image(&pixels, size, &place, 3, 7) == pixels);
+    assert!(Grade::new().image(&pixels) == pixels);
+    for mode in [FadeMode::Mix, FadeMode::Add] {
+        let fade = Fade {
+            colour: [1.0, 1.0, 1.0, 1.0],
+            amount: 0.0,
+            mode,
+        };
+        assert!(fade.image(&pixels) == pixels);
+    }
+    for letterbox in [
+        Letterbox::aspect(2.39, [0.0, 0.0, 0.0, 1.0]),
+        Letterbox::height(12.0, [0.0, 0.0, 0.0, 1.0]),
+    ] {
+        assert!(letterbox.amount(0.0).image(&pixels, size, &place) == pixels);
+    }
+    let grain = Grain::new(0.1, 1.5);
+    let a = grain.image(&pixels, size, &place, 3, 7);
+    assert!(a == grain.image(&pixels, size, &place, 3, 7));
+    assert!(a != pixels);
+    assert!(a != grain.image(&pixels, size, &place, 4, 7));
+    assert!(a != grain.image(&pixels, size, &place, 3, 8));
+    let bars = Letterbox::height(10.0, [0.0, 0.0, 0.0, 1.0]).image(&pixels, size, &place);
+    assert_eq!(bars[0], [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(
+        bars[(20 * 64 + 32) as usize],
+        pixels[(20 * 64 + 32) as usize]
+    );
+    let grey = Grade::new().saturation(0.0).pixel([0.8, 0.2, 0.4, 1.0]);
+    assert!((grey[0] - grey[1]).abs() < 1e-6 && (grey[1] - grey[2]).abs() < 1e-6);
+    assert_eq!(Fade::pulse(0.0, 0.05, 0.3), 0.0);
+    assert_eq!(Fade::pulse(0.05, 0.05, 0.3), 1.0);
+    assert_eq!(Fade::pulse(0.4, 0.05, 0.3), 0.0);
+}
+
+#[test]
 fn wipes_sweep_from_one_side_to_the_other() {
     let layout = [0.0, 0.0, 1920.0, 1080.0];
     let wipe = Blend::Wipe {
@@ -660,4 +705,120 @@ fn the_gpu_backdrop_vignette_crt_and_mix_match_their_twins() {
     assert_eq!(out[0], [0.0, 0.0, 0.0, 1.0]);
     let centre = out[(100 * 320 + 160) as usize];
     assert!(centre[3] > 0.0);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn the_gpu_grain_grade_letterbox_and_fade_match_their_twins() {
+    let gpu = device();
+    let mut look = LookGpu::new(&gpu.device, &gpu.queue);
+    let size = [320u32, 200u32];
+    let place = Place {
+        layout: [480.0, 270.0],
+        scale: 320.0 / 480.0,
+        offset: [0.0, 10.0],
+    };
+    let pixels = f16(&test_image(size));
+    let source = upload(&gpu, size, &pixels);
+    let target = gpu
+        .offscreen(size[0], size[1], wgpu::TextureFormat::Rgba16Float)
+        .unwrap();
+    fn surface(t: &OffscreenTarget) -> Surface<'_> {
+        Surface {
+            view: &t.view,
+            size: [320, 200],
+        }
+    }
+    let grain = Grain::new(0.12, 1.5);
+    let mut frames = Vec::new();
+    for (frame, seed) in [(3, 7), (3, 7), (4, 7)] {
+        let out = run(
+            &gpu,
+            &mut look,
+            |look| {
+                look.grain(
+                    surface(&source),
+                    surface(&target),
+                    &grain,
+                    &place,
+                    frame,
+                    seed,
+                )
+            },
+            &[&target],
+        )
+        .remove(0);
+        let twin = grain.image(&pixels, size, &place, frame, seed);
+        let differing = out
+            .iter()
+            .zip(&twin)
+            .filter(|(a, b)| worst(&[**a], &[**b]) > 2.0 / 255.0)
+            .count();
+        assert!(
+            differing * 100 <= out.len(),
+            "grain: {differing} of {} pixels differ",
+            out.len()
+        );
+        frames.push(out);
+    }
+    assert!(
+        frames[0] == frames[1],
+        "grain is the same for a frame and seed"
+    );
+    assert!(frames[0] != frames[2], "grain moves with the frame");
+    let grade = Grade::new()
+        .saturation(0.3)
+        .contrast(1.2)
+        .brightness(-0.03)
+        .tint([1.0, 0.85, 0.6, 0.7]);
+    let out = run(
+        &gpu,
+        &mut look,
+        |look| look.grade(surface(&source), surface(&target), &grade),
+        &[&target],
+    )
+    .remove(0);
+    let twin = grade.image(&pixels);
+    assert!(
+        worst(&out, &twin) < 1.5 / 255.0,
+        "grade {}",
+        worst(&out, &twin) * 255.0
+    );
+    for letterbox in [
+        Letterbox::aspect(2.39, [0.02, 0.02, 0.03, 1.0]).amount(0.6),
+        Letterbox::aspect(1.0, [0.0, 0.0, 0.0, 0.8]),
+        Letterbox::height(31.3, [0.1, 0.0, 0.0, 1.0]).amount(0.5),
+    ] {
+        let out = run(
+            &gpu,
+            &mut look,
+            |look| look.letterbox(surface(&source), surface(&target), &letterbox, &place),
+            &[&target],
+        )
+        .remove(0);
+        let twin = letterbox.image(&pixels, size, &place);
+        assert!(
+            worst(&out, &twin) < 1.5 / 255.0,
+            "{letterbox:?} {}",
+            worst(&out, &twin) * 255.0
+        );
+    }
+    for fade in [
+        Fade::to([0.0, 0.0, 0.0, 1.0], 0.35),
+        Fade::flash([1.0, 0.95, 0.8, 1.0], 0.6),
+    ] {
+        let out = run(
+            &gpu,
+            &mut look,
+            |look| look.fade(surface(&source), surface(&target), &fade),
+            &[&target],
+        )
+        .remove(0);
+        let twin = fade.image(&pixels);
+        assert!(
+            worst(&out, &twin) < 1.5 / 255.0,
+            "{fade:?} {}",
+            worst(&out, &twin) * 255.0
+        );
+    }
 }

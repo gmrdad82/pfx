@@ -1,3 +1,4 @@
+pub use pfx_post::look::{hash12, value_noise};
 use std::f32::consts::TAU;
 
 pub type Field = [f32; 3];
@@ -215,34 +216,6 @@ pub const FIBRE: u32 = 6;
 pub const FIBRE_STRETCH: f32 = 8.0;
 pub const GRAIN_HARDEST: f32 = 1.0 / 64.0;
 pub const GRAIN_TURN: f32 = 0.5;
-
-fn fract(value: f32) -> f32 {
-    value - value.floor()
-}
-
-pub fn hash12(p: [f32; 2]) -> f32 {
-    let mut p3 = [
-        fract(p[0] * 0.1031),
-        fract(p[1] * 0.1031),
-        fract(p[0] * 0.1031),
-    ];
-    let lean = p3[0] * (p3[1] + 33.33) + p3[1] * (p3[2] + 33.33) + p3[2] * (p3[0] + 33.33);
-    p3 = p3.map(|value| value + lean);
-    fract((p3[0] + p3[1]) * p3[2])
-}
-
-pub fn value_noise(q: [f32; 2]) -> f32 {
-    let i = [q[0].floor(), q[1].floor()];
-    let f = [q[0] - i[0], q[1] - i[1]];
-    let u = f.map(|t| t * t * (3.0 - 2.0 * t));
-    let a = hash12(i);
-    let b = hash12([i[0] + 1.0, i[1]]);
-    let c = hash12([i[0], i[1] + 1.0]);
-    let d = hash12([i[0] + 1.0, i[1] + 1.0]);
-    let top = a + (b - a) * u[0];
-    let bottom = c + (d - c) * u[0];
-    top + (bottom - top) * u[1]
-}
 
 pub fn grain(kind: u32, params: [f32; 4], p: [f32; 2], inverse: [[f32; 2]; 2]) -> f32 {
     let scale = params[0];

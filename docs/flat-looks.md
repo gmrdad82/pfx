@@ -23,7 +23,9 @@ Everything follows from the time the game passes in: the stack never reads a clo
 
 **Switching mid-transition.** The new transition starts from the look that is showing more, the one switched from before half way and the one switched to after it. At most half a transition jumps.
 
-**Reduced motion.** `stack.motion(Motion::Reduced { longest })` turns every wipe into a crossfade, drops the easing, and caps the duration at `longest` seconds. `longest: 0.0` makes every change instant. Nothing in a look moves on its own: scanlines, glow and curvature are still images.
+**Reduced motion.** `stack.motion(Motion::Reduced { longest })` turns every wipe into a crossfade, drops the easing, and caps the duration at `longest` seconds. `longest: 0.0` makes every change instant. Scanlines, glow, curvature and the rest are still images; only `Grain` moves, with the scene's `frame`, so a game honouring reduced motion holds the frame it passes or leaves the grain out.
+
+**Animating a pass.** `stack.current_mut()` gives the look being switched to, so a game can move a letterbox's or a fade's `amount` from frame to frame without starting a transition; the next frame validates it.
 
 ## Transitions
 
@@ -37,21 +39,22 @@ Everything follows from the time the game passes in: the stack never reads a clo
 
 The two looks are drawn in full and mixed per pixel, the frame's ids coming from the look switched to.
 - In a crossfade both sides take the two token sets mixed perceptually at the progress; in a wipe each side keeps its own.
-- A crossfade between looks whose passes differ only in tokens and shadow tint draws once, with the mixed set and tint.
+- A crossfade draws once when the looks differ only in tokens, shadow tint and the post passes (`Grain`, `Grade`, `Letterbox`, `Fade`, `Bloom`): it draws one look whose post passes are tweened at the progress (`Look::tween`), with the mixed token set and tint. A post pass one look lacks tweens from its rest (zero amount, zero strength, the identity grade), so a crossfade into a look with a letterbox slides the bars in, and one into a fade fades. The other passes must be equal and in the same order; post passes may sit between them. A look with a `LowRes` tweens only `Grain`, `Grade` and `Bloom` this way, since an added `Letterbox` or `Fade` would move its upscale. Anything else crossfades the two drawn frames as before.
+- A pass at rest leaves the frame bit for bit (its stage is skipped), so progress 0 of a tweened crossfade is the look switched from. `post_passes_compose_with_transitions` checks that, the half-way frame on two renderers, the bars at half their height, and that the crossfade draws once while a wipe between the same looks draws both and mixes.
 
 ## Passes
 
-`Look::new().with(LookPass::…)`. A look holds at most one `LowRes`, one `Tokens`, one `Shadow` and one `Backdrop`; `Look::validate` says which rule a look breaks.
+`Look::new().with(LookPass::…)`. A look holds at most one `LowRes`, one `Tokens`, one `Shadow`, one `Backdrop`, one `Grain`, one `Letterbox` and one `Bloom`; `Grade` and `Fade` may repeat (a fade to black under a flash). Each pass's values are finite and in range: a grain's size and a bloom's radius above zero, a letterbox's amount in 0..=1, amounts and strengths zero or more. `Look::validate` says which rule a look breaks.
 
 The order the passes run in:
 1. `Tokens` recolours the scene, and `Shadow` retints its cast shadows.
 2. The scene draws at the render size: the low size with a `LowRes`, the target's otherwise.
 3. `Backdrop` goes under it.
-4. `Quantise` and `Vignette` run in the order listed, at the render size.
-5. The upscale to the target runs just before the first `Crt`, or at the end; crisp text draws right after it.
-6. `Crt` and everything listed after it run at the target size.
+4. `Quantise`, `Vignette`, `Grain`, `Grade` and `Bloom` run in the order listed, at the render size.
+5. The upscale to the target runs just before the first `Crt`, `Letterbox` or `Fade`, or at the end; crisp text draws right after it.
+6. `Crt`, `Letterbox`, `Fade` and everything listed after the first of them run at the target size.
 
-So a pixel-art look quantises and dithers on the low-resolution pixels, and a CRT draws its scanlines on the screen's.
+So a pixel-art look quantises and dithers on the low-resolution pixels, a CRT draws its scanlines on the screen's, and a fade or a letterbox covers the upscale's border too. A `Letterbox` or `Fade` at rest still places the upscale, so animating its amount up from zero never moves it.
 
 ### Low resolution
 
@@ -139,6 +142,46 @@ As a fill, `Fill::Gradient(gradient)` paints a shape in its own local units, so 
 
 `Vignette { centre, radius, falloff, floor, colour }` lights the frame as a pool: full light inside the ellipse of `radius` around `centre` (layout units), falling with a smoothstep over `falloff` (a fraction of the radius) to `floor`, the light left outside. The shade mixes toward `colour`, whose alpha is the strength. It runs at the render size.
 
+### Grain
+
+`Grain { amount, size, response }` (`Grain::new(amount, size)`, response 0.5) adds film grain: value noise over David Hoskins' `hash12` (the hash of the flat pass's `Grain` pattern, MIT, in [NOTICE.md](../NOTICE.md)) with cells of `size` layout units, from −1 to 1, times `amount`, times `1 − response · luma` so highlights take less of it (the response of `pfx_post`'s 3D grain). It is one value for the three channels, on premultiplied colour, kept at zero or more.
+
+- It moves with the scene: `Grain::shift(frame, seed)` offsets the noise by a whole number of cells, up to 1024 on each axis, from `FlatScene::frame` and `seed`. The same frame and seed give the same bits; another frame gives another pattern.
+- The CPU twin is `Grain::image`. On the GPU the hash's last product rounds differently (it is fused), so about 0.2% of pixels land on a neighbouring hash value; `the_gpu_grain_grade_letterbox_and_fade_match_their_twins` allows 1% of pixels over 2/255, and renders the same frame twice for the same bits and another frame for another pattern.
+
+### Grade
+
+`Grade { saturation, contrast, brightness, tint }`, `Grade::new()` the identity, runs on the encoded premultiplied colour like the other passes:
+1. `saturation` mixes with the Rec. 709 luma: 0 is grey, 1 unchanged, above 1 more vivid;
+2. `contrast` scales around middle grey, 0.5: 1 unchanged;
+3. `brightness` is added: 0 unchanged;
+4. `tint` multiplies by `1 − a + rgb · a`, its alpha the strength, so a warm tint after `saturation(0.0)` is a sepia;
+5. the result is kept at zero or more.
+
+### Letterbox
+
+`Letterbox { size, colour, amount }` draws bars over the edges of the whole target:
+- `Letterbox::aspect(ratio, colour)` (`BarSize::Aspect`) leaves the largest band of that aspect: bars top and bottom when the target is taller, at the sides when it is wider;
+- `Letterbox::height(units, colour)` (`BarSize::Height`) puts bars of that many layout units at the top and the bottom.
+
+`amount` from 0 to 1 slides them in: the bars are `amount` of their full thickness, their inner edges anti-aliased by pixel coverage. The colour's alpha is its opacity.
+
+### Fade and flash
+
+`Fade { colour, amount, mode }`, its weight `amount · colour alpha`:
+- `Fade::to(colour, amount)` (`FadeMode::Mix`) mixes the frame toward the opaque colour; 1 is the colour alone, so `Fade::to(black, t)` is a fade to black.
+- `Fade::flash(colour, amount)` (`FadeMode::Add`) adds the colour times the weight where the frame has coverage, a light that keeps the frame under it.
+- `Fade::pulse(elapsed, attack, release)` is a flash's curve: up linearly over `attack` seconds, then down as `(1 − t)²` over `release`. A game sets `amount` from it each frame.
+
+### Bloom of a layer
+
+`Draw::bloom()` puts a draw in the bloom layer, and `LookPass::Bloom(Bloom { radius, strength, tint })` lights around that layer only:
+1. the layer's draws (the scene's own copy, so token swaps apply) render on transparent at the current size divided by the glow's factor (the power of two up to 4 that keeps σ at about 2 pixels), the layout fitted into it;
+2. the glow's separable Gaussian blurs it, σ = `radius` layout units;
+3. the blurred layer is added over the frame times `tint · strength` (the tint's alpha scales it), sampled by layout position, so it lines up at any size and after an upscale.
+
+The other draws neither feed it nor hide it: a card over a lit draw takes its light as well. A look without a `Bloom`, a bloom at zero strength and a scene with no draw in the layer cost nothing and keep their bytes. `bloom_lights_only_around_its_layer` flags one disc of the test board, finds every pixel beyond its reach byte for byte the plain frame and the ring around it lit, and finds a scene with no flagged draw unchanged. Like `Glow`, it has no CPU twin.
+
 ## The floor
 
 The look passes are full-screen triangles into Rgba16Float with core WebGPU only:
@@ -176,17 +219,31 @@ GPU time on this machine (RX 9060 XT, RADV), medians of 60 frames after a warm-u
 | low resolution, quantise 16 with Bayer 4 | 0.025 | quantise 0.012, upscale 0.221 | 0.258 | 0.038 | quantise 0.018, upscale 0.045 | 0.102 |
 | full stack: low resolution, quantise and Bayer 4, then CRT (scanlines, glow, curvature, aberration) | 0.025 | quantise 0.012, upscale 0.221, glow 0.604, crt 0.262 | **1.125** | 0.039 | quantise 0.018, upscale 0.045, glow 0.083, crt 0.048 | **0.233** |
 
+The post passes, from a later run of the same test with 15 discs of the board in the bloom layer. That run's "no look" was 1.111 ms at 4K and 0.143 at 1280×800, and its 4K flat pass settled near 0.65 as the clocks rose, so compare the pass columns:
+
+| Look | 3840×2160 flat | look passes | total | 1280×800 flat | look passes | total |
+|---|---|---|---|---|---|---|
+| grain (size 1) | 0.655 | grain 0.256 | 0.912 | 0.143 | grain 0.029 | 0.172 |
+| grade: desaturate and tint | 0.651 | grade 0.157 | 0.809 | 0.142 | grade 0.028 | 0.170 |
+| letterbox 2.39:1 | 0.648 | letterbox 0.143 | 0.791 | 0.141 | letterbox 0.028 | 0.169 |
+| fade to black, half | 0.650 | fade 0.158 | 0.807 | 0.143 | fade 0.028 | 0.171 |
+| bloom of a layer (radius 10) | 0.650 | layer 0.008, bloom 0.249 | 0.909 | 0.143 | layer 0.008, bloom 0.042 | 0.193 |
+| post chain: grade, grain, bloom, letterbox 2.39:1, fade | 0.673 | layer 0.008, bloom 0.439, grade 0.135, grain 0.306, letterbox 0.307, fade 0.265 | 2.133 | 0.144 | layer 0.008, bloom 0.042, grade 0.028, grain 0.029, letterbox 0.028, fade 0.028 | **0.307** |
+
 What sets them:
 - A full-size pass that reads and writes Rgba16Float once (vignette, CRT, upscale) costs about 0.22 ms at 4K and 0.03 ms at 1280×800: it is bandwidth.
 - The quantiser keeps its palette sorted by OKLab lightness and searches outward from the pixel's lightness, stopping once lightness alone is farther than the best match; that took the 216-colour cube at 4K from 3.18 to 1.94 ms with the same answers. A pixel-art look quantises at its low size, where 16 colours cost 0.012 ms.
 - The glow downsamples by at most 4: at 8, each pixel's 64 serial reads cost more than the full-size reads they save (1.10 ms against 0.60 at 4K).
 - A low-resolution look draws the flat pass at 480×270, so the full stack at 4K costs less than the flat pass alone at 4K.
+- The post passes are each one full-size read and write, the vignette's 0.03 ms at 1280×800; grain adds four hashes a pixel. At 4K, single passes measured 0.14 to 0.26 ms, and up to 0.31 in the chain of five, where the clocks moved within the run.
+- Bloom of a layer draws only the layer's draws, at a quarter of the size at these radii (0.008 ms for 15 discs), and blurs that, so it costs less than the whole-frame `Glow`, which reads every pixel of the frame to find the bright ones.
 - Runs differ by up to 0.03 ms at 1280×800 with the GPU's clocks.
 
-At 8× to 16× this machine for a Deck-class GPU, the full stack at 1280×800 is 1.9 to 3.7 ms of 16.7 (60 fps) or 11.1 (90 fps), and the costliest single look here, the 216-colour cube at full size, 3.1 to 6.2 ms.
+At 8× to 16× this machine for a Deck-class GPU, the full stack at 1280×800 is 1.9 to 3.7 ms of 16.7 (60 fps) or 11.1 (90 fps), the post chain of five 1.3 to 2.6 ms over the flat pass, and the costliest single look here, the 216-colour cube at full size, 3.1 to 6.2 ms.
 
 ## Not covered
 
 - Shapes snapping to a character grid, outline-only and bevel styles and inner viewports are the flat pass's shape styles, not looks; a terminal look is a character-grid scene under a `Crt`.
-- Glow and curvature have no CPU twin; their GPU test checks that they run, stay finite and draw the bezel.
+- Glow and curvature have no CPU twin; their GPU test checks that they run, stay finite and draw the bezel. Bloom of a layer has none either; its GPU test checks where its light reaches.
+- The bloom layer is not hidden by the draws above it, and a look has one layer.
 - A third look switched in mid-transition jumps by up to half a transition.

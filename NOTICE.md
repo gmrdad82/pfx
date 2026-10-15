@@ -54,7 +54,7 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 
 ## Hash without Sine, under the MIT licence
 
-`hash12` in `crates/live/src/flat/sdf.rs` and `flat_hash12` in `crates/live/src/flat/shader.rs` (in the package `pfx-live`), the hash behind the flat pass's `Grain` and `Fibre` patterns, are ported from David Hoskins' "Hash without Sine" (https://www.shadertoy.com/view/4djSRW, `hash12`, its constants `.1031` and `33.33` kept), Copyright (c)2014 David Hoskins, licensed MIT:
+`hash12` in `crates/post/src/look/mod.rs` (in the package `pfx-post`, re-exported by `crates/live/src/flat/sdf.rs`), `flat_hash12` in `crates/live/src/flat/shader.rs` (in the package `pfx-live`) and `look_hash12` in `crates/post/src/look/shader.rs`, the hash behind the flat pass's `Grain` and `Fibre` patterns and the flat looks' `Grain` pass, are ported from David Hoskins' "Hash without Sine" (https://www.shadertoy.com/view/4djSRW, `hash12`, its constants `.1031` and `33.33` kept), Copyright (c)2014 David Hoskins, licensed MIT:
 
 > Copyright (c)2014 David Hoskins.
 >

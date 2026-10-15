@@ -253,6 +253,81 @@ fn look_vignette(@builtin(position) position: vec4f) -> @location(0) vec4f {
     return vec4f(c.rgb * light + shade.rgb * c.a * (1.0 - light), c.a);
 }
 
+fn look_hash12(p: vec2f) -> f32 {
+    var p3 = fract(vec3f(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+fn look_value_noise(q: vec2f) -> f32 {
+    let i = floor(q);
+    let f = q - i;
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = look_hash12(i);
+    let b = look_hash12(i + vec2f(1.0, 0.0));
+    let c = look_hash12(i + vec2f(0.0, 1.0));
+    let d = look_hash12(i + vec2f(1.0, 1.0));
+    let top = a + (b - a) * u.x;
+    let bottom = c + (d - c) * u.x;
+    return top + (bottom - top) * u.y;
+}
+
+fn look_luma(c: vec4f) -> f32 {
+    return dot(c.rgb, vec3f(0.2126, 0.7152, 0.0722));
+}
+
+@fragment
+fn look_grain(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let c = textureLoad(look_source, vec2i(position.xy), 0);
+    let grain = look.p[0];
+    let q = look_layout_at(position.xy) / max(grain.y, 1e-6) + look.p[1].xy;
+    let n = 2.0 * look_value_noise(q) - 1.0;
+    let add = n * grain.x * max(c.a - grain.z * look_luma(c), 0.0);
+    return vec4f(max(c.rgb + vec3f(add), vec3f(0.0)), c.a);
+}
+
+@fragment
+fn look_grade(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let c = textureLoad(look_source, vec2i(position.xy), 0);
+    let grade = look.p[0];
+    let tint = look.p[1];
+    let l = look_luma(c);
+    var v = c.rgb * grade.x + vec3f(l * (1.0 - grade.x));
+    v = v * grade.y + vec3f(0.5 * c.a * (1.0 - grade.y));
+    v = v + vec3f(grade.z * c.a);
+    v = v * (vec3f(1.0 - tint.a) + tint.rgb * tint.a);
+    return vec4f(max(v, vec3f(0.0)), c.a);
+}
+
+@fragment
+fn look_letterbox(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let c = textureLoad(look_source, vec2i(position.xy), 0);
+    let d = min(position.xy, look.size.xy - position.xy);
+    let edge = clamp(look.p[0].xy - d + 0.5, vec2f(0.0), vec2f(1.0));
+    let cover = max(edge.x, edge.y);
+    let bar = look_premultiply(look.p[1]);
+    return bar * cover + c * (1.0 - cover * bar.a);
+}
+
+@fragment
+fn look_fade(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let c = textureLoad(look_source, vec2i(position.xy), 0);
+    let fade = look.p[0];
+    let colour = look.p[1];
+    if (fade.y > 0.5) {
+        return vec4f(c.rgb + colour.rgb * fade.x * c.a, c.a);
+    }
+    return c * (1.0 - fade.x) + vec4f(colour.rgb, 1.0) * fade.x;
+}
+
+@fragment
+fn look_bloom(@builtin(position) position: vec4f) -> @location(0) vec4f {
+    let c = textureLoad(look_source, vec2i(position.xy), 0);
+    let map = look.p[0];
+    let light = textureSampleLevel(look_aux, look_sampler, position.xy * map.xy + map.zw, 0.0);
+    return vec4f(c.rgb + light.rgb * look.p[1].rgb, c.a);
+}
+
 @fragment
 fn look_mix(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let a = textureLoad(look_source, vec2i(position.xy), 0);

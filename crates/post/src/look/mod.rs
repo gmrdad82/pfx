@@ -737,6 +737,364 @@ impl Crt {
     }
 }
 
+fn fract(value: f32) -> f32 {
+    value - value.floor()
+}
+
+pub fn hash12(p: [f32; 2]) -> f32 {
+    let mut p3 = [
+        fract(p[0] * 0.1031),
+        fract(p[1] * 0.1031),
+        fract(p[0] * 0.1031),
+    ];
+    let lean = p3[0] * (p3[1] + 33.33) + p3[1] * (p3[2] + 33.33) + p3[2] * (p3[0] + 33.33);
+    p3 = p3.map(|value| value + lean);
+    fract((p3[0] + p3[1]) * p3[2])
+}
+
+pub fn value_noise(q: [f32; 2]) -> f32 {
+    let i = [q[0].floor(), q[1].floor()];
+    let f = [q[0] - i[0], q[1] - i[1]];
+    let u = f.map(|t| t * t * (3.0 - 2.0 * t));
+    let a = hash12(i);
+    let b = hash12([i[0] + 1.0, i[1]]);
+    let c = hash12([i[0], i[1] + 1.0]);
+    let d = hash12([i[0] + 1.0, i[1] + 1.0]);
+    let top = a + (b - a) * u[0];
+    let bottom = c + (d - c) * u[0];
+    top + (bottom - top) * u[1]
+}
+
+fn luma(c: [f32; 4]) -> f32 {
+    crate::color::luma([c[0], c[1], c[2]], crate::color::REC709)
+}
+
+fn each_pixel(
+    pixels: &[[f32; 4]],
+    size: [u32; 2],
+    mut pixel: impl FnMut([f32; 4], [f32; 2]) -> [f32; 4],
+) -> Vec<[f32; 4]> {
+    pixels
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            pixel(
+                *c,
+                [
+                    (i as u32 % size[0]) as f32 + 0.5,
+                    (i as u32 / size[0]) as f32 + 0.5,
+                ],
+            )
+        })
+        .collect()
+}
+
+pub const GRAIN_SHIFT: f32 = 1024.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grain {
+    pub amount: f32,
+    pub size: f32,
+    pub response: f32,
+}
+
+impl Grain {
+    pub fn new(amount: f32, size: f32) -> Self {
+        Self {
+            amount,
+            size,
+            response: 0.5,
+        }
+    }
+
+    pub fn response(mut self, response: f32) -> Self {
+        self.response = response;
+        self
+    }
+
+    pub fn shift(frame: u32, seed: u32) -> [f32; 2] {
+        let mixed = crate::hash::mixed(seed, frame);
+        [
+            (crate::hash::grain_hash(0x51, 0x2f, mixed) * GRAIN_SHIFT).floor(),
+            (crate::hash::grain_hash(0x2f, 0x51, mixed) * GRAIN_SHIFT).floor(),
+        ]
+    }
+
+    pub fn noise(&self, p: [f32; 2], shift: [f32; 2]) -> f32 {
+        let size = self.size.max(1e-6);
+        2.0 * value_noise([p[0] / size + shift[0], p[1] / size + shift[1]]) - 1.0
+    }
+
+    pub fn pixel(&self, c: [f32; 4], p: [f32; 2], shift: [f32; 2]) -> [f32; 4] {
+        let add = self.noise(p, shift) * self.amount * (c[3] - self.response * luma(c)).max(0.0);
+        [
+            (c[0] + add).max(0.0),
+            (c[1] + add).max(0.0),
+            (c[2] + add).max(0.0),
+            c[3],
+        ]
+    }
+
+    pub fn image(
+        &self,
+        pixels: &[[f32; 4]],
+        size: [u32; 2],
+        place: &Place,
+        frame: u32,
+        seed: u32,
+    ) -> Vec<[f32; 4]> {
+        let shift = Self::shift(frame, seed);
+        each_pixel(pixels, size, |c, pixel| {
+            self.pixel(c, place.to_layout(pixel), shift)
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grade {
+    pub saturation: f32,
+    pub contrast: f32,
+    pub brightness: f32,
+    pub tint: [f32; 4],
+}
+
+impl Default for Grade {
+    fn default() -> Self {
+        Self {
+            saturation: 1.0,
+            contrast: 1.0,
+            brightness: 0.0,
+            tint: [1.0, 1.0, 1.0, 0.0],
+        }
+    }
+}
+
+impl Grade {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn saturation(mut self, saturation: f32) -> Self {
+        self.saturation = saturation;
+        self
+    }
+
+    pub fn contrast(mut self, contrast: f32) -> Self {
+        self.contrast = contrast;
+        self
+    }
+
+    pub fn brightness(mut self, brightness: f32) -> Self {
+        self.brightness = brightness;
+        self
+    }
+
+    pub fn tint(mut self, tint: [f32; 4]) -> Self {
+        self.tint = tint;
+        self
+    }
+
+    pub fn is_identity(&self) -> bool {
+        self.saturation == 1.0
+            && self.contrast == 1.0
+            && self.brightness == 0.0
+            && self.tint[3] == 0.0
+    }
+
+    pub fn pixel(&self, c: [f32; 4]) -> [f32; 4] {
+        let a = c[3];
+        let l = luma(c);
+        let (s, k, t) = (self.saturation, self.contrast, self.tint[3]);
+        let pivot = 0.5 * a;
+        std::array::from_fn(|i| {
+            if i == 3 {
+                return a;
+            }
+            let v = c[i] * s + l * (1.0 - s);
+            let v = v * k + pivot * (1.0 - k);
+            let v = v + self.brightness * a;
+            (v * ((1.0 - t) + self.tint[i] * t)).max(0.0)
+        })
+    }
+
+    pub fn image(&self, pixels: &[[f32; 4]]) -> Vec<[f32; 4]> {
+        pixels.iter().map(|c| self.pixel(*c)).collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BarSize {
+    Aspect(f32),
+    Height(f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Letterbox {
+    pub size: BarSize,
+    pub colour: [f32; 4],
+    pub amount: f32,
+}
+
+impl Letterbox {
+    pub fn aspect(aspect: f32, colour: [f32; 4]) -> Self {
+        Self {
+            size: BarSize::Aspect(aspect),
+            colour,
+            amount: 1.0,
+        }
+    }
+
+    pub fn height(height: f32, colour: [f32; 4]) -> Self {
+        Self {
+            size: BarSize::Height(height),
+            colour,
+            amount: 1.0,
+        }
+    }
+
+    pub fn amount(mut self, amount: f32) -> Self {
+        self.amount = amount;
+        self
+    }
+
+    pub fn thickness(&self, size: [u32; 2], scale: f32) -> [f32; 2] {
+        let amount = self.amount.clamp(0.0, 1.0);
+        let [w, h] = [size[0] as f32, size[1] as f32];
+        match self.size {
+            BarSize::Height(height) => [0.0, height.max(0.0) * scale * amount],
+            BarSize::Aspect(aspect) => {
+                let aspect = aspect.max(1e-6);
+                if w > h * aspect {
+                    [(w - h * aspect) * 0.5 * amount, 0.0]
+                } else {
+                    [0.0, (h - w / aspect) * 0.5 * amount]
+                }
+            }
+        }
+    }
+
+    pub fn cover(thickness: [f32; 2], pixel: [f32; 2], size: [u32; 2]) -> f32 {
+        let cover = |axis: usize| {
+            let d = pixel[axis].min(size[axis] as f32 - pixel[axis]);
+            (thickness[axis] - d + 0.5).clamp(0.0, 1.0)
+        };
+        cover(0).max(cover(1))
+    }
+
+    pub fn pixel(&self, c: [f32; 4], cover: f32) -> [f32; 4] {
+        let bar = premultiply(self.colour);
+        std::array::from_fn(|i| bar[i] * cover + c[i] * (1.0 - cover * bar[3]))
+    }
+
+    pub fn image(&self, pixels: &[[f32; 4]], size: [u32; 2], place: &Place) -> Vec<[f32; 4]> {
+        let thickness = self.thickness(size, place.scale);
+        each_pixel(pixels, size, |c, pixel| {
+            self.pixel(c, Self::cover(thickness, pixel, size))
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FadeMode {
+    #[default]
+    Mix,
+    Add,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fade {
+    pub colour: [f32; 4],
+    pub amount: f32,
+    pub mode: FadeMode,
+}
+
+impl Fade {
+    pub fn to(colour: [f32; 4], amount: f32) -> Self {
+        Self {
+            colour,
+            amount,
+            mode: FadeMode::Mix,
+        }
+    }
+
+    pub fn flash(colour: [f32; 4], amount: f32) -> Self {
+        Self {
+            colour,
+            amount,
+            mode: FadeMode::Add,
+        }
+    }
+
+    pub fn pulse(elapsed: f32, attack: f32, release: f32) -> f32 {
+        if elapsed.is_nan() || elapsed < 0.0 {
+            return 0.0;
+        }
+        if elapsed < attack {
+            return elapsed / attack;
+        }
+        let t = (elapsed - attack) / release.max(1e-6);
+        if t >= 1.0 { 0.0 } else { (1.0 - t) * (1.0 - t) }
+    }
+
+    pub fn weight(&self) -> f32 {
+        match self.mode {
+            FadeMode::Mix => self.amount.clamp(0.0, 1.0) * self.colour[3].clamp(0.0, 1.0),
+            FadeMode::Add => self.amount.max(0.0) * self.colour[3].clamp(0.0, 1.0),
+        }
+    }
+
+    pub fn pixel(&self, c: [f32; 4]) -> [f32; 4] {
+        let k = self.weight();
+        match self.mode {
+            FadeMode::Mix => std::array::from_fn(|i| {
+                c[i] * (1.0 - k) + if i == 3 { 1.0 } else { self.colour[i] } * k
+            }),
+            FadeMode::Add => std::array::from_fn(|i| {
+                if i == 3 {
+                    c[3]
+                } else {
+                    c[i] + self.colour[i] * k * c[3]
+                }
+            }),
+        }
+    }
+
+    pub fn image(&self, pixels: &[[f32; 4]]) -> Vec<[f32; 4]> {
+        pixels.iter().map(|c| self.pixel(*c)).collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bloom {
+    pub radius: f32,
+    pub strength: f32,
+    pub tint: [f32; 4],
+}
+
+impl Bloom {
+    pub fn new(radius: f32, strength: f32) -> Self {
+        Self {
+            radius,
+            strength,
+            tint: [1.0; 4],
+        }
+    }
+
+    pub fn tint(mut self, tint: [f32; 4]) -> Self {
+        self.tint = tint;
+        self
+    }
+
+    pub fn light(&self) -> [f32; 3] {
+        let k = self.strength.max(0.0) * self.tint[3];
+        [self.tint[0] * k, self.tint[1] * k, self.tint[2] * k]
+    }
+
+    pub fn is_dark(&self) -> bool {
+        self.radius.is_nan() || self.radius <= 0.0 || self.light() == [0.0; 3]
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Blend {
     #[default]

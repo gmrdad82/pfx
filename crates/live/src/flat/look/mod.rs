@@ -6,13 +6,16 @@ use super::{
 };
 use pfx_gpu::{GpuProfiler, wgpu};
 pub use pfx_post::look::{
-    Aberration, Backdrop, Blend, Crt, Curvature, Dither, Glow, Gradient, GradientShape, Grid,
-    Interpolation, Major, Palette, Place, Quantise, Scanlines, Upscale, UpscaleMap, Vignette,
+    Aberration, Backdrop, BarSize, Blend, Bloom, Crt, Curvature, Dither, Fade, FadeMode, Glow,
+    Grade, Gradient, GradientShape, Grain, Grid, Interpolation, Letterbox, Major, Palette, Place,
+    Quantise, Scanlines, Upscale, UpscaleMap, Vignette,
 };
-use pfx_post::look::{LookGpu, gpu::Surface, mix_oklab};
+use pfx_post::look::{LookGpu, gpu::Surface, gpu::glow_factor, mix_oklab};
 use std::collections::BTreeMap;
 
 pub const LOW_RES_MAX: u32 = 4096;
+const BLOOM_SLOT: usize = 4;
+const BLOOM_TARGET: usize = 8;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct TokenSet {
@@ -259,6 +262,136 @@ pub enum LookPass {
     Quantise(Quantise),
     Vignette(Vignette),
     Crt(Crt),
+    Grain(Grain),
+    Grade(Grade),
+    Letterbox(Letterbox),
+    Fade(Fade),
+    Bloom(Bloom),
+}
+
+fn finite(values: &[f32]) -> bool {
+    values.iter().all(|value| value.is_finite())
+}
+
+impl LookPass {
+    fn tweens(&self) -> bool {
+        matches!(
+            self,
+            LookPass::Grain(_)
+                | LookPass::Grade(_)
+                | LookPass::Letterbox(_)
+                | LookPass::Fade(_)
+                | LookPass::Bloom(_)
+        )
+    }
+
+    fn on_screen(&self) -> bool {
+        matches!(
+            self,
+            LookPass::Crt(_) | LookPass::Letterbox(_) | LookPass::Fade(_)
+        )
+    }
+
+    fn rest(&self) -> Option<LookPass> {
+        Some(match self {
+            LookPass::Grain(grain) => LookPass::Grain(Grain {
+                amount: 0.0,
+                ..*grain
+            }),
+            LookPass::Grade(_) => LookPass::Grade(Grade::default()),
+            LookPass::Letterbox(letterbox) => LookPass::Letterbox(Letterbox {
+                amount: 0.0,
+                ..*letterbox
+            }),
+            LookPass::Fade(fade) => LookPass::Fade(Fade {
+                amount: 0.0,
+                ..*fade
+            }),
+            LookPass::Bloom(bloom) => LookPass::Bloom(Bloom {
+                strength: 0.0,
+                ..*bloom
+            }),
+            _ => return None,
+        })
+    }
+
+    fn toward(&self, other: &LookPass, t: f32) -> Option<LookPass> {
+        let f = |a: f32, b: f32| a + (b - a) * t;
+        let c = |a: [f32; 4], b: [f32; 4]| std::array::from_fn(|i| f(a[i], b[i]));
+        Some(match (self, other) {
+            (LookPass::Grain(a), LookPass::Grain(b)) => LookPass::Grain(Grain {
+                amount: f(a.amount, b.amount),
+                size: f(a.size, b.size),
+                response: f(a.response, b.response),
+            }),
+            (LookPass::Grade(a), LookPass::Grade(b)) => LookPass::Grade(Grade {
+                saturation: f(a.saturation, b.saturation),
+                contrast: f(a.contrast, b.contrast),
+                brightness: f(a.brightness, b.brightness),
+                tint: c(a.tint, b.tint),
+            }),
+            (LookPass::Letterbox(a), LookPass::Letterbox(b)) => LookPass::Letterbox(Letterbox {
+                size: match (a.size, b.size) {
+                    (BarSize::Aspect(x), BarSize::Aspect(y)) => BarSize::Aspect(f(x, y)),
+                    (BarSize::Height(x), BarSize::Height(y)) => BarSize::Height(f(x, y)),
+                    _ => return None,
+                },
+                colour: c(a.colour, b.colour),
+                amount: f(a.amount, b.amount),
+            }),
+            (LookPass::Fade(a), LookPass::Fade(b)) if a.mode == b.mode => LookPass::Fade(Fade {
+                colour: c(a.colour, b.colour),
+                amount: f(a.amount, b.amount),
+                mode: a.mode,
+            }),
+            (LookPass::Bloom(a), LookPass::Bloom(b)) => LookPass::Bloom(Bloom {
+                radius: f(a.radius, b.radius),
+                strength: f(a.strength, b.strength),
+                tint: c(a.tint, b.tint),
+            }),
+            _ => return None,
+        })
+    }
+
+    fn check(&self) -> Result<(), String> {
+        let (ok, rule) = match self {
+            LookPass::Grain(grain) => (
+                finite(&[grain.amount, grain.size, grain.response])
+                    && grain.amount >= 0.0
+                    && grain.size > 0.0,
+                "a grain's amount is zero or more and its size more than zero",
+            ),
+            LookPass::Grade(grade) => (
+                finite(&[grade.saturation, grade.contrast, grade.brightness])
+                    && finite(&grade.tint)
+                    && grade.saturation >= 0.0
+                    && grade.contrast >= 0.0,
+                "a grade is finite, its saturation and contrast zero or more",
+            ),
+            LookPass::Letterbox(letterbox) => (
+                match letterbox.size {
+                    BarSize::Aspect(aspect) => aspect.is_finite() && aspect > 0.0,
+                    BarSize::Height(height) => height.is_finite() && height >= 0.0,
+                } && finite(&letterbox.colour)
+                    && (0.0..=1.0).contains(&letterbox.amount),
+                "a letterbox has a positive aspect or a height of zero or more, and an amount in 0..=1",
+            ),
+            LookPass::Fade(fade) => (
+                finite(&fade.colour) && fade.amount.is_finite() && fade.amount >= 0.0,
+                "a fade's colour is finite and its amount zero or more",
+            ),
+            LookPass::Bloom(bloom) => (
+                finite(&bloom.tint)
+                    && bloom.radius.is_finite()
+                    && bloom.radius > 0.0
+                    && bloom.strength.is_finite()
+                    && bloom.strength >= 0.0,
+                "a bloom's radius is more than zero and its strength zero or more",
+            ),
+            _ => (true, ""),
+        };
+        if ok { Ok(()) } else { Err(rule.into()) }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -320,6 +453,15 @@ impl Look {
                     .into(),
             );
         }
+        if count(|p| matches!(p, LookPass::Grain(_))) > 1
+            || count(|p| matches!(p, LookPass::Letterbox(_))) > 1
+            || count(|p| matches!(p, LookPass::Bloom(_))) > 1
+        {
+            return Err("a look holds at most one grain, letterbox and bloom".into());
+        }
+        for pass in &self.passes {
+            pass.check()?;
+        }
         if let Some(tint) = self.shadow()
             && !(tint.alpha.is_finite() && tint.alpha >= 0.0)
         {
@@ -335,15 +477,45 @@ impl Look {
         Ok(())
     }
 
-    fn same_pixels(&self, other: &Look) -> bool {
-        let pixels = |look: &Look| {
+    pub fn tween(&self, to: &Look, t: f32) -> Option<Look> {
+        fn kept(look: &Look) -> Vec<&LookPass> {
             look.passes
                 .iter()
                 .filter(|pass| !matches!(pass, LookPass::Tokens(_) | LookPass::Shadow(_)))
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        pixels(self) == pixels(other)
+                .collect()
+        }
+        let (a, b) = (kept(self), kept(to));
+        let low = self.low_res().is_some() || to.low_res().is_some();
+        let alone = |pass: &LookPass| pass.tweens() && !(low && pass.on_screen());
+        let mut passes = Vec::new();
+        let (mut i, mut j) = (0, 0);
+        while i < a.len() || j < b.len() {
+            match (a.get(i), b.get(j)) {
+                (Some(x), Some(y)) if std::mem::discriminant(*x) == std::mem::discriminant(*y) => {
+                    passes.push(if x.tweens() {
+                        x.toward(y, t)?
+                    } else if x == y {
+                        (*x).clone()
+                    } else {
+                        return None;
+                    });
+                    i += 1;
+                    j += 1;
+                }
+                (Some(x), _) if alone(x) => {
+                    passes.push(x.toward(&x.rest()?, t)?);
+                    i += 1;
+                }
+                (_, Some(y)) if alone(y) => {
+                    passes.push(y.rest()?.toward(y, t)?);
+                    j += 1;
+                }
+                _ => return None,
+            }
+        }
+        let look = Look { passes };
+        look.validate().ok()?;
+        Some(look)
     }
 }
 
@@ -496,6 +668,10 @@ impl LookStack {
 
     pub fn current(&self) -> &Look {
         &self.current
+    }
+
+    pub fn current_mut(&mut self) -> &mut Look {
+        &mut self.current
     }
 
     pub fn tokens(&self) -> &TokenSet {
@@ -707,6 +883,15 @@ fn warm_slots<'a>(
                 want(3, size);
             }
         }
+        if look
+            .passes
+            .iter()
+            .any(|pass| matches!(pass, LookPass::Bloom(_)))
+        {
+            let layer = render.map(|side| side.div_ceil(4));
+            want(BLOOM_SLOT, layer);
+            want(BLOOM_SLOT + 1, layer);
+        }
     }
     Ok(slots)
 }
@@ -724,6 +909,11 @@ enum Stage<'l> {
     Upscale(UpscaleMap),
     Text,
     Crt(&'l Crt),
+    Grain(&'l Grain),
+    Grade(&'l Grade),
+    Letterbox(&'l Letterbox),
+    Fade(&'l Fade),
+    Bloom(&'l Bloom),
 }
 
 impl FlatLooks {
@@ -789,12 +979,13 @@ impl FlatLooks {
         self.gpu.begin();
         self.stages = 0;
         let settled = frame.settled();
-        let shared =
-            !settled && frame.blend == Blend::Crossfade && frame.from.same_pixels(frame.to);
-        let sides: Vec<&Look> = if settled || shared {
-            vec![frame.to]
-        } else {
-            vec![frame.from, frame.to]
+        let tweened = (!settled && frame.blend == Blend::Crossfade)
+            .then(|| frame.from.tween(frame.to, frame.progress.clamp(0.0, 1.0)))
+            .flatten();
+        let sides: Vec<&Look> = match &tweened {
+            Some(look) => vec![look],
+            None if settled => vec![frame.to],
+            None => vec![frame.from, frame.to],
         };
         let mixed = !settled && frame.blend == Blend::Crossfade;
         let copies: Vec<SceneCopy<'_>> = sides
@@ -882,21 +1073,27 @@ impl FlatLooks {
             stages.push(Stage::Backdrop(backdrop));
         }
         let mut upscaled = map.is_none();
+        let blooming = copy.draws.iter().any(|draw| draw.fx.bloom);
         for pass in &look.passes {
+            if pass.on_screen() && !upscaled {
+                stages.push(Stage::Upscale(map.unwrap()));
+                if crisp {
+                    stages.push(Stage::Text);
+                }
+                upscaled = true;
+            }
             match pass {
                 LookPass::Quantise(quantise) => stages.push(Stage::Quantise(quantise)),
                 LookPass::Vignette(vignette) => stages.push(Stage::Vignette(vignette)),
-                LookPass::Crt(crt) => {
-                    if !upscaled {
-                        stages.push(Stage::Upscale(map.unwrap()));
-                        if crisp {
-                            stages.push(Stage::Text);
-                        }
-                        upscaled = true;
-                    }
-                    if !crt.is_empty() {
-                        stages.push(Stage::Crt(crt));
-                    }
+                LookPass::Crt(crt) if !crt.is_empty() => stages.push(Stage::Crt(crt)),
+                LookPass::Grain(grain) if grain.amount != 0.0 => stages.push(Stage::Grain(grain)),
+                LookPass::Grade(grade) if !grade.is_identity() => stages.push(Stage::Grade(grade)),
+                LookPass::Letterbox(letterbox) if letterbox.amount > 0.0 => {
+                    stages.push(Stage::Letterbox(letterbox))
+                }
+                LookPass::Fade(fade) if fade.weight() > 0.0 => stages.push(Stage::Fade(fade)),
+                LookPass::Bloom(bloom) if blooming && !bloom.is_dark() => {
+                    stages.push(Stage::Bloom(bloom))
                 }
                 _ => {}
             }
@@ -971,6 +1168,65 @@ impl FlatLooks {
                 Stage::Quantise(quantise) => self.gpu.quantise(from, to, quantise),
                 Stage::Vignette(vignette) => self.gpu.vignette(from, to, vignette, &place),
                 Stage::Crt(crt) => self.gpu.crt(device, from, to, crt, &place),
+                Stage::Grain(grain) => {
+                    self.gpu
+                        .grain(from, to, grain, &place, scene.frame, scene.seed)
+                }
+                Stage::Grade(grade) => self.gpu.grade(from, to, grade),
+                Stage::Letterbox(letterbox) => self.gpu.letterbox(from, to, letterbox, &place),
+                Stage::Fade(fade) => self.gpu.fade(from, to, fade),
+                Stage::Bloom(bloom) => {
+                    let factor = glow_factor(bloom.radius * place.scale);
+                    let layer_size = current_size.map(|side| side.div_ceil(factor));
+                    let layer = SceneCopy {
+                        draws: copy
+                            .draws
+                            .iter()
+                            .filter(|draw| draw.fx.bloom)
+                            .cloned()
+                            .collect(),
+                        text: copy.text.clone(),
+                        curve: copy.curve.clone(),
+                        clear: None,
+                    };
+                    let slot = BLOOM_SLOT + index;
+                    let layer_fit = self.pass(device, queue, slot).prepare(
+                        device,
+                        queue,
+                        &layer.scene(scene),
+                        layer_size,
+                    )?;
+                    let light = self
+                        .gpu
+                        .target(device, BLOOM_TARGET + 2 * index, layer_size);
+                    let spare = self
+                        .gpu
+                        .target(device, BLOOM_TARGET + 2 * index + 1, layer_size);
+                    if let Some(Some(pass)) = self.passes.get(slot) {
+                        pass.encode_colour_as(
+                            "flat bloom",
+                            encoder,
+                            &light,
+                            Some([0.0; 4]),
+                            profiler.as_deref_mut(),
+                        );
+                    }
+                    self.gpu.bloom(
+                        Surface {
+                            view: &light,
+                            size: layer_size,
+                        },
+                        Surface {
+                            view: &spare,
+                            size: layer_size,
+                        },
+                        from,
+                        to,
+                        bloom,
+                        &place,
+                        &place_of(&layer_fit),
+                    );
+                }
                 Stage::Upscale(map) => {
                     self.gpu.upscale(from, to, &map, clear);
                     let k = map.scale();

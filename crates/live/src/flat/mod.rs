@@ -336,6 +336,7 @@ pub struct Fx {
     pub blur: [f32; 2],
     pub additive: bool,
     pub unpicked: bool,
+    pub bloom: bool,
 }
 
 impl Fx {
@@ -565,6 +566,11 @@ impl Draw {
 
     pub fn unpicked(mut self) -> Self {
         self.fx.unpicked = true;
+        self
+    }
+
+    pub fn bloom(mut self) -> Self {
+        self.fx.bloom = true;
         self
     }
 }

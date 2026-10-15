@@ -354,6 +354,86 @@ fn looks_validate_their_passes() {
     assert!(!LookFrame::still(&terminal(), &TokenSet::new()).is_identity());
 }
 
+fn screen() -> Look {
+    Look::new()
+        .with(LookPass::Grade(
+            Grade::new().saturation(0.4).tint([1.0, 0.9, 0.75, 0.5]),
+        ))
+        .with(LookPass::Grain(Grain::new(0.08, 1.5)))
+        .with(LookPass::Bloom(
+            Bloom::new(10.0, 0.9).tint(Srgba::hex(0x7cf2a0).0),
+        ))
+        .with(LookPass::Letterbox(Letterbox::aspect(
+            2.39,
+            [0.0, 0.0, 0.0, 1.0],
+        )))
+        .with(LookPass::Fade(Fade::to([0.0, 0.0, 0.0, 1.0], 0.25)))
+}
+
+#[test]
+fn post_passes_validate_and_tween_in_a_crossfade() {
+    assert!(screen().validate().is_ok());
+    let bad = [
+        LookPass::Grain(Grain::new(0.1, 0.0)),
+        LookPass::Grade(Grade::new().saturation(f32::NAN)),
+        LookPass::Letterbox(Letterbox::height(40.0, [0.0; 4]).amount(1.5)),
+        LookPass::Letterbox(Letterbox::aspect(0.0, [0.0; 4])),
+        LookPass::Fade(Fade::to([0.0; 4], -1.0)),
+        LookPass::Bloom(Bloom::new(0.0, 1.0)),
+    ];
+    for pass in bad {
+        assert!(
+            Look::new().with(pass.clone()).validate().is_err(),
+            "{pass:?}"
+        );
+    }
+    let twice = Look::new()
+        .with(LookPass::Grain(Grain::new(0.1, 1.0)))
+        .with(LookPass::Grain(Grain::new(0.1, 1.0)));
+    assert!(twice.validate().is_err());
+    let plain = Look::new().with(LookPass::Tokens(dark_tokens()));
+    let half = plain.tween(&screen(), 0.5).unwrap();
+    assert_eq!(half.passes.len(), 5);
+    match &half.passes[3] {
+        LookPass::Letterbox(letterbox) => assert_eq!(letterbox.amount, 0.5),
+        other => panic!("{other:?}"),
+    }
+    match &half.passes[0] {
+        LookPass::Grade(grade) => assert!((grade.saturation - 0.7).abs() < 1e-6),
+        other => panic!("{other:?}"),
+    }
+    let start = plain.tween(&screen(), 0.0).unwrap();
+    for pass in &start.passes {
+        assert_eq!(pass.rest().as_ref(), Some(pass), "{pass:?}");
+    }
+    let back = screen().tween(&plain, 0.0).unwrap();
+    assert_eq!(back.passes, screen().passes);
+    assert!(Look::new().tween(&terminal(), 0.5).is_none());
+    let pool_look = Look::new().with(LookPass::Vignette(pool()));
+    assert!(pool_look.tween(&Look::new(), 0.5).is_none());
+    let retro_screen = retro(LowText::Pixelated, Upscale::Fit);
+    assert!(
+        retro_screen
+            .tween(
+                &retro_screen
+                    .clone()
+                    .with(LookPass::Fade(Fade::to([0.0; 4], 1.0))),
+                0.5
+            )
+            .is_none()
+    );
+    assert!(
+        retro_screen
+            .tween(
+                &retro_screen
+                    .clone()
+                    .with(LookPass::Grain(Grain::new(0.1, 2.0))),
+                0.5
+            )
+            .is_some()
+    );
+}
+
 #[test]
 fn gradient_fills_pack_and_render_on_the_cpu_twin() {
     let gradient = Gradient::radial(
@@ -794,6 +874,133 @@ fn grouped_scenes_render_through_the_renderer_with_timings() {
     }
 }
 
+fn bloom_draws(every: bool) -> Vec<Draw> {
+    let mut draws = board_draws();
+    let mut first = true;
+    for draw in &mut draws {
+        if matches!(draw.shape, Shape::Circle { .. }) && (every || first) {
+            draw.fx.bloom = true;
+            first = false;
+        }
+    }
+    draws
+}
+
+fn look_labels(rig: &mut Rig, scene: &FlatScene<'_>, frame: &LookFrame<'_>) -> Vec<String> {
+    rig.renderer
+        .render_flat_look(scene, frame, &rig.target.view)
+        .unwrap()
+        .into_iter()
+        .map(|timing| timing.label)
+        .collect()
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn post_passes_compose_with_transitions() {
+    let mut turns = pfx_gpu::pace::Turns::default();
+    let draws = bloom_draws(true);
+    let curve = test_curve();
+    let base = scene(&draws, &curve, &[]);
+    let size = [1280u32, 800u32];
+    let tokens = board_tokens();
+    let from = Look::new();
+    let to = screen();
+    let at = |progress: f32, blend: Blend| LookFrame {
+        from: &from,
+        to: &to,
+        progress,
+        blend,
+        base: &tokens,
+    };
+    let mut rig = turns.cpu(|| Rig::new(size));
+    let from_still = turns.cpu(|| rig.look(&base, &LookFrame::still(&from, &tokens)));
+    let to_still = turns.cpu(|| rig.look(&base, &LookFrame::still(&to, &tokens)));
+    assert!(from_still != to_still);
+    assert!(
+        turns.cpu(|| rig.look(&base, &at(0.0, Blend::Crossfade))) == from_still,
+        "progress 0 is the look switched from"
+    );
+    let middle = turns.cpu(|| rig.look(&base, &at(0.5, Blend::Crossfade)));
+    assert!(middle != from_still && middle != to_still);
+    let labels = turns.cpu(|| look_labels(&mut rig, &base, &at(0.5, Blend::Crossfade)));
+    assert!(
+        !labels.iter().any(|label| label == "look mix"),
+        "{labels:?}"
+    );
+    let mut other = turns.cpu(|| Rig::new(size));
+    assert!(middle == turns.cpu(|| other.look(&base, &at(0.5, Blend::Crossfade))));
+    let row = |pixels: &[[u16; 4]], y: u32| byte(f32s(&[pixels[(y * size[0] + 640) as usize]])[0]);
+    let bar = (800.0 - 1280.0 / 2.39) * 0.5 * 0.5;
+    assert_eq!(row(&middle, (bar - 4.0) as u32), [0, 0, 0]);
+    assert_ne!(row(&middle, (bar + 4.0) as u32), [0, 0, 0]);
+    let wipe = Blend::Wipe {
+        angle: 0.3,
+        softness: 60.0,
+    };
+    let wiped = turns.cpu(|| rig.look(&base, &at(0.5, wipe)));
+    assert!(wiped != middle);
+    assert!(wiped == turns.cpu(|| other.look(&base, &at(0.5, wipe))));
+    let labels = turns.cpu(|| look_labels(&mut rig, &base, &at(0.5, wipe)));
+    assert!(
+        labels.is_empty() || labels.iter().any(|label| label == "look mix"),
+        "{labels:?}"
+    );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn bloom_lights_only_around_its_layer() {
+    let mut turns = pfx_gpu::pace::Turns::default();
+    let curve = test_curve();
+    let size = [1280u32, 800u32];
+    let tokens = board_tokens();
+    let bloom = Look::new().with(LookPass::Bloom(Bloom::new(12.0, 1.0)));
+    let mut rig = turns.cpu(|| Rig::new(size));
+    let unflagged = board_draws();
+    let unflagged_scene = scene(&unflagged, &curve, &[]);
+    let plain = turns.cpu(|| rig.plain(&unflagged_scene));
+    assert!(
+        turns.cpu(|| rig.look(&unflagged_scene, &LookFrame::still(&bloom, &tokens))) == plain,
+        "a bloom with no draws in its layer keeps the frame"
+    );
+    let draws = bloom_draws(false);
+    let base = scene(&draws, &curve, &[]);
+    assert!(turns.cpu(|| rig.plain(&base)) == plain);
+    let lit = turns.cpu(|| rig.look(&base, &LookFrame::still(&bloom, &tokens)));
+    let disc = draws.iter().find(|draw| draw.fx.bloom).unwrap();
+    let centre = [disc.transform[3][0], disc.transform[3][1]];
+    let fit = Fit::new(LAYOUT, size).unwrap();
+    let reach = 26.0 + 20.0 + 3.0 * 12.0 + 24.0;
+    let (lit_bytes, plain_bytes) = (f32s(&lit), f32s(&plain));
+    let mut brighter = 0;
+    for y in 0..size[1] {
+        for x in 0..size[0] {
+            let p = fit.to_layout([x as f32 + 0.5, y as f32 + 0.5]);
+            let d = ((p[0] - centre[0]).powi(2) + (p[1] - centre[1]).powi(2)).sqrt();
+            let i = (y * size[0] + x) as usize;
+            if d > reach {
+                assert_eq!(
+                    byte(lit_bytes[i]),
+                    byte(plain_bytes[i]),
+                    "({x}, {y}) is out of the bloom's reach"
+                );
+            } else if d > 30.0 && d < 40.0 {
+                let gain: f32 = (0..3)
+                    .map(|c| {
+                        half::f16::from_bits(lit[i][c]).to_f32()
+                            - half::f16::from_bits(plain[i][c]).to_f32()
+                    })
+                    .sum();
+                if gain > 0.02 {
+                    brighter += 1;
+                }
+            }
+        }
+    }
+    assert!(brighter > 100, "{brighter} pixels lit around the disc");
+}
+
 fn median(values: &mut [f64]) -> f64 {
     values.sort_by(f64::total_cmp);
     values[values.len() / 2]
@@ -802,7 +1009,7 @@ fn median(values: &mut [f64]) -> f64 {
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
 fn look_passes_cost_at_4k_and_deck_size() {
-    let draws = board_draws();
+    let draws = bloom_draws(true);
     let curve = test_curve();
     let base = scene(&draws, &curve, &[]);
     let tokens = board_tokens();
@@ -874,6 +1081,34 @@ fn look_passes_cost_at_4k_and_deck_size() {
                 aberration: curved.aberration,
             })),
         ),
+        (
+            "grain",
+            Look::new().with(LookPass::Grain(Grain::new(0.06, 1.0))),
+        ),
+        (
+            "grade: desaturate and tint",
+            Look::new().with(LookPass::Grade(
+                Grade::new().saturation(0.4).tint([1.0, 0.9, 0.75, 0.5]),
+            )),
+        ),
+        (
+            "letterbox 2.39:1",
+            Look::new().with(LookPass::Letterbox(Letterbox::aspect(
+                2.39,
+                [0.0, 0.0, 0.0, 1.0],
+            ))),
+        ),
+        (
+            "fade to black, half",
+            Look::new().with(LookPass::Fade(Fade::to([0.0, 0.0, 0.0, 1.0], 0.5))),
+        ),
+        (
+            "bloom of a layer (15 discs, radius 10)",
+            Look::new().with(LookPass::Bloom(
+                Bloom::new(10.0, 0.9).tint(Srgba::hex(0x7cf2a0).0),
+            )),
+        ),
+        ("post chain: grade, grain, bloom, letterbox, fade", screen()),
     ];
     let mut report = String::new();
     for size in [[3840u32, 2160u32], [1280, 800]] {
@@ -1227,12 +1462,12 @@ fn shadow_tints_crossfade_with_the_transition_and_wipe_apart() {
         Srgba::hex(0x000000).alpha(0.5)
     );
     assert_eq!(side_shadow(&frame, frame.to, false, curve), curve);
-    assert!(plain.same_pixels(&dark));
+    assert!(plain.tween(&dark, 0.5).is_some());
     let tokens_and_tint = dark
         .clone()
         .with(LookPass::Tokens(TokenSet::new().with("a", Srgba::WHITE)));
-    assert!(plain.same_pixels(&tokens_and_tint));
-    assert!(!plain.same_pixels(&terminal()));
+    assert!(plain.tween(&tokens_and_tint, 0.5).is_some());
+    assert!(plain.tween(&terminal(), 0.5).is_none());
 }
 
 fn tinted_curve(tint: &ShadowTint) -> ShadowCurve {
@@ -1463,7 +1698,7 @@ fn the_look_set_counts_its_pipelines_exactly() {
     let gpu = pollster::block_on(Gpu::headless()).unwrap();
     let size = [1280u32, 800u32];
     let own = LookGpu::new(&gpu.device, &gpu.queue).pipelines();
-    assert_eq!(own, 9);
+    assert_eq!(own, 14);
     let slot = FlatPass::new(&gpu.device, &gpu.queue).pipelines_made() + 2;
 
     let mut identity = FlatLooks::new(&gpu.device, &gpu.queue);
