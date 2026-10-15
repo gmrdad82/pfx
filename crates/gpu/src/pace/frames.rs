@@ -151,11 +151,8 @@ impl FrameClock for WallClock {
     }
 
     fn turn(&mut self, report: TurnReport) {
-        if std::env::var_os(TURN_VAR).is_some() {
-            let _ = std::process::Command::new("pgpu")
-                .args(report.args())
-                .stdout(std::process::Stdio::null())
-                .status();
+        if cfg!(feature = "dev-hooks") && std::env::var_os(TURN_VAR).is_some() {
+            queue_turn(&report.args());
         }
     }
 
@@ -163,6 +160,17 @@ impl FrameClock for WallClock {
         frozen_file_ms(self.frozen.as_deref())
     }
 }
+
+#[cfg(feature = "dev-hooks")]
+pub(super) fn queue_turn(args: &[String]) {
+    let _ = std::process::Command::new("pgpu")
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .status();
+}
+
+#[cfg(not(feature = "dev-hooks"))]
+pub(super) fn queue_turn(_: &[String]) {}
 
 pub fn sleep_to(boundary_ms: f64, now_ms: f64) -> f64 {
     (boundary_ms - now_ms).max(0.0)
@@ -197,7 +205,11 @@ pub struct Pace<C: FrameClock> {
 impl Pace<WallClock> {
     pub fn new() -> Self {
         let get = |key: &str| std::env::var(key).ok();
-        let cap = if uncapped(&get) { None } else { Some(CAP_FPS) };
+        let cap = if cfg!(feature = "dev-hooks") && uncapped(&get) {
+            None
+        } else {
+            Some(CAP_FPS)
+        };
         let mut pace = Self::with_clock(WallClock::new(), cap);
         pace.wall_ms = turn_wall_ms(&get);
         pace
