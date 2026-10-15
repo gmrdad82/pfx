@@ -1334,11 +1334,22 @@ impl FlatPass {
         encoder: &mut wgpu::CommandEncoder,
         target: &wgpu::TextureView,
         clear: Option<[f32; 4]>,
+        profiler: Option<&mut GpuProfiler>,
+    ) {
+        self.encode_colour_as("flat", encoder, target, clear, profiler);
+    }
+
+    pub fn encode_colour_as(
+        &self,
+        label: &'static str,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        clear: Option<[f32; 4]>,
         mut profiler: Option<&mut GpuProfiler>,
     ) {
         let timing = profiler
             .as_deref_mut()
-            .and_then(|profiler| profiler.pass("flat"));
+            .and_then(|profiler| profiler.pass(label));
         let mut index = 0;
         let last = self.passes.saturating_sub(1);
         let writes = |index: u32| {
@@ -1368,7 +1379,7 @@ impl FlatPass {
             let mut pass = encoder
                 .begin_render_pass(&wgpu::RenderPassDescriptor {
                     multiview_mask: None,
-                    label: Some("flat"),
+                    label: Some(label),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view,
                         resolve_target: None,

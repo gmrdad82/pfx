@@ -1,4 +1,7 @@
-use super::{Backdrop, Blend, Crt, Dither, Place, Quantise, UpscaleMap, Vignette, wipe_front};
+use super::{
+    Backdrop, Blend, Bloom, Crt, Dither, Fade, FadeMode, Grade, Grain, Letterbox, Place, Quantise,
+    UpscaleMap, Vignette, wipe_front,
+};
 use pfx_gpu::GpuProfiler;
 
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -19,9 +22,14 @@ enum Kind {
     Bright,
     Blur,
     Crt,
+    Grain,
+    Grade,
+    Letterbox,
+    Fade,
+    Bloom,
 }
 
-const KINDS: [(Kind, &str); 9] = [
+const KINDS: [(Kind, &str); 14] = [
     (Kind::Backdrop, "look_backdrop"),
     (Kind::Quantise, "look_quantise"),
     (Kind::Upscale, "look_upscale"),
@@ -31,6 +39,11 @@ const KINDS: [(Kind, &str); 9] = [
     (Kind::Bright, "look_bright"),
     (Kind::Blur, "look_blur"),
     (Kind::Crt, "look_crt"),
+    (Kind::Grain, "look_grain"),
+    (Kind::Grade, "look_grade"),
+    (Kind::Letterbox, "look_letterbox"),
+    (Kind::Fade, "look_fade"),
+    (Kind::Bloom, "look_bloom"),
 ];
 
 #[derive(Clone, Copy)]
@@ -591,6 +604,115 @@ impl LookGpu {
             None,
             source.view,
             glow_view.as_ref(),
+            target.view,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn simple(
+        &mut self,
+        kind: Kind,
+        label: &'static str,
+        source: Surface<'_>,
+        target: Surface<'_>,
+        place: &Place,
+        p: &[[f32; 4]],
+    ) {
+        let uniform = self.push_uniform(header(target.size, place, source.size), p);
+        self.job(kind, label, uniform, None, source.view, None, target.view);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn grain(
+        &mut self,
+        source: Surface<'_>,
+        target: Surface<'_>,
+        grain: &Grain,
+        place: &Place,
+        frame: u32,
+        seed: u32,
+    ) {
+        let shift = Grain::shift(frame, seed);
+        let p = [
+            [grain.amount, grain.size, grain.response, 0.0],
+            [shift[0], shift[1], 0.0, 0.0],
+        ];
+        self.simple(Kind::Grain, "look grain", source, target, place, &p);
+    }
+
+    pub fn grade(&mut self, source: Surface<'_>, target: Surface<'_>, grade: &Grade) {
+        let p = [
+            [grade.saturation, grade.contrast, grade.brightness, 0.0],
+            grade.tint,
+        ];
+        let place = unplaced(target.size);
+        self.simple(Kind::Grade, "look grade", source, target, &place, &p);
+    }
+
+    pub fn letterbox(
+        &mut self,
+        source: Surface<'_>,
+        target: Surface<'_>,
+        letterbox: &Letterbox,
+        place: &Place,
+    ) {
+        let thickness = letterbox.thickness(target.size, place.scale);
+        let p = [[thickness[0], thickness[1], 0.0, 0.0], letterbox.colour];
+        self.simple(Kind::Letterbox, "look letterbox", source, target, place, &p);
+    }
+
+    pub fn fade(&mut self, source: Surface<'_>, target: Surface<'_>, fade: &Fade) {
+        let mode = f32::from(u8::from(fade.mode == FadeMode::Add));
+        let p = [[fade.weight(), mode, 0.0, 0.0], fade.colour];
+        let place = unplaced(target.size);
+        self.simple(Kind::Fade, "look fade", source, target, &place, &p);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn bloom(
+        &mut self,
+        layer: Surface<'_>,
+        spare: Surface<'_>,
+        source: Surface<'_>,
+        target: Surface<'_>,
+        bloom: &Bloom,
+        place: &Place,
+        layer_place: &Place,
+    ) {
+        let sigma = bloom.radius * layer_place.scale;
+        let reach = (3.0 * sigma).ceil().max(1.0);
+        for (direction, from, to) in [([1.0, 0.0], &layer, &spare), ([0.0, 1.0], &spare, &layer)] {
+            let uniform = self.push_uniform(
+                header(layer.size, &unplaced(layer.size), layer.size),
+                &[[direction[0], direction[1], sigma, reach]],
+            );
+            self.job(
+                Kind::Blur,
+                "look bloom",
+                uniform,
+                None,
+                from.view,
+                None,
+                to.view,
+            );
+        }
+        let k = layer_place.scale / place.scale;
+        let map = [
+            k / layer.size[0] as f32,
+            k / layer.size[1] as f32,
+            (layer_place.offset[0] - place.offset[0] * k) / layer.size[0] as f32,
+            (layer_place.offset[1] - place.offset[1] * k) / layer.size[1] as f32,
+        ];
+        let light = bloom.light();
+        let p = [map, [light[0], light[1], light[2], 0.0]];
+        let uniform = self.push_uniform(header(target.size, place, source.size), &p);
+        self.job(
+            Kind::Bloom,
+            "look bloom",
+            uniform,
+            None,
+            source.view,
+            Some(layer.view),
             target.view,
         );
     }
