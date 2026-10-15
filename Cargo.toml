@@ -23,7 +23,7 @@ authors.workspace = true
 default = ["harness", "editor", "bench"]
 editor = ["harness", "dep:pfx-editor"]
 bench = ["harness", "dep:pfx-bench"]
-harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project"]
+harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

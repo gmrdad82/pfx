@@ -306,10 +306,18 @@ impl Live {
 
     fn frame(&mut self, now_ns: u64) -> Result<(), String> {
         if let Some(size) = self.resize.take() {
+            let max = self
+                .painter
+                .renderer()
+                .gpu()
+                .device
+                .limits()
+                .max_texture_dimension_2d;
+            let (width, height) = pfx_gpu::surface_size(size.width, size.height, max);
             let config = &mut self.target.config;
-            if (config.width, config.height) != (size.width, size.height) {
-                config.width = size.width;
-                config.height = size.height;
+            if (config.width, config.height) != (width, height) {
+                config.width = width;
+                config.height = height;
                 self.stale = true;
             }
         }

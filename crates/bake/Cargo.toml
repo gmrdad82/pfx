@@ -26,6 +26,7 @@ gltf = { version = "1.4", default-features = false, features = ["names", "utils"
 block_compression = { version = "0.10", default-features = false, features = ["bc15", "bc7"] }
 
 [dev-dependencies]
+pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }
 pfx-load = { path = "../load", features = ["fixture"] }
 pollster = "0.4"
 naga = { version = "30", features = ["wgsl-in"] }

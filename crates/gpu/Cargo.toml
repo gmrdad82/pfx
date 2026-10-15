@@ -21,7 +21,9 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vul
 
 [features]
 window = ["dep:winit"]
+dev-hooks = []
 
 [dev-dependencies]
+pfx-gpu = { path = ".", features = ["dev-hooks"] }
 pollster = "0.4"
 winit = "=0.30.13"

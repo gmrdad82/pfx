@@ -26,6 +26,7 @@ toml_edit = "0.25"
 dev-hud = ["pfx-live/dev-hud"]
 
 [dev-dependencies]
+pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }
 pfx-load = { path = "../load", features = ["fixture"] }
 pollster = "0.4"
 half = "2.7.1"

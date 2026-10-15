@@ -294,8 +294,9 @@ pub struct Turns {
 impl Default for Turns {
     #[track_caller]
     fn default() -> Self {
-        let queued =
-            std::env::var_os(TURN_VAR).is_some() || std::env::var_os("GPU_QUEUE_PID").is_some();
+        let queued = cfg!(feature = "dev-hooks")
+            && (std::env::var_os(TURN_VAR).is_some()
+                || std::env::var_os("GPU_QUEUE_PID").is_some());
         Self::new(env_ms(TURN_MS_VAR, 50.0), queued)
             .with_wall_ms(env_ms(TURN_WALL_VAR, TURN_WALL_MS))
     }
@@ -469,10 +470,7 @@ impl Turns {
             let _held = TURNING
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let _ = std::process::Command::new("pgpu")
-                .args(args)
-                .stdout(std::process::Stdio::null())
-                .status();
+            frames::queue_turn(&args);
         }
         trace::turned();
         *LAST_TURN
@@ -1937,7 +1935,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "dev-hooks"))]
     #[test]
     fn turns_from_two_threads_never_overlap() {
         if std::env::var_os("PFX_TURN_CHILD").is_some() {
@@ -1984,7 +1982,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "dev-hooks"))]
     #[test]
     fn turns_child() {
         if std::env::var_os("PFX_TURN_CHILD").is_none() {
@@ -3002,7 +3000,7 @@ mod tests {
         assert_eq!(blocking.pacing().work_ms, 0.0);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "dev-hooks"))]
     #[test]
     fn frozen_reports_reach_pgpu_without_the_freeze() {
         if std::env::var_os("PFX_TURN_CHILD").is_some() {
@@ -3052,7 +3050,7 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "dev-hooks"))]
     #[test]
     fn frozen_child() {
         if std::env::var_os("PFX_TURN_CHILD").is_none() {

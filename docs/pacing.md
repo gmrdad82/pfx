@@ -2,6 +2,8 @@
 
 A bench or a render loop that draws on the GPU keeps pgpu's manners: it caps itself at 60 frames per second, hands the queue a turn at least every ~50 ms of GPU work and at most every 0.4 s of wall time, reports honest numbers in each turn, and never counts a freeze as work. `pfx_gpu::pace` has all of it as public API, so a product's bench, in its own repository, links the engine crate and writes none of it. The crate writes no job records: a job record is the caller's own.
 
+The queue hooks, the `pgpu turn` a turn runs and `PFX_UNCAPPED`, need pfx-gpu's `dev-hooks` feature, off by default, so a shipped game carries no dev tools: without it a turn is only counted, `pgpu` never runs and the cap always holds. The engine's own tests, examples and benches and the `pfx` tool turn it on; a product's bench adds `pfx-gpu = { …, features = ["dev-hooks"] }` to its dev-dependencies.
+
 ```rust
 use pfx_gpu::pace::{Frames, Pace};
 
@@ -22,8 +24,8 @@ let report = Frames::of(&frame_ms);
 - **`frame(work)`** times `work` on the clock less frozen time and passes the result's GPU time on. The result is a `FrameGpu`: `()` (no timing), `Vec<PassTiming>` or `[PassTiming]` (the frame's pass timestamps, summed by `pace::gpu_ms`).
 - **`after(frame_ms)`** is for a loop that times its own frames. **`after_gpu(frame_ms, gpu_ms)`** takes the GPU time too.
 - **Work counted.** A frame's GPU time, when it has one. Otherwise its CPU time, never more than the unfrozen time since the previous frame's turn and sleep, so a freeze, a turn's wait or the cap's sleep never counts. The first CPU-timed frame adds no work, since it holds first-use pipeline builds.
-- **Turns.** A turn goes out once the work since the last one reaches `TURN_AFTER_MS` (50), or once `PFX_TURN_WALL_MS` of wall time (default `pace::TURN_WALL_MS`, 400) has passed since the last one, whatever the work. It carries `--work-ms` (the sum) and `--longest-ms` (the longest single frame since the last turn) from `TurnReport::args()`, with three decimals. `WallClock` runs `pgpu turn` only when `GPU_QUEUE_TURN` is set, and waits for it; a turn's wait is never counted in the next frame.
-- **The cap.** After the turn, the loop sleeps to the next 1/60 s boundary. A late frame does not owe a burst: the boundary restarts from now. `PFX_UNCAPPED=1` (`pace::UNCAPPED_VAR`) lifts the cap for a deliberate peak measurement; the turns stay.
+- **Turns.** A turn goes out once the work since the last one reaches `TURN_AFTER_MS` (50), or once `PFX_TURN_WALL_MS` of wall time (default `pace::TURN_WALL_MS`, 400) has passed since the last one, whatever the work. It carries `--work-ms` (the sum) and `--longest-ms` (the longest single frame since the last turn) from `TurnReport::args()`, with three decimals. `WallClock` runs `pgpu turn` only when `GPU_QUEUE_TURN` is set and `dev-hooks` is on, and waits for it; a turn's wait is never counted in the next frame.
+- **The cap.** After the turn, the loop sleeps to the next 1/60 s boundary. A late frame does not owe a burst: the boundary restarts from now. `PFX_UNCAPPED=1` (`pace::UNCAPPED_VAR`) lifts the cap for a deliberate peak measurement, with `dev-hooks` on; the turns stay.
 - **Frozen time.** pgpu writes a job's cumulative frozen milliseconds to the file named by `GPU_QUEUE_FROZEN` (`pace::FROZEN_VAR`). `WallClock::frozen_ms` reads it at both ends of every interval and subtracts the difference. A missing variable or file reads as no freeze (`pace::frozen_file_ms`, `pace::Frozen`).
 - **`Frames::of(&sorted_ms)`** gives p50, p95, p99, max and `fps` (1000 ÷ p50) of sorted frame times.
 
