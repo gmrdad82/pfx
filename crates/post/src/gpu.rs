@@ -1,8 +1,10 @@
 use crate::chain::{Aux, Buffers, Chain, Pass, Uniforms};
 use crate::hash::BLUE_NOISE;
+use std::sync::{Mutex, PoisonError};
 use wgpu::{self, util::DeviceExt};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const UNIFORM_BYTES: u64 = 112;
 
 struct Target {
     _texture: wgpu::Texture,
@@ -52,6 +54,26 @@ struct Stage {
     target: ImageSlot,
     aux: Aux,
     label: String,
+    bind: Mutex<Option<(BindKey, wgpu::BindGroup)>>,
+}
+
+type Conversion = (wgpu::TextureView, (u32, u32), wgpu::BindGroup);
+
+struct BindKey {
+    source: wgpu::TextureView,
+    target: wgpu::TextureView,
+    normal: Option<wgpu::TextureView>,
+}
+
+impl BindKey {
+    fn matches(
+        &self,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        normal: Option<&wgpu::TextureView>,
+    ) -> bool {
+        self.source == *source && self.target == *target && self.normal.as_ref() == normal
+    }
 }
 
 struct Group {
@@ -61,6 +83,34 @@ struct Group {
     low: Option<LowPair>,
     factor: u32,
     data: Option<wgpu::Buffer>,
+    params: [Vec<[f32; 16]>; 4],
+    uniforms: wgpu::Buffer,
+}
+
+fn buffers_index(buffers: Buffers) -> usize {
+    usize::from(buffers.depth) | usize::from(buffers.normal) << 1
+}
+
+fn all_params(pass: &Pass) -> [Vec<[f32; 16]>; 4] {
+    std::array::from_fn(|index| {
+        pass.params(Buffers {
+            depth: index & 1 != 0,
+            normal: index & 2 != 0,
+        })
+    })
+}
+
+fn uniform_stride(device: &wgpu::Device) -> u64 {
+    UNIFORM_BYTES.next_multiple_of(u64::from(
+        device.limits().min_uniform_buffer_offset_alignment,
+    ))
+}
+
+fn reads_depth(groups: &[Group]) -> bool {
+    groups
+        .iter()
+        .flat_map(|group| &group.stages)
+        .any(|stage| matches!(stage.aux, Aux::Depth | Aux::DepthNormal))
 }
 
 pub struct GpuChain {
@@ -69,9 +119,11 @@ pub struct GpuChain {
     tape: TapePlan,
     scratch: [Target; 2],
     bloom_sampler: Option<wgpu::Sampler>,
-    depth_buffer: wgpu::Buffer,
+    depth_buffer: Option<wgpu::Buffer>,
     normal_fallback: Target,
     depth_pipeline: wgpu::ComputePipeline,
+    conversion: Mutex<Option<Conversion>>,
+    stride: u64,
     width: u32,
     height: u32,
     viewport: (u32, u32),
@@ -290,6 +342,7 @@ fn make_stage(
         target,
         aux,
         label,
+        bind: Mutex::new(None),
     }
 }
 
@@ -545,6 +598,13 @@ fn plan_groups(
         };
         let data = auxiliary_data(device, &pass);
         let exposure = exposure_slots(&pass, dispatches.len());
+        let params = all_params(&pass);
+        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("post uniforms"),
+            size: uniform_stride(device) * dispatches.len().max(1) as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         groups.push(Group {
             pass,
             stages,
@@ -552,6 +612,8 @@ fn plan_groups(
             low,
             factor,
             data,
+            params,
+            uniforms,
         });
     }
     groups
@@ -588,6 +650,7 @@ impl TapePlan {
         for group in &mut self.groups {
             if matches!(group.pass, Pass::Tape(_)) {
                 group.pass = Pass::Tape(tape);
+                group.params = all_params(&group.pass);
             }
         }
     }
@@ -659,6 +722,8 @@ impl GpuChain {
                 })
             });
         let pixels = u64::from(width) * u64::from(height);
+        let depth_buffer = (reads_depth(&groups) || reads_depth(&tape.groups))
+            .then(|| storage(device, "post depth", pixels * 4));
         Self {
             device: device.clone(),
             groups,
@@ -668,9 +733,11 @@ impl GpuChain {
                 Target::new(device, width, height),
             ],
             bloom_sampler,
-            depth_buffer: storage(device, "post depth", pixels * 4),
+            depth_buffer,
             normal_fallback: Target::new(device, 1, 1),
             depth_pipeline: conversion_pipeline(device),
+            conversion: Mutex::new(None),
+            stride: uniform_stride(device),
             width,
             height,
             viewport: (width, height),
@@ -716,6 +783,10 @@ impl GpuChain {
         if self.tape.groups.is_empty() && !tape.is_off() {
             self.tape.tape = tape;
             self.tape.plan(&self.device, self.width, self.height);
+            if self.depth_buffer.is_none() && reads_depth(&self.tape.groups) {
+                let pixels = u64::from(self.width) * u64::from(self.height);
+                self.depth_buffer = Some(storage(&self.device, "post depth", pixels * 4));
+            }
             self.bloom_sampler.get_or_insert_with(|| {
                 self.device.create_sampler(&wgpu::SamplerDescriptor {
                     mag_filter: wgpu::FilterMode::Linear,
@@ -762,9 +833,18 @@ impl GpuChain {
             Target::new(&self.device, width, height),
             Target::new(&self.device, width, height),
         ];
-        let pixels = u64::from(width) * u64::from(height);
-        self.depth_buffer = storage(&self.device, "post depth", pixels * 4);
+        if self.depth_buffer.is_some() {
+            let pixels = u64::from(width) * u64::from(height);
+            self.depth_buffer = Some(storage(&self.device, "post depth", pixels * 4));
+        }
+        *self
+            .conversion
+            .get_mut()
+            .unwrap_or_else(PoisonError::into_inner) = None;
         for group in self.groups.iter_mut().chain(&mut self.tape.groups) {
+            for stage in &mut group.stages {
+                *stage.bind.get_mut().unwrap_or_else(PoisonError::into_inner) = None;
+            }
             if group.low.is_some() {
                 let w = (width / group.factor).max(1);
                 let h = (height / group.factor).max(1);
@@ -783,34 +863,50 @@ impl GpuChain {
         mut profiler: Option<&mut pfx_gpu::GpuProfiler>,
     ) {
         let pipeline = &self.depth_pipeline;
-        let dst = &self.depth_buffer;
+        let Some(dst) = &self.depth_buffer else {
+            return;
+        };
         let (width, height) = self.viewport;
-        let extent = self
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("post geometry conversion extent"),
-                contents: bytemuck::cast_slice(&[width, height, 0, 0]),
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let layout = pipeline.get_bind_group_layout(0);
-        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("post geometry conversion bindings"),
-            layout: &layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: dst.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: extent.as_entire_binding(),
-                },
-            ],
-        });
+        let mut cached = self
+            .conversion
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let bind = match &*cached {
+            Some((source, viewport, bind)) if source == view && *viewport == self.viewport => {
+                bind.clone()
+            }
+            _ => {
+                let extent = self
+                    .device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("post geometry conversion extent"),
+                        contents: bytemuck::cast_slice(&[width, height, 0, 0]),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+                let layout = pipeline.get_bind_group_layout(0);
+                let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("post geometry conversion bindings"),
+                    layout: &layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: dst.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: extent.as_entire_binding(),
+                        },
+                    ],
+                });
+                *cached = Some((view.clone(), self.viewport, bind.clone()));
+                bind
+            }
+        };
+        drop(cached);
         let timing = profiler
             .as_deref_mut()
             .and_then(|p| p.pass("post depth conversion"));
@@ -967,27 +1063,70 @@ impl GpuChain {
     ) {
         let groups = self.active();
         if let Some(view) = depth
-            && groups.iter().any(|group| {
-                group
-                    .stages
-                    .iter()
-                    .any(|stage| matches!(stage.aux, Aux::Depth | Aux::DepthNormal))
-            })
+            && reads_depth(groups)
         {
             self.convert(encoder, view, profiler.as_deref_mut());
         }
-        let buffers = Buffers {
+        let buffers = buffers_index(Buffers {
             depth: depth.is_some(),
             normal: normal.is_some(),
-        };
+        });
+        let stride = self.stride;
+        let total: u64 = groups.iter().map(|group| group.uniforms.size()).sum();
+        let mut bytes = vec![0u8; total as usize];
+        let mut areas = Vec::with_capacity(groups.iter().map(|group| group.stages.len()).sum());
+        let mut start = 0;
+        for (group_index, group) in groups.iter().enumerate() {
+            for (stage_index, (stage, params)) in
+                group.stages.iter().zip(&group.params[buffers]).enumerate()
+            {
+                let mut params = *params;
+                if stage_index == 0 && self.tape.encodes && matches!(group.pass, Pass::Tape(_)) {
+                    params[14] = 1.0;
+                }
+                let (w, h) = self.slot_size(group, stage.target);
+                if group_index == 0
+                    && let Some(slot) = group.exposure[stage_index]
+                {
+                    params[slot] *= exposure;
+                }
+                let area = match (&scissor, stage.target) {
+                    (Some(scissor), ImageSlot::Main) => Some(scissor.grown(group_index, self)),
+                    _ => None,
+                };
+                let mut uniforms = Uniforms::new(w, h, frame, seed, params)
+                    .extent(self.slot_size(group, stage.source), self.low_size(group));
+                if let Some(area) = area {
+                    uniforms = uniforms.region(area);
+                }
+                let at = (start + stage_index as u64 * stride) as usize;
+                bytes[at..at + UNIFORM_BYTES as usize].copy_from_slice(&uniforms.bytes());
+                areas.push(match area {
+                    Some([x0, y0, x1, y1]) => ((x1 - x0).div_ceil(8), (y1 - y0).div_ceil(8)),
+                    None => (w.div_ceil(8), h.div_ceil(8)),
+                });
+            }
+            start += group.uniforms.size();
+        }
+        let staging = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("post uniform upload"),
+                contents: &bytes,
+                usage: wgpu::BufferUsages::COPY_SRC,
+            });
+        let mut start = 0;
+        for group in groups {
+            let size = group.uniforms.size();
+            encoder.copy_buffer_to_buffer(&staging, start, &group.uniforms, 0, size);
+            start += size;
+        }
+        let mut areas = areas.into_iter();
         let mut current = input;
         let mut scratch_index = 0;
         for (group_index, group) in groups.iter().enumerate() {
-            let mut params = group.pass.params(buffers);
-            if self.tape.encodes && matches!(group.pass, Pass::Tape(_)) {
-                params[0][14] = 1.0;
-            }
-            for (stage_index, (stage, mut params)) in group.stages.iter().zip(params).enumerate() {
+            let count = group.stages.len().min(group.params[buffers].len());
+            for (stage_index, stage) in group.stages[..count].iter().enumerate() {
                 let last_stage = stage_index + 1 == group.stages.len();
                 let last_group = group_index + 1 == groups.len();
                 let target = match stage.target {
@@ -1005,138 +1144,33 @@ impl GpuChain {
                     ImageSlot::LowA => &group.low.as_ref().unwrap().a.view,
                     ImageSlot::LowB => &group.low.as_ref().unwrap().b.view,
                 };
-                let (w, h) = self.slot_size(group, stage.target);
-                if group_index == 0
-                    && let Some(slot) = group.exposure[stage_index]
-                {
-                    params[slot] *= exposure;
-                }
-                let area = match (&scissor, stage.target) {
-                    (Some(scissor), ImageSlot::Main) => Some(scissor.grown(group_index, self)),
-                    _ => None,
+                let normal = matches!(stage.aux, Aux::Normal | Aux::DepthNormal)
+                    .then(|| normal.unwrap_or(&self.normal_fallback.view));
+                let offset = stage_index as u64 * stride;
+                let bind = if std::ptr::eq(target, output) {
+                    self.bind_group(group, stage, offset, source, target, normal)
+                } else {
+                    let mut cached = stage.bind.lock().unwrap_or_else(PoisonError::into_inner);
+                    match &*cached {
+                        Some((key, bind)) if key.matches(source, target, normal) => bind.clone(),
+                        _ => {
+                            let bind =
+                                self.bind_group(group, stage, offset, source, target, normal);
+                            *cached = Some((
+                                BindKey {
+                                    source: source.clone(),
+                                    target: target.clone(),
+                                    normal: normal.cloned(),
+                                },
+                                bind.clone(),
+                            ));
+                            bind
+                        }
+                    }
                 };
-                let mut uniforms = Uniforms::new(w, h, frame, seed, params)
-                    .extent(self.slot_size(group, stage.source), self.low_size(group));
-                if let Some(area) = area {
-                    uniforms = uniforms.region(area);
-                }
-                let uniform = self
-                    .device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("post uniforms"),
-                        contents: &uniforms.bytes(),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
-                let mut entries = vec![
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(source),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(target),
-                    },
-                ];
-                match stage.aux {
-                    Aux::Depth => entries.push(wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: self.depth_buffer.as_entire_binding(),
-                    }),
-                    Aux::Normal => entries.push(wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::TextureView(
-                            normal.unwrap_or(&self.normal_fallback.view),
-                        ),
-                    }),
-                    Aux::DepthNormal => {
-                        entries.push(wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: self.depth_buffer.as_entire_binding(),
-                        });
-                        entries.push(wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: wgpu::BindingResource::TextureView(
-                                normal.unwrap_or(&self.normal_fallback.view),
-                            ),
-                        });
-                    }
-                    Aux::Bloom | Aux::BloomB => entries.push(wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(
-                            if matches!(stage.aux, Aux::BloomB) {
-                                &group.low.as_ref().unwrap().b.view
-                            } else {
-                                &group.low.as_ref().unwrap().a.view
-                            },
-                        ),
-                    }),
-                    Aux::BloomLinear => {
-                        entries.push(wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::TextureView(
-                                &group.low.as_ref().unwrap().a.view,
-                            ),
-                        });
-                        entries.push(wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: wgpu::BindingResource::Sampler(
-                                self.bloom_sampler.as_ref().unwrap(),
-                            ),
-                        });
-                    }
-                    Aux::LinearSampler => entries.push(wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::Sampler(
-                            self.bloom_sampler.as_ref().unwrap(),
-                        ),
-                    }),
-                    Aux::Lut | Aux::Blue => entries.push(wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: group.data.as_ref().unwrap().as_entire_binding(),
-                    }),
-                    Aux::GradeBloom | Aux::GradeBloomLinear => entries.push(wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(
-                            &group.low.as_ref().unwrap().a.view,
-                        ),
-                    }),
-                    Aux::GradeBloomB => entries.push(wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(
-                            &group.low.as_ref().unwrap().b.view,
-                        ),
-                    }),
-                    Aux::Grade | Aux::None => {}
-                }
-                if stage.aux == Aux::GradeBloomLinear {
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: 4,
-                        resource: wgpu::BindingResource::Sampler(
-                            self.bloom_sampler.as_ref().unwrap(),
-                        ),
-                    });
-                }
-                if matches!(
-                    stage.aux,
-                    Aux::Grade | Aux::GradeBloom | Aux::GradeBloomB | Aux::GradeBloomLinear
-                ) {
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: 5,
-                        resource: group.data.as_ref().unwrap().as_entire_binding(),
-                    });
-                }
-                let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some(&stage.label),
-                    layout: &stage.layout,
-                    entries: &entries,
-                });
                 let timing = profiler
                     .as_deref_mut()
-                    .and_then(|timer| timer.pass(stage.label.clone()));
+                    .and_then(|timer| timer.pass(stage.label.as_str()));
                 let writes = profiler
                     .as_deref()
                     .and_then(|timer| timer.compute_writes(timing));
@@ -1146,10 +1180,7 @@ impl GpuChain {
                 });
                 pass.set_pipeline(&stage.pipeline);
                 pass.set_bind_group(0, &bind, &[]);
-                let (groups_x, groups_y) = match area {
-                    Some([x0, y0, x1, y1]) => ((x1 - x0).div_ceil(8), (y1 - y0).div_ceil(8)),
-                    None => (w.div_ceil(8), h.div_ceil(8)),
-                };
+                let (groups_x, groups_y) = areas.next().unwrap();
                 pass.dispatch_workgroups(groups_x, groups_y, 1);
                 drop(pass);
                 if matches!(stage.target, ImageSlot::Main) {
@@ -1157,6 +1188,112 @@ impl GpuChain {
                 }
             }
         }
+    }
+
+    fn bind_group(
+        &self,
+        group: &Group,
+        stage: &Stage,
+        offset: u64,
+        source: &wgpu::TextureView,
+        target: &wgpu::TextureView,
+        normal: Option<&wgpu::TextureView>,
+    ) -> wgpu::BindGroup {
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &group.uniforms,
+                    offset,
+                    size: wgpu::BufferSize::new(UNIFORM_BYTES),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(source),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(target),
+            },
+        ];
+        match stage.aux {
+            Aux::Depth => entries.push(wgpu::BindGroupEntry {
+                binding: 3,
+                resource: self.depth_buffer.as_ref().unwrap().as_entire_binding(),
+            }),
+            Aux::Normal => entries.push(wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(normal.unwrap()),
+            }),
+            Aux::DepthNormal => {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.depth_buffer.as_ref().unwrap().as_entire_binding(),
+                });
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(normal.unwrap()),
+                });
+            }
+            Aux::Bloom | Aux::BloomB => entries.push(wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(if matches!(stage.aux, Aux::BloomB) {
+                    &group.low.as_ref().unwrap().b.view
+                } else {
+                    &group.low.as_ref().unwrap().a.view
+                }),
+            }),
+            Aux::BloomLinear => {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(
+                        &group.low.as_ref().unwrap().a.view,
+                    ),
+                });
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(self.bloom_sampler.as_ref().unwrap()),
+                });
+            }
+            Aux::LinearSampler => entries.push(wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(self.bloom_sampler.as_ref().unwrap()),
+            }),
+            Aux::Lut | Aux::Blue => entries.push(wgpu::BindGroupEntry {
+                binding: 3,
+                resource: group.data.as_ref().unwrap().as_entire_binding(),
+            }),
+            Aux::GradeBloom | Aux::GradeBloomLinear => entries.push(wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&group.low.as_ref().unwrap().a.view),
+            }),
+            Aux::GradeBloomB => entries.push(wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&group.low.as_ref().unwrap().b.view),
+            }),
+            Aux::Grade | Aux::None => {}
+        }
+        if stage.aux == Aux::GradeBloomLinear {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(self.bloom_sampler.as_ref().unwrap()),
+            });
+        }
+        if matches!(
+            stage.aux,
+            Aux::Grade | Aux::GradeBloom | Aux::GradeBloomB | Aux::GradeBloomLinear
+        ) {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 5,
+                resource: group.data.as_ref().unwrap().as_entire_binding(),
+            });
+        }
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(&stage.label),
+            layout: &stage.layout,
+            entries: &entries,
+        })
     }
 }
 
