@@ -1,5 +1,45 @@
 # Changelog
 
+## v2.0.0 — 2026-10-15
+
+### Added
+
+- Flat pass: grain and fibre patterns, pattern offsets, icons that cast their own shadow, and contact shadows under curves.
+- Flat looks: grain, grade, letterbox, fade and flash, and bloom of a layer, with crossfades between looks.
+- Flat view: one transform for the whole board (pan and zoom), on the GPU and the CPU twin.
+- SVG: curves, viewBox-only roots and linear gradients.
+- Games follow the system's light or dark scheme, and `World::focused()` says whether the window has focus.
+- The window opens hidden and shows its first frame already cleared, with no flash of an empty window.
+- Sound: a drive stage per channel and glides scheduled ahead of time.
+- `Renderer::set_hour` changes the time of day without uploading the sky again.
+- Sound: `Prepared` clips, converted once and shared by every play.
+
+### Changed
+
+- The audio thread no longer waits on file reads, resampling or freeing memory, and game audio reaches the device through a lock-free ring.
+- Post effects keep their buffers and bind groups between frames.
+- Text draws in shared passes instead of one pass per item.
+- The live renderer uploads only the instances and materials that changed, and keeps its bind groups between frames.
+- The flat pass draws its pick pass only when a pick is waiting: a 4K frame of 2,000 shots and 20,301 particles now costs 0.36 ms of GPU time, down from 0.42 ms.
+- Physics keeps its query tree between steps and updates only the colliders that moved.
+- Text, the game's UI painter and the play loop stop allocating per glyph and per tick.
+- Fullscreen on the current monitor leaves the choice of output to the compositor.
+
+### Fixed
+
+- A PNG header can no longer ask for a huge allocation, a glTF node cycle can no longer overflow the stack, and a glTF buffer can no longer point outside its mesh folder.
+- A Vorbis clip is capped at 8 channels and 10 minutes of 48 kHz stereo.
+- A mod's log lines now cost fuel, so a mod can't spend unlimited time logging.
+- A saved shot pool can no longer claim a huge capacity.
+- Glows and additive light in the UI overlay.
+- The window reconfigures after a suboptimal frame, and a resize to the same size no longer rebuilds the swapchain.
+
+### Breaking
+
+- `driver::Event` gained `Scheme`, `Fit` gained `view`, `Pattern` gained `offset` and `CurvePoint` gained `contact`: struct literals and exhaustive matches need the new field or arm.
+- Raised icons cast a shadow by default; use `Shadow::None` to opt out.
+- `FullscreenPlan::Borderless` takes `monitor: Option<usize>`.
+
 ## v1.0.0 — 2026-10-14
 
 pfx reaches 1.0.0.
