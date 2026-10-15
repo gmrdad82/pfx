@@ -680,6 +680,17 @@ fn refreshing_the_queries_shows_new_colliders_and_moved_poses_without_a_step() {
     assert!((moved.distance - 7.5).abs() < 1e-4, "{moved:?}");
     assert_eq!(world.steps(), 0);
     assert_eq!(world.pose(wall).unwrap().position, [8.0, 0.0, 0.0]);
+    assert!(world.remove_body(wall));
+    let post = world.add_body(BodyDesc::fixed(Pose::at([0.0, 0.0, 6.0])));
+    let reused = world
+        .add_collider(post, ColliderDesc::cuboid([0.5, 0.5, 0.5]))
+        .unwrap();
+    world.refresh_queries();
+    assert!(world.raycast([0.0; 3], ahead, 20.0, Filter::ALL).is_none());
+    let hit = world
+        .raycast([0.0; 3], [0.0, 0.0, 1.0], 20.0, Filter::ALL)
+        .unwrap();
+    assert_eq!(hit.collider, reused);
 }
 
 #[test]
