@@ -335,11 +335,26 @@ impl<const N: usize> Shots<N> {
                         self.order.push((entry(&slot, &(*target).into()), hit.b));
                     }
                 }
-                self.order
-                    .sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
             }
             let mut pierce = slot.shot.pierce;
+            let mut sorted = self.order.len() < 2;
+            if !sorted && pierce == 0 {
+                let mut low = 0;
+                for index in 1..self.order.len() {
+                    if rank(&self.order[index], &self.order[low]).is_lt() {
+                        low = index;
+                    }
+                }
+                self.order.swap(0, low);
+            } else if !sorted {
+                self.order.sort_by(rank);
+                sorted = true;
+            }
             for index in 0..self.order.len() {
+                if index == 1 && !sorted {
+                    self.order[1..].sort_by(rank);
+                    sorted = true;
+                }
                 let target = self.order[index].1;
                 if !accept(id, target) {
                     continue;
@@ -391,6 +406,10 @@ impl<const N: usize> Shots<N> {
             self.high -= 1;
         }
     }
+}
+
+fn rank(x: &(f64, u32), y: &(f64, u32)) -> std::cmp::Ordering {
+    x.0.total_cmp(&y.0).then(x.1.cmp(&y.1))
 }
 
 fn entry<const N: usize>(slot: &Slot<N>, target: &Span<N>) -> f64 {
