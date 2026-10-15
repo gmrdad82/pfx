@@ -3,7 +3,7 @@ use super::{
     Draw, FX, Fill, Fit, FlatScene, Glyphs, INSTANCE_ATTRIBUTES, Instance, KIND_SHADOW, LIT, Order,
     Shape, Srgba, Step, pack_shadow_with, pack_shape, shader,
 };
-use crate::text::{GpuAtlas, PackedGlyph, TextSpace, pack_glyphs, pack_quads, screen_bounds};
+use crate::text::{GpuAtlas, PackedGlyph, TextSpace, screen_bounds};
 use bytemuck::{Pod, Zeroable};
 use pfx_gpu::{GpuProfiler, wgpu};
 use std::ops::Range;
@@ -279,7 +279,6 @@ pub struct FlatPass {
     quads: Pool<LayerQuad>,
     glyphs: Pool<PackedGlyph>,
     text_uniforms: Pool<[u8; TEXT_SLOT as usize]>,
-    scratch: Vec<PackedGlyph>,
     text_items: Vec<(usize, usize, Range<u32>, u32)>,
     order: Order,
     ops: Vec<Op>,
@@ -703,7 +702,6 @@ impl FlatPass {
             quads: Pool::new("flat layer quads", wgpu::BufferUsages::VERTEX),
             glyphs: Pool::new("flat glyphs", wgpu::BufferUsages::VERTEX),
             text_uniforms: Pool::new("flat text uniforms", wgpu::BufferUsages::UNIFORM),
-            scratch: Vec::new(),
             text_items: Vec::new(),
             order: Order::default(),
             ops: Vec::new(),
@@ -1090,14 +1088,18 @@ impl FlatPass {
             if !super::positive(draw.opacity) || super::placed(&draw.transform, fit).is_none() {
                 return Ok(None);
             }
-            self.scratch.clear();
+            let first = self.glyphs.items.len();
             let mode = match text.glyphs {
                 Glyphs::Paragraph(paragraph) => {
-                    self.scratch.extend(pack_glyphs(&paragraph.glyphs));
+                    self.glyphs
+                        .items
+                        .extend(paragraph.glyphs.iter().map(PackedGlyph::from));
                     u32::from(paragraph.atlas.channels == 3)
                 }
                 Glyphs::Quads(quads) => {
-                    self.scratch.extend(pack_quads(quads));
+                    self.glyphs
+                        .items
+                        .extend(quads.iter().map(PackedGlyph::from));
                     match text.atlas.format() {
                         wgpu::TextureFormat::Rgba16Float => 2,
                         wgpu::TextureFormat::Rgba8Unorm => 1,
@@ -1105,11 +1107,12 @@ impl FlatPass {
                     }
                 }
             };
-            if self.scratch.is_empty() {
+            let added = &mut self.glyphs.items[first..];
+            if added.is_empty() {
                 return Ok(None);
             }
             let tint = text.colour.0;
-            for glyph in &mut self.scratch {
+            for glyph in added.iter_mut() {
                 for (channel, value) in glyph.color.iter_mut().zip(tint).take(3) {
                     *channel *= value;
                 }
@@ -1120,11 +1123,10 @@ impl FlatPass {
                 &TextSpace::Surface {
                     model_view_projection: matrix,
                 },
-                self.scratch.iter().copied(),
+                added.iter().copied(),
                 self.size,
             );
-            let start = self.glyphs.items.len() as u32;
-            self.glyphs.items.extend_from_slice(&self.scratch);
+            let start = first as u32;
             let end = self.glyphs.items.len() as u32;
             let slot = self.text_uniforms.items.len() as u32;
             let size = text.atlas.size();
