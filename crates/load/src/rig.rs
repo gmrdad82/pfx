@@ -1,4 +1,4 @@
-use pfx_core::anim::{Channel, Clip, Joint, MAX_JOINTS, Rig, Skeleton, Trs};
+use pfx_core::anim::{Channel, Clip, Joint, MAX_JOINTS, Morph, MorphChannel, Rig, Skeleton, Trs};
 
 use crate::mesh::Mesh;
 
@@ -34,6 +34,10 @@ impl SkinRig {
 
 impl Mesh {
     pub fn rig(&self, skin: u32) -> Result<SkinRig, String> {
+        self.morphed_rig(skin, &[])
+    }
+
+    pub fn morphed_rig(&self, skin: u32, morphs: &[(u32, Morph)]) -> Result<SkinRig, String> {
         let found = self
             .skins
             .get(skin as usize)
@@ -109,14 +113,23 @@ impl Mesh {
             .unwrap_or(pfx_core::anim::math::IDENTITY);
         let skeleton = Skeleton::rooted(joints, binds, root)
             .map_err(|error| format!("mesh: skin {skin}: {error}"))?;
-        let clips = self.clips(|node| index_of(node).map(|slot| remap[slot] as usize))?;
-        let rig = Rig::new(skeleton, clips).map_err(|error| format!("mesh: {error}"))?;
+        let clips = self.clips(
+            |node| index_of(node).map(|slot| remap[slot] as usize),
+            morphs,
+        )?;
+        let morphs = morphs.iter().map(|(_, morph)| morph.clone()).collect();
+        let rig =
+            Rig::morphed(skeleton, clips, morphs).map_err(|error| format!("mesh: {error}"))?;
         Ok(SkinRig { rig, remap })
     }
 }
 
 impl Mesh {
-    fn clips(&self, joint_of: impl Fn(u32) -> Option<usize>) -> Result<Vec<Clip>, String> {
+    fn clips(
+        &self,
+        joint_of: impl Fn(u32) -> Option<usize>,
+        morphs: &[(u32, Morph)],
+    ) -> Result<Vec<Clip>, String> {
         let mut clips = Vec::new();
         for animation in &self.animations {
             let channels: Vec<Channel> = animation
@@ -132,11 +145,28 @@ impl Mesh {
                     })
                 })
                 .collect();
-            if channels.is_empty() {
+            let weights: Vec<MorphChannel> = animation
+                .weights
+                .iter()
+                .flat_map(|channel| {
+                    morphs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, (node, _))| *node == channel.node)
+                        .map(|(morph, _)| MorphChannel {
+                            morph,
+                            interpolation: channel.interpolation,
+                            times: channel.times.clone(),
+                            values: channel.values.clone(),
+                        })
+                })
+                .collect();
+            if channels.is_empty() && weights.is_empty() {
                 continue;
             }
             clips.push(
                 Clip::new(animation.name.clone(), channels)
+                    .and_then(|clip| clip.with_weights(weights))
                     .map_err(|error| format!("mesh: {error}"))?,
             );
         }
@@ -146,7 +176,15 @@ impl Mesh {
 
 impl Mesh {
     pub fn node_rig(&self, walked: &[(u32, bool)]) -> Result<Option<Rig>, String> {
-        if self.animations.is_empty() || walked.is_empty() {
+        self.morphed_node_rig(walked, &[])
+    }
+
+    pub fn morphed_node_rig(
+        &self,
+        walked: &[(u32, bool)],
+        morphs: &[(u32, Morph)],
+    ) -> Result<Option<Rig>, String> {
+        if (self.animations.is_empty() && morphs.is_empty()) || walked.is_empty() {
             return Ok(None);
         }
         if walked.len() > MAX_JOINTS {
@@ -185,11 +223,12 @@ impl Mesh {
             .collect();
         let binds = vec![pfx_core::anim::math::IDENTITY; joints.len()];
         let skeleton = Skeleton::new(joints, binds).map_err(|error| format!("mesh: {error}"))?;
-        let clips = self.clips(joint_of)?;
-        if clips.is_empty() {
+        let clips = self.clips(joint_of, morphs)?;
+        if clips.is_empty() && morphs.is_empty() {
             return Ok(None);
         }
-        Rig::new(skeleton, clips)
+        let morphs = morphs.iter().map(|(_, morph)| morph.clone()).collect();
+        Rig::morphed(skeleton, clips, morphs)
             .map(Some)
             .map_err(|error| format!("mesh: {error}"))
     }

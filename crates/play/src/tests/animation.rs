@@ -84,8 +84,9 @@ impl Folder {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../load/tests/scenes");
-        for file in ["materials.toml", "panel.gltf"] {
-            std::fs::copy(fixtures.join(file), root.join(file)).unwrap();
+        for file in ["materials.toml", "panel.gltf", "../data/head.glb"] {
+            let name = Path::new(file).file_name().unwrap();
+            std::fs::copy(fixtures.join(file), root.join(name)).unwrap();
         }
         std::fs::write(
             root.join("column.glb"),
@@ -411,4 +412,52 @@ fn a_posed_snapshot_carries_models_palettes_and_sprite_frames() {
         world.sprite_frame(id(world, "card")).unwrap()
     );
     assert!(!posed.palettes.contains_key(&card));
+}
+
+const HEADS: &str = r#"format = 1
+
+[mesh.head]
+file = "head.glb"
+id = "anmhd00001"
+
+[[object]]
+name = "talker"
+mesh = "head"
+id = "anmtk00001"
+
+[object.animation]
+clip = "talk"
+
+[[object]]
+name = "quiet"
+mesh = "head"
+at = [2.0, 0.0, 0.0]
+id = "anmqt00001"
+"#;
+
+#[test]
+fn morph_weights_follow_the_clip_per_tick_and_a_game_can_set_them() {
+    let folder = Folder::new("anim heads", HEADS);
+    let (mut session, _) = session(&folder, |_| {});
+    for _ in 0..20 {
+        session.advance(FRAME);
+    }
+    let world = session.world();
+    let talker = id(world, "talker");
+    let mut reference = Animator::new(rig(world, "talker"), 60);
+    reference.play("talk", 0).unwrap();
+    let now = world.morph_weights(talker).unwrap();
+    assert_eq!(now, reference.weights(world.ticks()));
+    assert_ne!(now, reference.weights(world.ticks() - 1));
+    let quiet = id(world, "quiet");
+    assert_eq!(world.morph_weights(quiet).unwrap(), [vec![0.0, 0.3, 0.0]]);
+
+    let world = session.world_mut();
+    world.set_morph_weights(quiet, "head", &[1.0]).unwrap();
+    assert_eq!(world.morph_weights(quiet).unwrap(), [vec![1.0, 0.3, 0.0]]);
+    assert!(world.set_morph_weights(quiet, "hat", &[1.0]).is_err());
+    assert!(world.set_morph_weights(quiet, "head", &[0.0; 4]).is_err());
+    assert!(world.set_morph_weights(quiet, "head", &[f32::NAN]).is_err());
+    world.clear_morph_weights(quiet, "head").unwrap();
+    assert_eq!(world.morph_weights(quiet).unwrap(), [vec![0.0, 0.3, 0.0]]);
 }

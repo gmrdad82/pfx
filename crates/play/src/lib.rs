@@ -24,7 +24,7 @@ pub use layers::Layers;
 pub use live::{Edit, Pending, Stamped};
 pub use paint::{NoWarmer, PaintFrame, Warm, Warmer, Warming};
 pub use pfx_core::modules::{Level, Notice, Reload};
-pub use present::PlayFrame;
+pub use present::{MorphWeights, PlayFrame};
 pub use rigs::{RigDesc, Rigs};
 pub use session::{MOTORS_KEPT, Options, PlaySession, Stopped};
 pub use settings::{Audio, Cap, Pacing, Settings};

@@ -28,3 +28,7 @@ fixture = ["pfx-core/fixture"]
 
 [dev-dependencies]
 pfx-core = { path = "../core", features = ["fixture"] }
+
+[[example]]
+name = "head_glb"
+required-features = ["fixture"]

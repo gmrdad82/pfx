@@ -90,13 +90,36 @@ impl Skeleton {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Morph {
+    pub name: String,
+    pub defaults: Vec<f32>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Rig {
     skeleton: Skeleton,
     clips: Vec<Clip>,
+    morphs: Vec<Morph>,
 }
 
 impl Rig {
     pub fn new(skeleton: Skeleton, clips: Vec<Clip>) -> Result<Self, AnimError> {
+        Self::morphed(skeleton, clips, Vec::new())
+    }
+
+    pub fn morphed(
+        skeleton: Skeleton,
+        clips: Vec<Clip>,
+        morphs: Vec<Morph>,
+    ) -> Result<Self, AnimError> {
+        for morph in &morphs {
+            if !morph.defaults.iter().all(|value| value.is_finite()) {
+                return Err(AnimError::NotFinite(format!(
+                    "the default weights of {}",
+                    morph.name
+                )));
+            }
+        }
         for (index, clip) in clips.iter().enumerate() {
             if clips[..index]
                 .iter()
@@ -118,8 +141,43 @@ impl Rig {
                     ),
                 });
             }
+            for channel in clip.weights() {
+                let reason = match morphs.get(channel.morph) {
+                    None => format!(
+                        "a weights channel names morph {} of {}",
+                        channel.morph,
+                        morphs.len()
+                    ),
+                    Some(morph) if morph.defaults.len() != channel.width() => format!(
+                        "a weights channel holds {} weights per key for {}, which has {} targets",
+                        channel.width(),
+                        morph.name,
+                        morph.defaults.len()
+                    ),
+                    Some(_) => continue,
+                };
+                return Err(AnimError::Channel {
+                    clip: clip.name().to_string(),
+                    reason,
+                });
+            }
         }
-        Ok(Self { skeleton, clips })
+        Ok(Self {
+            skeleton,
+            clips,
+            morphs,
+        })
+    }
+
+    pub fn morphs(&self) -> &[Morph] {
+        &self.morphs
+    }
+
+    pub fn default_weights(&self) -> Vec<Vec<f32>> {
+        self.morphs
+            .iter()
+            .map(|morph| morph.defaults.clone())
+            .collect()
     }
 
     pub fn skeleton(&self) -> &Skeleton {
