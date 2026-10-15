@@ -1801,6 +1801,24 @@ impl Renderer {
         Ok(request)
     }
 
+    pub fn set_hour(&mut self, hour: f32) -> Result<(), String> {
+        self.touch();
+        if !hour.is_finite() {
+            return Err("hour must be finite".into());
+        }
+        if hour == self.hour {
+            return Ok(());
+        }
+        self.frame.set_probe_hour(hour)?;
+        self.hour = hour;
+        self.history.invalidate();
+        Ok(())
+    }
+
+    pub fn hour(&self) -> f32 {
+        self.hour
+    }
+
     pub fn sky_settling(&self) -> bool {
         self.frame.sky().settling()
     }
