@@ -119,7 +119,7 @@ impl SpriteImage {
 
 pub struct FlatSprites {
     pub image: SpriteImage,
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
     pub(crate) view: wgpu::TextureView,
     pub(crate) sampler: wgpu::Sampler,
 }
@@ -149,10 +149,50 @@ impl FlatSprites {
         let sampler = sampler(device, image.filter);
         Self {
             image,
-            _texture: texture,
+            texture,
             view,
             sampler,
         }
+    }
+
+    pub fn live(device: &wgpu::Device, size: [u32; 2], filter: SpriteFilter) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("flat live sprites"),
+            size: wgpu::Extent3d {
+                width: size[0].max(1),
+                height: size[1].max(1),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: SPRITE_FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self {
+            image: SpriteImage {
+                width: 1,
+                height: 1,
+                rgba: vec![0; 4],
+                filter,
+            },
+            texture,
+            view,
+            sampler: sampler(device, filter),
+        }
+    }
+
+    pub fn size(&self) -> [u32; 2] {
+        [self.texture.width(), self.texture.height()]
+    }
+
+    pub fn texture(&self) -> &wgpu::Texture {
+        &self.texture
     }
 
     pub fn view(&self) -> &wgpu::TextureView {

@@ -18,7 +18,7 @@ A `FlatScene` is everything one frame needs:
 | `groups` | `Group { opacity }`s that draws join by index. |
 | `text` | `FlatText`s that `Shape::Text(index)` draws place. |
 | `icons` | The scene's `FlatIcons`, an uploaded distance-field atlas. |
-| `sprites` | The scene's `FlatSprites`, an uploaded colour atlas that image fills sample, or `None`. |
+| `sprites` | The scene's `FlatSprites`, an uploaded colour atlas or one the live renderer writes (`FlatSprites::live`), that image fills sample, or `None`. |
 | `environment` | The one prefiltered `Environment` the reflection dial samples. |
 | `post`, `frame`, `seed` | Whether the frame runs through the renderer's post chain, and the chain's frame number and seed. |
 
@@ -127,6 +127,22 @@ An SVG progress meter is an `Arc`. A circle with `stroke-dasharray="L C"`, `stro
     - One scene has one atlas, so the baked parts share it with any other sprites: pack them side by side and address each by its frame.
     - Each frame then pays one sprite instance instead of every draw in the part, its group layer and its shadows. The bake is the twin's cost once, at load or when the state changes; it scales with the cell's pixels times the draws covering them, so bake at the size the part shows at, not larger.
     - `a_baked_group_samples_back_as_its_premultiplied_pixels_without_a_dark_edge` bakes a grouped face on the twin and requires the atlas to sample back every pixel, and every point halfway between two, within 1.5/255 of the premultiplied source.
+  - **Live sprites: an atlas the live renderer writes.** For a part that changes every frame and is drawn larger than a chip (a lit 3D head with its expressions), `FlatSprites::live(&device, [width, height], filter)` makes an atlas with no CPU pixels: an `Rgba8Unorm` texture with `TEXTURE_BINDING | RENDER_ATTACHMENT | COPY_DST | COPY_SRC` usage, `texture()` and `view()` to reach it and `size()` for its texel size. One live `Renderer` made with `Renderer::new_with_output_format(gpu, width, height, Rgba8Unorm)` renders straight into `view()` each frame, and the flat draws sample it with `Fill::Image` like any atlas:
+    ```rust
+    let atlas = FlatSprites::live(&gpu.device, [1280, 640], SpriteFilter::Linear);
+    let mut heads = Renderer::new_with_output_format(gpu.clone(), 1280, 640, wgpu::TextureFormat::Rgba8Unorm)?;
+    heads.set_alpha_from_coverage(true)?;
+    heads.set_viewport(1200, 600)?;
+    heads.render(&scene, &Text::default(), &Effects::default(), Finish::Standard, atlas.view())?;
+    let face = Draw::circle(centre, 300.0).shadow(Shadow::None);
+    let face = Draw { fill: Fill::Image(SpriteFill::new([0.0, 0.0, 600.0 / 1280.0, 600.0 / 640.0])), ..face };
+    ```
+    - The format is `Rgba8Unorm`, the same as an uploaded atlas, because the flat pass works in sRGB-encoded colour and samples a sprite as stored: a texel shows its own bytes, filtered between encoded values as the twin's `SpriteImage::sample` filters them. An `Rgba8UnormSrgb` atlas would be decoded by the sampler and show darker; a second sRGB view of the same texture needs wgpu's `VIEW_FORMATS`, which the engine's floor does not require. So the live renderer gained an `Rgba8Unorm` output whose output blit encodes sRGB itself (the encode the hardware does for an sRGB target), and the flat pass is unchanged.
+    - With `Renderer::set_alpha_from_coverage(true)` the atlas holds straight alpha: 0 where only the sky or the clear shows, 1 on geometry, and in between on silhouettes ([live-renderer.md](live-renderer.md), "Alpha from coverage"). Transparent texels next to a head carry its colour, so `Linear` sampling leaves no dark fringe, and the flat draw composes the head over its card and under whatever is drawn after it.
+    - The renderer clears the whole atlas each frame and draws into its viewport's top-left corner; lay the heads out as a contact sheet there, one orthographic camera over all of them, and address each by its frame. A cell should hold its head with a few transparent texels around it.
+    - The CPU twin has no pixels for a live atlas: its `image` is one transparent texel, so the twin draws live sprites blank.
+    - `crates/live/examples/heads.rs` is the contact sheet: 11 heads (one at 600 px, two at 300 and eight at 120, each a sphere with a hat and two eyes, 44 instances) in a 1200×600 viewport of a 1280×640 atlas, shadows at 1024, a tone-only finish, no sharpening, lens, haze or sky visibility, fixed exposure, then a 3840×2160 flat frame with cards below and rings, badges and plates above. On the RX 9060 XT under RADV over 300 frames after 60 of warm-up: the live part 0.413 ms GPU at p50 and 0.452 ms at p99, the flat frame 1.118 ms and 1.217 ms. `cargo run --release -p pfx-live --example heads -- tmp/heads/flat.png [tmp/heads/atlas.png]` writes the flat frame and the atlas.
+    - `a_head_rendered_into_the_live_atlas_is_cut_out_in_its_flat_rect` (GPU, `tests/live_sprites.rs`) renders a sphere into a live atlas and draws it with `Draw::sprite`: the atlas is transparent black at its corner and opaque on the head with a thin band of partial alpha, the flat frame shows the clear colour inside the rect around the head and outside it, and the head's pixel is the atlas's texel.
 
 **Strokes.** `Stroke { colour, width, dash }` is centred on the outline, as SVG's is, and paints over the fill.
 - `Stroke::dashed(colour, width, on, off)` dashes a rounded rect's perimeter, or a circle's.

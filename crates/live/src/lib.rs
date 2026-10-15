@@ -1,5 +1,6 @@
 pub mod canopy;
 pub mod content_atlas;
+mod coverage;
 pub mod crisp;
 pub mod deform;
 pub mod demand;

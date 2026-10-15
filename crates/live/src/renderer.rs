@@ -667,6 +667,7 @@ pub struct Renderer {
     display: Option<(wgpu::Texture, wgpu::TextureView)>,
     blit: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
     blit_group: CachedGroup,
+    coverage: Option<crate::coverage::Coverage>,
     depths: [(wgpu::Texture, wgpu::TextureView); 2],
     depth_index: usize,
     reactive: wgpu::Texture,
@@ -762,7 +763,7 @@ fn plain_passes(passes: Vec<PassTiming>) -> Vec<PassTiming> {
     merged
 }
 
-const FULLSCREEN: &str = "@vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f { let xy = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0)); return vec4f(xy[index], 0.0, 1.0); }";
+pub(crate) const FULLSCREEN: &str = "@vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f { let xy = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0)); return vec4f(xy[index], 0.0, 1.0); }";
 
 const MOTION_WGSL: &str = r#"
 struct MotionUniform {
@@ -831,9 +832,15 @@ fn blit_pipeline(
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let source = format!(
-        "{FULLSCREEN}\n@group(0) @binding(0) var source: texture_2d<f32>; @fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {{ return textureLoad(source, vec2i(position.xy), 0); }}"
-    );
+    let source = if format == wgpu::TextureFormat::Rgba8Unorm {
+        format!(
+            "{FULLSCREEN}\n@group(0) @binding(0) var source: texture_2d<f32>; @fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {{ let c = textureLoad(source, vec2i(position.xy), 0); let l = clamp(c.rgb, vec3f(0.0), vec3f(1.0)); return vec4f(select(1.055 * pow(l, vec3f(1.0 / 2.4)) - vec3f(0.055), l * 12.92, l <= vec3f(0.0031308)), c.a); }}"
+        )
+    } else {
+        format!(
+            "{FULLSCREEN}\n@group(0) @binding(0) var source: texture_2d<f32>; @fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {{ return textureLoad(source, vec2i(position.xy), 0); }}"
+        )
+    };
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("live output blit"),
         source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -1253,6 +1260,7 @@ impl Renderer {
             wgpu::TextureFormat::Rgba16Float
                 | wgpu::TextureFormat::Rgba8UnormSrgb
                 | wgpu::TextureFormat::Bgra8UnormSrgb
+                | wgpu::TextureFormat::Rgba8Unorm
         ) {
             return Err(String::from("unsupported output format").into());
         }
@@ -1323,6 +1331,7 @@ impl Renderer {
             display,
             blit,
             blit_group: CachedGroup::default(),
+            coverage: None,
             depths: linear_depths(device, width, height),
             depth_index: 0,
             reactive,
@@ -1414,6 +1423,9 @@ impl Renderer {
         self.glass.set_viewport(width, height)?;
         self.post.set_viewport(width, height)?;
         self.dof.set_viewport(width, height)?;
+        if let Some(coverage) = &mut self.coverage {
+            coverage.invalidate();
+        }
         self.text_bounds.clear();
         if self
             .pick_request
@@ -1447,6 +1459,11 @@ impl Renderer {
         textures.extend(self.reflections.textures());
         textures.extend(self.glass.textures());
         textures.extend(self.display.as_ref().map(|(texture, _)| texture.clone()));
+        textures.extend(
+            self.coverage
+                .iter()
+                .flat_map(crate::coverage::Coverage::textures),
+        );
         textures.extend(self.flat.iter().flat_map(FlatPass::target_textures));
         textures
     }
@@ -1905,6 +1922,35 @@ impl Renderer {
         self.frame.set_sky_visibility(on);
     }
 
+    pub fn set_alpha_from_coverage(&mut self, on: bool) -> Result<(), String> {
+        if on == self.coverage.is_some() {
+            return Ok(());
+        }
+        if on {
+            if self.display.is_none() {
+                return Err("alpha from coverage needs an 8-bit output format".into());
+            }
+            if self.demand.is_some() {
+                return Err("frames on demand keep no alpha; turn them off first".into());
+            }
+            let (width, height) = self.capacity();
+            self.coverage = Some(crate::coverage::Coverage::new(
+                &self.frame.gpu.device,
+                [width, height],
+                self.output_format,
+                self.output_format == wgpu::TextureFormat::Rgba8Unorm,
+            ));
+        } else {
+            self.coverage = None;
+        }
+        self.touch();
+        Ok(())
+    }
+
+    pub fn alpha_from_coverage(&self) -> bool {
+        self.coverage.is_some()
+    }
+
     pub fn set_probe_emission(&mut self, scale: f32) -> Result<(), String> {
         self.touch();
         self.frame.set_probe_emission(scale)?;
@@ -2097,6 +2143,9 @@ impl Renderer {
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 "live display intermediate",
             ));
+        }
+        if let Some(coverage) = &mut self.coverage {
+            coverage.resize(device, [width, height]);
         }
         self.depths = linear_depths(device, width, height);
         self.mips = mips(device, width, height);
@@ -2387,7 +2436,7 @@ impl Renderer {
                 if self.display.is_some() {
                     let display = self.display.as_ref().map(|(_, view)| view.clone());
                     if let Some(display) = display {
-                        self.encode_blit(device, &mut encoder, &display, output);
+                        self.encode_blit(device, &mut encoder, &display, output, false);
                     }
                 }
             } else {
@@ -2397,7 +2446,7 @@ impl Renderer {
                     &target,
                     output,
                     self.output_format,
-                    true,
+                    self.output_format != wgpu::TextureFormat::Rgba8Unorm,
                     false,
                     Some(&mut self.profiler),
                 );
@@ -3519,7 +3568,22 @@ impl Renderer {
                 self.pass_log.push("composite");
             }
         } else if self.blit.is_some() {
-            self.encode_blit(device, &mut encoder, &source, output);
+            if let Some(coverage) = &mut self.coverage {
+                coverage.encode(
+                    device,
+                    &queue,
+                    &mut encoder,
+                    &self.frame.targets.depth_view,
+                    &self.frame.targets.velocity_view,
+                    [width, height],
+                    self.taa.restarts(),
+                    taa::Settings::default().history_weight,
+                    &mut self.profiler,
+                );
+                self.pass_log.push("coverage");
+            }
+            let coverage = self.coverage.is_some();
+            self.encode_blit(device, &mut encoder, &source, output, coverage);
         }
         self.finish_encoder(device, &queue, encoder, true)
     }
@@ -3530,41 +3594,55 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         post_output: &wgpu::TextureView,
         output: &wgpu::TextureView,
+        coverage: bool,
     ) {
-        if let Some((layout, pipeline)) = &self.blit {
-            let bind = self.blit_group.get(
-                device,
-                "live output blit",
-                layout,
-                &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(post_output),
-                }],
-            );
-            let timing = self.profiler.pass("output blit");
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                multiview_mask: None,
-                label: Some("live output blit"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: output,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: self.profiler.render_writes(timing),
-                occlusion_query_set: None,
-            });
-            let [width, height] = self.frame.viewport();
-            crate::viewport::apply(&mut pass, [width, height]);
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, bind, &[]);
-            pass.draw(0..3, 0..1);
-            self.pass_log.push("output blit");
-        }
+        let Some((layout, pipeline)) = &self.blit else {
+            return;
+        };
+        let (pipeline, bind, clear) = match self.coverage.as_mut().filter(|_| coverage) {
+            Some(coverage) => {
+                let bind = coverage
+                    .blit_group(device, post_output, &self.frame.targets.depth_view)
+                    .clone();
+                (coverage.pipeline().clone(), bind, wgpu::Color::TRANSPARENT)
+            }
+            None => {
+                let bind = self.blit_group.get(
+                    device,
+                    "live output blit",
+                    layout,
+                    &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(post_output),
+                    }],
+                );
+                (pipeline.clone(), bind.clone(), wgpu::Color::BLACK)
+            }
+        };
+        let timing = self.profiler.pass("output blit");
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            multiview_mask: None,
+            label: Some("live output blit"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: output,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: self.profiler.render_writes(timing),
+            occlusion_query_set: None,
+        });
+        let [width, height] = self.frame.viewport();
+        crate::viewport::apply(&mut pass, [width, height]);
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &bind, &[]);
+        pass.draw(0..3, 0..1);
+        drop(pass);
+        self.pass_log.push("output blit");
     }
 
     fn finish_encoder(
@@ -3684,8 +3762,13 @@ impl Renderer {
             self.demand = None;
             return Ok(());
         };
-        if self.display.is_none() {
+        if self.display.is_none() || self.output_format == wgpu::TextureFormat::Rgba8Unorm {
             return Err("frames on demand need an sRGB output format".into());
+        }
+        if self.coverage.is_some() {
+            return Err(
+                "frames on demand keep no alpha; turn alpha from coverage off first".into(),
+            );
         }
         if self.size() != self.capacity() {
             return Err("frames on demand render at the full size; set the viewport to the renderer's capacity first".into());
@@ -3800,7 +3883,7 @@ impl Renderer {
             );
             self.pass_log.push("composite");
         } else {
-            self.encode_blit(device, encoder, &base, output);
+            self.encode_blit(device, encoder, &base, output, false);
         }
         Ok(())
     }
