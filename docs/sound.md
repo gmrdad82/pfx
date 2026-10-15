@@ -240,6 +240,52 @@ mixer.stream_vorbis(ChannelId::DIALOG, &source, None, Level::default())?;
 - `VorbisSource` is bytes held in memory or a file path.
 - Stereo and mono play as they are; a file with more channels plays its first two.
 
+## Voice effects (feature `voicefx`)
+
+Offline building blocks for baking voices from recordings in a tools build: each call takes interleaved samples (`channels` of them a frame, mono is 1) at a sample rate, returns a new `Vec<f32>` and reads no clock or global state, so the same input, settings and seed give the same samples. The recipes (a robot, a mumble) belong to the game; the engine only supplies the parts. Off by default, so a game that bakes nothing builds none of it.
+
+```rust
+use pfx_sound::voicefx::{chorus, crush, flanger, ring, syllables, vocoder};
+
+let robot = vocoder::vocoder(&voice, 1, 48_000, vocoder::Carrier::Wave { wave: Wave::Saw, hz: 110.0, seed: 0 }, &vocoder::Vocoder::default());
+let radio = crush::crush(&voice, 1, 48_000, &crush::Crush { bits: Some(6), hold: 6.0, average: true, low_pass: Some(4_000.0) });
+let alien = ring::ring(&voice, 1, 48_000, &ring::Ring { hz: 90.0, mix: 0.6, feedback: 0.0 });
+
+let found = syllables::syllables(&voice, 1, 48_000, &syllables::Split::default());
+let grains: Vec<Vec<f32>> = syllables::cut(&voice, 1, &found)
+    .iter()
+    .map(|g| syllables::repitch(g, 1, 1.2, Resample::Cubic))
+    .collect();
+let mumble = syllables::join(&syllables::reorder(&grains, seed), 1, 48_000, 0.01);
+```
+
+- `ring::ring` multiplies by a sine carrier at `hz`, with `feedback` (0 to 1, scaled by 0.95) of the last output and `mix` dry against wet. Ported from mda RingMod.
+- `crush::crush` holds each sample for `hold` frames (fractional, so 6.0 at 48 kHz is an 8 kHz rate; `average: true` holds the mean of the frames it replaces instead of the first), then truncates it to `bits` (1 to 24; levels at multiples of 2^-(bits-1)), then, with `low_pass: Some(hz)`, runs it through an 8-pole low-pass. Ported from mda Degrade.
+- `chorus::chorus` mixes four taps of a delay line: tap k sits at `separation` x k seconds plus up to `depth` seconds, swung by its own seeded fractal noise at `rate` Hz (each tap 0.02 Hz faster than the last); `feedback` (-1 to 1, through a tanh) feeds their mean back into the line, `mix` is dry against wet, and the default 0.8 is fundsp's chorus exactly. The same `seed` gives the same swing.
+- `flanger::flanger` reads one tap swung by a sine at `rate` Hz between `delay` and `delay + depth` seconds, `feedback` (-1 to 1, through a tanh) feeds it back, and `mix` is dry against wet. Both are ported from fundsp.
+- `vocoder::vocoder` is a channel vocoder: the modulator (the voice) is split into 8 or 16 bands (`bands`) by 4th-order resonators run at half rate, an envelope follower on each band (`envelope_ms`) sets that band of the carrier, and a high band above the bank lets sibilants through (`hi_band` from the carrier, `hi_thru` from the voice, both 0 to 1). `q` (0 to 1) narrows the bands, `range_hz` (800 by default) moves the bank up or down in proportion, `output_db` trims the level (the default is about 10 dB above the voice; at 16 bands, trim it before mixing). The carrier is a `Wave` oscillator from pfx-sound (`Saw`, `Square`, `Sine`, `White`, `Pink`) at `hz` with a `seed` for the noises, or any mono buffer, looped; each channel of the modulator runs on its own. Ported from mda Vocoder; its envelope speeds are rescaled from the 44.1 kHz they were tuned at.
+- `syllables::syllables` cuts speech into syllable-sized grains, `Vec<Syllable { start, end }>` in frames: the RMS of each `hop` (10 ms) against the loudest hop opens a grain at `open_db` (-30 dB) and closes it below `close_db` (-40 dB), grains closer than `min_gap` (40 ms) merge and grains shorter than `min_length` (60 ms) are dropped. `onsets: true` also splits a grain where spectral flux over the vocoder's 16 bands peaks (librosa's onset detection and constants), for syllables that run into each other without a dip.
+- The grain helpers: `cut` copies the grains out, `reverse` plays one backwards, `repitch(grain, channels, ratio, Resample)` changes its pitch by resampling (1.5 is a fifth up and two thirds as long; `Sinc`, `Cubic` or `Linear`, as for playback), `permutation(len, seed)` and `reorder(items, seed)` shuffle them by a seed, and `join(grains, channels, rate, crossfade)` puts them back end to end with an equal-power crossfade of `crossfade` seconds (shortened to fit a grain shorter than that); the result is the grains' total length less the overlaps.
+
+Cost, measured once on 10 s of 48 kHz mono voice-like audio (a gliding 140 Hz tone with breath noise, gated four times a second), release build, Ryzen 9 9950X, CPU time per second of audio:
+
+| Call | Cost |
+|---|---|
+| `ring` | 0.55 ms |
+| `crush`, 8 bits | 0.34 ms |
+| `crush`, 6 bits, hold 6, averaged, 4 kHz low-pass | 0.28 ms |
+| `chorus` | 1.9 ms |
+| `flanger` | 2.0 ms |
+| `vocoder`, 8 bands, saw carrier | 1.9 ms |
+| `vocoder`, 8 bands, white noise carrier | 0.85 ms |
+| `vocoder`, 16 bands, saw carrier | 3.8 ms |
+| `syllables` | 0.03 ms |
+| `syllables` with `onsets` | 0.73 ms |
+| `cut`, `reorder`, `join` (10 ms crossfades) | under 0.05 ms each |
+| `reverse` every grain | 0.07 ms |
+| `repitch` every grain by 1.3, `Sinc` | 12.8 ms |
+| `repitch` every grain by 1.3, `Cubic` / `Linear` | 0.38 / 0.29 ms |
+
 ## Cost
 
 `crates/sound/tests/bench.rs` (`cargo test --release -p pfx-sound --test bench -- --ignored --nocapture`): a 48 kHz stereo mixer rendering 800-frame ticks (60 a second), a 0.1 s mono hit triggered 2,000 times a second with `max_voices: 20`, `Steal::Oldest`, 2 semitones of pitch jitter and 0.2 of volume jitter (about 20 live voices plus the stolen ones fading), and 20 live sine tones. Release build, Ryzen 9 9950X, CPU time a tick:
@@ -260,4 +306,4 @@ Before, 92 % of the jittered case was the sinc: for every pitched frame `Kernel:
 
 ## Tests
 
-No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, drive off bit for bit, the three curves pinned by a hash, a compensated drive keeping a quiet tone's level, scheduled glides matching the plain call made at the same frame bit for bit (and leaving the frames before it alone), and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The crate's own tests turn `vorbis` on through a self dev-dependency, so the workspace gate runs them.
+No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, drive off bit for bit, the three curves pinned by a hash, a compensated drive keeping a quiet tone's level, scheduled glides matching the plain call made at the same frame bit for bit (and leaving the frames before it alone), and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The voice effects' tests cover the crusher's bit-depth steps and sample-and-hold runs, the chorus's seed (the same seed the same samples, another seed others), the vocoder singing at the carrier's harmonics and falling silent with the voice, the segmentation finding synthesised bursts between silences (with and without onsets) and onsets splitting a run that steps up without a gap, and the grain helpers' lengths, seeded order and a repitch landing on the moved pitch. The crate's own tests turn `vorbis` and `voicefx` on through a self dev-dependency, so the workspace gate runs them.

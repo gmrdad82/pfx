@@ -13,6 +13,8 @@ mod pcm;
 mod sound;
 mod synth;
 mod voice;
+#[cfg(feature = "voicefx")]
+pub mod voicefx;
 #[cfg(feature = "vorbis")]
 mod vorbis;
 mod wav;
