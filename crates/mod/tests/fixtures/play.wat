@@ -34,6 +34,8 @@
           (call $line (i32.const 16) (i32.const 16))
           (local.set $times (i32.sub (local.get $times) (i32.const 1)))
           (br $next))))
+    (func (export "shout") (param $len i32)
+      (call $line (i32.const 0) (local.get $len)))
     (func (export "mix") (param $a f64) (param $b f64) (param $steps i32) (result f64)
       (block $done
         (loop $next
@@ -97,6 +99,8 @@
     (canon lift (core func $main "roll")))
   (func (export "chat") (param "times" u32)
     (canon lift (core func $main "chat")))
+  (func (export "shout") (param "len" u32)
+    (canon lift (core func $main "shout")))
   (func (export "mix") (param "a" f64) (param "b" f64) (param "steps" u32) (result f64)
     (canon lift (core func $main "mix")))
   (func (export "nan-bits") (param "bits" u64) (param "op" u32) (result u64)

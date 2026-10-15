@@ -88,7 +88,7 @@ world play {
 
 - **Imports go in interfaces,** so the game can register each interface's `add_to_linker` on its own and leave `pfx:mods/log` to the host.
 - **Randomness reaches a mod only through the world.** `seed` above is the game's own seeded RNG (`pfx_core::sim::Rng`), forked per mod as the game likes; a mod has no other source.
-- **The log** is `pfx:mods/log@0.1.0` with one function, `line: func(text: string)`. Its WIT is `crates/mod/wit/log.wit` (also `pfx_mod::LOG_WIT`); a game that imports it copies that file into its own `wit/deps/pfx-mod/`. With `Limits::log = Some(LogLimits { lines_per_tick, line_bytes })` each mod keeps up to `lines_per_tick` lines per tick, each cut to `line_bytes` on a character boundary; the rest are counted in `Mod::dropped_lines()`. The game drains lines with `Mod::take_log()`. With `log: None` the interface is not registered and a mod that imports it is refused.
+- **The log** is `pfx:mods/log@0.1.0` with one function, `line: func(text: string)`. Its WIT is `crates/mod/wit/log.wit` (also `pfx_mod::LOG_WIT`); a game that imports it copies that file into its own `wit/deps/pfx-mod/`. With `Limits::log = Some(LogLimits { lines_per_tick, line_bytes })` each mod keeps up to `lines_per_tick` lines per tick, each cut to `line_bytes` on a character boundary; the rest are counted in `Mod::dropped_lines()`. Every call costs one unit of fuel per byte of its text, kept or not, so a call whose text is longer than the fuel left traps as out of fuel. The game drains lines with `Mod::take_log()`. With `log: None` the interface is not registered and a mod that imports it is refused.
 
 The game generates bindings with wasmtime's `bindgen!` through pfx-mod's re-export, so both sides use the same wasmtime:
 

@@ -184,6 +184,20 @@ fn the_log_is_rate_limited_per_tick() {
 }
 
 #[test]
+fn a_log_line_longer_than_the_fuel_left_traps() {
+    let host = host(Limits {
+        fuel: Fuel::PerCall(10_000),
+        ..limits()
+    });
+    let mut m = start(&host, "shouty", 1);
+    let error = m
+        .call(|play, store| play.call_shout(store, 60_000))
+        .unwrap_err();
+    assert_eq!(error.cause, Cause::Fuel);
+    assert!(m.take_log().is_empty());
+}
+
+#[test]
 fn running_out_of_fuel_stops_only_that_mod() {
     let host = host(limits());
     let packages = ["calm", "greedy"]

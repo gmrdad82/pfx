@@ -84,6 +84,12 @@ impl<T: 'static> Host<T> {
                     log.func_wrap(
                         "line",
                         |mut cx: wasmtime::StoreContextMut<'_, ModCtx<T>>, (text,): (String,)| {
+                            let fuel = cx.get_fuel()?;
+                            let Some(left) = fuel.checked_sub(text.len() as u64) else {
+                                cx.set_fuel(0)?;
+                                return Err(wasmtime::Trap::OutOfFuel.into());
+                            };
+                            cx.set_fuel(left)?;
                             cx.data_mut().log.push(&text);
                             Ok(())
                         },
