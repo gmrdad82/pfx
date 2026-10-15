@@ -74,6 +74,40 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## mda VST plug-ins, under the MIT licence
+
+In the package `pfx-sound` (feature `voicefx`), the channel vocoder in `crates/sound/src/voicefx/vocoder.rs` (its 8 and 16 band tables, the 4th-order resonator bank run at half rate with its zeros applied once, the pre-emphasis, the high band and high thru, the envelope followers and their speeds, the gain and Q formulas and the denormal and instability catches) is ported from mda Vocoder (`src/mdaVocoder.cpp`), the bit and rate reducer in `crates/sound/src/voicefx/crush.rs` (the hold counter, the averaging mode, the truncating quantiser and the 8-pole post filter with its `filterFreq` constants) from mda Degrade (`src/mdaDegrade.cpp`), and the ring modulator in `crates/sound/src/voicefx/ring.rs` (the sine carrier and its 0.95 feedback) from mda RingMod (`src/mdaRingMod.cpp`), all from https://sourceforge.net/p/mda-vst/code/ at SVN revision 12, Copyright (c) 2008 Paul Kellett, released under the MIT licence or the GPL version 2 or later and used here under the MIT licence:
+
+> mda VST plug-ins
+>
+> Copyright (c) 2008 Paul Kellett
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## fundsp, under the MIT licence
+
+In the package `pfx-sound` (feature `voicefx`), the chorus in `crates/sound/src/voicefx/chorus.rs` (four taps at multiples of the separation swung by the variation, their rates spread by 0.02 Hz, the LFO sampled every 10 ms, the 8-octave spline noise with roughness 0.45 and its 1.25 divisor, and the 0.2 mix that `mix: 0.8` reproduces), the flanger in `crates/sound/src/voicefx/flanger.rs` (a tap swung between the minimum and maximum delay by a sine, its output fed back through a tanh) and the delay line in `crates/sound/src/voicefx/line.rs` (the cubic tap, its 1.00001-frame floor and its power-of-two buffer) are ported from fundsp (https://github.com/SamiPerttu/fundsp, `src/prelude.rs` `chorus` and `flanger`, `src/delay.rs` `Tap`, `src/math.rs` `fractal_noise` and `spline_noise`, version 0.23.0 at commit `559584043aa3369e92d5aad12a5e3b003cfacfd5`), by Sami Perttu, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## librosa, under the ISC licence
+
+In the package `pfx-sound` (feature `voicefx`), the spectral-flux onsets in `crates/sound/src/voicefx/syllables.rs` (the positive rise in dB averaged over bands with lag 1, `power_to_db`'s 1e-10 floor and 80 dB range, the min and max normalisation, `onset_detect`'s peak-picking windows of 30 ms, 100 ms and a 0.07 threshold, and the greedy `peak_pick`) are ported from librosa (https://github.com/librosa/librosa, `librosa/onset.py` and `librosa/util/utils.py`, commit `08e2c0a20d650fe00f10aaf3a1eaa9698ac19641`), licensed ISC:
+
+> Copyright (c) 2013--2026, librosa development team.
+>
+> Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
+>
+> THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
 ## Hash without Sine, under the MIT licence
 
 `hash12` in `crates/post/src/look/mod.rs` (in the package `pfx-post`, re-exported by `crates/live/src/flat/sdf.rs`), `flat_hash12` in `crates/live/src/flat/shader.rs` (in the package `pfx-live`) and `look_hash12` in `crates/post/src/look/shader.rs`, the hash behind the flat pass's `Grain` and `Fibre` patterns and the flat looks' `Grain` pass, are ported from David Hoskins' "Hash without Sine" (https://www.shadertoy.com/view/4djSRW, `hash12`, its constants `.1031` and `33.33` kept), Copyright (c)2014 David Hoskins, licensed MIT:

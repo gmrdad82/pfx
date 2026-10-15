@@ -1,5 +1,12 @@
+pub mod chorus;
+pub mod crush;
 mod fft;
+pub mod flanger;
+mod line;
+pub mod ring;
 mod stft;
 pub mod stretch;
+pub mod syllables;
+pub mod vocoder;
 
 pub use stretch::{Preset, Stretch, formant_shift, pitch_shift, time_stretch};
