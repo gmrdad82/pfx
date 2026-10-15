@@ -234,7 +234,7 @@ mixer.play_music_vorbis(&source, Some((loop_start, loop_end)), 2.0, Level::defau
 mixer.stream_vorbis(ChannelId::DIALOG, &source, None, Level::default())?;
 ```
 
-- `Clip::from_vorbis` decodes whole, trimmed to the stream's final granule position (lewton alone leaves the last page's tail on).
+- `Clip::from_vorbis` decodes whole, trimmed to the stream's final granule position (lewton alone leaves the last page's tail on). It refuses a file of more than 8 channels, and stops with an error once the clip would hold more than 57,600,000 samples (10 minutes of 48 kHz stereo), so a small crafted file cannot expand into gigabytes; a sound that long streams instead.
 - The stream decodes on its own thread, two seconds ahead of the mixer, and resamples to the mixer's rate with the same windowed-sinc as pitch (below). Looping streams (frames of the file's own rate) re-open the source and skip to the loop start, so the wrap is sample exact; the thread exits when its voice is dropped.
 - `VorbisSource` is bytes held in memory or a file path.
 - Stereo and mono play as they are; a file with more channels plays its first two.
