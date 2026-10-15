@@ -379,8 +379,14 @@ fn render_scene(
     let pixels = (size[0] * size[1]) as usize;
     let mut image = vec![clear; pixels];
     let mut layer: Option<(Vec<[f32; 4]>, f32)> = None;
+    let mut hidden = false;
     for step in &order.steps {
         match *step {
+            Step::Layer(group) if scene.groups[usize::from(group)].opacity <= 0.0 => {
+                hidden = true;
+            }
+            Step::EndLayer(_) if hidden => hidden = false,
+            Step::Draw(_) if hidden => {}
             Step::Layer(group) => {
                 layer = Some((
                     vec![[0.0; 4]; pixels],
