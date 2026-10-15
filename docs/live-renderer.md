@@ -383,6 +383,16 @@ TAA already averages the jittered samples, so a negative bias buys little sharpn
 
 The finish chain itself holds no slip: no double tone map, no gamut clip and no linear or sRGB mix-up. An `Rgba8UnormSrgb` output (no encode in the chain, a hardware-encoding blit) and an `Rgba16Float` output (the chain's encode) agree within 0.58/255. AgX's pastel look is AgX itself, the same on both sides. The one loss was in the shading: live's gold reflected 0.86 of the trace's light (0.260 against 0.303 in red), with sun-only frames identical. The whole gap was the sky's reflection, through the environment BRDF below. After the fit, every swatch agrees within 0.2% in lightness and chroma, and the test holds hue within 1° and lightness and chroma within 2%.
 
+### Output formats and alpha from coverage
+
+`Renderer::new_with_output_format` takes `Rgba16Float` (the chain encodes), `Rgba8UnormSrgb` or `Bgra8UnormSrgb` (a blit from a float intermediate, the hardware encodes), and `Rgba8Unorm`: the same blit, which encodes sRGB in its shader, so the bytes match an `Rgba8UnormSrgb` output's. It exists for a sprite atlas the flat pass samples ([flat.md](flat.md), "Live sprites"). A flat-only frame into it copies the flat pass's encoded colour as it is. Frames on demand refuse it. The blits of the other formats are unchanged, byte for byte.
+
+`Renderer::set_alpha_from_coverage(true)` makes the output's alpha the geometry's coverage, with straight colour, so a head rendered into an atlas comes out cut out; `alpha_from_coverage()` reads the switch. It needs an 8-bit output (it refuses `Rgba16Float`, which has no blit) and refuses frames on demand, as they refuse it. Off, nothing runs and every frame is as before. On, two full-screen passes replace the output blit (`crates/live/src/coverage.rs`):
+- **coverage** (into an `R16Float` history pair at the capacity): a pixel is covered when this frame's jittered depth is nearer than the far plane. Its alpha is the TAA of that one bit: the previous alpha, reprojected by the velocity target as TAA reprojects colour, clamped to the minimum and maximum coverage of the 3×3 neighbourhood, blended with the current bit at TAA's history weight (1 − 1/8). Inside the geometry and in the clear the clamp pins it to exactly 1 and 0; on a still silhouette the jitter sweeps the edge across the pixel and the alpha settles at the pixel's covered share, as TAA's colour does. It restarts with TAA's history, on a resize and on a viewport change.
+- **coverage blit**: alpha from that history; colour is the finished colour where the pixel is covered now, else the mean of its covered 3×3 neighbours, else black. TAA's colour on a silhouette is either the geometry's or the sky's (its depth and id tests drop the history when a pixel changes sides), so this keeps the sky out of the edge and gives transparent texels next to the geometry its colour for filtering. The output is cleared to transparent black first.
+
+What it does not cover: post effects that spread past the geometry (bloom, depth of field) are cut at alpha 0, and alpha-blended effects (glass, particles, volumes, overlay text) add no coverage. The camera may be orthographic; the shadow cascades then need a receiver box (`Quality::receiver`), since the renderer derives its frustum for them from a perspective projection.
+
 ### Tape glitch
 
 `pfx_post::Tape` is the colour glitch of a VHS tape that is fast-forwarding or rewinding. It runs as one full-screen pass (`Pass::Tape`) after tone mapping and the grade, on the display-referred image:
@@ -559,7 +569,7 @@ Measured in a release build: a `request_sky` call takes about 0.6 µs on the cal
 
 ## Frames on demand
 
-A product whose camera barely moves should not redraw a 4K frame every vsync. With `Renderer::set_frames_on_demand(Some(Limits::default()))` the renderer keeps the last full frame and answers, each tick, what the next one needs; `set_frames_on_demand(None)` and the plain `render`/`submit` calls keep today's behaviour (a product's `Redraw::Always`). It needs an sRGB output format (the display path), and refuses `Rgba16Float` outputs. It draws at the renderer's full size: it refuses a viewport smaller than the capacity, and `set_viewport` refuses one while it is on.
+A product whose camera barely moves should not redraw a 4K frame every vsync. With `Renderer::set_frames_on_demand(Some(Limits::default()))` the renderer keeps the last full frame and answers, each tick, what the next one needs; `set_frames_on_demand(None)` and the plain `render`/`submit` calls keep today's behaviour (a product's `Redraw::Always`). It needs an sRGB output format (the display path), and refuses `Rgba16Float` and `Rgba8Unorm` outputs and alpha from coverage. It draws at the renderer's full size: it refuses a viewport smaller than the capacity, and `set_viewport` refuses one while it is on.
 
 With `PFX_FRAME_STATS=<path>` set, every frame the renderer submits, on demand or not, writes one JSON line with its kind (full, partial, reproject, bridge or idle) and its sim, submit and GPU time ([frame-stats.md](frame-stats.md)).
 

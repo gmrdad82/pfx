@@ -478,7 +478,7 @@ pub fn surface_size(width: u32, height: u32, max: u32) -> (u32, u32) {
 
 pub fn format_bytes_per_pixel(format: wgpu::TextureFormat) -> Option<u32> {
     match format {
-        wgpu::TextureFormat::Rgba8UnormSrgb => Some(4),
+        wgpu::TextureFormat::Rgba8UnormSrgb | wgpu::TextureFormat::Rgba8Unorm => Some(4),
         wgpu::TextureFormat::Rgba16Float => Some(8),
         wgpu::TextureFormat::Rgba32Float => Some(16),
         _ => None,
