@@ -414,6 +414,10 @@ impl PlaySession {
         self.world.attend(attention);
     }
 
+    pub fn set_scheme(&mut self, scheme: Option<crate::Scheme>) {
+        self.world.set_scheme(scheme);
+    }
+
     pub fn take_recording(&mut self) -> Option<Recording> {
         self.input.stop_recording()
     }

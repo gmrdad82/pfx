@@ -568,7 +568,7 @@ impl Painter {
         if !draws.is_empty() || look.is_some() {
             let hud = FlatScene {
                 layout: report.layout_units(),
-                clear: None,
+                clear: self.staged.is_none().then(|| ui.clear.unwrap_or(BLACK)),
                 curve: ui.curve.as_ref().unwrap_or(&self.none),
                 light: ui.light,
                 draws: &draws,

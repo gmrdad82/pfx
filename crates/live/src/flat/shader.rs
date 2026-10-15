@@ -1092,6 +1092,7 @@ fn flat_blur(v: FlatVaryings) -> FlatPaint {
 
 pub const FINISH_WGSL: &str = r#"
 @group(0) @binding(0) var flat_source: texture_2d<f32>;
+@group(0) @binding(1) var<uniform> flat_ground: vec4f;
 
 @vertex
 fn flat_finish_vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
@@ -1111,10 +1112,19 @@ fn flat_finish_copy(@builtin(position) position: vec4f) -> @location(0) vec4f {
 @fragment
 fn flat_finish_linear(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let c = textureLoad(flat_source, vec2i(position.xy), 0);
-    if (c.a <= 0.0) {
-        return vec4f(0.0);
+    let a = max(c.a, 0.0);
+    let rgb = max(c.rgb, vec3f(0.0));
+    if (flat_ground.a > 0.0) {
+        let ground = flat_ground.rgb;
+        let lit = flat_finish_decode(rgb + ground * (1.0 - a)) - flat_finish_decode(ground) * (1.0 - a);
+        return vec4f(max(lit, vec3f(0.0)), a);
     }
-    return vec4f(flat_finish_decode(c.rgb / c.a) * c.a, c.a);
+    let over = min(rgb, vec3f(a));
+    var lit = flat_finish_decode(rgb - over);
+    if (a > 0.0) {
+        lit += flat_finish_decode(over / a) * a;
+    }
+    return vec4f(lit, a);
 }
 "#;
 

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use pfx_gpu::screens::{Budget, Device, ScreenPolicy};
 use pfx_input::{Backend, LayoutSource};
-use pfx_live::flat::{Icons, SpriteImage};
+use pfx_live::flat::{Icons, SpriteImage, Srgba};
 use pfx_live::renderer::Exposure;
 use pfx_live::upscale::Filter;
 use pfx_play::Settings;
@@ -39,6 +39,7 @@ pub struct Config {
     pub sprites: Option<SpriteImage>,
     pub environment: Option<EnvironmentTexels>,
     pub warm_budget: f64,
+    pub clear: Option<Srgba>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -84,7 +85,13 @@ impl Config {
             sprites: None,
             environment: None,
             warm_budget: WARM_BUDGET,
+            clear: None,
         }
+    }
+
+    pub fn clear(mut self, colour: Srgba) -> Self {
+        self.clear = Some(colour);
+        self
     }
 
     pub fn bind_text(&self) {

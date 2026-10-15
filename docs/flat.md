@@ -451,7 +451,10 @@ A game's own typeface moves these numbers; the test measures any font it is give
 `crates/live/tests/flat/scenes.py` draws the engine's own neutral test scenes as SVG and screenshots each in headless Chromium at 1× and 2×. The scenes are generic cards, pills, rings, arcs, dashed outlines, gradients, icons, patterns, groups and shadows at two elevations, in their own colours and layout, plus a full 1920×1080 board. `FLAT_CHROMIUM` can name the browser binary.
 
 `flat::svg::read` reads that SVG subset into draws, so each test scene is built from the same numbers as its reference:
-- elements: `rect`, `circle`, `path` (M, L, H, V, A and their relative forms), `use`, `g`, two-stop vertical gradients, dashes;
+- elements: `rect`, `circle`, `path` (M, L, H, V, C, S, Q, T, A and their relative forms; curves flattened to within 0.2% of their control box, at most 64 segments each), `use`, `g`, dashes;
+- the root's `width` and `height`, its `viewBox` alone (the size is the viewBox's, its origin moved to 0, 0), or both (scaled to fit);
+- `linearGradient`s with up to eight stops (`offset` as a number or a percentage, `stop-color` and `stop-opacity` as attributes or in `style`), in `objectBoundingBox` or `userSpaceOnUse` units, as `Fill::Gradient`; one gradient in user space runs across every path and shape that names it, as a wordmark's does. A two-stop gradient from the box's top to its bottom stays `Fill::Vertical`. `gradientTransform` is refused;
+- `fill`, `stroke` and `stroke-width` inherited from enclosing groups; paths fill even-odd;
 - `translate`, `rotate` and `scale`;
 - element and group opacity;
 - filters, mapped by the caller to an elevation or a glow; the tests map `lift1`, `lift2` and `halo`.

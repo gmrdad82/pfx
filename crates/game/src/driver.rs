@@ -4,7 +4,9 @@ use pfx_core::clock::Tick;
 use pfx_gpu::screens::{Device, Display, ScreenPolicy, ScreenReport};
 use pfx_gpu::window::{Attention, Clock, FramePacer, Host, Pace, Point, PresentPreference, Size};
 use pfx_input::{Backend, BindingMap, InputEvent, KeyLabels, LayoutSource};
-use pfx_play::{Cursor, Exit, Notice, PlaySession, Settings, Ui, UiFrame, Warm, Warmer, Warming};
+use pfx_play::{
+    Cursor, Exit, Notice, PlaySession, Scheme, Settings, Ui, UiFrame, Warm, Warmer, Warming,
+};
 
 use crate::cursor::{self, Warp};
 use crate::prompt::Part;
@@ -13,6 +15,7 @@ use crate::prompt::Part;
 pub enum Event {
     Input(InputEvent),
     Attention(Attention),
+    Scheme(Option<Scheme>),
     Resized(Size),
     Refresh(Option<u32>),
     Monitor(Option<String>),
@@ -103,6 +106,7 @@ impl Driver {
                 self.pacer.on(attention);
                 self.session.attend(attention);
             }
+            Event::Scheme(scheme) => self.session.set_scheme(scheme),
             Event::Resized(size) => {
                 self.window = size;
                 self.display.resized(size);

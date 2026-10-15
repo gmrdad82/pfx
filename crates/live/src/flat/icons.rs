@@ -102,7 +102,7 @@ impl IconShape {
     }
 }
 
-fn segment(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+pub(crate) fn segment(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     let ab = [b[0] - a[0], b[1] - a[1]];
     let ap = [p[0] - a[0], p[1] - a[1]];
     let span = ab[0] * ab[0] + ab[1] * ab[1];

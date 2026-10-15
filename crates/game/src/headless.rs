@@ -184,6 +184,10 @@ impl Headless {
         self.driver.feed(event);
     }
 
+    pub fn set_scheme(&mut self, scheme: Option<pfx_play::Scheme>) {
+        self.driver.feed(Event::Scheme(scheme));
+    }
+
     pub fn set_focused(&mut self, focused: bool) {
         self.driver
             .feed(Event::Attention(Attention::Focused(focused)));

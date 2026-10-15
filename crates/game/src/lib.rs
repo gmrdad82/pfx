@@ -14,6 +14,7 @@ pub mod modules {
 }
 mod painter;
 pub mod prompt;
+mod scheme;
 mod start;
 #[cfg(feature = "steam")]
 pub mod steam;
@@ -42,7 +43,8 @@ pub use pfx_live::renderer::Exposure;
 pub use pfx_live::renderer::Renderer;
 pub use pfx_play::{
     Anchor, Audio, Cap, Cursor, Exit, FrameTime, Game, GameError, Label, Level, Notice, Pacing,
-    PaintFrame, PcmStream, Prompt, PromptOf, Reload, RumbleRequest, SceneGame, Settings, Ui,
-    UiFrame, UiLook, Warm, Warming, World,
+    PaintFrame, PcmStream, Prompt, PromptOf, Reload, RumbleRequest, SceneGame, Scheme, Settings,
+    Ui, UiFrame, UiLook, Warm, Warming, World,
 };
 pub use prompt::Part;
+pub use scheme::system_scheme;

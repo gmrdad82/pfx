@@ -28,6 +28,9 @@ pfx-steam = { path = "../steam", default-features = false, features = ["input"],
 winit = "=0.30.13"
 pollster = "0.4"
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_System_Registry"] }
+
 [dev-dependencies]
 pfx-text = { path = "../text", features = ["fixture"] }
 serde_json = "1"

@@ -1289,13 +1289,15 @@ fn the_spike_scene_fits_its_budget_at_4k_and_on_a_deck_sized_target() {
 }
 
 fn linear_light(premultiplied: [f32; 4]) -> [f32; 4] {
-    let a = premultiplied[3];
-    if a <= 0.0 {
-        return [0.0; 4];
-    }
+    let a = premultiplied[3].max(0.0);
     let mut out = [0.0, 0.0, 0.0, a];
     for c in 0..3 {
-        out[c] = pfx_materials::linear_channel(premultiplied[c] / a) * a;
+        let rgb = premultiplied[c].max(0.0);
+        let over = rgb.min(a);
+        out[c] = pfx_materials::linear_channel(rgb - over);
+        if a > 0.0 {
+            out[c] += pfx_materials::linear_channel(over / a) * a;
+        }
     }
     out
 }

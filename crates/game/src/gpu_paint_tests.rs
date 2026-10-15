@@ -7,7 +7,10 @@ use pfx_gpu::window::{Rect, Size};
 use pfx_gpu::{Gpu, wgpu};
 use pfx_input::{Control, Glyph, GlyphAtlas, Input, Key};
 use pfx_live::flat::look::{Look, LookPass, Vignette};
-use pfx_live::flat::{Draw, FlatScene, Light, ShadowCurve, Srgba, rotation};
+use pfx_live::flat::{
+    Draw, Fill, FlatPass, FlatScene, FlatTarget, Glow, Gradient, Light, Shadow, ShadowCurve, Srgba,
+    rotation,
+};
 use pfx_live::renderer::Renderer;
 use pfx_live::upscale::{Overlay, Upscale};
 use pfx_play::{
@@ -510,4 +513,161 @@ fn prompt_quads_laid_out_by_a_game_equal_the_runtimes_own() {
     let ring = (100.0 + width - 2.0 * 4.0).round() as u32;
     let edge = pixel(&pixels, 1920, ring, 448);
     assert!(edge[0] > 150, "the widened keycap's right edge: {edge:?}");
+}
+
+const GROUND: Srgba = Srgba([0.063, 0.063, 0.094, 1.0]);
+
+fn light_draws() -> Vec<Draw> {
+    let halo = Glow {
+        colour: Srgba([0.514, 0.514, 0.98, 0.8]),
+        sigma: 34.0,
+    };
+    let gradient = Gradient::radial(
+        [0.0, 0.0],
+        [140.0, 140.0],
+        &[
+            (0.0, [1.0, 0.8, 0.4, 0.9]),
+            (0.6, [1.0, 0.6, 0.2, 0.3]),
+            (1.0, [1.0, 0.6, 0.2, 0.0]),
+        ],
+    )
+    .unwrap();
+    let mut spark = Draw::circle([1180.0, 540.0], 140.0)
+        .shadow(Shadow::None)
+        .additive();
+    spark.fill = Fill::Gradient(gradient);
+    vec![
+        Draw::rect([960.0, 540.0], [300.0, 120.0], 24.0)
+            .fill(Srgba([0.0; 4]))
+            .shadow(Shadow::Glow(halo)),
+        spark,
+        Draw::circle([400.0, 300.0], 120.0)
+            .fill(Srgba([1.0, 0.8, 0.4, 0.6]))
+            .shadow(Shadow::None)
+            .additive(),
+    ]
+}
+
+struct Lights {
+    own: bool,
+    pass: Option<FlatPass>,
+}
+
+impl Game for Lights {
+    fn start(&mut self, _world: &mut World) {}
+
+    fn tick(&mut self, _world: &mut World, _tick: &Tick, _input: &Input) {}
+
+    fn ui(&mut self, _world: &World, _frame: &UiFrame) -> Ui {
+        let mut ui = Ui::new();
+        ui.clear(GROUND);
+        if !self.own {
+            ui.draws = light_draws();
+        }
+        ui
+    }
+
+    fn paint(
+        &mut self,
+        renderer: &mut Renderer,
+        target: &wgpu::TextureView,
+        frame: &PaintFrame,
+    ) -> Result<(), GameError> {
+        if !self.own {
+            return Ok(());
+        }
+        let gpu = renderer.gpu().clone();
+        let pass = self
+            .pass
+            .get_or_insert_with(|| FlatPass::new(&gpu.device, &gpu.queue));
+        let draws = light_draws();
+        let none = ShadowCurve::none();
+        let scene = FlatScene {
+            layout: frame.layout,
+            clear: Some(GROUND),
+            curve: &none,
+            light: Light::default(),
+            draws: &draws,
+            groups: &[],
+            text: &[],
+            icons: None,
+            sprites: None,
+            environment: None,
+            post: false,
+            frame: frame.frame as u32,
+            seed: frame.seed,
+        };
+        let colour = pass.colour_target(&gpu.device, frame.output);
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        pass.render(
+            &gpu.device,
+            &gpu.queue,
+            &mut encoder,
+            &scene,
+            FlatTarget {
+                colour: &colour,
+                ids: None,
+                size: frame.output,
+                clear: Some(GROUND.premultiplied()),
+                clear_ids: false,
+            },
+            None,
+        )?;
+        pass.encode_finish(
+            &gpu.device,
+            &mut encoder,
+            &colour,
+            target,
+            frame.format,
+            frame.format.is_srgb(),
+            true,
+            None,
+        );
+        gpu.queue.submit([encoder.finish()]);
+        Ok(())
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn glows_and_additive_light_in_the_ui_match_a_flat_pass_on_its_ground() {
+    let window = Size {
+        width: 640,
+        height: 360,
+    };
+    let shot = |own: bool| {
+        let mut run = flat(Lights { own, pass: None }, window);
+        run.run_for(0.05).unwrap();
+        run.readback().unwrap()
+    };
+    let ui = shot(false);
+    let own = shot(true);
+    let mut worst = 0;
+    for y in 0..360 {
+        for x in 0..640 {
+            let (a, b) = (pixel(&ui, 640, x, y), pixel(&own, 640, x, y));
+            for c in 0..3 {
+                worst = worst.max((i32::from(a[c]) - i32::from(b[c])).abs());
+            }
+        }
+    }
+    let spark = pixel(&ui, 640, 393, 180);
+    let lamp = pixel(&ui, 640, 133, 100);
+    let halo = pixel(&ui, 640, 320, 152);
+    near(pixel(&ui, 640, 20, 340), GROUND, "the ground");
+    assert!(
+        spark[0] > 200 && spark[2] < 200,
+        "the spark's core: {spark:?}"
+    );
+    assert!(
+        lamp[0] > 150 && lamp[2] < 150,
+        "the additive lamp: {lamp:?}"
+    );
+    assert!(halo[2] > halo[0] + 25, "the halo's tail: {halo:?}");
+    assert!(
+        worst <= 2,
+        "the UI against a flat pass on its ground: {worst}"
+    );
 }

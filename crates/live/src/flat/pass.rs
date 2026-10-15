@@ -1,7 +1,7 @@
 use super::icons::{FORMAT as ICON_FORMAT, GpuIcons, Icons};
 use super::{
     Draw, FX, Fill, Fit, FlatScene, Glyphs, INSTANCE_ATTRIBUTES, Instance, KIND_SHADOW, LIT, Order,
-    Shape, Step, pack_shadow_with, pack_shape, shader,
+    Shape, Srgba, Step, pack_shadow_with, pack_shape, shader,
 };
 use crate::text::{GpuAtlas, PackedGlyph, TextSpace, pack_glyphs, pack_quads, screen_bounds};
 use bytemuck::{Pod, Zeroable};
@@ -288,6 +288,7 @@ pub struct FlatPass {
     size: [u32; 2],
     capacity: Option<[u32; 2]>,
     clip: Option<[u32; 4]>,
+    ground: wgpu::Buffer,
     passes: u32,
     made: usize,
 }
@@ -375,7 +376,18 @@ pub fn text_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
 }
 
 pub fn finish_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
-    layer_entries()
+    let mut entries = layer_entries();
+    entries.push(wgpu::BindGroupLayoutEntry {
+        binding: 1,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    });
+    entries
 }
 
 fn empty(
@@ -649,6 +661,12 @@ impl FlatPass {
             ..Default::default()
         });
         let far = half::f16::from_f32(1.0e4).to_bits().to_le_bytes();
+        let ground = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("flat finish ground"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         Self {
             view_layout,
             layer_layout,
@@ -693,6 +711,7 @@ impl FlatPass {
             size: [0, 0],
             capacity: None,
             clip: None,
+            ground,
             passes: 0,
             made: BASE_PIPELINES,
         }
@@ -708,6 +727,13 @@ impl FlatPass {
 
     pub fn set_clip(&mut self, clip: Option<[u32; 4]>) {
         self.clip = clip;
+    }
+
+    pub fn set_ground(&mut self, queue: &wgpu::Queue, ground: Option<Srgba>) {
+        let value = ground.map_or([0.0; 4], |colour| {
+            [colour.0[0], colour.0[1], colour.0[2], 1.0]
+        });
+        queue.write_buffer(&self.ground, 0, bytemuck::cast_slice(&value));
     }
 
     pub fn set_capacity(&mut self, capacity: Option<[u32; 2]>) {
@@ -1508,10 +1534,16 @@ impl FlatPass {
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("flat finish"),
             layout: &self.finish_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(source),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(source),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.ground.as_entire_binding(),
+                },
+            ],
         });
         let timing = profiler
             .as_deref_mut()

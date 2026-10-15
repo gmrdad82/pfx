@@ -471,8 +471,12 @@ impl Upscale {
             .flat
             .get_or_insert_with(|| FlatPass::new(device, queue));
         let look = overlay.look.filter(|look| !look.is_identity());
+        let scene = FlatScene {
+            clear: None,
+            ..*overlay.scene
+        };
         if look.is_none() {
-            flat.prepare(device, queue, overlay.scene, overlay.output_size)?;
+            flat.prepare(device, queue, &scene, overlay.output_size)?;
         }
         let Some(clip) = clip(overlay.content, overlay.output_size) else {
             return Ok(());
@@ -487,7 +491,7 @@ impl Upscale {
                     queue,
                     encoder,
                     flat,
-                    overlay.scene,
+                    &scene,
                     look,
                     overlay.output_size,
                     &target,
@@ -496,6 +500,7 @@ impl Upscale {
         } else {
             flat.encode_colour(encoder, &target, Some([0.0; 4]), profiler.as_deref_mut());
         }
+        flat.set_ground(queue, overlay.scene.clear);
         flat.encode_finish(
             device,
             encoder,

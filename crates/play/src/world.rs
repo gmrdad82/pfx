@@ -421,6 +421,7 @@ pub struct World {
     cursor: Cursor,
     warp: Option<[f32; 2]>,
     focus: Focus,
+    scheme: Option<Scheme>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -428,6 +429,12 @@ struct Focus {
     lost: bool,
     occluded: bool,
     minimized: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Scheme {
+    Light,
+    Dark,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -637,6 +644,7 @@ impl World {
             display: DisplaySettings::default(),
             cursor: Cursor::Shown,
             focus: Focus::default(),
+            scheme: None,
             warp: None,
             scene,
         };
@@ -919,6 +927,14 @@ impl World {
 
     pub fn focused(&self) -> bool {
         !(self.focus.lost || self.focus.occluded || self.focus.minimized)
+    }
+
+    pub fn scheme(&self) -> Option<Scheme> {
+        self.scheme
+    }
+
+    pub(crate) fn set_scheme(&mut self, scheme: Option<Scheme>) {
+        self.scheme = scheme;
     }
 
     pub(crate) fn attend(&mut self, attention: Attention) {

@@ -1,11 +1,13 @@
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 use pfx_gpu::screens::{Display, SystemSource, apply_display, detect};
 use pfx_gpu::window::{self, Attention, Pace, Size, SystemClock};
 use pfx_gpu::{Gpu, WindowTarget, wgpu};
 use pfx_input::{Backend, InputEvent, LayoutSource, SteamPrecedence};
+use pfx_live::flat::Srgba;
 use pfx_load::scene::Scene;
-use pfx_play::{Cursor, Game};
+use pfx_play::{Cursor, Game, Scheme};
 use pfx_sound::{ChannelId, Level, Output, PcmSender};
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
@@ -17,6 +19,7 @@ use crate::config::{Config, Pads, report};
 use crate::cursor::{Pointer, nudge};
 use crate::driver::{Driver, Event, present_preference};
 use crate::painter::{Painter, Warmup};
+use crate::scheme::{self, FROM_WINDOW, of_theme, system_scheme};
 use crate::start;
 
 pub const AUDIO_SECONDS: f32 = 0.25;
@@ -37,10 +40,14 @@ struct Live {
     pointer: Pointer,
     locked: bool,
     at: [f32; 2],
+    ground: Srgba,
+    grounded: bool,
+    schemes: Option<Receiver<Option<Scheme>>>,
 }
 
 struct App {
     pending: Option<(Box<dyn Game>, Config, Option<Scene>)>,
+    schemes: Option<Receiver<Option<Scheme>>>,
     live: Option<Live>,
     clock: SystemClock,
     error: Option<String>,
@@ -61,8 +68,13 @@ fn play(game: Box<dyn Game>, config: Config) -> Result<u8, String> {
     pfx_gpu::refuse_window("the game window")?;
     let scene = start::scene(&config)?;
     let event_loop = EventLoop::new().map_err(|error| format!("the event loop: {error}"))?;
+    let proxy = event_loop.create_proxy();
+    let schemes = scheme::watch(move || {
+        let _ = proxy.send_event(());
+    });
     let mut app = App {
         pending: Some((game, config, scene)),
+        schemes,
         live: None,
         clock: SystemClock::new(),
         error: None,
@@ -131,11 +143,68 @@ fn size_of(window: &Window) -> Size {
     }
 }
 
+fn decode(c: f32) -> f64 {
+    let c = f64::from(c);
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn present_ground(gpu: &Gpu, target: &WindowTarget, window: &Window, ground: Srgba) -> bool {
+    let texture = match target.surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(texture)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
+        _ => return false,
+    };
+    let view = texture.texture.create_view(&Default::default());
+    let [r, g, b, _] = ground.0;
+    let channel = |c: f32| {
+        if target.config.format.is_srgb() {
+            decode(c)
+        } else {
+            f64::from(c)
+        }
+    };
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("pfx game ground"),
+        });
+    encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        multiview_mask: None,
+        label: Some("pfx game ground"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: channel(r),
+                    g: channel(g),
+                    b: channel(b),
+                    a: 1.0,
+                }),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+    });
+    gpu.queue.submit([encoder.finish()]);
+    window.pre_present_notify();
+    gpu.queue.present(texture);
+    true
+}
+
 fn open(
     event_loop: &ActiveEventLoop,
     game: Box<dyn Game>,
     mut config: Config,
     scene: Option<&Scene>,
+    schemes: Option<Receiver<Option<Scheme>>>,
 ) -> Result<Live, String> {
     let settings = start::settings(game.as_ref(), &config);
     let device = config
@@ -145,7 +214,8 @@ fn open(
     let windowed = display.settings().size;
     let attributes = Window::default_attributes()
         .with_title(config.window_title())
-        .with_inner_size(PhysicalSize::new(windowed.width, windowed.height));
+        .with_inner_size(PhysicalSize::new(windowed.width, windowed.height))
+        .with_visible(false);
     let window = Arc::new(
         event_loop
             .create_window(attributes)
@@ -154,6 +224,10 @@ fn open(
     apply_display(&window, &display).map_err(|error| format!("the display mode: {error}"))?;
     let preference = present_preference(settings.pacing.vrr, window::host(&window));
     let (gpu, target) = pollster::block_on(Gpu::window_present(window.clone(), preference))?;
+    let ground = config.clear.unwrap_or(Srgba([0.0, 0.0, 0.0, 1.0]));
+    present_ground(&gpu, &target, &window, ground);
+    window.set_visible(true);
+    let grounded = present_ground(&gpu, &target, &window, ground);
     let size = size_of(&window);
     let painter = Painter::new(gpu, scene, &config, size)?;
     let sound = sound(&config);
@@ -177,8 +251,12 @@ fn open(
             .current_monitor()
             .and_then(|monitor| window::refresh_millihertz(&monitor)),
     ));
+    if FROM_WINDOW {
+        let scheme = window.theme().map(of_theme).or_else(system_scheme);
+        driver.feed(Event::Scheme(scheme));
+    }
     let pointer = Pointer::new(window.has_focus());
-    Ok(Live {
+    let mut live = Live {
         window,
         target,
         painter,
@@ -189,14 +267,32 @@ fn open(
         pointer,
         locked: false,
         at: [0.0; 2],
-    })
+        ground,
+        grounded,
+        schemes,
+    };
+    live.schemes();
+    Ok(live)
 }
 
 impl Live {
+    fn schemes(&mut self) {
+        let Some(schemes) = &self.schemes else {
+            return;
+        };
+        while let Ok(scheme) = schemes.try_recv() {
+            self.driver.feed(Event::Scheme(scheme));
+        }
+    }
+
     fn warm(&mut self, now_ns: u64) -> Result<(), String> {
         let Some(warmup) = &mut self.warming else {
             return Ok(());
         };
+        if !self.grounded {
+            let gpu = self.painter.renderer().gpu();
+            self.grounded = present_ground(gpu, &self.target, &self.window, self.ground);
+        }
         let format = self.target.config.format;
         if warmup.pass(&mut self.painter, &mut self.driver, format, now_ns)? {
             self.warming = None;
@@ -261,6 +357,7 @@ impl Live {
             self.target
                 .resize(self.painter.renderer().gpu(), size.width, size.height);
             self.driver.feed(Event::Resized(size));
+            self.grounded = false;
         }
     }
 
@@ -342,7 +439,13 @@ impl ApplicationHandler for App {
         let Some((game, config, scene)) = self.pending.take() else {
             return;
         };
-        match open(event_loop, game, config, scene.as_ref()) {
+        match open(
+            event_loop,
+            game,
+            config,
+            scene.as_ref(),
+            self.schemes.take(),
+        ) {
             Ok(live) => self.live = Some(live),
             Err(error) => {
                 self.error = Some(error);
@@ -369,6 +472,9 @@ impl ApplicationHandler for App {
                 height: size.height,
             }),
             WindowEvent::Moved(_) => live.moved(),
+            WindowEvent::ThemeChanged(theme) if FROM_WINDOW => {
+                live.driver.feed(Event::Scheme(Some(of_theme(theme))));
+            }
             WindowEvent::Focused(focused) => {
                 live.pointer.focus(focused);
                 live.cursor();
@@ -388,6 +494,12 @@ impl ApplicationHandler for App {
             _ => {}
         }
         live.check_minimized();
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        if let Some(live) = &mut self.live {
+            live.schemes();
+        }
     }
 
     fn device_event(&mut self, _event_loop: &ActiveEventLoop, _id: DeviceId, event: DeviceEvent) {

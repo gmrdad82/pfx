@@ -32,7 +32,7 @@ pub use tunables::{Kind, Tunable, TunableValue, Tunables};
 pub use ui::{Anchor, Label, Prompt, PromptOf, Ui, UiFrame, UiLook};
 pub use world::{
     Animate, AnimationEvent, Contact, Cursor, Exit, Fx, Hit, Look, ObjectId, Overlap, PcmStream,
-    Query, QueryError, RumbleRequest, SoundLevel, Sounds, World, body_volume,
+    Query, QueryError, RumbleRequest, Scheme, SoundLevel, Sounds, World, body_volume,
 };
 
 #[derive(Clone, Debug, PartialEq)]
