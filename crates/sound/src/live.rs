@@ -1,5 +1,6 @@
+use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -10,15 +11,19 @@ use crate::decode::{Decode, DecodeSpec, spec_at_output};
 use crate::drive::Drive;
 use crate::heard::Heard;
 use crate::interp::Resample;
-use crate::mix::{Level, Mixer, VoiceId, lock};
+use crate::mix::{Level, Mixer, Prepared, VoiceId, lock};
 use crate::music::MusicTrack;
 use crate::pcm::PcmSender;
 use crate::sound::{SoundId, SoundSpec};
 use crate::synth::Wave;
+use crate::voice::Voice;
+
+const RETIRED_VOICES: usize = 64;
 
 pub struct Output {
     stream: Option<cpal::Stream>,
     mixer: Arc<Mutex<Mixer>>,
+    retired: Mutex<Vec<Voice>>,
     heard: Arc<Heard>,
     decodes: Mutex<Vec<Decode>>,
     rate: u32,
@@ -41,7 +46,9 @@ impl Output {
         if channels == 0 || rate == 0 {
             return Err("output device has no channels".into());
         }
-        let mixer = Arc::new(Mutex::new(Mixer::new(rate, channels)));
+        let mut mixer = Mixer::new(rate, channels);
+        mixer.hold_retired(RETIRED_VOICES);
+        let mixer = Arc::new(Mutex::new(mixer));
         let heard = Arc::new(Heard::new(rate));
         let stream = match format {
             cpal::SampleFormat::F32 => {
@@ -78,11 +85,19 @@ impl Output {
         Ok(Output {
             stream: Some(stream),
             mixer,
+            retired: Mutex::new(Vec::with_capacity(RETIRED_VOICES)),
             heard,
             decodes: Mutex::new(Vec::new()),
             rate,
             channels,
         })
+    }
+
+    fn mixer(&self) -> Locked<'_> {
+        Locked {
+            mixer: Some(lock(&self.mixer)),
+            retired: &self.retired,
+        }
     }
 
     pub fn rate(&self) -> u32 {
@@ -94,91 +109,92 @@ impl Output {
     }
 
     pub fn play(&self, clip: &Clip, level: Level) -> VoiceId {
-        lock(&self.mixer).play(clip, level)
+        self.play_on(ChannelId::EFFECTS, clip, level)
     }
 
     pub fn set_volume(&self, id: VoiceId, volume: f32) {
-        lock(&self.mixer).set_volume(id, volume);
+        self.mixer().set_volume(id, volume);
     }
 
     pub fn set_pan(&self, id: VoiceId, pan: f32) {
-        lock(&self.mixer).set_pan(id, pan);
+        self.mixer().set_pan(id, pan);
     }
 
     pub fn play_on(&self, channel: ChannelId, clip: &Clip, level: Level) -> VoiceId {
-        lock(&self.mixer).play_on(channel, clip, level)
+        let prepared = Prepared::new(clip, self.rate);
+        self.mixer().play_prepared(channel, &prepared, level)
     }
 
     pub fn stop(&self, id: VoiceId, fade_seconds: f32) {
-        lock(&self.mixer).stop(id, fade_seconds);
+        self.mixer().stop(id, fade_seconds);
     }
 
     pub fn set_master_volume(&self, volume: f32) {
-        lock(&self.mixer).set_master_volume(volume);
+        self.mixer().set_master_volume(volume);
     }
 
     pub fn set_master_muted(&self, muted: bool) {
-        lock(&self.mixer).set_master_muted(muted);
+        self.mixer().set_master_muted(muted);
     }
 
     pub fn set_channel_volume(&self, channel: ChannelId, volume: f32) {
-        lock(&self.mixer).set_channel_volume(channel, volume);
+        self.mixer().set_channel_volume(channel, volume);
     }
 
     pub fn set_channel_muted(&self, channel: ChannelId, muted: bool) {
-        lock(&self.mixer).set_channel_muted(channel, muted);
+        self.mixer().set_channel_muted(channel, muted);
     }
 
     pub fn set_ducking(&self, ducking: Option<Ducking>) {
-        lock(&self.mixer).set_ducking(ducking);
+        self.mixer().set_ducking(ducking);
     }
 
     pub fn set_pitch(&self, id: VoiceId, ratio: f32) {
-        lock(&self.mixer).set_pitch(id, ratio);
+        self.mixer().set_pitch(id, ratio);
     }
 
     pub fn glide_pitch(&self, id: VoiceId, ratio: f32, seconds: f32) {
-        lock(&self.mixer).glide_pitch(id, ratio, seconds);
+        self.mixer().glide_pitch(id, ratio, seconds);
     }
 
     pub fn set_gain(&self, id: VoiceId, gain: f32) {
-        lock(&self.mixer).set_gain(id, gain);
+        self.mixer().set_gain(id, gain);
     }
 
     pub fn glide_gain(&self, id: VoiceId, gain: f32, seconds: f32) {
-        lock(&self.mixer).glide_gain(id, gain, seconds);
+        self.mixer().glide_gain(id, gain, seconds);
     }
 
     pub fn set_channel_pitch(&self, channel: ChannelId, ratio: f32) {
-        lock(&self.mixer).set_channel_pitch(channel, ratio);
+        self.mixer().set_channel_pitch(channel, ratio);
     }
 
     pub fn glide_channel_pitch(&self, channel: ChannelId, ratio: f32, seconds: f32) {
-        lock(&self.mixer).glide_channel_pitch(channel, ratio, seconds);
+        self.mixer().glide_channel_pitch(channel, ratio, seconds);
     }
 
     pub fn set_channel_lowpass(&self, channel: ChannelId, hz: Option<f32>) {
-        lock(&self.mixer).set_channel_lowpass(channel, hz);
+        self.mixer().set_channel_lowpass(channel, hz);
     }
 
     pub fn set_channel_highpass(&self, channel: ChannelId, hz: Option<f32>) {
-        lock(&self.mixer).set_channel_highpass(channel, hz);
+        self.mixer().set_channel_highpass(channel, hz);
     }
 
     pub fn clock(&self) -> u64 {
-        lock(&self.mixer).clock()
+        self.mixer().clock()
     }
 
     pub fn set_channel_drive(&self, channel: ChannelId, drive: Option<Drive>) {
-        lock(&self.mixer).set_channel_drive(channel, drive);
+        self.mixer().set_channel_drive(channel, drive);
     }
 
     pub fn glide_channel_drive(&self, channel: ChannelId, drive_db: f32, seconds: f32) {
-        lock(&self.mixer).glide_channel_drive(channel, drive_db, seconds);
+        self.mixer().glide_channel_drive(channel, drive_db, seconds);
     }
 
     pub fn channel_drive(&self, channel: ChannelId) -> Option<Drive> {
-        lock(&self.mixer).channel_drive(channel)
+        self.mixer().channel_drive(channel)
     }
 
     pub fn glide_channel_lowpass_in(
@@ -188,7 +204,8 @@ impl Output {
         hz: Option<f32>,
         seconds: f32,
     ) {
-        lock(&self.mixer).glide_channel_lowpass_in(offset, channel, hz, seconds);
+        self.mixer()
+            .glide_channel_lowpass_in(offset, channel, hz, seconds);
     }
 
     pub fn glide_channel_lowpass_at(
@@ -198,7 +215,8 @@ impl Output {
         hz: Option<f32>,
         seconds: f32,
     ) {
-        lock(&self.mixer).glide_channel_lowpass_at(at, channel, hz, seconds);
+        self.mixer()
+            .glide_channel_lowpass_at(at, channel, hz, seconds);
     }
 
     pub fn glide_channel_highpass_in(
@@ -208,7 +226,8 @@ impl Output {
         hz: Option<f32>,
         seconds: f32,
     ) {
-        lock(&self.mixer).glide_channel_highpass_in(offset, channel, hz, seconds);
+        self.mixer()
+            .glide_channel_highpass_in(offset, channel, hz, seconds);
     }
 
     pub fn glide_channel_highpass_at(
@@ -218,7 +237,8 @@ impl Output {
         hz: Option<f32>,
         seconds: f32,
     ) {
-        lock(&self.mixer).glide_channel_highpass_at(at, channel, hz, seconds);
+        self.mixer()
+            .glide_channel_highpass_at(at, channel, hz, seconds);
     }
 
     pub fn glide_channel_pitch_in(
@@ -228,11 +248,13 @@ impl Output {
         ratio: f32,
         seconds: f32,
     ) {
-        lock(&self.mixer).glide_channel_pitch_in(offset, channel, ratio, seconds);
+        self.mixer()
+            .glide_channel_pitch_in(offset, channel, ratio, seconds);
     }
 
     pub fn glide_channel_pitch_at(&self, at: u64, channel: ChannelId, ratio: f32, seconds: f32) {
-        lock(&self.mixer).glide_channel_pitch_at(at, channel, ratio, seconds);
+        self.mixer()
+            .glide_channel_pitch_at(at, channel, ratio, seconds);
     }
 
     pub fn glide_channel_drive_in(
@@ -242,55 +264,59 @@ impl Output {
         drive_db: f32,
         seconds: f32,
     ) {
-        lock(&self.mixer).glide_channel_drive_in(offset, channel, drive_db, seconds);
+        self.mixer()
+            .glide_channel_drive_in(offset, channel, drive_db, seconds);
     }
 
     pub fn glide_channel_drive_at(&self, at: u64, channel: ChannelId, drive_db: f32, seconds: f32) {
-        lock(&self.mixer).glide_channel_drive_at(at, channel, drive_db, seconds);
+        self.mixer()
+            .glide_channel_drive_at(at, channel, drive_db, seconds);
     }
 
     pub fn glide_pitch_in(&self, offset: u64, id: VoiceId, ratio: f32, seconds: f32) {
-        lock(&self.mixer).glide_pitch_in(offset, id, ratio, seconds);
+        self.mixer().glide_pitch_in(offset, id, ratio, seconds);
     }
 
     pub fn glide_pitch_at(&self, at: u64, id: VoiceId, ratio: f32, seconds: f32) {
-        lock(&self.mixer).glide_pitch_at(at, id, ratio, seconds);
+        self.mixer().glide_pitch_at(at, id, ratio, seconds);
     }
 
     pub fn glide_gain_in(&self, offset: u64, id: VoiceId, gain: f32, seconds: f32) {
-        lock(&self.mixer).glide_gain_in(offset, id, gain, seconds);
+        self.mixer().glide_gain_in(offset, id, gain, seconds);
     }
 
     pub fn glide_gain_at(&self, at: u64, id: VoiceId, gain: f32, seconds: f32) {
-        lock(&self.mixer).glide_gain_at(at, id, gain, seconds);
+        self.mixer().glide_gain_at(at, id, gain, seconds);
     }
 
     pub fn glide_tone_frequency_in(&self, offset: u64, id: VoiceId, hz: f32, seconds: f32) {
-        lock(&self.mixer).glide_tone_frequency_in(offset, id, hz, seconds);
+        self.mixer()
+            .glide_tone_frequency_in(offset, id, hz, seconds);
     }
 
     pub fn glide_tone_frequency_at(&self, at: u64, id: VoiceId, hz: f32, seconds: f32) {
-        lock(&self.mixer).glide_tone_frequency_at(at, id, hz, seconds);
+        self.mixer().glide_tone_frequency_at(at, id, hz, seconds);
     }
 
     pub fn set_limiter(&self, threshold: Option<f32>) {
-        lock(&self.mixer).set_limiter(threshold);
+        self.mixer().set_limiter(threshold);
     }
 
     pub fn set_seed(&self, seed: u64) {
-        lock(&self.mixer).set_seed(seed);
+        self.mixer().set_seed(seed);
     }
 
     pub fn sound(&self, clip: &Clip, spec: SoundSpec) -> SoundId {
-        lock(&self.mixer).sound(clip, spec)
+        let prepared = Prepared::new(clip, self.rate);
+        self.mixer().sound_prepared(prepared, spec)
     }
 
     pub fn trigger(&self, sound: SoundId) -> Option<VoiceId> {
-        lock(&self.mixer).trigger(sound)
+        self.mixer().trigger(sound)
     }
 
     pub fn tone(&self, channel: ChannelId, wave: Wave, hz: f32, volume: f32) -> VoiceId {
-        lock(&self.mixer).tone(channel, wave, hz, volume)
+        self.mixer().tone(channel, wave, hz, volume)
     }
 
     pub fn tone_in(
@@ -301,7 +327,7 @@ impl Output {
         hz: f32,
         volume: f32,
     ) -> VoiceId {
-        lock(&self.mixer).tone_in(offset, channel, wave, hz, volume)
+        self.mixer().tone_in(offset, channel, wave, hz, volume)
     }
 
     pub fn tone_sound(
@@ -311,31 +337,31 @@ impl Output {
         seconds: Option<f32>,
         spec: SoundSpec,
     ) -> SoundId {
-        lock(&self.mixer).tone_sound(wave, hz, seconds, spec)
+        self.mixer().tone_sound(wave, hz, seconds, spec)
     }
 
     pub fn trigger_in(&self, offset: u64, sound: SoundId) -> Option<VoiceId> {
-        lock(&self.mixer).trigger_in(offset, sound)
+        self.mixer().trigger_in(offset, sound)
     }
 
     pub fn trigger_with(&self, sound: SoundId, volume: f32) -> Option<VoiceId> {
-        lock(&self.mixer).trigger_with(sound, volume)
+        self.mixer().trigger_with(sound, volume)
     }
 
     pub fn trigger_in_with(&self, offset: u64, sound: SoundId, volume: f32) -> Option<VoiceId> {
-        lock(&self.mixer).trigger_in_with(offset, sound, volume)
+        self.mixer().trigger_in_with(offset, sound, volume)
     }
 
     pub fn set_resample(&self, id: VoiceId, resample: Resample) {
-        lock(&self.mixer).set_resample(id, resample);
+        self.mixer().set_resample(id, resample);
     }
 
     pub fn set_tone_frequency(&self, id: VoiceId, hz: f32) {
-        lock(&self.mixer).set_tone_frequency(id, hz);
+        self.mixer().set_tone_frequency(id, hz);
     }
 
     pub fn glide_tone_frequency(&self, id: VoiceId, hz: f32, seconds: f32) {
-        lock(&self.mixer).glide_tone_frequency(id, hz, seconds);
+        self.mixer().glide_tone_frequency(id, hz, seconds);
     }
 
     pub fn pcm_stream(
@@ -345,15 +371,18 @@ impl Output {
         capacity_seconds: f32,
         level: Level,
     ) -> (VoiceId, PcmSender) {
-        lock(&self.mixer).pcm_stream(channel, channels, capacity_seconds, level)
+        self.mixer()
+            .pcm_stream(channel, channels, capacity_seconds, level)
     }
 
     pub fn play_music(&self, track: &MusicTrack, fade_seconds: f32, level: Level) -> VoiceId {
-        lock(&self.mixer).play_music(track, fade_seconds, level)
+        let prepared = Prepared::track(track, self.rate);
+        self.mixer()
+            .play_music_prepared(&prepared, fade_seconds, level)
     }
 
     pub fn stop_music(&self, fade_seconds: f32) {
-        lock(&self.mixer).stop_music(fade_seconds);
+        self.mixer().stop_music(fade_seconds);
     }
 
     pub fn music_heard(&self) -> Option<f64> {
@@ -368,7 +397,8 @@ impl Output {
         looping: Option<(u64, u64)>,
         level: Level,
     ) -> Result<VoiceId, String> {
-        lock(&self.mixer).stream_vorbis(channel, source, looping, level)
+        let (queue, channels) = crate::vorbis::open_stream(source, self.rate, looping)?;
+        Ok(self.mixer().stream_on(channel, queue, channels, level))
     }
 
     #[cfg(feature = "vorbis")]
@@ -379,7 +409,10 @@ impl Output {
         fade_seconds: f32,
         level: Level,
     ) -> Result<VoiceId, String> {
-        lock(&self.mixer).play_music_vorbis(source, looping, fade_seconds, level)
+        let (queue, channels) = crate::vorbis::open_stream(source, self.rate, looping)?;
+        Ok(self
+            .mixer()
+            .stream_music(queue, channels, fade_seconds, level))
     }
 
     pub fn stream(&self, spec: &DecodeSpec, level: Level) -> Result<VoiceId, String> {
@@ -387,9 +420,43 @@ impl Output {
         let decode = Decode::start(&spec)?;
         let channels = decode.channels();
         let queue = decode.queue();
-        let id = lock(&self.mixer).stream(queue, channels, level);
+        let id = self.mixer().stream(queue, channels, level);
         lock(&self.decodes).push(decode);
         Ok(id)
+    }
+}
+
+struct Locked<'a> {
+    mixer: Option<MutexGuard<'a, Mixer>>,
+    retired: &'a Mutex<Vec<Voice>>,
+}
+
+impl Deref for Locked<'_> {
+    type Target = Mixer;
+
+    fn deref(&self) -> &Mixer {
+        self.mixer.as_deref().expect("the mixer is locked")
+    }
+}
+
+impl DerefMut for Locked<'_> {
+    fn deref_mut(&mut self) -> &mut Mixer {
+        self.mixer.as_deref_mut().expect("the mixer is locked")
+    }
+}
+
+impl Drop for Locked<'_> {
+    fn drop(&mut self) {
+        let Some(mut mixer) = self.mixer.take() else {
+            return;
+        };
+        if !mixer.has_retired() {
+            return;
+        }
+        let mut retired = lock(self.retired);
+        mixer.swap_retired(&mut retired);
+        drop(mixer);
+        retired.clear();
     }
 }
 

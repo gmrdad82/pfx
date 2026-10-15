@@ -50,6 +50,7 @@ pub(crate) struct History {
     base: u64,
     frames: VecDeque<(f32, f32)>,
     total: Option<u64>,
+    left: Option<usize>,
 }
 
 impl History {
@@ -58,6 +59,7 @@ impl History {
             base: 0,
             frames: VecDeque::new(),
             total: None,
+            left: None,
         }
     }
 
@@ -66,9 +68,19 @@ impl History {
     }
 
     fn refresh(&mut self, queue: &PcmQueue, channels: u16) {
-        if self.total.is_none() && queue.reader_ended() {
-            let waiting = queue.len() / usize::from(channels.max(1));
+        if self.total.is_none()
+            && let Some(waiting) = queue.waiting_if_ended()
+        {
+            self.left = Some(waiting);
+            let waiting = waiting / usize::from(channels.max(1));
             self.total = Some(self.end() + waiting as u64);
+        }
+    }
+
+    fn queue_finished(&self, queue: &PcmQueue, channels: u16) -> bool {
+        match self.left {
+            Some(left) => left < usize::from(channels.max(1)),
+            None => queue.is_finished(channels),
         }
     }
 
@@ -78,10 +90,9 @@ impl History {
         }
         let channels = channels.max(1);
         let want = ((need_end - self.end()) as usize).max(CHUNK);
-        let popped = queue.pop_frames(want, usize::from(channels));
-        for k in 0..popped.real {
-            self.frames
-                .push_back(source_pair(&popped.samples, channels, k as u64));
+        let popped = queue.pop_into(&mut self.frames, want, usize::from(channels));
+        if popped.ended {
+            self.left = Some(popped.left);
         }
         if popped.ended && self.total.is_none() {
             self.total = Some(self.end() + (popped.available - popped.real) as u64);
@@ -436,7 +447,7 @@ impl Voice {
                 channels,
                 history,
             } => {
-                if queue.is_finished(*channels) && self.cursor >= history.end() as f64 {
+                if history.queue_finished(queue, *channels) && self.cursor >= history.end() as f64 {
                     (self.start, self.start)
                 } else {
                     (self.start, block_end)
@@ -460,7 +471,7 @@ impl Voice {
                 queue,
                 channels,
                 history,
-            } => queue.is_finished(*channels) && self.cursor >= history.end() as f64,
+            } => history.queue_finished(queue, *channels) && self.cursor >= history.end() as f64,
             Source::Tone(_) => false,
             Source::Pcm(pcm) => pcm.finished(),
         }

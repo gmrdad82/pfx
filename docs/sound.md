@@ -29,7 +29,8 @@ mixer.play_on(ui, &click, Level::default());
 - A channel set before it has audio takes its volume at once, with no ramp.
 - `play`, `play_at` and `Timeline` placements are unchanged and play on `EFFECTS` at volume 1, so a render's mixdown stays byte for byte what it was.
 - `Mixer::stop(id, fade_seconds)` ends a voice, with an equal-power fade when the time is above zero.
-- `Output` mirrors all of this (`play_on`, `set_channel_volume`, `set_master_muted`, `play_music`, ...), behind the same lock the audio thread takes.
+- `Output` mirrors all of this (`play_on`, `set_channel_volume`, `set_master_muted`, `play_music`, ...), behind the same lock the audio thread takes. It resamples a clip, registers a sound and opens a decoded stream before it takes the lock, and the voices that end in the audio thread are handed back and freed on the caller's thread at its next call, so the audio thread neither waits on that work nor frees a clip.
+- `Prepared::new(&clip, rate)` (or `Prepared::track(&track, rate)` for a track's loop) converts a clip to the mixer's rate once; `play_prepared(channel, &prepared, level)` and `play_music_prepared(&prepared, fade, level)` then play it without copying the samples, so a sound played every tick costs no allocation. They play exactly what `play_on` and `play_music` play for the same clip.
 
 ## Music
 
@@ -167,7 +168,7 @@ let taken = pcm.push(&session.take_audio());
 ```
 
 - `Mixer::pcm_stream` and `Output::pcm_stream` take the channel, the interleaved channel count of what will be pushed, the ring's capacity in seconds and a `Level`, and return the voice and a `PcmSender`. Samples are f32 at the mixer's rate (`output.rate()`), so a mixer that renders for it is built at that rate. One channel plays on both sides; with more than two, the first two play and the rest are skipped.
-- `PcmSender::push` returns the frames it took, which is fewer than offered when the ring is full (the producer decides what to drop; nothing is overwritten) and ignores a trailing partial frame. `queued_frames`, `room_frames`, `capacity_frames`, `channels` and `rate` read the state. The sender is `Send`, so it can live on another thread.
+- The ring is a fixed buffer allocated with the stream, single producer and single consumer, with no lock: neither side waits on the other. `PcmSender::push` returns the frames it took, which is fewer than offered when the ring is full (the producer decides what to drop; nothing is overwritten) and ignores a trailing partial frame. `queued_frames`, `room_frames`, `capacity_frames`, `channels` and `rate` read the state. The sender is `Send`, so it can live on another thread.
 - Latency is what is queued. There is no prebuffer: a frame pushed before a block is rendered plays in that block, so a producer that pushes a tick of audio at a time hears it one block later at most. Keeping the queue short keeps the latency short.
 - No click on underrun. When the ring runs dry the voice holds its last frame and fades it to silence over 2 ms (`PCM_EDGE_SECONDS`); when frames return they fade in over the same 2 ms from wherever the fade has got to. The first frames of a new stream fade in the same way. Between 2 ms of silence and a longer gap the output is the same; a gap shorter than 2 ms is bridged by the held frame, and the step across it is the signal's own.
 - `finish` (or dropping the sender) ends the stream after the queued frames play and the tail fades out; the voice then ends. `is_connected` is false once the voice is gone (`stop`, a finished stream), so a producer can stop.
