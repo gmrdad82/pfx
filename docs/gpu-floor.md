@@ -163,11 +163,11 @@ Per-stage counts are summed over the pipeline layout's bind groups, the way WebG
 
 | Pass | Where | Groups | Per stage | Targets | Compute |
 |---|---|---|---|---|---|
-| Depth and velocity prepass | frame.rs | 4 | V: 1 uniform, 5 storage. F: 10 uniform, 5 storage, 17 textures, 6 samplers. C: 2 storage (deformers) | Rg16Float + R32Uint, Depth32Float | — |
+| Depth and velocity prepass | frame.rs | 4 | V: 1 uniform, 6 storage. F: 10 uniform, 5 storage, 17 textures, 6 samplers. C: 2 storage (deformers) | Rg16Float + R32Uint, Depth32Float | — |
 | Opaque PBR (± local lights) | frame.rs | 4 | as prepass | 2 × Rgba16Float, Depth32Float | — |
-| Shadow casters, transmissive casters | frame.rs, lights.rs | 3 | V: 2 uniform (1 dynamic), 6 storage | depth only; Rgba32Uint | — |
+| Shadow casters, transmissive casters | frame.rs, lights.rs | 3 | V: 2 uniform (1 dynamic), 7 storage | depth only; Rgba32Uint | — |
 | Sun shadow depth, creature shadow depth | shadow.rs | 1–2 | V: up to 2 uniform (1 dynamic), 2 storage | Depth32Float | — |
-| Tree cards (depth, shading) | frame.rs, canopy.rs | 4 | V: 2 uniform, 3 storage. F: 11 uniform, 5 storage, **18 textures**, 7 samplers | as prepass / opaque | — |
+| Tree cards (depth, shading) | frame.rs, canopy.rs | 4 | V: 2 uniform, 4 storage. F: 11 uniform, 5 storage, **18 textures**, 7 samplers | as prepass / opaque | — |
 | Canopy cookie | canopy.rs | 1 | V: 1 uniform, 1 storage. F: 1 texture, 1 sampler | R8Unorm, blended | — |
 | Sky | sky.rs | 1 | F: 1 uniform, 1 texture, 1 sampler | Rgba16Float | — |
 | Background motion, scene colour mips, output blit | renderer.rs | 1 | F: ≤ 2 textures | Rg16Float; Rgba16Float; sRGB output | — |

@@ -6,6 +6,9 @@ use crate::maps::{
     self, CAUSTIC_BINDING, CONTENT_BINDING, CONTENT_SLOTS, Caustic, ContentFormat, ContentSlots,
     GpuMapMaterial, MapImages, MapIndices, MapTextures,
 };
+use crate::morph::{
+    InstanceWeights, MORPH_BINDING, MORPH_WGSL, MorphData, MorphRange, MorphStore, NO_MORPH,
+};
 use crate::pipeline_cache::{CacheLoad, PipelineCache};
 use crate::probes::{
     Ambient, ContactDesc, ContactField, ContactUniform, PROBE_WGSL, ProbeLighting,
@@ -330,6 +333,7 @@ struct Mesh {
     skin: u32,
     skin_len: u32,
     skin_joints: u32,
+    morph: MorphRange,
 }
 
 struct MeshSlot {
@@ -344,6 +348,21 @@ fn live_mesh(meshes: &[MeshSlot], handle: MeshHandle) -> Option<&Mesh> {
     } else {
         None
     }
+}
+
+fn check_skin(data: &MeshData<'_>, skin: &SkinData<'_>) -> Result<(), String> {
+    if skin.joints.len() != data.positions.len() || skin.weights.len() != data.positions.len() {
+        return Err("skin joints and weights need one entry per vertex".into());
+    }
+    if skin
+        .weights
+        .iter()
+        .flatten()
+        .any(|weight| !weight.is_finite())
+    {
+        return Err("a skin weight is not finite".into());
+    }
+    Ok(())
 }
 
 fn check_mesh(data: &MeshData<'_>) -> Result<(), String> {
@@ -452,6 +471,7 @@ struct GpuInstance {
     content_crop: [f32; 4],
     content_face: [u32; 4],
     skin: [u32; 4],
+    morph: [u32; 4],
 }
 
 #[repr(C)]
@@ -1023,6 +1043,7 @@ pub struct Frame {
     sway: wgpu::Buffer,
     sway_data: Vec<GpuSway>,
     skins: SkinStore,
+    morphs: MorphStore,
     instance_capacity: usize,
     material_capacity: usize,
     scene_layout: wgpu::BindGroupLayout,
@@ -1421,6 +1442,7 @@ pub fn shader_source_with(gobo: &Gobo) -> String {
         LOD_WGSL,
         &deform_source(),
         SKIN_WGSL,
+        MORPH_WGSL,
         TREE_SWAY_WGSL,
         pfx_materials::NOISE,
         pfx_materials::AGEING,
@@ -1538,6 +1560,7 @@ pub fn scene_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
         buffer_entry(2, wgpu::ShaderStages::FRAGMENT, read),
         buffer_entry(3, wgpu::ShaderStages::VERTEX, read),
         buffer_entry(SKIN_BINDING, wgpu::ShaderStages::VERTEX, read),
+        buffer_entry(MORPH_BINDING, wgpu::ShaderStages::VERTEX, read),
     ]
 }
 
@@ -1935,11 +1958,19 @@ impl Frame {
         );
         let sway = storage(device, "live sway", std::mem::size_of::<GpuSway>());
         let skins = SkinStore::new(device);
+        let morphs = MorphStore::new(device);
         let scene_layout = layout(device, "live scene layout", &scene_entries());
         let scene_group = Self::make_scene_group(
             device,
             &scene_layout,
-            [&uniform, &instances, &materials, &sway, skins.buffer()],
+            [
+                &uniform,
+                &instances,
+                &materials,
+                &sway,
+                skins.buffer(),
+                morphs.buffer(),
+            ],
         );
         let shadow_layout = layout(device, "live shadow seam", &shadow_entries());
         let mut fallback_sample = [0u8; SAMPLE_UNIFORM_BYTES];
@@ -2085,6 +2116,7 @@ impl Frame {
             sway,
             sway_data: Vec::new(),
             skins,
+            morphs,
             free_meshes: Vec::new(),
             mesh_buffers_live: Arc::new(AtomicUsize::new(0)),
             mesh_epoch: 0,
@@ -2264,7 +2296,7 @@ impl Frame {
     fn make_scene_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        buffers: [&wgpu::Buffer; 5],
+        buffers: [&wgpu::Buffer; 6],
     ) -> wgpu::BindGroup {
         let entries: Vec<wgpu::BindGroupEntry<'_>> = buffers
             .iter()
@@ -2291,6 +2323,7 @@ impl Frame {
                 &self.materials,
                 &self.sway,
                 self.skins.buffer(),
+                self.morphs.buffer(),
             ],
         );
     }
@@ -2971,7 +3004,7 @@ impl Frame {
     }
 
     pub fn upload_mesh(&mut self, data: MeshData<'_>) -> Result<MeshHandle, String> {
-        self.upload(data, None, None)
+        self.upload(data, None, None, None)
     }
 
     pub fn upload_skinned_mesh(
@@ -2979,18 +3012,21 @@ impl Frame {
         data: MeshData<'_>,
         skin: SkinData<'_>,
     ) -> Result<MeshHandle, String> {
-        if skin.joints.len() != data.positions.len() || skin.weights.len() != data.positions.len() {
-            return Err("skin joints and weights need one entry per vertex".into());
+        check_skin(&data, &skin)?;
+        self.upload(data, None, Some(skin), None)
+    }
+
+    pub fn upload_morphed_mesh(
+        &mut self,
+        data: MeshData<'_>,
+        skin: Option<SkinData<'_>>,
+        morph: MorphData<'_>,
+    ) -> Result<MeshHandle, String> {
+        if let Some(skin) = &skin {
+            check_skin(&data, skin)?;
         }
-        if skin
-            .weights
-            .iter()
-            .flatten()
-            .any(|weight| !weight.is_finite())
-        {
-            return Err("a skin weight is not finite".into());
-        }
-        self.upload(data, None, Some(skin))
+        morph.check(data.positions.len())?;
+        self.upload(data, None, skin, Some(morph))
     }
 
     pub fn upload_swaying_mesh(
@@ -3001,7 +3037,7 @@ impl Frame {
         if sway.len() != data.positions.len() {
             return Err("sway attributes need one entry per vertex".into());
         }
-        self.upload(data, Some(sway), None)
+        self.upload(data, Some(sway), None, None)
     }
 
     fn upload(
@@ -3009,6 +3045,7 @@ impl Frame {
         data: MeshData<'_>,
         sway: Option<&[SwayVertex]>,
         skin: Option<SkinData<'_>>,
+        morph: Option<MorphData<'_>>,
     ) -> Result<MeshHandle, String> {
         check_mesh(&data)?;
         let slot = match self.free_meshes.last() {
@@ -3045,14 +3082,27 @@ impl Frame {
             Some(sway) => (self.allocate_sway(sway)?, sway.len() as u32),
             None => (NO_SWAY, 0),
         };
+        let morph = match morph {
+            Some(morph) => self
+                .morphs
+                .allocate(&self.gpu.device, data.positions.len(), morph)?,
+            None => MorphRange::NONE,
+        };
         let (skin_base, skin_len, skin_joints) = match skin {
-            Some(skin) => {
-                let range = self.skins.allocate(&self.gpu.device, skin)?;
-                self.rebuild_scene_group();
-                (range.start, range.end - range.start, skin.palette() as u32)
-            }
+            Some(skin) => match self.skins.allocate(&self.gpu.device, skin) {
+                Ok(range) => (range.start, range.end - range.start, skin.palette() as u32),
+                Err(error) => {
+                    if morph.base != NO_MORPH {
+                        self.morphs.release(morph.range());
+                    }
+                    return Err(error);
+                }
+            },
             None => (NO_SKIN, 0, 0),
         };
+        if morph.base != NO_MORPH || skin_base != NO_SKIN {
+            self.rebuild_scene_group();
+        }
         let mesh = Mesh {
             vertices: vertex_buffer,
             positions,
@@ -3065,6 +3115,7 @@ impl Frame {
             skin: skin_base,
             skin_len,
             skin_joints,
+            morph,
         };
         if slot == self.meshes.len() {
             self.meshes.push(MeshSlot {
@@ -3129,6 +3180,9 @@ impl Frame {
         if mesh.skin != NO_SKIN {
             self.skins.release(mesh.skin..mesh.skin + mesh.skin_len);
         }
+        if mesh.morph.base != NO_MORPH {
+            self.morphs.release(mesh.morph.range());
+        }
         let entry = &mut self.meshes[slot];
         entry.generation += 1;
         if entry.generation < MESH_GENERATION_LAST {
@@ -3149,6 +3203,9 @@ impl Frame {
         }
         if mesh.skin != NO_SKIN {
             return Err("a skinned mesh cannot be replaced".into());
+        }
+        if mesh.morph.base != NO_MORPH {
+            return Err("a morphed mesh cannot be replaced".into());
         }
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
@@ -3229,9 +3286,14 @@ impl Frame {
         live_mesh(&self.meshes, handle).is_some_and(|mesh| mesh.skin != NO_SKIN)
     }
 
+    pub fn morphed(&self, handle: MeshHandle) -> bool {
+        live_mesh(&self.meshes, handle).is_some_and(|mesh| mesh.morph.base != NO_MORPH)
+    }
+
     fn deforms(&self, handle: MeshHandle) -> bool {
-        live_mesh(&self.meshes, handle)
-            .is_some_and(|mesh| mesh.sway != NO_SWAY || mesh.skin != NO_SKIN)
+        live_mesh(&self.meshes, handle).is_some_and(|mesh| {
+            mesh.sway != NO_SWAY || mesh.skin != NO_SKIN || mesh.morph.base != NO_MORPH
+        })
     }
 
     pub fn set_poses(&self, poses: &[InstancePose<'_>]) -> Result<(), String> {
@@ -3240,6 +3302,14 @@ impl Frame {
 
     pub fn same_poses(&self, poses: &[InstancePose<'_>]) -> bool {
         self.skins.same(poses)
+    }
+
+    pub fn set_weights(&self, weights: &[InstanceWeights<'_>]) -> Result<(), String> {
+        self.morphs.set_weights(weights)
+    }
+
+    pub fn same_weights(&self, weights: &[InstanceWeights<'_>]) -> bool {
+        self.morphs.same(weights)
     }
 
     pub fn render(&mut self, scene: &Scene<'_>) -> Result<&FrameTargets, String> {
@@ -3318,6 +3388,7 @@ impl Frame {
     ) -> Result<(), String> {
         packed_instances.clear();
         let caustic = self.caustic.borrow();
+        let weights = self.morphs.layout();
         for (index, (instance, surface)) in scene.instances.iter().zip(surfaces).enumerate() {
             let Some(mesh) = live_mesh(&self.meshes, instance.mesh) else {
                 return Err("instance references a released or unknown mesh".into());
@@ -3347,10 +3418,12 @@ impl Frame {
                 Some(placed) => [mesh.skin, placed.current, placed.previous, placed.joints],
                 None => [NO_SKIN, 0, 0, 0],
             };
+            let morph = mesh.morph.pack(weights.get(index), index)?;
             let still = u32::from(
                 instance.deformer == DeformerId::NONE
                     && mesh.sway == NO_SWAY
                     && skin[0] == NO_SKIN
+                    && morph[0] == NO_MORPH
                     && same_bits(instance.model, instance.previous_model),
             );
             packed_instances.push(GpuInstance {
@@ -3387,6 +3460,7 @@ impl Frame {
                     u32::from(surface.authored_ambient),
                 ],
                 skin,
+                morph,
             });
         }
         Ok(())
@@ -3432,7 +3506,8 @@ impl Frame {
             &self.skins.layout(),
             &mut packed_instances,
         )?;
-        if self.skins.upload(&self.gpu.device, &self.gpu.queue) {
+        let skins_rebuilt = self.skins.upload(&self.gpu.device, &self.gpu.queue);
+        if self.morphs.upload(&self.gpu.device, &self.gpu.queue) || skins_rebuilt {
             self.rebuild_scene_group();
         }
         self.deformers
@@ -4297,6 +4372,7 @@ struct InstanceData {
     content_crop: vec4f,
     content_face: vec4u,
     skin: vec4u,
+    morph: vec4u,
 }
 struct SwayData {
     pivot_level: vec4f,
@@ -4377,9 +4453,26 @@ struct VertexOutput {
     @location(9) object_position: vec3f,
     @location(10) @interpolate(flat) instance: u32,
 }
-fn surface_shape(input: VertexInput, instance: InstanceData) -> DeformedVertex {
+fn morphed_shape(input: VertexInput, instance: InstanceData) -> DeformedVertex {
+    let morphed = morph_vertex(input.position.xyz, input.normal.xyz, input.vertex_index, instance.morph);
     if (instance.skin.x != 0xffffffffu) {
-        return skin_shape(input.position.xyz, input.normal.xyz, input.tangent, input.vertex_index, instance.skin);
+        return skin_shape(morphed.position, morphed.previous_position, morphed.normal, input.tangent, input.vertex_index, instance.skin);
+    }
+    var shape = deform_vertex(morphed.position, morphed.normal, input.tangent, instance.extra.x);
+    shape.previous_position = deform_position(morphed.previous_position, instance.extra.x, true);
+    if (instance.extra.y != 0xffffffffu) {
+        let sway = sway_data[instance.extra.y + input.vertex_index];
+        shape.position = tree_sway(shape.position, sway.pivot_level.xyz, sway.pivot_level.w, sway.stiffness.x, frame.wind.x, frame.wind.y, frame.wind_direction.xyz);
+        shape.previous_position = tree_sway(shape.previous_position, sway.pivot_level.xyz, sway.pivot_level.w, sway.stiffness.x, frame.wind.z, frame.wind.w, frame.previous_wind_direction.xyz);
+    }
+    return shape;
+}
+fn surface_shape(input: VertexInput, instance: InstanceData) -> DeformedVertex {
+    if (instance.morph.x != 0xffffffffu) {
+        return morphed_shape(input, instance);
+    }
+    if (instance.skin.x != 0xffffffffu) {
+        return skin_shape(input.position.xyz, input.position.xyz, input.normal.xyz, input.tangent, input.vertex_index, instance.skin);
     }
     var shape = deform_vertex(input.position.xyz, input.normal.xyz, input.tangent, instance.extra.x);
     if (instance.extra.y != 0xffffffffu) {
@@ -4411,10 +4504,14 @@ fn surface_shape(input: VertexInput, instance: InstanceData) -> DeformedVertex {
     return output;
 }
 fn caster_position(input: VertexInput, instance: InstanceData) -> vec3f {
-    if (instance.skin.x != 0xffffffffu) {
-        return skin_position(input.position.xyz, input.vertex_index, instance.skin);
+    var rest = input.position.xyz;
+    if (instance.morph.x != 0xffffffffu) {
+        rest = morph_position(rest, input.vertex_index, instance.morph);
     }
-    var position = deform_position(input.position.xyz, instance.extra.x, false);
+    if (instance.skin.x != 0xffffffffu) {
+        return skin_position(rest, input.vertex_index, instance.skin);
+    }
+    var position = deform_position(rest, instance.extra.x, false);
     if (instance.extra.y != 0xffffffffu) {
         let sway = sway_data[instance.extra.y + input.vertex_index];
         position = tree_sway(position, sway.pivot_level.xyz, sway.pivot_level.w, sway.stiffness.x, frame.wind.x, frame.wind.y, frame.wind_direction.xyz);
@@ -4982,7 +5079,7 @@ mod tests {
     #[test]
     fn gpu_layouts_and_shader_entry_points() {
         assert_eq!(std::mem::size_of::<Vertex>(), 64);
-        assert_eq!(std::mem::size_of::<GpuInstance>(), 304);
+        assert_eq!(std::mem::size_of::<GpuInstance>(), 320);
         assert_eq!(std::mem::size_of::<Uniforms>(), 384);
         assert_eq!(std::mem::size_of::<SkyLight>(), 160);
         assert_eq!(std::mem::size_of::<GpuSway>(), 32);

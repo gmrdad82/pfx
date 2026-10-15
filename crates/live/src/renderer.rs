@@ -1738,6 +1738,27 @@ impl Renderer {
         self.frame.set_poses(poses)
     }
 
+    pub fn upload_morphed_mesh(
+        &mut self,
+        data: MeshData<'_>,
+        skin: Option<crate::skin::SkinData<'_>>,
+        morph: crate::morph::MorphData<'_>,
+    ) -> Result<MeshHandle, String> {
+        self.touch();
+        self.frame.upload_morphed_mesh(data, skin, morph)
+    }
+
+    pub fn set_weights(
+        &mut self,
+        weights: &[crate::morph::InstanceWeights<'_>],
+    ) -> Result<(), String> {
+        if self.frame.same_weights(weights) {
+            return Ok(());
+        }
+        self.touch();
+        self.frame.set_weights(weights)
+    }
+
     pub fn set_surfaces(&mut self, surfaces: &[frame::InstanceSurface]) -> Result<(), String> {
         if self.frame.surfaces().as_slice() == surfaces {
             return Ok(());
