@@ -589,7 +589,7 @@ fn no_look_frames_are_byte_identical() {
             plain == still,
             "{size:?}: an identity look changed the frame"
         );
-        assert_eq!(rig.renderer.last_pass_order(), ["flat", "flat ids"]);
+        assert_eq!(rig.renderer.last_pass_order(), ["flat"]);
         let again = turns.cpu(|| rig.plain(&base));
         assert!(plain == again);
         let mut fresh = turns.cpu(|| Rig::new(size));

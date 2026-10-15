@@ -2361,13 +2361,15 @@ impl Renderer {
                 self.pass_log.push("flat finish");
             }
         }
-        flat.encode_ids(
-            &mut encoder,
-            &self.frame.targets.ids_view,
-            true,
-            Some(&mut self.profiler),
-        );
-        self.pass_log.push("flat ids");
+        if self.pick_request.is_some() && self.pick_readback.is_none() {
+            flat.encode_ids(
+                &mut encoder,
+                &self.frame.targets.ids_view,
+                true,
+                Some(&mut self.profiler),
+            );
+            self.pass_log.push("flat ids");
+        }
         self.flat = Some(flat);
         self.finish_encoder(device, &queue, encoder, false)
     }
@@ -7264,7 +7266,7 @@ mod tests {
         let mut direct = Renderer::new(gpu, 96, 96).unwrap();
         let target = output(direct.gpu(), 96, 96);
         direct.render_flat(&scene, &target.view).unwrap();
-        assert_eq!(direct.last_pass_order(), ["flat", "flat ids"]);
+        assert_eq!(direct.last_pass_order(), ["flat"]);
         let gamma = direct
             .gpu()
             .readback_rgba16(&target)
@@ -7299,7 +7301,7 @@ mod tests {
             .offscreen(96, 96, wgpu::TextureFormat::Rgba8UnormSrgb)
             .unwrap();
         srgb.render_flat(&scene, &srgb_target.view).unwrap();
-        assert_eq!(srgb.last_pass_order(), ["flat", "flat finish", "flat ids"]);
+        assert_eq!(srgb.last_pass_order(), ["flat", "flat finish"]);
         let bytes = srgb.gpu().readback_rgba8(&srgb_target).unwrap();
         for (pixel, expected) in bytes.chunks_exact(4).zip(&gamma) {
             for c in 0..3 {
@@ -7324,10 +7326,7 @@ mod tests {
         posted
             .render_flat(&through_post, &posted_target.view)
             .unwrap();
-        assert_eq!(
-            posted.last_pass_order(),
-            ["flat", "flat finish", "post", "flat ids"]
-        );
+        assert_eq!(posted.last_pass_order(), ["flat", "flat finish", "post"]);
         let finished = posted.gpu().readback_rgba16(&posted_target).unwrap();
         for (pixel, expected) in finished.chunks_exact(4).zip(&gamma) {
             for c in 0..3 {
