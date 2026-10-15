@@ -282,6 +282,7 @@ pub struct Ui {
     pub light: Light,
     pub clear: Option<Srgba>,
     pub look: Option<UiLook>,
+    pub view: Option<Matrix>,
 }
 
 impl Ui {
@@ -323,6 +324,11 @@ impl Ui {
 
     pub fn look(&mut self, frame: &LookFrame<'_>) -> &mut Self {
         self.look = Some(UiLook::of(frame));
+        self
+    }
+
+    pub fn view(&mut self, view: impl Into<Matrix>) -> &mut Self {
+        self.view = Some(view.into());
         self
     }
 

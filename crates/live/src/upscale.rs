@@ -4,7 +4,7 @@ use pfx_gpu::window::Rect;
 use pfx_post::color::srgb_channel;
 
 use crate::flat::look::{FlatLooks, Look, LookFrame};
-use crate::flat::{FlatPass, FlatScene};
+use crate::flat::{FlatPass, FlatScene, Matrix};
 
 pub const WGSL: &str = r#"
 struct Upscale {
@@ -184,6 +184,7 @@ pub struct Upscale {
     flat: Option<FlatPass>,
     backdrop: Option<FlatPass>,
     looks: Option<FlatLooks>,
+    view: Option<Matrix>,
 }
 
 impl Upscale {
@@ -239,7 +240,16 @@ impl Upscale {
             flat: None,
             backdrop: None,
             looks: None,
+            view: None,
         }
+    }
+
+    pub fn set_view(&mut self, view: Option<Matrix>) {
+        self.view = view;
+    }
+
+    pub fn view(&self) -> Option<Matrix> {
+        self.view
     }
 
     pub fn warm(&mut self, device: &wgpu::Device, format: wgpu::TextureFormat) {
@@ -470,6 +480,7 @@ impl Upscale {
         let flat = self
             .flat
             .get_or_insert_with(|| FlatPass::new(device, queue));
+        flat.set_view(self.view);
         let look = overlay.look.filter(|look| !look.is_identity());
         let scene = FlatScene {
             clear: None,

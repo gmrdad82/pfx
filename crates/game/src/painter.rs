@@ -587,6 +587,7 @@ impl Painter {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("pfx game ui"),
                 });
+            self.upscale.set_view(ui.view);
             self.upscale.encode_overlay(
                 &gpu.device,
                 &gpu.queue,
