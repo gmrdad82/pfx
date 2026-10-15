@@ -102,3 +102,4 @@ fddd62fccfdee787a5e6e3d1debee76dede905112bec0d31f2a9846f8d2f863a  docs/images/si
 24208ca427935f93c2714f691a0184e4f515c5467c99719624f8080e3bc4bcea  docs/images/size-deps.png  generated: the README's chart of empty-game dependency counts, drawn with pito-compare
 256da1e4cc462a82209d85e9e12900c92caac1b62b9d54536a9d2a8419d4a322  docs/images/size-build.png  generated: the README's chart of empty-game cold build times, drawn with pito-compare
 4d205792368f4610bc1e3054cc3be6c8e10fb9f7c9afe956de67d07beebebd53  assets/marks/lockup-light.svg  generated: pfx's lockup for light backgrounds, exported from pfx's brand masters (a logo, see TRADEMARKS.md)
+1653a8c800db1b8007ee8bb736cec37cea1fe27c90c0b221767b2114742583eb  crates/sound/tests/fixtures/nine.ogg  generated: nine channels of silence encoded with ffmpeg's libvorbis for pfx-sound's channel cap test, neutral, no script kept

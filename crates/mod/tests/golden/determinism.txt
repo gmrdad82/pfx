@@ -58,10 +58,10 @@ nan 7ff0000000000000 op 3 : ok 7ff0000000000000 fuel 50
 nan 7ff0000000000000 op 4 : ok 0 fuel 48
 nan 7ff0000000000000 op 5 : ok 7ff0000000000000 fuel 48
 burn 1000 : ok dfbd6a0c fuel 14017
-burn max : Fuel fuel 1000000 at 7+Some(36d)
-fall 9 : Trap(UnreachableCodeReached) fuel 156 at 9+Some(3d0)
-grow 100 : Limit(Memory { bytes: 6619136 }) fuel 0 at 8+Some(3ab)
-fall 999 : Trap(UnreachableCodeReached) fuel 15996 at 9+Some(3d0)
-fall 1000 : Depth fuel 16007 at 9+Some(3c1)
-fall 4294967295 : Depth fuel 16007 at 9+Some(3c1)
+burn max : Fuel fuel 1000000 at 8+Some(39a)
+fall 9 : Trap(UnreachableCodeReached) fuel 156 at 10+Some(3fd)
+grow 100 : Limit(Memory { bytes: 6619136 }) fuel 0 at 9+Some(3d8)
+fall 999 : Trap(UnreachableCodeReached) fuel 15996 at 10+Some(3fd)
+fall 1000 : Depth fuel 16007 at 10+Some(3ee)
+fall 4294967295 : Depth fuel 16007 at 10+Some(3ee)
 overflow : Stack
