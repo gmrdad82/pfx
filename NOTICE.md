@@ -52,6 +52,28 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 
 
 
+## Signalsmith Stretch and Signalsmith Linear, under the MIT licence
+
+`crates/sound/src/voicefx/stretch.rs` (in the package `pfx-sound`, feature `voicefx`), the pitch, formant and time stretcher, is ported from Signalsmith Stretch (https://github.com/Signalsmith-Audio/signalsmith-stretch, `signalsmith-stretch.h`, tag `1.4.0`, commit `a670068d9aeb64913331d5cc29337b19a457a7df`): the phase-vocoder prediction from the previous block and the neighbouring bins, the peak-based frequency map, the energy smoothing, the formant envelope and pitch estimate, the seek, pre-roll and flush of a whole buffer, and the presets' block and interval lengths. Copyright (c) 2022 Geraint Luff / Signalsmith Audio Ltd., licensed MIT:
+
+> Copyright (c) 2022 Geraint Luff / Signalsmith Audio Ltd.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+`crates/sound/src/voicefx/stft.rs` and `crates/sound/src/voicefx/fft.rs` are ported from Signalsmith Linear (https://github.com/Signalsmith-Audio/linear, `stft.h` and `fft.h`, tag `0.6.4`, commit `de55e6a50ffcf6f8f43f649692d94691c7025151`, the version Stretch `1.4.0` pins): the self-normalising STFT with its Kaiser window and perfect-reconstruction scaling, the half-bin-shifted real FFT, the split radix-3 and radix-5 FFT and the power-of-two radix-4 FFT. Copyright (c) 2025 Signalsmith Audio, licensed MIT:
+
+> Copyright (c) 2025 Signalsmith Audio
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 ## Hash without Sine, under the MIT licence
 
 `hash12` in `crates/post/src/look/mod.rs` (in the package `pfx-post`, re-exported by `crates/live/src/flat/sdf.rs`), `flat_hash12` in `crates/live/src/flat/shader.rs` (in the package `pfx-live`) and `look_hash12` in `crates/post/src/look/shader.rs`, the hash behind the flat pass's `Grain` and `Fibre` patterns and the flat looks' `Grain` pass, are ported from David Hoskins' "Hash without Sine" (https://www.shadertoy.com/view/4djSRW, `hash12`, its constants `.1031` and `33.33` kept), Copyright (c)2014 David Hoskins, licensed MIT:

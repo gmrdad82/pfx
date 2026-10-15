@@ -15,6 +15,7 @@ lewton = { version = "=0.10.2", optional = true }
 
 [features]
 vorbis = ["dep:lewton"]
+voicefx = []
 
 [dev-dependencies]
-pfx-sound = { path = ".", features = ["vorbis"] }
+pfx-sound = { path = ".", features = ["vorbis", "voicefx"] }

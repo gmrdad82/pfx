@@ -240,6 +240,36 @@ mixer.stream_vorbis(ChannelId::DIALOG, &source, None, Level::default())?;
 - `VorbisSource` is bytes held in memory or a file path.
 - Stereo and mono play as they are; a file with more channels plays its first two.
 
+## Voice effects (feature `voicefx`)
+
+`pfx_sound::voicefx` holds offline building blocks for baking voices from recordings, once, in a tools build; nothing in it runs live. Every call takes interleaved `&[f32]` with its channel count and rate and returns a new `Vec<f32>`; the same input and seed give the same output. The feature is off by default.
+
+### Pitch, formants and time (`voicefx::stretch`)
+
+A port of Signalsmith Stretch 1.4.0 and the STFT and FFT of Signalsmith Linear 0.6.4 (MIT, see [NOTICE.md](../NOTICE.md)): a phase vocoder that predicts each bin's phase from the previous block and its neighbouring bins, maps frequencies through the spectrum's peaks so harmonics move together, and keeps a smoothed spectral envelope it can move on its own, so pitch and formants shift independently.
+
+- `pitch_shift(samples, channels, rate, semitones)`: the same length, every frequency moved by `2^(semitones/12)`. Formants move with the pitch (a raised voice sounds smaller); keep them with the struct below.
+- `formant_shift(samples, channels, rate, semitones)`: the same length and pitch, the spectral envelope moved by `2^(semitones/12)` (up sounds smaller, down sounds bigger).
+- `time_stretch(samples, channels, rate, factor)`: `round(frames * factor)` frames out at the same pitch; `factor` above 1 is slower. Past 2x the bins' phase steps are drawn at random, seeded.
+- `Stretch::new(channels, rate)` (or `with_preset(channels, rate, Preset::Cheaper)`, or `with_blocks(channels, rate, block, interval)`), then `set_transpose_semitones(semitones, tonality_limit_hz)` (or `set_transpose_factor`; a limit above 0 stops shifting above that frequency, keeping the hiss of a voice where it was), `set_formant_semitones(semitones, formant_compensation)` (or `set_formant_factor`; with `formant_compensation` the envelope is moved back against the pitch shift, so a pitch shift keeps the formants), `set_formant_base(hz)` (a rough fundamental for the envelope; 0, the default, estimates it), `set_seed(seed)`, and `process(input, output_frames)`: the whole buffer in one call, any input length to any output length, so one call shifts pitch and stretches time together.
+- Presets: `Default` is 120 ms blocks every 30 ms, `Cheaper` 100 ms blocks every 40 ms. All channels are analysed together and stay phase locked to the loudest one, so stereo images hold.
+- Input shorter than about one block (120 ms at the default) is padded with silence for the analysis and cut back to the asked length.
+
+The port matches the C++ original bit for bit: built with g++ 16 at `-O2 -ffp-contract=off` against the same pinned headers and fed the same synthesised signals (a 100 Hz to 4 kHz sweep, a 140 Hz vowel-like harmonic tone with three formants, white noise, a stereo pair), eleven cases (pitch up and down, formant only, pitch with compensated formants, pitch and formant apart, a tonality limit, stretches of 0.6, 1.25, 1.5 and 3, the cheaper preset) gave a maximum difference of 0 over every sample, the 3x stretch with the C++ given the same seeded generator.
+
+Cost, measured once on 3 s of a 48 kHz mono voice-like tone, one thread, release build, Ryzen 9 9950X, in seconds of processing per second of audio:
+
+| Call | Cost |
+|---|---|
+| `pitch_shift` +5 | 0.0094 |
+| `formant_shift` +4 | 0.0074 |
+| `time_stretch` 1.5 | 0.0107 |
+| `time_stretch` 0.75 | 0.0054 |
+
+The cost grows with the output length and the channel count; the C++ original takes about the same.
+
+`crates/sound/tests/stretch.rs` guards the length kept by `pitch_shift` and `formant_shift`, a 440 Hz sine moved by 7, -5 and 12 semitones within 1 % (and kept by a formant shift and a time stretch), `time_stretch`'s output length at 0.5, 1.5 and 3, and the same output for the same input and seed.
+
 ## Cost
 
 `crates/sound/tests/bench.rs` (`cargo test --release -p pfx-sound --test bench -- --ignored --nocapture`): a 48 kHz stereo mixer rendering 800-frame ticks (60 a second), a 0.1 s mono hit triggered 2,000 times a second with `max_voices: 20`, `Steal::Oldest`, 2 semitones of pitch jitter and 0.2 of volume jitter (about 20 live voices plus the stolen ones fading), and 20 live sine tones. Release build, Ryzen 9 9950X, CPU time a tick:
