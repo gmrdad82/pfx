@@ -4,6 +4,8 @@ pub mod fixture;
 mod font;
 mod image;
 mod mesh;
+#[cfg(test)]
+mod morph_tests;
 mod rig;
 #[cfg(test)]
 mod rig_tests;
@@ -16,7 +18,10 @@ mod vec3;
 pub use cache::{Asset, Cache, Handle, sha256};
 pub use font::Font;
 pub use image::{ColorSpace, Image, Pixels};
-pub use mesh::{Animation, AnimationChannel, Group, Material, Mesh, Node, Primitive, Scene, Skin};
+pub use mesh::{
+    Animation, AnimationChannel, Group, Material, Mesh, MorphTarget, Node, Primitive, Scene, Skin,
+    WeightsChannel,
+};
 pub use rig::SkinRig;
 pub use room::{RoomLamp, RoomSky};
 pub use sky::{Distribution, Sky};

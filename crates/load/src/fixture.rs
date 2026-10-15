@@ -1,3 +1,9 @@
+mod head;
+
+pub use head::{
+    HEAD_KEYS, HEAD_RINGS, HEAD_SEGMENTS, HEAD_TARGETS, HEAD_TIMES, HEAD_VERTICES, HEAD_WEIGHTS,
+    head,
+};
 use pfx_core::anim::fixture::{column, rig};
 use pfx_core::anim::{Interpolation, Property};
 use serde_json::{Value, json};

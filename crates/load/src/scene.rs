@@ -158,7 +158,14 @@ pub struct Geometry {
     pub uvs1: Option<Vec<[f32; 2]>>,
     pub indices: Vec<u32>,
     pub skin: Option<Arc<GeometrySkin>>,
+    pub morph: Option<Arc<GeometryMorph>>,
     pub hash: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeometryMorph {
+    pub morph: usize,
+    pub targets: Vec<crate::MorphTarget>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

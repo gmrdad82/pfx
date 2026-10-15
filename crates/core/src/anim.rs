@@ -9,10 +9,10 @@ mod skin;
 mod sprite;
 
 pub use animator::{Animator, Fired, MAX_MIXES, MAX_REPEATS, Playback};
-pub use clip::{Channel, Clip, ClipEvent, Interpolation, Property};
+pub use clip::{Channel, Clip, ClipEvent, Interpolation, MorphChannel, Property, sample_weights};
 pub use math::{Mat4, Quat, Trs};
 pub use pose::Pose;
-pub use skeleton::{Joint, MAX_JOINTS, Rig, Skeleton};
+pub use skeleton::{Joint, MAX_JOINTS, Morph, Rig, Skeleton};
 pub use skin::{Skinned, blend_matrix, check_skin, normalize_weights, skin};
 pub use sprite::{Atlas, FrameEvent, SpriteClip, SpritePlayer, SpriteSheet};
 

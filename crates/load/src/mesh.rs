@@ -1,4 +1,4 @@
-use pfx_core::anim::{Interpolation, Property, Trs};
+use pfx_core::anim::{Interpolation, Property, Trs, sample_weights};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mesh {
@@ -40,6 +40,32 @@ pub struct Skin {
 pub struct Animation {
     pub name: String,
     pub channels: Vec<AnimationChannel>,
+    pub weights: Vec<WeightsChannel>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct WeightsChannel {
+    pub node: u32,
+    pub interpolation: Interpolation,
+    pub targets: usize,
+    pub times: Vec<f32>,
+    pub values: Vec<f32>,
+}
+
+impl WeightsChannel {
+    pub fn sample(&self, time: f32, out: &mut [f32]) {
+        sample_weights(
+            self.interpolation,
+            &self.times,
+            &self.values,
+            time,
+            |target, value| {
+                if let Some(slot) = out.get_mut(target) {
+                    *slot = value;
+                }
+            },
+        );
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -55,7 +81,31 @@ pub struct AnimationChannel {
 pub struct Group {
     pub name: String,
     pub primitives: Vec<Primitive>,
+    pub weights: Vec<f32>,
     pub extras: Option<serde_json::Value>,
+}
+
+impl Group {
+    pub fn targets(&self) -> usize {
+        self.primitives
+            .iter()
+            .map(|primitive| primitive.targets.len())
+            .max()
+            .unwrap_or(0)
+    }
+
+    pub fn default_weights(&self) -> Vec<f32> {
+        let mut weights = self.weights.clone();
+        weights.resize(self.targets(), 0.0);
+        weights
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MorphTarget {
+    pub positions: Vec<[f32; 3]>,
+    pub normals: Option<Vec<[f32; 3]>>,
+    pub tangents: Option<Vec<[f32; 3]>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +119,7 @@ pub struct Primitive {
     pub material: Option<u32>,
     pub joints: Option<Vec<[u16; 4]>>,
     pub weights: Option<Vec<[f32; 4]>>,
+    pub targets: Vec<MorphTarget>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -150,7 +201,7 @@ impl Mesh {
         let groups = groups(&gltf, &buffers)?;
         let materials = materials(&gltf)?;
         let skins = skins(&gltf, &buffers)?;
-        let animations = animations(&gltf, &buffers)?;
+        let animations = animations(&gltf, &buffers, &nodes, &groups)?;
         for node in &nodes {
             if let Some(group) = node.group
                 && groups.get(group as usize).is_none()
@@ -332,14 +383,35 @@ fn groups(gltf: &gltf::Gltf, buffers: &[Vec<u8>]) -> Result<Vec<Group>, String> 
             return Err("mesh: mesh order is not packed".into());
         }
         let mut primitives = Vec::new();
+        let mut targets = None;
         for primitive in mesh.primitives() {
+            let count = primitive.morph_targets().len();
+            if *targets.get_or_insert(count) != count {
+                return Err(format!(
+                    "mesh: mesh {index} has primitives with different morph target counts"
+                ));
+            }
             if let Some(primitive) = read_primitive(&primitive, buffers)? {
                 primitives.push(primitive);
             }
         }
+        let weights = mesh.weights().map(<[f32]>::to_vec).unwrap_or_default();
+        let targets = targets.unwrap_or(0);
+        if weights.len() > targets {
+            return Err(format!(
+                "mesh: mesh {index} has {} default weights for {targets} morph targets",
+                weights.len()
+            ));
+        }
+        if weights.iter().any(|weight| !weight.is_finite()) {
+            return Err(format!(
+                "mesh: mesh {index} has a default weight that is not finite"
+            ));
+        }
         groups.push(Group {
             name: mesh.name().unwrap_or("").to_string(),
             primitives,
+            weights,
             extras: read_extras(mesh.extras())?,
         });
     }
@@ -388,17 +460,23 @@ fn skins(gltf: &gltf::Gltf, buffers: &[Vec<u8>]) -> Result<Vec<Skin>, String> {
     Ok(skins)
 }
 
-fn animations(gltf: &gltf::Gltf, buffers: &[Vec<u8>]) -> Result<Vec<Animation>, String> {
+fn animations(
+    gltf: &gltf::Gltf,
+    buffers: &[Vec<u8>],
+    nodes: &[Node],
+    groups: &[Group],
+) -> Result<Vec<Animation>, String> {
     use gltf::animation::util::ReadOutputs;
     let mut out = Vec::new();
     for (index, animation) in gltf.animations().enumerate() {
         let mut channels = Vec::new();
+        let mut weights = Vec::new();
         for channel in animation.channels() {
             let property = match channel.target().property() {
-                gltf::animation::Property::Translation => Property::Translation,
-                gltf::animation::Property::Rotation => Property::Rotation,
-                gltf::animation::Property::Scale => Property::Scale,
-                gltf::animation::Property::MorphTargetWeights => continue,
+                gltf::animation::Property::Translation => Some(Property::Translation),
+                gltf::animation::Property::Rotation => Some(Property::Rotation),
+                gltf::animation::Property::Scale => Some(Property::Scale),
+                gltf::animation::Property::MorphTargetWeights => None,
             };
             let interpolation = match channel.sampler().interpolation() {
                 gltf::animation::Interpolation::Linear => Interpolation::Linear,
@@ -410,18 +488,31 @@ fn animations(gltf: &gltf::Gltf, buffers: &[Vec<u8>]) -> Result<Vec<Animation>, 
                 .read_inputs()
                 .ok_or_else(|| format!("mesh: animation {index} has a channel without key times"))?
                 .collect();
+            let node = channel.target().node().index() as u32;
             let values: Vec<f32> = match reader.read_outputs() {
                 Some(ReadOutputs::Translations(values)) => values.flatten().collect(),
                 Some(ReadOutputs::Scales(values)) => values.flatten().collect(),
                 Some(ReadOutputs::Rotations(values)) => values.into_f32().flatten().collect(),
-                Some(ReadOutputs::MorphTargetWeights(_)) | None => {
+                Some(ReadOutputs::MorphTargetWeights(values)) => values.into_f32().collect(),
+                None => {
                     return Err(format!(
                         "mesh: animation {index} has a channel without key values"
                     ));
                 }
             };
+            let Some(property) = property else {
+                weights.push(weights_channel(
+                    index,
+                    node,
+                    interpolation,
+                    times,
+                    values,
+                    (nodes, groups),
+                )?);
+                continue;
+            };
             channels.push(AnimationChannel {
-                node: channel.target().node().index() as u32,
+                node,
                 property,
                 interpolation,
                 times,
@@ -433,9 +524,57 @@ fn animations(gltf: &gltf::Gltf, buffers: &[Vec<u8>]) -> Result<Vec<Animation>, 
                 .name()
                 .map_or_else(|| format!("animation{index}"), str::to_string),
             channels,
+            weights,
         });
     }
     Ok(out)
+}
+
+fn weights_channel(
+    index: usize,
+    node: u32,
+    interpolation: Interpolation,
+    times: Vec<f32>,
+    values: Vec<f32>,
+    (nodes, groups): (&[Node], &[Group]),
+) -> Result<WeightsChannel, String> {
+    let group = nodes
+        .get(node as usize)
+        .and_then(|found| found.group)
+        .and_then(|group| groups.get(group as usize))
+        .ok_or_else(|| {
+            format!(
+                "mesh: animation {index} animates the weights of node {node}, which has no mesh"
+            )
+        })?;
+    let targets = group.targets();
+    let stride = match interpolation {
+        Interpolation::CubicSpline => 3,
+        Interpolation::Step | Interpolation::Linear => 1,
+    };
+    let expected = times.len() * stride * targets;
+    if targets == 0 || times.is_empty() || values.len() != expected {
+        return Err(format!(
+            "mesh: animation {index} holds {} weights for node {node}, whose {} keys and {targets} morph targets need {expected}",
+            values.len(),
+            times.len()
+        ));
+    }
+    if times.iter().any(|time| !time.is_finite() || *time < 0.0)
+        || times.windows(2).any(|pair| pair[1] <= pair[0])
+        || values.iter().any(|value| !value.is_finite())
+    {
+        return Err(format!(
+            "mesh: animation {index} has weight keys for node {node} that are not finite or do not rise"
+        ));
+    }
+    Ok(WeightsChannel {
+        node,
+        interpolation,
+        targets,
+        times,
+        values,
+    })
 }
 
 fn read_primitive(
@@ -507,6 +646,22 @@ fn read_primitive(
             "mesh: a primitive has joints without weights or weights without joints".into(),
         );
     }
+    let targets = primitive
+        .morph_targets()
+        .enumerate()
+        .map(|(index, target)| {
+            let read = |accessor: Option<gltf::Accessor<'_>>, what: &str| {
+                read_delta(accessor, buffers, positions.len())
+                    .map_err(|reason| format!("mesh: morph target {index} {what} {reason}"))
+            };
+            Ok(MorphTarget {
+                positions: read(target.positions(), "positions")?
+                    .unwrap_or_else(|| vec![[0.0; 3]; positions.len()]),
+                normals: read(target.normals(), "normals")?,
+                tangents: read(target.tangents(), "tangents")?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     Ok(Some(Primitive {
         positions,
         normals,
@@ -517,7 +672,48 @@ fn read_primitive(
         material: primitive.material().index().map(|index| index as u32),
         joints,
         weights,
+        targets,
     }))
+}
+
+fn read_delta(
+    accessor: Option<gltf::Accessor<'_>>,
+    buffers: &[Vec<u8>],
+    vertices: usize,
+) -> Result<Option<Vec<[f32; 3]>>, String> {
+    let Some(accessor) = accessor else {
+        return Ok(None);
+    };
+    if accessor.data_type() != gltf::accessor::DataType::F32
+        || accessor.dimensions() != gltf::accessor::Dimensions::Vec3
+    {
+        return Err("are not float three-component deltas".into());
+    }
+    if accessor.count() != vertices {
+        return Err(format!(
+            "hold {} deltas for {vertices} vertices",
+            accessor.count()
+        ));
+    }
+    let deltas: Vec<[f32; 3]> = if accessor.view().is_none() && accessor.sparse().is_none() {
+        vec![[0.0; 3]; vertices]
+    } else {
+        gltf::accessor::Iter::<[f32; 3]>::new(accessor, |buffer: gltf::Buffer<'_>| {
+            buffers.get(buffer.index()).map(Vec::as_slice)
+        })
+        .ok_or("cannot be read from their buffer")?
+        .collect()
+    };
+    if deltas.len() != vertices {
+        return Err(format!(
+            "hold {} deltas for {vertices} vertices",
+            deltas.len()
+        ));
+    }
+    if !deltas.iter().flatten().all(|value| value.is_finite()) {
+        return Err("hold a delta that is not finite".into());
+    }
+    Ok(Some(deltas))
 }
 
 fn fit<T>(values: Vec<T>, len: usize, what: &str) -> Result<Vec<T>, String> {

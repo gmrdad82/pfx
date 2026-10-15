@@ -32,6 +32,7 @@ pub(crate) struct Animations {
     animators: BTreeMap<usize, Animator>,
     sprites: BTreeMap<usize, SpritePlayer>,
     defaults: BTreeMap<usize, Defaults>,
+    weights: BTreeMap<(usize, usize), Vec<f32>>,
     events: Vec<AnimationEvent>,
     errors: Vec<AnimError>,
     revision: u64,
@@ -299,6 +300,81 @@ impl World {
             .map(|animator| animator.palette(self.ticks))
     }
 
+    pub fn morph_weights(&self, id: ObjectId) -> Option<Vec<Vec<f32>>> {
+        let animator = self.animator(id)?;
+        if animator.rig().morphs().is_empty() {
+            return None;
+        }
+        Some(self.weights_of(id.index(), animator))
+    }
+
+    pub fn set_morph_weights(
+        &mut self,
+        id: ObjectId,
+        morph: &str,
+        weights: &[f32],
+    ) -> Result<(), AnimError> {
+        let result = self.override_weights(id, morph, Some(weights));
+        if let Err(error) = &result {
+            self.animations.errors.push(error.clone());
+        }
+        result
+    }
+
+    pub fn clear_morph_weights(&mut self, id: ObjectId, morph: &str) -> Result<(), AnimError> {
+        let result = self.override_weights(id, morph, None);
+        if let Err(error) = &result {
+            self.animations.errors.push(error.clone());
+        }
+        result
+    }
+
+    fn override_weights(
+        &mut self,
+        id: ObjectId,
+        morph: &str,
+        weights: Option<&[f32]>,
+    ) -> Result<(), AnimError> {
+        let Some(animator) = self.animator(id) else {
+            return Err(self.not_animated(id, "has no morph targets"));
+        };
+        let morphs = animator.rig().morphs();
+        let Some(index) = morphs.iter().position(|found| found.name == morph) else {
+            return Err(self.not_animated(id, &format!("has no morph targets on {morph}")));
+        };
+        let key = (id.index(), index);
+        match weights {
+            Some(weights) => {
+                let targets = morphs[index].defaults.len();
+                if weights.len() > targets {
+                    return Err(self.not_animated(
+                        id,
+                        &format!("takes {targets} weights on {morph}, not {}", weights.len()),
+                    ));
+                }
+                if let Some(weight) = weights.iter().find(|weight| !weight.is_finite()) {
+                    return Err(AnimError::NotFinite(format!("morph weight {weight}")));
+                }
+                self.animations.weights.insert(key, weights.to_vec());
+            }
+            None => {
+                self.animations.weights.remove(&key);
+            }
+        }
+        self.animations.revision += 1;
+        Ok(())
+    }
+
+    fn weights_of(&self, index: usize, animator: &Animator) -> Vec<Vec<f32>> {
+        let mut weights = animator.weights(self.ticks);
+        for (morph, set) in weights.iter_mut().enumerate() {
+            if let Some(fixed) = self.animations.weights.get(&(index, morph)) {
+                set[..fixed.len()].copy_from_slice(fixed);
+            }
+        }
+        weights
+    }
+
     pub fn sprite_frame(&self, id: ObjectId) -> Option<[f32; 4]> {
         let player = self.sprite(id)?;
         player
@@ -323,6 +399,15 @@ impl World {
             .animators
             .iter()
             .map(|(&index, animator)| (index, animator.palette(self.ticks)))
+            .collect()
+    }
+
+    pub(crate) fn weights(&self) -> BTreeMap<usize, Vec<Vec<f32>>> {
+        self.animations
+            .animators
+            .iter()
+            .filter(|(_, animator)| !animator.rig().morphs().is_empty())
+            .map(|(&index, animator)| (index, self.weights_of(index, animator)))
             .collect()
     }
 

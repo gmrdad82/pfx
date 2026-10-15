@@ -43,21 +43,22 @@ pub struct Channel {
     pub values: Vec<f32>,
 }
 
+fn check_times(times: &[f32]) -> Result<(), String> {
+    if times.is_empty() {
+        return Err("a channel has no keys".into());
+    }
+    if times.iter().any(|time| !time.is_finite() || *time < 0.0) {
+        return Err("a key time is negative or not finite".into());
+    }
+    if times.windows(2).any(|pair| pair[1] <= pair[0]) {
+        return Err("key times do not rise".into());
+    }
+    Ok(())
+}
+
 impl Channel {
     pub fn check(&self) -> Result<(), String> {
-        if self.times.is_empty() {
-            return Err("a channel has no keys".into());
-        }
-        if self
-            .times
-            .iter()
-            .any(|time| !time.is_finite() || *time < 0.0)
-        {
-            return Err("a key time is negative or not finite".into());
-        }
-        if self.times.windows(2).any(|pair| pair[1] <= pair[0]) {
-            return Err("key times do not rise".into());
-        }
+        check_times(&self.times)?;
         let expected = self.times.len() * self.interpolation.stride() * self.property.width();
         if self.values.len() != expected {
             return Err(format!(
@@ -142,6 +143,109 @@ impl Channel {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct MorphChannel {
+    pub morph: usize,
+    pub interpolation: Interpolation,
+    pub times: Vec<f32>,
+    pub values: Vec<f32>,
+}
+
+impl MorphChannel {
+    pub fn width(&self) -> usize {
+        self.values
+            .len()
+            .checked_div(self.times.len() * self.interpolation.stride())
+            .unwrap_or(0)
+    }
+
+    pub fn check(&self) -> Result<(), String> {
+        check_times(&self.times)?;
+        let keys = self.times.len() * self.interpolation.stride();
+        if self.values.is_empty() || !self.values.len().is_multiple_of(keys) {
+            return Err(format!(
+                "a weights channel holds {} values, not a whole number of weights for its {} keys",
+                self.values.len(),
+                self.times.len()
+            ));
+        }
+        if self.values.iter().any(|value| !value.is_finite()) {
+            return Err("a key value is not finite".into());
+        }
+        Ok(())
+    }
+
+    pub fn sample_into(&self, time: f32, out: &mut [f32]) {
+        sample_weights(
+            self.interpolation,
+            &self.times,
+            &self.values,
+            time,
+            |target, value| {
+                if let Some(slot) = out.get_mut(target) {
+                    *slot = value;
+                }
+            },
+        );
+    }
+
+    pub fn end(&self) -> f32 {
+        self.times.last().copied().unwrap_or(0.0)
+    }
+}
+
+pub fn sample_weights(
+    interpolation: Interpolation,
+    times: &[f32],
+    values: &[f32],
+    time: f32,
+    mut write: impl FnMut(usize, f32),
+) {
+    let stride = interpolation.stride();
+    let keys = times.len() * stride;
+    if keys == 0 || values.len() < keys {
+        return;
+    }
+    let width = values.len() / keys;
+    let at =
+        |index: usize, part: usize, target: usize| values[(index * stride + part) * width + target];
+    let middle = match interpolation {
+        Interpolation::CubicSpline => 1,
+        Interpolation::Step | Interpolation::Linear => 0,
+    };
+    let after = times.partition_point(|key| *key <= time);
+    let last = times.len() - 1;
+    if after == 0 || after > last {
+        let index = if after == 0 { 0 } else { last };
+        for target in 0..width {
+            write(target, at(index, middle, target));
+        }
+        return;
+    }
+    let k0 = after - 1;
+    let k1 = after;
+    let span = times[k1] - times[k0];
+    let u = ((time - times[k0]) / span).clamp(0.0, 1.0);
+    for target in 0..width {
+        let value = match interpolation {
+            Interpolation::Step => at(k0, 0, target),
+            Interpolation::Linear => {
+                let a = at(k0, 0, target);
+                a + (at(k1, 0, target) - a) * u
+            }
+            Interpolation::CubicSpline => {
+                let u2 = u * u;
+                let u3 = u2 * u;
+                (2.0 * u3 - 3.0 * u2 + 1.0) * at(k0, 1, target)
+                    + (u3 - 2.0 * u2 + u) * span * at(k0, 2, target)
+                    + (-2.0 * u3 + 3.0 * u2) * at(k1, 1, target)
+                    + (u3 - u2) * span * at(k1, 0, target)
+            }
+        };
+        write(target, value);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClipEvent {
     pub time: f32,
     pub name: String,
@@ -160,6 +264,7 @@ impl ClipEvent {
 pub struct Clip {
     name: String,
     channels: Vec<Channel>,
+    weights: Vec<MorphChannel>,
     events: Vec<ClipEvent>,
     duration: f32,
 }
@@ -177,15 +282,32 @@ impl Clip {
         Ok(Self {
             name,
             channels,
+            weights: Vec::new(),
             events: Vec::new(),
             duration,
         })
+    }
+
+    pub fn with_weights(mut self, weights: Vec<MorphChannel>) -> Result<Self, AnimError> {
+        for channel in &weights {
+            channel.check().map_err(|reason| AnimError::Channel {
+                clip: self.name.clone(),
+                reason,
+            })?;
+        }
+        self.duration = weights
+            .iter()
+            .map(MorphChannel::end)
+            .fold(self.duration, f32::max);
+        self.weights = weights;
+        Ok(self)
     }
 
     pub(crate) fn empty(name: &str) -> Self {
         Self {
             name: name.to_string(),
             channels: Vec::new(),
+            weights: Vec::new(),
             events: Vec::new(),
             duration: 0.0,
         }
@@ -229,6 +351,36 @@ impl Clip {
 
     pub fn channels(&self) -> &[Channel] {
         &self.channels
+    }
+
+    pub fn weights(&self) -> &[MorphChannel] {
+        &self.weights
+    }
+
+    pub fn apply_weights(&self, time: f32, morphs: &mut [Vec<f32>], weight: f32) {
+        if weight <= 0.0 {
+            return;
+        }
+        for channel in &self.weights {
+            let Some(set) = morphs.get_mut(channel.morph) else {
+                continue;
+            };
+            sample_weights(
+                channel.interpolation,
+                &channel.times,
+                &channel.values,
+                time,
+                |target, value| {
+                    if let Some(slot) = set.get_mut(target) {
+                        *slot = if weight >= 1.0 {
+                            value
+                        } else {
+                            *slot + (value - *slot) * weight
+                        };
+                    }
+                },
+            );
+        }
     }
 
     pub fn events(&self) -> &[ClipEvent] {

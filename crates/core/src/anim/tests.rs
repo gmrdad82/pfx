@@ -515,3 +515,48 @@ fn a_blend_set_shares_its_weights_by_their_sum() {
     assert!(animator.play_blend(&[("lift", -1.0)], 0).is_err());
     assert!(animator.play_blend(&[], 0).is_err());
 }
+
+#[test]
+fn morph_weights_sample_cubic_tangents_by_span_and_a_wrong_width_is_refused() {
+    let cubic = MorphChannel {
+        morph: 0,
+        interpolation: Interpolation::CubicSpline,
+        times: vec![0.0, 2.0],
+        values: vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0],
+    };
+    cubic.check().unwrap();
+    assert_eq!(cubic.width(), 2);
+    let mut out = [0.0; 2];
+    cubic.sample_into(1.0, &mut out);
+    assert!(close(&out, &[0.75, 1.0], 1e-6), "{out:?}");
+    cubic.sample_into(3.0, &mut out);
+    assert_eq!(out, [1.0, 1.0]);
+    let skeleton = Skeleton::new(
+        vec![Joint {
+            name: "head".into(),
+            parent: None,
+            rest: Trs::IDENTITY,
+        }],
+        vec![IDENTITY],
+    )
+    .unwrap();
+    let clip = Clip::new("talk", Vec::new())
+        .unwrap()
+        .with_weights(vec![cubic])
+        .unwrap();
+    assert_eq!(clip.duration(), 2.0);
+    let morph = |targets: usize| Morph {
+        name: "head".into(),
+        defaults: vec![0.5; targets],
+    };
+    assert!(matches!(
+        Rig::morphed(skeleton.clone(), vec![clip.clone()], vec![morph(3)]),
+        Err(AnimError::Channel { .. })
+    ));
+    let rig = Arc::new(Rig::morphed(skeleton, vec![clip], vec![morph(2)]).unwrap());
+    let mut animator = Animator::new(rig, 10);
+    assert_eq!(animator.weights(0), [vec![0.5, 0.5]]);
+    animator.play("talk", 0).unwrap();
+    animator.set_weight("talk", 0.5).unwrap();
+    assert!(close(&animator.weights(10)[0], &[0.625, 0.75], 1e-6));
+}

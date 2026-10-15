@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use pfx_core::anim::normalize_weights;
+use pfx_core::anim::{Morph, normalize_weights};
 use pfx_core::camera::{DEG, Depth, Hush, Preset};
 use pfx_core::daylight::{Authored, Daylight, REFERENCE_HOUR, Reading};
 use pfx_core::sky::AnalyticSky;
@@ -14,9 +14,9 @@ use sha2::{Digest, Sha256};
 
 use super::{
     ALPHA_CUTOFF, Camera, Content, DepthOfField, Emitter, Environment, Finish, Geometry,
-    GeometrySkin, Haze, IDENTITY, Light, Location, Matrix, Motion, Mover, MoverKind, NodeOverride,
-    Object, Part, Projection, Scene, SceneError, SceneMesh, SceneSky, Shadow, Sun, Text,
-    TraceSettings, model, multiply,
+    GeometryMorph, GeometrySkin, Haze, IDENTITY, Light, Location, Matrix, Motion, Mover, MoverKind,
+    NodeOverride, Object, Part, Projection, Scene, SceneError, SceneMesh, SceneSky, Shadow, Sun,
+    Text, TraceSettings, model, multiply,
 };
 use crate::{
     ColorSpace, Font, Image, Mesh, Pixels, Primitive, RoomLamp, RoomSky, SkinRig, Sky, sha256,
@@ -577,8 +577,16 @@ fn build_mesh(
             rigs.skins.len()
         )));
     }
-    let rig = match rigs.skins.into_values().next() {
-        Some(found) => {
+    let morphs = std::mem::take(&mut rigs.morphs);
+    let rig = match rigs.skins.into_iter().next() {
+        Some((skin, found)) => {
+            let found = if morphs.is_empty() {
+                found
+            } else {
+                parsed
+                    .morphed_rig(skin, &morphs)
+                    .map_err(|message| error(format!("mesh {name}: {message}")))?
+            };
             for part in &mut parts {
                 part.joint = None;
             }
@@ -586,7 +594,7 @@ fn build_mesh(
         }
         None => {
             let found = parsed
-                .node_rig(&rigs.nodes)
+                .morphed_node_rig(&rigs.nodes, &morphs)
                 .map_err(|message| error(format!("mesh {name}: {message}")))?;
             if found.is_none() {
                 for part in &mut parts {
@@ -640,6 +648,7 @@ fn build_mesh(
 struct Rigging {
     skins: BTreeMap<u32, SkinRig>,
     nodes: Vec<(u32, bool)>,
+    morphs: Vec<(u32, Morph)>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -665,9 +674,30 @@ fn walk(
     };
     let node_override = overrides.get(&node.name).cloned().unwrap_or_default();
     if let Some(group) = node.group {
-        for primitive in &mesh.groups[group as usize].primitives {
+        let group = &mesh.groups[group as usize];
+        let morph = (group.targets() > 0).then(|| {
+            rigs.morphs.push((
+                index,
+                Morph {
+                    name: if node.name.is_empty() {
+                        format!("node{index}")
+                    } else {
+                        node.name.clone()
+                    },
+                    defaults: group.default_weights(),
+                },
+            ));
+            rigs.morphs.len() - 1
+        });
+        for primitive in &group.primitives {
             let mut geometry = geometry(primitive)
                 .map_err(|message| format!("mesh {name}, node {}: {message}", node.name))?;
+            if let Some(morph) = morph {
+                geometry = geometry.with_morph(GeometryMorph {
+                    morph,
+                    targets: primitive.targets.clone(),
+                });
+            }
             let mut placed = transform;
             if let (Some(skin), Some(joints), Some(weights)) =
                 (node.skin, &primitive.joints, &primitive.weights)
@@ -775,8 +805,32 @@ impl Geometry {
             uvs1,
             indices,
             skin: None,
+            morph: None,
             hash: hasher.finalize().into(),
         }
+    }
+
+    pub fn with_morph(mut self, morph: GeometryMorph) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(self.hash);
+        hasher.update([3]);
+        hasher.update((morph.morph as u64).to_le_bytes());
+        for target in &morph.targets {
+            hasher.update((target.positions.len() as u64).to_le_bytes());
+            hasher_add(&mut hasher, target.positions.iter().flatten().copied());
+            for deltas in [&target.normals, &target.tangents] {
+                match deltas {
+                    Some(deltas) => {
+                        hasher.update([1]);
+                        hasher_add(&mut hasher, deltas.iter().flatten().copied());
+                    }
+                    None => hasher.update([0]),
+                }
+            }
+        }
+        self.hash = hasher.finalize().into();
+        self.morph = Some(Arc::new(morph));
+        self
     }
 
     pub fn with_skin(mut self, skin: GeometrySkin) -> Self {

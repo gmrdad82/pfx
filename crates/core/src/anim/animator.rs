@@ -327,6 +327,64 @@ impl Animator {
         }
     }
 
+    fn mix_weights(&self, mix: &Mix, tick: u64, out: &mut [Vec<f32>]) {
+        for (set, morph) in out.iter_mut().zip(self.rig.morphs()) {
+            set.copy_from_slice(&morph.defaults);
+        }
+        for layer in &mix.layers {
+            let clip = &self.rig.clips()[layer.clip];
+            if clip.weights().is_empty() {
+                continue;
+            }
+            let time = local_time(
+                layer.elapsed(tick, self.rate),
+                clip.duration(),
+                layer.playback,
+            );
+            clip.apply_weights(time, out, layer.weight);
+        }
+    }
+
+    pub fn weights_into(&self, tick: u64, out: &mut Vec<Vec<f32>>) {
+        let morphs = self.rig.morphs();
+        out.resize_with(morphs.len(), Vec::new);
+        for (set, morph) in out.iter_mut().zip(morphs) {
+            set.clear();
+            set.extend_from_slice(&morph.defaults);
+        }
+        if morphs.is_empty() || self.mixes.is_empty() {
+            return;
+        }
+        let first = self
+            .mixes
+            .iter()
+            .rposition(|mix| mix.progress(tick) >= 1.0)
+            .unwrap_or(0);
+        let mut layer = self.rig.default_weights();
+        for (index, mix) in self.mixes.iter().enumerate().skip(first) {
+            if index == first {
+                self.mix_weights(mix, tick, out);
+                continue;
+            }
+            self.mix_weights(mix, tick, &mut layer);
+            let progress = mix.progress(tick);
+            if progress <= 0.0 {
+                continue;
+            }
+            for (set, mixed) in out.iter_mut().zip(&layer) {
+                for (value, target) in set.iter_mut().zip(mixed) {
+                    *value += (target - *value) * progress.min(1.0);
+                }
+            }
+        }
+    }
+
+    pub fn weights(&self, tick: u64) -> Vec<Vec<f32>> {
+        let mut out = Vec::new();
+        self.weights_into(tick, &mut out);
+        out
+    }
+
     pub fn pose(&self, tick: u64) -> Pose {
         let mut pose = Pose::rest(self.rig.skeleton());
         self.evaluate(tick, &mut pose);

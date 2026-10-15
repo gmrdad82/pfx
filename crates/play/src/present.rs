@@ -19,6 +19,14 @@ pub struct PlayFrame<'a> {
     pub scene: FrameScene<'a>,
     pub text: Text<'a>,
     pub effects: Effects<'a>,
+    pub weights: Vec<MorphWeights<'a>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MorphWeights<'a> {
+    pub instance: usize,
+    pub current: &'a [f32],
+    pub previous: &'a [f32],
 }
 
 #[derive(Default)]
@@ -30,6 +38,8 @@ pub(crate) struct Presenter {
     previous_palettes: BTreeMap<usize, Vec<Matrix>>,
     palettes: BTreeMap<usize, Vec<Matrix>>,
     palette_key: Option<(u64, u64)>,
+    weights: BTreeMap<usize, Vec<Vec<f32>>>,
+    previous_weights: BTreeMap<usize, Vec<Vec<f32>>>,
     surfaces: Vec<InstanceSurface>,
     last_view_projection: Option<Matrix>,
     lens_camera: Option<Camera>,
@@ -151,12 +161,14 @@ impl Presenter {
         let fresh = self.palette_key != Some(key);
         if fresh {
             self.previous_palettes = std::mem::replace(&mut self.palettes, world.palettes());
+            self.previous_weights = std::mem::replace(&mut self.weights, world.weights());
             self.palette_key = Some(key);
         }
         let palettes = &self.palettes;
         let frames = world.sprite_frames();
         let models = draws.models_posed(&posed, palettes);
         let mut skinned: Vec<(usize, usize)> = Vec::new();
+        let mut morphed: Vec<(usize, usize, usize)> = Vec::new();
         self.surfaces.clear();
         self.surfaces.extend_from_slice(staged.surfaces());
         self.instances.clear();
@@ -225,6 +237,14 @@ impl Presenter {
             if let Some(owner) = draw.owner {
                 if draw.geometry.skin.is_some() && palettes.contains_key(&owner) {
                     skinned.push((opaque, owner));
+                }
+                if let Some(morph) = &draw.geometry.morph
+                    && self
+                        .weights
+                        .get(&owner)
+                        .is_some_and(|sets| morph.morph < sets.len())
+                {
+                    morphed.push((opaque, owner, morph.morph));
                 }
                 if let (Some(frame), Some(surface)) =
                     (frames.get(&owner), self.surfaces.get_mut(opaque))
@@ -312,7 +332,28 @@ impl Presenter {
                 }
             }
         }
+        let weights = morphed
+            .into_iter()
+            .map(|(instance, owner, morph)| {
+                let current = self.weights[&owner][morph].as_slice();
+                let previous = if fresh {
+                    self.previous_weights
+                        .get(&owner)
+                        .and_then(|sets| sets.get(morph))
+                        .filter(|previous| previous.len() == current.len())
+                        .map_or(current, Vec::as_slice)
+                } else {
+                    current
+                };
+                MorphWeights {
+                    instance,
+                    current,
+                    previous,
+                }
+            })
+            .collect();
         Ok(PlayFrame {
+            weights,
             scene: FrameScene {
                 camera: frame_camera,
                 time,

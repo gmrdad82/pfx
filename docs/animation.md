@@ -57,10 +57,12 @@ pfx-scene checks the keys, names and kinds. pfx-load checks what only the assets
 
 ### glTF
 
-`Mesh::parse` reads `skins` (joints, inverse bind matrices, identity when the file has none), `animations` (translation, rotation and scale channels with their keys; morph weights are skipped), each node's `skin` and decomposed `trs`, and each primitive's `JOINTS_0` and `WEIGHTS_0`. 
+`Mesh::parse` reads `skins` (joints, inverse bind matrices, identity when the file has none), `animations` (translation, rotation and scale channels with their keys in `channels`, and morph weights channels in `weights`), each node's `skin` and decomposed `trs`, and each primitive's `JOINTS_0` and `WEIGHTS_0`. 
 
 - **Skinned meshes.** `Mesh::rig(skin)` builds a `Rig`: the skin's joints ordered parents first (a vertex's joints are remapped with `SkinRig::joints`), each joint's parent the nearest joint above it, the root joints' common parent node as the skeleton's root matrix, and every animation that moves its joints as a clip named after the animation. A scene mesh holds one skin; its skinned parts keep their bind-space vertices with an identity part transform, weights normalised to sum to one, and `Geometry::skin` carries the joints and weights. `SceneMesh::rig` is the rig.
 - **Node animation.** A mesh with animations and no skin gets a rig of its nodes (`Mesh::node_rig`): each walked node is a joint with an identity inverse bind, so its palette entry is the node's world matrix, and each part carries its node as `Part::joint` (and `Draw::joint`). A part then moves with its node: `Draws::models_posed` places it at the object's matrix times its node's pose.
+- **Morph targets.** Each primitive's `targets` holds its `MorphTarget`s (`positions` deltas, and `normals` and `tangents` deltas when the file has them; a target without `POSITION` reads zero deltas), one delta per vertex, sparse accessors included and an accessor with no buffer view reading zeros. A target whose accessor count is not its primitive's vertex count is refused, as are deltas that are not float three-component or not finite, primitives of one mesh with different target counts, and more default weights than targets. `Group::weights` is the mesh's default `weights` as written (`Group::default_weights` pads the missing ones with 0) and `Group::targets` the target count. A `weights` animation channel is kept as a `WeightsChannel` (its node, interpolation, target count, key times and `times × targets` values, three times that for a cubic spline) and refused when its node has no mesh or its value count does not match; `WeightsChannel::sample(time, out)` samples it step, linear or cubic spline as glTF says. Node `weights` overrides are not read.
+- **Morphed scene meshes.** Every walked node whose mesh has targets is a morph set of the scene mesh (in walk order, named after the node, with the mesh's default weights), its parts carry `Geometry::morph` (`GeometryMorph { morph, targets }`, hashed into the geometry), and the scene mesh always has a rig (`Mesh::morphed_rig` for a skin, `Mesh::morphed_node_rig` otherwise) whose `Rig::morphs()` lists the sets, even with no animation. A clip takes the animation's weights channels of the morphed nodes as `MorphChannel`s.
 
 ## Clips, poses and blending (`pfx_core::anim`)
 
@@ -70,12 +72,14 @@ pfx-scene checks the keys, names and kinds. pfx-load checks what only the assets
   - **linear** lerps translation and scale and slerps rotation (the shorter way, nlerp within 0.9995);
   - **cubic spline** uses the Hermite basis with the keys' in and out tangents scaled by the key interval; rotations come back normalised;
   - before the first key the first value holds, after the last the last value.
+- `Clip::with_weights` adds `MorphChannel`s (a morph set, an interpolation, key times and `width` weights per key), which `pfx_core::anim::sample_weights` samples by the same rules, and the clip's duration covers them. `Rig::morphed(skeleton, clips, morphs)` takes the `Morph` sets (a name and default weights) and refuses a channel that names a missing set or holds a different number of weights.
 - `Pose` is a local `Trs` per joint. `globals` chains them through the parents from the root; `palette` multiplies each by its inverse bind, which is what skinning takes.
 - `Animator` plays clips on a rig by tick, at the game's tick rate:
   - `play(clip, tick)` starts a clip; `crossfade(clip, seconds, tick)` starts it as a new mix that fades in over that many ticks, rounded, while the mixes before it keep playing underneath (at most `MAX_MIXES`, 4).
   - `blend(clip, weight, tick)` adds a layer to the newest mix: each layer mixes over the layers before it by its weight, only on the joints and properties its clip animates. `world.animate(id, "walk").blend("run", 0.3)` is 70% walk and 30% run wherever both move a joint.
   - `play_blend(&[(clip, weight)], tick)` shares the weights out by their sum, as `[object.animation] blend` says: `[(Walk, 0.7), (Run, 0.3)]` and `[(Walk, 7), (Run, 3)]` pose the same.
   - `set_speed` (0 or more; rebased so the clip time never jumps), `set_start` (seconds into the clip), `set_playback` and `set_weight` change a playing layer; `stop` returns the rest pose.
+  - `weights(tick)` (and `weights_into`) gives one weights list per morph set: the defaults, each layer mixing its sampled weights over them by its weight, and newer crossfading mixes over older ones by their progress, as poses blend. Nothing playing gives the defaults.
   - Clip time is `offset + ticks × speed / rate`. A loop wraps at the clip's duration, once holds the last pose, ping-pong runs to the end and back.
 - **Events.** `advance(tick)` returns every event whose mark play passed since the last call, in tick order: by mix, by layer, then by time. A loop fires on every pass; ping-pong on every pass in either direction; once only once; a clip started at `start` skips the marks before it. A stretch of skipped ticks still delivers each crossing, up to `MAX_REPEATS` (64) passes per mark.
 - **Determinism.** Only `+ - * /`, `floor`, `round` and `pfx_core::sim`'s `sqrtf`, `sinf`, `cosf` and `atan2f` touch floats: no std transcendentals and no fused multiply-add, which a source guard test checks. Ticks are integers and seconds are formed in f64 from them. A scripted run (plays, blends, crossfades, a speed change, once) hashes the palette bits of 400 ticks to one golden value, the same in debug, release and under Wine.
@@ -120,6 +124,8 @@ fn animated(&mut self, world: &mut World, events: &[AnimationEvent]) {
 | `stop_animation(id)` | the rest pose, or no sprite clip |
 | `animator(id)`, `animator_mut(id)`, `sprite(id)`, `sprite_mut(id)` | the players themselves |
 | `palette(id)`, `sprite_frame(id)` | the joint palette and the sprite frame at the current tick |
+| `morph_weights(id)` | the object's weights per morph set at the current tick, with the game's set weights over them |
+| `set_morph_weights(id, morph, weights)`, `clear_morph_weights(id, morph)` | hold the first weights of a morph set (named after its node) until cleared, over what the clips sample; more weights than targets or a weight that is not finite is refused |
 | `animation_events()` | the latest tick's `AnimationEvent { object, clip, event }`s, by object |
 | `animation_errors()` | this tick's refused calls (an unknown clip, a sprite asked to blend) |
 | `posed()` | a `Posed` snapshot (object matrices with camera-facing ones turned, palettes, sprite frames) for the tracer |
@@ -128,7 +134,7 @@ An unknown clip is never silent: `.done()` and `play_clip` return the `AnimError
 
 The tick runs `game.tick`, the physics step, `game.events`, then the animators and sprite players advance and `Game::animated` receives their events (only on ticks that have any), then the camera rigs. A clip a game starts in `tick` or `events` therefore plays from that tick, and its marks at 0 fire on it. The same scene, seed and inputs give the same poses and events, bit for bit, natively and under Wine (`the_same_ticks_give_the_same_poses_and_events_on_every_platform`, a golden hash over 240 frames of uneven length).
 
-`present` poses the frame from the world: each skinned draw gets its object's palette and the previous frame's as an `InstancePose`, node-animated parts their node's pose, and each sprite object's surface its frame's UV offset, scale and crop. Stop clears the poses and puts the staged surfaces back. Poses are taken at the latest tick, not interpolated between ticks.
+`present` poses the frame from the world: each skinned draw gets its object's palette and the previous frame's as an `InstancePose`, node-animated parts their node's pose, and each sprite object's surface its frame's UV offset, scale and crop. Each opaque instance of a morphed part comes back in `PlayFrame::weights` as a `MorphWeights { instance, current, previous }` (its object's weights for the part's morph set and the last presented tick's), the shape the renderer's weights take; a draw without an owning object gets none. Stop clears the poses and puts the staged surfaces back. Poses are taken at the latest tick, not interpolated between ticks.
 
 ## GPU skinning (`pfx-live`)
 
@@ -176,14 +182,18 @@ renderer.set_weights(&[InstanceWeights { instance: 0, current: &[0.8, 0.0], prev
 
 - `pfx-core` (`anim::tests`, `anim::tests_sprite`): linear, step, cubic-spline and slerp samples against hand-computed values; refusals; the rest palette; parent chains; blends, shared weights, crossfades, events in loops, once, ping-pong, skipped ticks and after a start offset; speed changes; CPU skinning; atlases, sprite steps, events and ping-pong; the golden hash; the source guard.
 - `pfx-load` (`rig_tests`): a generated skinned glb round-trips to the engine fixture's rig; joints listed children first are reordered and remapped; a scene mesh carries its rig and skin.
-- `pfx-play` (`tests::animation`): scene objects play their clips and fire events at fixed ticks; a sprite card steps its frames and a game switches its clip; a game's blends and crossfades match a reference animator; refused calls; the loader's refusals with their lines; the golden run natively and under Wine; the posed snapshot.
+- `pfx-load` (`morph_tests`): the generated head keeps its three targets (one sparse), default weights, hat child and weights channel, sampled linear and step; a cubic channel without tangents, a target shorter or longer than its primitive and too many default weights are refused; a scene head carries its morph set and an animator samples its weights.
+- `pfx-core` (`morph_weights_sample_cubic_tangents_by_span_and_a_wrong_width_is_refused`): cubic-spline weights against hand-computed values, a layer's weight over the defaults, and a set of the wrong width refused.
+- `pfx-play` (`tests::animation`): scene objects play their clips and fire events at fixed ticks; morph weights follow the clip per tick and a game sets and clears them; a sprite card steps its frames and a game switches its clip; a game's blends and crossfades match a reference animator; refused calls; the loader's refusals with their lines; the golden run natively and under Wine; the posed snapshot.
 - `pfx-live`, GPU: `tests/morphing.rs` (a generated sphere with two targets, one with normals, against its CPU-blended twin within 1/255 with its shadow and ids and no motion at unchanged weights; two instances of one mesh with their own weights; zero and missing weights byte for byte the plain mesh; motion vectors on a changing weight); `tests/skinning.rs` (the skinned fixture against its CPU-skinned twin within 1/255 with its shadow and ids, its bind pose without a pose, and motion vectors on a moving joint and none on a still one); `tests/posed_trace.rs` (the live silhouette against the traced snapshot in the same pose); `flat::sprite_tests` (the GPU against the CPU twin and its picks, and a sprite clip stepping a flat draw by tick).
+- `pfx-live`, GPU: `tests/skinning.rs` (the skinned fixture against its CPU-skinned twin within 1/255 with its shadow and ids, its bind pose without a pose, and motion vectors on a moving joint and none on a still one); `tests/posed_trace.rs` (the live silhouette against the traced snapshot in the same pose); `flat::sprite_tests` (the GPU against the CPU twin and its picks, and a sprite clip stepping a flat draw by tick).
 
-The fixtures are generated: `pfx_core::anim::fixture` (a chain of bones, a skinned square column and four clips, one per interpolation), `pfx_load::fixture::skinned_column` (that rig and column written as a glb with its skin and animations) and `pfx_load::fixture::atlas_png` (a grid of flat cells).
+The fixtures are generated: `pfx_core::anim::fixture` (a chain of bones, a skinned square column and four clips, one per interpolation), `pfx_load::fixture::skinned_column` (that rig and column written as a glb with its skin and animations) `pfx_load::fixture::atlas_png` (a grid of flat cells) and `pfx_load::fixture::head` (a 561-vertex UV-sphere head with jaw open, smile and brow raise targets, the brow one sparse, default weights, a `talk` weights animation and a `hat` child node), which `cargo run -p pfx-load --features fixture --example head_glb` writes to `crates/load/tests/data/head.glb`.
 
 ```
 cargo test -p pfx-core --lib anim
 cargo test -p pfx-load --lib rig_tests
+cargo test -p pfx-load --lib morph_tests
 cargo test -p pfx-play --lib animation
 cargo test -p pfx-live --test skinning --test morphing --test posed_trace --lib --no-run
 pgpu run --class clip --as pfx -- cargo test -p pfx-live --test skinning --test morphing --test posed_trace -- --ignored --test-threads=1
@@ -192,4 +202,4 @@ pgpu run --class clip --as pfx -- cargo test -p pfx-live --lib flat::sprite_test
 
 ## Not covered
 
-Morph target tangent deltas, root motion, inverse kinematics, additive layers and joint masks, more than four influences per vertex, more than one skin per scene mesh, and interpolating poses between ticks.
+Morph target tangent deltas, node `weights` overrides, quantized (integer) morph deltas, root motion, inverse kinematics, additive layers and joint masks, more than four influences per vertex, more than one skin per scene mesh, and interpolating poses between ticks.
