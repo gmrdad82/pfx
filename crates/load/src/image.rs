@@ -1,3 +1,5 @@
+const MAX_EDGE: u32 = 16384;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ColorSpace {
     Srgb,
@@ -27,6 +29,11 @@ impl Image {
         let (width, height) = reader.info().size();
         if width == 0 || height == 0 {
             return Err("png: the image is empty".into());
+        }
+        if width > MAX_EDGE || height > MAX_EDGE {
+            return Err(format!(
+                "png: the image is {width} by {height}, the limit is {MAX_EDGE} a side"
+            ));
         }
         let size = reader
             .output_buffer_size()
@@ -239,6 +246,32 @@ mod tests {
         let decoded = Image::png(&encode(&srgb)).unwrap();
         assert_eq!(decoded.space, ColorSpace::Srgb);
         assert_eq!(decoded.pixels, sixteen.pixels);
+    }
+
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for &byte in bytes {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    #[test]
+    fn a_header_past_the_edge_limit_is_refused_before_allocating() {
+        let mut bytes = include_bytes!("../tests/data/swatch8.png").to_vec();
+        bytes[16..20].copy_from_slice(&65535u32.to_be_bytes());
+        bytes[20..24].copy_from_slice(&65535u32.to_be_bytes());
+        let crc = crc32(&bytes[12..29]);
+        bytes[29..33].copy_from_slice(&crc.to_be_bytes());
+        let error = Image::png(&bytes).unwrap_err();
+        assert!(error.contains("the limit is 16384 a side"), "{error}");
     }
 
     #[test]

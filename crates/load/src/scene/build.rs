@@ -500,7 +500,7 @@ fn build_mesh(
     let buffers: RefCell<Vec<(PathBuf, Vec<u8>)>> = RefCell::new(Vec::new());
     let directory = file.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
     let parsed = Mesh::parse_with(&bytes, |uri| {
-        let path = directory.join(uri);
+        let path = directory.join(crate::source::normalize(uri)?);
         let data =
             std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         buffers.borrow_mut().push((path, data.clone()));

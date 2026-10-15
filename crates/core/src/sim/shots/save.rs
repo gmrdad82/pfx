@@ -4,6 +4,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::pool::{Shot, Shots, Slot};
 
+const MAX_SAVED: usize = 1 << 20;
+
 #[derive(Serialize, Deserialize)]
 struct Live<const N: usize> {
     index: u32,
@@ -81,8 +83,14 @@ impl<'de, const N: usize> Deserialize<'de> for Shots<N> {
 
 fn rebuild<const N: usize>(saved: Saved<N>) -> Result<Shots<N>, &'static str> {
     let capacity = saved.capacity as usize;
+    if capacity > MAX_SAVED {
+        return Err("saved shots claim more than 1048576 slots, the limit");
+    }
     if saved.generations.len() > capacity || saved.fresh > saved.capacity {
         return Err("saved shots outgrow their capacity");
+    }
+    if saved.fresh as usize + saved.free.len() + saved.live.len() != capacity {
+        return Err("saved shots miss a slot");
     }
     let mut seen = vec![false; capacity];
     let mut mark = |index: u32| -> Result<(), &'static str> {

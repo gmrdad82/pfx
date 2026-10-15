@@ -303,6 +303,25 @@ fn nodes(gltf: &gltf::Gltf) -> Result<Vec<Node>, String> {
             node.parent = Some(index as u32);
         }
     }
+    let mut rooted = vec![false; nodes.len()];
+    let mut chain = Vec::new();
+    for start in 0..nodes.len() {
+        let mut at = start;
+        while !rooted[at] {
+            if chain.len() > nodes.len() {
+                return Err("mesh: the node tree has a cycle".into());
+            }
+            chain.push(at);
+            match nodes[at].parent {
+                Some(parent) => at = parent as usize,
+                None => break,
+            }
+        }
+        for &done in &chain {
+            rooted[done] = true;
+        }
+        chain.clear();
+    }
     Ok(nodes)
 }
 
@@ -693,6 +712,23 @@ mod tests {
         assert!(mesh.roots.is_empty());
         assert!(mesh.scenes.is_empty());
         assert!(mesh.all_roots().is_empty());
+    }
+
+    #[test]
+    fn a_node_cycle_is_refused() {
+        for nodes in [
+            "{\"name\":\"a\",\"children\":[1]},{\"name\":\"b\",\"children\":[0]}",
+            "{\"name\":\"a\",\"children\":[0]}",
+            "{\"name\":\"r\",\"children\":[1]},{\"name\":\"a\"},{\"name\":\"b\",\"children\":[3]},{\"name\":\"c\",\"children\":[2]}",
+        ] {
+            let json = format!(
+                "{{\"asset\":{{\"version\":\"2.0\"}},\"nodes\":[{nodes}],\"scenes\":[{{\"nodes\":[0]}}]}}"
+            );
+            assert_eq!(
+                Mesh::parse(json.as_bytes()).unwrap_err(),
+                "mesh: the node tree has a cycle"
+            );
+        }
     }
 
     const EXTRAS_NODE_A: &str = "\"extras\":{\"mover\":true,\"kind\":\"door\",\"speed\":2.5,\"axis\":[0,1,0],\"limits\":{\"min\":-1,\"max\":1.5,\"tags\":[\"a\",\"b\"]},\"none\":null}";

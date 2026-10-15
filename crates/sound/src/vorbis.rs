@@ -41,32 +41,49 @@ fn unit(sample: i16) -> f32 {
     f32::from(sample) / 32768.0
 }
 
+const MAX_CHANNELS: u16 = 8;
+const MAX_SAMPLES: usize = 48_000 * 2 * 600;
+
 impl Clip {
     pub fn from_vorbis(bytes: &[u8]) -> Result<Clip, String> {
-        let mut reader =
-            OggStreamReader::new(Cursor::new(bytes)).map_err(|e| format!("vorbis: {e}"))?;
-        let rate = reader.ident_hdr.audio_sample_rate;
-        let channels = u16::from(reader.ident_hdr.audio_channels);
-        if rate == 0 || channels == 0 {
-            return Err("vorbis: no audio".into());
-        }
-        let mut samples = Vec::new();
-        while let Some(packet) = reader
-            .read_dec_packet_itl()
-            .map_err(|e| format!("vorbis: {e}"))?
-        {
-            samples.extend(packet.into_iter().map(unit));
-        }
-        if let Some(end) = reader.get_last_absgp() {
-            let keep = usize::try_from(end).unwrap_or(usize::MAX);
-            samples.truncate(keep.saturating_mul(usize::from(channels)));
-        }
-        Ok(Clip {
-            rate,
-            channels,
-            samples,
-        })
+        decode_clip(bytes, MAX_SAMPLES)
     }
+}
+
+fn decode_clip(bytes: &[u8], max_samples: usize) -> Result<Clip, String> {
+    let mut reader =
+        OggStreamReader::new(Cursor::new(bytes)).map_err(|e| format!("vorbis: {e}"))?;
+    let rate = reader.ident_hdr.audio_sample_rate;
+    let channels = u16::from(reader.ident_hdr.audio_channels);
+    if rate == 0 || channels == 0 {
+        return Err("vorbis: no audio".into());
+    }
+    if channels > MAX_CHANNELS {
+        return Err(format!(
+            "vorbis: the clip has {channels} channels, the limit is {MAX_CHANNELS}"
+        ));
+    }
+    let mut samples = Vec::new();
+    while let Some(packet) = reader
+        .read_dec_packet_itl()
+        .map_err(|e| format!("vorbis: {e}"))?
+    {
+        if samples.len() + packet.len() > max_samples {
+            return Err(format!(
+                "vorbis: the clip holds more than {max_samples} samples, the limit for a clip; stream it instead"
+            ));
+        }
+        samples.extend(packet.into_iter().map(unit));
+    }
+    if let Some(end) = reader.get_last_absgp() {
+        let keep = usize::try_from(end).unwrap_or(usize::MAX);
+        samples.truncate(keep.saturating_mul(usize::from(channels)));
+    }
+    Ok(Clip {
+        rate,
+        channels,
+        samples,
+    })
 }
 
 struct Pump {
@@ -311,5 +328,20 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(weak.strong_count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod clip_tests {
+    use super::*;
+
+    #[test]
+    fn a_clip_past_the_channel_or_sample_limit_is_refused() {
+        let nine = Clip::from_vorbis(include_bytes!("../tests/fixtures/nine.ogg")).unwrap_err();
+        assert!(nine.contains("9 channels, the limit is 8"), "{nine}");
+        let sine = include_bytes!("../tests/fixtures/sine.ogg").as_slice();
+        let long = decode_clip(sine, 10_000).unwrap_err();
+        assert!(long.contains("more than 10000 samples"), "{long}");
+        assert!(decode_clip(sine, MAX_SAMPLES).is_ok());
     }
 }
