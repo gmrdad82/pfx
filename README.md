@@ -8,8 +8,8 @@ pfx is a game and render engine in Rust, part of [PITO MD](https://pitomd.com): 
 
 | | Measured |
 |---|---|
-| Live renderer, 4K, neutral room | **4.4 ms** GPU a frame (p50), 4.8 ms p99, 0 dropped frames in 1,200 |
-| 2D pass, 4K, 2,000 shots + 20,301 particles | **0.39 ms** GPU a frame |
+| Live renderer, 4K, neutral room | **4.4 ms** GPU a frame (p50), 4.4 ms p99, 0 dropped frames in 1,200 |
+| 2D pass, 4K, 2,000 shots + 20,301 particles | **0.36 ms** GPU a frame |
 | Path tracer, desk scene, 4K final, denoised | **11.2 s**, down from 40.4 s in v0.26.0 |
 | Denoiser, 4K | **287 ms** on the GPU |
 | Empty game, stripped release binary | **34.7 MB** against Bevy's 106.6 MB |
@@ -66,11 +66,11 @@ pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v1.0.0" }
 
 <p align="center"><img src="docs/images/live.gif" width="800" alt="The live renderer drawing the engine's neutral desk scene while the camera sways around it: a wooden desk with a lamp, a colour chart, a chrome ball, a red box and a white card, with shadows, reflections in the ball and steam rising."></p>
 
-The live renderer keeps 60 fps at 4K with shadows, baked light, TAA, text drawn from vector outlines, effects and dynamic resolution ([docs/live-renderer.md](docs/live-renderer.md)). On the neutral room at 3840x2160 a frame costs 4.4 ms of GPU time at the median and 4.8 ms at p99, about a quarter of the 16.7 ms a 60 fps frame allows, and the CPU's simulate-and-submit takes 1.8 ms at the median. It draws frames on demand: when only the camera drifts a desk frame costs 0.50 ms, and an idle scene costs nothing.
+The live renderer keeps 60 fps at 4K with shadows, baked light, TAA, text drawn from vector outlines, effects and dynamic resolution ([docs/live-renderer.md](docs/live-renderer.md)). On the neutral room at 3840x2160 a frame costs 4.4 ms of GPU time at the median and at p99, about a quarter of the 16.7 ms a 60 fps frame allows, and the CPU's simulate-and-submit takes 0.85 ms at the median and 1.7 ms at p99. It draws frames on demand: when only the camera drifts a desk frame costs 0.50 ms, and an idle scene costs nothing.
 
-<p align="center"><img src="docs/images/live-frames.png" width="540" alt="Bar chart, live frame time at 4K on the neutral room, lower is better: GPU p50 4.4 ms, p99 4.8 ms; CPU p50 1.8 ms, p99 10.5 ms; the 60 fps budget 16.7 ms."></p>
+<p align="center"><img src="docs/images/live-frames.png" width="540" alt="Bar chart, live frame time at 4K on the neutral room, lower is better: GPU p50 4.4 ms, p99 4.4 ms; CPU p50 0.9 ms, p99 1.7 ms; the 60 fps budget 16.7 ms."></p>
 
-The flat 2D pass draws sprites, text and particles for 2D games and overlays ([docs/flat.md](docs/flat.md)). At 4K, 2,000 shots and 20,301 particles cost 0.39 ms of GPU time a frame.
+The flat 2D pass draws sprites, text and particles for 2D games and overlays ([docs/flat.md](docs/flat.md)). At 4K, 2,000 shots and 20,301 particles cost 0.36 ms of GPU time a frame.
 
 <p align="center"><img src="docs/images/swarm.png" width="800" alt="The flat 2D pass on a dark background: two long diagonal streams of orange, red and pale blue particles, about twenty thousand in all."></p>
 
@@ -118,17 +118,17 @@ That pfx game carries the editor; built without it (`--no-default-features`, wha
 
 ## The numbers
 
-Measured once on 2026-10-14 at commit 637c352 (v0.32.0), on an AMD Radeon RX 9060 XT with an AMD Ryzen 9 9950X (32 threads) under Linux, each GPU run through the machine's GPU queue, which other jobs shared:
+Measured on an AMD Radeon RX 9060 XT with an AMD Ryzen 9 9950X (32 threads) under Linux, each GPU run through the machine's GPU queue, which other jobs shared. The live and 2D numbers were measured on 2026-10-15 as an A/B against the commit before them (9e7514a): both release builds alternated run by run, five runs each, at a load average of 13 to 35, and each number is the median of the five; the rest were measured once on 2026-10-14 at commit 637c352 (v0.32.0):
 
-- **Live, 4K:** `pfx bench <room>.scene.toml --seconds 20 --size 3840x2160` on the neutral bench room (`crates/load/tests/scenes`, with a falling ball and a turning pillar), 1,200 frames. The CPU p99 (10.5 ms) is skewed: the queue held the job for part of the run.
+- **Live, 4K:** `pfx bench crates/load/tests/scenes/room.scene.toml --seconds 20 --size 3840x2160`, the neutral room, 1,200 frames a run. The same frame before: GPU 4.39 ms p50 and 4.41 ms p99, CPU 0.86 ms p50 and 1.84 ms p99; the room is GPU-bound with few instances, so the CPU savings in the frame's uploads and bind groups barely show here.
 - **Frames on demand:** `crates/live/examples/frames.rs`, the desk at 4K: every frame 4.9 ms GPU at the median, a drifting camera 0.50 ms, idle 0.
-- **2D pass:** the swarm test in `crates/live/tests/flat/`, 2,000 shots and 20,301 particles at 4K, GPU p50 0.39 ms, p99 0.61 ms.
+- **2D pass:** the swarm test `a_swarm_of_shots_and_particles_fits_a_120_hz_frame_on_the_gpu_at_4k` in `crates/live/src/flat/effects/`, 2,000 shots and 20,301 particles at 4K: GPU p50 0.36 ms and p99 0.37 ms (0.42 and 0.43 before, the pick pass now drawn only when a pick waits), the `render_flat` call 3.10 ms on the CPU (3.41 before), of which `prepare` 2.46 ms.
 - **Path tracer:** `crates/denoise/examples/rt_bench.rs time desk final|draft 3840 2160`, the desk scene in `crates/bake/tests/plates/`, adaptive 16-64 samples a pixel for a final and 6-12 for a draft, denoise included. The final's 11.2 s is the queue's run time: the bench's own clock also counted 2 min 4 s it waited for the GPU. v0.26.0 and v0.27.0 were measured with the same bench at their tags, with the PCG sampler at 32-128 and 8-16 samples, which Sobol matches in noise since v0.28.0.
 - **Denoiser:** `crates/denoise/examples/compare.rs bench 3840 2160`, median texture to texture (623 ms with upload and readback, 673 ms on a first call that builds the pipelines).
 - **Game systems:** the bench tests in pfx-core and pfx-sound (`cargo test --release -p pfx-core --features serde --lib -- --ignored bench_`, `cargo test --release -p pfx-sound --test bench -- --ignored`), one thread. A sound tick is 800 frames at 48 kHz, with cubic resampling, the default for short sounds.
 - **Size:** pfx v0.32.0's scaffold and Bevy 0.20.0 with `DefaultPlugins`, cargo's default release profile, 4 build jobs, one cold build each in turn; binaries measured after `strip`; dependency crates counted with `cargo tree -e normal`, the game itself excluded. Lines of Rust counted with `wc -l` over `crates/*/src` and `src`.
 
-Nothing here was run twice for a better number. Hardware ray queries on Windows are built but untested on NVIDIA, Intel and AMD Windows machines.
+The live A/B ran twice, because its first CPU p99 (1.65 ms before, 1.83 ms after) was within the noise; the numbers above are the second run's. Nothing else here was run twice. Hardware ray queries on Windows are built but untested on NVIDIA, Intel and AMD Windows machines.
 
 ## The crates
 
