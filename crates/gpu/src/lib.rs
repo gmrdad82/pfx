@@ -471,6 +471,11 @@ async fn open(
     Ok(gpu)
 }
 
+pub fn surface_size(width: u32, height: u32, max: u32) -> (u32, u32) {
+    let max = max.max(1);
+    (width.clamp(1, max), height.clamp(1, max))
+}
+
 pub fn format_bytes_per_pixel(format: wgpu::TextureFormat) -> Option<u32> {
     match format {
         wgpu::TextureFormat::Rgba8UnormSrgb => Some(4),
@@ -588,13 +593,18 @@ impl Gpu {
             .or_else(|| caps.alpha_modes.first().copied())
             .ok_or_else(|| refuse("surface has no supported alpha modes"))?;
         let size = window.inner_size();
+        let (width, height) = surface_size(
+            size.width,
+            size.height,
+            gpu.device.limits().max_texture_dimension_2d,
+        );
         let present = window::choose_present(preference, &caps.present_modes);
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
-            width: size.width.max(1),
-            height: size.height.max(1),
+            width,
+            height,
             present_mode: present.selected,
             desired_maximum_frame_latency: present.desired_maximum_frame_latency,
             alpha_mode,
@@ -788,7 +798,12 @@ impl Gpu {
 #[cfg(feature = "window")]
 impl WindowTarget {
     pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) {
-        if width == 0 || height == 0 || (width, height) == (self.config.width, self.config.height) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let (width, height) =
+            surface_size(width, height, gpu.device.limits().max_texture_dimension_2d);
+        if (width, height) == (self.config.width, self.config.height) {
             return;
         }
         self.config.width = width;
@@ -1031,6 +1046,14 @@ impl GpuProfiler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_surface_larger_than_the_device_allows_is_clamped_per_side() {
+        assert_eq!(surface_size(40_000, 1080, 16_384), (16_384, 1080));
+        assert_eq!(surface_size(1920, 40_000, 8192), (1920, 8192));
+        assert_eq!(surface_size(0, 0, 8192), (1, 1));
+        assert_eq!(surface_size(40_000, 40_000, 0), (1, 1));
+    }
 
     #[test]
     fn a_headless_render_is_any_value_but_empty_or_zero() {
