@@ -524,6 +524,13 @@ fn cube_texture(device: &wgpu::Device, lighting: &SkyLighting) -> wgpu::Texture 
     })
 }
 
+fn cube_view(cube: &wgpu::Texture) -> wgpu::TextureView {
+    cube.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::Cube),
+        ..Default::default()
+    })
+}
+
 fn sky_cube(device: &wgpu::Device, queue: &wgpu::Queue, lighting: &SkyLighting) -> wgpu::Texture {
     let texture = cube_texture(device, lighting);
     for (mip, texels) in lighting.cube.iter().enumerate() {
@@ -689,6 +696,7 @@ pub struct SkyPass {
     hdr: wgpu::Texture,
     sampler: wgpu::Sampler,
     cube: wgpu::Texture,
+    cube_view: wgpu::TextureView,
     device: wgpu::Device,
     steps: SkySteps,
     pub lighting: SkyLighting,
@@ -799,6 +807,7 @@ impl SkyPass {
             bind,
             hdr,
             sampler,
+            cube_view: cube_view(&cube),
             cube,
             device: device.clone(),
             steps,
@@ -859,6 +868,7 @@ impl SkyPass {
         let settled = self.steps.take()?;
         let (hdr, cube) = settled.textures?;
         self.hdr = hdr;
+        self.cube_view = cube_view(&cube);
         self.cube = cube;
         self.lighting = settled.lighting;
         self.bind = Self::bind(
@@ -958,10 +968,7 @@ impl SkyPass {
     }
 
     pub fn cube_view(&self) -> wgpu::TextureView {
-        self.cube.create_view(&wgpu::TextureViewDescriptor {
-            dimension: Some(wgpu::TextureViewDimension::Cube),
-            ..Default::default()
-        })
+        self.cube_view.clone()
     }
 
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {

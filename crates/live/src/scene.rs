@@ -694,7 +694,37 @@ impl Staged {
         if let Some(posing) = &self.posing {
             let models = self.draws.models(&posing.posed(&self.camera, time));
             self.previous = std::mem::replace(&mut self.models, models);
-            self.refresh();
+            self.repose();
+        }
+    }
+
+    fn repose(&mut self) {
+        let mut glass = self.glass.iter_mut();
+        for (index, slot) in self.slots.iter().enumerate() {
+            let change = if self.overrides.is_empty() {
+                Override::default()
+            } else {
+                self.overrides
+                    .get(&self.draws.items[index].object)
+                    .copied()
+                    .unwrap_or_default()
+            };
+            match *slot {
+                Slot::Opaque(at) => {
+                    let instance = &mut self.instances[at];
+                    instance.model = change.moved(self.models[index]);
+                    instance.previous_model = change.moved(self.previous[index]);
+                }
+                Slot::Plate => {}
+                Slot::Glass(_) => {
+                    if change.hidden {
+                        continue;
+                    }
+                    if let Some(surface) = glass.next() {
+                        surface.model = change.moved(self.models[index]);
+                    }
+                }
+            }
         }
     }
 

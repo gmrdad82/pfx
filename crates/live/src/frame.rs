@@ -854,6 +854,21 @@ impl Pipelines {
 
     fn ensure_opaque(&mut self, device: &wgpu::Device, key: OpaqueKey) {
         self.collect();
+        self.ensure_collected(device, key);
+    }
+
+    fn ensure_opaques(&mut self, device: &wgpu::Device, keys: impl IntoIterator<Item = OpaqueKey>) {
+        self.collect();
+        let mut done: Vec<OpaqueKey> = Vec::new();
+        for key in keys {
+            if !done.contains(&key) {
+                done.push(key);
+                self.ensure_collected(device, key);
+            }
+        }
+    }
+
+    fn ensure_collected(&mut self, device: &wgpu::Device, key: OpaqueKey) {
         while !self.opaque.contains_key(&key) && self.pending.contains(&key) {
             match self.arrivals.recv() {
                 Ok(arrival) => self.arrive(arrival),
@@ -903,6 +918,89 @@ impl Pipelines {
     }
 }
 
+#[derive(PartialEq)]
+enum Bound {
+    View(wgpu::TextureView),
+    Sampler(wgpu::Sampler),
+    Buffer(wgpu::Buffer, u64, Option<wgpu::BufferSize>),
+}
+
+impl Bound {
+    fn of(resource: &wgpu::BindingResource<'_>) -> Option<Self> {
+        match resource {
+            wgpu::BindingResource::TextureView(view) => Some(Self::View((*view).clone())),
+            wgpu::BindingResource::Sampler(sampler) => Some(Self::Sampler((*sampler).clone())),
+            wgpu::BindingResource::Buffer(binding) => Some(Self::Buffer(
+                binding.buffer.clone(),
+                binding.offset,
+                binding.size,
+            )),
+            _ => None,
+        }
+    }
+
+    fn is(&self, resource: &wgpu::BindingResource<'_>) -> bool {
+        match (self, resource) {
+            (Self::View(kept), wgpu::BindingResource::TextureView(view)) => kept == *view,
+            (Self::Sampler(kept), wgpu::BindingResource::Sampler(sampler)) => kept == *sampler,
+            (Self::Buffer(kept, offset, size), wgpu::BindingResource::Buffer(binding)) => {
+                kept == binding.buffer && *offset == binding.offset && *size == binding.size
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct Bindings(Vec<(u32, Option<Bound>)>);
+
+impl Bindings {
+    pub(crate) fn of(entries: &[wgpu::BindGroupEntry<'_>]) -> Self {
+        Self(
+            entries
+                .iter()
+                .map(|entry| (entry.binding, Bound::of(&entry.resource)))
+                .collect(),
+        )
+    }
+
+    pub(crate) fn same(&self, entries: &[wgpu::BindGroupEntry<'_>]) -> bool {
+        self.0.len() == entries.len()
+            && self.0.iter().zip(entries).all(|((binding, kept), entry)| {
+                *binding == entry.binding
+                    && kept.as_ref().is_some_and(|kept| kept.is(&entry.resource))
+            })
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct CachedGroup {
+    bound: Bindings,
+    group: Option<wgpu::BindGroup>,
+}
+
+impl CachedGroup {
+    pub(crate) fn get(
+        &mut self,
+        device: &wgpu::Device,
+        label: &str,
+        layout: &wgpu::BindGroupLayout,
+        entries: &[wgpu::BindGroupEntry<'_>],
+    ) -> &wgpu::BindGroup {
+        if !self.bound.same(entries) {
+            self.group = None;
+        }
+        self.group.get_or_insert_with(|| {
+            self.bound = Bindings::of(entries);
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some(label),
+                layout,
+                entries,
+            })
+        })
+    }
+}
+
 struct Fallbacks {
     black: wgpu::TextureView,
     local_probes: wgpu::TextureView,
@@ -930,6 +1028,7 @@ pub struct Frame {
     scene_layout: wgpu::BindGroupLayout,
     scene_group: wgpu::BindGroup,
     shadow_group: wgpu::BindGroup,
+    shadow_bound: Bindings,
     shadow_layout: wgpu::BindGroupLayout,
     shadow_uniform: wgpu::Buffer,
     _shadow_atlas: wgpu::Texture,
@@ -941,7 +1040,7 @@ pub struct Frame {
     cascade_align: u32,
     lights: Lights,
     lighting_layout: wgpu::BindGroupLayout,
-    lighting_group: Option<wgpu::BindGroup>,
+    lighting_group: CachedGroup,
     sky_light: wgpu::Buffer,
     ambient: Ambient,
     ambient_light: wgpu::Buffer,
@@ -966,12 +1065,16 @@ pub struct Frame {
     canopy_gobo: Gobo,
     shadow_sample: [u8; SAMPLE_UNIFORM_BYTES],
     instance_features: Vec<OpaqueFeatures>,
+    instance_scratch: Vec<GpuInstance>,
+    uploaded_instances: Vec<GpuInstance>,
+    uploaded_materials: Vec<PackedMaterial>,
+    uploaded_map_materials: Vec<GpuMapMaterial>,
     reflections_planned: bool,
     opaque_on: Cell<OpaqueFeatures>,
     opaque_off: Cell<OpaqueFeatures>,
     opaque_drawn: Vec<OpaqueFeatures>,
     jitter: [f32; 2],
-    profiler: GpuProfiler,
+    profiler: Option<GpuProfiler>,
 }
 
 pub fn multiply(a: Matrix, b: Matrix) -> Matrix {
@@ -1015,6 +1118,22 @@ pub fn jitter_matrix(jitter: [f32; 2]) -> Matrix {
     shift[3][0] = jitter[0];
     shift[3][1] = jitter[1];
     shift
+}
+
+fn write_changed<T: Pod>(queue: &wgpu::Queue, buffer: &wgpu::Buffer, kept: &[T], fresh: &[T]) {
+    let changed = |index: &usize| {
+        kept.get(*index)
+            .is_none_or(|old| bytemuck::bytes_of(old) != bytemuck::bytes_of(&fresh[*index]))
+    };
+    let Some(first) = (0..fresh.len()).find(changed) else {
+        return;
+    };
+    let last = (first..fresh.len()).rfind(changed).unwrap_or(first);
+    queue.write_buffer(
+        buffer,
+        (first * std::mem::size_of::<T>()) as u64,
+        bytemuck::cast_slice(&fresh[first..=last]),
+    );
 }
 
 fn same_bits(a: Matrix, b: Matrix) -> bool {
@@ -1220,13 +1339,9 @@ pub fn static_key(instances: &[Instance], batches: &[Batch], surfaces: &[Instanc
     {
         batch.mesh.hash(&mut hasher);
         for index in batch.range.start as usize..batch.range.end as usize {
-            for value in instances[index].model.iter().flatten() {
-                value.to_bits().hash(&mut hasher);
-            }
+            hasher.write(bytemuck::bytes_of(&instances[index].model));
             if batch.clipped {
-                for value in surfaces[index].clip.iter().flatten() {
-                    value.to_bits().hash(&mut hasher);
-                }
+                hasher.write(bytemuck::bytes_of(&surfaces[index].clip));
             }
         }
     }
@@ -1857,15 +1972,15 @@ impl Frame {
             ..Default::default()
         });
         let lights = Lights::new(device);
-        let shadow_group = Self::make_shadow_group(
-            device,
-            &shadow_layout,
+        let shadow_entries = Self::shadow_bindings(
             &shadow_uniform,
             &shadow_view,
             &shadow_sampler,
             lights.empty_transmission(),
             &lights,
         );
+        let shadow_group = Self::make_shadow_group(device, &shadow_layout, &shadow_entries);
+        let shadow_bound = Bindings::of(&shadow_entries);
         let cascade_layout = layout(device, "live cascade", &cascade_entries());
         let cascade_align = device.limits().min_uniform_buffer_offset_alignment.max(256);
         let cascade_uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1979,6 +2094,7 @@ impl Frame {
             scene_layout,
             scene_group,
             shadow_group,
+            shadow_bound,
             shadow_layout,
             shadow_uniform,
             _shadow_atlas: shadow_atlas,
@@ -1990,7 +2106,7 @@ impl Frame {
             cascade_align,
             lights,
             lighting_layout,
-            lighting_group: None,
+            lighting_group: CachedGroup::default(),
             sky_light,
             ambient: Ambient::Sky,
             ambient_light,
@@ -2015,12 +2131,16 @@ impl Frame {
             canopy_gobo: Gobo::default(),
             shadow_sample: fallback_sample,
             instance_features: Vec::new(),
+            instance_scratch: Vec::new(),
+            uploaded_instances: Vec::new(),
+            uploaded_materials: Vec::new(),
+            uploaded_map_materials: Vec::new(),
             reflections_planned: false,
             opaque_on: Cell::new(OpaqueFeatures::NONE),
             opaque_off: Cell::new(OpaqueFeatures::NONE),
             opaque_drawn: Vec::new(),
             jitter: [0.0; 2],
-            profiler,
+            profiler: Some(profiler),
             gpu,
         })
     }
@@ -2175,49 +2295,59 @@ impl Frame {
         );
     }
 
+    fn shadow_bindings<'a>(
+        uniform: &'a wgpu::Buffer,
+        view: &'a wgpu::TextureView,
+        sampler: &'a wgpu::Sampler,
+        transmission: &'a wgpu::TextureView,
+        lights: &'a Lights,
+    ) -> [wgpu::BindGroupEntry<'a>; 7] {
+        [
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniform.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(transmission),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: lights.uniform().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(lights.faces_view()),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::Sampler(lights.sampler()),
+            },
+        ]
+    }
+
     fn make_shadow_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        uniform: &wgpu::Buffer,
-        view: &wgpu::TextureView,
-        sampler: &wgpu::Sampler,
-        transmission: &wgpu::TextureView,
-        lights: &Lights,
+        entries: &[wgpu::BindGroupEntry<'_>],
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("live shadow sample"),
             layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::TextureView(transmission),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 5,
-                    resource: lights.uniform().as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: wgpu::BindingResource::TextureView(lights.faces_view()),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 7,
-                    resource: wgpu::BindingResource::Sampler(lights.sampler()),
-                },
-            ],
+            entries,
         })
+    }
+
+    pub(crate) fn shadow_uniform(&self) -> &wgpu::Buffer {
+        &self.shadow_uniform
     }
 
     pub fn set_shadows(&mut self, shadows: &Shadows, fit: &Fit) {
@@ -2225,9 +2355,7 @@ impl Frame {
         self.gpu
             .queue
             .write_buffer(&self.shadow_uniform, 0, &self.shadow_sample);
-        self.shadow_group = Self::make_shadow_group(
-            &self.gpu.device,
-            &self.shadow_layout,
+        let entries = Self::shadow_bindings(
             &self.shadow_uniform,
             shadows.atlas_view(),
             shadows.sampler(),
@@ -2236,6 +2364,11 @@ impl Frame {
                 .unwrap_or(self.lights.empty_transmission()),
             &self.lights,
         );
+        if !self.shadow_bound.same(&entries) {
+            self.shadow_group =
+                Self::make_shadow_group(&self.gpu.device, &self.shadow_layout, &entries);
+            self.shadow_bound = Bindings::of(&entries);
+        }
     }
 
     pub fn set_probe_corner_floor(&self, floor: f32) -> Result<(), String> {
@@ -2402,15 +2535,18 @@ impl Frame {
     }
 
     fn set_unshadowed(&mut self) {
-        self.shadow_group = Self::make_shadow_group(
-            &self.gpu.device,
-            &self.shadow_layout,
+        let entries = Self::shadow_bindings(
             &self.shadow_uniform,
             &self._shadow_view,
             &self._shadow_sampler,
             self.lights.empty_transmission(),
             &self.lights,
         );
+        if !self.shadow_bound.same(&entries) {
+            self.shadow_group =
+                Self::make_shadow_group(&self.gpu.device, &self.shadow_layout, &entries);
+            self.shadow_bound = Bindings::of(&entries);
+        }
     }
 
     pub fn set_lights(&mut self, lights: &[LocalLight]) -> Result<(), String> {
@@ -2691,7 +2827,7 @@ impl Frame {
         Some(crate::text::LitBindings {
             scene: &self.scene_group,
             shadow: &self.shadow_group,
-            lighting: self.lighting_group.as_ref()?,
+            lighting: self.lighting_group.group.as_ref()?,
             deformers: self.deformers.buffer(),
             plan: self.deformers.plan_buffer(),
         })
@@ -3113,13 +3249,13 @@ impl Frame {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("live frame"),
             });
-        let mut profiler = std::mem::replace(
-            &mut self.profiler,
-            GpuProfiler::new(&self.gpu.device, &self.gpu.queue),
-        );
+        let mut profiler = self
+            .profiler
+            .take()
+            .unwrap_or_else(|| GpuProfiler::new(&self.gpu.device, &self.gpu.queue));
         let result = self.encode(scene, &mut encoder, None, Some(&mut profiler));
         if let Err(error) = result {
-            self.profiler = profiler;
+            self.profiler = Some(profiler);
             return Err(error);
         }
         let slot = profiler.finish(&mut encoder);
@@ -3127,7 +3263,7 @@ impl Frame {
         if let Some(slot) = slot {
             profiler.submitted(slot);
         }
-        self.profiler = profiler;
+        self.profiler = Some(profiler);
         Ok(&self.targets)
     }
 
@@ -3169,6 +3305,18 @@ impl Frame {
         poses: &PoseLayout,
     ) -> Result<Vec<GpuInstance>, String> {
         let mut packed_instances = Vec::with_capacity(scene.instances.len());
+        self.pack_instances_into(scene, surfaces, poses, &mut packed_instances)?;
+        Ok(packed_instances)
+    }
+
+    fn pack_instances_into(
+        &self,
+        scene: &Scene<'_>,
+        surfaces: &[InstanceSurface],
+        poses: &PoseLayout,
+        packed_instances: &mut Vec<GpuInstance>,
+    ) -> Result<(), String> {
+        packed_instances.clear();
         let caustic = self.caustic.borrow();
         for (index, (instance, surface)) in scene.instances.iter().zip(surfaces).enumerate() {
             let Some(mesh) = live_mesh(&self.meshes, instance.mesh) else {
@@ -3241,7 +3389,7 @@ impl Frame {
                 skin,
             });
         }
-        Ok(packed_instances)
+        Ok(())
     }
 
     fn pack_map_materials(&self, scene: &Scene<'_>) -> Vec<GpuMapMaterial> {
@@ -3277,7 +3425,13 @@ impl Frame {
             &self.gpu.queue,
             Caustic::rows(self.caustic.borrow().as_ref(), scene.sun.direction),
         );
-        let packed_instances = self.pack_instances(scene, &surfaces, &self.skins.layout())?;
+        let mut packed_instances = std::mem::take(&mut self.instance_scratch);
+        self.pack_instances_into(
+            scene,
+            &surfaces,
+            &self.skins.layout(),
+            &mut packed_instances,
+        )?;
         if self.skins.upload(&self.gpu.device, &self.gpu.queue) {
             self.rebuild_scene_group();
         }
@@ -3315,6 +3469,9 @@ impl Frame {
         }
         if resized {
             self.rebuild_scene_group();
+            self.uploaded_instances.clear();
+            self.uploaded_materials.clear();
+            self.uploaded_map_materials.clear();
         }
         if self
             .lights
@@ -3396,11 +3553,22 @@ impl Frame {
         };
         let queue = &self.gpu.queue;
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&uniforms));
-        if !packed_instances.is_empty() {
-            queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&packed_instances));
-        }
-        queue.write_buffer(&self.materials, 0, bytemuck::cast_slice(&materials));
-        queue.write_buffer(&self.map_materials, 0, bytemuck::cast_slice(&map_materials));
+        write_changed(
+            queue,
+            &self.instances,
+            &self.uploaded_instances,
+            &packed_instances,
+        );
+        write_changed(queue, &self.materials, &self.uploaded_materials, &materials);
+        write_changed(
+            queue,
+            &self.map_materials,
+            &self.uploaded_map_materials,
+            &map_materials,
+        );
+        self.instance_scratch = std::mem::replace(&mut self.uploaded_instances, packed_instances);
+        self.uploaded_materials = materials;
+        self.uploaded_map_materials = map_materials;
         let mut light = SkyLight {
             sh: [[0.0; 4]; 9],
             info: [(self.sky.lighting.mip_count - 1) as f32, 0.0, 0.0, 0.0],
@@ -3442,7 +3610,7 @@ impl Frame {
             0,
             bytemuck::bytes_of(&selection),
         );
-        self.lighting_group = Some(self.make_lighting_group());
+        self.refresh_lighting_group();
         let batches = surface_batches(
             scene.instances,
             |mesh| self.deforms(mesh),
@@ -3452,7 +3620,7 @@ impl Frame {
         Ok((batches, surfaces))
     }
 
-    fn make_lighting_group(&self) -> wgpu::BindGroup {
+    fn refresh_lighting_group(&mut self) {
         let [lower, upper, grid] = self.probes.bindings();
         let cube = self.sky.cube_view();
         let (ssr, ssr_guide) = self
@@ -3513,21 +3681,17 @@ impl Frame {
             view(ssr_guide),
             content.caustic.as_entire_binding(),
         ];
-        let entries: Vec<wgpu::BindGroupEntry<'_>> = entries
-            .into_iter()
-            .enumerate()
-            .map(|(binding, resource)| wgpu::BindGroupEntry {
-                binding: binding as u32,
-                resource,
-            })
-            .collect();
-        self.gpu
-            .device
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("live lighting"),
-                layout: &self.lighting_layout,
-                entries: &entries,
-            })
+        let mut bindings = 0..;
+        let entries = entries.map(|resource| wgpu::BindGroupEntry {
+            binding: bindings.next().unwrap_or_default(),
+            resource,
+        });
+        self.lighting_group.get(
+            &self.gpu.device,
+            "live lighting",
+            &self.lighting_layout,
+            &entries,
+        );
     }
 
     pub fn encode(
@@ -3642,19 +3806,18 @@ impl Frame {
         }
         let features = self.opaque_features(&batches);
         let lit = self.lights.extended();
-        for (batch, used) in batches.iter().zip(&features) {
-            if batch.shadow_only {
-                continue;
-            }
-            self.pipelines.ensure_opaque(
-                &self.gpu.device,
-                OpaqueKey {
+        self.pipelines.ensure_opaques(
+            &self.gpu.device,
+            batches
+                .iter()
+                .zip(&features)
+                .filter(|(batch, _)| !batch.shadow_only)
+                .map(|(batch, used)| OpaqueKey {
                     features: *used,
                     lit,
                     two_sided: batch.two_sided,
-                },
-            );
-        }
+                }),
+        );
         self.encode_surfaces(&batches, &features, encoder, profiler)?;
         self.opaque_drawn = batches
             .iter()
@@ -3679,14 +3842,9 @@ impl Frame {
                 instance.alpha_cutoff.to_bits().hash(&mut hasher);
                 instance.opacity.to_bits().hash(&mut hasher);
                 content_row_key(&scene.materials[instance.material as usize]).hash(&mut hasher);
-                for value in surface
-                    .uv_offset
-                    .iter()
-                    .chain(&surface.uv_scale)
-                    .chain(&surface.crop)
-                {
-                    value.to_bits().hash(&mut hasher);
-                }
+                hasher.write(bytemuck::bytes_of(&surface.uv_offset));
+                hasher.write(bytemuck::bytes_of(&surface.uv_scale));
+                hasher.write(bytemuck::bytes_of(&surface.crop));
             }
         }
         hasher.finish()
@@ -3789,7 +3947,7 @@ impl Frame {
         let scene_group = &self.scene_group;
         let cascade_group = &self.cascade_group;
         let deformers = &self.deformers.group;
-        let lighting = self.lighting_group.as_ref();
+        let lighting = self.lighting_group.group.as_ref();
         let pipelines = &self.pipelines;
         let meshes = &self.meshes;
         let align = self.cascade_align;
@@ -3851,7 +4009,7 @@ impl Frame {
             casters,
             statics,
             &self.deformers.group,
-            self.lighting_group.as_ref(),
+            self.lighting_group.group.as_ref(),
             &self.pipelines,
             &self.meshes,
         );
@@ -3866,6 +4024,7 @@ impl Frame {
     ) -> Result<(), String> {
         let lighting = self
             .lighting_group
+            .group
             .as_ref()
             .ok_or("frame lighting is not prepared")?;
         let depth_timing = profiler
@@ -3962,12 +4121,21 @@ impl Frame {
             });
             crate::viewport::apply(&mut pass, self.viewport);
             let lit = self.lights.extended();
+            let last: Cell<Option<(OpaqueKey, &wgpu::RenderPipeline)>> = Cell::new(None);
             self.draw_with(&mut pass, batches, lighting, |index, two_sided| {
-                &self.pipelines.opaque[&OpaqueKey {
+                let key = OpaqueKey {
                     features: features[index],
                     lit,
                     two_sided,
-                }]
+                };
+                match last.get() {
+                    Some((seen, pipeline)) if seen == key => pipeline,
+                    _ => {
+                        let pipeline = &self.pipelines.opaque[&key];
+                        last.set(Some((key, pipeline)));
+                        pipeline
+                    }
+                }
             });
             if let Some(foliage) = &self.foliage {
                 self.draw_cards(&mut pass, foliage, &foliage.opaque, lighting);
@@ -4026,7 +4194,9 @@ impl Frame {
     }
 
     pub fn collect_timings(&mut self) -> Vec<Vec<PassTiming>> {
-        self.profiler.collect(&self.gpu.device)
+        self.profiler
+            .as_mut()
+            .map_or_else(Vec::new, |profiler| profiler.collect(&self.gpu.device))
     }
 
     pub fn readback_velocity(&self) -> Result<Vec<[u16; 2]>, String> {
