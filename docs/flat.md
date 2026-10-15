@@ -102,6 +102,31 @@ An SVG progress meter is an `Arc`. A circle with `stroke-dasharray="L C"`, `stro
   - The atlas is a `FlatSprites`, uploaded once from a `SpriteImage` (RGBA8 bytes, sRGB-encoded like every flat colour, filtered `Linear` or `Nearest` for pixel art). It is sampled as stored, without decoding, so a texel shows its own bytes.
   - An icon, a style (outline, ghost, bevel, flat) or motion blur draws an image fill as its tint; a pattern is ignored on it, since both use the instance's icon slot. Picking takes the shape's footprint, whatever the texels' alpha.
   - The CPU twin samples the same atlas (`SpriteImage::sample`, bilinear or nearest with clamped edges) from `scene.sprites`; `cpu::paint_sprite` paints one instance with it.
+  - **Baking a group into a sprite.** A part made of many draws that changes rarely (a face in one mood, a badge, a card's art) can be drawn once into the atlas and then cost one quad a frame. Lay out each state as its own small `FlatScene` with `clear: None`, render it at the pixel size it shows at, and turn the premultiplied pixels into an atlas with `SpriteImage::from_premultiplied`. It undoes the premultiply, rounds to bytes, and gives each fully transparent texel the colour of its neighbours, so a `Linear` atlas has no dark fringe where the shape meets transparency. The CPU twin needs no device, so this runs before the window exists:
+
+    ```rust
+    let moods = [happy_draws, sad_draws];
+    let cell = [128u32, 128];
+    let mut atlas = vec![[0.0; 4]; (cell[0] * 2 * cell[1]) as usize];
+    for (index, draws) in moods.iter().enumerate() {
+        let scene = FlatScene { layout: [64.0, 64.0], clear: None, draws, ..face_scene };
+        let pixels = flat::cpu::render_with_text(&scene, Some(&icons), &texts, cell)?;
+        for y in 0..cell[1] {
+            let row = &pixels[(y * cell[0]) as usize..][..cell[0] as usize];
+            let at = (y * cell[0] * 2 + index as u32 * cell[0]) as usize;
+            atlas[at..at + cell[0] as usize].copy_from_slice(row);
+        }
+    }
+    let image = SpriteImage::from_premultiplied(cell[0] * 2, cell[1], &atlas, SpriteFilter::Linear)?;
+    let sprites = FlatSprites::new(&device, &queue, image);
+    let face = Draw::sprite(centre, [64.0, 64.0], [0.5 * mood as f32, 0.0, 0.5 * mood as f32 + 0.5, 1.0]);
+    ```
+
+    - A group's opacity, shadows inside the cell, icons and text are all baked in; the sprite draw casts its own shadow from its rect, so give it `Shadow::None` and bake the shadow, or keep the part's shadow live with a separate draw.
+    - The CPU twin draws every dial at zero. A part with lit dials (thickness, bevel, gloss, reflection) is rendered on the GPU instead: `gpu.offscreen(w, h, Rgba16Float)`, `renderer.render_flat(&scene, &target.view)`, `gpu.readback_rgba16(&target)`, each `u16` through `half::f16::from_bits`, then the same `from_premultiplied`. An Rgba16Float output holds the same encoded premultiplied colour as the twin.
+    - One scene has one atlas, so the baked parts share it with any other sprites: pack them side by side and address each by its frame.
+    - Each frame then pays one sprite instance instead of every draw in the part, its group layer and its shadows. The bake is the twin's cost once, at load or when the state changes; it scales with the cell's pixels times the draws covering them, so bake at the size the part shows at, not larger.
+    - `a_baked_group_samples_back_as_its_premultiplied_pixels_without_a_dark_edge` bakes a grouped face on the twin and requires the atlas to sample back every pixel, and every point halfway between two, within 1.5/255 of the premultiplied source.
 
 **Strokes.** `Stroke { colour, width, dash }` is centred on the outline, as SVG's is, and paints over the fill.
 - `Stroke::dashed(colour, width, on, off)` dashes a rounded rect's perimeter, or a circle's.
@@ -112,6 +137,29 @@ An SVG progress meter is an `Arc`. A circle with `stroke-dasharray="L C"`, `stro
 - A filled icon stores the signed distance to its polygons, so a stroke on it is an outline with round joins.
 - A line icon stores the distance to its centre lines, so its stroke has round caps and round joins at any width.
 - Widths are in the icon's units, so a stroke stays proportional when the icon scales.
+
+**A pre-baked atlas.** Baking runs every icon's distance at every texel on the CPU. A game that would rather not do it at start-up bakes once at build time, ships the bytes, and loads them:
+
+```rust
+let raw = Icons::bake(&shapes)?.to_raw();
+std::fs::write("assets/icons.bin", &raw)?;
+
+let icons = Icons::from_raw(include_bytes!("../assets/icons.bin"))?;
+```
+
+`from_raw` gives back exactly what `bake` made (`Icons` compares equal), and refuses, never panics on, any other input: a short or long file, another magic or version, a side outside 1 to 8192, a kind other than 0 or 1, a non-finite bound, uv or texel. It allocates only after the length matches the header, so a crafted count or size cannot ask for more memory than the bytes it came with. The bytes, all little-endian:
+
+| offset | size | field |
+|---|---|---|
+| 0 | 4 | magic, the ASCII bytes `PFXI` |
+| 4 | 4 | `u32` format version, `1` |
+| 8 | 4 | `u32` width `W` |
+| 12 | 4 | `u32` height `H` |
+| 16 | 4 | `u32` icon count `N` |
+| 20 | 36 `N` | per icon: `u32` kind (0 fill, 1 line), `f32` × 4 bounds, `f32` × 4 uv |
+| 20 + 36 `N` | 2 `W H` | the R16Float texels, row by row, as `u16` bits |
+
+The file is exactly `20 + 36 N + 2 W H` bytes. The format version changes only with the bytes above.
 
 `flat::icons::standard()` is a small generic set in its own units:
 

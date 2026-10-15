@@ -191,3 +191,49 @@ fn a_sprite_clip_steps_a_flat_draw_through_its_frames_by_tick() {
         }
     }
 }
+
+#[test]
+fn a_baked_group_samples_back_as_its_premultiplied_pixels_without_a_dark_edge() {
+    let curve = ShadowCurve::none();
+    let draws = [
+        Draw::circle([16.0, 16.0], 12.0)
+            .fill(Srgba::hex(0xf0c040))
+            .shadow(Shadow::None)
+            .group(0),
+        Draw::circle([12.0, 13.0], 2.0)
+            .fill(Srgba::hex(0x202020))
+            .shadow(Shadow::None)
+            .group(0),
+    ];
+    let groups = [Group { opacity: 0.8 }];
+    let face = FlatScene {
+        layout: [32.0, 32.0],
+        clear: None,
+        groups: &groups,
+        ..scene(&draws, &curve, None)
+    };
+    let size = 32;
+    let pixels = cpu::render(&face, None, [size, size]).unwrap();
+    let sprite =
+        SpriteImage::from_premultiplied(size, size, &pixels, SpriteFilter::Linear).unwrap();
+    let at = |x: i64, y: i64| pixels[(y.clamp(0, 31) * 32 + x.clamp(0, 31)) as usize];
+    let premultiplied = |c: [f32; 4]| [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]];
+    for y in 0..size as i64 {
+        for x in 0..size as i64 {
+            let centre = [(x as f32 + 0.5) / 32.0, (y as f32 + 0.5) / 32.0];
+            let got = premultiplied(sprite.sample(centre));
+            let between = premultiplied(sprite.sample([(x as f32 + 1.0) / 32.0, centre[1]]));
+            let mean: [f32; 4] = std::array::from_fn(|k| (at(x, y)[k] + at(x + 1, y)[k]) * 0.5);
+            for k in 0..4 {
+                assert!(
+                    (got[k] - at(x, y)[k]).abs() < 1.5 / 255.0,
+                    "{x},{y}: {got:?}"
+                );
+                assert!(
+                    (between[k] - mean[k]).abs() < 1.5 / 255.0,
+                    "{x}.5,{y}: {between:?} vs {mean:?}"
+                );
+            }
+        }
+    }
+}

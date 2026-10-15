@@ -4,6 +4,11 @@ use pfx_gpu::wgpu::util::DeviceExt;
 pub const ATLAS_WIDTH: u32 = 1024;
 pub const CELL_TEXELS: f32 = 160.0;
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R16Float;
+pub const RAW_MAGIC: [u8; 4] = *b"PFXI";
+pub const RAW_VERSION: u32 = 1;
+const RAW_HEADER: usize = 20;
+const RAW_ENTRY: usize = 36;
+const RAW_MAX_SIDE: u32 = 8192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Icon(pub u32);
@@ -192,6 +197,93 @@ impl Icons {
                     scale[1],
                 ],
             });
+        }
+        Ok(Self {
+            width,
+            height,
+            texels,
+            entries,
+        })
+    }
+
+    pub fn to_raw(&self) -> Vec<u8> {
+        let mut out =
+            Vec::with_capacity(RAW_HEADER + self.entries.len() * RAW_ENTRY + self.texels.len() * 2);
+        out.extend_from_slice(&RAW_MAGIC);
+        out.extend_from_slice(&RAW_VERSION.to_le_bytes());
+        out.extend_from_slice(&self.width.to_le_bytes());
+        out.extend_from_slice(&self.height.to_le_bytes());
+        out.extend_from_slice(&(self.entries.len() as u32).to_le_bytes());
+        for entry in &self.entries {
+            let kind: u32 = match entry.kind {
+                IconKind::Fill => 0,
+                IconKind::Line => 1,
+            };
+            out.extend_from_slice(&kind.to_le_bytes());
+            for value in entry.bounds.iter().chain(&entry.uv) {
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        for texel in &self.texels {
+            out.extend_from_slice(&texel.to_le_bytes());
+        }
+        out
+    }
+
+    pub fn from_raw(bytes: &[u8]) -> Result<Self, String> {
+        let u32_at = |at: usize| {
+            u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+        };
+        if bytes.len() < RAW_HEADER {
+            return Err("an icon atlas is shorter than its header".into());
+        }
+        if bytes[..4] != RAW_MAGIC {
+            return Err("not a baked icon atlas".into());
+        }
+        let version = u32_at(4);
+        if version != RAW_VERSION {
+            return Err(format!(
+                "icon atlas format {version}, this build reads {RAW_VERSION}"
+            ));
+        }
+        let (width, height, count) = (u32_at(8), u32_at(12), u32_at(16));
+        if !(1..=RAW_MAX_SIDE).contains(&width) || !(1..=RAW_MAX_SIDE).contains(&height) {
+            return Err(format!(
+                "an icon atlas of {width}x{height} texels is outside 1 to {RAW_MAX_SIDE}"
+            ));
+        }
+        let texels_at = RAW_HEADER as u64 + u64::from(count) * RAW_ENTRY as u64;
+        let need = texels_at + u64::from(width) * u64::from(height) * 2;
+        if bytes.len() as u64 != need {
+            return Err(format!(
+                "a {width}x{height} icon atlas of {count} icons is {need} bytes, not {}",
+                bytes.len()
+            ));
+        }
+        let mut entries = Vec::with_capacity(count as usize);
+        for index in 0..count as usize {
+            let at = RAW_HEADER + index * RAW_ENTRY;
+            let kind = match u32_at(at) {
+                0 => IconKind::Fill,
+                1 => IconKind::Line,
+                other => return Err(format!("icon {index} has kind {other}")),
+            };
+            let value = |k: usize| {
+                f32::from_le_bytes(bytes[at + 4 + k * 4..at + 8 + k * 4].try_into().unwrap())
+            };
+            let bounds = [value(0), value(1), value(2), value(3)];
+            let uv = [value(4), value(5), value(6), value(7)];
+            if !bounds.iter().chain(&uv).all(|value| value.is_finite()) {
+                return Err(format!("icon {index} has a value that is not finite"));
+            }
+            entries.push(IconEntry { kind, bounds, uv });
+        }
+        let texels = bytes[texels_at as usize..]
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect::<Vec<_>>();
+        if texels.iter().any(|&bits| bits & 0x7c00 == 0x7c00) {
+            return Err("an icon atlas texel is not finite".into());
         }
         Ok(Self {
             width,
@@ -430,6 +522,48 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_baked_atlas_round_trips_through_raw_bytes() {
+        let shapes = standard()
+            .into_iter()
+            .map(|(_, shape)| shape)
+            .collect::<Vec<_>>();
+        let icons = Icons::bake(&shapes).unwrap();
+        let raw = icons.to_raw();
+        assert_eq!(Icons::from_raw(&raw).unwrap(), icons);
+    }
+
+    #[test]
+    fn crafted_raw_atlases_are_refused() {
+        let raw = Icons::bake(&[pointer(), tick()]).unwrap().to_raw();
+        for cut in [0, 3, 19, 20, 55, raw.len() - 1] {
+            assert!(Icons::from_raw(&raw[..cut]).is_err(), "cut at {cut}");
+        }
+        let mut longer = raw.clone();
+        longer.push(0);
+        assert!(Icons::from_raw(&longer).is_err());
+        let mut huge = raw.clone();
+        huge[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(Icons::from_raw(&huge).is_err());
+        let mut wide = raw.clone();
+        wide[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+        wide[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(Icons::from_raw(&wide).is_err());
+        let mut kind = raw.clone();
+        kind[20..24].copy_from_slice(&7u32.to_le_bytes());
+        assert!(Icons::from_raw(&kind).is_err());
+        let mut uv = raw.clone();
+        uv[40..44].copy_from_slice(&f32::NAN.to_le_bytes());
+        assert!(Icons::from_raw(&uv).is_err());
+        let mut texel = raw.clone();
+        let last = texel.len() - 2;
+        texel[last..].copy_from_slice(&0x7c00u16.to_le_bytes());
+        assert!(Icons::from_raw(&texel).is_err());
+        let mut version = raw;
+        version[4] = 2;
+        assert!(Icons::from_raw(&version).is_err());
     }
 
     #[test]
