@@ -7,7 +7,7 @@ Live mixing for games and apps, and deterministic mixdown for rendered clips. On
 Every voice plays on one channel. Channels sit under a master.
 
 ```
-voice (pitch, gain, level) -> channel filters -> channel volume/mute -> ducking -> master volume/mute -> soft limiter (if set) -> clamp
+voice (pitch, gain, level) -> channel filters -> channel drive (if set) -> channel volume/mute -> ducking -> master volume/mute -> soft limiter (if set) -> clamp
 ```
 
 | Id | Use |
@@ -187,6 +187,41 @@ mixer.glide_channel_lowpass(ChannelId::MUSIC, None, 1.0);
 - `set_*` ramps over `FILTER_RAMP_SECONDS` (30 ms), `glide_*` over the time you give.
 - A filter that has been idle starts from the steady state of its first sample, so it adds no step.
 
+## Drive
+
+A saturation stage per channel, after the filters and before the channel's volume, so the fader does not change how hard the channel is driven. Off until a game sets it; off costs nothing and leaves the audio bit for bit alone.
+
+```rust
+mixer.set_channel_drive(ChannelId::EFFECTS, Some(Drive {
+    drive_db: 18.0,
+    curve: DriveCurve::Tanh,
+    mix: 0.8,
+    compensate: false,
+    output_db: -3.0,
+}));
+mixer.glide_channel_drive(ChannelId::EFFECTS, 36.0, 1.5);
+mixer.set_channel_drive(ChannelId::EFFECTS, None);
+```
+
+- `drive_db` multiplies the signal before the curve (-24 to 60 dB). `curve` is `Soft` (x / (1 + |x|), the gentlest), `Tanh` (a rational tanh: x (27 + x^2) / (27 + 9 x^2), exactly 1 from |x| = 3 on) or `Hard` (a clamp to -1 and 1). Every curve is plain adds, multiplies and divides, so the bits are the same on every platform.
+- `compensate: true` divides the curved signal by the drive's gain, so a quiet signal comes out at the level it went in and only the loud peaks are bent; `false` leaves the curve's output as it is, which is louder and flatter, the one for a braam. `output_db` (-60 to 24 dB) scales the wet signal after that.
+- `mix` is dry against wet, 0 to 1, equal power (the square roots of `1 - mix` and `mix`). Soft, hard and the drive-and-mix blend are ported from kira's `Distortion` effect (MIT or Apache-2.0).
+- `set_channel_drive(channel, Some(drive))` fades the wet signal in over `RAMP_SECONDS` (10 ms) from nothing and moves `drive_db` there if already on; `None` fades it out and then switches the stage off. `glide_channel_drive(channel, drive_db, seconds)` ramps the drive amount in dB (a ramp in dB, so it moves evenly to the ear); it does nothing while the stage is off. `channel_drive(channel)` reads the target. `Output` mirrors all three.
+
+## Scheduled glides
+
+A glide that starts at a future frame, in the same terms as `trigger_in` and `trigger_at`:
+
+```rust
+mixer.glide_channel_lowpass_in(offset, ChannelId::MUSIC, Some(400.0), 0.8);
+mixer.glide_pitch_at(mixer.clock() + 24_000, voice, 0.5, 2.0);
+```
+
+- `glide_channel_lowpass`, `glide_channel_highpass`, `glide_channel_pitch`, `glide_channel_drive`, `glide_pitch`, `glide_gain` and `glide_tone_frequency` each have an `_in` form (frames after `Mixer::clock()`, the next block's first frame at 0) and an `_at` form (an absolute frame), with the arguments of the glide they schedule. `Output` mirrors them all, plus `Output::clock()` for the `_at` forms.
+- The block is cut at the frame, so the glide starts exactly there, not at the block's edge: the output is the same, bit for bit, as calling the plain glide when the clock reaches that frame. A frame already past is applied at the start of the next block. Events at the same frame apply in the order they were scheduled.
+- It applies the plain glide then, to whatever the target is by then: a voice that has ended is skipped, a channel or voice that did not exist is as in the plain call. `scheduled_glides()` counts the ones still waiting.
+- With nothing scheduled the block is rendered in one piece, as before.
+
 ## Vorbis (feature `vorbis`)
 
 Games ship with no ffmpeg, so the feature decodes Ogg Vorbis in pure Rust with [lewton](https://crates.io/crates/lewton) 0.10.2 (pinned). lewton over symphonia: it is only an Ogg Vorbis decoder, about four small crates against symphonia's container and codec framework, and it is all the games need. It is off by default; the ffmpeg path (`Decode`, `DecodeSpec`) is untouched and stays for the renderers.
@@ -218,8 +253,10 @@ mixer.stream_vorbis(ChannelId::DIALOG, &source, None, Level::default())?;
 | 20 sine tones (`tone`) | 0.22 ms | 0.10 ms |
 | 20 sine tones from one `tone_sound` with jitter | - | 0.10 ms |
 
+Channel drive (`bench_channel_drive`, 4 saw tones on one channel, 800-frame stereo ticks, 18 dB drive, mix 0.8): the drive stage adds 1.3 us a tick with `Soft`, 2.3 us with `Tanh` and 2.2 us with `Hard` (about 1 ns a sample, against 16 us for the 4 tones); off adds nothing.
+
 Before, 92 % of the jittered case was the sinc: for every pitched frame `Kernel::taps` built 33 weights (a distance in f64, a table read and a lerp each, then a normalising divide over all of them) and the voice read 33 frames through bounds and loop checks. Now a voice with no ramp, curve, envelope or fade in flight renders its block in one tight loop with its gain, pan and step worked out once, and the cubic read is four loads and a Horner polynomial. The fades of stolen voices read the sine table instead of a libm cosine.
 
 ## Tests
 
-No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The crate's own tests turn `vorbis` on through a self dev-dependency, so the workspace gate runs them.
+No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, drive off bit for bit, the three curves pinned by a hash, a compensated drive keeping a quiet tone's level, scheduled glides matching the plain call made at the same frame bit for bit (and leaving the frames before it alone), and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The crate's own tests turn `vorbis` on through a self dev-dependency, so the workspace gate runs them.

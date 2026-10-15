@@ -40,7 +40,7 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 
 ## kira, under the MIT licence
 
-`hermite` in `crates/sound/src/interp.rs` (in the package `pfx-sound`), the 4-point, 3rd-order Hermite behind `Resample::Cubic`, is ported from kira's `interpolate_frame` (https://github.com/tesselode/kira, `crates/kira/src/frame.rs`, commit `74b3ef0fd8bd15f90e3b469208ee741f04374a62`), Copyright 2021 Andrew Minnich, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+`hermite` in `crates/sound/src/interp.rs` (in the package `pfx-sound`), the 4-point, 3rd-order Hermite behind `Resample::Cubic`, is ported from kira's `interpolate_frame` (https://github.com/tesselode/kira, `crates/kira/src/frame.rs`, commit `74b3ef0fd8bd15f90e3b469208ee741f04374a62`), and `Drive` in `crates/sound/src/drive.rs` (the soft and hard clip curves, the drive gain with its division back out, and the equal-power dry and wet blend) from kira's `Distortion` effect (`crates/kira/src/effect/distortion.rs`, the same commit), Copyright 2021 Andrew Minnich, licensed MIT OR Apache-2.0 and used here under the MIT licence:
 
 > Copyright 2021 Andrew Minnich
 >

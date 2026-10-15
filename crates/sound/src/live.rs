@@ -7,6 +7,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use crate::channel::{ChannelId, Ducking};
 use crate::clip::Clip;
 use crate::decode::{Decode, DecodeSpec, spec_at_output};
+use crate::drive::Drive;
 use crate::heard::Heard;
 use crate::interp::Resample;
 use crate::mix::{Level, Mixer, VoiceId, lock};
@@ -162,6 +163,114 @@ impl Output {
 
     pub fn set_channel_highpass(&self, channel: ChannelId, hz: Option<f32>) {
         lock(&self.mixer).set_channel_highpass(channel, hz);
+    }
+
+    pub fn clock(&self) -> u64 {
+        lock(&self.mixer).clock()
+    }
+
+    pub fn set_channel_drive(&self, channel: ChannelId, drive: Option<Drive>) {
+        lock(&self.mixer).set_channel_drive(channel, drive);
+    }
+
+    pub fn glide_channel_drive(&self, channel: ChannelId, drive_db: f32, seconds: f32) {
+        lock(&self.mixer).glide_channel_drive(channel, drive_db, seconds);
+    }
+
+    pub fn channel_drive(&self, channel: ChannelId) -> Option<Drive> {
+        lock(&self.mixer).channel_drive(channel)
+    }
+
+    pub fn glide_channel_lowpass_in(
+        &self,
+        offset: u64,
+        channel: ChannelId,
+        hz: Option<f32>,
+        seconds: f32,
+    ) {
+        lock(&self.mixer).glide_channel_lowpass_in(offset, channel, hz, seconds);
+    }
+
+    pub fn glide_channel_lowpass_at(
+        &self,
+        at: u64,
+        channel: ChannelId,
+        hz: Option<f32>,
+        seconds: f32,
+    ) {
+        lock(&self.mixer).glide_channel_lowpass_at(at, channel, hz, seconds);
+    }
+
+    pub fn glide_channel_highpass_in(
+        &self,
+        offset: u64,
+        channel: ChannelId,
+        hz: Option<f32>,
+        seconds: f32,
+    ) {
+        lock(&self.mixer).glide_channel_highpass_in(offset, channel, hz, seconds);
+    }
+
+    pub fn glide_channel_highpass_at(
+        &self,
+        at: u64,
+        channel: ChannelId,
+        hz: Option<f32>,
+        seconds: f32,
+    ) {
+        lock(&self.mixer).glide_channel_highpass_at(at, channel, hz, seconds);
+    }
+
+    pub fn glide_channel_pitch_in(
+        &self,
+        offset: u64,
+        channel: ChannelId,
+        ratio: f32,
+        seconds: f32,
+    ) {
+        lock(&self.mixer).glide_channel_pitch_in(offset, channel, ratio, seconds);
+    }
+
+    pub fn glide_channel_pitch_at(&self, at: u64, channel: ChannelId, ratio: f32, seconds: f32) {
+        lock(&self.mixer).glide_channel_pitch_at(at, channel, ratio, seconds);
+    }
+
+    pub fn glide_channel_drive_in(
+        &self,
+        offset: u64,
+        channel: ChannelId,
+        drive_db: f32,
+        seconds: f32,
+    ) {
+        lock(&self.mixer).glide_channel_drive_in(offset, channel, drive_db, seconds);
+    }
+
+    pub fn glide_channel_drive_at(&self, at: u64, channel: ChannelId, drive_db: f32, seconds: f32) {
+        lock(&self.mixer).glide_channel_drive_at(at, channel, drive_db, seconds);
+    }
+
+    pub fn glide_pitch_in(&self, offset: u64, id: VoiceId, ratio: f32, seconds: f32) {
+        lock(&self.mixer).glide_pitch_in(offset, id, ratio, seconds);
+    }
+
+    pub fn glide_pitch_at(&self, at: u64, id: VoiceId, ratio: f32, seconds: f32) {
+        lock(&self.mixer).glide_pitch_at(at, id, ratio, seconds);
+    }
+
+    pub fn glide_gain_in(&self, offset: u64, id: VoiceId, gain: f32, seconds: f32) {
+        lock(&self.mixer).glide_gain_in(offset, id, gain, seconds);
+    }
+
+    pub fn glide_gain_at(&self, at: u64, id: VoiceId, gain: f32, seconds: f32) {
+        lock(&self.mixer).glide_gain_at(at, id, gain, seconds);
+    }
+
+    pub fn glide_tone_frequency_in(&self, offset: u64, id: VoiceId, hz: f32, seconds: f32) {
+        lock(&self.mixer).glide_tone_frequency_in(offset, id, hz, seconds);
+    }
+
+    pub fn glide_tone_frequency_at(&self, at: u64, id: VoiceId, hz: f32, seconds: f32) {
+        lock(&self.mixer).glide_tone_frequency_at(at, id, hz, seconds);
     }
 
     pub fn set_limiter(&self, threshold: Option<f32>) {

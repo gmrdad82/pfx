@@ -1,6 +1,7 @@
 mod channel;
 mod clip;
 mod decode;
+mod drive;
 mod envelope;
 mod filter;
 mod heard;
@@ -21,6 +22,7 @@ pub use clip::Clip;
 pub use decode::{
     AHEAD_SECONDS, CommandLine, Decode, DecodeSpec, ahead_limit, command_line, mix_graph,
 };
+pub use drive::{DRIVE_MAX_DB, DRIVE_MIN_DB, Drive, DriveCurve};
 pub use envelope::{Envelope, Shape};
 pub use interp::Resample;
 pub use live::{Output, chime, chime_reversed};

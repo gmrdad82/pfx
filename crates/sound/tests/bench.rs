@@ -132,3 +132,46 @@ fn bench_short_effects_and_tones() {
         }))
     );
 }
+
+fn drive_cost(curve: Option<pfx_sound::DriveCurve>) -> f64 {
+    let mut mixer = Mixer::new(RATE, 2);
+    for k in 0..4 {
+        mixer.tone(ChannelId::EFFECTS, Wave::Saw, 55.0 + 11.0 * k as f32, 0.2);
+    }
+    if let Some(curve) = curve {
+        mixer.set_channel_drive(
+            ChannelId::EFFECTS,
+            Some(pfx_sound::Drive {
+                drive_db: 18.0,
+                curve,
+                mix: 0.8,
+                ..pfx_sound::Drive::default()
+            }),
+        );
+    }
+    let mut out = vec![0.0f32; TICK * 2];
+    mixer.render_into(&mut out);
+    let started = Instant::now();
+    for _ in 0..TICKS * 10 {
+        mixer.render_into(&mut out);
+    }
+    started.elapsed().as_secs_f64() * 1000.0 / (TICKS * 10) as f64
+}
+
+#[test]
+#[ignore = "bench; run with --release"]
+fn bench_channel_drive() {
+    let off = drive_cost(None);
+    println!("4 saw tones, drive off: {off:.4} ms a tick");
+    for (name, curve) in [
+        ("soft", pfx_sound::DriveCurve::Soft),
+        ("tanh", pfx_sound::DriveCurve::Tanh),
+        ("hard", pfx_sound::DriveCurve::Hard),
+    ] {
+        let on = drive_cost(Some(curve));
+        println!(
+            "4 saw tones, drive {name}: {on:.4} ms a tick, drive alone {:.4} ms a tick",
+            on - off
+        );
+    }
+}

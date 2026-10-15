@@ -5,6 +5,7 @@ use crate::channel::{
     BUILT_IN, Channel, ChannelId, DuckState, Ducking, RAMP_SECONDS, clamp_volume, ramp_frames,
 };
 use crate::clip::Clip;
+use crate::drive::Drive;
 use crate::envelope::{EnvState, Envelope};
 use crate::filter::Kind;
 use crate::heard::{Bounds, MusicPlace};
@@ -84,6 +85,24 @@ pub fn mixdown(timeline: &Timeline) -> Vec<f32> {
         );
     }
     mixer.render(usize::try_from(end).unwrap_or(usize::MAX))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Action {
+    ChannelLowpass(ChannelId, Option<f32>),
+    ChannelHighpass(ChannelId, Option<f32>),
+    ChannelPitch(ChannelId, f32),
+    ChannelDrive(ChannelId, f32),
+    VoicePitch(VoiceId, f32),
+    VoiceGain(VoiceId, f32),
+    ToneFrequency(VoiceId, f32),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Scheduled {
+    at: u64,
+    seconds: f32,
+    action: Action,
 }
 
 pub(crate) struct PcmQueue {
@@ -174,6 +193,7 @@ pub struct Mixer {
     master: Channel,
     limiter: Option<f32>,
     duck: Option<DuckState>,
+    scheduled: Vec<Scheduled>,
     music: Option<VoiceId>,
     sounds: Vec<SoundDef>,
     rng: Rng,
@@ -199,6 +219,7 @@ impl Mixer {
             master: Channel::new(),
             limiter: None,
             duck: None,
+            scheduled: Vec::new(),
             music: None,
             sounds: Vec::new(),
             rng: Rng::new(DEFAULT_SEED),
@@ -359,6 +380,23 @@ impl Mixer {
             .and_then(|bus| bus.highpass.target())
     }
 
+    pub fn set_channel_drive(&mut self, channel: ChannelId, drive: Option<Drive>) {
+        let frames = ramp_frames(self.rate);
+        let bus = self.buses.entry(channel).or_insert_with(Channel::new);
+        bus.drive.set(drive, frames);
+    }
+
+    pub fn glide_channel_drive(&mut self, channel: ChannelId, drive_db: f32, seconds: f32) {
+        let frames = glide_frames(seconds, self.rate);
+        if let Some(bus) = self.buses.get_mut(&channel) {
+            bus.drive.glide(drive_db, frames);
+        }
+    }
+
+    pub fn channel_drive(&self, channel: ChannelId) -> Option<Drive> {
+        self.buses.get(&channel).and_then(|bus| bus.drive.target())
+    }
+
     fn glide_channel_filter(
         &mut self,
         channel: ChannelId,
@@ -372,6 +410,159 @@ impl Mixer {
         match kind {
             Kind::LowPass => bus.lowpass.set(hz, frames, rate),
             Kind::HighPass => bus.highpass.set(hz, frames, rate),
+        }
+    }
+
+    pub fn glide_channel_lowpass_in(
+        &mut self,
+        offset: u64,
+        channel: ChannelId,
+        hz: Option<f32>,
+        seconds: f32,
+    ) {
+        self.glide_channel_lowpass_at(self.clock.saturating_add(offset), channel, hz, seconds);
+    }
+
+    pub fn glide_channel_lowpass_at(
+        &mut self,
+        at: u64,
+        channel: ChannelId,
+        hz: Option<f32>,
+        seconds: f32,
+    ) {
+        self.schedule(at, seconds, Action::ChannelLowpass(channel, hz));
+    }
+
+    pub fn glide_channel_highpass_in(
+        &mut self,
+        offset: u64,
+        channel: ChannelId,
+        hz: Option<f32>,
+        seconds: f32,
+    ) {
+        self.glide_channel_highpass_at(self.clock.saturating_add(offset), channel, hz, seconds);
+    }
+
+    pub fn glide_channel_highpass_at(
+        &mut self,
+        at: u64,
+        channel: ChannelId,
+        hz: Option<f32>,
+        seconds: f32,
+    ) {
+        self.schedule(at, seconds, Action::ChannelHighpass(channel, hz));
+    }
+
+    pub fn glide_channel_pitch_in(
+        &mut self,
+        offset: u64,
+        channel: ChannelId,
+        ratio: f32,
+        seconds: f32,
+    ) {
+        self.glide_channel_pitch_at(self.clock.saturating_add(offset), channel, ratio, seconds);
+    }
+
+    pub fn glide_channel_pitch_at(
+        &mut self,
+        at: u64,
+        channel: ChannelId,
+        ratio: f32,
+        seconds: f32,
+    ) {
+        self.schedule(at, seconds, Action::ChannelPitch(channel, ratio));
+    }
+
+    pub fn glide_channel_drive_in(
+        &mut self,
+        offset: u64,
+        channel: ChannelId,
+        drive_db: f32,
+        seconds: f32,
+    ) {
+        self.glide_channel_drive_at(
+            self.clock.saturating_add(offset),
+            channel,
+            drive_db,
+            seconds,
+        );
+    }
+
+    pub fn glide_channel_drive_at(
+        &mut self,
+        at: u64,
+        channel: ChannelId,
+        drive_db: f32,
+        seconds: f32,
+    ) {
+        self.schedule(at, seconds, Action::ChannelDrive(channel, drive_db));
+    }
+
+    pub fn glide_pitch_in(&mut self, offset: u64, id: VoiceId, ratio: f32, seconds: f32) {
+        self.glide_pitch_at(self.clock.saturating_add(offset), id, ratio, seconds);
+    }
+
+    pub fn glide_pitch_at(&mut self, at: u64, id: VoiceId, ratio: f32, seconds: f32) {
+        self.schedule(at, seconds, Action::VoicePitch(id, ratio));
+    }
+
+    pub fn glide_gain_in(&mut self, offset: u64, id: VoiceId, gain: f32, seconds: f32) {
+        self.glide_gain_at(self.clock.saturating_add(offset), id, gain, seconds);
+    }
+
+    pub fn glide_gain_at(&mut self, at: u64, id: VoiceId, gain: f32, seconds: f32) {
+        self.schedule(at, seconds, Action::VoiceGain(id, gain));
+    }
+
+    pub fn glide_tone_frequency_in(&mut self, offset: u64, id: VoiceId, hz: f32, seconds: f32) {
+        self.glide_tone_frequency_at(self.clock.saturating_add(offset), id, hz, seconds);
+    }
+
+    pub fn glide_tone_frequency_at(&mut self, at: u64, id: VoiceId, hz: f32, seconds: f32) {
+        self.schedule(at, seconds, Action::ToneFrequency(id, hz));
+    }
+
+    pub fn scheduled_glides(&self) -> usize {
+        self.scheduled.len()
+    }
+
+    fn schedule(&mut self, at: u64, seconds: f32, action: Action) {
+        let place = self.scheduled.partition_point(|event| event.at <= at);
+        self.scheduled.insert(
+            place,
+            Scheduled {
+                at,
+                seconds,
+                action,
+            },
+        );
+    }
+
+    fn apply_due(&mut self) {
+        let due = self
+            .scheduled
+            .partition_point(|event| event.at <= self.clock);
+        if due == 0 {
+            return;
+        }
+        let events: Vec<Scheduled> = self.scheduled.drain(..due).collect();
+        for event in events {
+            let seconds = event.seconds;
+            match event.action {
+                Action::ChannelLowpass(channel, hz) => {
+                    self.glide_channel_lowpass(channel, hz, seconds)
+                }
+                Action::ChannelHighpass(channel, hz) => {
+                    self.glide_channel_highpass(channel, hz, seconds)
+                }
+                Action::ChannelPitch(channel, ratio) => {
+                    self.glide_channel_pitch(channel, ratio, seconds)
+                }
+                Action::ChannelDrive(channel, db) => self.glide_channel_drive(channel, db, seconds),
+                Action::VoicePitch(id, ratio) => self.glide_pitch(id, ratio, seconds),
+                Action::VoiceGain(id, gain) => self.glide_gain(id, gain, seconds),
+                Action::ToneFrequency(id, hz) => self.glide_tone_frequency(id, hz, seconds),
+            }
         }
     }
 
@@ -769,6 +960,23 @@ impl Mixer {
         if frames == 0 {
             return;
         }
+        let mut done = 0;
+        while done < frames {
+            self.apply_due();
+            let remaining = frames - done;
+            let len = self.scheduled.first().map_or(remaining, |event| {
+                usize::try_from(event.at - self.clock).map_or(remaining, |gap| gap.min(remaining))
+            });
+            let from = done * out_channels;
+            self.render_block(&mut out[from..from + len * out_channels]);
+            done += len;
+        }
+    }
+
+    fn render_block(&mut self, out: &mut [f32]) {
+        let out_channels = self.channels as usize;
+        let frames = out.len() / out_channels;
+        let body = frames * out_channels;
         let clock = self.clock;
         for bus in self.buses.values_mut() {
             bus.touched = false;
@@ -800,12 +1008,14 @@ impl Mixer {
                 bus.gain.skip(frames);
                 bus.lowpass.idle(frames);
                 bus.highpass.idle(frames);
+                bus.drive.idle(frames);
                 continue;
             }
             bus.lowpass
                 .process(&mut bus.bus, frames, out_channels, self.rate);
             bus.highpass
                 .process(&mut bus.bus, frames, out_channels, self.rate);
+            bus.drive.process(&mut bus.bus, frames, out_channels);
             let ducked = duck_target == Some(*id);
             for frame in 0..frames {
                 let mut gain = bus.gain.next();
@@ -1011,6 +1221,7 @@ pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::drive::DriveCurve;
     use crate::interp::tone_level;
 
     fn bits(samples: &[f32]) -> Vec<u32> {
@@ -2089,5 +2300,221 @@ mod tests {
         let out = mixer.render(1000);
         assert_eq!(mixer.voice_count(), 0);
         assert!(out[700..].iter().all(|sample| *sample == 0.0));
+    }
+
+    fn glide_probe(setup: impl Fn(&mut Mixer, VoiceId)) -> Mixer {
+        let mut mixer = Mixer::new(48_000, 1);
+        let voice = looped_sine(&mut mixer, 440, 0.5);
+        setup(&mut mixer, voice);
+        mixer
+    }
+
+    #[test]
+    fn a_scheduled_glide_starts_on_its_frame_and_not_before() {
+        let start = 301u64;
+        type Case = (
+            &'static str,
+            fn(&mut Mixer, u64, VoiceId),
+            fn(&mut Mixer, VoiceId),
+        );
+        let cases: Vec<Case> = vec![
+            (
+                "lowpass",
+                |m, at, _| m.glide_channel_lowpass_at(at, ChannelId::MUSIC, Some(300.0), 0.01),
+                |m, _| m.glide_channel_lowpass(ChannelId::MUSIC, Some(300.0), 0.01),
+            ),
+            (
+                "highpass",
+                |m, at, _| m.glide_channel_highpass_at(at, ChannelId::MUSIC, Some(900.0), 0.01),
+                |m, _| m.glide_channel_highpass(ChannelId::MUSIC, Some(900.0), 0.01),
+            ),
+            (
+                "channel pitch",
+                |m, at, _| m.glide_channel_pitch_at(at, ChannelId::MUSIC, 1.5, 0.01),
+                |m, _| m.glide_channel_pitch(ChannelId::MUSIC, 1.5, 0.01),
+            ),
+            (
+                "voice pitch",
+                |m, at, v| m.glide_pitch_at(at, v, 0.7, 0.01),
+                |m, v| m.glide_pitch(v, 0.7, 0.01),
+            ),
+            (
+                "voice gain",
+                |m, at, v| m.glide_gain_at(at, v, 0.2, 0.01),
+                |m, v| m.glide_gain(v, 0.2, 0.01),
+            ),
+            (
+                "drive",
+                |m, at, _| m.glide_channel_drive_at(at, ChannelId::MUSIC, 24.0, 0.01),
+                |m, _| m.glide_channel_drive(ChannelId::MUSIC, 24.0, 0.01),
+            ),
+        ];
+        for (name, scheduled, direct) in cases {
+            let prepare = |m: &mut Mixer| {
+                if name == "drive" {
+                    m.set_channel_drive(
+                        ChannelId::MUSIC,
+                        Some(Drive {
+                            drive_db: 6.0,
+                            ..Drive::default()
+                        }),
+                    );
+                }
+            };
+            let mut quiet = glide_probe(|m, _| prepare(m));
+            let untouched = quiet.render(1200);
+            let mut a = glide_probe(|m, v| {
+                prepare(m);
+                scheduled(m, start, v);
+            });
+            assert_eq!(a.scheduled_glides(), 1);
+            let mut got = a.render(500);
+            got.extend(a.render(700));
+            assert_eq!(a.scheduled_glides(), 0, "{name}");
+            let mut b = glide_probe(|m, _| prepare(m));
+            let mut want = b.render(301);
+            let id = VoiceId(1);
+            direct(&mut b, id);
+            want.extend(b.render(899));
+            assert_eq!(bits(&got), bits(&want), "{name}");
+            assert_eq!(bits(&got[..301]), bits(&untouched[..301]), "{name}");
+            assert_ne!(bits(&got[301..]), bits(&untouched[301..]), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_scheduled_glide_in_the_past_applies_at_the_next_block() {
+        let mut a = glide_probe(|_, _| {});
+        a.render(100);
+        a.glide_gain_at(10, VoiceId(1), 0.0, 0.01);
+        let got = a.render(300);
+        let mut b = glide_probe(|_, _| {});
+        b.render(100);
+        b.glide_gain(VoiceId(1), 0.0, 0.01);
+        assert_eq!(bits(&got), bits(&b.render(300)));
+    }
+
+    #[test]
+    fn a_scheduled_tone_glide_moves_the_frequency_from_its_frame() {
+        let mut a = Mixer::new(48_000, 1);
+        let tone = a.tone(ChannelId::EFFECTS, Wave::Sine, 440.0, 0.5);
+        a.glide_tone_frequency_in(250, tone, 880.0, 0.02);
+        let got = a.render(1000);
+        let mut b = Mixer::new(48_000, 1);
+        let tone = b.tone(ChannelId::EFFECTS, Wave::Sine, 440.0, 0.5);
+        let mut want = b.render(250);
+        b.glide_tone_frequency(tone, 880.0, 0.02);
+        want.extend(b.render(750));
+        assert_eq!(bits(&got), bits(&want));
+    }
+
+    fn drive_run(drive: Option<Drive>, frames: usize) -> Vec<f32> {
+        let mut mixer = Mixer::new(48_000, 2);
+        mixer.set_seed(3);
+        mixer.tone(ChannelId::EFFECTS, Wave::Saw, 220.0, 0.8);
+        mixer.set_channel_drive(ChannelId::EFFECTS, drive);
+        let mut out = Vec::new();
+        for _ in 0..frames / 400 {
+            out.extend(mixer.render(400));
+        }
+        out
+    }
+
+    #[test]
+    fn drive_off_leaves_the_audio_bit_for_bit_alone() {
+        let plain = {
+            let mut mixer = Mixer::new(48_000, 1);
+            looped_sine(&mut mixer, 440, 0.5);
+            mixer.render(3000)
+        };
+        let mut mixer = Mixer::new(48_000, 1);
+        looped_sine(&mut mixer, 440, 0.5);
+        mixer.set_channel_drive(
+            ChannelId::MUSIC,
+            Some(Drive {
+                drive_db: 30.0,
+                curve: DriveCurve::Hard,
+                ..Drive::default()
+            }),
+        );
+        assert!(mixer.channel_drive(ChannelId::MUSIC).is_some());
+        mixer.render(10);
+        mixer.set_channel_drive(ChannelId::MUSIC, None);
+        assert_eq!(mixer.channel_drive(ChannelId::MUSIC), None);
+        mixer.render(2000);
+        let after = mixer.render(1000);
+        let clean = {
+            let mut mixer = Mixer::new(48_000, 1);
+            looped_sine(&mut mixer, 440, 0.5);
+            mixer.render(2010);
+            mixer.render(1000)
+        };
+        assert_eq!(bits(&after), bits(&clean));
+        assert_eq!(plain.len(), 3000);
+    }
+
+    #[test]
+    fn the_drive_curves_keep_their_bits_on_every_platform() {
+        let mut hashes = Vec::new();
+        for curve in [DriveCurve::Soft, DriveCurve::Tanh, DriveCurve::Hard] {
+            let drive = Drive {
+                drive_db: 18.0,
+                curve,
+                mix: 0.7,
+                compensate: false,
+                output_db: -3.0,
+            };
+            let out = drive_run(Some(drive), 4000);
+            assert_eq!(bits(&out), bits(&drive_run(Some(drive), 4000)));
+            assert!(out.iter().all(|sample| sample.abs() <= 1.0));
+            hashes.push(fnv(&out));
+        }
+        assert_eq!(
+            hashes,
+            vec![
+                14_200_292_695_880_409_801,
+                16_769_013_843_704_761_931,
+                18_164_464_539_029_061_673
+            ]
+        );
+    }
+
+    #[test]
+    fn drive_bends_a_loud_tone_and_compensation_keeps_a_quiet_one() {
+        let dry = drive_run(None, 2000);
+        let loud = drive_run(
+            Some(Drive {
+                drive_db: 24.0,
+                curve: DriveCurve::Hard,
+                ..Drive::default()
+            }),
+            2000,
+        );
+        assert!(power(&loud[2000..]).is_finite());
+        assert_ne!(bits(&dry), bits(&loud));
+        let quiet = |curve| {
+            let mut mixer = Mixer::new(48_000, 1);
+            looped_sine(&mut mixer, 440, 0.01);
+            mixer.set_channel_drive(
+                ChannelId::MUSIC,
+                Some(Drive {
+                    drive_db: 6.0,
+                    curve,
+                    ..Drive::default()
+                }),
+            );
+            mixer.render(2000);
+            mixer.render(2000)
+        };
+        let reference = {
+            let mut mixer = Mixer::new(48_000, 1);
+            looped_sine(&mut mixer, 440, 0.01);
+            mixer.render(2000);
+            mixer.render(2000)
+        };
+        for curve in [DriveCurve::Soft, DriveCurve::Tanh, DriveCurve::Hard] {
+            let level = decibels(power(&quiet(curve)) / power(&reference));
+            assert!(level.abs() < 0.3, "{curve:?} {level}");
+        }
     }
 }

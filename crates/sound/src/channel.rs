@@ -1,3 +1,4 @@
+use crate::drive::DriveStage;
 use crate::filter::{Filter, Kind};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -99,6 +100,7 @@ pub(crate) struct Channel {
     pub(crate) pitch_on: bool,
     pub(crate) lowpass: Filter,
     pub(crate) highpass: Filter,
+    pub(crate) drive: DriveStage,
     pub(crate) bus: Vec<f32>,
     pub(crate) touched: bool,
 }
@@ -114,6 +116,7 @@ impl Channel {
             pitch_on: false,
             lowpass: Filter::new(Kind::LowPass),
             highpass: Filter::new(Kind::HighPass),
+            drive: DriveStage::new(),
             bus: Vec::new(),
             touched: false,
         }
