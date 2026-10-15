@@ -134,7 +134,7 @@ An unknown clip is never silent: `.done()` and `play_clip` return the `AnimError
 
 The tick runs `game.tick`, the physics step, `game.events`, then the animators and sprite players advance and `Game::animated` receives their events (only on ticks that have any), then the camera rigs. A clip a game starts in `tick` or `events` therefore plays from that tick, and its marks at 0 fire on it. The same scene, seed and inputs give the same poses and events, bit for bit, natively and under Wine (`the_same_ticks_give_the_same_poses_and_events_on_every_platform`, a golden hash over 240 frames of uneven length).
 
-`present` poses the frame from the world: each skinned draw gets its object's palette and the previous frame's as an `InstancePose`, node-animated parts their node's pose, and each sprite object's surface its frame's UV offset, scale and crop. Each opaque instance of a morphed part comes back in `PlayFrame::weights` as a `MorphWeights { instance, current, previous }` (its object's weights for the part's morph set and the last presented tick's), the shape the renderer's weights take; a draw without an owning object gets none. Stop clears the poses and puts the staged surfaces back. Poses are taken at the latest tick, not interpolated between ticks.
+`present` poses the frame from the world: each skinned draw gets its object's palette and the previous frame's as an `InstancePose`, node-animated parts their node's pose, and each sprite object's surface its frame's UV offset, scale and crop. Each opaque instance of a morphed part comes back in `PlayFrame::weights` as a `MorphWeights { instance, current, previous }` (its object's weights for the part's morph set and the last presented tick's), the shape the renderer's weights take, and `present` has already handed them to `Renderer::set_weights`; a draw without an owning object gets none. Stop clears the poses and the weights and puts the staged surfaces back. Poses are taken at the latest tick, not interpolated between ticks.
 
 ## GPU skinning (`pfx-live`)
 
@@ -167,7 +167,8 @@ renderer.set_weights(&[InstanceWeights { instance: 0, current: &[0.8, 0.0], prev
 - Only weights that are not zero now or before reach the GPU: the instance's morph word is the delta base, the mesh's target count, its weights' offset and their count, and the vertex loops over those weights alone. An instance whose weights are all zero, or that has none, draws exactly the plain mesh, byte for byte. Fewer weights than targets leave the rest at 0; more is an error from `render`.
 - `set_weights` holds until the next call; through `Renderer` the same weights again are a no-op and do not count as a change for frames on demand.
 - Morphed instances are moving batches, as skinned ones are: they never enter the static shadow cache.
-- Not covered: tangent deltas (the rest tangent is kept), replacing a morphed mesh in place (`replace_mesh` refuses it), the glass pass (a morphed part with a glass material draws its rest shape there) and `Staged` (it does not yet upload a scene's morph targets).
+- `Staged` uploads a part whose `Geometry` has a morph with `upload_morphed_mesh` (with its skin when it has one) and never reuses a morphed mesh slot for other geometry, as with skinned ones. `Staged` alone sets no weights, so it draws the rest shape; play's `present` hands each tick's `PlayFrame::weights` to `set_weights` (instance indices as its poses), and stop clears them.
+- Not covered: tangent deltas (the rest tangent is kept), replacing a morphed mesh in place (`replace_mesh` refuses it) and the glass pass (a morphed part with a glass material draws its rest shape there).
 
 ## Sprites on 3D cards and on the flat pass
 
@@ -185,6 +186,7 @@ renderer.set_weights(&[InstanceWeights { instance: 0, current: &[0.8, 0.0], prev
 - `pfx-load` (`morph_tests`): the generated head keeps its three targets (one sparse), default weights, hat child and weights channel, sampled linear and step; a cubic channel without tangents, a target shorter or longer than its primitive and too many default weights are refused; a scene head carries its morph set and an animator samples its weights.
 - `pfx-core` (`morph_weights_sample_cubic_tangents_by_span_and_a_wrong_width_is_refused`): cubic-spline weights against hand-computed values, a layer's weight over the defaults, and a set of the wrong width refused.
 - `pfx-play` (`tests::animation`): scene objects play their clips and fire events at fixed ticks; morph weights follow the clip per tick and a game sets and clears them; a sprite card steps its frames and a game switches its clip; a game's blends and crossfades match a reference animator; refused calls; the loader's refusals with their lines; the golden run natively and under Wine; the posed snapshot.
+- `pfx-play`, GPU: `tests/morph.rs` (the generated head staged and played: weights set through `World::set_morph_weights` change its pixels, and weights `[0, 0, 0]` draw byte for byte the same frame as the head with its morph targets dropped).
 - `pfx-live`, GPU: `tests/morphing.rs` (a generated sphere with two targets, one with normals, against its CPU-blended twin within 1/255 with its shadow and ids and no motion at unchanged weights; two instances of one mesh with their own weights; zero and missing weights byte for byte the plain mesh; motion vectors on a changing weight); `tests/skinning.rs` (the skinned fixture against its CPU-skinned twin within 1/255 with its shadow and ids, its bind pose without a pose, and motion vectors on a moving joint and none on a still one); `tests/posed_trace.rs` (the live silhouette against the traced snapshot in the same pose); `flat::sprite_tests` (the GPU against the CPU twin and its picks, and a sprite clip stepping a flat draw by tick).
 - `pfx-live`, GPU: `tests/skinning.rs` (the skinned fixture against its CPU-skinned twin within 1/255 with its shadow and ids, its bind pose without a pose, and motion vectors on a moving joint and none on a still one); `tests/posed_trace.rs` (the live silhouette against the traced snapshot in the same pose); `flat::sprite_tests` (the GPU against the CPU twin and its picks, and a sprite clip stepping a flat draw by tick).
 
@@ -198,6 +200,7 @@ cargo test -p pfx-play --lib animation
 cargo test -p pfx-live --test skinning --test morphing --test posed_trace --lib --no-run
 pgpu run --class clip --as pfx -- cargo test -p pfx-live --test skinning --test morphing --test posed_trace -- --ignored --test-threads=1
 pgpu run --class clip --as pfx -- cargo test -p pfx-live --lib flat::sprite_tests -- --ignored --test-threads=1
+pgpu run --class test --as pfx -- cargo test -p pfx-play --test morph -- --ignored
 ```
 
 ## Not covered

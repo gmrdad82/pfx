@@ -4,6 +4,7 @@ use pfx_live::frame::{
     Instance, InstanceSurface, Matrix, Scene as FrameScene, SceneWind, multiply,
 };
 use pfx_live::glass;
+use pfx_live::morph::InstanceWeights;
 use pfx_live::renderer::{Effects, Renderer, Text, invert};
 use pfx_live::scene::{self as live_scene, Staged};
 use pfx_live::skin::InstancePose;
@@ -54,6 +55,7 @@ pub(crate) struct Touched {
     pub lights: bool,
     pub finish: bool,
     pub posed: bool,
+    pub morphed: bool,
     pub sprites: bool,
 }
 
@@ -351,7 +353,19 @@ impl Presenter {
                     previous,
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
+        if !weights.is_empty() || self.touched.morphed {
+            let handed: Vec<InstanceWeights<'_>> = weights
+                .iter()
+                .map(|set| InstanceWeights {
+                    instance: set.instance,
+                    current: set.current,
+                    previous: set.previous,
+                })
+                .collect();
+            renderer.set_weights(&handed).map_err(PlayError::Render)?;
+            self.touched.morphed = true;
+        }
         Ok(PlayFrame {
             weights,
             scene: FrameScene {

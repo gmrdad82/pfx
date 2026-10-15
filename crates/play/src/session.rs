@@ -566,6 +566,9 @@ impl Stopped {
         if self.touched.posed {
             renderer.set_poses(&[]).map_err(PlayError::Render)?;
         }
+        if self.touched.morphed {
+            renderer.set_weights(&[]).map_err(PlayError::Render)?;
+        }
         if self.touched.sprites {
             renderer
                 .set_surfaces(staged.surfaces())

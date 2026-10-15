@@ -16,6 +16,7 @@ use crate::frame::{
 use crate::glass;
 use crate::lights::{LocalLight, local_light};
 use crate::maps::ContentFormat;
+use crate::morph::{MorphData, MorphTargetData};
 use crate::renderer::{Effects, Finish, Renderer, Text, TextQuadItem};
 use crate::skin::SkinData;
 use crate::sky::SkySource;
@@ -141,15 +142,24 @@ fn mesh_data(geometry: &Geometry) -> MeshData<'_> {
 }
 
 fn upload_geometry(renderer: &mut Renderer, geometry: &Geometry) -> Result<MeshHandle, String> {
-    match &geometry.skin {
-        Some(skin) => renderer.upload_skinned_mesh(
-            mesh_data(geometry),
-            SkinData {
-                joints: &skin.joints,
-                weights: &skin.weights,
-            },
-        ),
-        None => renderer.upload_mesh(mesh_data(geometry)),
+    let skin = geometry.skin.as_ref().map(|skin| SkinData {
+        joints: &skin.joints,
+        weights: &skin.weights,
+    });
+    match (&geometry.morph, skin) {
+        (Some(morph), skin) => {
+            let targets: Vec<MorphTargetData<'_>> = morph
+                .targets
+                .iter()
+                .map(|target| MorphTargetData {
+                    positions: &target.positions,
+                    normals: target.normals.as_deref(),
+                })
+                .collect();
+            renderer.upload_morphed_mesh(mesh_data(geometry), skin, MorphData { targets: &targets })
+        }
+        (None, Some(skin)) => renderer.upload_skinned_mesh(mesh_data(geometry), skin),
+        (None, None) => renderer.upload_mesh(mesh_data(geometry)),
     }
 }
 
@@ -583,7 +593,7 @@ impl Staged {
                 if self.meshes.contains_key(&geometry.hash) {
                     continue;
                 }
-                let reuse = if geometry.skin.is_none() {
+                let reuse = if geometry.skin.is_none() && geometry.morph.is_none() {
                     spare
                         .iter()
                         .rposition(|old| {
