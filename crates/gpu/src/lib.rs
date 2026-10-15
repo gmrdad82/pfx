@@ -788,7 +788,7 @@ impl Gpu {
 #[cfg(feature = "window")]
 impl WindowTarget {
     pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) {
-        if width == 0 || height == 0 {
+        if width == 0 || height == 0 || (width, height) == (self.config.width, self.config.height) {
             return;
         }
         self.config.width = width;
