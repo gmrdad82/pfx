@@ -77,7 +77,8 @@ impl TextEngine {
                 }];
                 let key =
                     self.layout_block(&spans, None, entry.scale, Anchor::Start, None, None)?;
-                let spots = self.block_spots(key, &spans);
+                let mut spots = Vec::new();
+                self.block_spots(key, &spans, &mut spots);
                 self.blocks.remove(&key);
                 let mut glyphs = Vec::with_capacity(spots.len());
                 for spot in spots {
