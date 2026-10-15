@@ -217,29 +217,36 @@ const CURVE_STEPS: f32 = 64.0;
 fn path(d: &str) -> Result<Vec<Vec<[f32; 2]>>, String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
+    let mut arc = false;
+    let mut count = 0usize;
+    let flush = |tokens: &mut Vec<String>, current: &mut String, count: &mut usize| {
+        if !current.is_empty() {
+            tokens.push(std::mem::take(current));
+            *count += 1;
+        }
+    };
     for c in d.chars() {
-        if c.is_ascii_alphabetic() && c != 'e' {
-            if !current.is_empty() {
-                tokens.push(std::mem::take(&mut current));
-            }
+        if arc && current.is_empty() && matches!(count % 7, 3 | 4) && matches!(c, '0' | '1') {
             tokens.push(c.to_string());
+            count += 1;
+        } else if c.is_ascii_alphabetic() && c != 'e' {
+            flush(&mut tokens, &mut current, &mut count);
+            tokens.push(c.to_string());
+            arc = c.eq_ignore_ascii_case(&'a');
+            count = 0;
         } else if c == '-' && !current.is_empty() && !current.ends_with('e') {
-            tokens.push(std::mem::take(&mut current));
+            flush(&mut tokens, &mut current, &mut count);
             current.push('-');
         } else if c == '.' && current.contains('.') {
-            tokens.push(std::mem::take(&mut current));
+            flush(&mut tokens, &mut current, &mut count);
             current.push('.');
         } else if c == ',' || c.is_whitespace() {
-            if !current.is_empty() {
-                tokens.push(std::mem::take(&mut current));
-            }
+            flush(&mut tokens, &mut current, &mut count);
         } else {
             current.push(c);
         }
     }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
+    flush(&mut tokens, &mut current, &mut count);
     let mut subpaths: Vec<Vec<[f32; 2]>> = Vec::new();
     let mut at = [0.0f32, 0.0];
     let mut command = 'M';
@@ -792,6 +799,13 @@ mod tests {
                 .all(|p| ((p[0] - 14.0).hypot(p[1]) - 14.0).abs() < 1e-3)
         );
         assert!(arc.iter().any(|p| p[1] < -13.0));
+    }
+
+    #[test]
+    fn compact_arc_flags_read_as_single_digits() {
+        let compact = path("M0 0a14 14 0 0128 0a.5.5 0 01.2.3").unwrap();
+        let spaced = path("M0 0a14 14 0 0 1 28 0a.5 .5 0 0 1 .2 .3").unwrap();
+        assert_eq!(compact, spaced);
     }
 
     #[test]
