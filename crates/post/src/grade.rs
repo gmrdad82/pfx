@@ -70,21 +70,109 @@ impl Warmth {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LutShape {
+    Cube,
+    Curves,
+}
+
+pub const NEUTRAL_DOMAIN: [[f32; 3]; 2] = [[0.0; 3], [1.0; 3]];
+
 #[derive(Clone, Debug)]
 pub struct Lut {
     pub size: u32,
     pub values: Vec<[f32; 3]>,
+    pub shape: LutShape,
+    pub amount: f32,
+    pub domain: [[f32; 3]; 2],
 }
 
 impl Lut {
+    pub fn cube(size: u32, values: Vec<[f32; 3]>) -> Self {
+        Self {
+            size,
+            values,
+            shape: LutShape::Cube,
+            amount: 1.0,
+            domain: NEUTRAL_DOMAIN,
+        }
+    }
+
+    pub fn needs(&self) -> usize {
+        let n = self.size as usize;
+        match self.shape {
+            LutShape::Cube => n.saturating_mul(n).saturating_mul(n),
+            LutShape::Curves => n,
+        }
+    }
+
+    fn remaps(&self) -> bool {
+        self.domain != NEUTRAL_DOMAIN
+    }
+
+    pub fn params(&self) -> [f32; 16] {
+        let [lo, hi] = self.domain;
+        [
+            self.size as f32,
+            self.amount,
+            if self.shape == LutShape::Curves {
+                1.0
+            } else {
+                0.0
+            },
+            if self.remaps() { 1.0 } else { 0.0 },
+            lo[0],
+            lo[1],
+            lo[2],
+            0.0,
+            hi[0],
+            hi[1],
+            hi[2],
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]
+    }
+
     pub fn sample(&self, c: [f32; 3]) -> [f32; 3] {
         let n = self.size;
-        let need = (n as usize)
-            .saturating_mul(n as usize)
-            .saturating_mul(n as usize);
-        if n < 2 || self.values.len() < need {
+        if n < 2 || self.values.len() < self.needs() {
             return c;
         }
+        let t = if self.remaps() {
+            let [lo, hi] = self.domain;
+            std::array::from_fn(|k| (c[k] - lo[k]) / (hi[k] - lo[k]))
+        } else {
+            c
+        };
+        let looked = match self.shape {
+            LutShape::Cube => self.cube_at(t),
+            LutShape::Curves => self.curves_at(t),
+        };
+        if self.amount < 1.0 {
+            color::lerp3(c, looked, self.amount)
+        } else {
+            looked
+        }
+    }
+
+    fn curves_at(&self, c: [f32; 3]) -> [f32; 3] {
+        let n = self.size;
+        let scale = (n - 1) as f32;
+        std::array::from_fn(|k| {
+            let x = c[k].clamp(0.0, 1.0) * scale;
+            let i = (x.floor() as u32).min(n - 1);
+            let j = (i + 1).min(n - 1);
+            let a = self.values[i as usize][k];
+            let b = self.values[j as usize][k];
+            a + (b - a) * (x - i as f32)
+        })
+    }
+
+    fn cube_at(&self, c: [f32; 3]) -> [f32; 3] {
+        let n = self.size;
         let scale = (n - 1) as f32;
         let coord = |v: f32| {
             let x = v.clamp(0.0, 1.0) * scale;

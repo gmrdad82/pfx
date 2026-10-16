@@ -646,14 +646,12 @@ fn lut_at(i: u32) -> vec3<f32> {
     let b = i * 3u;
     return vec3<f32>(lut_buf[b], lut_buf[b + 1u], lut_buf[b + 2u]);
 }
-"#,
-    r#"
-    let n = u32(post.p0.x);
-    if (n < 2u) { store(p, src); return; }
+
+fn lut_cube(c: vec3<f32>, n: u32) -> vec3<f32> {
     let scale = f32(n - 1u);
-    let xr = clamp(src.r, 0.0, 1.0) * scale;
-    let yg = clamp(src.g, 0.0, 1.0) * scale;
-    let zb = clamp(src.b, 0.0, 1.0) * scale;
+    let xr = clamp(c.r, 0.0, 1.0) * scale;
+    let yg = clamp(c.g, 0.0, 1.0) * scale;
+    let zb = clamp(c.b, 0.0, 1.0) * scale;
     let x0 = min(u32(floor(xr)), n - 1u);
     let y0 = min(u32(floor(yg)), n - 1u);
     let z0 = min(u32(floor(zb)), n - 1u);
@@ -669,7 +667,31 @@ fn lut_at(i: u32) -> vec3<f32> {
     let c11 = mix(lut_at(x0 + n * (y1 + n * z1)), lut_at(x1 + n * (y1 + n * z1)), tx);
     let c0 = mix(c00, c10, ty);
     let c1 = mix(c01, c11, ty);
-    store(p, vec4<f32>(mix(c0, c1, tz), src.a));
+    return mix(c0, c1, tz);
+}
+
+fn lut_curve(v: f32, n: u32, k: u32) -> f32 {
+    let x = clamp(v, 0.0, 1.0) * f32(n - 1u);
+    let i = min(u32(floor(x)), n - 1u);
+    let j = min(i + 1u, n - 1u);
+    let a = lut_buf[i * 3u + k];
+    let b = lut_buf[j * 3u + k];
+    return a + (b - a) * (x - f32(i));
+}
+"#,
+    r#"
+    let n = u32(post.p0.x);
+    if (n < 2u) { store(p, src); return; }
+    var t = src.rgb;
+    if (post.p0.w > 0.5) { t = (t - post.p1.xyz) / (post.p2.xyz - post.p1.xyz); }
+    var looked: vec3<f32>;
+    if (post.p0.z > 0.5) {
+        looked = vec3<f32>(lut_curve(t.r, n, 0u), lut_curve(t.g, n, 1u), lut_curve(t.b, n, 2u));
+    } else {
+        looked = lut_cube(t, n);
+    }
+    if (post.p0.y < 1.0) { looked = src.rgb + (looked - src.rgb) * post.p0.y; }
+    store(p, vec4<f32>(looked, src.a));
 "#
 );
 
@@ -1470,5 +1492,116 @@ pub const HALATION_ADD: &str = shader!(
     let v = (f32(p.y) + 0.5) / full.y;
     let s = sample_bloom(u * small.x - 0.5, v * small.y - 0.5);
     store(p, vec4<f32>(src.rgb + s.rgb * post.p0.x, src.a));
+"#
+);
+
+pub const FLARE_PREPARE: &str = shader!(
+    "@group(0) @binding(3) var flare_sampler: sampler;\n",
+    r#"
+    let factor = max(u32(max(post.p0.x, 1.0)), 1u);
+    let span = min(factor, 64u);
+    let base_x = i32(p.x) * i32(factor);
+    let base_y = i32(p.y) * i32(factor);
+    let size = vec2<f32>(textureDimensions(src_tex));
+    let edge = vec2<f32>(src_dim()) - vec2<f32>(0.5);
+    var acc = vec3<f32>(0.0);
+    var total = 0.0;
+    for (var dy = 0u; dy < span; dy = dy + 2u) {
+        for (var dx = 0u; dx < span; dx = dx + 2u) {
+            let at = vec2<f32>(f32(base_x + i32(dx)) + 1.0, f32(base_y + i32(dy)) + 1.0);
+            let s = textureSampleLevel(src_tex, flare_sampler, min(at, edge) / size, 0.0).rgb;
+            let c = max(s, vec3<f32>(0.0));
+            let w = 1.0 / (1.0 + max(c.r, max(c.g, c.b)));
+            acc = acc + c * w;
+            total = total + w;
+        }
+    }
+    var c = max(acc / max(total, 1e-8) - vec3<f32>(post.p0.y), vec3<f32>(0.0));
+    c = c * (1.0 / (1.0 + max(c.r, max(c.g, c.b)) * post.p0.z));
+    store(p, vec4<f32>(c, 1.0));
+"#
+);
+
+pub const FLARE_FEATURES: &str = shader!(
+    r#"
+fn flare_uv(uv: vec2<f32>) -> vec4<f32> {
+    let dim = vec2<f32>(src_dim());
+    return sample_src(uv.x * dim.x - 0.5, uv.y * dim.y - 0.5);
+}
+
+fn flare_normalize(v: vec2<f32>) -> vec2<f32> {
+    let len = length(v);
+    if (len < 1e-12) { return vec2<f32>(0.0); }
+    return v / len;
+}
+
+fn flare_color(uv: vec2<f32>) -> vec3<f32> {
+    let offset = flare_normalize(vec2<f32>(0.5001) - uv) * post.p0.w;
+    return vec3<f32>(
+        flare_uv(uv + offset).r,
+        flare_uv(uv).g,
+        flare_uv(uv - offset).b
+    );
+}
+
+fn flare_ring(x: f32, c: f32, r: f32) -> f32 {
+    let t = min(abs(x - c) / r, 1.0);
+    return 1.0 - t * t * (3.0 - 2.0 * t);
+}
+"#,
+    r#"
+    let dim = vec2<f32>(max(post.size, vec2<u32>(1u)));
+    let vertex = (vec2<f32>(p) + vec2<f32>(0.5)) / dim;
+    let ratio = dim.x / dim.y;
+    let aspect = vec2<f32>(ratio, 1.0 / ratio);
+    let threshold = post.p0.z;
+    var color = vec3<f32>(0.0);
+    let count = min(u32(max(post.p0.x, 0.0)), 16u);
+    if (count > 0u) {
+        let uv = vec2<f32>(1.0) - vertex;
+        let v = (vec2<f32>(0.5) - uv) * post.p0.y;
+        for (var i = 0u; i < count; i = i + 1u) {
+            let suv = fract(uv + v * f32(i));
+            color = color + clamp(flare_color(suv) - vec3<f32>(threshold), vec3<f32>(0.0), vec3<f32>(1.0));
+        }
+    }
+    if (post.p1.x > 0.0) {
+        var v = vec2<f32>(0.5001) - vertex;
+        v.x = v.x * aspect.x;
+        v = flare_normalize(v);
+        v.x = v.x * aspect.y;
+        let s = clamp(flare_color(vertex + v * post.p1.y) - vec3<f32>(threshold), vec3<f32>(0.0), vec3<f32>(1.0));
+        let w = vec2<f32>((vertex.x - 0.5) * aspect.x + 0.5, vertex.y);
+        let d = distance(w, vec2<f32>(0.5));
+        color = color + s * flare_ring(d, post.p1.y, post.p1.x);
+    }
+    store(p, vec4<f32>(color, 1.0));
+"#
+);
+
+pub const FLARE_ADD: &str = shader!(
+    bloomtex,
+    r#"
+    if (abs(post.p0.x) < 1e-8) { store(p, src); return; }
+    let full = max(vec2<f32>(src_dim()), vec2<f32>(1.0));
+    let small = vec2<f32>(bloom_dim());
+    let u = (f32(p.x) + 0.5) / full.x;
+    let v = (f32(p.y) + 0.5) / full.y;
+    let s = sample_bloom(u * small.x - 0.5, v * small.y - 0.5);
+    let cx = u - 0.5001;
+    let cy = v - 0.5001;
+    let d = sqrt(cx * cx + cy * cy);
+    let x = cx / max(d, 1e-12);
+    let radial = (-0.1565827 * x + 1.5707964) * sqrt(max(1.0 - x, 0.0));
+    let t = fract(radial) * 256.0 - 0.5;
+    let i0 = i32(floor(t));
+    let f = t - floor(t);
+    let a = floor((0.5 + 0.5 * grain_hash(u32(((i0 % 256) + 256) % 256), 0u, 0x2545f491u)) * 255.0) / 255.0;
+    let b = floor((0.5 + 0.5 * grain_hash(u32(((i0 + 1) % 256 + 256) % 256), 0u, 0x2545f491u)) * 255.0) / 255.0;
+    let lookup = a + (b - a) * f;
+    let edge = clamp(d / 0.3, 0.0, 1.0);
+    let burst = clamp(lookup * lookup + (1.0 - edge * edge * (3.0 - 2.0 * edge)), 0.0, 1.0);
+    let mask = 1.0 + (burst - 1.0) * post.p0.y;
+    store(p, vec4<f32>(src.rgb + s.rgb * (post.p0.x * mask), src.a));
 "#
 );

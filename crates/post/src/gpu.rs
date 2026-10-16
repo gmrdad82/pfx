@@ -477,6 +477,7 @@ fn exposure_slots(pass: &Pass, stages: usize) -> Vec<Option<usize>> {
 fn stage_name(pass: &Pass, stage: usize, count: usize) -> String {
     let parts: &[&str] = match count {
         3 => &["extract", "rings", "add"],
+        5 => &["prepare", "features", "blur x", "blur y", "add"],
         4 => &["extract", "blur x", "blur y", "add"],
         _ => &[],
     };
@@ -544,6 +545,16 @@ fn plan_groups(
                     (ImageSlot::Main, ImageSlot::Main),
                 ],
             ),
+            (Pass::Flare(_), _) => (
+                crate::flare::factor(height),
+                vec![
+                    (ImageSlot::Main, ImageSlot::LowB),
+                    (ImageSlot::LowB, ImageSlot::LowA),
+                    (ImageSlot::LowA, ImageSlot::LowB),
+                    (ImageSlot::LowB, ImageSlot::LowA),
+                    (ImageSlot::Main, ImageSlot::Main),
+                ],
+            ),
             (Pass::Halation(_), _) => (
                 4,
                 vec![
@@ -584,7 +595,10 @@ fn plan_groups(
             })
             .collect();
         let low = if (bloom.is_some()
-            || matches!(pass, Pass::Bloom(_) | Pass::Halation(_) | Pass::Neon(_)))
+            || matches!(
+                pass,
+                Pass::Bloom(_) | Pass::Halation(_) | Pass::Neon(_) | Pass::Flare(_)
+            ))
             && dispatches.len() > 1
         {
             let w = (width / factor).max(1);
@@ -845,6 +859,9 @@ impl GpuChain {
             for stage in &mut group.stages {
                 *stage.bind.get_mut().unwrap_or_else(PoisonError::into_inner) = None;
             }
+            if matches!(group.pass, Pass::Flare(_)) {
+                group.factor = crate::flare::factor(height);
+            }
             if group.low.is_some() {
                 let w = (width / group.factor).max(1);
                 let h = (height / group.factor).max(1);
@@ -1083,6 +1100,9 @@ impl GpuChain {
                 let mut params = *params;
                 if stage_index == 0 && self.tape.encodes && matches!(group.pass, Pass::Tape(_)) {
                     params[14] = 1.0;
+                }
+                if stage_index == 0 && matches!(group.pass, Pass::Flare(_)) {
+                    params[0] = group.factor as f32;
                 }
                 let (w, h) = self.slot_size(group, stage.target);
                 if group_index == 0

@@ -1,5 +1,6 @@
 use crate::bloom::{self, Bloom};
 use crate::comic::{self, ModernComic};
+use crate::flare::{self, Flare};
 use crate::fx::{self, NoiseKind};
 use crate::grade::{self, Contrast, WarmthKind};
 use crate::image::Image;
@@ -118,6 +119,7 @@ pub enum Pass {
     Exposure(f32),
     Black(f32),
     Bloom(Bloom),
+    Flare(Flare),
     Saturation(grade::Saturation),
     Contrast(Contrast),
     Warmth(grade::Warmth),
@@ -198,6 +200,28 @@ impl Chain {
         current
     }
 
+    pub fn set_flare(&mut self, flare: Flare) {
+        if let Some(slot) = self.passes.iter_mut().find_map(|pass| match pass {
+            Pass::Flare(slot) => Some(slot),
+            _ => None,
+        }) {
+            *slot = flare;
+            return;
+        }
+        let index = self
+            .passes
+            .iter()
+            .position(|pass| matches!(pass, Pass::Bloom(_)))
+            .map(|index| index + 1)
+            .or_else(|| {
+                self.passes
+                    .iter()
+                    .position(|pass| matches!(pass, Pass::Lut(_) | Pass::Tone(_) | Pass::Encode))
+            })
+            .unwrap_or(self.passes.len());
+        self.passes.insert(index, Pass::Flare(flare));
+    }
+
     pub fn split_after_bloom(&self) -> (Self, Self) {
         let boundary = self
             .passes
@@ -231,6 +255,7 @@ impl Pass {
             Self::Exposure(_) => "exposure",
             Self::Black(_) => "black",
             Self::Bloom(_) => "bloom",
+            Self::Flare(_) => "flare",
             Self::Saturation(_) => "saturation",
             Self::Contrast(_) => "contrast",
             Self::Warmth(_) => "warmth",
@@ -281,6 +306,7 @@ impl Pass {
         match self {
             Self::Exposure(v) => (*v - 1.0).abs() < 1e-8,
             Self::Bloom(v) => v.strength.abs() < 1e-8,
+            Self::Flare(v) => v.is_off(),
             Self::Vignette(v) => v.strength.abs() < 1e-8,
             Self::Saturation(v) => (v.amount - 1.0).abs() < 1e-8,
             Self::Warmth(v) => v.amount.abs() < 1e-8,
@@ -301,6 +327,7 @@ impl Pass {
             Self::Exposure(v) => grade::exposure(image, *v),
             Self::Black(v) => grade::black(image, *v),
             Self::Bloom(v) => bloom::apply(image, v),
+            Self::Flare(v) => flare::apply(image, v),
             Self::Saturation(v) => grade::saturation(image, v),
             Self::Contrast(v) => grade::contrast(image, v),
             Self::Warmth(v) => grade::warmth(image, v),
@@ -352,6 +379,7 @@ impl Pass {
     pub fn region_reach(&self) -> Option<u32> {
         match self {
             Self::Bloom(_)
+            | Self::Flare(_)
             | Self::Neon(_)
             | Self::Halation(_)
             | Self::Outline(_)
@@ -439,6 +467,7 @@ impl Pass {
             Self::Bloom(bloom) => bloom_dispatches(bloom, 1.0),
             Self::Grade(passes) => grade_dispatches(passes),
             Self::Halation(pass) => halation_dispatches(pass),
+            Self::Flare(pass) => flare_dispatches(pass),
             Self::Neon(pass) if pass.radius > 0 && pass.strength.abs() >= 1e-8 => vec![
                 GpuDispatch {
                     shader: Cow::Borrowed(wgsl::NEON_EDGE),
@@ -484,6 +513,7 @@ impl Pass {
             Self::Exposure(_) => wgsl::EXPOSURE,
             Self::Black(_) => wgsl::BLACK,
             Self::Bloom(_) => wgsl::BLOOM_ADD,
+            Self::Flare(_) => wgsl::FLARE_ADD,
             Self::Saturation(_) => wgsl::SATURATION,
             Self::Contrast(_) => wgsl::CONTRAST,
             Self::Warmth(_) => wgsl::WARMTH,
@@ -551,6 +581,7 @@ impl Pass {
             Self::Exposure(v) => fill(&[(*v, 0)]),
             Self::Black(v) => fill(&[(*v, 0)]),
             Self::Bloom(v) => bloom_add_params(v),
+            Self::Flare(v) => fill(&[(v.amount, 0), (v.starburst, 1)]),
             Self::Saturation(v) => fill(&[
                 (v.amount, 0),
                 (v.weights[0], 1),
@@ -580,7 +611,7 @@ impl Pass {
                 (v.high[0], 6),
                 (v.high[1], 7),
             ]),
-            Self::Lut(v) => fill(&[(v.size as f32, 0)]),
+            Self::Lut(v) => v.params(),
             Self::Tone(Tone::Aces { gain }) => fill(&[(0.0, 0), (*gain, 1)]),
             Self::Tone(Tone::Neutral {
                 start,
@@ -1016,6 +1047,49 @@ fn halation_dispatches(pass: &fx::Halation) -> Vec<GpuDispatch> {
         GpuDispatch {
             shader: Cow::Borrowed(wgsl::HALATION_ADD),
             params: fill(&[(pass.strength, 0)]),
+            aux: Aux::Bloom,
+        },
+    ]
+}
+
+fn flare_dispatches(pass: &Flare) -> Vec<GpuDispatch> {
+    let blur = |x: f32, y: f32| GpuDispatch {
+        shader: Cow::Borrowed(wgsl::BLOOM_BLUR),
+        params: fill(&[
+            (x, 0),
+            (y, 1),
+            (flare::BLUR_RADIUS as f32, 2),
+            (flare::BLUR_SPREAD, 3),
+        ]),
+        aux: Aux::None,
+    };
+    vec![
+        GpuDispatch {
+            shader: Cow::Borrowed(wgsl::FLARE_PREPARE),
+            params: fill(&[
+                (1.0, 0),
+                (flare::BLOOM_THRESHOLD, 1),
+                (1.0 / flare::HIGHLIGHT, 2),
+            ]),
+            aux: Aux::LinearSampler,
+        },
+        GpuDispatch {
+            shader: Cow::Borrowed(wgsl::FLARE_FEATURES),
+            params: fill(&[
+                (pass.ghosts.min(flare::MAX_GHOSTS) as f32, 0),
+                (pass.ghost_spacing, 1),
+                (pass.threshold, 2),
+                (flare::ABERRATION, 3),
+                (pass.halo, 4),
+                (pass.halo_radius, 5),
+            ]),
+            aux: Aux::None,
+        },
+        blur(1.0, 0.0),
+        blur(0.0, 1.0),
+        GpuDispatch {
+            shader: Cow::Borrowed(wgsl::FLARE_ADD),
+            params: fill(&[(pass.amount, 0), (pass.starburst, 1)]),
             aux: Aux::Bloom,
         },
     ]

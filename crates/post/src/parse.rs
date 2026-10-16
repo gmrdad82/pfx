@@ -50,6 +50,7 @@ pub const KEYS: &[&str] = &[
     "levels",
     "line_weight",
     "lut",
+    "lut_amount",
     "mask",
     "outline",
     "outline_alpha",
@@ -152,14 +153,30 @@ impl std::fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
+pub type Reader<'a> = dyn FnMut(&str) -> Result<Vec<u8>, String> + 'a;
+
+fn no_files(path: &str) -> Result<Vec<u8>, String> {
+    Err(format!(
+        "lut = \"{path}\" is read by a scene or a caller with files"
+    ))
+}
+
 pub fn parse_str(text: &str) -> Result<Chain, ParseError> {
+    parse_str_with(text, &mut no_files)
+}
+
+pub fn parse_str_with(text: &str, read: &mut Reader<'_>) -> Result<Chain, ParseError> {
     let table: Table = text
         .parse()
         .map_err(|err| ParseError::msg(format!("toml: {err}")))?;
-    parse(&table)
+    parse_with(&table, read)
 }
 
 pub fn parse(table: &Table) -> Result<Chain, ParseError> {
+    parse_with(table, &mut no_files)
+}
+
+pub fn parse_with(table: &Table, read: &mut Reader<'_>) -> Result<Chain, ParseError> {
     if let Some(bad) = table.keys().find(|key| !KEYS.contains(&key.as_str())) {
         return Err(ParseError::msg(format!(
             "unknown key {bad}; allowed: {}",
@@ -240,7 +257,8 @@ pub fn parse(table: &Table) -> Result<Chain, ParseError> {
                     );
                 }
             }
-            "lut" => set_lut(&mut chain, value)?,
+            "lut" => set_lut(&mut chain, value, read)?,
+            "lut_amount" => {}
             "weights" => set_weights(&mut chain, value)?,
             "cel_bands" => {
                 let n = number_u(value, key)?;
@@ -411,6 +429,9 @@ pub fn parse(table: &Table) -> Result<Chain, ParseError> {
                 )));
             }
         }
+    }
+    if let Some(value) = table.get("lut_amount") {
+        set_lut_amount(&mut chain, number(value, "lut_amount")?)?;
     }
     Ok(chain)
 }
@@ -1053,9 +1074,16 @@ fn set_dither_kind(chain: &mut Chain, value: &Value) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn set_lut(chain: &mut Chain, value: &Value) -> Result<(), ParseError> {
+fn set_lut(chain: &mut Chain, value: &Value, read: &mut Reader<'_>) -> Result<(), ParseError> {
+    if let Some(path) = value.as_str() {
+        let bytes = read(path).map_err(|error| ParseError::msg(format!("lut: {error}")))?;
+        let lut = crate::cube::parse_bytes(&bytes)
+            .map_err(|error| ParseError::msg(format!("lut {path}: {error}")))?;
+        put_lut(chain, lut);
+        return Ok(());
+    }
     let Some(table) = value.as_table() else {
-        return Err(ParseError::msg("lut is a table"));
+        return Err(ParseError::msg("lut is a .cube path or a table"));
     };
     if let Some(bad) = table.keys().find(|key| !LUT_KEYS.contains(&key.as_str())) {
         return Err(unknown("lut", bad, LUT_KEYS));
@@ -1064,8 +1092,11 @@ fn set_lut(chain: &mut Chain, value: &Value) -> Result<(), ParseError> {
         .get("size")
         .ok_or_else(|| ParseError::msg("lut.size is an integer"))
         .and_then(|v| integer(v, "lut.size"))?;
-    if !(2..=32).contains(&size) {
-        return Err(ParseError::msg("lut.size is from 2 to 32"));
+    if !(2..=crate::cube::MAX_CUBE).contains(&size) {
+        return Err(ParseError::msg(format!(
+            "lut.size is from 2 to {}",
+            crate::cube::MAX_CUBE
+        )));
     }
     let values = table
         .get("values")
@@ -1085,11 +1116,15 @@ fn set_lut(chain: &mut Chain, value: &Value) -> Result<(), ParseError> {
             number(&chunk[2], "lut.values")?,
         ]);
     }
-    let lut = crate::grade::Lut { size, values: rgb };
+    put_lut(chain, crate::grade::Lut::cube(size, rgb));
+    Ok(())
+}
+
+pub fn put_lut(chain: &mut Chain, lut: crate::grade::Lut) {
     for pass in &mut chain.passes {
         if let Pass::Lut(slot) = pass {
             *slot = lut;
-            return Ok(());
+            return;
         }
     }
     let index = chain
@@ -1098,7 +1133,19 @@ fn set_lut(chain: &mut Chain, value: &Value) -> Result<(), ParseError> {
         .position(|pass| matches!(pass, Pass::Tone(_)))
         .unwrap_or(chain.passes.len());
     chain.passes.insert(index, Pass::Lut(lut));
-    Ok(())
+}
+
+fn set_lut_amount(chain: &mut Chain, amount: f32) -> Result<(), ParseError> {
+    if !(0.0..=1.0).contains(&amount) {
+        return Err(ParseError::msg("lut_amount is 0 to 1"));
+    }
+    for pass in &mut chain.passes {
+        if let Pass::Lut(slot) = pass {
+            slot.amount = amount;
+            return Ok(());
+        }
+    }
+    Err(ParseError::msg("lut_amount needs a lut"))
 }
 
 fn set_weights(chain: &mut Chain, value: &Value) -> Result<(), ParseError> {

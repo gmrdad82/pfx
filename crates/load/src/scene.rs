@@ -4,6 +4,9 @@ mod build;
 mod diff;
 mod draws;
 mod edit;
+mod flare;
+#[cfg(test)]
+mod flare_tests;
 mod haze;
 mod mix;
 mod motion_blur;
