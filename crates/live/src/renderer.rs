@@ -32,7 +32,10 @@ use pfx_geom::tree::{PetalSource, Tree, tree_sway};
 use pfx_gpu::screens::{Budget, DynamicResolution};
 use pfx_gpu::{FrameTimings, Gpu, GpuProfiler, GpuRefusal, PassTiming, wgpu};
 use pfx_physics::{Emitter, ParticleKind, Wind};
-use pfx_post::{Bloom, Chain, Pass as PostPass, Style, Tape, Tone, dof, gpu::GpuChain};
+use pfx_post::{
+    Bloom, Chain, GpuMotionBlur, MotionBlur, Pass as PostPass, Style, Tape, Tone, dof,
+    gpu::GpuChain,
+};
 use pfx_text::Paragraph;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -655,6 +658,9 @@ pub struct Renderer {
     post: GpuChain,
     dof: dof::GpuDof,
     lens: Option<dof::Lens>,
+    blur: Option<GpuMotionBlur>,
+    motion_blur: Option<MotionBlur>,
+    velocity_spans_shutter: bool,
     haze: Option<RoomHaze>,
     exposure: ExposureMeter,
     exposure_mode: Exposure,
@@ -1319,6 +1325,9 @@ impl Renderer {
             post,
             dof: dof::GpuDof::new(device, width, height),
             lens: None,
+            blur: None,
+            motion_blur: None,
+            velocity_spans_shutter: false,
             haze: None,
             exposure: ExposureMeter::new(device),
             exposure_mode: Exposure::Auto { bias: 0.0 },
@@ -1425,6 +1434,9 @@ impl Renderer {
         self.dof.set_viewport(width, height)?;
         if let Some(coverage) = &mut self.coverage {
             coverage.invalidate();
+        }
+        if let Some(blur) = self.blur.as_mut() {
+            blur.set_viewport(width, height)?;
         }
         self.text_bounds.clear();
         if self
@@ -1605,6 +1617,37 @@ impl Renderer {
             self.touch();
         }
         self.lens = lens;
+    }
+
+    pub fn set_motion_blur(&mut self, blur: Option<MotionBlur>) {
+        let blur = blur.filter(|blur| blur.active());
+        if blur != self.motion_blur {
+            self.touch();
+        }
+        if blur.is_some() && self.blur.is_none() {
+            let (width, height) = self.capacity();
+            let mut pass = GpuMotionBlur::new(&self.frame.gpu.device, width, height);
+            let (shown_width, shown_height) = self.size();
+            if pass.set_viewport(shown_width, shown_height).is_ok() {
+                self.blur = Some(pass);
+            }
+        }
+        self.motion_blur = blur;
+    }
+
+    pub fn motion_blur(&self) -> Option<MotionBlur> {
+        self.motion_blur
+    }
+
+    pub fn set_velocity_spans_shutter(&mut self, spans: bool) {
+        if spans != self.velocity_spans_shutter {
+            self.touch();
+        }
+        self.velocity_spans_shutter = spans;
+    }
+
+    pub fn velocity_spans_shutter(&self) -> bool {
+        self.velocity_spans_shutter
     }
 
     pub fn set_haze(&mut self, haze: Option<RoomHaze>) {
@@ -2149,6 +2192,9 @@ impl Renderer {
         self.effects.set_volume_cuts(device, cuts);
         self.post.resize(width, height);
         self.dof.resize(width, height);
+        if let Some(blur) = self.blur.as_mut() {
+            blur.resize(width, height);
+        }
         self.reflections.resize(device, width, height);
         let meshes = self.glass.take_meshes();
         self.glass = glass::Pass::new(device, width, height);
@@ -3420,6 +3466,27 @@ impl Renderer {
         } else {
             resolved
         };
+        let blurred = match (self.motion_blur.filter(|_| !cached), self.blur.as_mut()) {
+            (Some(settings), Some(blur)) => {
+                let timing = self.profiler.pass("motion blur");
+                self.pass_log.push("motion blur");
+                Some(
+                    blur.render(
+                        &mut encoder,
+                        &resolved,
+                        &self.frame.targets.velocity_view,
+                        current_depth,
+                        settings,
+                        self.velocity_spans_shutter,
+                        scene.time,
+                        self.profiler.compute_writes(timing),
+                    )
+                    .clone(),
+                )
+            }
+            _ => None,
+        };
+        let resolved = blurred.unwrap_or(resolved);
         let resolved = if let Some(lens) = self.lens {
             let timing = self.profiler.pass("depth of field");
             self.pass_log.push("depth of field");

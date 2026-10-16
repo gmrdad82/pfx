@@ -62,6 +62,7 @@ pub struct SceneDiff {
     pub trace: bool,
     pub plates: bool,
     pub physics: bool,
+    pub motion_blur: bool,
 }
 
 impl SceneDiff {
@@ -90,6 +91,7 @@ impl SceneDiff {
             && !self.trace
             && !self.plates
             && !self.physics
+            && !self.motion_blur
     }
 
     pub fn draws(&self) -> bool {
@@ -162,5 +164,6 @@ pub(super) fn diff(older: &Scene, newer: &Scene) -> SceneDiff {
         trace: older.trace != newer.trace,
         plates: older.plates != newer.plates,
         physics: older.physics != newer.physics,
+        motion_blur: older.motion_blur != newer.motion_blur,
     }
 }

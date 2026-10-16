@@ -381,6 +381,7 @@ pub(super) fn build(
         texts,
         plates,
         physics: resolved.physics.as_ref().map(super::play::build_physics),
+        motion_blur: resolved.motion_blur.as_ref().map(super::motion_blur::build),
         bodies,
         body_layers,
         characters,
