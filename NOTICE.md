@@ -108,6 +108,18 @@ In the package `pfx-sound` (feature `voicefx`), the spectral-flux onsets in `cra
 >
 > THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+## enginesound, under the MIT licence
+
+The engine voice in `crates/sound/src/shot/engine.rs` (in the package `pfx-sound`, feature `shot`), its crank cycle, piston and ignition pulses, valve-modulated cylinder waveguides, collectors, straight pipe, muffler elements, intake noise, waveguide damping and DC filter, with the tuned values of `example1.esc`, is ported from enginesound (https://github.com/DasEtwas/enginesound, `src/gen.rs`, commit `e5fcca587397c0c8ba9c9d24874b951fed74d260`), Copyright (c) 2020 DasEtwas, licensed MIT:
+
+> Copyright (c) 2020 DasEtwas
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 ## Hash without Sine, under the MIT licence
 
 `hash12` in `crates/post/src/look/mod.rs` (in the package `pfx-post`, re-exported by `crates/live/src/flat/sdf.rs`), `flat_hash12` in `crates/live/src/flat/shader.rs` (in the package `pfx-live`) and `look_hash12` in `crates/post/src/look/shader.rs`, the hash behind the flat pass's `Grain` and `Fibre` patterns and the flat looks' `Grain` pass, are ported from David Hoskins' "Hash without Sine" (https://www.shadertoy.com/view/4djSRW, `hash12`, its constants `.1031` and `33.33` kept), Copyright (c)2014 David Hoskins, licensed MIT:
