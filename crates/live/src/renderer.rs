@@ -997,7 +997,7 @@ fn depth_pipeline(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::Comput
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("live linear depth"), source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let z = textureLoad(source, id.xy, 0); let distance = limits.y / (z + limits.x); textureStore(destination, id.xy, vec4f(select(limits.z, distance, z < 1.0 && distance > 0.0), 0.0, 0.0, 0.0)); }".into()) });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("live linear depth"), source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let z = textureLoad(source, id.xy, 0); let distance = select(limits.y / (z + limits.x), (limits.y - z) / limits.x, limits.w > 0.5); textureStore(destination, id.xy, vec4f(select(limits.z, distance, z < 1.0 && distance > 0.0), 0.0, 0.0, 0.0)); }".into()) });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("live linear depth"),
         layout: Some(&pipeline_layout),
@@ -3033,7 +3033,11 @@ impl Renderer {
                 scene.camera.projection[2][2],
                 scene.camera.projection[3][2],
                 view.far,
-                0.0,
+                if scene.camera.projection[2][3] == 0.0 {
+                    1.0
+                } else {
+                    0.0
+                },
             ]),
         );
         let bind = self.depth_groups[self.depth_index].get(
