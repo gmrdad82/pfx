@@ -102,7 +102,7 @@ fn a_camera_view_frames_the_callers_aspect_centred_with_the_passepartout_around_
     assert_eq!(rig.viewport.look(), Look::Scene);
     assert_eq!(rig.viewport.passepartout(), None);
     let scene = rig.viewport.scene().unwrap().camera_or_default();
-    assert_eq!(rig.viewport.camera(), Some(scene));
+    assert_eq!(rig.viewport.camera(), Some(scene.clone()));
     rig.viewport.set_frame_aspect(Some(WIDE));
     rig.run(&Script::default());
     let panel = rig.panel();

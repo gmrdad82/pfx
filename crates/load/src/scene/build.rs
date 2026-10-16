@@ -1330,6 +1330,7 @@ fn build_camera(
             fstop,
             distance,
             focal,
+            keys: camera.focus_keys.clone().unwrap_or_default(),
         });
     }
     Ok(built)

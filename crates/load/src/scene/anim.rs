@@ -1,12 +1,14 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use pfx_core::anim::{Atlas, ClipEvent, FrameEvent, Playback, Rig, SpriteClip, SpriteSheet};
+use pfx_core::anim::{
+    Animator, Atlas, ClipEvent, FrameEvent, Playback, Rig, SpriteClip, SpriteSheet,
+};
 use pfx_scene::Entry;
 use pfx_scene::types as file;
 
 use super::build::{Places, Reader, Step, content_from, inner};
-use super::{Content, Matrix, Object, SceneError, SceneMesh};
+use super::{Content, Matrix, Object, Scene, SceneError, SceneMesh};
 
 pub const SPRITE_CLIP: &str = "";
 
@@ -64,6 +66,72 @@ impl Animation {
             .unwrap_or(0);
         sheet.atlas().uv(frame)
     }
+}
+
+impl Scene {
+    pub fn clipped(&self) -> bool {
+        self.objects.iter().any(|object| {
+            self.animations
+                .get(&object.name)
+                .is_some_and(|data| data.sprite.is_none() && data.plays())
+        })
+    }
+
+    pub fn animator(&self, place: usize, rate: u32) -> Result<Option<Animator>, String> {
+        let Some(object) = self.objects.get(place) else {
+            return Ok(None);
+        };
+        let data = self.animations.get(&object.name);
+        if data.is_some_and(|data| data.sprite.is_some()) {
+            return Ok(None);
+        }
+        let rig = data.and_then(|data| data.rig.clone()).or_else(|| {
+            self.meshes
+                .get(&object.mesh)
+                .and_then(|mesh| mesh.rig.clone())
+        });
+        let Some(rig) = rig else {
+            return Ok(None);
+        };
+        let mut animator = Animator::new(rig, rate);
+        if let Some(data) = data.filter(|data| data.plays()) {
+            let clips: Vec<(&str, f32)> = if data.blend.is_empty() {
+                data.clip.iter().map(|clip| (clip.as_str(), 1.0)).collect()
+            } else {
+                data.blend
+                    .iter()
+                    .map(|(clip, weight)| (clip.as_str(), *weight))
+                    .collect()
+            };
+            let failed = |error| format!("object {}: {error}", object.name);
+            animator.play_blend(&clips, 0).map_err(failed)?;
+            for (clip, _) in &clips {
+                animator
+                    .set_playback(clip, data.playback)
+                    .and_then(|()| animator.set_start(clip, data.start, 0))
+                    .and_then(|()| animator.set_speed(clip, data.speed, 0))
+                    .map_err(failed)?;
+            }
+        }
+        Ok(Some(animator))
+    }
+
+    pub fn animators(&self, rate: u32) -> Result<BTreeMap<usize, Animator>, String> {
+        let mut out = BTreeMap::new();
+        for place in 0..self.objects.len() {
+            if let Some(animator) = self.animator(place, rate)? {
+                out.insert(place, animator);
+            }
+        }
+        Ok(out)
+    }
+}
+
+pub fn palettes(animators: &BTreeMap<usize, Animator>, time: f32) -> BTreeMap<usize, Vec<Matrix>> {
+    animators
+        .iter()
+        .map(|(&place, animator)| (place, animator.palette_at(f64::from(time))))
+        .collect()
 }
 
 pub fn surface(frame: [f32; 4]) -> ([f32; 2], [f32; 2], [f32; 4]) {

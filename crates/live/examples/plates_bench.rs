@@ -127,7 +127,7 @@ fn drifted(base: &SceneCamera, time: f32) -> SceneCamera {
         offset[1],
         -offset[0] * s + offset[2] * c,
     ];
-    let mut camera = *base;
+    let mut camera = base.clone();
     camera.at = [
         base.look_at[0] + turned[0],
         base.look_at[1] + turned[1] + pitch * 2.0,
@@ -162,7 +162,7 @@ fn run(
             Motion::Still | Motion::Drift => 0.0,
         };
         let pose = match motion {
-            Motion::Still => base,
+            Motion::Still => base.clone(),
             Motion::Drift | Motion::Moving => drifted(&base, frame as f32 / 60.0),
         };
         let finish = staged.finish();

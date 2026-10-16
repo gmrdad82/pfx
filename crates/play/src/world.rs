@@ -188,7 +188,7 @@ impl Fx {
     pub fn camera(&self, camera: &Camera) -> Camera {
         let offset = self.shake.offset(self.comfort.amount());
         if offset.is_zero() {
-            return *camera;
+            return camera.clone();
         }
         let (_, right, up) = camera.axes();
         let shift: [f32; 3] = std::array::from_fn(|axis| {
@@ -199,7 +199,7 @@ impl Fx {
             at: std::array::from_fn(|axis| camera.at[axis] + shift[axis]),
             look_at: std::array::from_fn(|axis| camera.look_at[axis] + shift[axis]),
             up: std::array::from_fn(|axis| up[axis] * cos - right[axis] * sin),
-            ..*camera
+            ..camera.clone()
         }
     }
 }

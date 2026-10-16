@@ -45,7 +45,7 @@ use pfx_text::{Anchor, Face, Representation, RichParagraph, Span, TextEngine};
 use crate::Sky;
 use crate::vec3::{cross, dot, sub};
 
-pub use anim::{Animation, Posed, SPRITE_CLIP, Sprite, content_key, surface};
+pub use anim::{Animation, Posed, SPRITE_CLIP, Sprite, content_key, palettes, surface};
 pub use bind::{bind, bound, filled};
 pub use build::project_root;
 pub use diff::{Changes, SceneDiff};
@@ -435,20 +435,41 @@ pub enum Projection {
     Orthographic { height: f32 },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DepthOfField {
     pub fstop: f32,
     pub distance: f32,
     pub focal: f32,
+    pub keys: Vec<[f32; 2]>,
 }
 
 impl DepthOfField {
     pub fn aperture(&self) -> f32 {
         self.focal / self.fstop
     }
+
+    pub fn distance_at(&self, time: f32) -> f32 {
+        focus_at(&self.keys, time).unwrap_or(self.distance)
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+pub fn focus_at(keys: &[[f32; 2]], time: f32) -> Option<f32> {
+    let first = keys.first()?;
+    if time <= first[0] {
+        return Some(first[1]);
+    }
+    for pair in keys.windows(2) {
+        let ([t0, m0], [t1, m1]) = (pair[0], pair[1]);
+        if time <= t1 {
+            let span = t1 - t0;
+            let u = if span > 0.0 { (time - t0) / span } else { 1.0 };
+            return Some(m0 + (m1 - m0) * u);
+        }
+    }
+    keys.last().map(|last| last[1])
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Camera {
     pub projection: Projection,
     pub at: [f32; 3],
@@ -705,7 +726,7 @@ impl Scene {
     }
 
     pub fn camera_or_default(&self) -> Camera {
-        self.camera.unwrap_or_default()
+        self.camera.clone().unwrap_or_default()
     }
 
     pub fn environment(&self) -> Environment {

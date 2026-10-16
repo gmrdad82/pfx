@@ -86,7 +86,7 @@ impl Live {
         renderer.set_exposure(Exposure::Fixed(1.0))?;
         renderer.set_frames_on_demand(Some(Limits::default()))?;
         let mut shown = scene.clone();
-        shown.camera = Some(camera);
+        shown.camera = Some(camera.clone());
         let staged = renderer.stage(&shown)?;
         renderer.wait_sky()?;
         renderer.set_lens(staged.lens(aspect(size)));
@@ -155,7 +155,7 @@ impl Live {
 
     pub fn show(&mut self, scene: &Scene, revision: u64) -> Result<(), String> {
         let mut next = scene.clone();
-        next.camera = self.scene.camera;
+        next.camera = self.scene.camera.clone();
         let diff = self.scene.diff(&next);
         self.staged.apply(&mut self.renderer, &next, &diff)?;
         self.scene = next;
@@ -167,7 +167,7 @@ impl Live {
         if self.camera == camera {
             return Ok(());
         }
-        self.scene.camera = Some(camera);
+        self.scene.camera = Some(camera.clone());
         let diff = SceneDiff {
             camera: true,
             ..SceneDiff::default()

@@ -288,7 +288,7 @@ impl PlateRecipe {
 
 impl ViewKeys {
     pub fn camera(&self, base: &SceneCamera) -> Result<SceneCamera, String> {
-        let mut camera = *base;
+        let mut camera = base.clone();
         if let Some(at) = self.at {
             camera.at = at;
         }

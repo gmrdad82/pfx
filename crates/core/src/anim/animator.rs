@@ -51,7 +51,11 @@ impl Layer {
     }
 
     fn elapsed(&self, tick: u64, rate: u32) -> f64 {
-        let ticks = tick.saturating_sub(self.start) as f64;
+        self.elapsed_at(tick as f64, rate)
+    }
+
+    fn elapsed_at(&self, tick: f64, rate: u32) -> f64 {
+        let ticks = (tick - self.start as f64).max(0.0);
         self.offset + ticks * self.speed as f64 / rate as f64
     }
 
@@ -84,12 +88,12 @@ struct Mix {
 }
 
 impl Mix {
-    fn progress(&self, tick: u64) -> f32 {
+    fn progress(&self, tick: f64) -> f32 {
         if self.fade == 0 {
             return 1.0;
         }
-        let done = tick.saturating_sub(self.start).min(self.fade);
-        (done as f64 / self.fade as f64) as f32
+        let done = (tick - self.start as f64).clamp(0.0, self.fade as f64);
+        (done / self.fade as f64) as f32
     }
 }
 
@@ -295,12 +299,12 @@ impl Animator {
         })
     }
 
-    fn mix_pose(&self, mix: &Mix, tick: u64, out: &mut Pose) {
+    fn mix_pose(&self, mix: &Mix, tick: f64, out: &mut Pose) {
         out.reset(self.rig.skeleton());
         for layer in &mix.layers {
             let clip = &self.rig.clips()[layer.clip];
             let time = local_time(
-                layer.elapsed(tick, self.rate),
+                layer.elapsed_at(tick, self.rate),
                 clip.duration(),
                 layer.playback,
             );
@@ -309,6 +313,10 @@ impl Animator {
     }
 
     pub fn evaluate(&self, tick: u64, pose: &mut Pose) {
+        self.evaluate_at(tick as f64, pose);
+    }
+
+    fn evaluate_at(&self, tick: f64, pose: &mut Pose) {
         let skeleton = self.rig.skeleton();
         pose.reset(skeleton);
         let mut layer = Pose::rest(skeleton);
@@ -358,7 +366,7 @@ impl Animator {
         let first = self
             .mixes
             .iter()
-            .rposition(|mix| mix.progress(tick) >= 1.0)
+            .rposition(|mix| mix.progress(tick as f64) >= 1.0)
             .unwrap_or(0);
         let mut layer = self.rig.default_weights();
         for (index, mix) in self.mixes.iter().enumerate().skip(first) {
@@ -367,7 +375,7 @@ impl Animator {
                 continue;
             }
             self.mix_weights(mix, tick, &mut layer);
-            let progress = mix.progress(tick);
+            let progress = mix.progress(tick as f64);
             if progress <= 0.0 {
                 continue;
             }
@@ -395,8 +403,19 @@ impl Animator {
         self.pose(tick).palette(self.rig.skeleton())
     }
 
+    pub fn palette_at(&self, seconds: f64) -> Vec<Mat4> {
+        let skeleton = self.rig.skeleton();
+        let mut pose = Pose::rest(skeleton);
+        self.evaluate_at(seconds * self.rate as f64, &mut pose);
+        pose.palette(skeleton)
+    }
+
     pub fn advance(&mut self, tick: u64) -> Vec<Fired> {
-        if let Some(done) = self.mixes.iter().rposition(|mix| mix.progress(tick) >= 1.0) {
+        if let Some(done) = self
+            .mixes
+            .iter()
+            .rposition(|mix| mix.progress(tick as f64) >= 1.0)
+        {
             self.mixes.drain(..done);
         }
         let rate = self.rate;

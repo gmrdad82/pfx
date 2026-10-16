@@ -48,7 +48,7 @@ impl BenchGame {
     }
 
     fn aim(&mut self, world: &World) {
-        let camera = world.camera;
+        let camera = &world.camera;
         let (direction, _, _) = camera.axes();
         self.yaw = direction[0].atan2(-direction[2]);
         self.pitch = direction[1].clamp(-1.0, 1.0).asin();
@@ -80,7 +80,7 @@ impl Game for BenchGame {
     fn start(&mut self, world: &mut World) {
         self.scene.start(world);
         if let Some(id) = self.camera.as_deref().and_then(|name| world.object(name)) {
-            world.camera = placed(world.model(id), world.camera);
+            world.camera = placed(world.model(id), world.camera.clone());
         }
         self.aim(world);
     }
@@ -99,7 +99,7 @@ impl Game for BenchGame {
         self.yaw += (turn * TURN_SPEED * dt).to_radians();
         self.pitch = (self.pitch + (tilt * TURN_SPEED * dt).to_radians()).clamp(-1.5, 1.5);
         let (ahead, right, _) = {
-            let mut aimed = world.camera;
+            let mut aimed = world.camera.clone();
             aimed.look_at = add(aimed.at, forward(self.yaw, self.pitch), 1.0);
             aimed.axes()
         };

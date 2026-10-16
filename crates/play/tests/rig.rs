@@ -100,7 +100,7 @@ fn difference(a: &[f32], b: &[f32]) -> f32 {
 }
 
 fn offset(world: &World) -> (f32, f32) {
-    let camera = world.camera;
+    let camera = &world.camera;
     let id = world.object("crate").unwrap();
     let at = world.at(id);
     let (forward, right, up) = camera.axes();

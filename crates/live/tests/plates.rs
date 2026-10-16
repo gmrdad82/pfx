@@ -440,7 +440,7 @@ fn a_plated_scene_on_demand_idles_still_reprojects_a_drift_and_redraws_moving_pa
         "the same settings change nothing"
     );
 
-    let mut drift = rest;
+    let mut drift = rest.clone();
     drift.at = [rest.at[0] + 0.004, rest.at[1], rest.at[2]];
     assert_eq!(
         view.tick(&drift, 0.0),

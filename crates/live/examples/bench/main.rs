@@ -918,6 +918,7 @@ impl Bench {
             }),
             props: &self.props,
             lights: None,
+            lens: None,
         };
         if self.submit {
             return self
