@@ -99,6 +99,14 @@ pub fn run_plan(
     plan: &Plan,
     caller_tmp: impl FnOnce() -> Result<PathBuf, String>,
 ) -> Result<Report, String> {
+    run_plan_with(plan, caller_tmp, |_, _| {})
+}
+
+pub fn run_plan_with(
+    plan: &Plan,
+    caller_tmp: impl FnOnce() -> Result<PathBuf, String>,
+    mut each: impl FnMut(u64, u64),
+) -> Result<Report, String> {
     if !plan.scene.is_file() {
         return Err(format!("{}: no such scene file", plan.scene.display()));
     }
@@ -147,7 +155,7 @@ pub fn run_plan(
     let seed = plan.seed as u32;
     let finish = staged.finish();
     let mut pace = Pace::new();
-    for _ in 0..frames {
+    for frame in 0..frames {
         session.advance((1.0 / FPS) as f32);
         let drawn = session
             .present(&staged, &mut renderer, aspect, seed)
@@ -166,6 +174,7 @@ pub fn run_plan(
         if let Some(error) = failed {
             return Err(error);
         }
+        each(frame + 1, frames);
     }
     let ticks = session.world().ticks();
     let camera = (session.world().camera.at, session.world().camera.look_at);

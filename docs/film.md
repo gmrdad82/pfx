@@ -225,6 +225,8 @@ pfx film <script.film.toml> --out <dir> [--json] [--plan]
 
 `--out` is a folder under the caller's `tmp/`. The command writes `frames/000000.png...`, `stills/<name>.png` for scenes that name a still, `audio.wav` and `manifest.json`, and prints the manifest's path (or, with `--json`, the manifest itself). It never runs an encoder; the manifest's `pcod` field is the exact command that makes the video, `pcod frames <out>/frames --audio <out>/audio.wav --fps <fps> <out>/film.mp4`. `--plan` checks the script and its files and prints each scene's kind, length, start and frame count without rendering (with `--json`, as JSON; with `--out`, with the `pcod` command too).
 
+On a terminal, `pfx film` keeps a progress line on stderr (frame n/N, frames per second, ETA and a bar), cleared before it prints; piped, with `NO_COLOR` or with `--json` it shows none ([Progress and stderr](render-a-scene.md#progress-and-stderr)).
+
 The manifest carries `film` (1), `script` and `script_sha256`, `frames`, `fps`, `size`, `seconds`, `scenes` (name, kind, seconds, from, frames, source), `out`, `frames_dir`, `stills_dir`, `stills`, `wav`, `samples`, `rate`, `format` (`png`), `pcod`, `pfx` (the version) and `wall_ms` (`total`, `per_frame`).
 
 A footage script is a film script (everything above works: keys, camera moves, looks, captions, marks, flashes, shakes and the score) with these keys added:

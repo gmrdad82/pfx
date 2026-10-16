@@ -30,6 +30,12 @@ pfx shot <scene.toml> (--seconds S | --frames N) [--size WxH] [--fps N] [--from 
 
 Input pfx can't parse gets clap's short answer with exit 2. A refusal after the parse is one line, `pfx: …`, with exit 1: a missing scene file, a `--set` the scene's checks refuse, a camera name the scene doesn't hold, a size over the GPU's limit, or an `--out` folder holding files pfx shot did not write. A folder pfx shot wrote before (it has its `manifest.json`) is cleared of its frames and manifest and written again.
 
+## Progress and stderr
+
+When stderr is a terminal, `pfx shot` keeps one line on it updated in place with `\r`: `pfx shot [#####-------------------] frame 30/120  35.2 fps  ETA 3s`. The rate counts the frames since the first one written, so device start and staging don't drag it down; the line is redrawn at most ten times a second and on the last frame, and cleared before the summary prints or an error does. It is left out when stderr is piped or redirected, when `NO_COLOR` is set to anything non-empty, when `TERM` is `dumb`, and with `--json`, which keeps stdout to its JSON lines and stderr quiet. `pfx film` and `pfx bench` show the same line (`pfx film`, `pfx bench`) under the same rules.
+
+Mesa's radv driver prints `WARNING: radv is not a conformant Vulkan implementation, testing use only.` at device creation on hardware it has no conformance submission for. The `pfx` binary sets `MESA_VK_IGNORE_CONFORMANCE_WARNING=1`, the switch Mesa's `vk_warn_non_conformant_implementation` reads, for its own process at start, before any GPU instance exists, and only when that variable isn't already set; set it to `0` to see the warning again. Programs pfx starts inherit it. Nothing else on stderr is filtered. The library crates a game links never set it: a game decides for itself.
+
 ## The clock
 
 The world ticks at a rate that puts every frame on a tick: fps × k, with k the smallest whole number that keeps the rate at or above the scene's `[physics] rate` (60 by default). With `--shutter`, k is also chosen so that S × k is a whole number, which puts t − S / fps on a tick too. At 60 fps with the default physics rate the world ticks at 60 Hz, at 24 fps at 72 Hz, and at 60 fps with `--shutter 0.5` at 120 Hz. Before frame n is posed, the clock is moved to n / fps plus one microsecond, so a frame that lands exactly on a tick includes it. Poses are taken at the latest tick, so they are exactly the clip's pose at t. The rate is in the manifest as `tick_rate`.

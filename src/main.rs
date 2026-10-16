@@ -8,6 +8,7 @@ use std::path::PathBuf;
 mod bake;
 mod cache_report;
 mod film;
+mod progress;
 mod project;
 mod scene;
 #[cfg(feature = "bench")]
@@ -1119,7 +1120,16 @@ fn edit(_args: &[String]) -> Result<(), String> {
 
 #[cfg(feature = "bench")]
 fn bench(args: &[String]) -> Result<(), String> {
-    pfx_bench::run(args, tools::caller_tmp)
+    let plan = pfx_bench::parse(args)?;
+    let mut shown = None;
+    let report = pfx_bench::run_plan_with(&plan, tools::caller_tmp, |done, total| {
+        shown
+            .get_or_insert_with(|| progress::Progress::new("pfx bench", total, progress::live()))
+            .frame(done)
+    });
+    drop(shown);
+    println!("{}", report?.line);
+    Ok(())
 }
 
 #[cfg(not(feature = "bench"))]
@@ -1144,7 +1154,16 @@ fn pfx(work: Plan, args: &[String]) -> Result<(), String> {
     perform(work)
 }
 
+const MESA_CONFORMANCE: &str = "MESA_VK_IGNORE_CONFORMANCE_WARNING";
+
+fn quiet_mesa() {
+    if std::env::var_os(MESA_CONFORMANCE).is_none() {
+        unsafe { std::env::set_var(MESA_CONFORMANCE, "1") };
+    }
+}
+
 fn main() {
+    quiet_mesa();
     if let Err(error) = pfx_run::ending::install() {
         eprintln!("pfx: {error}");
         std::process::exit(1);
