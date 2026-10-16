@@ -705,9 +705,9 @@ fn walk(
             ));
             rigs.morphs.len() - 1
         });
-        if !node.lod.is_empty() && (morph.is_some() || node.skin.is_some()) {
+        if !node.lod.is_empty() && node.skin.is_some() {
             return Err(format!(
-                "mesh {name}, node {}: MSFT_lod levels take a static mesh, not a skinned or morphed one",
+                "mesh {name}, node {}: MSFT_lod levels take a static or morphed mesh, not a skinned one",
                 node.name
             ));
         }
@@ -715,9 +715,8 @@ fn walk(
             let mut geometry = geometry(primitive)
                 .map_err(|message| format!("mesh {name}, node {}: {message}", node.name))?;
             if !node.lod.is_empty() {
-                let levels =
-                    super::lod::levels(mesh, node, slot, group.primitives.len(), &geometry)
-                        .map_err(|message| format!("mesh {name}, node {}: {message}", node.name))?;
+                let levels = super::lod::levels(mesh, node, slot, group, morph, &geometry)
+                    .map_err(|message| format!("mesh {name}, node {}: {message}", node.name))?;
                 geometry = geometry.with_levels(levels);
             }
             if let Some(morph) = morph {

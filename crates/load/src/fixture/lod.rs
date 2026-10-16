@@ -46,12 +46,34 @@ pub fn lod_sphere(rings: u32) -> SphereArrays {
     (positions, tangents, uvs, indices)
 }
 
+pub const LOD_TARGETS: [&str; 2] = ["bulge", "slide"];
+pub const LOD_SLIDE: f32 = 0.05;
+
+pub type TargetArrays = (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>);
+
+pub fn lod_targets(positions: &[[f32; 3]]) -> TargetArrays {
+    let mut bulge = Vec::with_capacity(positions.len());
+    let mut bulge_normals = Vec::with_capacity(positions.len());
+    for position in positions {
+        let n = position.map(|value| value / LOD_RADIUS);
+        let lift = n[1].max(0.0) * 0.3;
+        bulge.push(n.map(|value| value * lift * LOD_RADIUS));
+        bulge_normals.push([-0.4 * n[0] * lift, 0.5 * lift, -0.4 * n[2] * lift]);
+    }
+    let slide = vec![[LOD_SLIDE, 0.0, 0.0]; positions.len()];
+    (bulge, bulge_normals, slide)
+}
+
 pub fn lod_glb(name: &str, screen_coverage: Option<&[f32]>, with_errors: bool) -> Vec<u8> {
-    levels_glb(name, &LOD_RINGS, screen_coverage, with_errors)
+    levels_glb(name, &LOD_RINGS, screen_coverage, with_errors, None)
+}
+
+pub fn lod_morph_glb(name: &str, level_targets: &[&str]) -> Vec<u8> {
+    levels_glb(name, &LOD_RINGS, None, true, Some(level_targets))
 }
 
 pub fn plain_glb(name: &str, rings: u32) -> Vec<u8> {
-    levels_glb(name, &[rings], None, false)
+    levels_glb(name, &[rings], None, false, None)
 }
 
 fn levels_glb(
@@ -59,6 +81,7 @@ fn levels_glb(
     rings: &[u32],
     screen_coverage: Option<&[f32]>,
     with_errors: bool,
+    level_targets: Option<&[&str]>,
 ) -> Vec<u8> {
     let mut writer = Writer {
         bin: Vec::new(),
@@ -78,19 +101,46 @@ fn levels_glb(
         let tangent = writer.floats(tangents.as_flattened(), "VEC4", 4, false);
         let uv = writer.floats(uvs.as_flattened(), "VEC2", 2, false);
         let index = writer.indices(&indices);
-        meshes.push(json!({
+        let names: Option<&[&str]> = match level_targets {
+            Some(_) if level == 0 => Some(&LOD_TARGETS),
+            other => other,
+        };
+        let mut targets = Vec::new();
+        if let Some(names) = names {
+            let (bulge, bulge_normals, slide) = lod_targets(&positions);
+            for at in 0..names.len() {
+                targets.push(if at % 2 == 0 {
+                    json!({
+                        "POSITION": writer.floats(bulge.as_flattened(), "VEC3", 3, true),
+                        "NORMAL": writer.floats(bulge_normals.as_flattened(), "VEC3", 3, false),
+                    })
+                } else {
+                    json!({ "POSITION": writer.floats(slide.as_flattened(), "VEC3", 3, true) })
+                });
+            }
+        }
+        let mut primitive = json!({
+            "attributes": {
+                "POSITION": position,
+                "NORMAL": normal,
+                "TANGENT": tangent,
+                "TEXCOORD_0": uv,
+            },
+            "indices": index,
+            "material": 0,
+        });
+        if !targets.is_empty() {
+            primitive["targets"] = json!(targets);
+        }
+        let mut entry = json!({
             "name": if level == 0 { name.to_string() } else { format!("{name}.lod{level}") },
-            "primitives": [{
-                "attributes": {
-                    "POSITION": position,
-                    "NORMAL": normal,
-                    "TANGENT": tangent,
-                    "TEXCOORD_0": uv,
-                },
-                "indices": index,
-                "material": 0,
-            }],
-        }));
+            "primitives": [primitive],
+        });
+        if let Some(names) = names {
+            entry["weights"] = json!(vec![0.0; names.len()]);
+            entry["extras"] = json!({ "targetNames": names });
+        }
+        meshes.push(entry);
         let mut node = if level == 0 {
             json!({ "name": name, "mesh": 0 })
         } else {

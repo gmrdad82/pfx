@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::fixture::{LOD_RINGS, lod_error, lod_glb, lod_sphere};
+use crate::fixture::{LOD_RINGS, LOD_TARGETS, lod_error, lod_glb, lod_morph_glb, lod_sphere};
 use crate::scene::{COVERAGE_HEIGHT, Scene};
 
 struct Folder {
@@ -84,4 +84,43 @@ fn screen_coverage_stands_in_for_a_missing_error() {
 fn a_lod_node_without_an_error_or_a_coverage_is_refused() {
     let error = open("bare", &lod_glb("ball", None, false)).unwrap_err();
     assert!(error.contains("no extras.lod.error"), "{error}");
+}
+
+#[test]
+fn a_morphed_node_takes_morphed_levels_with_its_own_targets_and_morph_slot() {
+    let scene = open("morphed", &lod_morph_glb("ball", &LOD_TARGETS)).unwrap();
+    let mesh = &scene.meshes["ball"];
+    assert_eq!(mesh.parts.len(), 1);
+    let geometry = &mesh.parts[0].geometry;
+    let base = geometry.morph.as_ref().expect("the base is morphed");
+    assert_eq!(base.targets.len(), 2);
+    assert_eq!(geometry.levels.len(), 2);
+    for level in &geometry.levels {
+        let morph = level
+            .geometry
+            .morph
+            .as_ref()
+            .expect("a level of a morphed node is morphed");
+        assert_eq!(morph.morph, base.morph);
+        assert_eq!(morph.targets.len(), 2);
+        assert!(
+            morph
+                .targets
+                .iter()
+                .all(|target| target.positions.len() == level.geometry.positions.len())
+        );
+    }
+    let rig = mesh.rig.as_ref().expect("a morphed mesh has a rig");
+    assert_eq!(rig.morphs().len(), 1);
+}
+
+#[test]
+fn a_level_whose_targets_differ_from_its_node_is_refused() {
+    for (name, targets) in [
+        ("renamed", &["bulge", "swell"][..]),
+        ("fewer", &["bulge"][..]),
+    ] {
+        let error = open(name, &lod_morph_glb("ball", targets)).unwrap_err();
+        assert!(error.contains("morph targets"), "{error}");
+    }
 }

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use sha2::{Digest, Sha256};
 
-use super::Geometry;
-use crate::{Mesh, Node};
+use super::{Geometry, GeometryMorph};
+use crate::{Group, Mesh, Node};
 
 pub const COVERAGE_HEIGHT: f32 = 2160.0;
 
@@ -67,9 +67,12 @@ pub(super) fn levels(
     mesh: &Mesh,
     node: &Node,
     slot: usize,
-    count: usize,
+    owner: &Group,
+    morph: Option<usize>,
     base: &Geometry,
 ) -> Result<Vec<GeometryLevel>, String> {
+    let count = owner.primitives.len();
+    let names = |group: &Group| group.extra("targetNames").cloned();
     let mut levels: Vec<GeometryLevel> = Vec::with_capacity(node.lod.len());
     for (rank, &id) in node.lod.iter().enumerate() {
         let level = &mesh.nodes[id as usize];
@@ -85,14 +88,30 @@ pub(super) fn levels(
             ));
         }
         let primitive = &group.primitives[slot];
-        if primitive.joints.is_some() || !primitive.targets.is_empty() {
+        if primitive.joints.is_some() || level.skin.is_some() {
             return Err(format!(
-                "MSFT_lod level {} is skinned or morphed; levels take a static mesh",
+                "MSFT_lod level {} is skinned; levels take a static or morphed mesh",
                 level.name
             ));
         }
-        let geometry = super::build::geometry(primitive)
+        let targets = owner.primitives[slot].targets.len();
+        if primitive.targets.len() != targets || names(group) != names(owner) {
+            return Err(format!(
+                "MSFT_lod level {} has {} morph targets {}, the node has {targets} {}",
+                level.name,
+                primitive.targets.len(),
+                names(group).unwrap_or_default(),
+                names(owner).unwrap_or_default()
+            ));
+        }
+        let mut geometry = super::build::geometry(primitive)
             .map_err(|message| format!("MSFT_lod level {}: {message}", level.name))?;
+        if let Some(morph) = morph {
+            geometry = geometry.with_morph(GeometryMorph {
+                morph,
+                targets: primitive.targets.clone(),
+            });
+        }
         let error = error(node, level, rank, base)?;
         if !error.is_finite() || error < 0.0 {
             return Err(format!(

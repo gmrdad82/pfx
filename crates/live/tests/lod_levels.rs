@@ -2,10 +2,15 @@ use std::path::Path;
 use std::time::Instant;
 
 use pfx_gpu::{Gpu, OffscreenTarget, wgpu};
-use pfx_live::frame::{Camera, Instance, MeshHandle};
+use pfx_live::frame::{Camera, Instance, MeshData, MeshHandle};
 use pfx_live::lod::LodSet;
+use pfx_live::morph::InstanceWeights;
 use pfx_live::renderer::{Exposure, Renderer};
-use pfx_load::fixture::{LOD_RINGS, lod_error, lod_glb, plain_glb};
+use pfx_live::scene::Staged;
+use pfx_load::fixture::{
+    LOD_RADIUS, LOD_RINGS, LOD_TARGETS, lod_error, lod_glb, lod_morph_glb, lod_sphere, lod_targets,
+    plain_glb,
+};
 use pfx_load::scene::Scene;
 use pfx_post::Chain;
 
@@ -72,12 +77,20 @@ fn output(gpu: &Gpu) -> OffscreenTarget {
 }
 
 fn render(scene: &Scene) -> (Vec<u16>, Option<usize>) {
+    render_with(scene, |_, _| {})
+}
+
+fn render_with(
+    scene: &Scene,
+    prepare: impl FnOnce(&mut Renderer, &Staged),
+) -> (Vec<u16>, Option<usize>) {
     let gpu = pollster::block_on(Gpu::headless()).unwrap();
     let output = output(&gpu);
     let mut renderer = Renderer::new(gpu, WIDTH, HEIGHT).unwrap();
     renderer.set_exposure(Exposure::Fixed(1.0)).unwrap();
     let mut staged = renderer.stage(scene).unwrap();
     renderer.set_finish(Chain::new());
+    prepare(&mut renderer, &staged);
     for _ in 0..3 {
         let finish = staged.finish();
         let drawn = staged.frame(ASPECT, 0.0, 7);
@@ -118,6 +131,75 @@ fn prebuilt_levels_coarsen_as_the_ball_shrinks_and_draw_as_their_own_meshes() {
         levels.push(level);
     }
     assert_eq!(levels, [Some(0), Some(1), Some(2)]);
+}
+
+fn channel(bits: u16) -> f32 {
+    half::f16::from_bits(bits).to_f32().clamp(0.0, 1.0)
+}
+
+fn differing(a: &[u16], b: &[u16]) -> usize {
+    a.chunks_exact(4)
+        .zip(b.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|c| (channel(a[c]) - channel(b[c])).abs() > 1.0 / 255.0))
+        .count()
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_morphed_level_at_a_weight_draws_as_that_level_blended_on_the_cpu() {
+    let distance = 9.0;
+    let set = [0.8_f32, 0.6];
+    let weighted = |renderer: &mut Renderer, _: &Staged| {
+        renderer
+            .set_weights(&[InstanceWeights {
+                instance: 0,
+                current: &set,
+                previous: &set,
+            }])
+            .unwrap();
+    };
+    let glb = lod_morph_glb("ball", &LOD_TARGETS);
+    let (live, level) = render_with(&scene("morphed-lod", &glb, distance), weighted);
+    assert_eq!(level, Some(1));
+    let (rest, _) = render(&scene("morphed-rest", &glb, distance));
+    let rings = LOD_RINGS[1];
+    let (positions, tangents, uvs, indices) = lod_sphere(rings);
+    let (bulge, bulge_normals, slide) = lod_targets(&positions);
+    let blended: Vec<[f32; 3]> = (0..positions.len())
+        .map(|i| {
+            std::array::from_fn(|c| positions[i][c] + bulge[i][c] * set[0] + slide[i][c] * set[1])
+        })
+        .collect();
+    let normals: Vec<[f32; 3]> = (0..positions.len())
+        .map(|i| {
+            std::array::from_fn(|c| positions[i][c] / LOD_RADIUS + bulge_normals[i][c] * set[0])
+        })
+        .collect();
+    let (reference, none) = render_with(
+        &scene("morphed-cpu", &plain_glb("ball", rings), distance),
+        |renderer, staged| {
+            renderer
+                .replace_mesh(
+                    staged.instances()[0].mesh,
+                    MeshData {
+                        positions: &blended,
+                        normals: &normals,
+                        tangents: &tangents,
+                        uvs: &uvs,
+                        uvs1: None,
+                        alpha: None,
+                        indices: &indices,
+                    },
+                )
+                .unwrap();
+        },
+    );
+    assert_eq!(none, None);
+    let moved = differing(&live, &rest);
+    let flips = differing(&live, &reference);
+    println!("weighted against rest: {moved} pixels; against the CPU blend: {flips}");
+    assert!(moved > 20, "the weights move the level ({moved} pixels)");
+    assert!(flips <= 4, "{flips} pixels differ from the CPU blend");
 }
 
 fn camera(z: f32) -> Camera {
