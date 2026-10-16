@@ -1569,7 +1569,8 @@ fn flare_ring(x: f32, c: f32, r: f32) -> f32 {
         let v = (vec2<f32>(0.5) - uv) * post.p0.y;
         for (var i = 0u; i < count; i = i + 1u) {
             let suv = fract(uv + v * f32(i));
-            color = color + flare_knee(flare_color(suv), threshold);
+            let weight = pow(max(1.0 - length(vec2<f32>(0.5) - suv) / 0.70710677, 0.0), 10.0);
+            color = color + flare_knee(flare_color(suv), threshold) * weight;
         }
     }
     if (post.p1.x > 0.0) {

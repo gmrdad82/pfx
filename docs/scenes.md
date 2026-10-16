@@ -93,7 +93,7 @@ amount = 0.15
 threshold = 6.0
 ```
 
-Lens flare and sun glare from the frame's brightest parts: ghosts mirrored through the centre, a halo ring and a starburst, as Filament draws them. Without `[flare]` nothing changes; with it the flare pass goes into the finish after its bloom (before the LUT and tone curve when there is no bloom), and a scene with `[flare]` but no `[finish]` runs it on the standard finish (bloom, flare, ACES). Every key is optional:
+Lens flare and sun glare from the frame's brightest parts: ghosts mirrored through the centre, a halo ring and a starburst, as Filament draws them. Ghosts fall off with their source's distance from the centre of the frame, so a light near the middle ghosts and lit windows toward the edges do not. Without `[flare]` nothing changes; with it the flare pass goes into the finish after its bloom (before the LUT and tone curve when there is no bloom), and a scene with `[flare]` but no `[finish]` runs it on the standard finish (bloom, flare, ACES). Every key is optional:
 
 | Key | Range | Default | What it does |
 |---|---|---|---|
