@@ -5,6 +5,7 @@ mod engine;
 mod layers;
 mod read;
 mod recording;
+mod surface;
 
 pub use curve::{Curve, Ease};
 
@@ -63,6 +64,29 @@ pub struct Recording {
 pub struct Road {
     pub speed: Value,
     pub roughness: f32,
+    pub surface: Vec<(f32, Surface)>,
+    pub load: Value,
+    pub spacing: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Surface {
+    Asphalt,
+    Gravel,
+    Wet,
+    Cobbles,
+}
+
+impl Surface {
+    fn named(name: &str) -> Option<Surface> {
+        match name {
+            "asphalt" => Some(Surface::Asphalt),
+            "gravel" => Some(Surface::Gravel),
+            "wet" => Some(Surface::Wet),
+            "cobbles" => Some(Surface::Cobbles),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -246,7 +270,10 @@ impl Script {
                     known(&e.load)?;
                     known(&e.blend)?;
                 }
-                Kind::Road(r) => known(&r.speed)?,
+                Kind::Road(r) => {
+                    known(&r.speed)?;
+                    known(&r.load)?;
+                }
                 Kind::Squeal(s) => {
                     known(&s.hz)?;
                     if let Some(name) = &s.curve {
@@ -510,10 +537,28 @@ fn layer(kind: &str, table: &toml::Table, i: usize, dir: &Path) -> Result<Layer,
                 sample,
             })
         }
-        "road" => Kind::Road(Road {
-            speed: f.value("speed", 0.0)?,
-            roughness: f.number_or("roughness", 0.4)?.clamp(0.0, 1.0),
-        }),
+        "road" => {
+            let keys = f.stamps("surface")?.unwrap_or_default();
+            let mut surface = Vec::with_capacity(keys.len());
+            for (t, name) in keys {
+                let s = Surface::named(&name).ok_or_else(|| {
+                    format!(
+                        "{at}: `surface` must be \"asphalt\", \"gravel\", \"wet\" or \"cobbles\", not \"{name}\""
+                    )
+                })?;
+                surface.push((t, s));
+            }
+            if surface.windows(2).any(|w| w[1].0 < w[0].0) {
+                return Err(format!("{at}: `surface` times must not go backwards"));
+            }
+            Kind::Road(Road {
+                speed: f.value("speed", 0.0)?,
+                roughness: f.number_or("roughness", 0.4)?.clamp(0.0, 1.0),
+                surface,
+                load: f.value("load", 1.0)?,
+                spacing: f.number_or("spacing", 0.2)?.clamp(0.02, 5.0),
+            })
+        }
         "squeal" => Kind::Squeal(Squeal {
             at: f.pairs("at")?.unwrap_or_default(),
             curve: f.text("curve")?,

@@ -286,6 +286,50 @@ fn a_looped_sample_crossfades_its_seam_and_trims_hold() {
     assert!(steepest(&trimmed) < own * 1.2);
 }
 
+fn road(keys: &str, seconds: usize) -> Vec<f32> {
+    let text = format!("seed = 9\n[[road]]\nspeed = 10\n{keys}\n");
+    let script = Script::parse(&text, Path::new("")).unwrap();
+    mono(&script.mix(seconds * RATE as usize).unwrap())
+}
+
+#[test]
+fn asphalt_is_the_road_it_always_was() {
+    let plain = road("", 1);
+    assert_eq!(road("surface = \"asphalt\"", 1), plain);
+    assert_eq!(
+        road("surface = [[0.0, \"asphalt\"], [0.5, \"asphalt\"]]", 1),
+        plain
+    );
+    assert_ne!(road("surface = \"wet\"", 1), plain);
+}
+
+#[test]
+fn cobbles_thump_at_the_stone_spacing_over_the_speed() {
+    for (spacing, expected) in [(0.5, 2400), (0.8, 3840)] {
+        let out = road(
+            &format!("roughness = 0\nsurface = \"cobbles\"\nspacing = {spacing}"),
+            2,
+        );
+        let found = cycle(&out[RATE as usize / 4..], expected);
+        let error = (found as f32 - expected as f32).abs() / expected as f32;
+        assert!(
+            error < 0.03,
+            "spacing {spacing}: {found} frames, expected {expected}"
+        );
+    }
+}
+
+#[test]
+fn the_same_surfaces_give_the_same_samples() {
+    let keys = "load = 0.6\nsurface = [[0.0, \"gravel\"], [0.4, \"cobbles\"], [0.8, \"wet\"]]";
+    let a = road(keys, 1);
+    assert_eq!(a, road(keys, 1));
+    assert!(a.iter().all(|s| s.is_finite()) && rms(&a) > 0.01);
+    let text = format!("seed = 10\n[[road]]\nspeed = 10\n{keys}\n");
+    let other = Script::parse(&text, Path::new("")).unwrap();
+    assert_ne!(mono(&other.mix(RATE as usize).unwrap()), a);
+}
+
 #[test]
 #[ignore = "bench; run with --release"]
 fn bench_recorded_engine() {

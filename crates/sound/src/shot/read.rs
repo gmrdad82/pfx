@@ -143,6 +143,28 @@ impl<'a> Fields<'a> {
             .map(Some)
     }
 
+    pub(crate) fn stamps(&mut self, key: &'a str) -> Result<Option<Vec<(f32, String)>>, String> {
+        let Some(value) = self.get(key) else {
+            return Ok(None);
+        };
+        let want = || self.wrong(key, "a name or an array of [t, name] pairs");
+        match value {
+            Toml::String(s) => Ok(Some(vec![(0.0, s.clone())])),
+            Toml::Array(items) if !items.is_empty() => items
+                .iter()
+                .map(|item| match item {
+                    Toml::Array(pair) if pair.len() == 2 => match (number(&pair[0]), &pair[1]) {
+                        (Some(t), Toml::String(s)) => Ok((t, s.clone())),
+                        _ => Err(want()),
+                    },
+                    _ => Err(want()),
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Some),
+            _ => Err(want()),
+        }
+    }
+
     pub(crate) fn mark(&mut self, key: &'a str) {
         if self.table.contains_key(key) {
             self.used.insert(key);
