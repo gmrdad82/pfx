@@ -5,6 +5,7 @@ use pfx_live::frame::{
 };
 use pfx_live::glass;
 use pfx_live::morph::InstanceWeights;
+use pfx_live::particles::{SprayInstance, Sprays};
 use pfx_live::renderer::{Effects, Renderer, Text, invert};
 use pfx_live::scene::{self as live_scene, Staged};
 use pfx_live::skin::InstancePose;
@@ -48,6 +49,11 @@ pub(crate) struct Presenter {
     lit: u64,
     exposed: u64,
     touched: Touched,
+    sprays: Option<Sprays>,
+    spray_parents: Vec<Matrix>,
+    spray_next: Vec<Matrix>,
+    spray_time: Option<f32>,
+    spray_instances: Vec<SprayInstance>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -302,6 +308,7 @@ impl Presenter {
             self.touched.posed = true;
         }
         drop(poses);
+        self.spray(world, &posed, time);
         if !frames.is_empty() {
             renderer
                 .set_surfaces(&self.surfaces)
@@ -381,8 +388,37 @@ impl Presenter {
             text,
             effects: Effects {
                 glass: &self.glass,
+                sprays: &self.spray_instances,
                 ..Effects::default()
             },
         })
+    }
+
+    fn spray(&mut self, world: &World, posed: &[Matrix], time: f32) {
+        let scene = world.scene();
+        if self
+            .sprays
+            .as_ref()
+            .is_none_or(|sprays| !sprays.same(scene))
+        {
+            self.sprays = Some(Sprays::of(scene));
+            self.spray_time = None;
+        }
+        let Some(sprays) = self.sprays.as_mut().filter(|sprays| !sprays.is_empty()) else {
+            self.spray_instances.clear();
+            return;
+        };
+        sprays.parents(Some(posed), &self.palettes, &mut self.spray_next);
+        let from = match self.spray_time {
+            Some(last) if last <= time => last,
+            _ => {
+                self.spray_parents.clone_from(&self.spray_next);
+                time
+            }
+        };
+        sprays.seek_between([from, time], &self.spray_parents, &self.spray_next);
+        sprays.pack(&mut self.spray_instances);
+        std::mem::swap(&mut self.spray_parents, &mut self.spray_next);
+        self.spray_time = Some(time);
     }
 }

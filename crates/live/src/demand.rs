@@ -655,6 +655,10 @@ pub(crate) fn print_effects(print: &mut Print, effects: &Effects<'_>) {
     for prop in effects.props {
         print.bytes(bytemuck::bytes_of(prop));
     }
+    if !effects.sprays.is_empty() {
+        print.word(effects.sprays.len() as u32);
+        print.bytes(bytemuck::cast_slice(effects.sprays));
+    }
 }
 
 fn transform(matrix: &Matrix, point: [f32; 4]) -> [f32; 4] {

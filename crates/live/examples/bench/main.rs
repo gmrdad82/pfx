@@ -904,6 +904,7 @@ impl Bench {
                 time_scale: 0.5,
             }),
             particles: &self.motes,
+            sprays: &[],
             creatures: if self.bird_mesh.is_some() {
                 &birds
             } else {

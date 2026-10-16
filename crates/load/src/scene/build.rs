@@ -315,6 +315,7 @@ pub(super) fn build(
         .iter()
         .map(|entry| (entry.key.clone(), build_emitter(&entry.value)))
         .collect();
+    let particles = super::particles::build(&places, &resolved.particles, &objects, &meshes)?;
     let camera = match &resolved.camera {
         Some(camera) => {
             let holder = places.holder(&resolved.files, "camera");
@@ -368,6 +369,7 @@ pub(super) fn build(
         movers,
         lights,
         emitters,
+        particles,
         camera,
         finish,
         trace: resolved
