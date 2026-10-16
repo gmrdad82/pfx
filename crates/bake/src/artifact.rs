@@ -97,6 +97,7 @@ pub fn scene_hash(
     h.update(pfx_trace::TRACE_WGSL.as_bytes());
     h.update(include_str!("batch.wgsl").as_bytes());
     h.update(pfx_materials::BRDF.as_bytes());
+    h.update(pfx_materials::WET.as_bytes());
     h.update(crate::PROBE_WGSL.as_bytes());
     add_len(&mut h, scene.triangles.len());
     for triangle in &scene.triangles {

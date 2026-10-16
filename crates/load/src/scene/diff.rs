@@ -43,6 +43,7 @@ pub struct SceneDiff {
     pub objects: Changes,
     pub lights: Changes,
     pub emitters: Changes,
+    pub particles: Changes,
     pub contents: Changes,
     pub texts: Changes,
     pub movers: Changes,
@@ -62,6 +63,7 @@ pub struct SceneDiff {
     pub trace: bool,
     pub plates: bool,
     pub physics: bool,
+    pub motion_blur: bool,
 }
 
 impl SceneDiff {
@@ -71,6 +73,7 @@ impl SceneDiff {
             && self.objects.is_empty()
             && self.lights.is_empty()
             && self.emitters.is_empty()
+            && self.particles.is_empty()
             && self.contents.is_empty()
             && self.texts.is_empty()
             && self.movers.is_empty()
@@ -90,6 +93,7 @@ impl SceneDiff {
             && !self.trace
             && !self.plates
             && !self.physics
+            && !self.motion_blur
     }
 
     pub fn draws(&self) -> bool {
@@ -137,6 +141,7 @@ pub(super) fn diff(older: &Scene, newer: &Scene) -> SceneDiff {
         objects: objects_changes,
         lights: Changes::by(&older.lights, &newer.lights, |a, b| a == b),
         emitters: Changes::by(&older.emitters, &newer.emitters, |a, b| a == b),
+        particles: Changes::by(&older.particles, &newer.particles, |a, b| a == b),
         contents: Changes::by(&older.contents, &newer.contents, |a, b| a.hash == b.hash),
         texts: Changes::by(&older.texts, &newer.texts, |a, b| a == b),
         movers: Changes::by(&older.movers, &newer.movers, |a, b| a == b),
@@ -162,5 +167,6 @@ pub(super) fn diff(older: &Scene, newer: &Scene) -> SceneDiff {
         trace: older.trace != newer.trace,
         plates: older.plates != newer.plates,
         physics: older.physics != newer.physics,
+        motion_blur: older.motion_blur != newer.motion_blur,
     }
 }

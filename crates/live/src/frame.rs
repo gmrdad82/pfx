@@ -1447,6 +1447,7 @@ pub fn shader_source_with(gobo: &Gobo) -> String {
         TREE_SWAY_WGSL,
         pfx_materials::NOISE,
         pfx_materials::AGEING,
+        pfx_materials::WET,
         maps::MAPS_WGSL,
         crate::textured::TEXTURED_WGSL,
         &maps::content_wgsl(),
@@ -1620,6 +1621,11 @@ pub fn shadow_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
             count: None,
         },
+        buffer_entry(
+            9,
+            wgpu::ShaderStages::FRAGMENT,
+            wgpu::BufferBindingType::Storage { read_only: true },
+        ),
     ]
 }
 
@@ -2336,7 +2342,7 @@ impl Frame {
         sampler: &'a wgpu::Sampler,
         transmission: &'a wgpu::TextureView,
         lights: &'a Lights,
-    ) -> [wgpu::BindGroupEntry<'a>; 7] {
+    ) -> [wgpu::BindGroupEntry<'a>; 8] {
         [
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -2365,6 +2371,10 @@ impl Frame {
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: wgpu::BindingResource::Sampler(lights.sampler()),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: lights.clustered_buffer().as_entire_binding(),
             },
         ]
     }
@@ -3872,13 +3882,23 @@ impl Frame {
             );
             shadow_hook(&self.gpu, encoder, shadows, fit)?;
             self.encode_lights(key, &batches, encoder, profiler.as_deref_mut());
-            self.lights
-                .write_uniform(&self.gpu.queue, transmitting, shadows.face_tiles());
+            self.lights.write_uniform(
+                &self.gpu.device,
+                &self.gpu.queue,
+                transmitting,
+                shadows.face_tiles(),
+                &scene.camera,
+            );
             self.set_shadows(shadows, fit);
         } else {
             self.encode_lights(key, &batches, encoder, profiler.as_deref_mut());
-            self.lights
-                .write_uniform(&self.gpu.queue, false, Default::default());
+            self.lights.write_uniform(
+                &self.gpu.device,
+                &self.gpu.queue,
+                false,
+                Default::default(),
+                &scene.camera,
+            );
             self.set_unshadowed();
         }
         let features = self.opaque_features(&batches);
@@ -4401,6 +4421,7 @@ struct MaterialData {
     layer3: vec4f,
     tail: vec4f,
     params: array<vec4f, 16>,
+    wet: vec4f,
     sheen: vec4f,
     lobes: vec4f,
     scatter: vec4f,
@@ -4764,6 +4785,7 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     let caustic_at = caustic_uv(input.world_position);
     let caustic_dx = dpdx(caustic_at);
     let caustic_dy = dpdy(caustic_at);
+    let wet_footprint = max(length(dpdx(input.world_position)), length(dpdy(input.world_position)));
     let uv1 = vec2f(input.uv_alpha.w, input.normal.w);
     let uv1_dx = dpdx(uv1);
     let uv1_dy = dpdy(uv1);
@@ -4792,6 +4814,12 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     let content_t = normalize(input.tangent.xyz - mapped.normal * dot(input.tangent.xyz, mapped.normal));
     let content_b = cross(mapped.normal, content_t) * input.tangent.w;
     surface = content_apply(surface, input.material, input.uv_alpha.xy, uv_dx, uv_dy, placed.content_uv, content_crop, content_t, content_b, geometric);
+    let wetted = wet_active(material.wet);
+    if (wetted) {
+        let soaked = wet_soak(surface, surface.normal, geometric, input.world_position, material.wet, wet_footprint);
+        surface = soaked.shade;
+        surface.normal = soaked.normal;
+    }
     let n = surface.normal;
     let t = normalize(input.tangent.xyz - n * dot(input.tangent.xyz, n));
     let b = cross(n, t) * input.tangent.w;
@@ -4877,7 +4905,7 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     }
     var output: OpaqueOutput;
     output.colour = vec4f(max(direct + diffuse + specular + surface.emission, vec3f(0.0)), 1.0);
-    output.normal_roughness = vec4f(view_normal, surface.roughness);
+    output.normal_roughness = vec4f(view_normal, select(surface.roughness, min(surface.roughness, surface.clearcoat_roughness), wetted));
     return output;
 }
 "#;

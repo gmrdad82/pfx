@@ -201,7 +201,7 @@ impl Show for Toybox {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct Tape {
     frames: Vec<Vec<u8>>,
     stills: Vec<(String, Vec<u8>)>,
@@ -237,9 +237,13 @@ fn script(text: &str) -> Result<Script<Toy>, String> {
 }
 
 fn roll() -> (Tape, u32) {
-    let script = script(FILM).unwrap();
+    shot(FILM, SCORE).unwrap()
+}
+
+fn shot(film: &str, sounds: &str) -> Result<(Tape, u32), String> {
+    let script = script(film)?;
     let mut show = Toybox::new();
-    let mut score = Score::new(SCORE, &[], script.film.seed, RATE).unwrap();
+    let mut score = Score::new(sounds, &[], script.film.seed, RATE)?;
     let mut tape = Tape::default();
     let crew = Crew {
         show: &mut show,
@@ -251,11 +255,11 @@ fn roll() -> (Tape, u32) {
         size: [640, 360],
         fps: FPS,
     };
-    let done = pfx_film::shoot(&script, rig, crew).unwrap();
+    let done = pfx_film::shoot(&script, rig, crew)?;
     assert_eq!(done.frames, script.frames(FPS));
     assert_eq!(done.stills, 1);
     assert_eq!(done.samples * u64::from(CHANNELS), tape.audio.len() as u64);
-    (tape, show.keys)
+    Ok((tape, show.keys))
 }
 
 #[test]
@@ -353,4 +357,57 @@ fn a_mark_with_arcs_bakes_into_icons() {
     let marks = Marks::load(0, &[("mark.svg", MARK)]).unwrap();
     assert_eq!(marks.names(), ["mark.svg"]);
     Icons::bake(&marks.shapes).unwrap();
+}
+
+fn fnv(hash: u64, bytes: &[u8]) -> u64 {
+    bytes.iter().fold(hash, |h, b| {
+        (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+#[test]
+fn the_fixture_film_keeps_its_hash() {
+    let (tape, _) = roll();
+    let mut h = 0xcbf2_9ce4_8422_2325;
+    for f in &tape.frames {
+        h = fnv(h, f);
+    }
+    for (name, s) in &tape.stills {
+        h = fnv(fnv(h, name.as_bytes()), s);
+    }
+    for s in &tape.audio {
+        h = fnv(h, &s.to_le_bytes());
+    }
+    if cfg!(not(windows)) {
+        assert_eq!(h, 17_911_994_450_967_581_415);
+    }
+}
+
+#[test]
+fn the_bed_ducks_under_the_score_deterministically() {
+    let (plain, _) = roll();
+    let ducked = format!("[duck]\nunder = [\"score\"]\ndepth_db = 12\n{FILM}");
+    let (one, _) = shot(&ducked, SCORE).unwrap();
+    let (two, _) = shot(&ducked, SCORE).unwrap();
+    assert_eq!(one.audio, two.audio);
+    assert_eq!(one.frames, plain.frames);
+    assert_ne!(one.audio, plain.audio);
+    let off = format!("[duck]\ndepth_db = 0\n{FILM}");
+    assert_eq!(shot(&off, SCORE).unwrap().0.audio, plain.audio);
+    let scene = FILM.replacen(
+        "seconds = 0.5\n",
+        "seconds = 0.5\n\n[scene.duck]\ndepth_db = 0\n",
+        1,
+    );
+    let (opened, _) = shot(&format!("[duck]\n{scene}"), SCORE).unwrap();
+    assert_ne!(opened.audio, one.audio);
+    let hits = SCORE.replace("[recipe.thump]\n", "[recipe.thump]\nkind = \"hit\"\n");
+    let keyed = format!("[duck]\nunder = [\"hit\"]\nbeds = [\"pad\"]\n{FILM}");
+    let (kind, _) = shot(&keyed, &hits).unwrap();
+    assert!(kind.audio.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
+    assert_ne!(kind.audio, one.audio);
+    let err = shot(&format!("[duck]\nunder = \"nope\"\n{FILM}"), SCORE).unwrap_err();
+    assert!(err.contains("'nope'"), "{err}");
+    assert!(script(&format!("[duck]\nbeds = [\"nope\"]\n{FILM}")).is_err());
+    assert!(script(&format!("[duck]\ndepth_db = 90\n{FILM}")).is_err());
 }

@@ -4,7 +4,15 @@ mod build;
 mod diff;
 mod draws;
 mod edit;
+mod flare;
+#[cfg(test)]
+mod flare_tests;
+mod haze;
+mod lights;
+mod lod;
 mod mix;
+mod motion_blur;
+mod particles;
 mod plates;
 mod play;
 mod pose;
@@ -14,9 +22,13 @@ pub mod tiles;
 mod watch;
 
 #[cfg(test)]
+mod particles_tests;
+#[cfg(test)]
 mod play_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wet_tests;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -39,6 +51,10 @@ pub use build::project_root;
 pub use diff::{Changes, SceneDiff};
 pub use draws::{Draw, Draws};
 pub use edit::{EditError, Kind, Patch, PatchGroup, SceneEdit, Target, Value};
+pub use haze::OutdoorHaze;
+pub use lights::{Attach as LightAttach, SPOT_CONE, SPOT_DIRECTION, Spot};
+pub use lod::{COVERAGE_HEIGHT, GeometryLevel};
+pub use particles::{Attach, Node as ParticleNode, Particles};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
 pub use pfx_scene::types::{
@@ -160,6 +176,7 @@ pub struct Geometry {
     pub indices: Vec<u32>,
     pub skin: Option<Arc<GeometrySkin>>,
     pub morph: Option<Arc<GeometryMorph>>,
+    pub levels: Vec<GeometryLevel>,
     pub hash: [u8; 32],
 }
 
@@ -306,6 +323,8 @@ pub struct Light {
     pub radius: f32,
     pub range: f32,
     pub shadow: bool,
+    pub spot: Option<Spot>,
+    pub attach: Option<LightAttach>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -323,6 +342,7 @@ pub struct Haze {
     pub reach: f32,
     pub unmapped: f32,
     pub seed: u32,
+    pub outdoor: Option<OutdoorHaze>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -644,6 +664,7 @@ pub struct Scene {
     pub movers: BTreeMap<String, Mover>,
     pub lights: BTreeMap<String, Light>,
     pub emitters: BTreeMap<String, Emitter>,
+    pub particles: BTreeMap<String, Particles>,
     pub camera: Option<Camera>,
     pub finish: Option<Finish>,
     pub trace: TraceSettings,
@@ -651,6 +672,7 @@ pub struct Scene {
     pub texts: BTreeMap<String, Text>,
     pub plates: Option<Plates>,
     pub physics: Option<Physics>,
+    pub motion_blur: Option<pfx_post::MotionBlur>,
     pub bodies: BTreeMap<String, Body>,
     pub body_layers: BTreeMap<String, String>,
     pub characters: BTreeMap<String, Character>,

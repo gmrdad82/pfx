@@ -11,6 +11,7 @@ use crate::frame::{
     self, CachedGroup, Frame, Instance, Matrix, MeshData, MeshHandle, OpaqueKey, Scene,
 };
 use crate::glass;
+use crate::height_fog::{FogInputs, HeightFog, HeightFogPass, fog_lights, sky_ambient};
 use crate::impostor::{ImpostorInstance, ImpostorParams, ImpostorPass};
 use crate::lights::{LightQuality, LocalLight};
 use crate::lod::{LodSet, LodStats};
@@ -32,7 +33,10 @@ use pfx_geom::tree::{PetalSource, Tree, tree_sway};
 use pfx_gpu::screens::{Budget, DynamicResolution};
 use pfx_gpu::{FrameTimings, Gpu, GpuProfiler, GpuRefusal, PassTiming, wgpu};
 use pfx_physics::{Emitter, ParticleKind, Wind};
-use pfx_post::{Bloom, Chain, Pass as PostPass, Style, Tape, Tone, dof, gpu::GpuChain};
+use pfx_post::{
+    Bloom, Chain, GpuMotionBlur, MotionBlur, Pass as PostPass, Style, Tape, Tone, dof,
+    gpu::GpuChain,
+};
 use pfx_text::Paragraph;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -179,11 +183,13 @@ pub struct Liquid<'a> {
 pub struct Effects<'a> {
     pub volume: Option<Volume>,
     pub particles: &'a [ParticleInstance],
+    pub sprays: &'a [crate::particles::SprayInstance],
     pub creatures: &'a [CreatureInstance],
     pub creature_mesh: Option<&'a CreatureMesh>,
     pub glass: &'a [glass::Surface],
     pub liquid: Option<Liquid<'a>>,
     pub props: &'a [ImpostorInstance],
+    pub lights: Option<&'a [LocalLight]>,
 }
 
 pub const HISTORY_GAP: f32 = 0.25;
@@ -651,11 +657,16 @@ pub struct Renderer {
     glass: glass::Pass,
     impostors: Option<ImpostorPass>,
     petals: Option<Petals>,
+    sprays: Option<crate::particles::SprayPass>,
     lod: LodSet,
     post: GpuChain,
     dof: dof::GpuDof,
     lens: Option<dof::Lens>,
+    blur: Option<GpuMotionBlur>,
+    motion_blur: Option<MotionBlur>,
+    velocity_spans_shutter: bool,
     haze: Option<RoomHaze>,
+    height_fog: Option<(HeightFog, HeightFogPass)>,
     exposure: ExposureMeter,
     exposure_mode: Exposure,
     custom_finish: bool,
@@ -1315,11 +1326,16 @@ impl Renderer {
             glass: glass::Pass::new(device, width, height),
             impostors: None,
             petals: None,
+            sprays: None,
             lod: LodSet::new(2_000_000),
             post,
             dof: dof::GpuDof::new(device, width, height),
             lens: None,
+            blur: None,
+            motion_blur: None,
+            velocity_spans_shutter: false,
             haze: None,
+            height_fog: None,
             exposure: ExposureMeter::new(device),
             exposure_mode: Exposure::Auto { bias: 0.0 },
             custom_finish: false,
@@ -1426,6 +1442,9 @@ impl Renderer {
         if let Some(coverage) = &mut self.coverage {
             coverage.invalidate();
         }
+        if let Some(blur) = self.blur.as_mut() {
+            blur.set_viewport(width, height)?;
+        }
         self.text_bounds.clear();
         if self
             .pick_request
@@ -1456,6 +1475,9 @@ impl Renderer {
         textures.extend(self.taa.textures());
         textures.extend(self.crisp.target().cloned());
         textures.extend(self.effects.textures());
+        if let Some((_, pass)) = &self.height_fog {
+            textures.extend(pass.textures());
+        }
         textures.extend(self.reflections.textures());
         textures.extend(self.glass.textures());
         textures.extend(self.display.as_ref().map(|(texture, _)| texture.clone()));
@@ -1607,11 +1629,53 @@ impl Renderer {
         self.lens = lens;
     }
 
+    pub fn set_motion_blur(&mut self, blur: Option<MotionBlur>) {
+        let blur = blur.filter(|blur| blur.active());
+        if blur != self.motion_blur {
+            self.touch();
+        }
+        if blur.is_some() && self.blur.is_none() {
+            let (width, height) = self.capacity();
+            let mut pass = GpuMotionBlur::new(&self.frame.gpu.device, width, height);
+            let (shown_width, shown_height) = self.size();
+            if pass.set_viewport(shown_width, shown_height).is_ok() {
+                self.blur = Some(pass);
+            }
+        }
+        self.motion_blur = blur;
+    }
+
+    pub fn motion_blur(&self) -> Option<MotionBlur> {
+        self.motion_blur
+    }
+
+    pub fn set_velocity_spans_shutter(&mut self, spans: bool) {
+        if spans != self.velocity_spans_shutter {
+            self.touch();
+        }
+        self.velocity_spans_shutter = spans;
+    }
+
+    pub fn velocity_spans_shutter(&self) -> bool {
+        self.velocity_spans_shutter
+    }
+
     pub fn set_haze(&mut self, haze: Option<RoomHaze>) {
         if haze != self.haze {
             self.touch();
         }
         self.haze = haze;
+    }
+
+    pub fn set_height_fog(&mut self, fog: Option<HeightFog>) {
+        if fog != self.height_fog.as_ref().map(|(known, _)| *known) {
+            self.touch();
+        }
+        self.height_fog = match (fog, self.height_fog.take()) {
+            (Some(fog), Some((_, pass))) => Some((fog, pass)),
+            (Some(fog), None) => Some((fog, HeightFogPass::new(&self.frame.gpu.device))),
+            (None, _) => None,
+        };
     }
 
     pub fn set_exposure(&mut self, exposure: Exposure) -> Result<(), String> {
@@ -2149,6 +2213,9 @@ impl Renderer {
         self.effects.set_volume_cuts(device, cuts);
         self.post.resize(width, height);
         self.dof.resize(width, height);
+        if let Some(blur) = self.blur.as_mut() {
+            blur.resize(width, height);
+        }
         self.reflections.resize(device, width, height);
         let meshes = self.glass.take_meshes();
         self.glass = glass::Pass::new(device, width, height);
@@ -2620,6 +2687,11 @@ impl Renderer {
         if !cached {
             self.begin_frame(FrameKind::Full);
         }
+        if let Some(lights) = effects.lights
+            && self.frame.lights().lights() != lights
+        {
+            self.set_lights(lights)?;
+        }
         self.pass_log.clear();
         let (width, height) = self.size();
         self.text.set_viewport(Some([width, height]));
@@ -2673,7 +2745,8 @@ impl Renderer {
             lod_instances = uploaded?;
             self.pass_log.push("lod");
         }
-        let dynamic = scene.instances;
+        let leveled = self.lod.swap_levels(scene.instances, scene.camera, height);
+        let dynamic = leveled.as_deref().unwrap_or(scene.instances);
         let stand_ins: &[Instance] = if self.plates.is_some() {
             &self.plate_casters
         } else {
@@ -2681,11 +2754,11 @@ impl Renderer {
         };
         let combined: Vec<Instance>;
         let instances = if lod_instances.is_empty() && stand_ins.is_empty() {
-            scene.instances
+            dynamic
         } else {
             combined = lod_instances
                 .into_iter()
-                .chain(scene.instances.iter().copied())
+                .chain(dynamic.iter().copied())
                 .chain(stand_ins.iter().copied())
                 .collect();
             &combined
@@ -3158,6 +3231,7 @@ impl Renderer {
                         ripple_height: ripple,
                         mip_count: self.mips.levels.len() as u32,
                         sky_sh: self.frame.sky().lighting.sh,
+                        sun: scene.sun,
                     },
                     output: &self.frame.targets.hdr.view,
                     profiler: Some(&mut self.profiler),
@@ -3222,6 +3296,35 @@ impl Renderer {
             );
             self.pass_log.extend(["haze march", "haze upsample"]);
         }
+        if let Some((fog, pass)) = self.height_fog.as_mut() {
+            let lights = fog_lights(
+                self.frame.lights().lights(),
+                scene.camera.position,
+                fog.reach,
+            );
+            let ambient = sky_ambient(&self.frame.sky().lighting.sh);
+            let march = self.profiler.pass("height fog march");
+            let upsample = self.profiler.pass("height fog upsample");
+            pass.render(
+                &mut EffectCommands {
+                    device,
+                    encoder: &mut encoder,
+                },
+                &effect_frame,
+                FogInputs {
+                    fog,
+                    ambient,
+                    lights: &lights,
+                },
+                targets,
+                VolumeTimestamps {
+                    march: self.profiler.render_writes(march),
+                    upsample: self.profiler.render_writes(upsample),
+                },
+            );
+            self.pass_log
+                .extend(["height fog march", "height fog upsample"]);
+        }
         if let Some(volume) = effects.volume.as_ref().filter(|_| !cached) {
             let mut volume_frame = effect_frame;
             volume_frame.set_volume(
@@ -3275,6 +3378,42 @@ impl Renderer {
                 self.profiler.render_writes(timing),
             );
             self.pass_log.push("particles");
+        }
+        if !cached && !effects.sprays.is_empty() {
+            let spray_view = crate::particles::SprayView {
+                view_proj: jittered,
+                motion_view_proj: frame::multiply(scene.camera.projection, scene.camera.view),
+                previous_view_proj: scene.camera.previous_view_projection,
+                eye: scene.camera.position,
+                right,
+                up: view.up,
+                forward: view.forward,
+                sun: scene.sun.direction,
+                sun_color: scene.sun.colour,
+                sun_intensity: scene.sun.intensity,
+                sky_sh: self.frame.sky().lighting.sh,
+                size: [width, height],
+            };
+            let pass = self.sprays.get_or_insert_with(|| {
+                crate::particles::SprayPass::new(device, self.frame.probes())
+            });
+            let timing = self.profiler.pass("sprays");
+            pass.render(
+                device,
+                &mut encoder,
+                &spray_view,
+                crate::particles::SprayTargets {
+                    hdr: &self.frame.targets.hdr.view,
+                    velocity: &self.frame.targets.velocity_view,
+                    depth: current_depth,
+                    shadow: (self.shadows.atlas_view(), self.frame.shadow_uniform()),
+                    lights: self.frame.lights().lights(),
+                    probes: self.frame.probes(),
+                },
+                effects.sprays,
+                self.profiler.render_writes(timing),
+            );
+            self.pass_log.push("sprays");
         }
         if let Some(mesh) = effects.creature_mesh
             && !effects.creatures.is_empty()
@@ -3420,6 +3559,27 @@ impl Renderer {
         } else {
             resolved
         };
+        let blurred = match (self.motion_blur.filter(|_| !cached), self.blur.as_mut()) {
+            (Some(settings), Some(blur)) => {
+                let timing = self.profiler.pass("motion blur");
+                self.pass_log.push("motion blur");
+                Some(
+                    blur.render(
+                        &mut encoder,
+                        &resolved,
+                        &self.frame.targets.velocity_view,
+                        current_depth,
+                        settings,
+                        self.velocity_spans_shutter,
+                        scene.time,
+                        self.profiler.compute_writes(timing),
+                    )
+                    .clone(),
+                )
+            }
+            _ => None,
+        };
+        let resolved = blurred.unwrap_or(resolved);
         let resolved = if let Some(lens) = self.lens {
             let timing = self.profiler.pass("depth of field");
             self.pass_log.push("depth of field");

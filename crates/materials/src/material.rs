@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::content::ContentLayer;
 use crate::lobes::{Anisotropy, Fabric, Scatter, Textures, UvTransform};
+use crate::wet::Wet;
 
 pub const LAYER_CAP: usize = 4;
 
@@ -396,6 +397,7 @@ pub struct Material {
     pub content_layer: ContentLayer,
     pub layers: [NoiseLayer; LAYER_CAP],
     pub ageing: Ageing,
+    pub wet: Wet,
     pub fabric: Fabric,
     pub anisotropy: Anisotropy,
     pub scatter: Scatter,
@@ -432,6 +434,7 @@ impl Default for Material {
             content_layer: ContentLayer::default(),
             layers: [NoiseLayer::default(); LAYER_CAP],
             ageing: Ageing::default(),
+            wet: Wet::default(),
             fabric: Fabric::default(),
             anisotropy: Anisotropy::default(),
             scatter: Scatter::default(),
@@ -491,6 +494,8 @@ pub(crate) struct Recipe {
     content_layer: ContentLayer,
     layers: Vec<NoiseLayer>,
     ageing: Ageing,
+    #[serde(skip_serializing_if = "Wet::is_default")]
+    wet: Wet,
     #[serde(skip_serializing_if = "Fabric::off")]
     fabric: Fabric,
     #[serde(skip_serializing_if = "Anisotropy::off")]
@@ -538,6 +543,7 @@ impl From<Material> for Recipe {
                 .filter(|layer| layer.kind != NoiseKind::None)
                 .collect(),
             ageing: m.ageing,
+            wet: m.wet,
             fabric: m.fabric,
             anisotropy: m.anisotropy,
             scatter: m.scatter,
@@ -584,6 +590,7 @@ impl Recipe {
             content_layer: self.content_layer,
             layers,
             ageing: self.ageing,
+            wet: self.wet,
             fabric: self.fabric,
             anisotropy: self.anisotropy,
             scatter: self.scatter,
@@ -619,6 +626,7 @@ pub struct PackedMaterial {
     pub layer3: [f32; 4],
     pub tail: [f32; 4],
     pub params: [[f32; 4]; PARAM_ROWS],
+    pub wet: [f32; 4],
     pub sheen: [f32; 4],
     pub lobes: [f32; 4],
     pub scatter: [f32; 4],
@@ -633,8 +641,8 @@ pub const PARAM_ROWS: usize = LAYER_CAP * GPU_PARAMS / 4;
 pub const LOBE_ROWS: usize = 8;
 
 impl PackedMaterial {
-    pub const SIZE: usize = 240 + PARAM_ROWS * 16 + LOBE_ROWS * 16;
-    pub const LOBES_OFFSET: usize = 240 + PARAM_ROWS * 16;
+    pub const SIZE: usize = 256 + PARAM_ROWS * 16 + LOBE_ROWS * 16;
+    pub const LOBES_OFFSET: usize = 256 + PARAM_ROWS * 16;
     pub const ALIGN: usize = 16;
 
     pub fn pack(m: &Material) -> Self {
@@ -698,6 +706,7 @@ impl PackedMaterial {
                 let at = row % (GPU_PARAMS / 4) * 4;
                 [params[at], params[at + 1], params[at + 2], params[at + 3]]
             }),
+            wet: m.wet.packed(),
             sheen: [
                 m.fabric.color[0],
                 m.fabric.color[1],
@@ -822,6 +831,12 @@ impl PackedMaterial {
                 dust: self.age_b[1],
                 patina: self.age_b[2],
                 seed: self.tail[0].to_bits(),
+            },
+            wet: Wet {
+                amount: self.wet[0],
+                puddles: self.wet[1],
+                puddle_scale: self.wet[2],
+                seed: u64::from(self.wet[3].to_bits()),
             },
             fabric: Fabric {
                 color: [self.sheen[0], self.sheen[1], self.sheen[2]],

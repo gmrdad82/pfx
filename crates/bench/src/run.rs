@@ -32,7 +32,7 @@ fn rounded(values: [f32; 3]) -> Value {
     json!(values.map(|value| (f64::from(value) * 10_000.0).round() / 10_000.0))
 }
 
-fn target(gpu: &Gpu, width: u32, height: u32) -> OffscreenTarget {
+pub(crate) fn target(gpu: &Gpu, width: u32, height: u32) -> OffscreenTarget {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("pfx bench output"),
         size: wgpu::Extent3d {

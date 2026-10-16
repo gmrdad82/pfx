@@ -106,7 +106,7 @@ Each of these costs a small slice of a frame:
 
 ## Film
 
-pfx-film renders scripted films offline from a game, at a fixed frame rate ([docs/film.md](docs/film.md)). A TOML script of scenes drives the game's own frames through one trait, and the film adds a camera (focus, zoom, roll, follow, shake), looks (grade, tint, vignette, grain, bloom, letterbox, flashes), captions, SVG marks and a synthesised score mixed under the game's audio, then writes PNG frames, stills and a 48 kHz stereo WAV. The same script and seed give the same bytes every run, and it runs no external tool.
+pfx-film renders scripted films offline from a game, at a fixed frame rate ([docs/film.md](docs/film.md)). A TOML script of scenes drives the game's own frames through one trait, and the film adds a camera (focus, zoom, roll, follow, shake), looks (grade, tint, vignette, grain, bloom, letterbox, flashes), captions, SVG marks and a synthesised score mixed under the game's audio, then writes PNG frames, stills and a 48 kHz stereo WAV. The same script and seed give the same bytes every run, and it runs no external tool. With no game behind it, `pfx film` assembles a film of screen recordings (decoded by pito-codecs), rendered frame folders and title cards under the same camera, looks, captions and score.
 
 ## Small and light
 
@@ -155,7 +155,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-trace` | the offline path tracer |
 | `pfx-denoise` | Intel Open Image Denoise's RT filter ported to wgpu compute |
 | `pfx-bake` | path-traced light the live renderer shows at raster cost: probe grids, lightmaps and plates |
-| `pfx-film` | scripted films rendered offline from a game: timeline, camera, looks, captions, marks, a synthesised score and the frame and audio writer |
+| `pfx-film` | scripted films rendered offline from a game: timeline, camera, looks, captions, marks, a synthesised score and the frame and audio writer; with its `video` feature, footage films of clips, frame folders and cards (`pfx film`) |
 | `pfx-play` | play mode: a game run live over a runtime copy of a scene, with pause, step and an exact stop |
 | `pfx-game` | the game runtime and its command-line launcher |
 | `pfx-project` | a game's `project.toml`, scenes and content folders, and `pfx new`'s scaffold |
@@ -165,7 +165,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-theme` | the colours, fonts and type the editor and the dev HUD paint with |
 | `pfx-bench` | `pfx bench` |
 | `pfx-assets` | path-traced renders of logos, icons and scenes from SVG masters and small specs |
-| `pfx-run` | the `pfx` tool's process plumbing: GPU queueing, ending children cleanly and the system ffmpeg |
+| `pfx-run` | the `pfx` tool's process plumbing: GPU queueing, ending children cleanly, the system ffmpeg and the alpha master ([docs/alpha-master.md](docs/alpha-master.md)) |
 
 The `pfx` tool's commands:
 
@@ -177,6 +177,7 @@ pfx bake --scene <dir>                   path-traced probes, lightmaps and plate
 pfx render --scene <shot> --product <product> --still
 pfx steam stage --manifest <game>/steam.toml --out tmp/steam
 pfx scene migrate|fix <scene.toml>
+pfx film <script.film.toml> --out <dir>  a film of clips, frame folders and cards
 pfx --help
 ```
 

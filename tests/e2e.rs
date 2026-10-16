@@ -551,3 +551,94 @@ fn an_adapters_audio_is_muxed_into_the_x264_master_and_reproduces() {
     assert!(encoded.windows(4).any(|w| w == b"colr"));
     std::fs::remove_dir_all(&base).ok();
 }
+
+fn cutout_clip(base: &std::path::Path, run: &str, encode: bool) -> (PathBuf, serde_json::Value) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures = base.join("none");
+    std::fs::create_dir_all(&fixtures).unwrap();
+    std::fs::write(fixtures.join("readme.txt"), "empty set").unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pfx"));
+    command
+        .env("PFX_DIRECT", "1")
+        .env("CHECKER_CUTOUTS", "1")
+        .env("PITO_ARCHIVE", base.join("archive"))
+        .current_dir(&root)
+        .args(["render", "--app", "checker", "--shot", "slide", "--clip"])
+        .arg("--adapter")
+        .arg(checker())
+        .arg("--fixtures")
+        .arg(&fixtures)
+        .arg("--out")
+        .arg(base.join(run))
+        .args([
+            "--size",
+            "720p",
+            "--seconds",
+            "0.5",
+            "--set",
+            "cutouts=true",
+        ])
+        .arg("--no-archive");
+    if !encode {
+        command.arg("--no-encode");
+    }
+    let result = command.output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let path = PathBuf::from(String::from_utf8(result.stdout).unwrap().trim());
+    let manifest = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    (path.parent().unwrap().to_path_buf(), manifest)
+}
+
+#[test]
+fn a_cutout_clip_writes_its_alpha_master_as_a_16_bit_png_sequence() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let base = root
+        .join("tmp")
+        .join(format!("e2e-alpha-{}", std::process::id()));
+    let stem = "checker-clip-slide-1280x720-60fps";
+    let (dir, manifest) = cutout_clip(&base, "encoded", true);
+    let alpha = dir.join(format!("{stem}.alpha.master"));
+    assert!(!dir.join(format!("{stem}.cutouts")).exists());
+    assert!(!dir.join(format!("{stem}.alpha.master.mov")).exists());
+    let inner: pfx_run::alpha::Manifest =
+        serde_json::from_slice(&std::fs::read(alpha.join("manifest.json")).unwrap()).unwrap();
+    assert_eq!((inner.size, inner.fps, inner.frames), ([1280, 720], 60, 30));
+    assert_eq!((inner.alpha.as_str(), inner.bit_depth), ("straight", 16));
+    assert_eq!(inner.rev, manifest["source"]["commit"].as_str().unwrap());
+    let files = manifest["files"].as_array().unwrap();
+    for (n, frame) in inner.files.iter().enumerate() {
+        assert_eq!(frame.file, format!("{n:06}.png"));
+        let listed = format!("{stem}.alpha.master/{}", frame.file);
+        let outer = files.iter().find(|f| f["file"] == listed.as_str()).unwrap();
+        assert_eq!(outer["sha256"], frame.sha256.as_str());
+    }
+    let master = files
+        .iter()
+        .find(|f| f["file"] == format!("{stem}.alpha.master/manifest.json").as_str())
+        .unwrap();
+    assert_eq!(master["tier"], "alpha master");
+    assert_eq!(std::fs::read_dir(&alpha).unwrap().count(), 31);
+    let (width, _, rgba) = pfx_run::alpha::decode(&alpha.join("000000.png")).unwrap();
+    for column in 0..8usize {
+        let pixel = &rgba[(360 * width as usize + column * 40 + 20) * 4..][..4];
+        let want = ((column % 4 + 1) as f32 / 4.0 * 65535.0) as i32;
+        assert!(
+            (pixel[3] as i32 - want).abs() <= 64,
+            "alpha {} for {want}",
+            pixel[3]
+        );
+    }
+    let (loose, _) = cutout_clip(&base, "loose", false);
+    assert_eq!(
+        std::fs::read_dir(loose.join(format!("{stem}.cutouts")))
+            .unwrap()
+            .count(),
+        30
+    );
+    assert!(!loose.join(format!("{stem}.alpha.master")).exists());
+    std::fs::remove_dir_all(&base).ok();
+}

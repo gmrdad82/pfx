@@ -13,6 +13,7 @@ pub const LOBES: &str = concat!(
 );
 pub const AGEING: &str = include_str!("wgsl/ageing.wgsl");
 pub const CONTENT: &str = include_str!("wgsl/content.wgsl");
+pub const WET: &str = include_str!("wgsl/wet.wgsl");
 
 pub fn library() -> String {
     let mut out = String::with_capacity(NOISE.len() + BRDF.len() + AGEING.len() + 2);

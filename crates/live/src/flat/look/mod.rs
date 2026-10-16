@@ -784,7 +784,7 @@ impl<'a> SceneCopy<'a> {
             groups: base.groups,
             text: &self.text,
             icons: base.icons,
-            sprites: None,
+            sprites: base.sprites,
             environment: base.environment,
             post: base.post,
             frame: base.frame,

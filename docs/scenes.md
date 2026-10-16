@@ -19,19 +19,93 @@ The files are format 1 of the public crate `pfx-scene`, which owns the format: e
 
 ## What the engine does with each table
 
-- **Meshes.** A glTF material resolves to the library entry of its name, else of its name before the first `.`, else `fallback`, else the glTF's own material when it declares anything (a factor off the glTF default, a texture or a read extension; named `gltf <mesh>/<material>`, see `docs/materials.md`, Texture maps on imported meshes), else `Material::default()`. Missing normals are computed (smooth, area weighted), missing tangents are `[1, 0, 0, 1]`, or computed from the UVs where the part's material has anisotropy or its glTF material a normal, detail or anisotropy map, and missing UVs zero. With `node`, the node's own placement in the file is dropped; the object places it.
+- **Meshes.** A glTF material resolves to the library entry of its name, else of its name before the first `.`, else `fallback`, else the glTF's own material when it declares anything (a factor off the glTF default, a texture or a read extension; named `gltf <mesh>/<material>`, see `docs/materials.md`, Texture maps on imported meshes), else `Material::default()`. Missing normals are computed (smooth, area weighted), missing tangents are `[1, 0, 0, 1]`, or computed from the UVs where the part's material has anisotropy or its glTF material a normal, detail or anisotropy map, and missing UVs zero. With `node`, the node's own placement in the file is dropped; the object places it. A node whose `MSFT_lod` extension lists level nodes (`head.lod1`, `head.lod2`, …, each with `extras.lod.error` in metres) loads as one part with prebuilt levels of detail, and the level nodes are not drawn on their own; the live renderer picks a level by projected error ([live-renderer.md](live-renderer.md#prebuilt-levels-of-detail)). There is no scene key: the levels come with the file.
+- **Wet materials.** A material's `[wet]` table (in a materials file or a scene's own `[materials.<name>]`) soaks it in both renderers: `amount` (0 to 1, default 0) is the overall dampness, `puddles` (0 to 1, default 0) roughly the share of flat ground under standing water, `puddle_scale` (metres, above 0, default 2) the size of the puddle pattern and `seed` (default 0) which pattern. The table reads into `Material::wet` through the library, so scene watch and the editor change it live, and `--set materials.<name>.wet.amount=0.7` sets it from the CLI through the same edit. Without `[wet]`, or with `amount` and `puddles` both 0, the material renders exactly as before. The model, the puddle mask and its cost are in [Wet surfaces](materials.md#wet-surfaces).
 - **Material lobes.** A material's `fabric = { color, roughness }` (sheen, colour 0 to 1 default `[0, 0, 0]` = off, roughness 0 to 1 default 0), `anisotropy = { strength, rotation }` (strength 0 to 1 default 0 = off, rotation in radians default 0) and `scatter = { color, radius, amount }` (colour 0 to 1 default `[1, 0.35, 0.2]`, radius in metres above 0 default 0.01, amount 0 to 1 default 0 = off) shade in both renderers; `docs/materials.md` has the lobes and their cost.
 - **Sun.** An authored sun follows `hour`: its direction, colour and intensity come from `Daylight::authored(&Authored, reference_hour)` for that hour, day, latitude and heading, so at `hour = reference_hour` it is exactly as authored, and away from it the sun turns, lowers, warms and dims as the day does. Its colour keeps the authored colour's peak; its intensity is `irradiance` times the day's intensity at `hour`. `hour` also picks the light probes' hour. `radius` is the soft sun: live soft shadows (`Quality::sun_radius_deg`) and the tracer's sun disc (`Detail::sun_radius_deg`). Without `[sun]` the sun is dark.
 - **Sky.** An analytic sky follows the sun. A mix sky is baked once, on load, into one HDR at the width of its widest HDR or room layer (`256` when every layer is analytic); an analytic layer is evaluated per texel with `AnalyticSky::diffuse`, the sky without its sun disc. The live renderer and the tracer both draw that HDR. Without `[sky]` the sky is black.
+- **Lights.** A `[[light]]` is a point light by default and a spot with `kind = "spot"`. Its keys, all optional but `name` and `intensity`:
+
+  | Key | Default | Range | Meaning |
+  |---|---|---|---|
+  | `kind` | `"point"` | `"point"`, `"spot"` | the light's shape |
+  | `position` | `[0, 0, 0]` | metres | where a free light stands (a parented light uses `at`) |
+  | `color` | `[1, 1, 1]` | ≥ 0 | linear colour, times `intensity` |
+  | `intensity` | | ≥ 0 | power: irradiance `intensity / d²` at `d` metres, before the window |
+  | `radius` | `0` | ≥ 0 m | the bulb: it softens highlights and caps the falloff at `d = radius` |
+  | `range` | `10` | > 0 m | the smooth window `(1 − (d / range)⁴)²` ends the light at `range`, live and traced |
+  | `shadow` | `true` | | casts shadows; at most four lights do (below) |
+  | `direction` | `[0, −1, 0]` | nonzero | where a spot points, in its parent's space when parented |
+  | `cone` | `[30, 45]` | `0 ≤ inner ≤ outer ≤ 90`° | full light inside `inner`, none outside `outer`, glTF's `KHR_lights_punctual` smooth falloff between: `t = clamp((cos θ − cos outer) / (cos inner − cos outer))`, times `t²` |
+  | `parent` | none | an object key or id | the object the light rides; it follows the object's movers, physics and animation every frame |
+  | `node` | none | a glTF node name | a node inside the parent's mesh (`"hero.body"`, `"hero.wheel_rl"`): the light follows that node's animated transform |
+  | `at` | `[0, 0, 0]` | metres | the light's place in the parent's (or the node's) local space, scale included |
+
+  A refused light names itself: a `node` without a `parent`, a `parent` that is no object, a `node` not in the parent's mesh, a cone out of range or a zero direction. `Light::spot` (`Spot { direction, inner, outer }`, world space) and `Light::attach` (`Attach { object, joint, rest, at, direction }`) carry them; `Light::position` and `spot.direction` are already placed at the objects' rest. `Light::placed(&posed)` places it on posed objects, and `Light::placed_with(&posed, &palettes)` on posed objects and their animated nodes; `Staged::frame` does the first at its time, `pfx_play`'s presenter the second with the world's animators, and `pfx_trace::stage::scene_posed` the second for the tracer, so live and traced lights stand in the same place. Every key is live under a scene watch and settable with `--set light.<name>.<key>=<value>`. The live renderer takes any number up to `MAX_LIGHTS + MAX_CLUSTERED` (4 + 1,024): with four lights or fewer they all go through the shadowed path as before; with more, the first four lit lights with `shadow = true` keep their shadows and every other light is lit through the clustered list, unshadowed ([live-renderer.md](live-renderer.md#many-lights-clustered-forward)).
 - **Emitters.** An emitter is a 12 × 24 sphere with a black, fully rough, emissive material named `emitter <name>` radiating `intensity / (π radius²)` per channel; it casts no shadow.
 - **Camera.** `shift` is live's off-centre projection and the tracer's `Lens::shift`. `fstop` is depth of field through a thin lens of the camera's focal length: live `dof::Lens`, traced `Lens::aperture` (`focal / fstop`). `[camera.preset]` tunes `pfx_core::camera::Preset`.
-- **Finish.** `file`, or the inline keys, build the chain as `pfx_post::parse` does: a style's passes first, then each key adds or tunes its pass at that parser's own place. `[[finish.pass]]` tables apply in the order written, each built from nothing, after the base. A pass that builds nothing is refused with its line. Without `[finish]` the renderer's standard finish.
-- **Haze.** The live renderer marches it (`Renderer::set_haze`); the tracer has no room haze and draws the scene clear.
+- **Finish.** `file`, or the inline keys, build the chain as `pfx_post::parse` does: a style's passes first, then each key adds or tunes its pass at that parser's own place. `[[finish.pass]]` tables apply in the order written, each built from nothing, after the base. A pass that builds nothing is refused with its line. Without `[finish]` the renderer's standard finish. `lut = "<path.cube>"` grades through an Adobe or Resolve `.cube` file (see [`[finish] lut`](#finish-lut-a-cube-file)); `lut` as a table (`size`, `values`) is the inline cube.
+- **Haze.** The live renderer marches it: a room haze in its `lo`/`hi` box (`Renderer::set_haze`), or, when `height` or `falloff` is set, an outdoor height fog over the whole view (`Renderer::set_height_fog`, [`[haze]` outdoor](#haze-outdoor) below). The tracer has no haze and draws the scene clear.
 - **Movers.** At time `t`, `u = (t + offset) / period` and the mover stands at `from + (to − from) · f(u)`. A child's own mover applies first, then its parent's, up the chain. The time is the one the viewer passes to `Staged::frame` (and `pfx_trace::stage::scene_at`); at `0` every swing and once mover stands at `from`.
 - **Content.** An object that names a content shows its image in its material's content layer slot; two objects showing different content through one slot are refused when staged.
 - **Text.** The block is laid out with the font at `size` per em and centred on `at`; it reads along its local +X with +Y up and faces +Z. `Staged` draws it through the live text pass (`Staged::text`), and the tracer letters it on a carrier card, so both agree.
 - **A prefab's text moves with its placement.** Its `at` and `rotate` are in the prefab's space: `Text::place` is the placement object's world matrix (the identity for a scene's own text), and `Text::model()` applies it, so the text moves, turns and scales with its group, and a prefab placed twice draws its text twice.
 - **Bound text.** A `{key}` in `text` is filled when the scene loads, with the value bound to `key`: `pfx_load::scene::bind(key, value)` sets it for the process, `bound(key)` reads it and `filled(text)` fills a string. A key is letters, digits, `_`, `-` and `.`; a token with no value, and anything else in braces, stays as written. `pfx_game::Config::bind_text()` binds `name` and `version` from the game's config: the game's window, `Headless` and `<game> edit` call it before a scene loads, and `pfx edit <project>` binds the project's name and its `Cargo.toml`'s `[package] version` (`Project::version()`). The text is filled at load, so play, the editor's viewport, hot reload and the tracer show the same text. `pfx bake` runs with nothing bound, so a bound text in a plated scene is `dynamic = true`.
+
+### `[haze]` outdoor
+
+Setting `height` or `falloff` turns `[haze]` into an outdoor height fog that fills the whole view; `lo` and `hi` are then optional, and the room-haze keys keep their meaning in a room haze. `pfx_load::scene::Haze::outdoor` holds it as `OutdoorHaze`, and the live renderer marches it (`pfx_live::height_fog`, [live-renderer.md](live-renderer.md#outdoor-height-fog)). Every key is live under scene watch and settable with `--set haze.<key>=<value>`.
+
+| Key | Range | Default | Meaning |
+|---|---|---|---|
+| `height` | any metres | `0` | The fog's base height: its density is `fog` there and falls off above it |
+| `falloff` | ≥ 0, per metre | `1` | Height falloff: density is `fog · exp(−falloff · (y − height))`; `0` is uniform fog |
+| `fog` | ≥ 0 | `amount / 6` when `amount` is set, else `0.1` | Density at `height`; extinction is `0.6 · density` per metre (absorption 0.3, scattering 0.3) |
+| `reach` | ≥ 0 metres | `300` | How far the march goes: fog stops at the first surface or at `reach` |
+| `shafts` | 0 to 1 | `1` | How much the sun's shadow cascades carve the in-scatter: `0` lights all fog, `1` full light shafts and shadowed volumes |
+| `steps` | 1 to 256 | `64` | March steps per half-resolution pixel |
+| `color` (alias `colour`) | `#rrggbb` or three numbers | white | Tints the light the fog scatters |
+| `phase` | −0.9 to 0.9 | `0.5` | Henyey-Greenstein asymmetry: above 0 the fog glows toward the sun, so a low sun ahead blooms in the haze |
+| `ambient` | three numbers ≥ 0 | the sky's mean radiance | The isotropic light the fog scatters besides the sun and the lights |
+
+A haze without `height` and `falloff` is the room haze, and a scene without `[haze]` renders byte-identical to one rendered before the outdoor mode existed.
+
+### `[finish] lut`: a `.cube` file
+
+```toml
+[finish]
+lut = "looks/lilac.cube"
+lut_amount = 0.8
+```
+
+| Key | Range | Default | What it does |
+|---|---|---|---|
+| `lut` | a `.cube` path from the project root, or a `{ size, values }` table | none | adds the LUT pass before the tone curve |
+| `lut_amount` | 0 to 1 | 1 | mixes the graded colour over the ungraded one; needs a `lut` |
+
+The file is read through the scene's reader, so scene watch reloads the finish when the `.cube` changes, and its bytes are in the finish's hash. `pfx_post::cube::parse` reads `LUT_3D_SIZE` (2 to 64), `LUT_1D_SIZE` (2 to 65536, one curve per channel), `DOMAIN_MIN` and `DOMAIN_MAX` (the input is mapped from them to 0 to 1), Resolve's `LUT_1D_INPUT_RANGE` and `LUT_3D_INPUT_RANGE`, `TITLE`, `#` comments and other upper-case keywords before the data; red changes fastest. It refuses, with the line, a file over 16 MiB, one that is not UTF-8, no size or two sizes, a size out of range, a keyword after the data, an entry that is not three finite numbers, too few or too many entries, and a domain whose minimum is not below its maximum; nothing in a malformed file panics. The table form's `size` is 2 to 64. `pfx_post::cube::generate(size, map)` and `cube::format` write a `.cube` from a colour function, which is how the tests make their identity and lilac cubes.
+
+### `[flare]`
+
+```toml
+[flare]
+amount = 0.15
+threshold = 6.0
+```
+
+Lens flare and sun glare from the frame's brightest parts: ghosts mirrored through the centre, a halo ring and a starburst, as Filament draws them. Without `[flare]` nothing changes; with it the flare pass goes into the finish after its bloom (before the LUT and tone curve when there is no bloom), and a scene with `[flare]` but no `[finish]` runs it on the standard finish (bloom, flare, ACES). Every key is optional:
+
+| Key | Range | Default | What it does |
+|---|---|---|---|
+| `amount` | 0 and up | 0.1 | strength of the composite; 0 turns the pass off |
+| `ghosts` | 0 to 16 | 4 | mirrored ghosts; 0 drops them |
+| `ghost_spacing` | 0 and up, under 1 in use | 0.6 | spacing of the ghosts toward the centre, in screen units |
+| `halo` | 0 and up | 0.1 | halo ring thickness, in screen heights; 0 drops it |
+| `halo_radius` | 0 and up, 0 to 0.5 in use | 0.4 | halo ring radius, in screen heights |
+| `starburst` | 0 to 1 | 1 | how much of the starburst mask the flare takes |
+| `threshold` | 0 and up | 10 | the HDR level, above the bloom input's 1, that a pixel must pass to make ghosts and halo |
+
+`--set flare.amount=0.2` and the editor edit it through the scene edit path (`Target::Flare`). The renderer side and its cost are in [live-renderer.md](live-renderer.md#lens-flare-and-cube-luts).
 
 ### `[trace]`
 
@@ -50,6 +124,20 @@ The baked plates of the scene's static part (`docs/plates.md`, baked by `pfx bak
 `Scene::dynamic(index)` and `Scene::dynamic_names()` say what is dynamic, `Scene::static_subset()` is the scene with every dynamic object hidden and dynamic text dropped (what a plate traces), and `Scene::open_at(path, hour)` opens a scene with its `[sun] hour` set to `hour` (the bake's anchors).
 
 Proxies are never drawn. With `casters = "proxies"` they shadow the dynamic objects; `pfx_load::scene::Proxies::pick(origin, direction)` returns the nearest proxy a ray meets (its object's pick id and distance) for picks on the CPU, and `Renderer::pick` reads the plate's own ids on the GPU where nothing dynamic covers them.
+
+### `[motion_blur]`
+
+Per-object motion blur in the live renderer, from its velocity buffer ([live-renderer.md](live-renderer.md#motion-blur)); the tracer ignores it. Without the table there is no blur and the frame is the same bytes as before the key existed.
+
+| Key | Range | Default | Meaning |
+|---|---|---|---|
+| `shutter` | 0 to 1 | `0.5` | The share of the frame the shutter is open (0.5 is a 180° shutter). `0` turns the blur off. |
+| `max_px` | above 0 | `64` | The longest streak, in pixels either side of a pixel; the pass clamps it to 1..256. It also sets the tile size, the next multiple of 8 at or above it. |
+| `samples` | 1 and up | `8` | Taps per pixel along the motion; the pass clamps it to 2..64 and takes half on each side. |
+
+`Scene::motion_blur` holds it as `pfx_post::MotionBlur`. `Renderer::stage` hands it to `Renderer::set_motion_blur`; `SceneDiff::motion_blur` flags an edit and `Staged::apply` sets it again (`Applied::motion_blur`), so a scene watch turns it on, off or retunes it in the window. On the CLI, `--set motion_blur.shutter=0.25` edits it through the same path (`Target::MotionBlur`, or `Target::Scene` with the path `motion_blur.shutter`).
+
+The blur reads the velocity the frame wrote: moving and posed instances (`previous_model`), skinned meshes (their previous joints), morphed meshes (their previous weights), swaying trees and deformers, and the camera's own motion (`Camera::previous_view_projection`, carried to the sky and props by the background motion pass). While the scene's blur is on, `Staged` gives the renderer the camera of the frame it built last as the previous camera, so a camera moved by edits between frames streaks the frame; call `Staged::cut()` at a cut so the first frame after it does not streak. With the blur off the previous camera stays the current one, as before.
 
 ### `[physics]`, bodies and sounds
 
@@ -70,6 +158,39 @@ A tile layer is pfx-scene's grid of prefab placements in a plane (`[[tiles]]`: `
 ### `[object.animation]`
 
 An object's glTF clips or a sprite of an image atlas, played in play mode and drawn live ([animation.md](animation.md)). pfx-load reads it into `Scene::animations`, keyed by the object, and checks the glTF clip names and the sprite frames against the files. An animated object is dynamic, so a plate never bakes it. A sprite's atlas becomes the object's content (`sprite:<object>`), shown through its material's content layer at its first frame until play steps it.
+
+### `[[particles]]`: 3D emitters
+
+A deterministic emitter simulated on a 1/120 s grid and drawn by the live renderer's `sprays` pass ([particles.md](particles.md)). pfx-load reads each into `Scene::particles` (`pfx_load::scene::Particles`, keyed by `name`), and `SceneDiff::particles` flags an edit; a scene watch reload restarts the emitters. Every key but `name` is optional; without `[[particles]]` nothing is drawn and the frame is byte-identical. The tracer draws no particles.
+
+| Key | Meaning | Range | Default |
+|---|---|---|---|
+| `name` | the emitter's key | text | required |
+| `parent` | the object it rides; refused when the scene has no such object | object key | none, world space |
+| `node` | a glTF node inside the parent's mesh (`hero.wheel_rl`); its animated motion in play mode, its file placement otherwise; refused when the mesh has no such node, or without `parent` | node name | none |
+| `at` | the spawn point, in the node's (else the parent's) local space | metres | `[0, 0, 0]` |
+| `rate` | particles per second | ≥ 0 | `0` |
+| `rate_keys` | `[[t, rate], ...]` over scene time `t` in seconds, linear between keys and held past the ends; replaces `rate` when set | t in order, rate ≥ 0 | none |
+| `burst` | particles spawned at once on the first step | ≥ 0 | `0` |
+| `max` | the pool cap; spawns past it are dropped | ≥ 0 | `1024` |
+| `lifetime` | `[min, max]` life, uniform | seconds, 0 ≤ min ≤ max, max > 0 | `[1, 1]` |
+| `speed` | `[min, max]` spawn speed, uniform | m/s, 0 ≤ min ≤ max | `[1, 1]` |
+| `direction` | the cone's axis, turned with the parent | vector | `[0, 1, 0]` |
+| `cone` | the cone's half-angle; `180` is every direction | 0 to 180 degrees | `0` |
+| `inherit` | share of the spawn point's own velocity added | 0 to 1 | `0` |
+| `gravity` | acceleration | m/s² | `[0, 0, 0]` |
+| `drag` | `v *= exp(−drag · dt)` | ≥ 0, 1/s | `0` |
+| `size` | `[start, end]` across, linear over life | metres, ≥ 0 | `[0.1, 0.1]` |
+| `alpha` | `[[t, a], ...]` over life `t` | both 0 to 1 | `[[0, 1], [1, 0]]` |
+| `color` (`colour`) | one colour, `"#rrggbb"` (sRGB) or `[r, g, b]` linear | | white |
+| `colors` (`colours`) | `[[t, "#rrggbb"], ...]` over life; replaces `color` | t 0 to 1 | none |
+| `spin` | `[min, max]` spin, either way | rad/s | `[0, 0]` |
+| `stretch` | velocity stretch: the quad lengthens by `stretch · speed` metres along its screen motion | ≥ 0 seconds | `0` |
+| `blend` | `"alpha"` covers what is behind, `"add"` adds light | | `"alpha"` |
+| `lit` | lit by the sun and its shadows, the probes or sky and local lights; unlit emits its colour | | `true` |
+| `seed` | the emitter's random stream | u64 | a hash of `name` |
+
+From the CLI and the editor these are keys of `Target::Particles(name)`, so `--set particles.<name>.<key>=<value>` (`--set particles.spray.rate=800`) goes through the same `SceneEdit` path as a hand edit and reaches the window through the scene watch.
 
 ## Reload
 
@@ -120,9 +241,9 @@ loop {
 }
 ```
 
-`watch.poll()` never blocks and does no work until a watched file changed. `staged.frame(aspect, time, seed)` poses the movers and cards for `time` and returns a `StagedFrame`: `scene`, the staged instances and materials as the renderer's `Scene`; `text`, the scene's `[text.*]` for the live text pass; and `effects`, its glass. The parts are there apart too: `staged.pose(time)`, then `staged.scene(aspect, time, seed)`, `staged.text(aspect)` and `staged.effects()`, which borrow the staging immutably. `apply` returns an `Applied` that says what it touched on the device; `Applied::sky_request` is the `request_sky` ticket, and `renderer.wait_sky()` waits for it when a viewer wants the new sky at once.
+`watch.poll()` never blocks and does no work until a watched file changed. `staged.frame(aspect, time, seed)` poses the movers and cards for `time` (their previous pose is the pose of the last frame built) and returns a `StagedFrame`: `scene`, the staged instances and materials as the renderer's `Scene`; `text`, the scene's `[text.*]` for the live text pass; and `effects`, its glass. The parts are there apart too: `staged.pose(time)`, then `staged.scene(aspect, time, seed)`, `staged.text(aspect)` and `staged.effects()`, which borrow the staging immutably. `staged.frame_at(aspect, time, interval, seed)` poses them for `time` and their previous pose for `time - interval`, so a frame rendered alone has the motion of its place in the film (`interval = 1 / fps` for frame-to-frame velocity; the motion blur then scales it by `shutter`). A caller that poses the previous frame at `time - shutter / fps` instead sets `Renderer::set_velocity_spans_shutter(true)`, and the blur takes the velocity as it is. `apply` returns an `Applied` that says what it touched on the device; `Applied::sky_request` is the `request_sky` ticket, and `renderer.wait_sky()` waits for it when a viewer wants the new sky at once.
 
-- **Glass.** A draw whose material is of the glass family (`family = "glass"`) is uploaded with `upload_glass` and drawn as a `glass::Surface` through `Effects::glass`, not as an opaque instance; it keeps its shadow, two_sided, clip and pick id.
+- **Glass.** A draw whose material is of the glass family (`family = "glass"`) or lets light through (`transmission` above 0, any family: a tinted lens is a plain material with `transmission`, see [materials.md](materials.md#see-through-and-tinted-surfaces)) is uploaded with `upload_glass` and drawn as a `glass::Surface` through `Effects::glass`, not as an opaque instance; it keeps its shadow, two_sided, clip and pick id.
 - **Overrides.** `staged.set_override(object, Override { hidden, color, highlight, transform })` hides, recolours (`color` replaces the base colour), highlights (`highlight` adds that emission) or moves (`transform`) one object's draws, its glass among them, without editing the scene; its children keep their own looks. It returns `false` for a name the staging has not; `clear_override(object)` and `clear_overrides()` undo. They live in `Staged`, survive `apply`, and touch no data and nothing on the device.
   - `transform` is a world-space matrix applied on the left of each of the object's instance models (and their previous models, so a still preview has no motion), which is how an editor previews a drag without restaging: for a move from pose A to pose B it is `world_B × world_A⁻¹`, set on the object and on each of its descendants, and the frame equals a restaged copy of the moved scene (`crates/live/tests/override_transform.rs` checks the pixels match). It moves meshes and glass only: lights, emitters and `[text.*]` stay where the scene puts them, and a plated static object stays in its plate. Unset (`None`, the default) it changes no instance and no pixel.
 - **Lens.** `stage` and `apply` set the depth of field for the renderer's own aspect; after a resize the viewer calls `renderer.set_lens(staged.lens(aspect))`.

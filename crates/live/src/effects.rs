@@ -1096,7 +1096,7 @@ override low_scale: f32 = 4.0;
 }
 "#;
 
-fn uniform(device: &wgpu::Device, frame: &EffectFrame) -> wgpu::Buffer {
+pub(crate) fn uniform(device: &wgpu::Device, frame: &EffectFrame) -> wgpu::Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("effects frame"),
         contents: bytemuck::bytes_of(frame),
@@ -1112,7 +1112,7 @@ fn storage<T: Pod>(device: &wgpu::Device, label: &'static str, values: &[T]) -> 
     })
 }
 
-fn buffer_entry(
+pub(crate) fn buffer_entry(
     binding: u32,
     visibility: wgpu::ShaderStages,
     ty: wgpu::BufferBindingType,
@@ -1129,7 +1129,7 @@ fn buffer_entry(
     }
 }
 
-fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+pub(crate) fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -1142,7 +1142,7 @@ fn texture_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     }
 }
 
-fn shadow_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+pub(crate) fn shadow_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
     wgpu::BindGroupLayoutEntry {
         binding,
         visibility: wgpu::ShaderStages::FRAGMENT,
@@ -1165,7 +1165,7 @@ fn pipeline(
     pipeline_with(device, label, source, layout, targets, &[])
 }
 
-fn pipeline_with(
+pub(crate) fn pipeline_with(
     device: &wgpu::Device,
     label: &'static str,
     source: &str,
@@ -1212,7 +1212,7 @@ fn pipeline_with(
     })
 }
 
-fn premultiplied_target() -> Option<wgpu::ColorTargetState> {
+pub(crate) fn premultiplied_target() -> Option<wgpu::ColorTargetState> {
     Some(wgpu::ColorTargetState {
         format: HDR_FORMAT,
         blend: Some(wgpu::BlendState {
@@ -1231,7 +1231,10 @@ fn premultiplied_target() -> Option<wgpu::ColorTargetState> {
     })
 }
 
-fn color_attachment(view: &wgpu::TextureView, clear: bool) -> wgpu::RenderPassColorAttachment<'_> {
+pub(crate) fn color_attachment(
+    view: &wgpu::TextureView,
+    clear: bool,
+) -> wgpu::RenderPassColorAttachment<'_> {
     wgpu::RenderPassColorAttachment {
         view,
         resolve_target: None,
@@ -1328,7 +1331,7 @@ impl Default for VolumeCuts {
     }
 }
 
-fn volume_targets() -> [Option<wgpu::ColorTargetState>; 2] {
+pub(crate) fn volume_targets() -> [Option<wgpu::ColorTargetState>; 2] {
     [
         Some(wgpu::ColorTargetState {
             format: HDR_FORMAT,

@@ -1137,10 +1137,11 @@ fn shader_source(lit: bool, rt: bool) -> String {
         end.to_string()
     };
     let source = format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         pfx_materials::NOISE,
         pfx_materials::BRDF,
         pfx_materials::LOBES,
+        pfx_materials::WET,
         pfx_materials::CONTENT,
         ENVIRONMENT_WGSL.as_str(),
         start,
@@ -2341,9 +2342,10 @@ mod tests {
         assert!(lit.contains("@binding(16)"));
         assert!(!dark.contains("@binding(14)"));
         let baked = format!(
-            "{}\n{}\n{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}",
             pfx_materials::BRDF,
             pfx_materials::LOBES,
+            pfx_materials::WET,
             pfx_materials::CONTENT,
             ENVIRONMENT_WGSL.as_str(),
             include_str!("trace.wgsl"),

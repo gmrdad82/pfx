@@ -315,6 +315,81 @@ Cost, measured once on 10 s of 48 kHz mono voice-like audio (a gliding 140 Hz to
 | `repitch` every grain by 1.3, `Sinc` | 12.8 ms |
 | `repitch` every grain by 1.3, `Cubic` / `Linear` | 0.38 / 0.29 ms |
 
+## Shot mix (feature `shot`)
+
+`pfx_sound::shot` mixes a rendered shot's sound offline from a `*.sound.toml` script: curves over the shot's time drive synthesised layers, and WAVs the user supplies are placed on top. Everything is synthesised from pfx-sound's own blocks, seeded; no third-party samples ship.
+
+```rust
+let mix = pfx_sound::shot::render(Path::new("shot.sound.toml"), 600, 60)?;
+let wav = Clip { rate: pfx_sound::shot::RATE, channels: 2, samples: mix }.to_wav();
+```
+
+- `render(script_path, frames, fps)` returns 48 kHz (`RATE`) stereo interleaved samples, exactly `frames / fps` seconds long: `audio_frames(frames, fps)` = round(frames x 48000 / fps) frames, so 600 frames at 60 fps are 480,000 frames. Frame n of the picture is time n / fps on the script's clock.
+- `Script::load(path)` and `Script::parse(text, dir)` read a script into `Script` (curves, layers, samples, all public fields), and `Script::mix(audio_frames)` renders it, so a caller can change a value before mixing. Unknown keys, a curve named twice and a layer reading a curve that does not exist are errors, with the table and key named.
+- The same script gives the same samples, bit for bit: time comes from the frame count, every noise and event draw from the script's `seed` (each layer takes its own seed from it and its place, or `seed` on the layer), and the sines, exponentials and powers go through pfx-sound's sine table and pfx-core's `sim` functions, never the platform's libm.
+- The mix is the layers summed, then `[mix] gain`, then the soft limiter if `limiter` is set (the mixer's own `set_limiter` curve), then a clamp to -1..1.
+
+### Script keys
+
+| Key | Default | Meaning |
+|---|---|---|
+| `seed` | 0 | the script's seed |
+| `[mix] gain` | 1 | master gain |
+| `[mix] limiter` | off | soft limiter threshold, 0.05 to 0.999 |
+| `[[curve]] name` | required | the name layers read it by |
+| `[[curve]] keys` | required | `[[t, v], ...]`, t in seconds, not going backwards; held before the first key and after the last |
+| `[[curve]] ease` | `"linear"` | `"linear"`, or `"smooth"`: a monotone cubic (Fritsch-Carlson) that passes every key and never overshoots between them |
+
+Every layer table (`[[engine]]`, `[[road]]`, `[[squeal]]`, `[[spray]]`, `[[whoosh]]`, `[[ambience]]`) takes these, and any key marked *curve* below takes either a number or a curve's name:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `name` | none | a label |
+| `gain` | 1 | *curve*; linear gain, ramped inside each 16-frame control block |
+| `pan` | 0 | *curve*; -1 left to 1 right, equal power on mono layers, a balance on stereo ones (whoosh, ambience) |
+| `start`, `end` | 0, the shot's end | seconds the layer plays between |
+| `fade_in`, `fade_out` | 0 | seconds of smoothstep fade after `start` and before `end` |
+| `seed` | from the script's | the layer's own seed |
+
+| Layer | Keys | What it is |
+|---|---|---|
+| `[[engine]]` | `rpm` (*curve*, 900), `load` (*curve*, 0 to 1, 1), `cylinders` (1 to 16, 8), `drive` (dB, 0 to 40, 6), `lowpass` (Hz, 6000), `crackle` (0 to 1, 0) | a combustion engine, ported from enginesound (MIT, see [NOTICE.md](../NOTICE.md)): a four-stroke crank turns at `rpm` / 120 cycles a second and each cylinder fires once a cycle, so the firing rate is rpm x cylinders / 120 Hz; each cylinder's piston and ignition pulse excites valve-modulated intake, exhaust and extractor waveguides into collectors, a straight pipe and four muffler elements. `load` scales the ignition (35 % to 100 %), the intake and the exhaust, so more load means more upper harmonics; the drive (a rational tanh, `drive` x 40 % to 100 % by load) and a low-pass at `lowpass` x 30 % to 100 % by load follow, and a 25 Hz high-pass. With `crackle`, exhaust pops (seeded 3 to 12 ms band-passed noise bursts) fire on lift-off (a falling load) and on overrun (low load above 2,500 rpm). The model runs 0.5 s before the layer starts, so it opens warm |
+| `[[road]]` | `speed` (*curve*, m/s, 0), `roughness` (0 to 1, 0.4) | tyre road noise: pink noise low-passed at 180 + 28 x speed Hz, a brown rumble and a band of hiss at 1500 + 45 x speed Hz by `roughness`, at a level of (speed / 25)^1.3 |
+| `[[squeal]]` | `at` (`[[t0, t1], ...]`), `curve` (a curve name), `threshold` (0.5), `range` (0.5), `hz` (*curve*, 1400) | a tyre squeal: a tone with its octave and a Q 14 resonant band of noise at `hz`, wobbling 2 % and fluttering; it sounds inside each `at` window and while the curve is above `threshold`, reaching full at `threshold + range`, with a 40 ms attack and 120 ms release |
+| `[[spray]]` | `speed` (*curve*, m/s, 0), `wet` (*curve*, 0 to 1, 1) | wet road spray: white noise high-passed at 1.8 kHz and low-passed at 5000 + 120 x speed Hz, fluttering, at wet x (speed / 25)^1.2 |
+| `[[whoosh]]` | `at` (`[t, ...]`, seconds of closest approach), `speed` (m/s, 20), `distance` (m, 3), `hz` (700), `sweep` (`[from, to]`, `[-1, 1]`), `length` (s, 2) | passing vehicles: for each time, a source at `speed` passing `distance` away: pink noise band-passed at `hz` and low-passed at 350 Hz, both moved by the Doppler factor 343 / (343 + radial speed), at distance / range, panned from `sweep[0]` to `sweep[1]` as it passes, over `length` seconds |
+| `[[ambience]]` | `bed` (1), `rumble` (1), `horns` (per minute, 3), `birds` (per minute, 6) | a stereo city bed: pink noise low-passed at 700 Hz with a little air, a distant traffic rumble under 110 Hz that swells slowly, distant two-tone horns (a square and a saw a major third apart through a 1.4 kHz low-pass, 0.18 to 0.6 s, one in three honking twice) and bird chirp groups (2 to 5 sine chirps at 2.6 to 4.8 kHz with sweeps), placed at seeded Poisson times with seeded pitch, level and pan |
+| `[[sample]]` | `path` (required, relative to the script), `at` (s, 0), `gain` (1), `pan` (0) | a WAV the user supplies (their own or CC0), resampled to 48 kHz stereo and added from `at`; anything past the shot's end is cut |
+
+`crates/sound/examples/car-pass.sound.toml` is a neutral example: a V8 pulling through three gears with lift-off crackle, road noise and spray by a speed curve, a squeal through a corner, three cars passing and a city bed. Its curves:
+
+```toml
+[[curve]]
+name = "rpm"
+ease = "smooth"
+keys = [[0.0, 2400], [2.2, 6400], [2.45, 4300], [4.8, 6900], [5.05, 4800], [7.6, 7000], [8.2, 3200], [10.0, 2600]]
+
+[[engine]]
+rpm = "rpm"
+load = "load"
+cylinders = 8
+crackle = 0.8
+```
+
+Cost, measured once (`bench_shot_mix` in `crates/sound/tests/bench.rs`), the example's 10 s mix layer by layer, one thread, release build, Ryzen 9 9950X under other load, best of five:
+
+| Layer | 10 s of audio |
+|---|---|
+| engine, 8 cylinders | 113 ms |
+| road | 8.8 ms |
+| squeal | 3.7 ms |
+| spray | 7.1 ms |
+| whoosh, 3 passes | 3.8 ms |
+| ambience | 11 ms |
+| the whole example | 143 ms |
+
+The engine costs about 3.3 ms a second of audio for its pipes plus 1.2 ms a second per cylinder.
+
 ## Cost
 
 `crates/sound/tests/bench.rs` (`cargo test --release -p pfx-sound --test bench -- --ignored --nocapture`): a 48 kHz stereo mixer rendering 800-frame ticks (60 a second), a 0.1 s mono hit triggered 2,000 times a second with `max_voices: 20`, `Steal::Oldest`, 2 semitones of pitch jitter and 0.2 of volume jitter (about 20 live voices plus the stolen ones fading), and 20 live sine tones. Release build, Ryzen 9 9950X, CPU time a tick:
@@ -335,4 +410,4 @@ Before, 92 % of the jittered case was the sinc: for every pitched frame `Kernel:
 
 ## Tests
 
-No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, drive off bit for bit, the three curves pinned by a hash, a compensated drive keeping a quiet tone's level, scheduled glides matching the plain call made at the same frame bit for bit (and leaving the frames before it alone), and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The voice effects' tests cover the crusher's bit-depth steps and sample-and-hold runs, the chorus's seed (the same seed the same samples, another seed others), the vocoder singing at the carrier's harmonics and falling silent with the voice, the segmentation finding synthesised bursts between silences (with and without onsets) and onsets splitting a run that steps up without a gap, and the grain helpers' lengths, seeded order and a repitch landing on the moved pitch. The crate's own tests turn `vorbis` and `voicefx` on through a self dev-dependency, so the workspace gate runs them.
+No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, drive off bit for bit, the three curves pinned by a hash, a compensated drive keeping a quiet tone's level, scheduled glides matching the plain call made at the same frame bit for bit (and leaving the frames before it alone), and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The voice effects' tests cover the crusher's bit-depth steps and sample-and-hold runs, the chorus's seed (the same seed the same samples, another seed others), the vocoder singing at the carrier's harmonics and falling silent with the voice, the segmentation finding synthesised bursts between silences (with and without onsets) and onsets splitting a run that steps up without a gap, and the grain helpers' lengths, seeded order and a repitch landing on the moved pitch. The crate's own tests turn `vorbis`, `voicefx` and `shot` on through a self dev-dependency, so the workspace gate runs them. The shot mix's tests (`crates/sound/tests/shot.rs`, feature `shot`) cover the mix's exact length for a frame count and rate, the same script giving the same samples (and another seed others), and the engine's cycle following its rpm curve (the autocorrelation's period within 2 % of 120 / rpm seconds at 2,000 and 5,000 rpm).

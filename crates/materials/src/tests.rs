@@ -2,7 +2,7 @@ use bytemuck::Zeroable;
 
 use crate::{
     AGEING, At, BRDF, CoatWobble, Content, Family, GLASS_IOR, Material, NOISE, NoiseKind, PI,
-    PackedMaterial, PlankWood, RGB_WAVELENGTHS_NM, Scratch, Shaded, apply, dielectric_f0,
+    PackedMaterial, PlankWood, RGB_WAVELENGTHS_NM, Scratch, Shaded, Wet, apply, dielectric_f0,
     dispersed_ior, eval, fixtures, fresnel_conductor, fresnel_dielectric, ggx_d, ink_age, library,
     resolve, schlick, smith_correlated, smith_g,
 };
@@ -190,9 +190,9 @@ fn packed_layout() {
         std::mem::align_of::<PackedMaterial>(),
         PackedMaterial::ALIGN
     );
-    assert_eq!(PackedMaterial::SIZE, 624);
-    assert_eq!(std::mem::offset_of!(PackedMaterial, sheen), 496);
-    assert_eq!(PackedMaterial::LOBES_OFFSET, 496);
+    assert_eq!(PackedMaterial::SIZE, 640);
+    assert_eq!(std::mem::offset_of!(PackedMaterial, sheen), 512);
+    assert_eq!(PackedMaterial::LOBES_OFFSET, 512);
     assert_eq!(PackedMaterial::ALIGN, 16);
     assert_eq!(std::mem::offset_of!(PackedMaterial, base_roughness), 0);
     assert_eq!(std::mem::offset_of!(PackedMaterial, metal_spec_coat), 16);
@@ -210,9 +210,10 @@ fn packed_layout() {
     assert_eq!(std::mem::offset_of!(PackedMaterial, layer0), 160);
     assert_eq!(std::mem::offset_of!(PackedMaterial, tail), 224);
     assert_eq!(std::mem::offset_of!(PackedMaterial, params), 240);
+    assert_eq!(std::mem::offset_of!(PackedMaterial, wet), 496);
     assert_eq!(
         bytemuck::bytes_of(&PackedMaterial::pack(&Material::default())).len(),
-        624
+        640
     );
     let zero = PackedMaterial::zeroed();
     let unpacked = PackedMaterial::unpack(zero);
@@ -223,6 +224,12 @@ fn packed_layout() {
     aged.layers[0].seed = 0x8000_0001;
     aged.layers[0].kind = NoiseKind::Flow;
     aged.layers[2].params = std::array::from_fn(|k| k as f32 * 0.5 + 1.0);
+    aged.wet = Wet {
+        amount: 0.4,
+        puddles: 0.6,
+        puddle_scale: 3.0,
+        seed: 0xC3C3_C3C3,
+    };
     let packed = PackedMaterial::pack(&aged);
     assert_eq!(packed.params[8], [1.0, 1.5, 2.0, 2.5]);
     assert_eq!(packed.params[10], [5.0, 5.5, 6.0, 6.5]);

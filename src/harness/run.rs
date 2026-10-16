@@ -10,10 +10,10 @@ use exr::prelude::{
 };
 use pfx_run::ending::{self, Process};
 use pfx_run::job::{HD_DETAIL, Job, TOOL, stages};
-use pfx_run::{archive, encode as master_encode};
+use pfx_run::{alpha as master_alpha, archive, encode as master_encode};
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -502,6 +502,22 @@ fn linear_pick(
     write_linear_exr(&bytes, output, width, height)
 }
 
+fn alpha_made((path, manifest): (PathBuf, master_alpha::Manifest)) -> Made {
+    Made {
+        path,
+        what: master_alpha::MANIFEST_WHAT.into(),
+        encoded: Some(json!({
+            "tier": "alpha master",
+            "size": format!("{}x{}", manifest.size[0], manifest.size[1]),
+            "fps": manifest.fps,
+            "frames": manifest.frames,
+            "depth": manifest.bit_depth,
+            "alpha": manifest.alpha,
+            "colour": "sRGB",
+        })),
+    }
+}
+
 fn made(path: PathBuf, what: &str) -> Made {
     Made {
         path,
@@ -585,7 +601,7 @@ fn fresh(dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))
 }
 
-fn matte(black: &Frame, white: &Frame, bg: [f32; 3], wg: [f32; 3]) -> Frame {
+fn matte(black: &Frame, white: &Frame, bg: [f32; 3], wg: [f32; 3]) -> Linear {
     let (b, w) = (black.linear(), white.linear());
     let span = ((wg[0] - bg[0]) + (wg[1] - bg[1]) + (wg[2] - bg[2])) / 3.0;
     let mut rgba = Vec::with_capacity(b.rgba.len());
@@ -606,7 +622,85 @@ fn matte(black: &Frame, white: &Frame, bg: [f32; 3], wg: [f32; 3]) -> Frame {
         height: b.height,
         rgba,
     }
-    .frame()
+}
+
+type Grounds = ([f32; 3], [f32; 3]);
+
+struct Cuts {
+    dir: PathBuf,
+    blended: BTreeSet<usize>,
+    grounds: BTreeMap<usize, Grounds>,
+}
+
+impl Cuts {
+    fn new(dir: PathBuf, picks: &[Pick]) -> Result<Cuts, String> {
+        fresh(&dir)?;
+        let blended = picks
+            .iter()
+            .flat_map(|pick| match *pick {
+                Pick::Blend(a, b, _) => vec![a, b],
+                Pick::One(_) => Vec::new(),
+            })
+            .collect();
+        Ok(Cuts {
+            dir,
+            blended,
+            grounds: BTreeMap::new(),
+        })
+    }
+
+    fn cut(&self, i: usize) -> PathBuf {
+        self.dir.join(format!("{i:05}.png"))
+    }
+
+    fn side(&self, i: usize, side: &str) -> PathBuf {
+        self.dir.join(format!("{i:05}.{side}.png"))
+    }
+
+    fn keep(
+        &mut self,
+        i: usize,
+        black: &Frame,
+        white: &Frame,
+        grounds: Grounds,
+    ) -> Result<(), String> {
+        let cut = matte(black, white, grounds.0, grounds.1).frame();
+        let path = self.cut(i);
+        std::fs::write(
+            &path,
+            master_alpha::encode(cut.width, cut.height, &cut.rgba)?,
+        )
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+        if self.blended.contains(&i) {
+            black.save(&self.side(i, "black"))?;
+            white.save(&self.side(i, "white"))?;
+            self.grounds.insert(i, grounds);
+        }
+        Ok(())
+    }
+
+    fn linear(&self, i: usize) -> Result<Linear, String> {
+        let (bg, wg) = self
+            .grounds
+            .get(&i)
+            .ok_or_else(|| format!("cutout {i} was not kept for its crossfade"))?;
+        let black = Frame::load(&self.side(i, "black"))?;
+        let white = Frame::load(&self.side(i, "white"))?;
+        Ok(matte(&black, &white, *bg, *wg))
+    }
+
+    fn pick(&self, pick: Pick) -> Result<Vec<u8>, String> {
+        match pick {
+            Pick::One(i) => {
+                let path = self.cut(i);
+                std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
+            }
+            Pick::Blend(a, b, t) => {
+                let frame = mix_cutouts(&self.linear(a)?, &self.linear(b)?, t).frame();
+                master_alpha::encode(frame.width, frame.height, &frame.rgba)
+            }
+        }
+    }
 }
 
 fn mix_cutouts(a: &Linear, b: &Linear, t: f32) -> Linear {
@@ -1039,9 +1133,18 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
         fresh(&linear_dir)?;
     }
     let cut_dir = dir.join(format!("{master_stem}.cutouts"));
-    if shot.cutouts {
-        fresh(&cut_dir)?;
-    }
+    let alpha_dir = dir.join(master_alpha::folder(&master_stem));
+    let picks = loops::picks(closure, shot.seconds, master_fps, master_fps);
+    let mut cuts = if shot.cutouts {
+        for stale in [&cut_dir, &alpha_dir] {
+            if stale.exists() {
+                std::fs::remove_dir_all(stale).map_err(|e| format!("{}: {e}", stale.display()))?;
+            }
+        }
+        Some(Cuts::new(scratch.path.join("cutouts"), &picks)?)
+    } else {
+        None
+    };
     let mut outputs_made: Vec<Made> = Vec::new();
     let raw = scratch.path.join("frame.rgba");
     let raw_s = raw.display().to_string();
@@ -1077,7 +1180,7 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
                 mh,
             )?;
         }
-        if shot.cutouts {
+        if let Some(cuts) = cuts.as_mut() {
             let b: Written = typed(client.call(&Request::Frame {
                 path: raw_s.clone(),
                 ground: Some([0.0; 3]),
@@ -1090,14 +1193,12 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
                 linear: true,
             })?)?;
             let white = Frame::read_raw(&raw, mw, mh)?;
-            let cut = cut_dir.join(format!("{i:05}.png"));
-            matte(
+            cuts.keep(
+                i,
                 &black,
                 &white,
-                b.ground.unwrap_or([0.0; 3]),
-                w.ground.unwrap_or([1.0; 3]),
-            )
-            .save(&cut)?;
+                (b.ground.unwrap_or([0.0; 3]), w.ground.unwrap_or([1.0; 3])),
+            )?;
         }
         job.progress(i as u64 + 1);
         if i % 30 == 29 || i + 1 == count {
@@ -1110,7 +1211,6 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
         }
     }
     let _ = std::fs::remove_file(&raw);
-    let picks = loops::picks(closure, shot.seconds, master_fps, master_fps);
     let clip_seconds = picks.len() as f64 / master_fps as f64;
     let wav = scratch.path.join("audio.wav");
     let pcm = match (o.encode, hello.audio, hello.audio_format) {
@@ -1158,24 +1258,33 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
         width: mw,
         height: mh,
     };
-    if shot.cutouts {
-        let source = scratch.path.join("cutouts-original");
-        std::fs::rename(&cut_dir, &source).map_err(|e| e.to_string())?;
-        fresh(&cut_dir)?;
+    if let Some(cuts) = cuts {
+        let mut alpha = if o.encode {
+            Some(master_alpha::Writer::create(
+                &alpha_dir,
+                mw,
+                mh,
+                master_fps,
+                &built.commit,
+            )?)
+        } else {
+            fresh(&cut_dir)?;
+            None
+        };
         for (n, pick) in picks.iter().enumerate() {
-            let load = |i: usize| {
-                Frame::load(&source.join(format!("{i:05}.png"))).map(|frame| frame.linear())
-            };
-            let frame = match *pick {
-                Pick::One(i) => load(i)?,
-                Pick::Blend(a, b, blend) => mix_cutouts(&load(a)?, &load(b)?, blend),
+            let bytes = cuts.pick(*pick)?;
+            if let Some(writer) = alpha.as_mut() {
+                outputs_made.push(made(writer.push_encoded(&bytes)?, master_alpha::FRAME_WHAT));
+            } else {
+                let path = cut_dir.join(format!("{n:05}.png"));
+                std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+                outputs_made.push(made(path, "cutout frame, 16-bit RGBA PNG"));
             }
-            .frame();
-            let path = cut_dir.join(format!("{n:05}.png"));
-            frame.save(&path)?;
-            outputs_made.push(made(path, "cutout frame, 16-bit RGBA PNG"));
         }
-        std::fs::remove_dir_all(source).map_err(|e| e.to_string())?;
+        if let Some(writer) = alpha {
+            outputs_made.push(alpha_made(writer.finish()?));
+        }
+        std::fs::remove_dir_all(&cuts.dir).map_err(|e| e.to_string())?;
     }
     let master = dir.join(encode::master(&master_stem));
     let poster = dir.join(encode::poster(&master_stem));
@@ -1252,11 +1361,7 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
             let ff = &ffmpeg.as_ref().ok_or("ffmpeg unavailable")?.path;
             master_encode::mux_audio(ff, &silent, &wav, clip_seconds, &master)?;
         }
-        job.stage(
-            stages::ENCODE,
-            Some(if shot.cutouts { 2 } else { 1 }),
-            "outputs",
-        );
+        job.stage(stages::ENCODE, Some(1), "outputs");
         let size = format!("{mw}x{mh}");
         let args = master_encode::master_args(master_fps);
         outputs_made.push(Made {
@@ -1265,17 +1370,6 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
             encoded: Some(json!({"tier": "master", "size": size, "fps": master_fps, "args": args, "depth": 8, "chroma": "4:2:0", "color": master_encode::COLOR, "audio": audio_record.as_ref().map(|a| a.codec)})),
         });
         job.progress(1);
-        if shot.cutouts {
-            let alpha = dir.join(format!("{master_stem}.alpha.master.mov"));
-            let ff = &ffmpeg.as_ref().ok_or("ffmpeg unavailable")?.path;
-            master_encode::alpha_sequence(ff, &cut_dir, master_fps, &alpha)?;
-            outputs_made.push(Made {
-                path: alpha,
-                what: "ProRes 4444 alpha master".into(),
-                encoded: Some(json!({"tier": "alpha master", "fps": master_fps, "args": master_encode::alpha_args(), "depth": 10, "chroma": "4:4:4"})),
-            });
-            job.progress(2);
-        }
     }
     if let Some(started) = encode_started {
         stages.insert("encode".into(), started.elapsed().as_secs_f64());
@@ -1451,13 +1545,26 @@ fn reencode_mode(path: &Path, archive_enabled: bool) -> Result<(), String> {
         }
         let cutouts = dir.join(format!("{stem}.cutouts"));
         if cutouts.is_dir() {
-            let alpha = dir.join(format!("{stem}.alpha.master.mov"));
-            master_encode::alpha_sequence(&ffmpeg, &cutouts, fps, &alpha)?;
-            files.push(entry(dir, &Made {
-                path: alpha,
-                what: "ProRes 4444 alpha master".into(),
-                encoded: Some(json!({"tier": "alpha master", "fps": fps, "args": master_encode::alpha_args(), "depth": 10, "chroma": "4:4:4"})),
-            })?);
+            let mut names: Vec<PathBuf> = std::fs::read_dir(&cutouts)
+                .map_err(|e| format!("{}: {e}", cutouts.display()))?
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().is_some_and(|x| x == "png"))
+                .collect();
+            names.sort();
+            let first = Frame::load(names.first().ok_or("the cutouts folder is empty")?)?;
+            let rev = manifest["source"]["commit"].as_str().unwrap_or_default();
+            let mut writer = master_alpha::Writer::create(
+                &dir.join(master_alpha::folder(stem)),
+                first.width,
+                first.height,
+                fps,
+                rev,
+            )?;
+            for name in &names {
+                let path = writer.push(&Frame::load(name)?.rgba)?;
+                files.push(entry(dir, &made(path, master_alpha::FRAME_WHAT))?);
+            }
+            files.push(entry(dir, &alpha_made(writer.finish()?))?);
         }
         manifest["files"] = json!(files);
         manifest["outputs"] = outputs();
@@ -1584,6 +1691,65 @@ mod tests {
         };
         let mixed = mix_cutouts(&visible, &invisible, 0.5);
         assert_eq!(mixed.rgba, [1.0, 0.0, 0.0, 0.5]);
+    }
+
+    #[test]
+    fn a_crossfaded_cutout_is_quantised_once_from_the_adapters_captures() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tmp")
+            .join(format!("cuts-{}", std::process::id()));
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            (state >> 40) as f32 / (1u64 << 24) as f32
+        };
+        let mut capture = || {
+            let (mut black, mut white) = (Vec::new(), Vec::new());
+            for _ in 0..64 {
+                let alpha = 0.05 + 0.95 * next();
+                let colour = [next(), next(), next()];
+                black.extend(colour.map(|c| c * alpha));
+                black.push(1.0);
+                white.extend(colour.map(|c| c * alpha + 1.0 - alpha));
+                white.push(1.0);
+            }
+            let frame = |rgba| {
+                Linear {
+                    width: 8,
+                    height: 8,
+                    rgba,
+                }
+                .frame()
+            };
+            (frame(black), frame(white))
+        };
+        let (frames, grounds) = ([capture(), capture()], ([0.0; 3], [1.0; 3]));
+        let mut cuts = Cuts::new(dir.clone(), &[Pick::Blend(1, 0, 0.375)]).unwrap();
+        for (i, (black, white)) in frames.iter().enumerate() {
+            cuts.keep(i, black, white, grounds).unwrap();
+        }
+        let decoded = |pick: Pick| {
+            let path = dir.join("picked.png");
+            std::fs::write(&path, cuts.pick(pick).unwrap()).unwrap();
+            pfx_run::alpha::decode(&path).unwrap().2
+        };
+        let mattes = frames
+            .each_ref()
+            .map(|(b, w)| matte(b, w, grounds.0, grounds.1));
+        assert_eq!(decoded(Pick::One(0)), mattes[0].frame().rgba);
+        let once = mix_cutouts(&mattes[1], &mattes[0], 0.375).frame().rgba;
+        let twice = mix_cutouts(
+            &mattes[1].frame().linear(),
+            &mattes[0].frame().linear(),
+            0.375,
+        )
+        .frame()
+        .rgba;
+        assert_eq!(decoded(Pick::Blend(1, 0, 0.375)), once);
+        assert_ne!(once, twice);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

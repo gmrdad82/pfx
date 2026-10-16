@@ -86,9 +86,10 @@ fn shader_source() -> Result<String, String> {
     }
     let head = head.replace(EMISSION, BOUNCED_EMISSION);
     Ok(format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         pfx_materials::BRDF,
         pfx_materials::LOBES,
+        pfx_materials::WET,
         pfx_materials::CONTENT,
         ENVIRONMENT_WGSL.as_str(),
         head,

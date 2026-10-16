@@ -24,6 +24,13 @@ roughness = 0.9
 specular = 0.02
 fabric = { color = [0.9, 0.9, 0.9], roughness = 0.5 }
 
+[materials.soaked]
+base = [0.3, 0.05, 0.05]
+roughness = 0.9
+specular = 0.02
+fabric = { color = [0.9, 0.9, 0.9], roughness = 0.5 }
+wet = { amount = 1.0 }
+
 [materials.metal]
 base = [0.8, 0.8, 0.8]
 metalness = 1.0
@@ -293,6 +300,23 @@ fn sheen_brightens_the_rim_in_both_renderers() {
         gains[0] / gains[1] < 1.6 && gains[1] / gains[0] < 1.6,
         "the renderers' sheen gains differ: {gains:?}"
     );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_lobed_material_still_soaks_in_both_renderers() {
+    let toward = [0.2, 0.3, 1.0];
+    let dry = render_material("soak-dry", "fabric", toward);
+    let wet = render_material("soak-wet", "soaked", toward);
+    let body = |n: [f32; 3]| n[2] > 0.6 && n[1] < 0.0;
+    for (k, renderer) in RENDERERS.iter().enumerate() {
+        let before = mean(&region(&dry[k], body));
+        let after = mean(&region(&wet[k], body));
+        assert!(
+            after[0] < before[0] * 0.9,
+            "{renderer}: soaked {after:?} against {before:?}"
+        );
+    }
 }
 
 #[test]

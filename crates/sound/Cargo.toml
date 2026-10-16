@@ -12,10 +12,12 @@ authors.workspace = true
 pfx-core = { path = "../core" }
 cpal = "=0.18.1"
 lewton = { version = "=0.10.2", optional = true }
+toml = { version = "0.9", optional = true }
 
 [features]
 vorbis = ["dep:lewton"]
 voicefx = []
+shot = ["dep:toml"]
 
 [dev-dependencies]
-pfx-sound = { path = ".", features = ["vorbis", "voicefx"] }
+pfx-sound = { path = ".", features = ["vorbis", "voicefx", "shot"] }

@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use super::{
     ALPHA_CUTOFF, Camera, Content, DepthOfField, Emitter, Environment, Finish, Geometry,
-    GeometryMorph, GeometrySkin, Haze, IDENTITY, Light, Location, Matrix, Motion, Mover, MoverKind,
+    GeometryMorph, GeometrySkin, Haze, IDENTITY, Location, Matrix, Motion, Mover, MoverKind,
     NodeOverride, Object, Part, Projection, Scene, SceneError, SceneMesh, SceneSky, Shadow, Sun,
     Text, TraceSettings, model, multiply,
 };
@@ -305,16 +305,21 @@ pub(super) fn build(
         .iter()
         .map(|entry| (entry.key.clone(), build_mover(&entry.value)))
         .collect();
-    let lights = resolved
-        .lights
-        .iter()
-        .map(|entry| (entry.key.clone(), build_light(&entry.value)))
-        .collect();
+    let lights = super::lights::build_lights(
+        &places,
+        &resolved.lights,
+        &objects,
+        &resolved.objects,
+        &meshes,
+    )?
+    .into_iter()
+    .collect();
     let emitters = resolved
         .emitters
         .iter()
         .map(|entry| (entry.key.clone(), build_emitter(&entry.value)))
         .collect();
+    let particles = super::particles::build(&places, &resolved.particles, &objects, &meshes)?;
     let camera = match &resolved.camera {
         Some(camera) => {
             let holder = places.holder(&resolved.files, "camera");
@@ -329,6 +334,7 @@ pub(super) fn build(
         }
         None => None,
     };
+    let finish = super::flare::fold(finish, resolved.flare.as_ref());
     let plates = match &resolved.plates {
         Some(plates) => {
             let holder = places.holder(&resolved.files, "plates");
@@ -367,6 +373,7 @@ pub(super) fn build(
         movers,
         lights,
         emitters,
+        particles,
         camera,
         finish,
         trace: resolved
@@ -381,6 +388,7 @@ pub(super) fn build(
         texts,
         plates,
         physics: resolved.physics.as_ref().map(super::play::build_physics),
+        motion_blur: resolved.motion_blur.as_ref().map(super::motion_blur::build),
         bodies,
         body_layers,
         characters,
@@ -445,6 +453,7 @@ fn build_haze(haze: &file::Haze) -> Haze {
         reach: haze.reach.unwrap_or(3.0),
         unmapped: haze.unmapped.unwrap_or(0.0),
         seed: haze.seed.unwrap_or(0),
+        outdoor: super::haze::outdoor(haze),
     }
 }
 
@@ -556,7 +565,10 @@ fn build_mesh(
         .collect();
     let mut parts = Vec::new();
     let mut visited = BTreeSet::new();
-    let mut rigs = Rigging::default();
+    let mut rigs = Rigging {
+        lod_levels: super::lod::level_nodes(&parsed),
+        ..Rigging::default()
+    };
     for (root, own) in roots {
         walk(
             &parsed,
@@ -650,6 +662,7 @@ struct Rigging {
     skins: BTreeMap<u32, SkinRig>,
     nodes: Vec<(u32, bool)>,
     morphs: Vec<(u32, Morph)>,
+    lod_levels: BTreeSet<u32>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -664,6 +677,9 @@ fn walk(
     visited: &mut BTreeSet<String>,
     rigs: &mut Rigging,
 ) -> Result<(), String> {
+    if rigs.lod_levels.contains(&index) {
+        return Ok(());
+    }
     let node = &mesh.nodes[index as usize];
     visited.insert(node.name.clone());
     rigs.nodes.push((index, own));
@@ -690,9 +706,20 @@ fn walk(
             ));
             rigs.morphs.len() - 1
         });
-        for primitive in &group.primitives {
+        if !node.lod.is_empty() && node.skin.is_some() {
+            return Err(format!(
+                "mesh {name}, node {}: MSFT_lod levels take a static or morphed mesh, not a skinned one",
+                node.name
+            ));
+        }
+        for (slot, primitive) in group.primitives.iter().enumerate() {
             let mut geometry = geometry(primitive)
                 .map_err(|message| format!("mesh {name}, node {}: {message}", node.name))?;
+            if !node.lod.is_empty() {
+                let levels = super::lod::levels(mesh, node, slot, group, morph, &geometry)
+                    .map_err(|message| format!("mesh {name}, node {}: {message}", node.name))?;
+                geometry = geometry.with_levels(levels);
+            }
             if let Some(morph) = morph {
                 geometry = geometry.with_morph(GeometryMorph {
                     morph,
@@ -812,6 +839,7 @@ impl Geometry {
             indices,
             skin: None,
             morph: None,
+            levels: Vec::new(),
             hash: hasher.finalize().into(),
         }
     }
@@ -984,17 +1012,6 @@ fn build_objects(
         objects[place].model = matrix;
     }
     Ok(objects)
-}
-
-fn build_light(light: &file::Light) -> Light {
-    Light {
-        position: light.position,
-        color: light.color.unwrap_or(file::Light::COLOR),
-        intensity: light.intensity,
-        radius: light.radius.unwrap_or(file::Light::RADIUS),
-        range: light.range.unwrap_or(file::Light::RANGE),
-        shadow: light.shadow.unwrap_or(file::Light::SHADOW),
-    }
 }
 
 fn build_emitter(emitter: &file::Emitter) -> Emitter {
@@ -1396,6 +1413,18 @@ fn pass_line(text: &str, place: usize) -> Option<usize> {
         .map(|(number, _)| number + 1)
 }
 
+fn finish_file(
+    places: &Places,
+    reader: &mut Reader,
+    hasher: &mut Sha256,
+    relative: &str,
+) -> Result<Vec<u8>, String> {
+    let bytes = reader.read(&places.root.join(relative))?;
+    hasher.update(relative.as_bytes());
+    hasher.update(sha256(&bytes));
+    Ok(bytes)
+}
+
 fn build_finish(
     places: &Places,
     holder: &Path,
@@ -1424,12 +1453,14 @@ fn build_finish(
             hasher.update(sha256(&bytes));
             let text = String::from_utf8(bytes)
                 .map_err(|_| SceneError::new(&path, None, "the finish is not UTF-8"))?;
-            pfx_post::parse_str(&text)
+            let mut files = |relative: &str| finish_file(places, reader, &mut hasher, relative);
+            pfx_post::parse_str_with(&text, &mut files)
                 .map_err(|error| SceneError::new(&path, None, error.to_string()))?
         }
         None => {
             hasher.update(base.to_string().as_bytes());
-            pfx_post::parse(&base)
+            let mut files = |relative: &str| finish_file(places, reader, &mut hasher, relative);
+            pfx_post::parse_with(&base, &mut files)
                 .map_err(|error| places.refusal(holder, &steps, format!("[finish]: {error}")))?
         }
     };
@@ -1445,8 +1476,9 @@ fn build_finish(
         let Some(pass) = item.as_table() else {
             return Err(refuse("a [[finish.pass]] is a table of finish keys".into()));
         };
-        let built =
-            pfx_post::parse(pass).map_err(|error| refuse(format!("[[finish.pass]]: {error}")))?;
+        let mut files = |relative: &str| finish_file(places, reader, &mut hasher, relative);
+        let built = pfx_post::parse_with(pass, &mut files)
+            .map_err(|error| refuse(format!("[[finish.pass]]: {error}")))?;
         if built.passes.is_empty() {
             return Err(refuse("a [[finish.pass]] builds no pass".into()));
         }

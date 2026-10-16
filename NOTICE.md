@@ -40,11 +40,13 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 
 ## Filament, under the Apache License 2.0
 
+`crates/post/src/flare.rs` and the `FLARE_*` shaders in `crates/post/src/wgsl.rs` (in the package `pfx-post`) are a port of Filament's screen-space lens flare (https://github.com/google/filament, tag `v1.56.0`, commit `003e5005713cba55cbd3f3a423c472000b96b868`), Copyright (C) 2016-2021 The Android Open Source Project, licensed under the Apache License 2.0. Its text ships in [crates/post/LICENSE-APACHE](crates/post/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Filament. The port is a translation into Rust and WGSL compute, changed by pfx's authors: the ghosts, halo, ring and chromatic sampling of `filament/src/materials/flare/flare.mat` (after John Chapman's 2017 pseudo lens flare), the bloom input's threshold, highlight crush and firefly weights of `filament/src/materials/bloom/bloomDownsample2x.mat`, the flare's 9-tap blur and its 192-row buffer from `filament/src/PostProcessManager.cpp`, the starburst mask of `filament/src/materials/colorGrading/colorGrading.mat` with its 256-texel table, and the defaults of `BloomOptions` in `filament/include/filament/Options.h`.
+
 `crates/materials/src/wgsl/lobes.wgsl` and `crates/materials/src/lobes.rs` (in the package `pfx-materials`) port parts of Filament (https://github.com/google/filament, tag `v1.78.0`), Copyright (C) 2015 The Android Open Source Project, licensed under the Apache License 2.0. Its text ships in [crates/materials/LICENSE-APACHE](crates/materials/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Filament. The port is a translation into WGSL and Rust, changed by pfx's authors: the Charlie sheen distribution, Neubelt's visibility, the anisotropic GGX distribution and its height-correlated visibility (`shaders/src/surface_brdf.fs`), the sheen energy scaling, the anisotropic bent reflection normal and the cloth wrap diffuse with its subsurface tint (`shaders/src/surface_shading_model_standard.fs`, `surface_shading_model_cloth.fs`, `surface_shading_lit.fs`, `surface_lighting.fs`, `surface_light_indirect.fs`). The sheen albedo table is pfx's own integral of that lobe.
 
 ## kira, under the MIT licence
 
-`hermite` in `crates/sound/src/interp.rs` (in the package `pfx-sound`), the 4-point, 3rd-order Hermite behind `Resample::Cubic`, is ported from kira's `interpolate_frame` (https://github.com/tesselode/kira, `crates/kira/src/frame.rs`, commit `74b3ef0fd8bd15f90e3b469208ee741f04374a62`), and `Drive` in `crates/sound/src/drive.rs` (the soft and hard clip curves, the drive gain with its division back out, and the equal-power dry and wet blend) from kira's `Distortion` effect (`crates/kira/src/effect/distortion.rs`, the same commit), Copyright 2021 Andrew Minnich, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+`hermite` in `crates/sound/src/interp.rs` (in the package `pfx-sound`), the 4-point, 3rd-order Hermite behind `Resample::Cubic`, is ported from kira's `interpolate_frame` (https://github.com/tesselode/kira, `crates/kira/src/frame.rs`, commit `74b3ef0fd8bd15f90e3b469208ee741f04374a62`), and `Drive` in `crates/sound/src/drive.rs` (the soft and hard clip curves, the drive gain with its division back out, and the equal-power dry and wet blend) from kira's `Distortion` effect (`crates/kira/src/effect/distortion.rs`, the same commit), and `gains` in `crates/film/src/duck.rs` (in the package `pfx-film`; the dB level, the amount over the threshold and its envelope follower with its attack and release speeds) from kira's `Compressor` effect (`crates/kira/src/effect/compressor.rs`, the same commit), Copyright 2021 Andrew Minnich, licensed MIT OR Apache-2.0 and used here under the MIT licence:
 
 > Copyright 2021 Andrew Minnich
 >
@@ -102,6 +104,18 @@ In the package `pfx-sound` (feature `voicefx`), the chorus in `crates/sound/src/
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## bevy_hanabi, under the MIT licence
+
+In the package `pfx-core`, `crates/core/src/sim/particles.rs` ports bevy_hanabi's GPU-free parts (https://github.com/djeedai/bevy_hanabi, version 0.19.0 at commit `cf35d53d54fb973e30c635e7097ff3e6abf33099`): the spawner's fractional remainder (`src/spawn.rs`, `EffectSpawner::tick`), the gradient's sampling with its first-of-duplicates rule (`src/gradient.rs`, `Gradient::sample`) and the circle basis of `SetPositionCircleModifier` (`src/modifier/position.rs`), by Jerome Humbert, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+
+> Copyright (c) 2021 Jerome Humbert
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 ## librosa, under the ISC licence
 
 In the package `pfx-sound` (feature `voicefx`), the spectral-flux onsets in `crates/sound/src/voicefx/syllables.rs` (the positive rise in dB averaged over bands with lag 1, `power_to_db`'s 1e-10 floor and 80 dB range, the min and max normalisation, `onset_detect`'s peak-picking windows of 30 ms, 100 ms and a 0.07 threshold, and the greedy `peak_pick`) are ported from librosa (https://github.com/librosa/librosa, `librosa/onset.py` and `librosa/util/utils.py`, commit `08e2c0a20d650fe00f10aaf3a1eaa9698ac19641`), licensed ISC:
@@ -111,6 +125,18 @@ In the package `pfx-sound` (feature `voicefx`), the spectral-flux onsets in `cra
 > Permission to use, copy, modify, and/or distribute this software for any purpose with or without fee is hereby granted, provided that the above copyright notice and this permission notice appear in all copies.
 >
 > THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+## enginesound, under the MIT licence
+
+The engine voice in `crates/sound/src/shot/engine.rs` (in the package `pfx-sound`, feature `shot`), its crank cycle, piston and ignition pulses, valve-modulated cylinder waveguides, collectors, straight pipe, muffler elements, intake noise, waveguide damping and DC filter, with the tuned values of `example1.esc`, is ported from enginesound (https://github.com/DasEtwas/enginesound, `src/gen.rs`, commit `e5fcca587397c0c8ba9c9d24874b951fed74d260`), Copyright (c) 2020 DasEtwas, licensed MIT:
+
+> Copyright (c) 2020 DasEtwas
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## Hash without Sine, under the MIT licence
 
@@ -124,10 +150,40 @@ In the package `pfx-sound` (feature `voicefx`), the spectral-flux onsets in `cra
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## KinoMotion, under the MIT licence
+
+`crates/post/src/motion_blur.rs` (in the package `pfx-post`), the live renderer's motion blur, is ported from Keijiro Takahashi's KinoMotion (https://github.com/keijiro/KinoMotion, commit `35d5d5179e60703d1db5eac967715f5ea416e387`, `Assets/Kino/Motion/Shader/Prefilter.cginc`, `Reconstruction.cginc` and `Script/ReconstructionFilter.cs`), itself after McGuire, Hennessy, Bukowski and Osman, "A Reconstruction Filter for Plausible Motion Blur" (I3D 2012), Copyright (c) 2016, 2017 Keijiro Takahashi, licensed MIT:
+
+> Copyright (c) 2016, 2017 Keijiro Takahashi
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 pfx's mark and wordmark are © Catalin Ilinca, all rights reserved, and not covered by the MIT licence ([TRADEMARKS.md](TRADEMARKS.md)):
 
 - `assets/marks/` and `.github/icon.png`, copied by `bin/marks` from the PITO MD brand masters at `aa3aee8b232a1b848995bf3d9a012a01d4aff8ec`; the README shows the lockup at its Licence section, `lockup.svg` on a dark theme and `lockup-light.svg` on a light one;
 - `crates/project/src/templates/badge.glb` and `crates/project/src/templates/wordmark.glb`, the mark and wordmark in 3D that `pfx new` places in a new game's first scene.
+
+## Bevy, under the MIT licence
+
+The outdoor height fog's ray march in `crates/live/src/height_fog.rs` (in the package `pfx-live`) is ported from Bevy's volumetric fog (https://github.com/bevyengine/bevy, `crates/bevy_pbr/src/volumetric_fog/volumetric_fog.wesl` and `crates/bevy_pbr/src/render/utils.wesl`, release 0.20.0, commit `b3bdd75becaffe9a16677cf5bae5bd6d198f052b`), Copyright the Bevy Contributors, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+
+`crates/live/src/clusters.rs` and the clustered lookup in `LIGHTS_WGSL` (`cluster_span`, in `crates/live/src/lights.rs`), in the package `pfx-live`, are ported from Bevy's clustered forward shading (https://github.com/bevyengine/bevy, tag `v0.16.1`, commit `383b3510455c431f34cf3f2c6e3c2d40eddce744`): the `ClusterConfig::FixedZ` grid of 4,096 clusters in 24 depth slices with a 5 m first slice and its x and y split by the aspect ratio (`crates/bevy_pbr/src/cluster/mod.rs`), the exponential depth slicing and its factors (`calculate_cluster_factors`, `crates/bevy_pbr/src/render/light.rs`; `view_z_to_z_slice` and `fragment_cluster_index`, `crates/bevy_pbr/src/render/clustered_forward.wgsl`), the far plane at the farthest light's reach, and the spot cone test against a cluster's bounding sphere (`crates/bevy_pbr/src/cluster/assign.rs`, after Bart Wronski's "Cull that cone"). Copyright (c) 2020 Carter Anderson, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+
+> Copyright (c) 2020 Carter Anderson
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Filament, under the Apache License 2.0
+
+The outdoor height fog's density and its closed-form optical path in `crates/live/src/height_fog.rs` (in the package `pfx-live`) are ported from Filament's fog (https://github.com/google/filament, `shaders/src/surface_fog.fs` and `filament/src/ds/ColorPassDescriptorSet.cpp`, tag `v1.56.0`, commit `003e5005713cba55cbd3f3a423c472000b96b868`), Copyright The Android Open Source Project, licensed under the Apache License 2.0. Its text ships in [crates/live/LICENSE-APACHE](crates/live/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Filament. The port is a translation into WGSL, changed by pfx's authors: the density is sampled inside a ray march instead of applied once per surface, and the optical path is taken along each light's chord and along the sun's path through the fog.
 
 ## Fonts, under the SIL Open Font License 1.1
 

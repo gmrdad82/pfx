@@ -7,8 +7,11 @@ use std::path::PathBuf;
 
 mod bake;
 mod cache_report;
+mod film;
 mod project;
 mod scene;
+#[cfg(feature = "bench")]
+mod shot;
 mod steam;
 
 const ABOUT: &str = "pfx, a game and render engine: scaffold, edit, bench and bake games and scenes, stage Steam builds, and render apps' shots, logos, icons and scenes offline on its path tracer.";
@@ -32,8 +35,10 @@ const USAGE: &str = "usage:
   pfx edit <project folder>
   pfx new <game> [--path <dir>] [--with-module]
   pfx bench <scene.toml> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
+  pfx shot <scene.toml> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr] [--audio <out.wav>] [--sound <script>] [--shutter S] [--seed S] [--json]
   pfx scene migrate <scene.toml> [--dry-run]
   pfx scene fix <scene.toml> [--dry-run]
+  pfx film <script.film.toml> --out <dir> [--json] [--plan]
   pfx --version
   pfx --help
 clip masters are x264 at 60 fps; pconv makes video deliveries
@@ -44,7 +49,9 @@ a logo, wordmark or lockup reads its master from --assets <dir>, then PITO_ASSET
 an app renders only itself: run from its own git tree, whose render/engine.toml [app] names it; --rev checks out that tree's own revision
 steam stage writes Steam's build scripts and stages depots; it does not upload
 bench plays a scene headless for N seconds at 60 fps, from its own camera, an object's (--camera) or a recorded input stream (--replay), writes the engine's frame stats to --stats (default tmp/pfx/bench/<scene>-<time>.jsonl) and prints one JSON summary line (docs/frame-stats.md, Bench); it paces like pgpu's manners ask, so run it under pgpu
+shot renders a scene file offline on the live renderer at a fixed clock (frame n at t = n / fps), headless, into numbered PNG or EXR frames, a manifest.json and an optional WAV for pcod (docs/render-a-scene.md); --draft halves the shadow maps, --final keeps the scene's and warms TAA on the frames before --from
 scene migrate rewrites a scene's format 0 files as format 1, keeping comments; scene fix writes the ids its entries lack; both refuse to write when the check fails
+film assembles a script of clips, rendered frame folders and cards into PNG frames, a WAV and a manifest.json naming the pcod command that encodes them, under the caller's tmp/ (docs/film.md, Footage films); --plan prints the scenes without rendering
 new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)";
 
 const SWITCHES: &[&str] = &[
@@ -52,6 +59,7 @@ const SWITCHES: &[&str] = &[
     "--detail",
     "--draft",
     "--dry-run",
+    "--final",
     "--force-fixtures",
     "--hdr",
     "--force",
@@ -248,6 +256,26 @@ const SCENE_FLAGS: &[&str] = &[
     "--zoom",
 ];
 
+const SHOT_FLAGS: &[&str] = &[
+    "--audio",
+    "--camera",
+    "--draft",
+    "--final",
+    "--format",
+    "--fps",
+    "--frames",
+    "--from",
+    "--hour",
+    "--json",
+    "--out",
+    "--seconds",
+    "--seed",
+    "--set",
+    "--shutter",
+    "--size",
+    "--sound",
+];
+
 const SHOTS_FLAGS: &[&str] = &[
     "--adapter",
     "--app",
@@ -280,7 +308,7 @@ const STEAM_FLAGS: &[&str] = &["--manifest", "--out"];
 
 const COMMANDS: &[&str] = &[
     "render", "encode", "archive", "list", "bake", "steam", "cache", "font", "edit", "new",
-    "bench", "scene", "help",
+    "bench", "shot", "scene", "film", "help",
 ];
 
 const TOP: &str = "pfx <COMMAND>";
@@ -303,7 +331,9 @@ fn shape(command: &str) -> &'static str {
         "edit" => "pfx edit <PATH>",
         "new" => "pfx new [OPTIONS] <GAME>",
         "bench" => "pfx bench [OPTIONS] --seconds <SECONDS> <SCENE>",
+        "shot" => "pfx shot [OPTIONS] <--seconds <SECONDS>|--frames <FRAMES>> <SCENE>",
         "scene" => "pfx scene <COMMAND>",
+        "film" => film::USAGE,
         _ => TOP,
     }
 }
@@ -373,7 +403,9 @@ enum Plan {
     FontSubset(Vec<String>),
     Edit(Vec<String>),
     Bench(Vec<String>),
+    Shot(Vec<String>),
     Scene(scene::Command),
+    Film(film::Command),
     Project(project::Command),
 }
 
@@ -897,6 +929,17 @@ fn plan_bench(args: &[String]) -> Result<Plan, String> {
     Ok(Plan::Bench(args.to_vec()))
 }
 
+#[cfg(feature = "bench")]
+fn plan_shot(args: &[String]) -> Result<Plan, String> {
+    shot::parse(args, SHOT_FLAGS)?;
+    Ok(Plan::Shot(args.to_vec()))
+}
+
+#[cfg(not(feature = "bench"))]
+fn plan_shot(args: &[String]) -> Result<Plan, String> {
+    Ok(Plan::Shot(args.to_vec()))
+}
+
 fn plan(args: &[String]) -> Result<Plan, Refusal> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         return Ok(Plan::Help);
@@ -920,7 +963,9 @@ fn plan(args: &[String]) -> Result<Plan, Refusal> {
         "font" => plan_font(rest),
         "edit" => plan_edit(rest).map_err(Refusal::from),
         "bench" => plan_bench(rest).map_err(Refusal::from),
+        "shot" => plan_shot(rest).map_err(Refusal::from),
         "scene" => scene::plan(rest).map(Plan::Scene),
+        "film" => film::plan(rest).map(Plan::Film),
         "new" => project::plan(rest)
             .map(Plan::Project)
             .map_err(Refusal::from),
@@ -1055,7 +1100,9 @@ fn perform(plan: Plan) -> Result<(), String> {
         Plan::Steam(args) => steam::run(&args),
         Plan::Edit(args) => edit(&args),
         Plan::Bench(args) => bench(&args),
+        Plan::Shot(args) => render_shot(&args),
         Plan::Scene(command) => scene::run(&command),
+        Plan::Film(command) => film::run(&command),
         Plan::Project(command) => project::run(&command),
     }
 }
@@ -1077,6 +1124,16 @@ fn bench(args: &[String]) -> Result<(), String> {
 
 #[cfg(not(feature = "bench"))]
 fn bench(_args: &[String]) -> Result<(), String> {
+    Err("this pfx was built without the bench feature".into())
+}
+
+#[cfg(feature = "bench")]
+fn render_shot(args: &[String]) -> Result<(), String> {
+    shot::run(&shot::parse(args, SHOT_FLAGS)?)
+}
+
+#[cfg(not(feature = "bench"))]
+fn render_shot(_args: &[String]) -> Result<(), String> {
     Err("this pfx was built without the bench feature".into())
 }
 
@@ -1484,7 +1541,7 @@ mod tests {
         for (line, message, usage) in [
             (
                 "",
-                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, scene, help]",
+                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, shot, scene, film, help]",
                 TOP,
             ),
             ("tui", "unrecognized subcommand 'tui'", TOP),
@@ -1525,6 +1582,11 @@ mod tests {
                 "unrecognized subcommand 'tidy'",
                 shape("scene"),
             ),
+            (
+                "film",
+                "the following required arguments were not provided:\n  --out <OUT>\n  <SCRIPT>",
+                shape("film"),
+            ),
         ] {
             assert_eq!(
                 refused(line),
@@ -1536,6 +1598,58 @@ mod tests {
             refused("bake --scene room --out"),
             format!("error: a value is required for '--out <OUT>' but none was supplied{hint}")
         );
+        for (line, message) in [
+            (
+                "shot room.scene.toml",
+                "the following required arguments were not provided:\n  <--seconds <SECONDS>|--frames <FRAMES>>",
+            ),
+            (
+                "shot --frames 3",
+                "the following required arguments were not provided:\n  <SCENE>",
+            ),
+            (
+                "shot room.scene.toml --frames 3 --seconds 1",
+                "the argument '--frames <FRAMES>' cannot be used with '--seconds <SECONDS>'",
+            ),
+            (
+                "shot room.scene.toml --frames 3 --draft --final",
+                "the argument '--final' cannot be used with '--draft'",
+            ),
+            (
+                "shot room.scene.toml --frames 3 --size 2161x3840",
+                "invalid value '2161x3840' for '--size <SIZE>': expected an even WxH between 2 and 16384",
+            ),
+            (
+                "shot room.scene.toml --frames 3 --format tiff",
+                "invalid value 'tiff' for '--format <FORMAT>'\n  [possible values: png, exr]",
+            ),
+            (
+                "shot room.scene.toml --frames 3 --set haze",
+                "invalid value 'haze' for '--set <SET>': expected dotted.key=value",
+            ),
+            (
+                "shot room.scene.toml --frames 3 --shutter 1.5",
+                "invalid value '1.5' for '--shutter <SHUTTER>': expected a number above 0 to 1",
+            ),
+            (
+                "shot room.scene.toml --frames 3 --stats x",
+                "unexpected argument '--stats' found",
+            ),
+            (
+                "shot room.scene.toml other.scene.toml --frames 3",
+                "unexpected argument 'other.scene.toml' found",
+            ),
+        ] {
+            let refusal = refused(line);
+            assert!(
+                refusal.starts_with(&format!("error: {message}")) && refusal.ends_with(hint),
+                "{line}: {refusal}"
+            );
+        }
+        assert!(matches!(
+            plan(&words("shot room.scene.toml --frames 3 --size 2160x3840 --set haze.shafts=0.4 --set finish.lut_amount=1 --final --json")).unwrap(),
+            Plan::Shot(_)
+        ));
         for command in [
             "render --app alpha --shot short --clip --youtube",
             "render --scene spin --product delta --clip --profile web",

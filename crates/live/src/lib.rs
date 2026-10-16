@@ -1,4 +1,5 @@
 pub mod canopy;
+pub mod clusters;
 pub mod content_atlas;
 mod coverage;
 pub mod crisp;
@@ -8,15 +9,18 @@ pub mod effects;
 pub mod flat;
 pub mod frame;
 pub mod glass;
+pub mod height_fog;
 #[cfg(feature = "dev-hud")]
 pub mod hud;
 pub mod impostor;
 pub mod lacquer;
 pub mod lights;
 pub mod lod;
+mod lod_levels;
 pub mod maps;
 pub mod morph;
 pub mod noise_tiles;
+pub mod particles;
 pub mod pipeline_cache;
 pub mod plates;
 pub mod probes;

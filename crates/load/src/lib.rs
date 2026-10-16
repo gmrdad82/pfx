@@ -3,6 +3,8 @@ mod cache;
 pub mod fixture;
 mod font;
 mod image;
+#[cfg(test)]
+mod lod_tests;
 mod mesh;
 #[cfg(test)]
 mod morph_tests;

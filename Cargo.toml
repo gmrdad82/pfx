@@ -2,7 +2,7 @@
 members = ["crates/assets", "crates/bake", "crates/bench", "crates/core", "crates/denoise", "crates/editor", "crates/editor-doc", "crates/editor-shell", "crates/editor-style", "crates/editor-toml", "crates/editor-viewport", "crates/film", "crates/game", "crates/geom", "crates/gpu", "crates/input", "crates/live", "crates/load", "crates/materials", "crates/mod", "crates/physics", "crates/play", "crates/post", "crates/project", "crates/run", "crates/sound", "crates/steam", "crates/text", "crates/theme", "crates/trace"]
 
 [workspace.package]
-version = "2.0.0"
+version = "2.2.0"
 edition = "2024"
 rust-version = "1.97"
 publish = false
@@ -20,10 +20,11 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["harness", "editor", "bench"]
+default = ["harness", "editor", "bench", "shot-sound"]
 editor = ["harness", "dep:pfx-editor"]
 bench = ["harness", "dep:pfx-bench"]
-harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project"]
+harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film"]
+shot-sound = ["bench", "pfx-sound/shot"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -43,7 +44,9 @@ pollster = { version = "0.4", optional = true }
 exr = { version = "1.74", optional = true }
 pfx-editor = { path = "crates/editor", optional = true }
 pfx-bench = { path = "crates/bench", optional = true }
+pfx-sound = { path = "crates/sound", optional = true }
 pfx-project = { path = "crates/project", features = ["scaffold"], optional = true }
+pfx-film = { path = "crates/film", features = ["video"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

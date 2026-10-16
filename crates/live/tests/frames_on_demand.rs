@@ -138,6 +138,7 @@ fn dirty_tracking_sees_each_kind_of_change() {
                         radius: 0.05,
                         range: 3.0,
                         shadow: false,
+                        spot: None,
                     }])
                     .unwrap()
             }),

@@ -175,3 +175,34 @@ fn bench_channel_drive() {
         );
     }
 }
+
+#[test]
+#[ignore = "bench; run with --release"]
+fn bench_shot_mix() {
+    use pfx_sound::shot::{self, Script};
+    let path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/car-pass.sound.toml");
+    let full = Script::load(&path).unwrap();
+    let frames = shot::audio_frames(600, 60);
+    let time = |script: &Script| {
+        (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                let out = script.mix(frames).unwrap();
+                assert_eq!(out.len(), frames * 2);
+                started.elapsed().as_secs_f64() * 1e3
+            })
+            .fold(f64::MAX, f64::min)
+    };
+    for layer in &full.layers {
+        let mut one = full.clone();
+        one.layers = vec![layer.clone()];
+        let name = format!("{:?}", layer.kind);
+        println!(
+            "{:<10} {:7.2} ms for 10 s",
+            name.split('(').next().unwrap_or(""),
+            time(&one)
+        );
+    }
+    println!("{:<10} {:7.2} ms for 10 s", "all", time(&full));
+}

@@ -14,6 +14,7 @@ use crate::frame::{
     SceneWind, Sun, multiply,
 };
 use crate::glass;
+use crate::height_fog::HeightFog;
 use crate::lights::{LocalLight, local_light};
 use crate::maps::ContentFormat;
 use crate::morph::{MorphData, MorphTargetData};
@@ -37,6 +38,7 @@ pub struct Applied {
     pub sun: bool,
     pub lens: bool,
     pub finish: bool,
+    pub motion_blur: bool,
 }
 
 impl Applied {
@@ -49,6 +51,7 @@ impl Applied {
             || self.sun
             || self.lens
             || self.finish
+            || self.motion_blur
     }
 }
 
@@ -127,6 +130,13 @@ pub struct Staged {
     camera: SceneCamera,
     sun: SceneSun,
     plate: crate::plates::PlateMode,
+    blurred: bool,
+    shown: Option<Matrix>,
+    sprays: crate::particles::Sprays,
+    spray_instances: Vec<crate::particles::SprayInstance>,
+    rig: Vec<pfx_load::scene::Light>,
+    lights: Option<Vec<LocalLight>>,
+    leveled: Vec<MeshHandle>,
     textured: bool,
 }
 
@@ -200,6 +210,21 @@ pub fn local_lights(scene: &Scene) -> Vec<LocalLight> {
     scene.lights.values().map(local_light).collect()
 }
 
+pub fn posed_lights(lights: &[pfx_load::scene::Light], posed: &[Matrix]) -> Vec<LocalLight> {
+    lights
+        .iter()
+        .map(|light| local_light(&light.placed(posed)))
+        .collect()
+}
+
+fn light_rig(scene: &Scene) -> Vec<pfx_load::scene::Light> {
+    if scene.animated() && scene.lights.values().any(|light| light.attach.is_some()) {
+        scene.lights.values().copied().collect()
+    } else {
+        Vec::new()
+    }
+}
+
 pub fn room_haze(haze: &Haze) -> RoomHaze {
     RoomHaze {
         fog: haze.fog,
@@ -215,6 +240,26 @@ pub fn room_haze(haze: &Haze) -> RoomHaze {
         seed: haze.seed,
         ..RoomHaze::new(haze.lo, haze.hi)
     }
+}
+
+pub fn height_fog(haze: &Haze) -> Option<HeightFog> {
+    let outdoor = haze.outdoor?;
+    Some(HeightFog {
+        height: outdoor.height,
+        falloff: outdoor.falloff,
+        density: outdoor.density,
+        reach: outdoor.reach,
+        shafts: outdoor.shafts,
+        steps: outdoor.steps,
+        color: outdoor.color,
+        phase: outdoor.phase,
+        ambient: outdoor.ambient,
+    })
+}
+
+fn apply_haze(renderer: &mut Renderer, haze: Option<&Haze>) {
+    renderer.set_haze(haze.filter(|haze| haze.outdoor.is_none()).map(room_haze));
+    renderer.set_height_fog(haze.and_then(height_fog));
 }
 
 pub fn lens(camera: &SceneCamera, aspect: f32) -> Option<dof::Lens> {
@@ -243,6 +288,10 @@ pub fn camera(camera: &SceneCamera, aspect: f32) -> Camera {
         previous_view_projection: multiply(projection, view),
         position: camera.at,
     }
+}
+
+fn blurred(scene: &Scene) -> bool {
+    scene.motion_blur.is_some_and(|blur| blur.active())
 }
 
 pub fn sun(sun: &SceneSun) -> Sun {
@@ -301,7 +350,8 @@ fn content_bytes(content: &Content) -> (ContentFormat, Vec<u8>) {
 }
 
 fn is_glass(draws: &Draws, index: usize) -> bool {
-    draws.materials[draws.items[index].material as usize].family == Family::Glass
+    let material = &draws.materials[draws.items[index].material as usize];
+    material.family == Family::Glass || material.transmission > 0.0
 }
 
 fn set_sun_radius(renderer: &mut Renderer, radius: f32) -> bool {
@@ -352,10 +402,14 @@ impl Renderer {
                 {
                     entry.insert(self.upload_glass(&glass_mesh(&draw.geometry))?);
                 }
-            } else if let std::collections::hash_map::Entry::Vacant(entry) =
-                meshes.entry(draw.geometry.hash)
-            {
-                entry.insert(upload_geometry(self, &draw.geometry)?);
+            } else {
+                for geometry in crate::lod_levels::with_levels(&draw.geometry) {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        meshes.entry(geometry.hash)
+                    {
+                        entry.insert(upload_geometry(self, geometry)?);
+                    }
+                }
             }
         }
         let mut staged = Staged {
@@ -378,6 +432,13 @@ impl Renderer {
             camera: scene.camera_or_default(),
             sun: scene.sun_or_dark(),
             plate: crate::plates::PlateMode::default(),
+            blurred: blurred(scene),
+            shown: None,
+            sprays: crate::particles::Sprays::of(scene),
+            spray_instances: Vec::new(),
+            rig: Vec::new(),
+            lights: None,
+            leveled: Vec::new(),
             textured,
         };
         staged.plate.load(self, scene, true)?;
@@ -385,12 +446,13 @@ impl Renderer {
         self.set_plate_hour(staged.sun.hour);
         self.set_lights(&local_lights(scene))?;
         self.set_sky(sky_source(scene.environment()), staged.sun.hour)?;
-        self.set_haze(scene.haze.as_ref().map(room_haze));
+        apply_haze(self, scene.haze.as_ref());
         set_sun_radius(self, staged.sun.radius);
         self.set_lens(lens(&staged.camera, aspect_of(self)));
         if let Some(finish) = &scene.finish {
             self.set_finish(finish.chain.clone());
         }
+        self.set_motion_blur(scene.motion_blur);
         Ok(staged)
     }
 }
@@ -463,6 +525,13 @@ impl Staged {
             }
         }
         renderer.frame().set_surfaces(&surfaces)?;
+        self.leveled = crate::lod_levels::register(
+            renderer,
+            &draws,
+            &self.meshes,
+            |index| is_glass(&draws, index) || self.plate.baked(&draws.items[index]),
+            &self.leveled,
+        )?;
         self.plate.cast(renderer, &stand_ins)?;
         let mut written = 0;
         for (slot, name) in &wanted {
@@ -485,14 +554,17 @@ impl Staged {
         self.models = draws.items.iter().map(|draw| draw.model).collect();
         self.previous = self.models.clone();
         self.posing = scene.animated().then(|| scene.clone());
+        self.rig = light_rig(scene);
         self.draws = draws;
         self.slots = slots;
         self.base = base;
         self.base_glass = base_glass;
         self.surfaces = surfaces;
         if let Some(posing) = &self.posing {
-            self.models = self.draws.models(&posing.posed(&self.camera, 0.0));
+            let posed = posing.posed(&self.camera, 0.0);
+            self.models = self.draws.models(&posed);
             self.previous = self.models.clone();
+            self.place_lights(&posed);
         }
         self.refresh();
         Ok(written)
@@ -561,6 +633,9 @@ impl Staged {
         if diff.is_empty() {
             return Ok(applied);
         }
+        if !self.sprays.same(scene) {
+            self.sprays = crate::particles::Sprays::of(scene);
+        }
         if diff.camera {
             self.camera = scene.camera_or_default();
             renderer.set_lens(lens(&self.camera, aspect_of(renderer)));
@@ -581,11 +656,15 @@ impl Staged {
                 } else {
                     &mut needed
                 };
-                if !list
-                    .iter()
-                    .any(|geometry| geometry.hash == draw.geometry.hash)
-                {
-                    list.push(&draw.geometry);
+                let glass = is_glass(&draws, index);
+                for geometry in crate::lod_levels::with_levels(&draw.geometry).take(if glass {
+                    1
+                } else {
+                    usize::MAX
+                }) {
+                    if !list.iter().any(|known| known.hash == geometry.hash) {
+                        list.push(geometry);
+                    }
                 }
             }
             let mut spare: Vec<[u8; 32]> = self
@@ -681,6 +760,8 @@ impl Staged {
         }
         if !diff.lights.is_empty() {
             renderer.set_lights(&local_lights(scene))?;
+            self.rig = light_rig(scene);
+            self.lights = None;
             applied.lights = true;
         }
         if diff.sun {
@@ -694,7 +775,7 @@ impl Staged {
             applied.sky = true;
         }
         if diff.haze {
-            renderer.set_haze(scene.haze.as_ref().map(room_haze));
+            apply_haze(renderer, scene.haze.as_ref());
             applied.haze = true;
         }
         if diff.finish {
@@ -704,15 +785,38 @@ impl Staged {
             }
             applied.finish = true;
         }
+        if diff.motion_blur {
+            self.blurred = blurred(scene);
+            renderer.set_motion_blur(scene.motion_blur);
+            applied.motion_blur = true;
+        }
         Ok(applied)
     }
 
     pub fn pose(&mut self, time: f32) {
         if let Some(posing) = &self.posing {
-            let models = self.draws.models(&posing.posed(&self.camera, time));
+            let posed = posing.posed(&self.camera, time);
+            let models = self.draws.models(&posed);
             self.previous = std::mem::replace(&mut self.models, models);
+            self.place_lights(&posed);
             self.repose();
         }
+    }
+
+    pub fn pose_at(&mut self, time: f32, interval: f32) {
+        if let Some(posing) = &self.posing {
+            self.previous = self
+                .draws
+                .models(&posing.posed(&self.camera, time - interval));
+            let posed = posing.posed(&self.camera, time);
+            self.models = self.draws.models(&posed);
+            self.place_lights(&posed);
+            self.repose();
+        }
+    }
+
+    fn place_lights(&mut self, posed: &[Matrix]) {
+        self.lights = (!self.rig.is_empty()).then(|| posed_lights(&self.rig, posed));
     }
 
     fn repose(&mut self) {
@@ -760,8 +864,33 @@ impl Staged {
 
     pub fn frame(&mut self, aspect: f32, time: f32, seed: u32) -> StagedFrame<'_> {
         self.pose(time);
+        self.staged_frame(aspect, time, seed)
+    }
+
+    pub fn frame_at(
+        &mut self,
+        aspect: f32,
+        time: f32,
+        interval: f32,
+        seed: u32,
+    ) -> StagedFrame<'_> {
+        self.pose_at(time, interval);
+        self.staged_frame(aspect, time, seed)
+    }
+
+    pub fn cut(&mut self) {
+        self.shown = None;
+    }
+
+    fn staged_frame(&mut self, aspect: f32, time: f32, seed: u32) -> StagedFrame<'_> {
+        self.spray(time);
+        let shown = camera(&self.camera, aspect).previous_view_projection;
+        let previous = self.shown.filter(|_| self.blurred).unwrap_or(shown);
+        self.shown = Some(shown);
+        let mut scene = self.scene(aspect, time, seed);
+        scene.camera.previous_view_projection = previous;
         StagedFrame {
-            scene: self.scene(aspect, time, seed),
+            scene,
             text: self.text(aspect),
             effects: self.effects(),
         }
@@ -795,9 +924,26 @@ impl Staged {
         }
     }
 
+    pub fn spray(&mut self, time: f32) {
+        if self.sprays.is_empty() {
+            return;
+        }
+        let camera = self.camera;
+        let posing = self.posing.as_ref();
+        self.sprays
+            .seek_posed(time, |t| posing.map(|scene| scene.posed(&camera, t)));
+        self.sprays.pack(&mut self.spray_instances);
+    }
+
+    pub fn sprays(&self) -> &crate::particles::Sprays {
+        &self.sprays
+    }
+
     pub fn effects(&self) -> Effects<'_> {
         Effects {
             glass: &self.glass,
+            sprays: &self.spray_instances,
+            lights: self.lights.as_deref(),
             ..Effects::default()
         }
     }
@@ -881,6 +1027,9 @@ impl Staged {
     }
 
     pub fn release(self, renderer: &mut Renderer) -> Result<(), String> {
+        for base in &self.leveled {
+            renderer.lod_mut().clear_levels(*base);
+        }
         self.plate.release(renderer)?;
         if self.textured {
             renderer.set_maps(&crate::maps::MapImages::default())?;

@@ -1,10 +1,15 @@
 mod ball;
 mod head;
+mod lod;
 
 pub use ball::{BALL_RADIUS, BALL_RINGS, BALL_SEGMENTS, ball, ball_png};
 pub use head::{
     HEAD_KEYS, HEAD_RINGS, HEAD_SEGMENTS, HEAD_TARGETS, HEAD_TIMES, HEAD_VERTICES, HEAD_WEIGHTS,
     head,
+};
+pub use lod::{
+    LOD_RADIUS, LOD_RINGS, LOD_SLIDE, LOD_TARGETS, lod_error, lod_glb, lod_morph_glb, lod_sphere,
+    lod_targets, plain_glb,
 };
 use pfx_core::anim::fixture::{column, rig};
 use pfx_core::anim::{Interpolation, Property};
