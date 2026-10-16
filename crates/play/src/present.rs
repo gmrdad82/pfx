@@ -4,6 +4,7 @@ use pfx_live::frame::{
     Instance, InstanceSurface, Matrix, Scene as FrameScene, SceneWind, multiply,
 };
 use pfx_live::glass;
+use pfx_live::keyed::keyed_light;
 use pfx_live::morph::InstanceWeights;
 use pfx_live::particles::{SprayInstance, Sprays};
 use pfx_live::renderer::{Effects, Renderer, Text, invert};
@@ -160,7 +161,10 @@ impl Presenter {
             self.cut = true;
         }
         self.sync(world, renderer)?;
+        let keyer = staged.keyer();
+        let keyed_at = world.time() as f32;
         let camera = world.fx.camera(&world.camera);
+        let camera = keyer.map_or(camera.clone(), |keyer| keyer.camera(&camera, keyed_at));
         if self.lens_camera.as_ref() != Some(&camera) {
             renderer.set_lens(live_scene::lens(&camera, aspect));
             self.lens_camera = Some(camera.clone());
@@ -175,8 +179,17 @@ impl Presenter {
             self.palette_key = Some(key);
         }
         let palettes = &self.palettes;
-        if world.lights().values().any(|light| light.attach.is_some()) {
+        let keyed = keyer.is_some_and(|keyer| !keyer.keys().lights.is_empty());
+        if keyed || world.lights().values().any(|light| light.attach.is_some()) {
             let lights = live_scene::posed_lights(world.lights().values(), &posed, palettes);
+            let lights = match keyer.filter(|_| keyed) {
+                Some(keyer) => lights
+                    .into_iter()
+                    .zip(world.lights().keys())
+                    .map(|(light, name)| keyed_light(keyer.keys(), name, light, keyed_at))
+                    .collect(),
+                None => lights,
+            };
             if self.placed != lights {
                 renderer.set_lights(&lights).map_err(PlayError::Render)?;
                 self.placed = lights;
@@ -325,6 +338,9 @@ impl Presenter {
                 .map_err(PlayError::Render)?;
             self.touched.sprites = true;
         }
+        if let Some(keyer) = keyer {
+            keyer.apply(renderer, keyed_at).map_err(PlayError::Render)?;
+        }
         let mut frame_camera = live_scene::camera(&camera, aspect);
         let view_projection = multiply(frame_camera.projection, frame_camera.view);
         if let Some(last) = self.last_view_projection {
@@ -389,7 +405,9 @@ impl Presenter {
                 camera: frame_camera,
                 time,
                 seed,
-                sun: live_scene::sun(&staged.sun()),
+                sun: live_scene::sun(
+                    &keyer.map_or(staged.sun(), |keyer| keyer.sun(staged.sun(), keyed_at)),
+                ),
                 instances: &self.instances,
                 materials: &self.materials,
                 deformers: &[],

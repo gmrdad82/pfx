@@ -640,3 +640,76 @@ fn haze_from_the_scene_marches_live_and_goes_with_an_edit() {
         .fold(0.0, f64::max);
     assert!(gone < kept * 0.25, "{gone} against {kept}");
 }
+
+const SKY_SUN: &str = "[sun]\nmodel = \"authored\"\ntoward = [-0.4, 0.8, 0.45]\nirradiance = 2.0\n";
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn the_backdrop_brightens_only_the_seen_sky_live_and_traced() {
+    let body = |backdrop: f32| {
+        format!(
+            "[[object]]\nname = \"block\"\nmesh = \"block\"\n\n{SKY_SUN}\n[sky]\nkind = \"analytic\"\nbackdrop = {backdrop:?}\n\n[camera]\nat = [0.0, 0.3, 3.0]\nlook_at = [0.0, 0.3, 0.0]\nfov = 40.0\n"
+        )
+    };
+    let plain = scene("backdrop-plain", &body(1.0));
+    let bright = scene("backdrop-bright", &body(3.0));
+    let centre = (HEIGHT / 2 * WIDTH + WIDTH / 2) as usize;
+    let corner = WIDTH as usize + 1;
+    for (name, before, after) in [
+        (
+            "live",
+            Viewer::new(&plain).frames(0.0, 4),
+            Viewer::new(&bright).frames(0.0, 4),
+        ),
+        ("traced", traced(&plain, 0.0, 4), traced(&bright, 0.0, 4)),
+    ] {
+        assert_eq!(
+            before[centre], after[centre],
+            "{name}: the lit block keeps its pixels"
+        );
+        let (dim, lit) = (luminance(&before[corner]), luminance(&after[corner]));
+        println!("{name}: sky {dim:.4} -> {lit:.4}");
+        assert!(
+            lit > dim * 1.3,
+            "{name}: the seen sky brightens, {dim} -> {lit}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn the_horizon_tint_shows_near_the_horizon_only_live_and_traced() {
+    let body = |amount: f32| {
+        format!(
+            "[[object]]\nname = \"behind\"\nmesh = \"block\"\nat = [0.0, 1.0, 6.0]\nscale = 0.1\n\n{SKY_SUN}\n[sky]\nkind = \"analytic\"\nhorizon_color = [1.0, 0.0, 0.0]\nhorizon_width = 8.0\nhorizon_amount = {amount:?}\n\n[camera]\nat = [0.0, 1.0, 0.0]\nlook_at = [0.0, 1.0, -1.0]\nfov = 40.0\n"
+        )
+    };
+    let plain = scene("horizon-plain", &body(0.0));
+    let tinted = scene("horizon-tinted", &body(1.0));
+    let row = |pixels: &[[f32; 3]], y: u32| -> Vec<[f32; 3]> {
+        pixels[(y * WIDTH) as usize..((y + 1) * WIDTH) as usize].to_vec()
+    };
+    for (name, before, after) in [
+        (
+            "live",
+            Viewer::new(&plain).frames(0.0, 4),
+            Viewer::new(&tinted).frames(0.0, 4),
+        ),
+        ("traced", traced(&plain, 0.0, 4), traced(&tinted, 0.0, 4)),
+    ] {
+        assert_eq!(
+            row(&before, 2),
+            row(&after, 2),
+            "{name}: high sky is untouched"
+        );
+        let (was, now) = (
+            mean(&row(&before, HEIGHT / 2)),
+            mean(&row(&after, HEIGHT / 2)),
+        );
+        println!("{name}: horizon {was:?} -> {now:?}");
+        assert!(
+            now[0] > was[0] && now[2] < was[2] * 0.5,
+            "{name}: the horizon takes the tint, {was:?} -> {now:?}"
+        );
+    }
+}

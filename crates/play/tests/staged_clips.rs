@@ -1,9 +1,10 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use pfx_gpu::{Gpu, OffscreenTarget};
 use pfx_live::renderer::{Exposure, Renderer};
 use pfx_load::fixture::{TIMELINE_CLIP, TIMELINE_NODE, timeline_glb, timeline_x};
-use pfx_load::scene::{DepthOfField, Scene};
+use pfx_load::scene::{CameraKeys, DepthOfField, KeyValue, Keys, Scene};
 use pfx_play::{PlaySession, SceneGame};
 
 mod common;
@@ -140,9 +141,16 @@ fn an_attached_light_and_a_parented_spray_follow_a_staged_clip() {
         fstop: 2.8,
         distance: 3.0,
         focal: 0.05,
-        keys: vec![[0.25, 2.0], [0.75, 4.0]],
     });
     scene.camera = Some(camera);
+    scene.keys.camera = Some(CameraKeys {
+        keys: Keys(BTreeMap::from([(
+            "focus".to_string(),
+            vec![(0.25, KeyValue::Number(2.0)), (0.75, KeyValue::Number(4.0))],
+        )])),
+        sensor: 24.0,
+        focal: Some(50.0),
+    });
     let gpu = pollster::block_on(Gpu::headless()).unwrap();
     let mut renderer = renderer(&gpu);
     let mut staged = renderer.stage(&scene).unwrap();

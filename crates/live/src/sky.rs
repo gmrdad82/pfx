@@ -3,7 +3,7 @@ use bytemuck::{Pod, Zeroable};
 use pfx_core::daylight::Daylight;
 use pfx_core::daylight::{self, Probe};
 pub use pfx_core::sky::AnalyticSky;
-use pfx_core::sky::SKY_MODEL_WGSL;
+use pfx_core::sky::{PLAIN_LOOK, SKY_MODEL_WGSL};
 use pfx_load::Sky as HdrSky;
 use std::f32::consts::{PI, TAU};
 use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard};
@@ -672,7 +672,7 @@ fn sky_vs(@builtin(vertex_index) index: u32) -> SkyVertex {
 @fragment
 fn sky_fs(input: SkyVertex) -> @location(0) vec4f {
     let direction = normalize(sky.forward.xyz + sky.right.xyz*(input.uv.x*2.0-1.0) + sky.up.xyz*(1.0-input.uv.y*2.0));
-    return vec4f(sky_radiance(direction), 1.0);
+    return vec4f(sky_seen(direction, sky_radiance(direction)), 1.0);
 }
 "#;
 
@@ -686,6 +686,8 @@ struct SkyUniform {
     forward: [f32; 4],
     right: [f32; 4],
     up: [f32; 4],
+    look: [f32; 4],
+    horizon: [f32; 4],
 }
 
 pub struct SkyPass {
@@ -699,6 +701,7 @@ pub struct SkyPass {
     cube_view: wgpu::TextureView,
     device: wgpu::Device,
     steps: SkySteps,
+    look: [[f32; 4]; 2],
     pub lighting: SkyLighting,
 }
 
@@ -811,6 +814,7 @@ impl SkyPass {
             cube,
             device: device.clone(),
             steps,
+            look: PLAIN_LOOK,
             lighting,
         };
         pass.set_source(device, queue, pass.lighting.source.clone());
@@ -934,6 +938,8 @@ impl SkyPass {
             forward: [forward[0], forward[1], forward[2], 0.0],
             right: [right[0], right[1], right[2], 0.0],
             up: [up[0], up[1], up[2], 0.0],
+            look: self.look[0],
+            horizon: self.look[1],
         };
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&data));
         if let Some((mip, face)) = self.lighting.step() {
@@ -969,6 +975,16 @@ impl SkyPass {
 
     pub fn cube_view(&self) -> wgpu::TextureView {
         self.cube_view.clone()
+    }
+
+    pub fn look(&self) -> [[f32; 4]; 2] {
+        self.look
+    }
+
+    pub fn set_look(&mut self, look: [[f32; 4]; 2]) -> bool {
+        let changed = look != self.look;
+        self.look = look;
+        changed
     }
 
     pub fn draw<'a>(&'a self, pass: &mut wgpu::RenderPass<'a>) {

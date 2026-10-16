@@ -109,6 +109,16 @@ impl SceneDiff {
     }
 }
 
+fn keyed_lights(
+    scene: &Scene,
+) -> BTreeMap<String, (super::Light, Option<&pfx_scene::types::Keys>)> {
+    scene
+        .lights
+        .iter()
+        .map(|(name, light)| (name.clone(), (*light, scene.keys.lights.get(name))))
+        .collect()
+}
+
 pub(super) fn diff(older: &Scene, newer: &Scene) -> SceneDiff {
     let objects = |scene: &Scene| -> BTreeMap<String, super::Object> {
         scene
@@ -139,7 +149,7 @@ pub(super) fn diff(older: &Scene, newer: &Scene) -> SceneDiff {
             && objects_changes.removed.is_empty()
             && names(older) != names(newer),
         objects: objects_changes,
-        lights: Changes::by(&older.lights, &newer.lights, |a, b| a == b),
+        lights: Changes::by(&keyed_lights(older), &keyed_lights(newer), |a, b| a == b),
         emitters: Changes::by(&older.emitters, &newer.emitters, |a, b| a == b),
         particles: Changes::by(&older.particles, &newer.particles, |a, b| a == b),
         contents: Changes::by(&older.contents, &newer.contents, |a, b| a.hash == b.hash),
@@ -159,11 +169,13 @@ pub(super) fn diff(older: &Scene, newer: &Scene) -> SceneDiff {
                 && a.object == b.object
         }),
         fallback: older.fallback != newer.fallback,
-        sun: older.sun != newer.sun,
-        sky: older.sky != newer.sky,
-        haze: older.haze != newer.haze,
-        camera: older.camera != newer.camera,
-        finish: older.finish != newer.finish,
+        sun: older.sun != newer.sun || older.keys.sun != newer.keys.sun,
+        sky: older.sky != newer.sky
+            || older.keys.sky != newer.keys.sky
+            || (older.keys.sun != newer.keys.sun && newer.keys.sky.is_some()),
+        haze: older.haze != newer.haze || older.keys.haze != newer.keys.haze,
+        camera: older.camera != newer.camera || older.keys.camera != newer.keys.camera,
+        finish: older.finish != newer.finish || older.keys.finish != newer.keys.finish,
         trace: older.trace != newer.trace,
         plates: older.plates != newer.plates,
         physics: older.physics != newer.physics,

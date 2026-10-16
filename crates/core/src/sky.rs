@@ -104,6 +104,27 @@ impl AnalyticSky {
     }
 }
 
+pub fn sky_look(backdrop: f32, horizon: [f32; 3], width: f32, amount: f32) -> [[f32; 4]; 2] {
+    [
+        [backdrop, amount, width, 0.0],
+        [horizon[0], horizon[1], horizon[2], 0.0],
+    ]
+}
+
+pub const PLAIN_LOOK: [[f32; 4]; 2] = [[1.0, 0.0, 10.0, 0.0], [0.0; 4]];
+
+pub fn seen(direction: [f32; 3], radiance: [f32; 3], look: [[f32; 4]; 2]) -> [f32; 3] {
+    let shown = radiance.map(|value| value * look[0][0]);
+    if look[0][1] <= 0.0 {
+        return shown;
+    }
+    let direction = unit(direction);
+    let elevation = direction[1].clamp(-1.0, 1.0).asin().to_degrees().abs();
+    let edge = (elevation / look[0][2]).clamp(0.0, 1.0);
+    let fade = look[0][1] * (1.0 - edge * edge * (3.0 - 2.0 * edge));
+    std::array::from_fn(|k| shown[k] + (look[1][k] - shown[k]) * fade)
+}
+
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
@@ -122,6 +143,8 @@ struct SkyUniform {
     forward: vec4f,
     right: vec4f,
     up: vec4f,
+    look: vec4f,
+    horizon: vec4f,
 };
 @group(1) @binding(0) var<uniform> sky: SkyUniform;
 @group(1) @binding(1) var hdr: texture_2d<f32>;
@@ -163,6 +186,15 @@ fn sky_analytic(direction: vec3f) -> vec3f {
         value += sky.sun_colour_intensity.xyz*(sky.sun_colour_intensity.w*limb/(3.14159265*radius*radius*0.8));
     }
     return value;
+}
+fn sky_seen(direction: vec3f, radiance: vec3f) -> vec3f {
+    let shown = radiance*sky.look.x;
+    if sky.look.y <= 0.0 {
+        return shown;
+    }
+    let elevation = degrees(asin(clamp(normalize(direction).y, -1.0, 1.0)));
+    let fade = sky.look.y*(1.0-smoothstep(0.0, sky.look.z, abs(elevation)));
+    return mix(shown, sky.horizon.xyz, fade);
 }
 fn sky_radiance(direction: vec3f) -> vec3f {
     let d = normalize(direction);

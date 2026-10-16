@@ -919,6 +919,7 @@ impl Bench {
             props: &self.props,
             lights: None,
             lens: None,
+            tuned: None,
         };
         if self.submit {
             return self

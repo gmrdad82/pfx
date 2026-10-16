@@ -323,6 +323,7 @@ pub struct Detail {
     pub filter_glossy: f32,
     pub sampler: crate::sobol::Sampler,
     pub textures: Textures,
+    pub sky_look: pfx_load::scene::SkyLook,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

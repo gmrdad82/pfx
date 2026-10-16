@@ -28,6 +28,12 @@ impl Lerp for f32 {
     }
 }
 
+impl Lerp for [f32; 2] {
+    fn lerp(self, other: Self, t: f32) -> Self {
+        std::array::from_fn(|i| self[i] + (other[i] - self[i]) * t)
+    }
+}
+
 impl Lerp for [f32; 3] {
     fn lerp(self, other: Self, t: f32) -> Self {
         std::array::from_fn(|i| self[i] + (other[i] - self[i]) * t)
@@ -78,10 +84,19 @@ impl<T: Lerp> Gradient<T> {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecipeKeys {
+    pub rate: Option<Gradient<f32>>,
+    pub speed: Option<Gradient<[f32; 2]>>,
+    pub size: Option<Gradient<[f32; 2]>>,
+    pub colour: Option<Gradient<[f32; 3]>>,
+    pub alpha: Option<Gradient<f32>>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Recipe {
     pub rate: f32,
-    pub rate_keys: Option<Gradient<f32>>,
+    pub keys: RecipeKeys,
     pub burst: u32,
     pub max: u32,
     pub lifetime: [f32; 2],
@@ -105,7 +120,7 @@ impl Default for Recipe {
     fn default() -> Self {
         Self {
             rate: 0.0,
-            rate_keys: None,
+            keys: RecipeKeys::default(),
             burst: 0,
             max: 1024,
             lifetime: [1.0, 1.0],
@@ -129,10 +144,25 @@ impl Default for Recipe {
 
 impl Recipe {
     pub fn rate_at(&self, time: f32) -> f32 {
-        self.rate_keys
+        self.keys
+            .rate
             .as_ref()
             .map_or(self.rate, |keys| keys.sample(time))
             .max(0.0)
+    }
+
+    pub fn speed_at(&self, time: f32) -> [f32; 2] {
+        self.keys
+            .speed
+            .as_ref()
+            .map_or(self.speed, |keys| keys.sample(time))
+    }
+
+    pub fn size_at(&self, time: f32) -> [f32; 2] {
+        self.keys
+            .size
+            .as_ref()
+            .map_or(self.size, |keys| keys.sample(time))
     }
 }
 
@@ -282,7 +312,7 @@ impl Emitter {
         let recipe = &self.recipe;
         let rng = &mut self.rng;
         let direction = cone(rng, unit(axis[0].lerp(axis[1], born)), recipe.cone);
-        let speed = between(rng, recipe.speed);
+        let speed = between(rng, recipe.speed_at(self.time + dt * born));
         let life = between(rng, recipe.lifetime).max(1e-3);
         let angle = rng.next_f32() * std::f32::consts::TAU;
         let spin = between(rng, recipe.spin) * if rng.next_bool() { 1.0 } else { -1.0 };
@@ -326,10 +356,25 @@ impl Emitter {
 
     pub fn sprites(&self, out: &mut Vec<Sprite>) {
         let recipe = &self.recipe;
+        let sizes = recipe.size_at(self.time);
+        let fade = recipe
+            .keys
+            .alpha
+            .as_ref()
+            .map(|keys| keys.sample(self.time));
+        let tint = recipe
+            .keys
+            .colour
+            .as_ref()
+            .map(|keys| keys.sample(self.time));
         for particle in &self.particles {
             let t = (particle.age / particle.life).clamp(0.0, 1.0);
-            let size = recipe.size[0].lerp(recipe.size[1], t);
-            let alpha = recipe.alpha.sample(t).clamp(0.0, 1.0);
+            let size = sizes[0].lerp(sizes[1], t);
+            let alpha = match fade {
+                Some(fade) => recipe.alpha.sample(t) * fade,
+                None => recipe.alpha.sample(t),
+            }
+            .clamp(0.0, 1.0);
             if !(size > 0.0 && alpha > 0.0) {
                 continue;
             }
@@ -339,7 +384,7 @@ impl Emitter {
                 velocity: particle.velocity,
                 size,
                 angle: particle.angle,
-                colour: recipe.colour.sample(t),
+                colour: tint.unwrap_or_else(|| recipe.colour.sample(t)),
                 alpha,
             });
         }

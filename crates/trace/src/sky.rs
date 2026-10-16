@@ -3,7 +3,7 @@ use bytemuck::{Pod, Zeroable};
 use pfx_core::daylight::Daylight;
 use pfx_core::daylight::{self, Probe};
 pub use pfx_core::sky::AnalyticSky;
-use pfx_core::sky::{SKY_MODEL_WGSL, SUN_RADIUS};
+use pfx_core::sky::{PLAIN_LOOK, SKY_MODEL_WGSL, SUN_RADIUS};
 use pfx_load::Sky as HdrSky;
 use std::f32::consts::{PI, TAU};
 use std::sync::LazyLock;
@@ -30,6 +30,17 @@ pub struct EnvironmentUniform {
     pub forward: [f32; 4],
     pub right: [f32; 4],
     pub up: [f32; 4],
+    pub look: [f32; 4],
+    pub horizon: [f32; 4],
+}
+
+pub fn look(look: &pfx_load::scene::SkyLook) -> [[f32; 4]; 2] {
+    pfx_core::sky::sky_look(
+        look.backdrop,
+        look.horizon_color,
+        look.horizon_width,
+        look.horizon_amount,
+    )
 }
 
 impl Environment {
@@ -66,6 +77,8 @@ impl Environment {
             forward: [0.0; 4],
             right: [0.0; 4],
             up: [0.0; 4],
+            look: PLAIN_LOOK[0],
+            horizon: PLAIN_LOOK[1],
         }
     }
 

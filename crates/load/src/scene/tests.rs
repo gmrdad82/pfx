@@ -1178,19 +1178,26 @@ fn the_camera_lens_shifts_and_focuses() {
         "camera-focus",
         "[camera]\nat = [0.0, 0.0, 5.0]\nfov = 40.0\nfstop = 4.0\nfocus = 2.5\n",
     );
-    let depth = focused.camera.unwrap().depth_of_field.unwrap();
+    let depth = focused.camera.clone().unwrap().depth_of_field.unwrap();
     assert!(close(depth.distance, 2.5));
-    assert!(depth.keys.is_empty() && close(depth.distance_at(3.0), 2.5));
+    assert!(focused.keys.camera.is_none());
     let pulled = opened(
         "camera-focus-keys",
         "[camera]\nat = [0.0, 0.0, 5.0]\nfov = 40.0\nfstop = 4.0\nfocus = 2.5\nfocus_keys = [[1.0, 4.0], [3.0, 8.0]]\n",
     );
-    let pull = pulled.camera.unwrap().depth_of_field.unwrap();
-    assert_eq!(pull.keys, vec![[1.0, 4.0], [3.0, 8.0]]);
-    assert!(close(pull.distance_at(2.0), 6.0));
-    assert!(close(pull.distance_at(0.0), 4.0));
-    assert!(close(pull.distance_at(5.0), 8.0));
-    assert!(close(pull.distance, 2.5));
+    let rest = pulled.camera.clone().unwrap();
+    let at = |time| {
+        pulled
+            .keys
+            .camera(&rest, time)
+            .depth_of_field
+            .unwrap()
+            .distance
+    };
+    assert!(close(at(2.0), 6.0));
+    assert!(close(at(0.0), 4.0));
+    assert!(close(at(5.0), 8.0));
+    assert!(close(rest.depth_of_field.unwrap().distance, 2.5));
     assert!(close(
         depth.focal,
         0.024 / (2.0 * 20.0_f32.to_radians().tan())
