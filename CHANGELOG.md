@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.2.0 — 2026-10-16
+
+### Added
+
+- 3D particles: emitters in scene files (`[[particles]]`) attached to an object or a glTF node, with rate keys, lifetime, speed cone, inherited velocity, gravity, drag, size, alpha and colour curves, lit by the sun, the sky and local lights, blended or additive, stretched by velocity and blurred by motion blur.
+- Many lights: more than four local lights through clustered lighting, spot lights with smooth cones, and lights that ride an object or a glTF node (head and tail lights follow the car).
+- Lens flare and sun glare (`[flare]`: ghosts, halo, starburst) and colour grades from `.cube` LUT files (`[finish] lut`, `lut_amount`; up to 64 per side).
+- `pfx film`: assemble a film from screen recordings (decoded through pito-codecs), rendered frame folders with their WAV, and cards, with camera moves, looks, captions, marks and a score, written as frames, a WAV and the one-line encode command.
+- Alpha masters are folders of 16-bit RGBA PNG frames with a manifest, written by pfx itself (no ffmpeg); docs/alpha-master.md has the format.
+
+### Changed
+
+- A material with any transmission is drawn as glass, tinted by its base colour, with the share that isn't transmitted lit like the surface.
+- `Light` gained `attach`, and the renderer's `Effects` gained `lights` and `sprays`, so code that builds them by hand needs the new fields.
+
+### Fixed
+
+- Thin glass lenses (a few millimetres) and single-sheet lenses no longer drop to white stripes or vanish.
+- Any flat look used to hide a scene's sprites.
+
 ## v2.1.0 — 2026-10-16
 
 ### Added
