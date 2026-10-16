@@ -1,4 +1,5 @@
 pub mod characters;
+mod clipboard;
 mod events;
 mod game;
 mod hooks;
@@ -17,6 +18,7 @@ mod world;
 #[cfg(test)]
 mod tests;
 
+pub use clipboard::Clipboard;
 pub use events::{Phase, TriggerEvent, WorldEvent};
 pub use game::{FrameTime, Game, GameError, SceneGame};
 pub use hooks::{NoHooks, PlayHooks};

@@ -15,6 +15,7 @@ use winit::event::{DeviceEvent, DeviceId, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{CursorGrabMode, Window, WindowId};
 
+use crate::clipboard;
 use crate::config::{Config, Pads, report};
 use crate::cursor::{Pointer, nudge};
 use crate::driver::{Driver, Event, present_preference};
@@ -45,6 +46,7 @@ struct Live {
     schemes: Option<Receiver<Option<Scheme>>>,
     resize: Option<Size>,
     stale: bool,
+    _clipboard: Option<clipboard::Service>,
 }
 
 struct App {
@@ -248,6 +250,13 @@ fn open(
         pads,
     )?;
     driver.set_layout(layout(&mut config));
+    let clipboard = clipboard::system(&window);
+    if let Some(service) = &clipboard {
+        driver
+            .session_mut()
+            .world_mut()
+            .attach_clipboard(Box::new(service.link()));
+    }
     driver.feed(Event::Refresh(
         window
             .current_monitor()
@@ -274,6 +283,7 @@ fn open(
         schemes,
         resize: None,
         stale: false,
+        _clipboard: clipboard,
     };
     live.schemes();
     Ok(live)
