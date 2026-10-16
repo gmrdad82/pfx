@@ -45,6 +45,43 @@ enum ImageSlot {
     Main,
     LowA,
     LowB,
+    Level(usize),
+}
+
+const ROUND_GLOW: usize = crate::bloom::ROUND_LEVELS;
+
+fn round_allocation(width: u32, height: u32) -> Vec<(u32, u32)> {
+    let downs = crate::bloom::round_levels(width, height);
+    let mut out = downs.to_vec();
+    out.extend_from_slice(&downs[crate::bloom::ROUND_LEAD..crate::bloom::ROUND_LEVELS - 1]);
+    out
+}
+
+fn round_targets(device: &wgpu::Device, sizes: &[(u32, u32)]) -> Vec<Target> {
+    sizes
+        .iter()
+        .map(|&(w, h)| Target::new(device, w, h))
+        .collect()
+}
+
+fn round_slots() -> Vec<(ImageSlot, ImageSlot, Option<ImageSlot>)> {
+    use crate::bloom::{ROUND_LEAD, ROUND_LEVELS, ROUND_MIPS};
+    let mut out = vec![(ImageSlot::Main, ImageSlot::Level(0), None)];
+    out.extend((1..ROUND_LEVELS).map(|i| (ImageSlot::Level(i - 1), ImageSlot::Level(i), None)));
+    for mip in (1..ROUND_MIPS).rev() {
+        let source = if mip == ROUND_MIPS - 1 {
+            ImageSlot::Level(ROUND_LEVELS - 1)
+        } else {
+            ImageSlot::Level(ROUND_GLOW + mip)
+        };
+        out.push((
+            source,
+            ImageSlot::Level(ROUND_GLOW + mip - 1),
+            Some(ImageSlot::Level(ROUND_LEAD + mip - 1)),
+        ));
+    }
+    out.push((ImageSlot::Main, ImageSlot::Main, None));
+    out
 }
 
 struct Stage {
@@ -52,6 +89,7 @@ struct Stage {
     layout: wgpu::BindGroupLayout,
     source: ImageSlot,
     target: ImageSlot,
+    blend: Option<ImageSlot>,
     aux: Aux,
     label: String,
     bind: Mutex<Option<(BindKey, wgpu::BindGroup)>>,
@@ -82,6 +120,8 @@ struct Group {
     exposure: Vec<Option<usize>>,
     low: Option<LowPair>,
     factor: u32,
+    levels: Vec<Target>,
+    level_sizes: Vec<(u32, u32)>,
     data: Option<wgpu::Buffer>,
     params: [Vec<[f32; 16]>; 4],
     uniforms: wgpu::Buffer,
@@ -254,6 +294,7 @@ fn make_stage(
     aux: Aux,
     source: ImageSlot,
     target: ImageSlot,
+    blend: Option<ImageSlot>,
     label: String,
 ) -> Stage {
     let mut entries = vec![
@@ -267,7 +308,7 @@ fn make_stage(
         ),
         entry(
             1,
-            if matches!(aux, Aux::LinearSampler) {
+            if matches!(aux, Aux::LinearSampler | Aux::Pyramid) {
                 wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: true },
                     view_dimension: wgpu::TextureViewDimension::D2,
@@ -306,6 +347,13 @@ fn make_stage(
             3,
             wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         )),
+        Aux::Pyramid => {
+            entries.push(entry(
+                3,
+                wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            ));
+            entries.push(entry(4, sampled()));
+        }
         Aux::Grade | Aux::None => {}
     }
     if matches!(
@@ -340,6 +388,7 @@ fn make_stage(
         layout,
         source,
         target,
+        blend,
         aux,
         label,
         bind: Mutex::new(None),
@@ -475,6 +524,15 @@ fn exposure_slots(pass: &Pass, stages: usize) -> Vec<Option<usize>> {
 }
 
 fn stage_name(pass: &Pass, stage: usize, count: usize) -> String {
+    if count == crate::bloom::ROUND_LEVELS + crate::bloom::ROUND_MIPS {
+        let part = match stage {
+            0 => "extract".to_owned(),
+            s if s < crate::bloom::ROUND_LEVELS => format!("down {s}"),
+            s if s + 1 < count => format!("up {}", count - 1 - s),
+            _ => "add".to_owned(),
+        };
+        return format!("{} {part}", pass.name());
+    }
     let parts: &[&str] = match count {
         3 => &["extract", "rings", "add"],
         5 => &["prepare", "features", "blur x", "blur y", "add"],
@@ -510,7 +568,12 @@ fn plan_groups(
             }),
             _ => None,
         };
+        let round = match &pass {
+            Pass::Bloom(bloom) => bloom.kind == crate::bloom::BloomKind::Round,
+            _ => bloom.is_some_and(|bloom| bloom.kind == crate::bloom::BloomKind::Round),
+        } && dispatches.len() > 1;
         let (factor, slots): (u32, Vec<(ImageSlot, ImageSlot)>) = match (&pass, bloom) {
+            _ if round => (1, Vec::new()),
             (Pass::Grade(_), Some(bloom)) if dispatches.len() == 3 => (
                 bloom.down.max(1),
                 vec![
@@ -575,11 +638,19 @@ fn plan_groups(
             ),
             _ => (1, vec![(ImageSlot::Main, ImageSlot::Main)]),
         };
+        let slots: Vec<(ImageSlot, ImageSlot, Option<ImageSlot>)> = if round {
+            round_slots()
+        } else {
+            slots
+                .into_iter()
+                .map(|(source, target)| (source, target, None))
+                .collect()
+        };
         let stages = dispatches
             .iter()
             .zip(slots)
             .enumerate()
-            .map(|(stage_index, (dispatch, (source, target)))| {
+            .map(|(stage_index, (dispatch, (source, target, blend)))| {
                 let label = format!(
                     "post {index}:{stage_index} {}",
                     stage_name(&pass, stage_index, dispatches.len())
@@ -590,11 +661,20 @@ fn plan_groups(
                     dispatch.aux,
                     source,
                     target,
+                    blend,
                     label,
                 )
             })
             .collect();
-        let low = if (bloom.is_some()
+        let level_sizes = if round {
+            round_allocation(width, height)
+        } else {
+            Vec::new()
+        };
+        let levels = round_targets(device, &level_sizes);
+        let low = if round {
+            None
+        } else if (bloom.is_some()
             || matches!(
                 pass,
                 Pass::Bloom(_) | Pass::Halation(_) | Pass::Neon(_) | Pass::Flare(_)
@@ -625,6 +705,8 @@ fn plan_groups(
             exposure,
             low,
             factor,
+            levels,
+            level_sizes,
             data,
             params,
             uniforms,
@@ -725,7 +807,7 @@ impl GpuChain {
             .any(|stage| {
                 matches!(
                     stage.aux,
-                    Aux::BloomLinear | Aux::LinearSampler | Aux::GradeBloomLinear
+                    Aux::BloomLinear | Aux::LinearSampler | Aux::Pyramid | Aux::GradeBloomLinear
                 )
             })
             .then(|| {
@@ -786,7 +868,37 @@ impl GpuChain {
         match slot {
             ImageSlot::Main => self.viewport,
             ImageSlot::LowA | ImageSlot::LowB => self.low_size(group),
+            ImageSlot::Level(index) => crate::bloom::scaled_level(
+                group.level_sizes[index],
+                (self.width, self.height),
+                self.viewport,
+            ),
         }
+    }
+
+    fn aux_size(&self, group: &Group, stage: &Stage) -> (u32, u32) {
+        match stage.blend {
+            Some(slot) => self.slot_size(group, slot),
+            None if !group.levels.is_empty() => self.slot_size(group, ImageSlot::Level(ROUND_GLOW)),
+            None => self.low_size(group),
+        }
+    }
+
+    fn view<'a>(&'a self, group: &'a Group, slot: ImageSlot) -> &'a wgpu::TextureView {
+        match slot {
+            ImageSlot::LowA => &group.low.as_ref().unwrap().a.view,
+            ImageSlot::LowB => &group.low.as_ref().unwrap().b.view,
+            ImageSlot::Level(index) => &group.levels[index].view,
+            ImageSlot::Main => unreachable!("the main image is the chain's own"),
+        }
+    }
+
+    fn bloom_view<'a>(&'a self, group: &'a Group, b: bool) -> &'a wgpu::TextureView {
+        if !group.levels.is_empty() {
+            return &group.levels[ROUND_GLOW].view;
+        }
+        let low = group.low.as_ref().unwrap();
+        if b { &low.b.view } else { &low.a.view }
     }
 
     pub fn tape(&self) -> crate::tape::Tape {
@@ -861,6 +973,10 @@ impl GpuChain {
             }
             if matches!(group.pass, Pass::Flare(_)) {
                 group.factor = crate::flare::factor(height);
+            }
+            if !group.levels.is_empty() {
+                group.level_sizes = round_allocation(width, height);
+                group.levels = round_targets(&self.device, &group.level_sizes);
             }
             if group.low.is_some() {
                 let w = (width / group.factor).max(1);
@@ -1114,8 +1230,10 @@ impl GpuChain {
                     (Some(scissor), ImageSlot::Main) => Some(scissor.grown(group_index, self)),
                     _ => None,
                 };
-                let mut uniforms = Uniforms::new(w, h, frame, seed, params)
-                    .extent(self.slot_size(group, stage.source), self.low_size(group));
+                let mut uniforms = Uniforms::new(w, h, frame, seed, params).extent(
+                    self.slot_size(group, stage.source),
+                    self.aux_size(group, stage),
+                );
                 if let Some(area) = area {
                     uniforms = uniforms.region(area);
                 }
@@ -1156,13 +1274,11 @@ impl GpuChain {
                         scratch_index ^= 1;
                         view
                     }
-                    ImageSlot::LowA => &group.low.as_ref().unwrap().a.view,
-                    ImageSlot::LowB => &group.low.as_ref().unwrap().b.view,
+                    slot => self.view(group, slot),
                 };
                 let source = match stage.source {
                     ImageSlot::Main => current,
-                    ImageSlot::LowA => &group.low.as_ref().unwrap().a.view,
-                    ImageSlot::LowB => &group.low.as_ref().unwrap().b.view,
+                    slot => self.view(group, slot),
                 };
                 let normal = matches!(stage.aux, Aux::Normal | Aux::DepthNormal)
                     .then(|| normal.unwrap_or(&self.normal_fallback.view));
@@ -1258,18 +1374,14 @@ impl GpuChain {
             }
             Aux::Bloom | Aux::BloomB => entries.push(wgpu::BindGroupEntry {
                 binding: 3,
-                resource: wgpu::BindingResource::TextureView(if matches!(stage.aux, Aux::BloomB) {
-                    &group.low.as_ref().unwrap().b.view
-                } else {
-                    &group.low.as_ref().unwrap().a.view
-                }),
+                resource: wgpu::BindingResource::TextureView(
+                    self.bloom_view(group, matches!(stage.aux, Aux::BloomB)),
+                ),
             }),
             Aux::BloomLinear => {
                 entries.push(wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: wgpu::BindingResource::TextureView(
-                        &group.low.as_ref().unwrap().a.view,
-                    ),
+                    resource: wgpu::BindingResource::TextureView(self.bloom_view(group, false)),
                 });
                 entries.push(wgpu::BindGroupEntry {
                     binding: 4,
@@ -1280,17 +1392,29 @@ impl GpuChain {
                 binding: 3,
                 resource: wgpu::BindingResource::Sampler(self.bloom_sampler.as_ref().unwrap()),
             }),
+            Aux::Pyramid => {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(self.bloom_sampler.as_ref().unwrap()),
+                });
+                entries.push(wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(
+                        self.view(group, stage.blend.unwrap()),
+                    ),
+                });
+            }
             Aux::Lut | Aux::Blue => entries.push(wgpu::BindGroupEntry {
                 binding: 3,
                 resource: group.data.as_ref().unwrap().as_entire_binding(),
             }),
             Aux::GradeBloom | Aux::GradeBloomLinear => entries.push(wgpu::BindGroupEntry {
                 binding: 3,
-                resource: wgpu::BindingResource::TextureView(&group.low.as_ref().unwrap().a.view),
+                resource: wgpu::BindingResource::TextureView(self.bloom_view(group, false)),
             }),
             Aux::GradeBloomB => entries.push(wgpu::BindGroupEntry {
                 binding: 3,
-                resource: wgpu::BindingResource::TextureView(&group.low.as_ref().unwrap().b.view),
+                resource: wgpu::BindingResource::TextureView(self.bloom_view(group, true)),
             }),
             Aux::Grade | Aux::None => {}
         }
@@ -1586,6 +1710,15 @@ pub(crate) mod tests {
             crate::bloom::NEUTRAL_GAINS,
         )));
         chains.push(rings);
+        chains.push(Chain {
+            passes: vec![
+                Pass::Exposure(1.2),
+                Pass::Bloom(crate::bloom::Bloom::round(0.2, 1.0)),
+                Pass::Tone(crate::tone::Tone::aces()),
+            ],
+            seed: 0,
+            frame: 0,
+        });
         let mut seen = std::collections::BTreeSet::new();
         for chain in chains {
             for unfused in [false, true] {
@@ -1621,6 +1754,7 @@ pub(crate) mod tests {
             Aux::None,
             stage.source,
             stage.target,
+            None,
             stage.label.clone(),
         );
         for stage in &mut post.groups[0].stages[1..3] {
@@ -1630,6 +1764,7 @@ pub(crate) mod tests {
                 Aux::None,
                 stage.source,
                 stage.target,
+                None,
                 stage.label.clone(),
             );
         }
@@ -1640,6 +1775,7 @@ pub(crate) mod tests {
             Aux::Bloom,
             stage.source,
             stage.target,
+            None,
             stage.label.clone(),
         );
     }

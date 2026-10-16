@@ -1434,6 +1434,128 @@ pub const BLOOM_ADD_LINEAR: &str = shader!(
 "#
 );
 
+macro_rules! round_taps {
+    () => {
+        r#"
+@group(0) @binding(3) var round_sampler: sampler;
+
+fn round_tap(at: vec2<f32>) -> vec3<f32> {
+    let used = vec2<f32>(src_dim());
+    let size = vec2<f32>(textureDimensions(src_tex));
+    let c = clamp(at, vec2<f32>(0.5), max(used - vec2<f32>(0.5), vec2<f32>(0.5)));
+    return textureSampleLevel(src_tex, round_sampler, c / size, 0.0).rgb;
+}
+
+fn round_centre(p: vec2<u32>) -> vec2<f32> {
+    return (vec2<f32>(p) + vec2<f32>(0.5)) / vec2<f32>(max(post.size, vec2<u32>(1u))) * vec2<f32>(src_dim());
+}
+
+fn round_karis(c: vec3<f32>) -> f32 {
+    let luma = dot(pow(max(c, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2)), vec3<f32>(0.2126, 0.7152, 0.0722)) / 4.0;
+    return 1.0 / (1.0 + luma);
+}
+
+fn round_13(at: vec2<f32>, scale: f32, karis: bool) -> vec3<f32> {
+    let a = round_tap(at + vec2<f32>(-2.0, 2.0)) * scale;
+    let b = round_tap(at + vec2<f32>(0.0, 2.0)) * scale;
+    let c = round_tap(at + vec2<f32>(2.0, 2.0)) * scale;
+    let d = round_tap(at + vec2<f32>(-2.0, 0.0)) * scale;
+    let e = round_tap(at) * scale;
+    let f = round_tap(at + vec2<f32>(2.0, 0.0)) * scale;
+    let g = round_tap(at + vec2<f32>(-2.0, -2.0)) * scale;
+    let h = round_tap(at + vec2<f32>(0.0, -2.0)) * scale;
+    let i = round_tap(at + vec2<f32>(2.0, -2.0)) * scale;
+    let j = round_tap(at + vec2<f32>(-1.0, 1.0)) * scale;
+    let k = round_tap(at + vec2<f32>(1.0, 1.0)) * scale;
+    let l = round_tap(at + vec2<f32>(-1.0, -1.0)) * scale;
+    let m = round_tap(at + vec2<f32>(1.0, -1.0)) * scale;
+    if (karis) {
+        let g0 = (a + b + d + e) * 0.25;
+        let g1 = (b + c + e + f) * 0.25;
+        let g2 = (d + e + g + h) * 0.25;
+        let g3 = (e + f + h + i) * 0.25;
+        let g4 = (j + k + l + m) * 0.25;
+        let w0 = 0.125 * round_karis(g0);
+        let w1 = 0.125 * round_karis(g1);
+        let w2 = 0.125 * round_karis(g2);
+        let w3 = 0.125 * round_karis(g3);
+        let w4 = 0.5 * round_karis(g4);
+        return (g0 * w0 + g1 * w1 + g2 * w2 + g3 * w3 + g4 * w4) / (w0 + w1 + w2 + w3 + w4);
+    }
+    var sample = (a + c + g + i) * 0.03125;
+    sample += (b + d + f + h) * 0.0625;
+    sample += (e + j + k + l + m) * 0.125;
+    return sample;
+}
+
+fn round_tent(at: vec2<f32>) -> vec3<f32> {
+    var sample = round_tap(at) * 0.25;
+    sample += (round_tap(at + vec2<f32>(0.0, 1.0)) + round_tap(at + vec2<f32>(-1.0, 0.0)) + round_tap(at + vec2<f32>(1.0, 0.0)) + round_tap(at + vec2<f32>(0.0, -1.0))) * 0.125;
+    sample += (round_tap(at + vec2<f32>(-1.0, 1.0)) + round_tap(at + vec2<f32>(1.0, 1.0)) + round_tap(at + vec2<f32>(-1.0, -1.0)) + round_tap(at + vec2<f32>(1.0, -1.0))) * 0.0625;
+    return sample;
+}
+"#
+    };
+}
+
+macro_rules! round_glow {
+    () => {
+        r#"
+fn glow_tap(at: vec2<f32>) -> vec3<f32> {
+    let used = vec2<f32>(min(textureDimensions(bloom_tex), post.extent.zw));
+    let size = vec2<f32>(textureDimensions(bloom_tex));
+    let c = clamp(at, vec2<f32>(0.5), max(used - vec2<f32>(0.5), vec2<f32>(0.5)));
+    return textureSampleLevel(bloom_tex, bloom_sampler, c / size, 0.0).rgb;
+}
+
+fn glow_tent(p: vec2<u32>) -> vec3<f32> {
+    let used = vec2<f32>(min(textureDimensions(bloom_tex), post.extent.zw));
+    let at = (vec2<f32>(p) + vec2<f32>(0.5)) / vec2<f32>(max(src_dim(), vec2<u32>(1u))) * used;
+    var sample = glow_tap(at) * 0.25;
+    sample += (glow_tap(at + vec2<f32>(0.0, 1.0)) + glow_tap(at + vec2<f32>(-1.0, 0.0)) + glow_tap(at + vec2<f32>(1.0, 0.0)) + glow_tap(at + vec2<f32>(0.0, -1.0))) * 0.125;
+    sample += (glow_tap(at + vec2<f32>(-1.0, 1.0)) + glow_tap(at + vec2<f32>(1.0, 1.0)) + glow_tap(at + vec2<f32>(-1.0, -1.0)) + glow_tap(at + vec2<f32>(1.0, -1.0))) * 0.0625;
+    return sample;
+}
+"#
+    };
+}
+
+pub const ROUND_GLOW: &str = round_glow!();
+
+pub const BLOOM_ROUND_DOWN: &str = shader!(
+    round_taps!(),
+    r#"
+    let at = round_centre(p);
+    if (post.p0.x > 0.5) {
+        let c = clamp(round_13(at, post.p1.z, true), vec3<f32>(0.0001), vec3<f32>(3.40282347e37));
+        store(p, vec4<f32>(keep_rgb(c, post.p0.y, post.p0.z, post.p0.w, post.p1.x), 1.0));
+    } else {
+        store(p, vec4<f32>(round_13(at, 1.0, false), 1.0));
+    }
+"#
+);
+
+pub const BLOOM_ROUND_UP: &str = shader!(
+    concat!(
+        round_taps!(),
+        "@group(0) @binding(4) var round_fine: texture_2d<f32>;\n"
+    ),
+    r#"
+    let t = round_tent(round_centre(p));
+    let d = textureLoad(round_fine, vec2<i32>(p), 0).rgb;
+    store(p, vec4<f32>(mix(d, t, post.p0.x), 1.0));
+"#
+);
+
+pub const BLOOM_ROUND_ADD: &str = shader!(
+    concat!(bloom_linear!(), round_glow!()),
+    r#"
+    if (abs(post.p0.x) < 1e-8) { store(p, src); return; }
+    let kept = keep_rgb(src.rgb, post.p0.y, post.p0.z, post.p0.w, post.p1.x);
+    store(p, vec4<f32>(src.rgb + (glow_tent(p) - kept) * post.p0.x, src.a));
+"#
+);
+
 pub const BLOOM_RINGS: &str = shader!(
     "",
     r#"

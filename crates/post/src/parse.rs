@@ -120,7 +120,7 @@ const OUTLINE_KEYS: &[&str] = &[
 
 const SCRATCH_KEYS: &[&str] = &["count", "strength"];
 
-const KINDS: &[&str] = &["box", "rings", "tent"];
+const KINDS: &[&str] = &["box", "rings", "round", "tent"];
 
 const VIGNETTE_KINDS: &[&str] = &["power", "smoothstep"];
 
@@ -774,7 +774,9 @@ fn ensure_bloom(chain: &mut Chain) -> &mut Bloom {
             .position(|pass| matches!(pass, Pass::Exposure(_)))
             .map(|i| i + 1)
             .unwrap_or(0);
-        chain.passes.insert(index, Pass::Bloom(Bloom::neutral(0.0)));
+        chain
+            .passes
+            .insert(index, Pass::Bloom(Bloom::round(0.0, 1.0)));
     }
     let Some(Pass::Bloom(bloom)) = chain
         .passes
@@ -804,6 +806,7 @@ fn set_bloom(chain: &mut Chain, value: &Value) -> Result<(), ParseError> {
                 "box" => Bloom::neutral(bloom.strength),
                 "tent" => Bloom::tent(bloom.strength, 1.0, 4, 16.0, 2),
                 "rings" => Bloom::rings(bloom.strength, 1.0, 4, NEUTRAL_RADII, NEUTRAL_GAINS),
+                "round" => Bloom::round(bloom.strength, 1.0),
                 other => {
                     return Err(ParseError::msg(format!(
                         "unknown bloom.kind {other}; allowed: {}",

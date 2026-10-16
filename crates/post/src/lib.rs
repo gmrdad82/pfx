@@ -21,6 +21,8 @@ pub mod view;
 pub mod wgsl;
 
 #[cfg(test)]
+mod bloom_tests;
+#[cfg(test)]
 mod flare_tests;
 #[cfg(test)]
 mod tests;

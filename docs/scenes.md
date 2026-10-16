@@ -85,6 +85,35 @@ lut_amount = 0.8
 
 The file is read through the scene's reader, so scene watch reloads the finish when the `.cube` changes, and its bytes are in the finish's hash. `pfx_post::cube::parse` reads `LUT_3D_SIZE` (2 to 64), `LUT_1D_SIZE` (2 to 65536, one curve per channel), `DOMAIN_MIN` and `DOMAIN_MAX` (the input is mapped from them to 0 to 1), Resolve's `LUT_1D_INPUT_RANGE` and `LUT_3D_INPUT_RANGE`, `TITLE`, `#` comments and other upper-case keywords before the data; red changes fastest. It refuses, with the line, a file over 16 MiB, one that is not UTF-8, no size or two sizes, a size out of range, a keyword after the data, an entry that is not three finite numbers, too few or too many entries, and a domain whose minimum is not below its maximum; nothing in a malformed file panics. The table form's `size` is 2 to 64. `pfx_post::cube::generate(size, map)` and `cube::format` write a `.cube` from a colour function, which is how the tests make their identity and lilac cubes.
 
+### `[finish] bloom`
+
+```toml
+[finish]
+bloom = { strength = 0.15, threshold = 0.9 }
+```
+
+`bloom = 0.15` sets the strength alone. The light above `threshold` (with the soft knee below) scatters into a glow around its source; `kind` picks how the glow is drawn:
+
+| `kind` | The glow |
+|---|---|
+| `round` (the default) | a round, wide glow that falls off like a lens's: Bevy's progressive downsample and upsample (below). `strength` is the share of the light above the threshold that leaves its pixel for the glow (0 to 1); the total light stays the same within 2% |
+| `box` | the frame at `1/down` size (box average), blurred by a separable Gaussian `radius` texels wide with `sigma` (weights `exp(−k² / sigma)`), added at `strength`. The glow stops at `radius × down` pixels on each axis, so a source far over the threshold, a low sun or a lamp, draws its square. The `crt` and `neon` styles use it for a screen's glow |
+| `tent` | as `box`, with a tent downsample and one tap per texel |
+| `rings` | four rings of 20 taps at `radii` (times `unit`) with `gains`, `clamp` capping the extract; a narrow, beaded glow |
+
+| Key | Range | Default | What it does |
+|---|---|---|---|
+| `kind` | `round`, `box`, `tent`, `rings` | `round` | the glow, above; naming a kind resets the other keys to that kind's defaults before the ones written apply |
+| `strength` | 0 and up (`round`: 0 to 1) | 0 | how much light goes into the glow; 0 turns the pass off |
+| `threshold` | 0 and up | 1 | the brightest channel above it blooms; `round` at 0 is Bevy's energy-conserving natural bloom, every pixel scattering `strength` of its light |
+| `knee`, `knee_width`, `soft` | 0 and up | 0 | a soft start below the threshold: from `knee` over `knee_width` the kept share rises as a square to `soft` |
+| `radius`, `sigma`, `down`, `linear_taps` | | 4, 16, 2, true | `box` and `tent` only |
+| `radii`, `gains`, `unit`, `clamp` | | 1, 2, 4, 8; 1, 0.5, 0.25, 0.125; 1; 4 | `rings` only |
+
+A finish that names no `kind` blooms `round`. Before, it bloomed `box` with `radius` 4 and `sigma` 16 at half size, so such a scene now shows a wider, softer glow, its sources lose `strength` of their light over the threshold to it, and its `radius`, `sigma` and `down` are ignored; `kind = "box"` brings the old glow back. A finish that names a kind, and a style's own bloom (`crt`, `neon`), keep theirs and render as before.
+
+The round kind follows Bevy's bloom (tag `v0.16.1`; NOTICE.md): a 13-tap downsample with Karis firefly weights on the first level, so a lone bright pixel does not bloom, then halving levels down to 8 levels below one 512 texels tall, then a 3x3 tent upsample that blends each level into the one above by Bevy's `compute_blend_factor` with its natural constants. The glow's size is a share of the frame's height, so a 1080x1920 draft and a 2160x3840 final glow alike. Its cost is in [live-renderer.md](live-renderer.md#round-bloom).
+
 ### `[flare]`
 
 ```toml
