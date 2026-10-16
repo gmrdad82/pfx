@@ -48,8 +48,8 @@ pub use diff::{Changes, SceneDiff};
 pub use draws::{Draw, Draws};
 pub use edit::{EditError, Kind, Patch, PatchGroup, SceneEdit, Target, Value};
 pub use haze::OutdoorHaze;
-pub use particles::{Attach, Node as ParticleNode, Particles};
 pub use lights::{Attach as LightAttach, SPOT_CONE, SPOT_DIRECTION, Spot};
+pub use particles::{Attach, Node as ParticleNode, Particles};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
 pub use pfx_scene::types::{
@@ -317,7 +317,7 @@ pub struct Light {
     pub range: f32,
     pub shadow: bool,
     pub spot: Option<Spot>,
-    pub attach: Option<Attach>,
+    pub attach: Option<LightAttach>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
