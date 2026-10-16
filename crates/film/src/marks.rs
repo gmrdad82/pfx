@@ -1,11 +1,9 @@
-use crate::colour::hex;
 use crate::sheet::{Sheet, painted};
 use crate::titles::{Align, Setter, Words};
 use pfx_live::flat::{
-    Draw, Icon, IconShape, Matrix, Shape, Srgba, multiply, scaling, svg, translation,
+    Draw, Fill, Icon, IconShape, Matrix, Shape, Srgba, multiply, scaling, svg, translation,
 };
 
-const REACH: f32 = 0.04;
 pub const LABEL: f32 = 0.62;
 const GAP: f32 = 0.4;
 const BADGE: f32 = 0.66;
@@ -15,16 +13,10 @@ const RING: usize = 16;
 const INNER: usize = 8;
 
 #[derive(Clone, Debug, PartialEq)]
-struct Part {
-    icon: u32,
-    fill: Srgba,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub struct Mark {
     pub name: String,
     pub view: [f32; 2],
-    parts: Vec<Part>,
+    draws: Vec<Draw>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -63,136 +55,31 @@ pub struct Badge {
     pub edge: Srgba,
 }
 
-fn attr<'a>(element: &'a str, name: &str) -> Option<&'a str> {
-    let key = format!(" {name}=\"");
-    let start = element.find(&key)? + key.len();
-    let len = element[start..].find('"')?;
-    Some(&element[start..start + len])
-}
-
-fn apply(m: &Matrix, p: [f32; 2]) -> [f32; 2] {
-    [
-        m[0][0] * p[0] + m[1][0] * p[1] + m[3][0],
-        m[0][1] * p[0] + m[1][1] * p[1] + m[3][1],
-    ]
-}
-
-fn bounds(points: &[[f32; 2]]) -> [f32; 4] {
-    points.iter().fold(
-        [f32::MAX, f32::MAX, f32::MIN, f32::MIN],
-        |[x0, y0, x1, y1], p| [x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1])],
-    )
-}
-
-fn area(b: [f32; 4]) -> f32 {
-    (b[2] - b[0]) * (b[3] - b[1])
-}
-
-fn within(p: [f32; 2], polygon: &[[f32; 2]]) -> bool {
-    let mut inside = false;
-    for (i, &a) in polygon.iter().enumerate() {
-        let b = polygon[(i + 1) % polygon.len()];
-        if (a[1] > p[1]) != (b[1] > p[1])
-            && p[0] < a[0] + (p[1] - a[1]) / (b[1] - a[1]) * (b[0] - a[0])
-        {
-            inside = !inside;
-        }
-    }
-    inside
-}
-
-fn groups(lines: Vec<Vec<[f32; 2]>>) -> Vec<Vec<Vec<[f32; 2]>>> {
-    let boxes: Vec<[f32; 4]> = lines.iter().map(|l| bounds(l)).collect();
-    let parent: Vec<Option<usize>> = (0..lines.len())
-        .map(|j| {
-            (0..lines.len())
-                .filter(|&i| i != j && area(boxes[i]) > area(boxes[j]))
-                .filter(|&i| within(lines[j][0], &lines[i]))
-                .min_by(|&a, &b| area(boxes[a]).total_cmp(&area(boxes[b])))
-        })
-        .collect();
-    let root = |mut j: usize| {
-        while let Some(p) = parent[j] {
-            j = p;
-        }
-        j
-    };
-    let mut out: Vec<(usize, Vec<Vec<[f32; 2]>>)> = Vec::new();
-    for (j, line) in lines.into_iter().enumerate() {
-        let r = root(j);
-        match out.iter_mut().find(|(k, _)| *k == r) {
-            Some((_, g)) => g.push(line),
-            None => out.push((r, vec![line])),
-        }
-    }
-    out.into_iter().map(|(_, g)| g).collect()
-}
-
-fn fill(element: &str) -> Result<Srgba, String> {
-    match attr(element, "fill") {
-        None | Some("currentColor") => Ok(Srgba::WHITE),
-        Some(f) => hex(f),
-    }
-}
-
 fn parse(name: &str, source: &str, shapes: &mut Vec<IconShape>) -> Result<Mark, String> {
     let fail = |e: String| format!("{name}: {e}");
-    let root = source
-        .split("<svg")
-        .nth(1)
-        .ok_or_else(|| fail("no <svg>".into()))?;
-    let view = attr(root, "viewBox").ok_or_else(|| fail("no viewBox".into()))?;
-    let v: Vec<f32> = view
-        .split([' ', ','])
-        .filter_map(|n| n.parse().ok())
-        .collect();
-    let [_, _, w, h] = v[..] else {
-        return Err(fail("the viewBox needs four numbers".into()));
-    };
-    let reach = h * REACH;
-    let mut parts = Vec::new();
-    for element in source.split("<path").skip(1) {
-        let element = element.split('>').next().unwrap_or_default();
-        let d = attr(element, "d").ok_or_else(|| fail("a path has no d".into()))?;
-        let doc = format!(
-            "<svg width=\"{w}\" height=\"{h}\" viewBox=\"{view}\"><path fill=\"#ffffff\" d=\"{d}\"/></svg>"
-        );
-        let board = svg::read(&doc, &[]).map_err(fail)?;
-        let colour = fill(element).map_err(fail)?;
-        for draw in &board.draws {
-            let Shape::Icon(Icon(i)) = draw.shape else {
-                continue;
-            };
-            let shape = board
-                .icons
-                .get(i as usize)
-                .ok_or_else(|| fail("a missing path".into()))?;
-            let lines: Vec<Vec<[f32; 2]>> = shape
-                .polygons
-                .iter()
-                .filter(|l| l.len() > 2)
-                .map(|l| l.iter().map(|p| apply(&draw.transform, *p)).collect())
-                .collect();
-            for polygons in groups(lines) {
-                parts.push(Part {
-                    icon: shapes.len() as u32,
-                    fill: colour,
-                });
-                shapes.push(IconShape {
-                    polygons,
-                    reach,
-                    ..IconShape::default()
-                });
+    let board = svg::read_mark(source, Srgba::WHITE).map_err(fail)?;
+    let base = shapes.len() as u32;
+    shapes.extend(board.icons);
+    let draws: Vec<Draw> = board
+        .draws
+        .into_iter()
+        .map(|mut draw| {
+            if let Shape::Icon(Icon(i)) = draw.shape {
+                draw.shape = Shape::Icon(Icon(base + i));
             }
-        }
-    }
-    if parts.is_empty() {
-        return Err(fail("no paths".into()));
+            if let Some(g) = draw.group.take() {
+                draw.opacity *= board.groups.get(usize::from(g)).map_or(1.0, |g| g.opacity);
+            }
+            draw
+        })
+        .collect();
+    if draws.is_empty() {
+        return Err(fail("no shapes".into()));
     }
     Ok(Mark {
         name: name.to_string(),
-        view: [w, h],
-        parts,
+        view: board.size,
+        draws,
     })
 }
 
@@ -228,15 +115,28 @@ impl Marks {
         ring: &Ring,
         out: &mut Layers,
     ) {
-        for part in &mark.parts {
-            let draw = Draw::new(Shape::Icon(Icon(self.base + part.icon))).transform(frame);
-            let fill = tint.unwrap_or(part.fill);
+        for part in &mark.draws {
+            let mut draw = *part;
+            if let Shape::Icon(Icon(i)) = draw.shape {
+                draw.shape = Shape::Icon(Icon(self.base + i));
+            }
+            let placed = multiply(frame, draw.transform);
             ring.each(|shift, edge| {
-                let at = multiply(translation(shift[0], shift[1]), frame);
-                out.put(
-                    edge,
-                    painted(draw.transform(at), Some(edge.unwrap_or(fill)), None),
-                );
+                let at = multiply(translation(shift[0], shift[1]), placed);
+                let mut d = draw.transform(at);
+                let opacity = d.opacity;
+                match (edge, tint) {
+                    (Some(e), _) => d = painted(d, Some(e), None),
+                    (None, Some(t)) => d = painted(d, Some(t), None),
+                    (None, None) => {}
+                }
+                if edge.is_some() || tint.is_some() {
+                    d.opacity = opacity;
+                }
+                if matches!(d.fill, Fill::None) && d.stroke.is_none() {
+                    return;
+                }
+                out.put(edge, d);
             });
         }
     }

@@ -3,7 +3,16 @@ use super::{
     Draw, Fill, Glow, Gradient, Group, IDENTITY, IconShape, Matrix, Shadow, Shape, Srgba, Stroke,
     multiply, rotation, scaling, translation,
 };
+use i_overlay::core::fill_rule::FillRule;
+use i_overlay::float::simplify::SimplifyShape;
+use i_overlay::mesh::float::stroke::offset::StrokeOffset;
+use i_overlay::mesh::float::style::{LineCap, LineJoin, StrokeStyle};
 use std::collections::HashMap;
+
+const MARK_REACH: f32 = 0.04;
+const ARC_STEP: f32 = 0.1;
+const MITER_LIMIT: f32 = 4.0;
+const ELLIPSE_STEPS: usize = 72;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Filter {
@@ -104,7 +113,59 @@ fn numbers(value: &str) -> Result<Vec<f32>, String> {
         .collect()
 }
 
+fn rgb(value: &str) -> Option<Result<Srgba, String>> {
+    let inner = value
+        .trim()
+        .strip_prefix("rgb(")
+        .or_else(|| value.trim().strip_prefix("rgba("))?
+        .strip_suffix(')')?;
+    let parts: Vec<&str> = inner
+        .split([',', ' ', '/'])
+        .filter(|p| !p.is_empty())
+        .collect();
+    if !(3..=4).contains(&parts.len()) {
+        return Some(Err(format!("{value:?} is not an rgb() colour")));
+    }
+    let channel = |part: &str| -> Result<f32, String> {
+        match part.strip_suffix('%') {
+            Some(percent) => Ok(number(percent)? / 100.0),
+            None => Ok(number(part)? / 255.0),
+        }
+    };
+    let made = (|| -> Result<Srgba, String> {
+        let alpha = match parts.get(3) {
+            Some(a) => fraction(a)?,
+            None => 1.0,
+        };
+        Ok(Srgba([
+            channel(parts[0])?.clamp(0.0, 1.0),
+            channel(parts[1])?.clamp(0.0, 1.0),
+            channel(parts[2])?.clamp(0.0, 1.0),
+            alpha.clamp(0.0, 1.0),
+        ]))
+    })();
+    Some(made)
+}
+
+fn named(value: &str) -> Option<Srgba> {
+    Some(match value.trim() {
+        "black" => Srgba::hex(0x000000),
+        "white" => Srgba::hex(0xffffff),
+        "red" => Srgba::hex(0xff0000),
+        "green" => Srgba::hex(0x008000),
+        "blue" => Srgba::hex(0x0000ff),
+        "transparent" => Srgba([0.0; 4]),
+        _ => return None,
+    })
+}
+
 fn colour(value: &str) -> Result<Srgba, String> {
+    if let Some(made) = rgb(value) {
+        return made;
+    }
+    if let Some(c) = named(value) {
+        return Ok(c);
+    }
     let hex = value
         .strip_prefix('#')
         .ok_or_else(|| format!("{value:?} is not a #rgb colour"))?;
@@ -214,7 +275,14 @@ fn cubic(p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], p3: [f32; 2]) -> Vec<[f32; 2]
 const CURVE_TOLERANCE: f32 = 0.002;
 const CURVE_STEPS: f32 = 64.0;
 
+#[cfg(test)]
 fn path(d: &str) -> Result<Vec<Vec<[f32; 2]>>, String> {
+    path_closed(d).map(|(lines, _)| lines)
+}
+
+type Outline = (Vec<Vec<[f32; 2]>>, Vec<bool>);
+
+fn path_closed(d: &str) -> Result<Outline, String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut arc = false;
@@ -248,6 +316,7 @@ fn path(d: &str) -> Result<Vec<Vec<[f32; 2]>>, String> {
     }
     flush(&mut tokens, &mut current, &mut count);
     let mut subpaths: Vec<Vec<[f32; 2]>> = Vec::new();
+    let mut closed: Vec<bool> = Vec::new();
     let mut at = [0.0f32, 0.0];
     let mut command = 'M';
     let mut index = 0;
@@ -269,6 +338,10 @@ fn path(d: &str) -> Result<Vec<Vec<[f32; 2]>>, String> {
             index += 1;
             if command == 'Z' || command == 'z' {
                 let start = subpaths.last().ok_or("Z before a move")?[0];
+                closed.resize(subpaths.len(), false);
+                if let Some(last) = closed.last_mut() {
+                    *last = true;
+                }
                 at = start;
                 cubic_control = None;
                 quad_control = None;
@@ -345,7 +418,213 @@ fn path(d: &str) -> Result<Vec<Vec<[f32; 2]>>, String> {
         }
         subpaths.last_mut().ok_or("a line before a move")?.push(at);
     }
-    Ok(subpaths)
+    closed.resize(subpaths.len(), false);
+    Ok((subpaths, closed))
+}
+
+fn points_of(value: &str) -> Result<Vec<[f32; 2]>, String> {
+    let n = numbers(value)?;
+    if n.len() < 4 || n.len() % 2 != 0 {
+        return Err("a points list needs pairs, at least two".into());
+    }
+    Ok(n.chunks_exact(2).map(|p| [p[0], p[1]]).collect())
+}
+
+fn ellipse_points(c: [f32; 2], r: [f32; 2]) -> Vec<[f32; 2]> {
+    (0..ELLIPSE_STEPS)
+        .map(|i| {
+            let a = std::f32::consts::TAU * i as f32 / ELLIPSE_STEPS as f32;
+            [c[0] + r[0] * a.cos(), c[1] + r[1] * a.sin()]
+        })
+        .collect()
+}
+
+fn rect_points(x: f32, y: f32, w: f32, h: f32, r: f32) -> Vec<[f32; 2]> {
+    let r = r.clamp(0.0, w.min(h) * 0.5);
+    if r <= 0.0 {
+        return vec![[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+    }
+    let mut out = Vec::new();
+    let corners = [
+        ([x + w - r, y + r], -0.25),
+        ([x + w - r, y + h - r], 0.0),
+        ([x + r, y + h - r], 0.25),
+        ([x + r, y + r], 0.5),
+    ];
+    for (c, from) in corners {
+        for i in 0..=8 {
+            let a = std::f32::consts::TAU * (from + 0.25 * i as f32 / 8.0);
+            out.push([c[0] + r * a.cos(), c[1] + r * a.sin()]);
+        }
+    }
+    out
+}
+
+fn shape_of(element: &Tag) -> Result<Option<Outline>, String> {
+    let get = |key: &str| element.get(key).map_or(Ok(0.0), number);
+    Ok(Some(match element.name.as_str() {
+        "path" => path_closed(element.need("d")?)?,
+        "polyline" => (vec![points_of(element.need("points")?)?], vec![false]),
+        "polygon" => (vec![points_of(element.need("points")?)?], vec![true]),
+        "line" => (
+            vec![vec![[get("x1")?, get("y1")?], [get("x2")?, get("y2")?]]],
+            vec![false],
+        ),
+        "ellipse" => (
+            vec![ellipse_points(
+                [get("cx")?, get("cy")?],
+                [number(element.need("rx")?)?, number(element.need("ry")?)?],
+            )],
+            vec![true],
+        ),
+        "circle" => {
+            let r = number(element.need("r")?)?;
+            (
+                vec![ellipse_points([get("cx")?, get("cy")?], [r, r])],
+                vec![true],
+            )
+        }
+        "rect" => {
+            let r = element
+                .get("rx")
+                .or(element.get("ry"))
+                .map_or(Ok(0.0), number)?;
+            (
+                vec![rect_points(
+                    get("x")?,
+                    get("y")?,
+                    number(element.need("width")?)?,
+                    number(element.need("height")?)?,
+                    r,
+                )],
+                vec![true],
+            )
+        }
+        _ => return Ok(None),
+    }))
+}
+
+fn dashed(line: &[[f32; 2]], pattern: &[f32]) -> Vec<Vec<[f32; 2]>> {
+    let pattern: Vec<f32> = if pattern.len() % 2 == 1 {
+        pattern.iter().chain(pattern).copied().collect()
+    } else {
+        pattern.to_vec()
+    };
+    let total: f32 = pattern.iter().map(|v| v.max(0.0)).sum();
+    if total <= 0.0 || line.len() < 2 {
+        return vec![line.to_vec()];
+    }
+    let distance =
+        |a: [f32; 2], b: [f32; 2]| ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+    let mut out = Vec::new();
+    let mut current = vec![line[0]];
+    let mut on = true;
+    let mut index = 0;
+    let mut left = pattern[0].max(0.0);
+    for pair in line.windows(2) {
+        let (mut a, b) = (pair[0], pair[1]);
+        loop {
+            let span = distance(a, b);
+            if span <= left {
+                left -= span;
+                if on {
+                    current.push(b);
+                }
+                break;
+            }
+            let t = left / span;
+            let p = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+            if on {
+                current.push(p);
+                if current.len() > 1 {
+                    out.push(std::mem::take(&mut current));
+                }
+                current.clear();
+            } else {
+                current = vec![p];
+            }
+            on = !on;
+            index = (index + 1) % pattern.len();
+            left = pattern[index].max(0.0);
+            a = p;
+        }
+    }
+    if on && current.len() > 1 {
+        out.push(current);
+    }
+    out
+}
+
+struct Pen {
+    width: f32,
+    join: String,
+    cap: String,
+    miter: f32,
+    dash: Option<Vec<f32>>,
+}
+
+fn stroked(lines: &[Vec<[f32; 2]>], closed: &[bool], pen: &Pen) -> Vec<Vec<[f32; 2]>> {
+    let cap = match pen.cap.as_str() {
+        "round" => LineCap::Round(ARC_STEP),
+        "square" => LineCap::Square,
+        _ => LineCap::Butt,
+    };
+    let join = match pen.join.as_str() {
+        "round" => LineJoin::Round(ARC_STEP),
+        "bevel" => LineJoin::Bevel,
+        _ => LineJoin::Miter(2.0 * (1.0 / pen.miter.max(1.0)).asin()),
+    };
+    let style = StrokeStyle::new(pen.width)
+        .start_cap(cap.clone())
+        .end_cap(cap)
+        .line_join(join);
+    let mut open: Vec<Vec<[f32; 2]>> = Vec::new();
+    let mut shut: Vec<Vec<[f32; 2]>> = Vec::new();
+    for (line, &closed) in lines.iter().zip(closed) {
+        if line.len() < 2 {
+            continue;
+        }
+        match (&pen.dash, closed) {
+            (Some(pattern), _) => {
+                let mut whole = line.clone();
+                if closed {
+                    whole.push(line[0]);
+                }
+                open.extend(dashed(&whole, pattern));
+            }
+            (None, true) => shut.push(line.clone()),
+            (None, false) => open.push(line.clone()),
+        }
+    }
+    let mut contours: Vec<Vec<[f32; 2]>> = Vec::new();
+    for (set, closed) in [(&open, false), (&shut, true)] {
+        if set.is_empty() {
+            continue;
+        }
+        for shape in set.as_slice().stroke(style.clone(), closed) {
+            contours.extend(shape);
+        }
+    }
+    contours
+        .as_slice()
+        .simplify_shape(FillRule::NonZero)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+fn filled(lines: Vec<Vec<[f32; 2]>>, rule: Option<&str>) -> Vec<Vec<[f32; 2]>> {
+    let rule = match rule {
+        Some("evenodd") => FillRule::EvenOdd,
+        _ => FillRule::NonZero,
+    };
+    let lines: Vec<Vec<[f32; 2]>> = lines.into_iter().filter(|l| l.len() > 2).collect();
+    lines
+        .as_slice()
+        .simplify_shape(rule)
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
 #[derive(Clone)]
@@ -363,6 +642,12 @@ struct Paint {
     fill: Option<String>,
     stroke: Option<String>,
     stroke_width: Option<String>,
+    join: Option<String>,
+    cap: Option<String>,
+    miter: Option<String>,
+    fill_opacity: Option<String>,
+    stroke_opacity: Option<String>,
+    fill_rule: Option<String>,
 }
 
 impl Paint {
@@ -376,40 +661,78 @@ impl Paint {
             fill: own("fill", &self.fill),
             stroke: own("stroke", &self.stroke),
             stroke_width: own("stroke-width", &self.stroke_width),
+            join: own("stroke-linejoin", &self.join),
+            cap: own("stroke-linecap", &self.cap),
+            miter: own("stroke-miterlimit", &self.miter),
+            fill_opacity: own("fill-opacity", &self.fill_opacity),
+            stroke_opacity: own("stroke-opacity", &self.stroke_opacity),
+            fill_rule: own("fill-rule", &self.fill_rule),
         }
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Kind {
+    Linear,
+    Radial,
+}
+
+const LINEAR_KEYS: [&str; 4] = ["x1", "y1", "x2", "y2"];
+const RADIAL_KEYS: [&str; 3] = ["cx", "cy", "r"];
+
+#[derive(Clone, Debug)]
 struct LinearGradient {
-    user_space: bool,
-    ends: [Option<String>; 4],
+    kind: Kind,
+    units: Option<bool>,
+    keys: HashMap<String, String>,
     stops: Vec<(f32, Srgba)>,
+    turn: Option<Matrix>,
+    href: Option<String>,
 }
 
 impl LinearGradient {
-    fn of(tag: &Tag) -> Result<Self, String> {
-        if tag.get("gradientTransform").is_some() {
-            return Err("a gradientTransform is unsupported".into());
-        }
+    fn of(tag: &Tag, kind: Kind) -> Result<Self, String> {
+        let names: &[&str] = match kind {
+            Kind::Linear => &LINEAR_KEYS,
+            Kind::Radial => &RADIAL_KEYS,
+        };
+        let keys = names
+            .iter()
+            .filter_map(|k| tag.get(k).map(|v| (k.to_string(), v.to_string())))
+            .collect();
         Ok(Self {
-            user_space: tag.get("gradientUnits") == Some("userSpaceOnUse"),
-            ends: ["x1", "y1", "x2", "y2"].map(|key| tag.get(key).map(str::to_string)),
+            kind,
+            units: tag.get("gradientUnits").map(|u| u == "userSpaceOnUse"),
+            keys,
             stops: Vec::new(),
+            turn: tag.get("gradientTransform").map(transform).transpose()?,
+            href: tag
+                .get("href")
+                .or(tag.get("xlink:href"))
+                .map(|h| h.trim_start_matches('#').to_string()),
         })
+    }
+
+    fn user_space(&self) -> bool {
+        self.units.unwrap_or(false)
+    }
+
+    fn end(&self, index: usize) -> Option<&str> {
+        self.keys.get(LINEAR_KEYS[index]).map(String::as_str)
     }
 
     fn vertical_box(&self) -> bool {
         let at = |index: usize, value: f32| {
-            self.ends[index]
-                .as_deref()
+            self.end(index)
                 .map_or(
                     Ok(index == 2 && value == 1.0 || index != 2 && value == 0.0),
                     |end| fraction(end).map(|v| v == value),
                 )
                 .unwrap_or(false)
         };
-        !self.user_space
+        self.kind == Kind::Linear
+            && self.turn.is_none()
+            && !self.user_space()
             && self.stops.len() == 2
             && self.stops[0].0 == 0.0
             && self.stops[1].0 == 1.0
@@ -423,19 +746,25 @@ impl LinearGradient {
         if self.vertical_box() {
             return Ok(Fill::Vertical(self.stops[0].1, self.stops[1].1));
         }
-        let defaults = [0.0, 0.0, 1.0, 0.0];
-        let mut ends = [0.0f32; 4];
-        for (index, end) in ends.iter_mut().enumerate() {
-            let value = self.ends[index].as_deref();
-            *end = match (self.user_space, value) {
-                (_, None) if self.user_space => defaults[index] * view[index % 2],
-                (_, None) => defaults[index],
-                (true, Some(v)) if v.trim().ends_with('%') => fraction(v)? * view[index % 2],
+        let user = self.user_space();
+        let value = |key: &str, default: f32, side: f32| -> Result<f32, String> {
+            Ok(match (user, self.keys.get(key).map(String::as_str)) {
+                (true, None) => default * side,
+                (false, None) => default,
+                (true, Some(v)) if v.trim().ends_with('%') => fraction(v)? * side,
                 (_, Some(v)) => fraction(v)?,
-            };
-        }
+            })
+        };
+        let turn = self.turn.unwrap_or(IDENTITY);
+        let turned = |x: f32, y: f32| {
+            [
+                turn[0][0] * x + turn[1][0] * y + turn[3][0],
+                turn[0][1] * x + turn[1][1] * y + turn[3][1],
+            ]
+        };
         let point = |x: f32, y: f32| {
-            if self.user_space {
+            let [x, y] = turned(x, y);
+            if user {
                 [x - origin[0], y - origin[1]]
             } else {
                 [
@@ -445,8 +774,64 @@ impl LinearGradient {
             }
         };
         let stops: Vec<(f32, [f32; 4])> = self.stops.iter().map(|(at, c)| (*at, c.0)).collect();
-        Gradient::linear(point(ends[0], ends[1]), point(ends[2], ends[3]), &stops)
-            .map(Fill::Gradient)
+        match self.kind {
+            Kind::Linear => {
+                let defaults = [0.0, 0.0, 1.0, 0.0];
+                let mut ends = [0.0f32; 4];
+                for (index, end) in ends.iter_mut().enumerate() {
+                    *end = value(LINEAR_KEYS[index], defaults[index], view[index % 2])?;
+                }
+                Gradient::linear(point(ends[0], ends[1]), point(ends[2], ends[3]), &stops)
+                    .map(Fill::Gradient)
+            }
+            Kind::Radial => {
+                let diagonal = ((view[0] * view[0] + view[1] * view[1]) * 0.5).sqrt();
+                let cx = value("cx", 0.5, view[0])?;
+                let cy = value("cy", 0.5, view[1])?;
+                let r = value("r", 0.5, diagonal)?;
+                let column = |c: usize| (turn[c][0] * turn[c][0] + turn[c][1] * turn[c][1]).sqrt();
+                let mut radius = [r * column(0), r * column(1)];
+                if !user {
+                    radius[0] *= bounds[2] - bounds[0];
+                    radius[1] *= bounds[3] - bounds[1];
+                }
+                Gradient::radial(point(cx, cy), radius, &stops).map(Fill::Gradient)
+            }
+        }
+    }
+
+    fn inherit(&mut self, from: &LinearGradient) {
+        if self.stops.is_empty() {
+            self.stops = from.stops.clone();
+        }
+        if self.units.is_none() {
+            self.units = from.units;
+        }
+        if self.turn.is_none() {
+            self.turn = from.turn;
+        }
+        if self.kind == from.kind {
+            for (k, v) in &from.keys {
+                self.keys.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
+    }
+}
+
+fn resolve(gradients: &mut HashMap<String, LinearGradient>) {
+    for _ in 0..4 {
+        let names: Vec<String> = gradients.keys().cloned().collect();
+        for name in names {
+            let Some(href) = gradients[&name].href.clone() else {
+                continue;
+            };
+            let Some(from) = gradients.get(&href).cloned() else {
+                continue;
+            };
+            if let Some(g) = gradients.get_mut(&name) {
+                g.inherit(&from);
+            }
+        }
     }
 }
 
@@ -506,6 +891,19 @@ fn filter_of<'a>(filters: &'a [(&str, Filter)], value: &str) -> Result<&'a Filte
 }
 
 pub fn read(source: &str, filters: &[(&str, Filter)]) -> Result<Board, String> {
+    read_in(source, filters, None)
+}
+
+pub fn read_mark(source: &str, current: Srgba) -> Result<Board, String> {
+    read_in(source, &[], Some(current))
+}
+
+fn read_in(
+    source: &str,
+    filters: &[(&str, Filter)],
+    current: Option<Srgba>,
+) -> Result<Board, String> {
+    let mark = current.is_some();
     let all = tags(source)?;
     let mut gradients: HashMap<String, LinearGradient> = HashMap::new();
     let mut symbols: HashMap<String, Tag> = HashMap::new();
@@ -524,12 +922,17 @@ pub fn read(source: &str, filters: &[(&str, Filter)]) -> Result<Board, String> {
             ("text", false) => in_text += 1,
             ("text", true) => in_text = in_text.saturating_sub(1),
             _ if in_text > 0 => {}
-            ("linearGradient", false) => {
+            ("linearGradient" | "radialGradient", false) => {
+                let kind = if tag.name == "radialGradient" {
+                    Kind::Radial
+                } else {
+                    Kind::Linear
+                };
                 let id = tag.need("id")?.to_string();
-                gradients.insert(id.clone(), LinearGradient::of(&tag)?);
+                gradients.insert(id.clone(), LinearGradient::of(&tag, kind)?);
                 gradient = Some(id);
             }
-            ("linearGradient", true) => gradient = None,
+            ("linearGradient" | "radialGradient", true) => gradient = None,
             ("stop", false) => {
                 let id = gradient.as_ref().ok_or("a stop outside a gradient")?;
                 let mut c = colour(styled(&tag, "stop-color").ok_or("<stop> has no stop-color")?)?;
@@ -552,11 +955,13 @@ pub fn read(source: &str, filters: &[(&str, Filter)]) -> Result<Board, String> {
             _ => body.push(tag),
         }
     }
+    resolve(&mut gradients);
+    let reach_of_mark = MARK_REACH * size[1] / view[1][1].abs().max(f32::MIN_POSITIVE);
     let mut board = Board {
         size,
         ..Board::default()
     };
-    let mut icon_keys: Vec<(String, u32)> = Vec::new();
+    let mut icon_keys: HashMap<(String, u32), usize> = HashMap::new();
     let mut level = 0.0f32;
     let mut stack = vec![Context {
         transform: view,
@@ -627,17 +1032,58 @@ pub fn read(source: &str, filters: &[(&str, Filter)]) -> Result<Board, String> {
                     .ok_or_else(|| format!("{value} is not a linear gradient with stops"))?;
                 return Ok(Some(Ink::Gradient(gradient)));
             }
+            if let (Some(c), "currentColor") = (current, value.trim()) {
+                return Ok(Some(Ink::Solid(c)));
+            }
             Ok(Some(Ink::Solid(colour(value)?)))
         };
         let fill = match (element.name.as_str(), inherited.fill.as_deref()) {
+            (_, None) if mark => current.map(Ink::Solid),
             ("path", None) => None,
             (_, None) => Some(Ink::Solid(Srgba::hex(0))),
             (_, value) => ink(value)?,
         };
         let stroke_width = inherited.stroke_width.as_deref().map_or(Ok(1.0), number)?;
-        let stroke = match ink(inherited.stroke.as_deref())? {
+        let stroke_ink = ink(inherited.stroke.as_deref())?;
+        let explicit = |value: &Option<String>| value.as_deref().is_some_and(|v| v != "round");
+        let geometric = stroke_ink.is_some()
+            && (mark
+                || matches!(stroke_ink, Some(Ink::Gradient(_)))
+                || explicit(&inherited.join)
+                || explicit(&inherited.cap));
+        let alpha_of = |value: &Option<String>| value.as_deref().map_or(Ok(1.0), number);
+        let fill_alpha = if mark {
+            alpha_of(&inherited.fill_opacity)?
+        } else {
+            1.0
+        };
+        let pen = Pen {
+            width: stroke_width,
+            join: inherited
+                .join
+                .clone()
+                .unwrap_or_else(|| if mark { "miter" } else { "round" }.to_string()),
+            cap: inherited
+                .cap
+                .clone()
+                .unwrap_or_else(|| if mark { "butt" } else { "round" }.to_string()),
+            miter: inherited.miter.as_deref().map_or(Ok(MITER_LIMIT), number)?,
+            dash: element
+                .get("stroke-dasharray")
+                .filter(|d| *d != "none")
+                .map(numbers)
+                .transpose()?
+                .filter(|d| !d.is_empty()),
+        };
+        let stroke_alpha = if geometric {
+            alpha_of(&inherited.stroke_opacity)?
+        } else {
+            1.0
+        };
+        let stroke = match stroke_ink.as_ref().filter(|_| !geometric) {
             None => None,
-            Some(Ink::Solid(mut c)) => {
+            Some(Ink::Solid(c)) => {
+                let mut c = *c;
                 if let Some(alpha) = element.get("stroke-opacity") {
                     c = c.alpha(number(alpha)?);
                 }
@@ -654,7 +1100,89 @@ pub fn read(source: &str, filters: &[(&str, Filter)]) -> Result<Board, String> {
         let filter = tag.get("filter").map(str::to_string).or(top.filter.clone());
         let casts = tag.get("filter").is_some() || top.first;
         let box_of: ([f32; 4], [f32; 2]);
+        let geometry = if geometric
+            || matches!(
+                element.name.as_str(),
+                "polyline" | "polygon" | "line" | "ellipse"
+            ) {
+            shape_of(&element)?
+        } else {
+            None
+        };
+        let stroke_draw = match (&geometry, stroke_ink.as_ref().filter(|_| geometric)) {
+            (Some((lines, closed)), Some(ink)) => {
+                let polygons = stroked(lines, closed, &pen);
+                if polygons.is_empty() {
+                    None
+                } else {
+                    let bounds = bounds_of(lines);
+                    let shape = IconShape {
+                        polygons,
+                        reach: if mark { reach_of_mark } else { 4.0 },
+                        ..IconShape::default()
+                    };
+                    board.icons.push(shape);
+                    let mut d = Draw::new(Shape::Icon(Icon((board.icons.len() - 1) as u32)))
+                        .transform(base);
+                    d.fill = match ink {
+                        Ink::Solid(c) => Fill::Solid(c.alpha(c.0[3] * stroke_alpha)),
+                        Ink::Gradient(g) => faded(g.fill(bounds, [0.0, 0.0], size)?, stroke_alpha),
+                    };
+                    Some(d)
+                }
+            }
+            _ => None,
+        };
+        let path_like = matches!(
+            element.name.as_str(),
+            "path" | "polyline" | "polygon" | "line" | "ellipse"
+        ) || (geometric
+            && matches!(element.name.as_str(), "rect" | "circle")
+            && fill.is_none());
         let mut draw = match element.name.as_str() {
+            _ if path_like && geometric && fill.is_none() => {
+                box_of = ([0.0; 4], [0.0; 2]);
+                Draw::new(Shape::Circle { radius: 0.0 })
+            }
+            _ if path_like => {
+                let (subpaths, _) = match &geometry {
+                    Some(g) => g.clone(),
+                    None => path_closed(element.need("d")?)?,
+                };
+                box_of = (bounds_of(&subpaths), [0.0, 0.0]);
+                let reach = if mark {
+                    reach_of_mark
+                } else {
+                    stroke.map_or(0.0, |s| s.width * 0.5) + 4.0
+                };
+                let shape = if fill.is_some() {
+                    IconShape {
+                        polygons: if mark {
+                            filled(subpaths.clone(), inherited.fill_rule.as_deref())
+                        } else {
+                            subpaths.clone()
+                        },
+                        reach,
+                        ..IconShape::default()
+                    }
+                } else {
+                    IconShape {
+                        lines: subpaths.clone(),
+                        reach,
+                        ..IconShape::default()
+                    }
+                };
+                let key = (format!("{:?}{}", subpaths, fill.is_some()), reach.to_bits());
+                let index = match icon_keys.get(&key) {
+                    Some(index) => *index,
+                    None => {
+                        board.icons.push(shape);
+                        icon_keys.insert(key, board.icons.len() - 1);
+                        board.icons.len() - 1
+                    }
+                };
+                Draw::new(Shape::Icon(Icon(index as u32))).transform(base)
+            }
             "rect" => {
                 let x = element.get("x").map_or(Ok(0.0), number)?;
                 let y = element.get("y").map_or(Ok(0.0), number)?;
@@ -693,35 +1221,6 @@ pub fn read(source: &str, filters: &[(&str, Filter)]) -> Result<Board, String> {
                     _ => Draw::new(Shape::Circle { radius: r }).transform(placed),
                 }
             }
-            "path" => {
-                let d = element.need("d")?;
-                let subpaths = path(d)?;
-                box_of = (bounds_of(&subpaths), [0.0, 0.0]);
-                let reach = stroke.map_or(0.0, |s| s.width * 0.5) + 4.0;
-                let shape = if fill.is_some() {
-                    IconShape {
-                        polygons: subpaths,
-                        reach,
-                        ..IconShape::default()
-                    }
-                } else {
-                    IconShape {
-                        lines: subpaths,
-                        reach,
-                        ..IconShape::default()
-                    }
-                };
-                let key = (d.to_string(), reach.to_bits());
-                let index = match icon_keys.iter().position(|k| *k == key) {
-                    Some(index) => index,
-                    None => {
-                        icon_keys.push(key);
-                        board.icons.push(shape);
-                        icon_keys.len() - 1
-                    }
-                };
-                Draw::new(Shape::Icon(Icon(index as u32))).transform(base)
-            }
             other => return Err(format!("<{other}> is unsupported")),
         };
         if matches!(draw.shape, Shape::Ring { .. } | Shape::Arc { .. }) {
@@ -729,8 +1228,10 @@ pub fn read(source: &str, filters: &[(&str, Filter)]) -> Result<Board, String> {
         } else {
             draw.fill = match fill {
                 None => Fill::None,
-                Some(Ink::Solid(c)) => Fill::Solid(c),
-                Some(Ink::Gradient(gradient)) => gradient.fill(box_of.0, box_of.1, size)?,
+                Some(Ink::Solid(c)) => Fill::Solid(c.alpha(c.0[3] * fill_alpha)),
+                Some(Ink::Gradient(gradient)) => {
+                    faded(gradient.fill(box_of.0, box_of.1, size)?, fill_alpha)
+                }
             };
             draw.stroke = stroke;
             draw.opacity = opacity;
@@ -768,9 +1269,39 @@ pub fn read(source: &str, filters: &[(&str, Filter)]) -> Result<Board, String> {
         if let Some(context) = stack.last_mut() {
             context.first = false;
         }
-        board.draws.push(draw);
+        let shown = !(geometric && fill.is_none());
+        if shown {
+            board.draws.push(draw);
+        }
+        if let Some(mut d) = stroke_draw {
+            d.group = top.group;
+            d.shadow = Shadow::None;
+            d.opacity = opacity;
+            d.elevation = level;
+            board.draws.push(d);
+        }
     }
     Ok(board)
+}
+
+fn faded(fill: Fill, alpha: f32) -> Fill {
+    if alpha >= 1.0 {
+        return fill;
+    }
+    match fill {
+        Fill::Solid(c) => Fill::Solid(c.alpha(c.0[3] * alpha)),
+        Fill::Vertical(a, b) => Fill::Vertical(a.alpha(a.0[3] * alpha), b.alpha(b.0[3] * alpha)),
+        Fill::Gradient(g) => {
+            let stops: Vec<(f32, [f32; 4])> = g
+                .stops()
+                .map(|(at, c)| (at, [c[0], c[1], c[2], c[3] * alpha]))
+                .collect();
+            Gradient::new(g.shape, &stops)
+                .map(|faded| faded.space(g.space))
+                .map_or(Fill::Gradient(g), Fill::Gradient)
+        }
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -899,6 +1430,51 @@ mod tests {
         assert_eq!(
             board.draws[0].fill,
             Fill::Vertical(Srgba::hex(0xffffff), Srgba::hex(0))
+        );
+    }
+
+    #[test]
+    fn marks_read_radial_gradients_strokes_with_caps_and_fill_opacity() {
+        let source = r##"<svg width="20" height="20"><defs><radialGradient id="r" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="rgb(0, 0, 255)"/></radialGradient></defs><circle cx="10" cy="10" r="8" fill="url(#r)" fill-opacity="0.5"/><path d="M2 10H18" fill="none" stroke="#00ff00" stroke-width="4"/><path d="M2 14H18" fill="none" stroke="#00ff00" stroke-width="4" stroke-linecap="square"/></svg>"##;
+        let board = read_mark(source, Srgba::WHITE).unwrap();
+        assert_eq!(board.draws.len(), 3);
+        let Fill::Gradient(g) = &board.draws[0].fill else {
+            panic!("a radial fill: {:?}", board.draws[0].fill);
+        };
+        assert!(matches!(
+            g.shape,
+            pfx_post::look::GradientShape::Radial { .. }
+        ));
+        assert!(g.stops().all(|(_, c)| (c[3] - 0.5).abs() < 1e-6));
+        let reach = |draw: &Draw| {
+            let Shape::Icon(Icon(i)) = draw.shape else {
+                panic!("a stroke is an outline");
+            };
+            let xs: Vec<f32> = board.icons[i as usize]
+                .polygons
+                .iter()
+                .flatten()
+                .map(|p| p[0])
+                .collect();
+            (
+                xs.iter().copied().fold(f32::MAX, f32::min),
+                xs.iter().copied().fold(f32::MIN, f32::max),
+            )
+        };
+        let (butt, square) = (reach(&board.draws[1]), reach(&board.draws[2]));
+        assert!(
+            (butt.0 - 2.0).abs() < 0.05 && (butt.1 - 18.0).abs() < 0.05,
+            "{butt:?}"
+        );
+        assert!(
+            (square.0 - 0.0).abs() < 0.05 && (square.1 - 20.0).abs() < 0.05,
+            "{square:?}"
+        );
+        assert_eq!(board.draws[1].fill, Fill::Solid(Srgba::hex(0x00ff00)));
+        let plain = read(source, &FILTERS).unwrap();
+        assert!(
+            plain.draws[1].stroke.is_some(),
+            "boards keep their SDF strokes"
         );
     }
 
