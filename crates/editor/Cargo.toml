@@ -17,7 +17,7 @@ pfx-editor-shell = { path = "../editor-shell" }
 pfx-editor-style = { path = "../editor-style" }
 pfx-editor-toml = { path = "../editor-toml" }
 pfx-editor-viewport = { path = "../editor-viewport" }
-pfx-scene = { git = "https://github.com/gmrdad82/pfx-scene", tag = "v1.3.0" }
+pfx-scene = { git = "https://github.com/gmrdad82/pfx-scene", tag = "v1.4.0" }
 pfx-game = { path = "../game" }
 pfx-gpu = { path = "../gpu", features = ["window"] }
 pfx-input = { path = "../input", default-features = false }
