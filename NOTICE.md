@@ -149,6 +149,22 @@ pfx's mark and wordmark are © Catalin Ilinca, all rights reserved, and not cove
 - `assets/marks/` and `.github/icon.png`, copied by `bin/marks` from the PITO MD brand masters at `aa3aee8b232a1b848995bf3d9a012a01d4aff8ec`; the README shows the lockup at its Licence section, `lockup.svg` on a dark theme and `lockup-light.svg` on a light one;
 - `crates/project/src/templates/badge.glb` and `crates/project/src/templates/wordmark.glb`, the mark and wordmark in 3D that `pfx new` places in a new game's first scene.
 
+## Bevy, under the MIT licence
+
+The outdoor height fog's ray march in `crates/live/src/height_fog.rs` (in the package `pfx-live`) is ported from Bevy's volumetric fog (https://github.com/bevyengine/bevy, `crates/bevy_pbr/src/volumetric_fog/volumetric_fog.wesl` and `crates/bevy_pbr/src/render/utils.wesl`, release 0.20.0, commit `b3bdd75becaffe9a16677cf5bae5bd6d198f052b`), Copyright the Bevy Contributors, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+
+> Copyright the Bevy Contributors
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Filament, under the Apache License 2.0
+
+The outdoor height fog's density and its closed-form optical path in `crates/live/src/height_fog.rs` (in the package `pfx-live`) are ported from Filament's fog (https://github.com/google/filament, `shaders/src/surface_fog.fs` and `filament/src/ds/ColorPassDescriptorSet.cpp`, tag `v1.56.0`, commit `003e5005713cba55cbd3f3a423c472000b96b868`), Copyright The Android Open Source Project, licensed under the Apache License 2.0. Its text ships in [crates/live/LICENSE-APACHE](crates/live/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Filament. The port is a translation into WGSL, changed by pfx's authors: the density is sampled inside a ray march instead of applied once per surface, and the optical path is taken along each light's chord and along the sun's path through the fog.
+
 ## Fonts, under the SIL Open Font License 1.1
 
 Each font keeps its licence beside it:

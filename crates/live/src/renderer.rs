@@ -11,6 +11,7 @@ use crate::frame::{
     self, CachedGroup, Frame, Instance, Matrix, MeshData, MeshHandle, OpaqueKey, Scene,
 };
 use crate::glass;
+use crate::height_fog::{FogInputs, HeightFog, HeightFogPass, fog_lights, sky_ambient};
 use crate::impostor::{ImpostorInstance, ImpostorParams, ImpostorPass};
 use crate::lights::{LightQuality, LocalLight};
 use crate::lod::{LodSet, LodStats};
@@ -662,6 +663,7 @@ pub struct Renderer {
     motion_blur: Option<MotionBlur>,
     velocity_spans_shutter: bool,
     haze: Option<RoomHaze>,
+    height_fog: Option<(HeightFog, HeightFogPass)>,
     exposure: ExposureMeter,
     exposure_mode: Exposure,
     custom_finish: bool,
@@ -1329,6 +1331,7 @@ impl Renderer {
             motion_blur: None,
             velocity_spans_shutter: false,
             haze: None,
+            height_fog: None,
             exposure: ExposureMeter::new(device),
             exposure_mode: Exposure::Auto { bias: 0.0 },
             custom_finish: false,
@@ -1468,6 +1471,9 @@ impl Renderer {
         textures.extend(self.taa.textures());
         textures.extend(self.crisp.target().cloned());
         textures.extend(self.effects.textures());
+        if let Some((_, pass)) = &self.height_fog {
+            textures.extend(pass.textures());
+        }
         textures.extend(self.reflections.textures());
         textures.extend(self.glass.textures());
         textures.extend(self.display.as_ref().map(|(texture, _)| texture.clone()));
@@ -1655,6 +1661,17 @@ impl Renderer {
             self.touch();
         }
         self.haze = haze;
+    }
+
+    pub fn set_height_fog(&mut self, fog: Option<HeightFog>) {
+        if fog != self.height_fog.as_ref().map(|(known, _)| *known) {
+            self.touch();
+        }
+        self.height_fog = match (fog, self.height_fog.take()) {
+            (Some(fog), Some((_, pass))) => Some((fog, pass)),
+            (Some(fog), None) => Some((fog, HeightFogPass::new(&self.frame.gpu.device))),
+            (None, _) => None,
+        };
     }
 
     pub fn set_exposure(&mut self, exposure: Exposure) -> Result<(), String> {
@@ -3267,6 +3284,35 @@ impl Renderer {
                 },
             );
             self.pass_log.extend(["haze march", "haze upsample"]);
+        }
+        if let Some((fog, pass)) = self.height_fog.as_mut() {
+            let lights = fog_lights(
+                self.frame.lights().lights(),
+                scene.camera.position,
+                fog.reach,
+            );
+            let ambient = sky_ambient(&self.frame.sky().lighting.sh);
+            let march = self.profiler.pass("height fog march");
+            let upsample = self.profiler.pass("height fog upsample");
+            pass.render(
+                &mut EffectCommands {
+                    device,
+                    encoder: &mut encoder,
+                },
+                &effect_frame,
+                FogInputs {
+                    fog,
+                    ambient,
+                    lights: &lights,
+                },
+                targets,
+                VolumeTimestamps {
+                    march: self.profiler.render_writes(march),
+                    upsample: self.profiler.render_writes(upsample),
+                },
+            );
+            self.pass_log
+                .extend(["height fog march", "height fog upsample"]);
         }
         if let Some(volume) = effects.volume.as_ref().filter(|_| !cached) {
             let mut volume_frame = effect_frame;

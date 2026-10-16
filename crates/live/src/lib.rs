@@ -8,6 +8,7 @@ pub mod effects;
 pub mod flat;
 pub mod frame;
 pub mod glass;
+pub mod height_fog;
 #[cfg(feature = "dev-hud")]
 pub mod hud;
 pub mod impostor;

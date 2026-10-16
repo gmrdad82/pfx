@@ -25,12 +25,30 @@ The files are format 1 of the public crate `pfx-scene`, which owns the format: e
 - **Emitters.** An emitter is a 12 × 24 sphere with a black, fully rough, emissive material named `emitter <name>` radiating `intensity / (π radius²)` per channel; it casts no shadow.
 - **Camera.** `shift` is live's off-centre projection and the tracer's `Lens::shift`. `fstop` is depth of field through a thin lens of the camera's focal length: live `dof::Lens`, traced `Lens::aperture` (`focal / fstop`). `[camera.preset]` tunes `pfx_core::camera::Preset`.
 - **Finish.** `file`, or the inline keys, build the chain as `pfx_post::parse` does: a style's passes first, then each key adds or tunes its pass at that parser's own place. `[[finish.pass]]` tables apply in the order written, each built from nothing, after the base. A pass that builds nothing is refused with its line. Without `[finish]` the renderer's standard finish.
-- **Haze.** The live renderer marches it (`Renderer::set_haze`); the tracer has no room haze and draws the scene clear.
+- **Haze.** The live renderer marches it: a room haze in its `lo`/`hi` box (`Renderer::set_haze`), or, when `height` or `falloff` is set, an outdoor height fog over the whole view (`Renderer::set_height_fog`, [`[haze]` outdoor](#haze-outdoor) below). The tracer has no haze and draws the scene clear.
 - **Movers.** At time `t`, `u = (t + offset) / period` and the mover stands at `from + (to − from) · f(u)`. A child's own mover applies first, then its parent's, up the chain. The time is the one the viewer passes to `Staged::frame` (and `pfx_trace::stage::scene_at`); at `0` every swing and once mover stands at `from`.
 - **Content.** An object that names a content shows its image in its material's content layer slot; two objects showing different content through one slot are refused when staged.
 - **Text.** The block is laid out with the font at `size` per em and centred on `at`; it reads along its local +X with +Y up and faces +Z. `Staged` draws it through the live text pass (`Staged::text`), and the tracer letters it on a carrier card, so both agree.
 - **A prefab's text moves with its placement.** Its `at` and `rotate` are in the prefab's space: `Text::place` is the placement object's world matrix (the identity for a scene's own text), and `Text::model()` applies it, so the text moves, turns and scales with its group, and a prefab placed twice draws its text twice.
 - **Bound text.** A `{key}` in `text` is filled when the scene loads, with the value bound to `key`: `pfx_load::scene::bind(key, value)` sets it for the process, `bound(key)` reads it and `filled(text)` fills a string. A key is letters, digits, `_`, `-` and `.`; a token with no value, and anything else in braces, stays as written. `pfx_game::Config::bind_text()` binds `name` and `version` from the game's config: the game's window, `Headless` and `<game> edit` call it before a scene loads, and `pfx edit <project>` binds the project's name and its `Cargo.toml`'s `[package] version` (`Project::version()`). The text is filled at load, so play, the editor's viewport, hot reload and the tracer show the same text. `pfx bake` runs with nothing bound, so a bound text in a plated scene is `dynamic = true`.
+
+### `[haze]` outdoor
+
+Setting `height` or `falloff` turns `[haze]` into an outdoor height fog that fills the whole view; `lo` and `hi` are then optional, and the room-haze keys keep their meaning in a room haze. `pfx_load::scene::Haze::outdoor` holds it as `OutdoorHaze`, and the live renderer marches it (`pfx_live::height_fog`, [live-renderer.md](live-renderer.md#outdoor-height-fog)). Every key is live under scene watch and settable with `--set haze.<key>=<value>`.
+
+| Key | Range | Default | Meaning |
+|---|---|---|---|
+| `height` | any metres | `0` | The fog's base height: its density is `fog` there and falls off above it |
+| `falloff` | ≥ 0, per metre | `1` | Height falloff: density is `fog · exp(−falloff · (y − height))`; `0` is uniform fog |
+| `fog` | ≥ 0 | `amount / 6` when `amount` is set, else `0.1` | Density at `height`; extinction is `0.6 · density` per metre (absorption 0.3, scattering 0.3) |
+| `reach` | ≥ 0 metres | `300` | How far the march goes: fog stops at the first surface or at `reach` |
+| `shafts` | 0 to 1 | `1` | How much the sun's shadow cascades carve the in-scatter: `0` lights all fog, `1` full light shafts and shadowed volumes |
+| `steps` | 1 to 256 | `64` | March steps per half-resolution pixel |
+| `color` (alias `colour`) | `#rrggbb` or three numbers | white | Tints the light the fog scatters |
+| `phase` | −0.9 to 0.9 | `0.5` | Henyey-Greenstein asymmetry: above 0 the fog glows toward the sun, so a low sun ahead blooms in the haze |
+| `ambient` | three numbers ≥ 0 | the sky's mean radiance | The isotropic light the fog scatters besides the sun and the lights |
+
+A haze without `height` and `falloff` is the room haze, and a scene without `[haze]` renders byte-identical to one rendered before the outdoor mode existed.
 
 ### `[trace]`
 

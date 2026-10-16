@@ -14,6 +14,7 @@ use crate::frame::{
     SceneWind, Sun, multiply,
 };
 use crate::glass;
+use crate::height_fog::HeightFog;
 use crate::lights::{LocalLight, local_light};
 use crate::maps::ContentFormat;
 use crate::morph::{MorphData, MorphTargetData};
@@ -220,6 +221,26 @@ pub fn room_haze(haze: &Haze) -> RoomHaze {
     }
 }
 
+pub fn height_fog(haze: &Haze) -> Option<HeightFog> {
+    let outdoor = haze.outdoor?;
+    Some(HeightFog {
+        height: outdoor.height,
+        falloff: outdoor.falloff,
+        density: outdoor.density,
+        reach: outdoor.reach,
+        shafts: outdoor.shafts,
+        steps: outdoor.steps,
+        color: outdoor.color,
+        phase: outdoor.phase,
+        ambient: outdoor.ambient,
+    })
+}
+
+fn apply_haze(renderer: &mut Renderer, haze: Option<&Haze>) {
+    renderer.set_haze(haze.filter(|haze| haze.outdoor.is_none()).map(room_haze));
+    renderer.set_height_fog(haze.and_then(height_fog));
+}
+
 pub fn lens(camera: &SceneCamera, aspect: f32) -> Option<dof::Lens> {
     let depth = camera.depth_of_field?;
     let tan_half_width = camera.tan_half_height()? * aspect;
@@ -392,7 +413,7 @@ impl Renderer {
         self.set_plate_hour(staged.sun.hour);
         self.set_lights(&local_lights(scene))?;
         self.set_sky(sky_source(scene.environment()), staged.sun.hour)?;
-        self.set_haze(scene.haze.as_ref().map(room_haze));
+        apply_haze(self, scene.haze.as_ref());
         set_sun_radius(self, staged.sun.radius);
         self.set_lens(lens(&staged.camera, aspect_of(self)));
         if let Some(finish) = &scene.finish {
@@ -699,7 +720,7 @@ impl Staged {
             applied.sky = true;
         }
         if diff.haze {
-            renderer.set_haze(scene.haze.as_ref().map(room_haze));
+            apply_haze(renderer, scene.haze.as_ref());
             applied.haze = true;
         }
         if diff.finish {

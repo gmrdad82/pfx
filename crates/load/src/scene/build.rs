@@ -432,8 +432,8 @@ fn build_library(
 fn build_haze(haze: &file::Haze) -> Haze {
     let amount = haze.amount.unwrap_or(0.0);
     Haze {
-        lo: haze.lo.unwrap_or_default(),
-        hi: haze.hi.unwrap_or_default(),
+        lo: haze.lo.unwrap_or([0.0; 3]),
+        hi: haze.hi.unwrap_or([0.0; 3]),
         fog: haze.fog.unwrap_or(amount / 6.0),
         smoke: haze.smoke.unwrap_or(amount * 20.0),
         mist: haze.mist.unwrap_or(amount * 0.2),
@@ -445,6 +445,7 @@ fn build_haze(haze: &file::Haze) -> Haze {
         reach: haze.reach.unwrap_or(3.0),
         unmapped: haze.unmapped.unwrap_or(0.0),
         seed: haze.seed.unwrap_or(0),
+        outdoor: super::haze::outdoor(haze),
     }
 }
 

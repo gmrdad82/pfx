@@ -178,6 +178,7 @@ Per-stage counts are summed over the pipeline layout's bind groups, the way WebG
 | Content mips | maps.rs | 1 | F: 1 texture, 1 sampler | Rgba8UnormSrgb or Rgba16Float | — |
 | Particles, creatures, volume, upsample, haze blur | effects.rs | 1 | V: ≤ 2 storage. F: ≤ 3 textures, 1 sampler | Rgba16Float; volume adds R32Float | — |
 | Room haze field | effects.rs | 1 | C: 1 uniform, 1 storage texture (3D Rgba8Unorm) | — | 4×4×4 |
+| Outdoor height fog march, upsample | height_fog.rs | 1 | F: 3 uniform, 2 textures (one depth D2Array) | Rgba16Float + R32Float; Rgba16Float, blended | — |
 | Glass front, back, compose | glass.rs | 1–3 | V: 2 textures. F: up to 9 textures, 1 sampler | Rgba16Float + R32Uint or R8Unorm, Depth32Float | — |
 | Impostors, impostor shadows | impostor.rs | 1 | F: 2 textures (one D2Array), 1 sampler | Rgba16Float, Depth32Float | — |
 | Text: surface, overlay, deformed | text.rs | 1–3 | V: ≤ 2 storage. F: 1 texture, 1 sampler | Rgba16Float, blended | — |

@@ -478,6 +478,25 @@ At each stage, capture the same fixture state, camera, time, age and seed in old
 
 `RoomHaze::from_amount(lo, hi, amount)` is one default model for the room haze, for recipes that give a single number: `amount` is clamped to 0 to 1, where 0 is no haze and 1 a clearly hazy room, and `lo` and `hi` are the haze box. Fog is `amount / 6`, smoke `20 × amount`, mist `0.2 × amount` and floor `2 × amount`; the rest comes from `RoomHaze::new(lo, hi)`: phase 0.3, back 0.5, reach 3, gold neutral and the ambient a neutral grey of 0.03 (`HAZE_AMBIENT_GREY`). Every field is public, so a product sets its own phase, back, reach and gold after the call.
 
+## Outdoor height fog
+
+`pfx_live::height_fog` marches an outdoor `[haze]` (one with `height` or `falloff`) over the whole view: `Renderer::set_height_fog(Some(HeightFog))` turns it on, `None` off; the pass and its two half-resolution targets are made on first use, so a scene without it draws exactly what it drew before. It runs after the opaque passes, glass and room haze and before particles, into the HDR target that TAA resolves.
+
+- **March.** A fullscreen pass at half resolution (1080 × 1920 for a 2160 × 3840 frame) walks each ray from the eye to the scene depth or `reach`, in `steps` equal steps, after Bevy's volumetric fog: per step the density `fog · exp(−falloff · (y − height))` (Filament's height fog), the Beer-Lambert attenuation `exp(−step · density · 0.6)`, the sun's shadow cascades looked up for the shafts (the cascade positions stepped linearly from the eye, no matrix per step), the sun's own path through the fog in closed form (Filament's optical path from the point to `reach` toward the sun), the Henyey-Greenstein phase with Bevy's 1/(4π), and the sky's mean radiance (`sky_ambient`, band 0 of the sky's irradiance SH over π) as isotropic in-scatter. The start of each ray is offset by Bevy's interleaved gradient noise, its frame index hashed from the scene time and seed, so TAA resolves the banding and the same time and seed give the same frame.
+- **Local lights.** Up to `FOG_LIGHTS` (8) lit local lights nearest the eye and within `reach` plus their range scatter too. Each is marched over its own chord, where the ray crosses its range, in 8 steps, with the scene's light falloff (`lights::falloff`'s window over distance squared), Filament's spot attenuation when a light has a cone (`FogLight::spot` and `cone`; a point light today) and the eye-side transmittance in closed form, so a light costs 8 evaluations a pixel instead of `steps`.
+- **Upsample.** The effects' depth-aware upsample (`UPSAMPLE_WGSL` at scale 2) blends the half-resolution fog into the frame with premultiplied alpha: colour plus the frame times the fog's transmittance.
+
+Cost at 2160 × 3840 on this machine's RDNA 4 under `pgpu run --class bench` (a street of two building slabs toward a low sun, `fog = 0.08`, `falloff = 0.15`, `reach = 300`; median of 30 frames):
+
+| Setting | March | Upsample |
+|---|---:|---:|
+| 64 steps, shafts on (the defaults) | 2.11 ms | 0.22 ms |
+| 32 steps, shafts on | 1.17 ms | 0.22 ms |
+| 64 steps, `shafts = 0` (no cascade lookups) | 0.89 ms | 0.23 ms |
+| 64 steps, shafts on, 4 local lights in range | 2.93 ms | 0.33 ms |
+
+The cascades lookups are most of the march; `steps = 32` halves it, and TAA keeps the jittered result smooth.
+
 ## Bindings
 
 wgpu gives a pipeline four bind groups. The opaque passes share one layout, and `frame::{scene,shadow,deformer,lighting}_entries` are its single source; a test parses every composed shader with naga and checks each binding an entry point uses against these tables (kind, view dimension and stage).

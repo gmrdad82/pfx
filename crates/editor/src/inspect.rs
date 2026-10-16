@@ -685,6 +685,19 @@ fn haze_rows(scene: &Scene, raw: &Raw) -> Vec<Row> {
     };
     let empty = toml::Table::new();
     let table = raw.table("haze").unwrap_or(&empty);
+    if let Some(outdoor) = haze.outdoor {
+        rows.number(&["height"], outdoor.height);
+        rows.positive(&["falloff"], outdoor.falloff);
+        rows.positive(&["fog"], outdoor.density);
+        rows.positive(&["reach"], outdoor.reach);
+        rows.unit(&["shafts"], outdoor.shafts);
+        rows.number(&["phase"], outdoor.phase).range = Some(Range {
+            min: -0.9,
+            max: 0.9,
+        });
+        rows.color(&["color"], outdoor.color);
+        return rows.rows;
+    }
     rows.vector(&[HAZE_VECTORS[0]], haze.lo);
     rows.vector(&[HAZE_VECTORS[1]], haze.hi);
     for key in HAZE_NUMBERS {
