@@ -37,7 +37,7 @@ const OFF_BYTES: [u64; 3] = [
     0xb632_fda5_6681_ecfc,
 ];
 const OFF_BYTES_RAY_QUERIES: [u64; 3] = [
-    0x37c0_2f1e_608d_9258,
+    0x988e_dad5_336b_4721,
     0x41ef_cdf1_2868_1a39,
     0xd035_0011_033e_905c,
 ];

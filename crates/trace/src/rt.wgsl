@@ -1,10 +1,11 @@
 @group(0) @binding(17) var rt_world: acceleration_structure;
 @group(0) @binding(18) var<storage, read> rt_map: array<u32>;
 fn rt_triangle(c: RayIntersection) -> u32 {
-    return rt_map[2u+select(0u,rt_map[0],c.geometry_index==1u)+c.primitive_index];
+    if (c.instance_custom_data>0u) { return rt_map[rt_map[2]+c.instance_custom_data-1u]+c.primitive_index; }
+    return rt_map[3u+select(0u,rt_map[0],c.geometry_index==1u)+c.primitive_index];
 }
 fn rt_shape(c: RayIntersection) -> u32 {
-    return rt_map[2u+rt_map[1]+c.primitive_index];
+    return rt_map[3u+rt_map[1]+c.primitive_index];
 }
 fn rt_finite(v: f32) -> bool {
     return (bitcast<u32>(v)&0x7fffffffu)<0x7f800000u;

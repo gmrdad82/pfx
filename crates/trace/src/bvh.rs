@@ -36,26 +36,26 @@ pub struct Bvh {
     pub order: Vec<u32>,
 }
 
-#[derive(Clone, Copy)]
-struct Bounds {
-    lo: [f32; 3],
-    hi: [f32; 3],
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bounds {
+    pub lo: [f32; 3],
+    pub hi: [f32; 3],
 }
 
 impl Bounds {
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Self {
             lo: [f32::INFINITY; 3],
             hi: [f32::NEG_INFINITY; 3],
         }
     }
-    fn point(&mut self, p: [f32; 3]) {
+    pub fn point(&mut self, p: [f32; 3]) {
         for (axis, value) in p.into_iter().enumerate() {
             self.lo[axis] = self.lo[axis].min(value);
             self.hi[axis] = self.hi[axis].max(value);
         }
     }
-    fn grow(&mut self, other: Self) {
+    pub fn grow(&mut self, other: Self) {
         self.point(other.lo);
         self.point(other.hi);
     }
@@ -71,6 +71,19 @@ impl Bounds {
 
 const BINS: usize = 16;
 const LEAF: usize = 4;
+const SAH_LEAF: usize = 16;
+
+#[derive(Clone, Copy)]
+struct Leaves {
+    size: usize,
+    most: usize,
+}
+
+const TRIANGLE_LEAVES: Leaves = Leaves {
+    size: LEAF,
+    most: SAH_LEAF,
+};
+const INSTANCE_LEAVES: Leaves = Leaves { size: 1, most: 0 };
 
 impl Bvh {
     pub fn build(triangles: &[Triangle]) -> Self {
@@ -84,14 +97,30 @@ impl Bvh {
                 bounds
             })
             .collect();
+        Self::over(&boxes, TRIANGLE_LEAVES)
+    }
+
+    pub fn build_instances(boxes: &[Bounds]) -> Self {
+        Self::over(boxes, INSTANCE_LEAVES)
+    }
+
+    fn over(boxes: &[Bounds], leaves: Leaves) -> Self {
         let centers: Vec<_> = boxes
             .iter()
             .map(|b| [0, 1, 2].map(|axis| (b.lo[axis] + b.hi[axis]) * 0.5))
             .collect();
-        let mut order: Vec<_> = (0..triangles.len() as u32).collect();
+        let mut order: Vec<_> = (0..boxes.len() as u32).collect();
         let mut nodes = Vec::new();
-        if !triangles.is_empty() {
-            split(&boxes, &centers, &mut order, 0, triangles.len(), &mut nodes);
+        if !boxes.is_empty() {
+            split(
+                boxes,
+                &centers,
+                &mut order,
+                0,
+                boxes.len(),
+                &mut nodes,
+                leaves,
+            );
         }
         Self { nodes, order }
     }
@@ -134,6 +163,7 @@ fn split(
     start: usize,
     end: usize,
     nodes: &mut Vec<Node>,
+    leaves: Leaves,
 ) {
     let mut bounds = Bounds::empty();
     let mut centroids = Bounds::empty();
@@ -150,7 +180,7 @@ fn split(
         _pad: [0; 2],
     });
     let len = end - start;
-    if len <= LEAF {
+    if len <= leaves.size {
         return;
     }
     let mut best = (f32::INFINITY, 0usize, 0usize);
@@ -190,7 +220,7 @@ fn split(
             }
         }
     }
-    if best.0 >= bounds.area() * len as f32 && len <= 16 {
+    if best.0 >= bounds.area() * len as f32 && len <= leaves.most {
         return;
     }
     let mid = if best.0.is_finite() {
@@ -220,9 +250,9 @@ fn split(
     } else {
         start + len / 2
     };
-    split(boxes, centers, order, start, mid, nodes);
+    split(boxes, centers, order, start, mid, nodes, leaves);
     let right = nodes.len();
-    split(boxes, centers, order, mid, end, nodes);
+    split(boxes, centers, order, mid, end, nodes, leaves);
     nodes[here].first = right as u32;
     nodes[here].count = 0;
 }

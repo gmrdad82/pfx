@@ -21,7 +21,7 @@ const OUTLIER_FLOOR: f32 = 0.01;
 const CLAMP_INDIRECT: f32 = 4.0;
 const FILTER_GLOSSY: f32 = 0.25;
 const OFF_BYTES: [u64; 3] = [
-    0x674f_a934_1fdd_cf91,
+    0x9b10_5b8d_f4be_3ed9,
     0xa381_2026_00e7_9695,
     0x8dfd_8091_2445_7c6f,
 ];

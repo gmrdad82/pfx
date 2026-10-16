@@ -180,6 +180,12 @@ fn light_dim(k: u32) -> u32 {
     if (k<13u) { return 3u+k; }
     return k<<16u;
 }
+const ENTRYPOINT_SENTINEL: u32 = 0x76543210u;
+const INSTANCE_LEAF: u32 = 1u;
+fn to_object(m: Node, p: vec3f, w: f32) -> vec3f {
+    let q=vec4f(p,w);
+    return vec3f(dot(m.lo,q),dot(m.hi,q),dot(bitcast<vec4f>(vec4u(m.first,m.count,m.pad.x,m.pad.y)),q));
+}
 fn box_hit(node: Node, o: vec3f, d: vec3f, limit: f32) -> bool {
     var near = 0.0;
     var far = limit;
@@ -463,19 +469,40 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
         var stack: array<u32,64>;
         var top=1u;
         stack[0]=0u;
+        var ro=o;
+        var rd=d;
+        var base=0u;
         while (top>0u) {
             top-=1u;
             let index=stack[top];
+            if (index==ENTRYPOINT_SENTINEL) {
+                ro=o;
+                rd=d;
+                base=0u;
+                continue;
+            }
             let node=nodes[index];
-            if (!box_hit(node,o,d,hit.t)) { continue; }
-            if (node.count==0u) {
+            if (!box_hit(node,ro,rd,hit.t)) { continue; }
+            if (node.pad.x==INSTANCE_LEAF) {
+                if (top+2u<=64u) {
+                    stack[top]=ENTRYPOINT_SENTINEL;
+                    stack[top+1u]=node.first;
+                    top+=2u;
+                    base=node.count;
+                    if (node.pad.y>0u) {
+                        let m=nodes[node.pad.y];
+                        ro=to_object(m,o,1.0);
+                        rd=to_object(m,d,0.0);
+                    }
+                }
+            } else if (node.count==0u) {
                 if (top+2u<=64u) {
                     stack[top]=node.first;
                     stack[top+1u]=index+1u;
                     top+=2u;
                 }
             } else {
-                for (var j=0u;j<node.count;j++) { tri_hit(node.first+j,o,d,shadow_ray,&hit); }
+                for (var j=0u;j<node.count;j++) { tri_hit(base+node.first+j,o,d,shadow_ray,&hit); }
             }
         }
     }
@@ -523,12 +550,33 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
         var stack: array<u32,64>;
         var top=1u;
         stack[0]=0u;
+        var ro=o;
+        var rd=d;
+        var base=0u;
         while (top>0u) {
             top-=1u;
             let index=stack[top];
+            if (index==ENTRYPOINT_SENTINEL) {
+                ro=o;
+                rd=d;
+                base=0u;
+                continue;
+            }
             let node=nodes[index];
-            if (!box_hit(node,o,d,limit)) { continue; }
-            if (node.count==0u) {
+            if (!box_hit(node,ro,rd,limit)) { continue; }
+            if (node.pad.x==INSTANCE_LEAF) {
+                if (top+2u<=64u) {
+                    stack[top]=ENTRYPOINT_SENTINEL;
+                    stack[top+1u]=node.first;
+                    top+=2u;
+                    base=node.count;
+                    if (node.pad.y>0u) {
+                        let m=nodes[node.pad.y];
+                        ro=to_object(m,o,1.0);
+                        rd=to_object(m,d,0.0);
+                    }
+                }
+            } else if (node.count==0u) {
                 if (top+2u<=64u) {
                     stack[top]=node.first;
                     stack[top+1u]=index+1u;
@@ -536,7 +584,7 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
                 }
             } else {
                 for (var j=0u;j<node.count;j++) {
-                    if (tri_blocks(node.first+j,o,d,limit)) { return true; }
+                    if (tri_blocks(base+node.first+j,o,d,limit)) { return true; }
                 }
             }
         }
@@ -568,12 +616,33 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
         var stack: array<u32,64>;
         var top=1u;
         stack[0]=0u;
+        var ro=o;
+        var rd=d;
+        var base=0u;
         while (top>0u) {
             top-=1u;
             let index=stack[top];
+            if (index==ENTRYPOINT_SENTINEL) {
+                ro=o;
+                rd=d;
+                base=0u;
+                continue;
+            }
             let node=nodes[index];
-            if (!box_hit(node,o,d,limit)) { continue; }
-            if (node.count==0u) {
+            if (!box_hit(node,ro,rd,limit)) { continue; }
+            if (node.pad.x==INSTANCE_LEAF) {
+                if (top+2u<=64u) {
+                    stack[top]=ENTRYPOINT_SENTINEL;
+                    stack[top+1u]=node.first;
+                    top+=2u;
+                    base=node.count;
+                    if (node.pad.y>0u) {
+                        let m=nodes[node.pad.y];
+                        ro=to_object(m,o,1.0);
+                        rd=to_object(m,d,0.0);
+                    }
+                }
+            } else if (node.count==0u) {
                 if (top+2u<=64u) {
                     stack[top]=node.first;
                     stack[top+1u]=index+1u;
@@ -581,7 +650,7 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
                 }
             } else {
                 for (var j=0u;j<node.count;j++) {
-                    passed*=tri_passes(node.first+j,o,d,limit);
+                    passed*=tri_passes(base+node.first+j,o,d,limit);
                     if (all(passed<=vec3f(0.0))) { return vec3f(0.0); }
                 }
             }
