@@ -7,6 +7,7 @@ mod film;
 pub mod fixtures;
 mod kinds;
 mod library;
+mod lobes;
 mod material;
 mod math;
 mod noise;
@@ -31,15 +32,20 @@ pub use film::{
 };
 pub use kinds::{CoatWobble, Crinkle, Fibre, Grime, PlankWood, Scratch, WallMottle};
 pub use library::{FIXTURE, Library};
+pub use lobes::{
+    Anisotropy, Fabric, SHEEN_ROUGHNESS_FLOOR, SHEEN_TABLE, SHEEN_TABLE_SIDE, Scatter, Textures,
+    UvTransform, d_charlie, sheen_albedo, sheen_albedo_exact, sheen_alpha, v_neubelt,
+};
 pub use material::{
-    Ageing, At, Content, Family, GPU_PARAMS, LAYER_CAP, Maps, Material, NoiseKind, NoiseLayer,
-    Normal, NormalSource, PARAM_ROWS, PARAMS, PackedMaterial, SCRATCH_STRETCH, gpu_params,
+    Ageing, At, Content, Family, GPU_PARAMS, LAYER_CAP, LOBE_ROWS, Maps, Material, NoiseKind,
+    NoiseLayer, Normal, NormalSource, PARAM_ROWS, PARAMS, PackedMaterial, SCRATCH_STRETCH,
+    gpu_params,
 };
 pub use noise::{
     Hash, fbm3, fbm3_filtered, flow, hash2, hash3, hash21, noise2, octave_weight, pcg,
     value_noise2_signed, value_noise3, value_noise3_gradient,
 };
-pub use wgsl::{AGEING, BRDF, CONTENT, FILM, NOISE, library};
+pub use wgsl::{AGEING, BRDF, CONTENT, FILM, LOBES, NOISE, library};
 
 #[cfg(test)]
 mod library_tests;

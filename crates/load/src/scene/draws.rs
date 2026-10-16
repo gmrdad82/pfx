@@ -1,4 +1,5 @@
-use std::collections::BTreeSet;
+use std::borrow::Cow;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, LazyLock};
 
 use pfx_materials::Material;
@@ -35,6 +36,7 @@ pub struct Draws {
     pub names: Vec<String>,
     pub materials: Vec<Material>,
     pub items: Vec<Draw>,
+    pub textures: super::textures::Textures,
 }
 
 impl Draws {
@@ -133,32 +135,39 @@ fn sphere() -> Geometry {
     )
 }
 
-pub(super) fn pick<'a>(scene: &'a Scene, object: &'a Object, part: &'a Part) -> &'a str {
+pub(super) fn pick<'a>(scene: &'a Scene, object: &'a Object, part: &'a Part) -> Cow<'a, str> {
     if let Some(material) = object.materials.get(&part.node) {
-        return material;
+        return material.into();
     }
     if let Some(material) = &object.material {
-        return material;
+        return material.into();
     }
     if let Some(material) = &part.overrides.material {
-        return material;
+        return material.into();
     }
     if let Some(name) = &part.material {
         if scene.library.contains(name) {
-            return name;
+            return name.into();
         }
         if let Some((head, _)) = name.split_once('.')
             && scene.library.contains(head)
         {
-            return head;
+            return head.into();
         }
     }
-    scene.fallback.as_deref().unwrap_or(DEFAULT_MATERIAL)
+    if let Some(fallback) = &scene.fallback {
+        return fallback.into();
+    }
+    match &part.surface {
+        Some(surface) => super::textures::surface_name(&object.mesh, surface).into(),
+        None => DEFAULT_MATERIAL.into(),
+    }
 }
 
 pub(super) fn draws(scene: &Scene) -> Draws {
     let mut used = BTreeSet::new();
     let mut picked = Vec::new();
+    let mut surfaces = BTreeMap::new();
     for (owner, object) in scene.objects.iter().enumerate() {
         let Some(mesh) = scene.meshes.get(&object.mesh) else {
             continue;
@@ -167,8 +176,14 @@ pub(super) fn draws(scene: &Scene) -> Draws {
             if object.hidden || part.overrides.hidden {
                 continue;
             }
-            let name = pick(scene, object, part);
-            used.insert(name.to_string());
+            let name = pick(scene, object, part).into_owned();
+            if let Some(surface) = &part.surface
+                && !scene.library.contains(&name)
+                && name == super::textures::surface_name(&object.mesh, surface)
+            {
+                surfaces.insert(name.clone(), surface.clone());
+            }
+            used.insert(name.clone());
             picked.push((owner, object, part, name));
         }
     }
@@ -176,9 +191,11 @@ pub(super) fn draws(scene: &Scene) -> Draws {
         used.insert(emitter_material(name));
     }
     let names: Vec<String> = used.into_iter().collect();
+    let mut textures = super::textures::Textures::default();
     let materials = names
         .iter()
         .map(|name| match scene.library.get(name) {
+            None if surfaces.contains_key(name) => textures.material(&surfaces[name]),
             Some(material) => *material,
             None => match name
                 .strip_prefix("emitter ")
@@ -216,7 +233,7 @@ pub(super) fn draws(scene: &Scene) -> Draws {
             joint: part.joint,
             geometry: part.geometry.clone(),
             model: multiply(object.model, part.transform),
-            material: index(name),
+            material: index(&name),
             id: object.id,
             shadow: part.overrides.shadow.unwrap_or(object.shadow),
             two_sided: part.overrides.two_sided.unwrap_or(object.two_sided),
@@ -268,5 +285,6 @@ pub(super) fn draws(scene: &Scene) -> Draws {
         names,
         materials,
         items,
+        textures,
     }
 }

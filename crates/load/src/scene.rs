@@ -9,6 +9,7 @@ mod plates;
 mod play;
 mod pose;
 mod rewrite;
+pub mod textures;
 pub mod tiles;
 mod watch;
 
@@ -207,6 +208,7 @@ pub struct Part {
     pub geometry: Arc<Geometry>,
     pub material: Option<String>,
     pub overrides: NodeOverride,
+    pub surface: Option<Arc<crate::surface::Surface>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

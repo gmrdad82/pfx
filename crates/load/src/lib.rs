@@ -13,6 +13,7 @@ mod room;
 pub mod scene;
 mod sky;
 mod source;
+pub mod surface;
 mod vec3;
 
 pub use cache::{Asset, Cache, Handle, sha256};

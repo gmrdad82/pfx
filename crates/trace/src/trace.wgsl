@@ -68,6 +68,14 @@ struct Material {
     layer3: vec4f,
     tail: vec4f,
     params: array<vec4f, 16>,
+    sheen: vec4f,
+    lobes: vec4f,
+    scatter: vec4f,
+    textures: vec4f,
+    texture_scales: vec4f,
+    texture_extra: vec4f,
+    texture_transform: vec4f,
+    detail_transform: vec4f,
 }
 struct Hit { t: f32, n: vec3f, geometric: vec3f, material: u32, uv: vec2f, tangent: vec3f, bitangent: vec3f, surface: u32, shape: u32 }
 struct ContentInfo { offset: u32, width: u32, height: u32, kind: u32 }
@@ -1011,7 +1019,8 @@ fn sample_bsdf(s: Shaded, wo: vec3f, entering: bool, carried: u32, state: ptr<fu
         let u2=rnd(state,u.y);
         let phi=2.0*PI*u1;
         let cos_theta=sqrt((1.0-u2)/(1.0+(alpha*alpha-1.0)*u2));
-        let h=vec3f(cos(phi)*sqrt(max(0.0,1.0-cos_theta*cos_theta)),sin(phi)*sqrt(max(0.0,1.0-cos_theta*cos_theta)),cos_theta);
+        var h=vec3f(cos(phi)*sqrt(max(0.0,1.0-cos_theta*cos_theta)),sin(phi)*sqrt(max(0.0,1.0-cos_theta*cos_theta)),cos_theta);
+        if (!coat && lobes_anisotropy_on()) { h=anisotropic_half(s.roughness,u1,u2); }
         let wi=reflect(-wo,h);
         return LightSample(wi,bsdf_pdf(s,wo,wi),3u,vec3f(1.0),1u);
     }
@@ -1031,7 +1040,8 @@ fn bsdf_pdf(s: Shaded, wo: vec3f, wi: vec3f) -> f32 {
     let a=alpha_rough(s.roughness);
     let ca=alpha_rough(s.clearcoat_roughness);
     let denom=max(4.0*abs(dot(wi,h)),1e-8);
-    let base_pdf=ggx_d(max(h.z,0.0),a*a)*max(h.z,0.0)/denom;
+    var base_pdf=ggx_d(max(h.z,0.0),a*a)*max(h.z,0.0)/denom;
+    if (lobes_anisotropy_on()) { base_pdf=anisotropic_density(s.roughness,h)*max(h.z,0.0)/denom; }
     let coat_pdf=ggx_d(max(h.z,0.0),ca*ca)*max(h.z,0.0)/denom;
     return (1.0-trans)*(coat*coat_pdf+spec*base_pdf+(1.0-coat-spec)*wi.z/PI);
 }
@@ -1160,6 +1170,13 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                 n=detailed.normal;
             }
         }
+        traced_occlusion=1.0;
+        traced_direction=vec3f(1.0,0.0,1.0);
+        if (traced_textured(m)) {
+            let textured=traced_maps(s,n,m,hit,p);
+            s=textured.shade;
+            n=textured.normal;
+        }
         let geometric=select(hit.geometric,-hit.geometric,dot(hit.geometric,d)>0.0);
         if (dot(n,geometric)<0.05) { n=normalize(n+geometric*0.1); }
         var layer=content_layers[hit.material];
@@ -1208,6 +1225,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         result+=indirect_capped(throughput*s.emission,bounce>1u);
         if (last) { break; }
         let transform=basis(n);
+        lobes_traced(m,transform,hit,n);
         let wo=transpose(transform)*(-d);
         let origin=spawn_point(p,n,o,hit.t);
         let entering=dot(hit.n,d)<0.0;
@@ -1231,7 +1249,8 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                     direction=normalize(orient*vec3f(radius*cos(phi),radius*sin(phi),height));
                 }
                 local=transpose(transform)*direction;
-                if (local.z<=0.0) { continue; }
+                if (local.z<=0.0 && local.z<=-scatter_reach()) { continue; }
+                if (local.z<=0.0) { direction=normalize(direction-n*dot(direction,n)+n*0.25); }
                 var shade=1.0;
                 if (bounce==0u && effects().base_roughness.y>0.0) { shade=canopy(p); }
                 strength=frame.sun_color.xyz*(frame.sun_color.w*shade);
@@ -1241,7 +1260,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                 direction=light.direction;
                 local=transpose(transform)*direction;
                 if (local.z<=0.0) { continue; }
-                strength=sky_surface_radiance(direction);
+                strength=sky_surface_radiance(direction)*traced_occlusion;
                 pdf=light.pdf;
                 if (!(pdf>0.0)) { continue; }
             } else {
@@ -1273,7 +1292,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             }
             if (limit>0.0) {
                 if (TRANSMISSIVE_SHADOWS) {
-                    var unshadowed=throughput*eval(lit,wo,local)*select(1.0,glossy_share(s),pdf>0.0)*local.z*strength;
+                    var unshadowed=throughput*traced_eval(lit,wo,local)*select(1.0,glossy_share(s),pdf>0.0)*local.z*strength;
                     let reach=throughput*strength;
                     let keep=clamp(16.0*PI*max(unshadowed.r,max(unshadowed.g,unshadowed.b))/max(max(reach.r,max(reach.g,reach.b)),1e-30),0.0,1.0);
                     if (keep<1.0) {
@@ -1284,7 +1303,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                     continue;
                 } else if (occluded(origin,direction,limit)) { continue; }
             }
-            result+=indirect_capped(throughput*eval(lit,wo,local)*select(1.0,glossy_share(s),pdf>0.0)*local.z*strength,bounce>0u);
+            result+=indirect_capped(throughput*traced_eval(lit,wo,local)*select(1.0,glossy_share(s),pdf>0.0)*local.z*strength,bounce>0u);
         }
         let sample=sample_bsdf(s,wo,entering,carried,state,sobol(3u));
         let wi=sample.dir;
@@ -1303,7 +1322,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             previous_pdf=0.0;
         } else {
             if (wi.z<=0.0 || sample.pdf<=0.0) { break; }
-            throughput*=eval(s,wo,wi)*glossy_share(s)*wi.z/sample.pdf;
+            throughput*=eval_bounce(s,wo,wi)*glossy_share(s)*wi.z/sample.pdf*traced_occlusion;
             d=normalize(transform*wi);
             previous_pdf=sample.pdf;
         }

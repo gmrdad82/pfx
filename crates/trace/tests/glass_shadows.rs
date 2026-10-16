@@ -97,6 +97,7 @@ fn staged(mesh: &GeomMesh) -> Mesh<'_> {
         uvs: &mesh.uvs,
         alpha: None,
         indices: &mesh.indices,
+        uvs1: None,
     }
 }
 

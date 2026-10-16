@@ -37,6 +37,7 @@ impl Arrays {
             uvs: &self.uvs,
             alpha: None,
             indices: &self.indices,
+            uvs1: None,
         }
     }
 
@@ -386,6 +387,7 @@ fn unset_placement_fields_trace_the_bytes_they_traced_before() {
         uvs: &[[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
         alpha: Some(&alpha),
         indices: &[0, 1, 2],
+        uvs1: None,
     };
     let texels = ring_texels();
     let image = Image {

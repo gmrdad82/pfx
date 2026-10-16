@@ -27,6 +27,7 @@ pub struct Mesh<'a> {
     pub normals: &'a [[f32; 3]],
     pub tangents: &'a [[f32; 4]],
     pub uvs: &'a [[f32; 2]],
+    pub uvs1: Option<&'a [[f32; 2]]>,
     pub alpha: Option<&'a [f32]>,
     pub indices: &'a [u32],
 }
@@ -449,6 +450,7 @@ pub fn scene_posed(
             normals: &geometry.normals,
             tangents: &geometry.tangents,
             uvs: &geometry.uvs,
+            uvs1: geometry.uvs1.as_deref(),
             alpha: None,
             indices: &geometry.indices,
         })
@@ -463,6 +465,7 @@ pub fn scene_posed(
                     normals: &skinned.normals,
                     tangents: &skinned.tangents,
                     uvs: &geometry.uvs,
+                    uvs1: geometry.uvs1.as_deref(),
                     alpha: None,
                     indices: &geometry.indices,
                 });
@@ -559,6 +562,7 @@ pub fn scene_posed(
             ..LocalLight::point(light.position, light.color, light.intensity, light.range)
         })
         .collect();
+    staged.detail.textures = crate::textured::from_scene(&draws.textures);
     staged.detail.transmissive_shadows = scene.trace.transmissive_shadows;
     staged.detail.clamp_indirect = scene.trace.clamp_indirect;
     staged.detail.filter_glossy = scene.trace.filter_glossy;
@@ -570,6 +574,7 @@ struct Corner {
     position: [f32; 3],
     normal: [f32; 3],
     uv: [f32; 2],
+    uv1: [f32; 2],
     alpha: f32,
 }
 
@@ -585,6 +590,7 @@ fn check_mesh(mesh: &Mesh<'_>) -> Result<(), String> {
     if mesh.normals.len() != count
         || mesh.tangents.len() != count
         || mesh.uvs.len() != count
+        || mesh.uvs1.is_some_and(|uvs1| uvs1.len() != count)
         || mesh.alpha.is_some_and(|alpha| alpha.len() != count)
     {
         return Err("mesh attributes have different vertex counts".into());
@@ -603,6 +609,7 @@ fn triangles(mesh: &Mesh<'_>, cutoff: f32) -> Result<Vec<TriangleDetail>, String
             position: mesh.positions[index],
             normal: mesh.normals[index],
             uv: mesh.uvs[index],
+            uv1: mesh.uvs1.map_or(mesh.uvs[index], |uvs1| uvs1[index]),
             alpha: mesh.alpha.map_or(1.0, |alpha| alpha[index]),
         }
     };
@@ -620,6 +627,7 @@ fn triangles(mesh: &Mesh<'_>, cutoff: f32) -> Result<Vec<TriangleDetail>, String
                 vertices: [a.position, b.position, c.position],
                 normals: [a.normal, b.normal, c.normal],
                 uvs: [a.uv, b.uv, c.uv],
+                uvs1: [a.uv1, b.uv1, c.uv1],
                 material: 0,
             });
         }
@@ -646,6 +654,7 @@ fn cut(corners: [Corner; 3]) -> Vec<Corner> {
                 position: lerp(a.position, b.position, t),
                 normal: lerp(a.normal, b.normal, t),
                 uv: lerp(a.uv, b.uv, t),
+                uv1: lerp(a.uv1, b.uv1, t),
                 alpha: ALPHA_CUTOFF,
             });
         }
@@ -672,6 +681,7 @@ fn cut_at(corners: [Corner; 3], cutoff: f32) -> Vec<Corner> {
                 position: lerp(a.position, b.position, t),
                 normal: lerp(a.normal, b.normal, t),
                 uv: lerp(a.uv, b.uv, t),
+                uv1: lerp(a.uv1, b.uv1, t),
                 alpha: cutoff,
             });
         }
@@ -733,6 +743,7 @@ mod tests {
             uvs: &UVS,
             alpha,
             indices: &[0, 1, 2],
+            uvs1: None,
         }
     }
 

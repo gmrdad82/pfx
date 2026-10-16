@@ -8,6 +8,7 @@ pub struct TriangleDetail {
     pub vertices: [[f32; 3]; 3],
     pub normals: [[f32; 3]; 3],
     pub uvs: [[f32; 2]; 3],
+    pub uvs1: [[f32; 2]; 3],
     pub material: u32,
 }
 
@@ -19,6 +20,7 @@ impl TriangleDetail {
             vertices: triangle.vertices,
             normals: [normal; 3],
             uvs: [[0.0; 2]; 3],
+            uvs1: [[0.0; 2]; 3],
             material: triangle.material,
         }
     }
@@ -180,6 +182,7 @@ impl Instance {
                     .normals
                     .map(|normal| normalize(normal_matrix.map(|row| dot(row, normal)))),
                 uvs: triangle.uvs,
+                uvs1: triangle.uvs1,
                 material: triangle.material,
             })
             .collect();
@@ -267,6 +270,20 @@ pub struct Detail {
     pub clamp_indirect: f32,
     pub filter_glossy: f32,
     pub sampler: crate::sobol::Sampler,
+    pub textures: Textures,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Textures {
+    pub colour: Vec<ContentImage>,
+    pub linear: Vec<ContentImage>,
+    pub orm: Vec<ContentImage>,
+}
+
+impl Textures {
+    pub fn is_empty(&self) -> bool {
+        self.colour.is_empty() && self.linear.is_empty() && self.orm.is_empty()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -502,6 +519,7 @@ mod tests {
             normals: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
             uvs: [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
             material: 0,
+            uvs1: [[0.0; 2]; 3],
         };
         let (normal, uv) = triangle.interpolate([0.5, 0.25, 0.25]);
         assert_eq!(uv, [0.25, 0.25]);
@@ -514,6 +532,7 @@ mod tests {
             vertices: [[0.0; 3]; 3],
             normals: [[1.0, 1.0, 0.0]; 3],
             uvs: [[0.0; 2]; 3],
+            uvs1: [[0.0; 2]; 3],
             material: 0,
         };
         let instance = Instance {

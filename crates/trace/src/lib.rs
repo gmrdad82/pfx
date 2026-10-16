@@ -15,7 +15,9 @@ pub mod sky;
 pub mod sobol;
 pub mod stage;
 pub mod text;
+pub mod textured;
 pub const TRACE_WGSL: &str = include_str!("trace.wgsl");
+pub const TEXTURED_WGSL: &str = include_str!("textured.wgsl");
 
 pub use adaptive::{Adaptive, Converged, Round};
 pub use gpu::{Camera, Output, Projection, Scene, Sun, Trace, TraceError, equirect_direction};

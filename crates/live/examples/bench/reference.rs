@@ -319,6 +319,7 @@ pub fn trace_rgb(staging: &Staging, hour: f32) -> Vec<[f32; 3]> {
             uvs: &mesh.uvs,
             alpha: alpha.as_deref(),
             indices: &mesh.indices,
+            uvs1: None,
         })
         .collect();
     let placements: Vec<Placement<'_>> = staging
