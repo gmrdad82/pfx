@@ -78,7 +78,7 @@ impl Service {
     pub(crate) fn spawn<B: Board + 'static>(
         open: impl FnOnce() -> Option<B> + Send + 'static,
     ) -> Option<Self> {
-        let (asks, inbox) = mpsc::channel();
+        let (asks, requests) = mpsc::channel();
         let (finished, done) = mpsc::channel();
         let held = Arc::new(Mutex::new(Held::default()));
         let shared = held.clone();
@@ -90,7 +90,7 @@ impl Service {
                     finished,
                 };
                 if let Some(board) = open() {
-                    serve(board, inbox, &end.held);
+                    serve(board, requests, &end.held);
                 }
             })
             .ok()?;
@@ -127,12 +127,12 @@ impl Drop for End {
     }
 }
 
-fn serve<B: Board>(mut board: B, inbox: Receiver<Ask>, held: &Mutex<Held>) {
-    while let Ok(first) = inbox.recv() {
+fn serve<B: Board>(mut board: B, requests: Receiver<Ask>, held: &Mutex<Held>) {
+    while let Ok(first) = requests.recv() {
         let mut set = None;
         let mut fetch = false;
         let mut quit = false;
-        for ask in std::iter::once(first).chain(inbox.try_iter()) {
+        for ask in std::iter::once(first).chain(requests.try_iter()) {
             match ask {
                 Ask::Set(text) => set = Some(text),
                 Ask::Fetch => fetch = true,
