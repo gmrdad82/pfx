@@ -3471,8 +3471,8 @@ dependencies = [
 
 [[package]]
 name = "pfx-scene"
-version = "1.1.0"
-source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.1.0#eedeccbbdf3840d8927c4748b679bbc4790b0f60"
+version = "1.2.0"
+source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.2.0#f15524a7fbfe725aef13181526968aaa3310bfcb"
 dependencies = [
  "serde",
  "toml 1.1.6+spec-1.1.0",

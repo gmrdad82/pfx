@@ -16,7 +16,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
 toml_edit = "0.25"
-pfx-scene = { git = "https://github.com/gmrdad82/pfx-scene", tag = "v1.1.0" }
+pfx-scene = { git = "https://github.com/gmrdad82/pfx-scene", tag = "v1.2.0" }
 notify = "8.2"
 pfx-core = { path = "../core" }
 pfx-materials = { path = "../materials" }

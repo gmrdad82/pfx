@@ -529,6 +529,29 @@ fn a_material_edit_lands_in_its_library_and_leaves_the_scene_file_alone() {
 }
 
 #[test]
+fn the_figurine_lobes_are_set_through_the_edit_path() {
+    let folder = Folder::new("lobes");
+    let mut edit = folder.edit();
+    edit.set_material("clay", &["fabric", "color"], [0.8, 0.7, 0.6])
+        .unwrap();
+    edit.set_material("clay", &["fabric", "roughness"], 0.4f32)
+        .unwrap();
+    edit.set_material("clay", &["anisotropy", "strength"], 0.7f32)
+        .unwrap();
+    edit.set_material("clay", &["scatter", "amount"], 0.5f32)
+        .unwrap();
+    let clay = edit.scene().library.get("clay").unwrap();
+    assert_eq!(clay.fabric.color, [0.8, 0.7, 0.6]);
+    assert!((clay.fabric.roughness - 0.4).abs() < 1e-6);
+    assert!((clay.anisotropy.strength - 0.7).abs() < 1e-6);
+    assert!((clay.scatter.amount - 0.5).abs() < 1e-6);
+    assert!(
+        edit.set_material("clay", &["scatter", "amount"], 2.0f32)
+            .is_err()
+    );
+}
+
+#[test]
 fn material_layers_and_params_are_edited_as_tables_and_lists() {
     let folder = Folder::new("layers");
     let mut edit = folder.edit();

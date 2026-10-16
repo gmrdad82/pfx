@@ -142,7 +142,7 @@ roughness = 0.6
 scatter = { color = [1.0, 0.3, 0.2], radius = 0.01, amount = 1.0 }
 ```
 
-Being material keys, the edit path reaches them by their key path (`SceneEdit::set_material("knit", &["fabric", "roughness"], 0.4)`, so the scene CLI's `--set materials.knit.fabric.roughness=0.4` too), pfx-scene checks their ranges, and scene watch shows a file edit at once. They are new pfx-scene keys (`Material::fabric`, `anisotropy`, `scatter`); a pfx-scene release that carries them is the pin that lets a scene file use them.
+Being material keys, the edit path reaches them by their key path (`SceneEdit::set_material("knit", &["fabric", "roughness"], 0.4)`, so the scene CLI's `--set materials.knit.fabric.roughness=0.4` too), pfx-scene checks their ranges, and scene watch shows a file edit at once. They are pfx-scene's `Material::fabric`, `anisotropy` and `scatter` (`pfx_scene::types::{Fabric, Anisotropy, Scatter}`, from pfx-scene v1.2.0), passed through the library to `pfx_materials::Material` unchanged.
 
 ### Sheen: `fabric`
 
