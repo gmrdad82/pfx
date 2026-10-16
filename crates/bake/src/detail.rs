@@ -794,8 +794,7 @@ pub fn bake_scene(
     let view = recipe.view.as_ref().map(View::look);
     let root = folder.canonicalize().map_err(|e| e.to_string())?;
     let bytes = crate::recipe::read_inside(&root, scene_file)?;
-    let animated: std::collections::BTreeSet<usize> = gltf::Gltf::from_slice(&bytes)
-        .map_err(|e| e.to_string())?
+    let animated: std::collections::BTreeSet<usize> = pfx_load::open_gltf(&bytes)?
         .animations()
         .flat_map(|animation| {
             animation

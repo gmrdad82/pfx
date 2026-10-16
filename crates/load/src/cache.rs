@@ -74,9 +74,10 @@ impl Cache {
     pub fn load_mesh_from(&mut self, source: &Source, name: &str) -> Result<Handle, String> {
         let bytes = source.read(name)?;
         self.insert(&bytes, Kind::Mesh, || {
-            Ok(Asset::Mesh(Mesh::parse_with(&bytes, |uri| {
-                source.read_beside(name, uri)
-            })?))
+            Ok(Asset::Mesh(
+                Mesh::parse_with(&bytes, |uri| source.read_beside(name, uri))
+                    .map_err(|e| format!("{name}: {e}"))?,
+            ))
         })
     }
 

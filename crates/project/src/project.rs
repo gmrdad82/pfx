@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 pub const FILE: &str = "project.toml";
 pub const SKIPPED: [&str; 2] = ["target", "tmp"];
-pub const CONTENT: [&str; 12] = [
-    "gltf", "glb", "bin", "png", "hdr", "wav", "ogg", "ttf", "otf", "svg", "ktx2", "exr",
+pub const CONTENT: [&str; 13] = [
+    "gltf", "glb", "manf", "bin", "png", "hdr", "wav", "ogg", "ttf", "otf", "svg", "ktx2", "exr",
 ];
 pub const KINDS: [&str; 5] = [
     ".scene.toml",

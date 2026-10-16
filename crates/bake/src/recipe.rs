@@ -826,8 +826,8 @@ impl Recipe {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if !self.scene.ends_with(".gltf") && !self.scene.ends_with(".glb") {
-            return Err("scene must name a .gltf or .glb file".into());
+        if !pfx_load::is_mesh_file(&self.scene) {
+            return Err("scene must name a .gltf, .glb or .manf file".into());
         }
         if self.samples == 0 {
             return Err("samples must be positive".into());
@@ -898,10 +898,10 @@ impl Recipe {
                 return Err("sky.shade values must be finite and nonnegative".into());
             }
         }
-        let gltf = |name: &str| name.ends_with(".gltf") || name.ends_with(".glb");
+        let gltf = pfx_load::is_mesh_file;
         for file in &self.files {
             if !gltf(&file.path) {
-                return Err("file must name a .gltf or .glb file".into());
+                return Err("file must name a .gltf, .glb or .manf file".into());
             }
             if file
                 .translation
@@ -924,7 +924,7 @@ impl Recipe {
         }
         for pose in &self.poses {
             if pose.node.is_empty() || pose.file.as_deref().is_some_and(|name| !gltf(name)) {
-                return Err("pose needs a node and a .gltf or .glb file".into());
+                return Err("pose needs a node and a .gltf, .glb or .manf file".into());
             }
             if pose
                 .translation
@@ -1088,7 +1088,7 @@ fn triangles(mesh: &Mesh, shadow_only_nodes: &[String]) -> Result<Vec<Triangle>,
 }
 
 pub(crate) fn materials(bytes: &[u8], palette: Option<&Palette>) -> Result<Vec<Material>, String> {
-    let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| format!("materials: {e}"))?;
+    let gltf = pfx_load::open_gltf(bytes).map_err(|e| format!("materials: {e}"))?;
     let mut result = Vec::new();
     for item in gltf.materials() {
         if let Some(palette) = palette {

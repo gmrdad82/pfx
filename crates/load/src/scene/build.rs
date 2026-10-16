@@ -233,6 +233,7 @@ pub(super) fn project(root: &Path) -> Result<Project, SceneError> {
 }
 
 pub(super) fn open(path: &Path, hour: Option<f64>) -> Result<Scene, SceneError> {
+    crate::manf::scene_seam(path).map_err(|message| SceneError::new(path, None, message))?;
     let root = project_root(path);
     let project = project(&root)?;
     let absolute = absolute(path);

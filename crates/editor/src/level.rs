@@ -128,7 +128,7 @@ impl Level {
 
 pub fn placeable(path: &Path) -> bool {
     let name = path.to_string_lossy().to_lowercase();
-    name.ends_with(".prefab.toml") || name.ends_with(".gltf") || name.ends_with(".glb")
+    name.ends_with(".prefab.toml") || pfx_load::is_mesh_file(&name)
 }
 
 pub fn stem(path: &Path) -> String {
@@ -137,7 +137,7 @@ pub fn stem(path: &Path) -> String {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
     let lower = name.to_lowercase();
-    for suffix in [".prefab.toml", ".gltf", ".glb"] {
+    for suffix in std::iter::once(".prefab.toml").chain(pfx_load::MESH_SUFFIXES) {
         if lower.ends_with(suffix) {
             return name[..name.len() - suffix.len()].to_string();
         }
