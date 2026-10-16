@@ -1747,7 +1747,7 @@ fn order(closure: &Closure, n: usize, fade: usize) -> Vec<(usize, Option<(usize,
 fn clip(opts: &Opts, scene: &Scene, live: &mut Job) -> Result<(), String> {
     let made_at = pfx_run::archive::local_made();
     if !opts.derive.is_empty() {
-        return Err("clip --derive belongs to pconv; use pconv for more video sizes".into());
+        return Err("clip --derive belongs to pcod; use pcod for more video sizes".into());
     }
     if opts.fps != video::FPS {
         return Err(format!("{TOOL} renders at {}", video::FPS));

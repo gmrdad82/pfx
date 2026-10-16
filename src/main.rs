@@ -42,7 +42,7 @@ const USAGE: &str = "usage:
   pfx film <script.film.toml> --out <dir> [--json] [--plan]
   pfx --version
   pfx --help
-clip masters are x264 at 60 fps; pconv makes video deliveries
+clip masters are x264 at 60 fps; pcod (pito-codecs) makes video deliveries
 still --derive and --web add PNG deliveries; --hdr adds diagnostic scene-linear EXR files; --no-archive skips the archive step
 --samples N overrides a shot's samples; --class interactive|clip|truth|search sets the pgpu class (app renders default to clip for stills and clips, asset renders and bake to truth, list --shots to interactive)
 asset recipes come from --recipes <dir>, then PFX_RECIPES, then <git toplevel>/render/assets: presets/<product>.toml, icons/<product>/<set>.toml, shots/<product>.toml, every product a shot lists read from that one folder
@@ -460,7 +460,7 @@ fn bag_of(args: &[String]) -> Result<Bag, String> {
             .unwrap_or((token.as_str(), None));
         if ["--youtube", "--profile"].contains(&flag) {
             return Err(format!(
-                "{}\n\n  tip: video deliveries belong to 'pconv'",
+                "{}\n\n  tip: video deliveries belong to 'pcod'",
                 cli::unexpected(flag)
             ));
         }
@@ -685,7 +685,7 @@ fn plan_render(args: &[String]) -> Result<Plan, String> {
     foreign(&bag, allowed)?;
     if bag.switches.contains("--clip") && bag.has("--derive") {
         return Err(format!(
-            "{}\n\n  tip: more video sizes belong to 'pconv'",
+            "{}\n\n  tip: more video sizes belong to 'pcod'",
             cli::conflict(&cli::with_value("--derive"), "--clip")
         ));
     }
@@ -1676,7 +1676,7 @@ mod tests {
             "render --app alpha --shot short --clip --derive 720p",
             "render --scene spin --product delta --clip --derive 720p",
         ] {
-            assert!(refused(command).contains("pconv"), "{command}");
+            assert!(refused(command).contains("pcod"), "{command}");
         }
     }
 }

@@ -19,11 +19,11 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 - `crates/sound/tests/fixtures/`: sine tones made with ffmpeg.
 - `crates/project/src/templates/grid.glb`: the floor grid of the scaffold's first scene.
 - `docs/images/`: the README's and the docs' pictures, made from the engine's own neutral scenes; the mark they show is covered by [TRADEMARKS.md](TRADEMARKS.md):
-  - `turntable.gif`: the sample shot `shapes`, traced by `pfx render --scene shapes --product sample --clip --recipes crates/assets/tests/recipes`, made a GIF with pconv.
+  - `turntable.gif`: the sample shot `shapes`, traced by `pfx render --scene shapes --product sample --clip --recipes crates/assets/tests/recipes`, made a GIF with pcod's predecessor; `pcod <master> docs/images/<shot>.gif --size 1280 --fps 15` (pito-codecs) remakes it.
   - `desk.png` and `denoise.png`: the neutral desk (`crates/bake/tests/plates/desk.scene.toml`), traced by `crates/denoise/examples/rt_bench.rs` and denoised by `crates/denoise/examples/compare.rs`.
-  - `live.gif`: the desk drawn by the live renderer, frames from `crates/live/examples/clip.rs`, made a GIF with pconv.
+  - `live.gif`: the desk drawn by the live renderer, frames from `crates/live/examples/clip.rs`, made a GIF with pcod's predecessor; `pcod <master> docs/images/<shot>.gif --size 1280 --fps 15` (pito-codecs) remakes it.
   - `swarm.png`: the flat 2D pass under the swarm test's load, from `crates/live/examples/swarm.rs`.
-  - `new.gif`: the terminal shot `start` in `render/terminal.toml`, recorded with prec and made a GIF with pconv.
+  - `new.gif`: the terminal shot `start` in `render/terminal.toml`, recorded with prec and made a GIF with pcod's predecessor; `pcod <master> docs/images/<shot>.gif --size 1280 --fps 15` (pito-codecs) remakes it.
   - `editor.png`, `editor-drag.gif` and `editor-example.png`: the editor and `crates/editor-viewport/examples/editor.rs`, captured by the offscreen shot harness.
   - `live-frames.png`, `trace-speed.png`, `systems.png`, `size-binary.png`, `size-deps.png` and `size-build.png`: charts drawn with pito-compare from the measurements the README's "The numbers" section lists.
 

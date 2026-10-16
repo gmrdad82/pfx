@@ -1082,7 +1082,7 @@ pub fn shot(o: &Options) -> Result<PathBuf, String> {
 
 fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
     if !o.derive.is_empty() {
-        return Err("clip --derive belongs to pconv; use pconv for more video sizes".into());
+        return Err("clip --derive belongs to pcod; use pcod for more video sizes".into());
     }
     let Session {
         tmp,

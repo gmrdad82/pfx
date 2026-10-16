@@ -80,7 +80,7 @@ root, dest, tag, notes_path, api, crates = sys.argv[1:7]
 api = api == "1"
 crates = crates.split()
 repo = "https://github.com/gmrdad82/pfx"
-estate = {"pfx-scene", "manfred", "prec", "pconv", "pito-compare", "pito-codecs"}
+estate = {"pfx-scene", "manfred", "prec", "pito-compare", "pito-codecs"}
 
 GUIDES = [
     ("first-game", 101, "Scaffold a game with pfx new, play it with cargo run, open it in the editor and measure it with pfx bench."),

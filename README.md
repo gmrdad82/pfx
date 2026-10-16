@@ -187,7 +187,7 @@ pfx is the engine under the [PITO MD](https://pitomd.com) games and apps. It is 
 
 - [pfx-scene](https://github.com/gmrdad82/pfx-scene), the TOML scene format pfx reads and the editor writes in place.
 - [Manfred](https://github.com/gmrdad82/manfred), which builds and views scenes on pfx's renderers.
-- [prec](https://github.com/gmrdad82/prec), [pconv](https://github.com/gmrdad82/pconv) and [pito-compare](https://github.com/gmrdad82/pito-compare), which recorded, encoded and charted this page.
+- [prec](https://github.com/gmrdad82/prec), [pito-codecs](https://github.com/gmrdad82/pito-codecs) (pcod) and [pito-compare](https://github.com/gmrdad82/pito-compare), which recorded, encoded and charted this page.
 
 ## Build and test
 
