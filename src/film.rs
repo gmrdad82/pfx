@@ -4,9 +4,11 @@ use std::time::Instant;
 use pfx::harness::tools;
 use pfx_core::cli::{self, Refusal};
 use pfx_film::reel::{Planned, Roll};
-use pfx_film::write::{AUDIO, FRAMES, STILLS};
+use pfx_film::write::{AUDIO, Encoder, FRAMES, Files, STILLS};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+
+use crate::progress::{self, Progress};
 
 pub const USAGE: &str = "pfx film [OPTIONS] --out <OUT> <SCRIPT>";
 pub const MANIFEST: &str = "manifest.json";
@@ -138,6 +140,42 @@ fn inside_tmp(out: &Path) -> Result<PathBuf, String> {
     Ok(real)
 }
 
+struct Shown<'a> {
+    files: Files,
+    progress: &'a mut Progress,
+}
+
+impl Encoder for Shown<'_> {
+    fn frame(&mut self, index: u64, rgba: Vec<u8>, size: [u32; 2]) -> Result<(), String> {
+        self.files.frame(index, rgba, size)?;
+        self.progress.frame(index + 1);
+        Ok(())
+    }
+
+    fn still(&mut self, name: &str, rgba: Vec<u8>, size: [u32; 2]) -> Result<(), String> {
+        self.files.still(name, rgba, size)
+    }
+
+    fn finish(&mut self, audio: Option<&[f32]>, rate: u32, channels: u16) -> Result<(), String> {
+        self.files.finish(audio, rate, channels)
+    }
+}
+
+fn shoot(roll: &Roll, out: &Path, json: bool) -> Result<pfx_film::Reeled, String> {
+    let mut progress = Progress::new("pfx film", roll.frames(), !json && progress::live());
+    if !progress.shows() {
+        return roll.shoot(out);
+    }
+    std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let film = &roll.script.film;
+    let files = Files::open(out, film.frames, roll.script.stills() > 0)?;
+    let mut shown = Shown {
+        files,
+        progress: &mut progress,
+    };
+    roll.roll(Some(&mut shown))
+}
+
 fn sha256(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     Ok(hex::encode(Sha256::digest(&bytes)))
@@ -178,7 +216,7 @@ pub fn run(command: &Command) -> Result<(), String> {
     let out = command.out.as_ref().ok_or("a film needs --out")?;
     let out = inside_tmp(out)?;
     let started = Instant::now();
-    let reeled = roll.shoot(&out)?;
+    let reeled = shoot(&roll, &out, command.json)?;
     let total = started.elapsed().as_secs_f64() * 1000.0;
     let film = &roll.script.film;
     let mut manifest = head(&roll);

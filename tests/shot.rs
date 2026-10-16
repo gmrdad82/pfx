@@ -232,7 +232,15 @@ fn two_shots_of_an_animated_glb_give_the_same_bytes_and_follow_its_camera_node()
     let a = frames(&folder.join("a"));
     assert_eq!(a, frames(&folder.join("b")));
     assert_ne!(a[0], a[3], "the node animation moves the frames");
+    assert_eq!(first.len(), 5);
     for (index, line) in first.iter().take(4).enumerate() {
+        let keys: Vec<&String> = line.as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys,
+            [
+                "camera", "frame", "gpu_ms", "number", "of", "time", "wall_ms"
+            ]
+        );
         let number = 2 + index as u64;
         assert_eq!(line["number"], json!(number));
         let at: Vec<f64> = serde_json::from_value(line["camera"]["at"].clone()).unwrap();

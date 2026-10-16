@@ -15,6 +15,8 @@ use sha2::{Digest, Sha256};
 
 use args::Quality as Asked;
 
+use crate::progress::{self, Progress};
+
 pub const SCHEMA: u32 = 1;
 pub const MANIFEST: &str = "manifest.json";
 pub const AUDIO: &str = "audio.wav";
@@ -243,6 +245,7 @@ pub fn run(plan: &Plan) -> Result<(), String> {
     let started = Instant::now();
     let writers = write::Writers::new(plan.format);
     let mut gpu = Vec::new();
+    let mut progress = Progress::new("pfx shot", plan.frames, !plan.json && progress::live());
     let shot = Shot {
         scene: &applied.scene,
         size: plan.size,
@@ -273,9 +276,13 @@ pub fn run(plan: &Plan) -> Result<(), String> {
                 })
             );
         }
-        writers.write(&out, frame.index, frame.width, frame.height, frame.pixels)
+        let index = frame.index;
+        writers.write(&out, index, frame.width, frame.height, frame.pixels)?;
+        progress.frame(index + 1);
+        Ok(())
     });
     let written = writers.finish();
+    progress.clear();
     let played = played?;
     written?;
     let (wav, sound) = audio(plan, script.as_deref(), &out)?;
