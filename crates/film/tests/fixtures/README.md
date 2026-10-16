@@ -7,3 +7,4 @@ Neutral files written by hand for this crate's tests, dedicated to the public do
 | `mark.svg` | `ebc23e25652ba7fa36e3b2d51b7c80d9c7ab4c95cde791de8be946c064d01f6d` | written for these tests: a ring drawn with two arcs and a square |
 | `score.toml` | `2f5be63c7965c4c72c794f791e6f55547f99d7ea5508b4ac04427d70667479ab` | written for these tests: a thump and a driven pad |
 | `film.toml` | `138d32321e2074b820902ece5665ac7943b39b2e914a8f87d8805129ddf06511` | written for these tests: two scenes touching keys, captions, art, marks, flashes, shakes, sounds and input |
+| `drop.toml` | `e8e28e60a79461ae9da34d56a36d6b538d608928559d8301819cab94cbb11bac` | written for these tests: a kick (kind `kick`), a held bass, a hat and a pad for a build and a drop |
