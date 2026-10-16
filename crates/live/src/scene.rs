@@ -290,7 +290,8 @@ fn content_bytes(content: &Content) -> (ContentFormat, Vec<u8>) {
 }
 
 fn is_glass(draws: &Draws, index: usize) -> bool {
-    draws.materials[draws.items[index].material as usize].family == Family::Glass
+    let material = &draws.materials[draws.items[index].material as usize];
+    material.family == Family::Glass || material.transmission > 0.0
 }
 
 fn set_sun_radius(renderer: &mut Renderer, radius: f32) -> bool {

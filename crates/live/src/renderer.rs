@@ -3109,6 +3109,7 @@ impl Renderer {
                         ripple_height: ripple,
                         mip_count: self.mips.levels.len() as u32,
                         sky_sh: self.frame.sky().lighting.sh,
+                        sun: scene.sun,
                     },
                     output: &self.frame.targets.hdr.view,
                     profiler: Some(&mut self.profiler),

@@ -71,6 +71,7 @@ pub struct Inputs<'a> {
     pub ripple_height: &'a wgpu::TextureView,
     pub mip_count: u32,
     pub sky_sh: [[f32; 3]; 9],
+    pub sun: crate::frame::Sun,
 }
 
 pub struct Render<'a> {
@@ -307,6 +308,7 @@ struct SceneGpu {
     extent: [f32; 4],
     caustic: [[f32; 4]; 3],
     sky: [[f32; 4]; 9],
+    sun: [[f32; 4]; 2],
 }
 
 #[repr(C)]
@@ -394,6 +396,23 @@ pub fn cast_tint(material: &Material) -> [f32; 3] {
         material.base
     };
     passed.map(|channel| (channel * material.transmission).clamp(0.0, 1.0))
+}
+
+fn sun_rows(sun: crate::frame::Sun) -> [[f32; 4]; 2] {
+    let length = dot(sun.direction, sun.direction).sqrt();
+    if !length.is_finite() || length <= 0.0 || !sun.intensity.is_finite() {
+        return [[0.0; 4]; 2];
+    }
+    let toward = sun.direction.map(|value| value / length);
+    [
+        [toward[0], toward[1], toward[2], 0.0],
+        [
+            sun.colour[0] * sun.intensity,
+            sun.colour[1] * sun.intensity,
+            sun.colour[2] * sun.intensity,
+            0.0,
+        ],
+    ]
 }
 
 pub fn casting(surfaces: &[Surface]) -> bool {
@@ -1206,6 +1225,7 @@ impl Pass {
             ],
             caustic: CausticProjection::rows(inputs.caustic_projection, 0, 0.0),
             sky: inputs.sky_sh.map(|c| [c[0], c[1], c[2], 0.0]),
+            sun: sun_rows(inputs.sun),
         };
         queue.write_buffer(&self.scene, 0, bytemuck::bytes_of(&scene));
         let objects: Vec<_> = surfaces
@@ -1245,7 +1265,12 @@ impl Pass {
                         t.subsurface_tint[2],
                         t.subsurface,
                     ],
-                    pick: [surface.id, 0, 0, 0],
+                    pick: [
+                        surface.id,
+                        m.clearcoat.to_bits(),
+                        m.clearcoat_roughness.to_bits(),
+                        0,
+                    ],
                     clip: surface.clip,
                 }
             })
@@ -1590,6 +1615,7 @@ struct Scene {
     caustic_plane: vec4f,
     caustic_info: vec4f,
     sky: array<vec4f, 9>,
+    sun: array<vec4f, 2>,
 }
 struct Object {
     model_view: mat4x4f,
@@ -1774,8 +1800,10 @@ fn sky_irradiance(n: vec3f) -> vec3f {
     let opaque_z = textureLoad(opaque_depth_tex, pixel, 0);
     if (opaque_z < front_z) { discard; }
     let front = textureLoad(front_tex, pixel, 0);
-    let back = textureLoad(back_tex, pixel, 0);
-    if (back.w <= front.w) { discard; }
+    var back = textureLoad(back_tex, pixel, 0);
+    if (back.w <= front.w) {
+        back = vec4f(-front.xyz, front.w);
+    }
     let object = objects[id - 1u];
     let look = textureLoad(front_look_tex, pixel, 0);
     var base = object.base_roughness.xyz;
@@ -1827,7 +1855,22 @@ fn sky_irradiance(n: vec3f) -> vec3f {
     let reflected_world = normalize(world * reflect(ray, normal));
     let reflected = textureSampleLevel(reflection_tex, linear_sampler, reflected_world, lod).rgb;
     let caustic = caustic_light(landing(uv, front.w, back.w, normal, normalize(back.xyz), ior.y, background_depth).xyz, object.film.w);
-    let color = mix(reflected, refracted + caustic, (vec3f(1.0) - fresnel) * clamp(object.optics.z, 0.0, 1.0));
+    var color = mix(reflected, refracted + caustic, (vec3f(1.0) - fresnel) * clamp(object.optics.z, 0.0, 1.0));
+    if (object.optics.z < 1.0) {
+        let transmission = clamp(object.optics.z, 0.0, 1.0);
+        let lit_normal = world * normal;
+        let sun = scene.sun[1].xyz * max(dot(lit_normal, scene.sun[0].xyz), 0.0);
+        let body = base * (sky_irradiance(lit_normal) + sun) / 3.14159265;
+        color += (vec3f(1.0) - fresnel) * (1.0 - transmission) * (body - reflected);
+    }
+    let coat = bitcast<f32>(object.pick.y);
+    if (coat > 0.0) {
+        let coat_rough = bitcast<f32>(object.pick.z);
+        let coat_lod = clamp(coat_rough * coat_rough * max_lod, 0.0, max_lod);
+        let coat_reflected = textureSampleLevel(reflection_tex, linear_sampler, reflected_world, coat_lod).rgb;
+        let coat_f = clamp(coat, 0.0, 1.0) * (0.04 + 0.96 * pow(1.0 - cosine, 5.0));
+        color = mix(color, coat_reflected, coat_f);
+    }
     var out: ComposeOut;
     out.color = vec4f(color, 1.0);
     out.reactive = 1.0;
@@ -1840,9 +1883,6 @@ fn sky_irradiance(n: vec3f) -> vec3f {
     let front_z = textureLoad(front_depth_tex, pixel, 0);
     let opaque_z = textureLoad(opaque_depth_tex, pixel, 0);
     if (opaque_z < front_z) { discard; }
-    let front = textureLoad(front_tex, pixel, 0);
-    let back = textureLoad(back_tex, pixel, 0);
-    if (back.w <= front.w) { discard; }
     let pick = objects[id - 1u].pick.x;
     if (pick == 0u) { discard; }
     return pick;
@@ -2056,6 +2096,14 @@ mod tests {
     use super::*;
     use pfx_geom::shapes::Shape;
     use pfx_gpu::Gpu;
+
+    fn dark_sun() -> crate::frame::Sun {
+        crate::frame::Sun {
+            direction: [0.0, 0.0, 1.0],
+            colour: [0.0; 3],
+            intensity: 0.0,
+        }
+    }
 
     #[test]
     fn clip_planes_cut_where_the_point_lies_past_them() {
@@ -2371,6 +2419,7 @@ mod tests {
                     ripple_height: &ripple_view,
                     mip_count: 1,
                     sky_sh: uniform_sky_sh([std::f32::consts::PI; 3]),
+                    sun: dark_sun(),
                 },
                 output: &output.view,
                 profiler: Some(&mut profiler),
@@ -2535,6 +2584,7 @@ mod tests {
                     ripple_height: &ripple_view,
                     mip_count: 1,
                     sky_sh,
+                    sun: dark_sun(),
                 },
                 output: &output.view,
                 profiler: None,
@@ -2682,6 +2732,7 @@ mod tests {
             ripple_height: &ripple_view,
             mip_count: 1,
             sky_sh: uniform_sky_sh([std::f32::consts::PI; 3]),
+            sun: dark_sun(),
         };
         let mut warmup = gpu
             .device
@@ -2849,6 +2900,7 @@ mod tests {
                         ripple_height: &ripple_view,
                         mip_count: 1,
                         sky_sh: uniform_sky_sh([std::f32::consts::PI; 3]),
+                        sun: dark_sun(),
                     },
                     output: &output.view,
                     profiler: None,
