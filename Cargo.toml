@@ -22,7 +22,8 @@ authors.workspace = true
 [features]
 default = ["harness", "editor", "bench"]
 editor = ["harness", "dep:pfx-editor"]
-bench = ["harness", "dep:pfx-bench"]
+bench = ["harness", "dep:pfx-bench", "dep:pfx-sound"]
+shot-sound = ["bench"]
 harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project"]
 
 [dependencies]
@@ -43,6 +44,7 @@ pollster = { version = "0.4", optional = true }
 exr = { version = "1.74", optional = true }
 pfx-editor = { path = "crates/editor", optional = true }
 pfx-bench = { path = "crates/bench", optional = true }
+pfx-sound = { path = "crates/sound", optional = true }
 pfx-project = { path = "crates/project", features = ["scaffold"], optional = true }
 
 [target.'cfg(unix)'.dependencies]

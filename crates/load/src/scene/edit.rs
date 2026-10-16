@@ -276,6 +276,18 @@ impl SceneEdit {
         Ok(group)
     }
 
+    pub fn preview(&self, group: &PatchGroup) -> Result<(Scene, pfx_scene::Scene), EditError> {
+        if group.is_empty() {
+            return Ok((self.scene.clone(), self.writer.scene().clone()));
+        }
+        let resolved = self
+            .writer
+            .project()
+            .scene_with(&self.writer.path(), group.after())
+            .map_err(|found| edit_error(build::refused(&self.root, &found), &group.label))?;
+        Ok((self.check(group, &group.label)?, resolved))
+    }
+
     fn check(&self, group: &PatchGroup, key: &str) -> Result<Scene, EditError> {
         let resolved = self
             .writer

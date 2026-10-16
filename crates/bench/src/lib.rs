@@ -1,6 +1,7 @@
 mod args;
 mod game;
 mod run;
+pub mod shot;
 mod summary;
 
 #[cfg(test)]

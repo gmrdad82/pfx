@@ -124,6 +124,7 @@ GUIDES = [
     ("denoise", 317, None),
     ("bake", 318, "pfx bake traces a scene's probe volumes, prerendered props, plates and detail maps on the GPU and writes versioned, checked artifacts the live renderer shows."),
     ("geom-assets", 319, "pfx-geom's asset geometry on the CPU: SVG marks as extruded, bevelled solids and icon parts fused through a distance field."),
+    ("render-a-scene", 320, "pfx shot renders a scene file offline on the live renderer at a fixed clock: numbered frames, a manifest and a WAV for pcod, the same bytes every run."),
     ("editor", 401, None),
     ("editor-crates", 402, None),
     ("windows", 501, "Games on pfx build for Windows: the one build Steam ships, which Linux and the Steam Deck run through Proton."),
@@ -509,12 +510,13 @@ groups = [
     ("encode", "Re-encode a master from its manifest.", "ENCODE_FLAGS"),
     ("cache", "The machine cache.", "CACHE_FLAGS"),
     ("bake", "Path-traced probes, lightmaps, plates and detail maps.", "BAKE_FLAGS"),
+    ("shot", "A scene file rendered offline on the live renderer at a fixed clock.", "SHOT_FLAGS"),
     ("steam stage", "Stage Steam's build scripts and depots.", "STEAM_FLAGS"),
 ]
 cli.append("## Flags\n\nEach mode takes the flags below and refuses any other. A switch takes no value; any other flag takes one, as `--flag value` or `--flag=value`. `new`, `edit`, `bench`, `scene`, `font subset` and `archive` take what their usage lines above show.")
 for name, line, constant in groups:
     cli.append(f"### pfx {name}\n\n{line}\n\n" + flags_table(rust_list(constant)))
-cli.append("## Errors\n\nInput the tool can't parse gets clap's answer on stderr with exit 2: the error, the command's usage line and `For more information, try '--help'.` A refusal after a successful parse is one line, `pfx: …`, with exit 1. `pfx bench`'s flags and summary are in [Benchmark a scene](bundle:guides/benchmark-a-scene.md) and [Frame stats](bundle:guides/frame-stats.md#bench).")
+cli.append("## Errors\n\nInput the tool can't parse gets clap's answer on stderr with exit 2: the error, the command's usage line and `For more information, try '--help'.` A refusal after a successful parse is one line, `pfx: …`, with exit 1. `pfx bench`'s flags and summary are in [Benchmark a scene](bundle:guides/benchmark-a-scene.md) and [Frame stats](bundle:guides/frame-stats.md#bench); `pfx shot`'s in [Render a scene](bundle:guides/render-a-scene.md).")
 cli_body = rewrite("\n\n".join(cli), "src/main.rs", "reference/cli.md")
 write("reference/cli.md", front("The pfx tool", "Every command and flag of the pfx tool, generated from its usage text.", 901) + cli_body.strip("\n") + "\n")
 
