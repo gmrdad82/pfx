@@ -68,7 +68,7 @@ Setting `height` or `falloff` turns `[haze]` into an outdoor height fog that fil
 | `phase` | −0.9 to 0.9 | `0.5` | Henyey-Greenstein asymmetry: above 0 the fog glows toward the sun, so a low sun ahead blooms in the haze |
 | `ambient` | three numbers ≥ 0 | the sky's mean radiance | The isotropic light the fog scatters besides the sun and the lights |
 
-A haze without `height` and `falloff` is the room haze, and a scene without `[haze]` renders byte-identical to one rendered before the outdoor mode existed.
+Toward a low sun, the glow is the phase lobe and the fog's density: `phase` 0.8 narrows it into a soft halo around the sun that bleeds over the buildings in front of it, `fog` about 0.05 keeps it large without hiding the street, `shafts` below 1 leaves some light in the shadowed street so the shafts stay gentle, and `color` tints it (a pink-white such as `#f0c8f0` against a warm, low daylight sun). A haze without `height` and `falloff` is the room haze, and a scene without `[haze]` renders byte-identical to one rendered before the outdoor mode existed.
 
 ### `[finish] lut`: a `.cube` file
 
