@@ -152,7 +152,7 @@ impl Preview {
         aspect: f32,
     ) -> Result<(), String> {
         let mut moved = scene.clone();
-        moved.camera = Some(camera);
+        moved.camera = Some(camera.clone());
         let transforms = pfx_trace::stage::posed_transforms(&moved, &Posed::at(0.0))?;
         let (view, projection) = pfx_trace::stage::scene_camera(&camera, aspect);
         self.trace.set_instance_transforms(gpu, &transforms)?;
@@ -371,7 +371,9 @@ impl View {
             .trace
             .as_mut()
             .filter(|preview| preview.of.1 == of.1 && preview.of.0 != of.0)
-            && preview.move_camera(&self.gpu, scene, of.0, aspect).is_err()
+            && preview
+                .move_camera(&self.gpu, scene, of.0.clone(), aspect)
+                .is_err()
         {
             self.trace = None;
         }

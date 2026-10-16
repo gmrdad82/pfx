@@ -198,7 +198,7 @@ impl DeformedPositions {
             }
             if source.vertices.div_ceil(WORKGROUP) > limit {
                 return Err(format!(
-                    "instance {index} has {} vertices, more than one deformed positions dispatch covers",
+                    "instance {index} has {} vertices, more than one deformed positions pass covers",
                     source.vertices
                 ));
             }
