@@ -7,7 +7,7 @@ use pfx_load::scene::TraceSettings;
 use pfx_materials::{Content, ContentLayer, Material, PackedMaterial};
 use wgpu::util::DeviceExt;
 
-use crate::bvh::{Bvh, Triangle};
+use crate::bvh::Triangle;
 use crate::detail::{Bounces, Detail, InstanceSurface, Lens, PlumeLook, TriangleDetail};
 use crate::lights::{Candidate, MAX_EMITTERS, MAX_LIGHTS, Source, build_emitters, emits};
 use crate::shapes::Shape;
@@ -204,6 +204,7 @@ pub const BAND_STEP: u32 = 8;
 pub const SAMPLE_SPAN_MS: f64 = 12.0;
 pub const SAMPLE_TARGET_MS: f64 = 10.0;
 const LANES: u32 = 64;
+const UPLOAD_TRIANGLES: usize = 1 << 18;
 const PIECE_COLUMNS: u32 = 8;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -267,6 +268,18 @@ pub struct Trace {
     pub albedo: OffscreenTarget,
     pub normal: OffscreenTarget,
     rt: Option<crate::rt::Rt>,
+    placing: Option<Placing>,
+    triangle_buffer: wgpu::Buffer,
+    node_buffer: wgpu::Buffer,
+    emitter_buffer: wgpu::Buffer,
+    emitter_cdf_buffer: wgpu::Buffer,
+    builds: Builds,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Builds {
+    pub bottom: usize,
+    pub top: usize,
 }
 
 #[derive(Debug, PartialEq)]
@@ -294,6 +307,40 @@ pub struct SceneBuffers {
     pub emitter_count: u32,
     pub light_count: u32,
     pub rt: crate::rt::RtGeometry,
+    levels: Option<Placing>,
+    bottom_builds: usize,
+}
+
+struct Placing {
+    levels: crate::levels::Levels,
+    candidates: Vec<Candidate>,
+    lights: usize,
+}
+
+fn pack_triangle(tri: &TriangleDetail, word: u32) -> GpuTriangle {
+    GpuTriangle {
+        a: vec4(tri.vertices[0], tri.material as f32),
+        b: vec4(tri.vertices[1], word as f32),
+        c: vec4(tri.vertices[2], 0.0),
+        na: [
+            tri.normals[0][0],
+            tri.normals[0][1],
+            tri.normals[0][2],
+            tri.uvs[0][0],
+        ],
+        nb: [
+            tri.normals[1][0],
+            tri.normals[1][1],
+            tri.normals[1][2],
+            tri.uvs[1][0],
+        ],
+        nc: [
+            tri.normals[2][0],
+            tri.normals[2][1],
+            tri.normals[2][2],
+            tri.uvs[2][0],
+        ],
+    }
 }
 
 impl SceneBuffers {
@@ -345,6 +392,9 @@ impl SceneBuffers {
             return Err("trace scene has too many content layers".into());
         }
         let mut placed_layers = Vec::new();
+        let world = detailed.len();
+        let mut starts = Vec::with_capacity(detail.instances.len());
+        let mut words = Vec::with_capacity(detail.instances.len());
         for instance in &detail.instances {
             let transformed = instance.transformed()?;
             let surface = instance.surface;
@@ -365,6 +415,8 @@ impl SceneBuffers {
             if !instance.two_sided {
                 word |= ONE_SIDED;
             }
+            starts.push(detailed.len());
+            words.push(word);
             flags.extend(std::iter::repeat_n(word, transformed.len()));
             surfaces.extend(std::iter::repeat_n(
                 GpuSurface::from(surface),
@@ -399,44 +451,13 @@ impl SceneBuffers {
                 return Err("smooth union needs earlier primitive shapes".into());
             }
         }
-        let all_triangles: Vec<Triangle> = detailed
+        let laid = crate::levels::lay(&detailed, world, &detail.instances, &starts, &words)?;
+        let order = &laid.order;
+        let mut triangles: Vec<_> = order
             .iter()
-            .copied()
-            .map(TriangleDetail::triangle)
+            .map(|&index| pack_triangle(&detailed[index as usize], flags[index as usize]))
             .collect();
-        let bvh = Bvh::build(&all_triangles);
-        let mut triangles: Vec<_> = bvh
-            .order
-            .iter()
-            .map(|&index| {
-                let tri = detailed[index as usize];
-                GpuTriangle {
-                    a: vec4(tri.vertices[0], tri.material as f32),
-                    b: vec4(tri.vertices[1], flags[index as usize] as f32),
-                    c: vec4(tri.vertices[2], 0.0),
-                    na: [
-                        tri.normals[0][0],
-                        tri.normals[0][1],
-                        tri.normals[0][2],
-                        tri.uvs[0][0],
-                    ],
-                    nb: [
-                        tri.normals[1][0],
-                        tri.normals[1][1],
-                        tri.normals[1][2],
-                        tri.uvs[1][0],
-                    ],
-                    nc: [
-                        tri.normals[2][0],
-                        tri.normals[2][1],
-                        tri.normals[2][2],
-                        tri.uvs[2][0],
-                    ],
-                }
-            })
-            .collect();
-        let ordered_surfaces: Vec<GpuSurface> = bvh
-            .order
+        let ordered_surfaces: Vec<GpuSurface> = order
             .iter()
             .map(|&index| surfaces[index as usize])
             .collect();
@@ -452,8 +473,7 @@ impl SceneBuffers {
             effects.thick_sub_film = vec4(steam.box_lo, steam.density);
             effects.tint_absorption = vec4(steam.box_hi, steam.ambient);
         }
-        let uv_v: Vec<[f32; 4]> = bvh
-            .order
+        let uv_v: Vec<[f32; 4]> = order
             .iter()
             .map(|&index| {
                 let tri = detailed[index as usize];
@@ -567,7 +587,7 @@ impl SceneBuffers {
             ]
         };
         let mut candidates = Vec::new();
-        for (slot, &index) in bvh.order.iter().enumerate() {
+        for (slot, &index) in order.iter().enumerate() {
             let tri = detailed[index as usize];
             if emitting[tri.material as usize]
                 && flags[index as usize] & (SHADOW_ONLY | CUTOUT) == 0
@@ -604,8 +624,7 @@ impl SceneBuffers {
         if candidates.len() > MAX_EMITTERS {
             return Err("trace scene has too many emitters".into());
         }
-        let solid: Vec<bool> = bvh
-            .order
+        let solid: Vec<bool> = order
             .iter()
             .map(|&index| {
                 let index = index as usize;
@@ -616,8 +635,12 @@ impl SceneBuffers {
                     && materials[detailed[index].material as usize].transmission <= 0.0
             })
             .collect();
-        let placed: Vec<[[f32; 3]; 3]> = bvh
-            .order
+        let world_slots = if laid.levels.is_some() {
+            world
+        } else {
+            order.len()
+        };
+        let placed: Vec<[[f32; 3]; 3]> = order[..world_slots]
             .iter()
             .map(|&index| detailed[index as usize].vertices)
             .collect();
@@ -645,13 +668,16 @@ impl SceneBuffers {
         } else {
             Vec::new()
         };
-        let rt = crate::rt::RtGeometry::new(&placed, &solid, boxes);
+        let mut rt = crate::rt::RtGeometry::new(&placed, &solid[..world_slots], boxes);
+        if let Some(levels) = &laid.levels {
+            rt.place(levels, &solid);
+        }
         let list = build_emitters(&candidates, detail.lights.len());
         let lights: Vec<_> = detail.lights.iter().map(|light| light.pack()).collect();
         packed_materials.push(effects);
         Ok(Self {
             triangles: bytemuck::cast_slice(&triangles).to_vec(),
-            nodes: bytemuck::cast_slice(&bvh.nodes).to_vec(),
+            nodes: bytemuck::cast_slice(&laid.nodes).to_vec(),
             shapes: bytemuck::cast_slice(&packed_shapes).to_vec(),
             materials: bytemuck::cast_slice(&packed_materials).to_vec(),
             uv: bytemuck::cast_slice(&uv_v).to_vec(),
@@ -667,6 +693,12 @@ impl SceneBuffers {
             emitter_count: candidates.len() as u32,
             light_count: detail.lights.len() as u32,
             rt,
+            levels: laid.levels.map(|levels| Placing {
+                levels,
+                candidates,
+                lights: detail.lights.len(),
+            }),
+            bottom_builds: laid.bottom_builds,
         })
     }
 }
@@ -1449,17 +1481,18 @@ impl Trace {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let tri_buffer = storage(gpu, "trace triangles", &buffers.triangles, false);
+        let placed = buffers.levels.is_some();
+        let tri_buffer = storage(gpu, "trace triangles", &buffers.triangles, placed);
         let uv_buffer = storage(gpu, "trace triangle uv v", &buffers.uv, false);
         let content_buffer = storage(gpu, "trace content", &buffers.content, false);
         let surface_buffer = storage(gpu, "trace instance surfaces", &buffers.surfaces, false);
         let layer_buffer = storage(gpu, "trace content layers", &buffers.layers, false);
         let content_info_buffer = storage(gpu, "trace content info", &buffers.content_info, false);
-        let node_buffer = storage(gpu, "trace nodes", &buffers.nodes, false);
+        let node_buffer = storage(gpu, "trace nodes", &buffers.nodes, placed);
         let shape_buffer = storage(gpu, "trace shapes", &buffers.shapes, false);
         let material_buffer = storage(gpu, "trace materials", &buffers.materials, false);
-        let emitter_buffer = storage(gpu, "trace emitters", &buffers.emitters, false);
-        let emitter_cdf_buffer = storage(gpu, "trace emitter cdf", &buffers.emitter_cdf, false);
+        let emitter_buffer = storage(gpu, "trace emitters", &buffers.emitters, placed);
+        let emitter_cdf_buffer = storage(gpu, "trace emitter cdf", &buffers.emitter_cdf, placed);
         let light_buffer = storage(gpu, "trace lights", &buffers.lights, false);
         let accum_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trace accumulation"),
@@ -1485,7 +1518,9 @@ impl Trace {
             ],
             lit,
         };
-        let rt = (crate::rt::wanted(gpu) && !buffers.rt.is_empty())
+        let rt = (crate::rt::wanted(gpu)
+            && !buffers.rt.is_empty()
+            && buffers.rt.instances.len() <= crate::rt::MAX_INSTANCES)
             .then(|| crate::rt::Rt::build(gpu, &buffers.rt));
         let module = gpu
             .device
@@ -1646,7 +1681,144 @@ impl Trace {
             albedo,
             normal,
             rt,
+            placing: buffers.levels,
+            triangle_buffer: tri_buffer,
+            node_buffer,
+            emitter_buffer,
+            emitter_cdf_buffer,
+            builds: Builds {
+                bottom: buffers.bottom_builds,
+                top: usize::from(placed),
+            },
         })
+    }
+
+    pub fn builds(&self) -> Builds {
+        self.builds
+    }
+
+    pub fn instance_count(&self) -> usize {
+        self.placing
+            .as_ref()
+            .map_or(0, |placing| placing.levels.instance_count())
+    }
+
+    pub fn set_instance_transforms(
+        &mut self,
+        gpu: &Gpu,
+        transforms: &[crate::detail::Transform],
+    ) -> Result<(), String> {
+        let Some(placing) = self.placing.as_mut() else {
+            return if transforms.is_empty() {
+                Ok(())
+            } else {
+                Err("this trace has no instances to move".into())
+            };
+        };
+        let levels = &mut placing.levels;
+        if transforms.len() > levels.placed.len() {
+            return Err(format!(
+                "the trace has {} instances and {} transforms were given",
+                levels.placed.len(),
+                transforms.len()
+            ));
+        }
+        let poses = transforms
+            .iter()
+            .map(|&transform| crate::detail::Pose::new(transform))
+            .collect::<Result<Vec<_>, _>>()?;
+        let moved = |placed: &crate::levels::Placed, transform: &crate::detail::Transform| {
+            placed
+                .transform
+                .iter()
+                .flatten()
+                .zip(transform.iter().flatten())
+                .any(|(a, b)| a.to_bits() != b.to_bits())
+        };
+        if !levels
+            .placed
+            .iter()
+            .zip(transforms)
+            .any(|(placed, transform)| placed.as_ref().is_some_and(|p| moved(p, transform)))
+        {
+            return Ok(());
+        }
+        let mut emitters_moved = false;
+        let mut packed: Vec<GpuTriangle> = Vec::new();
+        for ((placed, transform), pose) in levels.placed.iter_mut().zip(transforms).zip(&poses) {
+            let Some(placed) = placed else { continue };
+            if !moved(placed, transform) {
+                continue;
+            }
+            let mesh = &levels.meshes[placed.mesh];
+            let word = placed.word;
+            packed.clear();
+            packed.resize(mesh.triangles.len(), GpuTriangle::zeroed());
+            let bounds = crate::levels::pose_into(
+                pose,
+                &mesh.triangles,
+                &placed.materials,
+                &mut packed,
+                |triangle| pack_triangle(triangle, word),
+            );
+            if packed.iter().any(|tri| {
+                [tri.a, tri.b, tri.c, tri.na, tri.nb, tri.nc]
+                    .iter()
+                    .any(|lane| !lane[..3].iter().all(|v| v.is_finite()))
+            }) {
+                return Err("a moved instance has non-finite geometry".into());
+            }
+            let first = placed.base;
+            let last = first + packed.len() as u32;
+            for (index, candidate) in placing.candidates.iter_mut().enumerate() {
+                if let crate::lights::Source::Triangle { vertices, slot } = &mut candidate.source
+                    && (first..last).contains(slot)
+                {
+                    let tri = &mut packed[(*slot - first) as usize];
+                    tri.c[3] = (index + 1) as f32;
+                    *vertices = [
+                        [tri.a[0], tri.a[1], tri.a[2]],
+                        [tri.b[0], tri.b[1], tri.b[2]],
+                        [tri.c[0], tri.c[1], tri.c[2]],
+                    ];
+                    emitters_moved = true;
+                }
+            }
+            let stride = std::mem::size_of::<GpuTriangle>();
+            for (k, chunk) in packed.chunks(UPLOAD_TRIANGLES).enumerate() {
+                gpu.queue.write_buffer(
+                    &self.triangle_buffer,
+                    (first as usize + k * UPLOAD_TRIANGLES) as u64 * stride as u64,
+                    bytemuck::cast_slice(chunk),
+                );
+            }
+            placed.transform = *transform;
+            placed.inverse = pose.inverse_rows();
+            placed.bounds = bounds;
+        }
+        gpu.queue
+            .write_buffer(&self.node_buffer, 0, bytemuck::cast_slice(&levels.top()));
+        if emitters_moved {
+            let list = build_emitters(&placing.candidates, placing.lights);
+            gpu.queue
+                .write_buffer(&self.emitter_buffer, 0, bytemuck::cast_slice(&list.entries));
+            gpu.queue
+                .write_buffer(&self.emitter_cdf_buffer, 0, bytemuck::cast_slice(&list.cdf));
+        }
+        if let Some(rt) = &mut self.rt {
+            let rows: Vec<[f32; 12]> = levels
+                .placed
+                .iter()
+                .flatten()
+                .map(|placed| {
+                    crate::detail::Pose::new(placed.transform).map_or([0.0; 12], |pose| pose.rows())
+                })
+                .collect();
+            rt.set_transforms(gpu, &rows);
+        }
+        self.builds.top += 1;
+        self.samples = 0;
+        Ok(())
     }
 
     pub fn hardware_rays(&self) -> bool {

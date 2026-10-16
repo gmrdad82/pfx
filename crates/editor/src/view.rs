@@ -9,7 +9,7 @@ use pfx_gpu::window::Size;
 use pfx_gpu::{Gpu, OffscreenTarget};
 use pfx_input::{KeyLabels, LayoutSource, Recording};
 use pfx_live::renderer::Renderer;
-use pfx_load::scene::{Camera, Scene};
+use pfx_load::scene::{Camera, Posed, Scene};
 use pfx_play::{Game, Options, PlayHooks, PlaySession, Rigs, SceneGame, Tunables};
 use pfx_trace::Trace;
 
@@ -141,6 +141,28 @@ struct Preview {
     pacer: Pacer,
     samples: u32,
     of: (Camera, u64),
+}
+
+impl Preview {
+    fn move_camera(
+        &mut self,
+        gpu: &Gpu,
+        scene: &Scene,
+        camera: Camera,
+        aspect: f32,
+    ) -> Result<(), String> {
+        let mut moved = scene.clone();
+        moved.camera = Some(camera);
+        let transforms = pfx_trace::stage::posed_transforms(&moved, &Posed::at(0.0))?;
+        let (view, projection) = pfx_trace::stage::scene_camera(&camera, aspect);
+        self.trace.set_instance_transforms(gpu, &transforms)?;
+        self.trace.set_projection(projection)?;
+        self.trace.set_camera(view)?;
+        self.trace.set_lens(pfx_trace::stage::scene_lens(&camera))?;
+        self.samples = 0;
+        self.of.0 = camera;
+        Ok(())
+    }
 }
 
 struct Playing {
@@ -344,6 +366,15 @@ impl View {
     }
 
     pub fn trace_frame(&mut self, scene: &Scene, of: (Camera, u64)) -> Result<bool, String> {
+        let aspect = self.aspect();
+        if let Some(preview) = self
+            .trace
+            .as_mut()
+            .filter(|preview| preview.of.1 == of.1 && preview.of.0 != of.0)
+            && preview.move_camera(&self.gpu, scene, of.0, aspect).is_err()
+        {
+            self.trace = None;
+        }
         if self.trace.as_ref().is_some_and(|preview| preview.of != of) {
             self.trace = None;
         }

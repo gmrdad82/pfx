@@ -142,7 +142,23 @@ impl InstanceSurface {
 
 impl Instance {
     pub fn transformed(&self) -> Result<Vec<TriangleDetail>, String> {
-        let m = self.transform;
+        let pose = Pose::new(self.transform)?;
+        Ok(self
+            .triangles
+            .iter()
+            .map(|triangle| pose.triangle(triangle))
+            .collect())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Pose {
+    m: Transform,
+    normal: [[f32; 3]; 3],
+}
+
+impl Pose {
+    pub(crate) fn new(m: Transform) -> Result<Self, String> {
         if m.into_iter().flatten().any(|value| !value.is_finite()) {
             return Err("instance transform is not finite".into());
         }
@@ -161,29 +177,65 @@ impl Instance {
         if determinant.abs() < 1e-12 {
             return Err("instance transform is singular".into());
         }
-        let normal_matrix: [[f32; 3]; 3] = std::array::from_fn(|row| {
+        let normal = std::array::from_fn(|row| {
             std::array::from_fn(|column| cofactor(row, column) * determinant.signum())
         });
-        let triangles = self
-            .triangles
-            .iter()
-            .map(|triangle| TriangleDetail {
-                vertices: triangle.vertices.map(|point| {
-                    std::array::from_fn(|row| {
-                        m[3][row]
-                            + (0..3)
-                                .map(|column| m[column][row] * point[column])
-                                .sum::<f32>()
-                    })
-                }),
-                normals: triangle
-                    .normals
-                    .map(|normal| normalize(normal_matrix.map(|row| dot(row, normal)))),
-                uvs: triangle.uvs,
-                material: triangle.material,
-            })
-            .collect();
-        Ok(triangles)
+        Ok(Self { m, normal })
+    }
+
+    pub(crate) fn point(&self, point: [f32; 3]) -> [f32; 3] {
+        let m = self.m;
+        std::array::from_fn(|row| {
+            m[3][row]
+                + (0..3)
+                    .map(|column| m[column][row] * point[column])
+                    .sum::<f32>()
+        })
+    }
+
+    pub(crate) fn triangle(&self, triangle: &TriangleDetail) -> TriangleDetail {
+        TriangleDetail {
+            vertices: triangle.vertices.map(|point| self.point(point)),
+            normals: triangle
+                .normals
+                .map(|normal| normalize(self.normal.map(|row| dot(row, normal)))),
+            uvs: triangle.uvs,
+            material: triangle.material,
+        }
+    }
+
+    pub(crate) fn rows(&self) -> [f32; 12] {
+        let m = self.m;
+        [
+            m[0][0], m[1][0], m[2][0], m[3][0], m[0][1], m[1][1], m[2][1], m[3][1], m[0][2],
+            m[1][2], m[2][2], m[3][2],
+        ]
+    }
+
+    pub(crate) fn inverse_rows(&self) -> [f32; 12] {
+        let m = self.m.map(|column| column.map(f64::from));
+        let a = |row: usize, column: usize| m[column][row];
+        let cofactor = |row: usize, column: usize| {
+            let (r0, r1) = ((row + 1) % 3, (row + 2) % 3);
+            let (c0, c1) = ((column + 1) % 3, (column + 2) % 3);
+            a(r0, c0) * a(r1, c1) - a(r0, c1) * a(r1, c0)
+        };
+        let determinant: f64 = (0..3)
+            .map(|column| a(0, column) * cofactor(0, column))
+            .sum();
+        let inverse: [[f64; 3]; 3] = std::array::from_fn(|row| {
+            std::array::from_fn(|column| cofactor(column, row) / determinant)
+        });
+        let translation = [m[3][0], m[3][1], m[3][2]];
+        let mut rows = [0.0_f32; 12];
+        for row in 0..3 {
+            let shift: f64 = (0..3).map(|k| inverse[row][k] * translation[k]).sum();
+            for column in 0..3 {
+                rows[row * 4 + column] = inverse[row][column] as f32;
+            }
+            rows[row * 4 + 3] = (-shift) as f32;
+        }
+        rows
     }
 }
 

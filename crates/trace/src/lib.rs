@@ -4,6 +4,7 @@ pub mod denoise;
 pub mod detail;
 pub mod film;
 pub mod gpu;
+mod levels;
 pub mod lights;
 mod math;
 pub mod matte;

@@ -573,6 +573,24 @@ pub fn scene_posed(
     Ok(staged)
 }
 
+pub fn posed_transforms(scene: &LoadedScene, posed: &Posed) -> Result<Vec<Transform>, String> {
+    let draws = scene.draws();
+    if draws.items.iter().any(|draw| {
+        draw.geometry.skin.is_some()
+            && draw
+                .owner
+                .is_some_and(|owner| posed.palettes.contains_key(&owner))
+    }) {
+        return Err("a skinned part changes its mesh with the pose; stage it again".into());
+    }
+    let objects = if posed.models.is_empty() {
+        scene.posed(&scene.camera_or_default(), posed.time)
+    } else {
+        posed.models.clone()
+    };
+    Ok(draws.models_posed(&objects, &posed.palettes))
+}
+
 #[derive(Clone, Copy)]
 struct Corner {
     position: [f32; 3],
