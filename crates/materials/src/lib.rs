@@ -10,6 +10,7 @@ mod library;
 mod material;
 mod math;
 mod noise;
+mod wet;
 mod wgsl;
 
 pub use ageing::{
@@ -39,9 +40,15 @@ pub use noise::{
     Hash, fbm3, fbm3_filtered, flow, hash2, hash3, hash21, noise2, octave_weight, pcg,
     value_noise2_signed, value_noise3, value_noise3_gradient,
 };
-pub use wgsl::{AGEING, BRDF, CONTENT, FILM, NOISE, library};
+pub use wet::{
+    PORE_SPAN, PORE_START, PUDDLE_EDGE, PUDDLE_FLAT, PUDDLE_MEDIAN, PUDDLE_OCTAVES,
+    PUDDLE_SCALE_MIN, PUDDLE_SPREAD, Soaked, WATER_ROUGHNESS, WET_DARKEST, Wet, puddle, soak,
+};
+pub use wgsl::{AGEING, BRDF, CONTENT, FILM, NOISE, WET, library};
 
 #[cfg(test)]
 mod library_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wet_tests;

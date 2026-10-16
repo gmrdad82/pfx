@@ -431,8 +431,8 @@ fn build_library(
 fn build_haze(haze: &file::Haze) -> Haze {
     let amount = haze.amount.unwrap_or(0.0);
     Haze {
-        lo: haze.lo,
-        hi: haze.hi,
+        lo: haze.lo.unwrap_or_default(),
+        hi: haze.hi.unwrap_or_default(),
         fog: haze.fog.unwrap_or(amount / 6.0),
         smoke: haze.smoke.unwrap_or(amount * 20.0),
         mist: haze.mist.unwrap_or(amount * 0.2),

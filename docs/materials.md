@@ -60,11 +60,37 @@ A `Material` carries up to four `NoiseLayer`s: a `kind`, a `frequency`, an `ampl
 
 The shader ids are stable; ids 6 and 9 to 13 are retired. The algorithms' shape (mix weights, thresholds, the warp octaves inside the plank rings) is fixed; scales and gains are the params.
 
-On the GPU each layer is five `vec4` rows: the kind row and four parameter rows. Twelve values are the params; `gpu_params` adds four the packer derives (a plank's reciprocal width and seam span, a scratch's stretch), and the live renderer adds its own (the ring fade rate, `RING_FADE` = 8/7 of the ring frequency, and a coat's fine scale and tile match). `PackedMaterial` is 496 bytes.
+On the GPU each layer is five `vec4` rows: the kind row and four parameter rows. Twelve values are the params; `gpu_params` adds four the packer derives (a plank's reciprocal width and seam span, a scratch's stretch), and the live renderer adds its own (the ring fade rate, `RING_FADE` = 8/7 of the ring frequency, and a coat's fine scale and tile match). `PackedMaterial` is 512 bytes: the layer rows, then one `wet` row last (see Wet surfaces).
 
 ## Noise functions
 
 `value_noise3(p, hash)` is one value noise over a 3D lattice, on `Hash::Xor` (the xor of three products through `pcg`) or `Hash::Nested` (`pcg` nested per axis). `fbm3` and `fbm3_filtered` sum its octaves at lacunarity 2.03; `value_noise3_gradient(p, scale)` is the central-difference gradient (±0.35 of a cell) on the xor lattice, reusing the corner hashes; `value_noise2_signed` is the 2D noise `Flow` warps. The WGSL in `NOISE` carries the same names (`value_noise3(p, nested)`), and the tracer's copy matches.
+
+## Wet surfaces
+
+`Material::wet` (`Wet { amount, puddles, puddle_scale, seed }`, the `[wet]` table) soaks a material after its maps, ageing, noise layers and content, the same way in the live renderer and the tracer: `soak` and `puddle` on the CPU, `wet_soak` and `wet_puddle` in `WET`, which both renderers' shaders include. It follows Sébastien Lagarde's published wet-surface model ("Water drop 3b: physically based wet surfaces" and "Water drop 2b: dynamic rain and its effects", 2013):
+
+- **Wet level.** `level = max(amount, water)`, where `water` is the puddle mask below: under a puddle the ground is fully wet.
+- **Porosity darkens.** `porosity = clamp((roughness − 0.5) / 0.4, 0, 1)`: a surface smoother than 0.5 takes no water in. `factor = mix(1, 0.2, (1 − metalness) · porosity)`, `base *= mix(1, factor, level)` and `roughness *= mix(1, factor, 0.5 · level)`, Lagarde's darkest 0.2 and half-weighted gloss gain. Metals and smooth surfaces keep their colour.
+- **A water film.** The clear coat turns on: `clearcoat = max(clearcoat, mix(0.5 · level, 1, water))`, so a damp film has water's normal-incidence reflectance (half the coat's 0.04 is water's 0.02) and a puddle the full coat, grazing Fresnel included. The coat's roughness goes from the wet roughness to `WATER_ROUGHNESS` (0.03) as `water` goes to 1; an existing coat keeps the smaller of its own and that. The tracer floors every roughness at 0.05, so its puddles are a touch broader.
+- **Puddles are flat.** The shading normal is blended to the geometric normal by `water`, so a puddle hides the bumps and normal map under it.
+- **The mask.** `water` is `fbm3_filtered`'s three octaves of value noise on the xor lattice (in WGSL `wet_fbm`, the same sum over `value_noise3`, so the bake's copy of the tracer carries it too) at `(x / puddle_scale, seed slice, z / puddle_scale)` in world space, thresholded at `0.4375 − x · (0.24 + 2.1 x²)` with `x = puddles − 0.5` and a ±0.04 soft shore, times `smoothstep(0.8, 0.95, n_y)` of the geometric normal: water stands only on ground facing up, never on walls. The cubic spreads the threshold over the noise's spread, so `puddles` 0 is dry ground, 0.5 covers about half and 1 floods it. The `seed` (`u64`, folded to 32 bits) picks the slice through the noise. Live filters the octaves by the pixel's footprint (`dpdx` of the world position); the tracer, which supersamples, takes them all.
+
+A `[wet]` whose `amount` and `puddles` are both 0 is skipped in both shaders, and a material without one packs a zero `wet` row, so dry scenes render bit for bit as before (`an_idle_wet_table_renders_byte_identical_in_both_renderers`). `a_wet_floor_is_darker_and_glossier_and_its_puddles_follow_the_mask` renders one floor in both: damp at 0.8 the floor reads 0.41 of dry in both renderers, a flooded floor shows the sun's glint, and every pixel the CPU mask calls in or out of a puddle (7,937 of 9,216 at 96×96) is darker or unchanged accordingly, in both.
+
+**Reflections.** A puddle reflects what live already has for a glossy coat: screen-space reflections (the opaque pass writes the coat's roughness into the G-buffer for a wet pixel, so SSR traces it at water's roughness), then the local reflection cubes, then the sky. SSR loses whatever is off screen, and a street's buildings mostly are, so a street wants reflection cubes baked along it with `pfx bake`: one `[[reflection]]` every 10 to 20 m down the street, each at the street's centre about 1.5 m up, its box spanning the street between the façades and overlapping its neighbours by a `fade` of 2 to 4 m, at `resolution` 256 or 512 (`docs/bake.md`, Local reflections). The cubes carry their hit distances, so the parallax holds across each box, and the live renderer blends the nearest two at every pixel.
+
+```toml
+[[reflection]]
+name = "street-020"
+position = [0.0, 1.5, -20.0]
+min = [-8.0, 0.0, -30.0]
+max = [8.0, 12.0, -10.0]
+resolution = 256
+fade = 3.0
+```
+
+**Cost.** On a full-screen street at 2160×3840 (a road and two walls, every pixel wet, an AMD Radeon RX 9060 XT under Linux, `pfx bench` under `pgpu --class bench`, 300 frames each, p50 GPU frame time): dry 3.32 ms, damp (`amount` 0.6) 3.52 ms, damp with `puddles` 0.5 at 2 m 4.32 ms. The damp film costs 0.20 ms (the soak and the coat's own reflection lobe); puddles add 0.80 ms more, for the noise mask and the sharper screen-space reflections water's roughness asks for (the split between the two was not measured). Dry materials cost nothing.
 
 ## Content
 

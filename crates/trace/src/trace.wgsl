@@ -68,6 +68,7 @@ struct Material {
     layer3: vec4f,
     tail: vec4f,
     params: array<vec4f, 16>,
+    wet: vec4f,
 }
 struct Hit { t: f32, n: vec3f, geometric: vec3f, material: u32, uv: vec2f, tangent: vec3f, bitangent: vec3f, surface: u32, shape: u32 }
 struct ContentInfo { offset: u32, width: u32, height: u32, kind: u32 }
@@ -1192,6 +1193,11 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                     }
                 }
             }
+        }
+        if (wet_active(m.wet)) {
+            let soaked=wet_soak(s,n,geometric,p,m.wet,0.0);
+            s=soaked.shade;
+            n=soaked.normal;
         }
         s.roughness=max(s.roughness,ROUGHNESS_FLOOR);
         s.clearcoat_roughness=max(s.clearcoat_roughness,ROUGHNESS_FLOOR);
