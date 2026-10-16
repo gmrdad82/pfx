@@ -38,6 +38,7 @@ pub enum Aux {
     BloomB,
     BloomLinear,
     LinearSampler,
+    Pyramid,
     Lut,
     Blue,
     Grade,
@@ -795,11 +796,50 @@ fn fill(pairs: &[(f32, usize)]) -> [f32; 16] {
 }
 
 fn bloom_add_params(bloom: &Bloom) -> [f32; 16] {
+    if bloom.kind == bloom::BloomKind::Round {
+        return fill(&[
+            (bloom::blend_factor(bloom::intensity(bloom), 0), 0),
+            (bloom.threshold, 1),
+            (bloom.knee, 2),
+            (bloom.knee_width, 3),
+            (bloom.soft, 4),
+        ]);
+    }
     fill(&[(bloom.strength, 0)])
+}
+
+fn round_dispatches(bloom: &Bloom, scale: f32) -> Vec<GpuDispatch> {
+    let down = |params: [f32; 16]| GpuDispatch {
+        shader: Cow::Borrowed(wgsl::BLOOM_ROUND_DOWN),
+        params,
+        aux: Aux::LinearSampler,
+    };
+    let mut out = vec![down(fill(&[
+        (1.0, 0),
+        (bloom.threshold, 1),
+        (bloom.knee, 2),
+        (bloom.knee_width, 3),
+        (bloom.soft, 4),
+        (scale, 6),
+    ]))];
+    out.extend((1..bloom::ROUND_LEVELS).map(|_| down([0.0; 16])));
+    let intensity = bloom::intensity(bloom);
+    out.extend((1..bloom::ROUND_MIPS).rev().map(|mip| GpuDispatch {
+        shader: Cow::Borrowed(wgsl::BLOOM_ROUND_UP),
+        params: fill(&[(bloom::blend_factor(intensity, mip), 0)]),
+        aux: Aux::Pyramid,
+    }));
+    out.push(GpuDispatch {
+        shader: Cow::Borrowed(wgsl::BLOOM_ROUND_ADD),
+        params: bloom_add_params(bloom),
+        aux: Aux::BloomLinear,
+    });
+    out
 }
 
 fn bloom_dispatches(bloom: &Bloom, scale: f32) -> Vec<GpuDispatch> {
     match bloom.kind {
+        bloom::BloomKind::Round => round_dispatches(bloom, scale),
         bloom::BloomKind::Rings => vec![
             GpuDispatch {
                 shader: Cow::Borrowed(wgsl::BLOOM_RING_DOWN),
@@ -924,7 +964,7 @@ fn grade_parts(passes: &[Pass]) -> (f32, Option<&Bloom>) {
 fn grade_aux(bloom: Option<&Bloom>) -> Aux {
     match bloom.map(|bloom| bloom.kind) {
         None => Aux::Grade,
-        Some(bloom::BloomKind::Box) => Aux::GradeBloomLinear,
+        Some(bloom::BloomKind::Box | bloom::BloomKind::Round) => Aux::GradeBloomLinear,
         Some(bloom::BloomKind::Tent) => Aux::GradeBloom,
         Some(bloom::BloomKind::Rings) => Aux::GradeBloomB,
     }
@@ -937,10 +977,17 @@ fn grade_params(passes: &[Pass]) -> Vec<[f32; 16]> {
         stages.pop();
         stages.into_iter().map(|stage| stage.params).collect()
     });
-    out.push(fill(&[
-        (1.0, 0),
-        (bloom.map_or(0.0, |bloom| bloom.strength), 1),
-    ]));
+    out.push(match bloom {
+        Some(bloom) if bloom.kind == bloom::BloomKind::Round => fill(&[
+            (1.0, 0),
+            (bloom::blend_factor(bloom::intensity(bloom), 0), 1),
+            (bloom.threshold, 2),
+            (bloom.knee, 3),
+            (bloom.knee_width, 4),
+            (bloom.soft, 5),
+        ]),
+        _ => fill(&[(1.0, 0), (bloom.map_or(0.0, |bloom| bloom.strength), 1)]),
+    });
     out
 }
 
@@ -961,12 +1008,17 @@ fn grade_dispatches(passes: &[Pass]) -> Vec<GpuDispatch> {
 }
 
 pub fn grade_shader(passes: &[Pass]) -> String {
-    let aux = grade_aux(grade_parts(passes).1);
+    let fused = grade_parts(passes).1;
+    let aux = grade_aux(fused);
+    let round = fused.is_some_and(|bloom| bloom.kind == bloom::BloomKind::Round);
     let mut out = String::from(wgsl::HEAD);
     match aux {
         Aux::GradeBloom | Aux::GradeBloomB => out.push_str(wgsl::BLOOM_TEX),
         Aux::GradeBloomLinear => out.push_str(wgsl::BLOOM_LINEAR),
         _ => {}
+    }
+    if round {
+        out.push_str(wgsl::ROUND_GLOW);
     }
     out.push_str("\n@group(0) @binding(5) var<storage, read> grade: array<vec4<f32>>;\n");
     out.push_str(wgsl::GRADE_OPS);
@@ -977,6 +1029,9 @@ pub fn grade_shader(passes: &[Pass]) -> String {
     for pass in passes {
         if matches!(pass, Pass::Bloom(_)) {
             out.push_str(match aux {
+                Aux::GradeBloomLinear if round => {
+                    "    let kept = keep_rgb(c.rgb, post.p0.z, post.p0.w, post.p1.x, post.p1.y);\n    c = as_half(vec4<f32>(c.rgb + (glow_tent(p) - kept) * post.p0.y, c.a));\n"
+                }
                 Aux::GradeBloomLinear => {
                     "    let uv = bloom_uv(p);\n    c = as_half(vec4<f32>(c.rgb + textureSampleLevel(bloom_tex, bloom_sampler, uv, 0.0).rgb * post.p0.y, c.a));\n"
                 }
