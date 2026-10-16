@@ -4,6 +4,7 @@ mod build;
 mod diff;
 mod draws;
 mod edit;
+mod haze;
 mod mix;
 mod plates;
 mod play;
@@ -38,6 +39,7 @@ pub use build::project_root;
 pub use diff::{Changes, SceneDiff};
 pub use draws::{Draw, Draws};
 pub use edit::{EditError, Kind, Patch, PatchGroup, SceneEdit, Target, Value};
+pub use haze::OutdoorHaze;
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
 pub use pfx_scene::types::{
@@ -321,6 +323,7 @@ pub struct Haze {
     pub reach: f32,
     pub unmapped: f32,
     pub seed: u32,
+    pub outdoor: Option<OutdoorHaze>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

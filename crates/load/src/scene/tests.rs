@@ -899,7 +899,7 @@ fn round_two_refusals_name_what_is_wrong() {
         (
             "camera-ortho-fstop",
             "[camera]\nprojection = \"orthographic\"\nheight = 2.0\nfstop = 2.8\n",
-            "not fov, focal, sensor, fstop or focus",
+            "not fov, focal, sensor, fstop, focus or focus_keys",
             2,
         ),
         (
