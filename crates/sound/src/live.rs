@@ -7,10 +7,11 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 use crate::channel::{ChannelId, Ducking};
 use crate::clip::Clip;
-use crate::decode::{Decode, DecodeSpec, spec_at_output};
 use crate::drive::Drive;
 use crate::heard::Heard;
 use crate::interp::Resample;
+#[cfg(feature = "media")]
+use crate::media::{Decode, DecodeSpec, spec_at_output};
 use crate::mix::{Level, Mixer, Prepared, VoiceId, lock};
 use crate::music::MusicTrack;
 use crate::pcm::PcmSender;
@@ -25,6 +26,7 @@ pub struct Output {
     mixer: Arc<Mutex<Mixer>>,
     retired: Mutex<Vec<Voice>>,
     heard: Arc<Heard>,
+    #[cfg(feature = "media")]
     decodes: Mutex<Vec<Decode>>,
     rate: u32,
     channels: u16,
@@ -87,6 +89,7 @@ impl Output {
             mixer,
             retired: Mutex::new(Vec::with_capacity(RETIRED_VOICES)),
             heard,
+            #[cfg(feature = "media")]
             decodes: Mutex::new(Vec::new()),
             rate,
             channels,
@@ -415,6 +418,7 @@ impl Output {
             .stream_music(queue, channels, fade_seconds, level))
     }
 
+    #[cfg(feature = "media")]
     pub fn stream(&self, spec: &DecodeSpec, level: Level) -> Result<VoiceId, String> {
         let spec = spec_at_output(spec, self.rate, self.channels);
         let decode = Decode::start(&spec)?;
@@ -463,6 +467,7 @@ impl Drop for Locked<'_> {
 impl Drop for Output {
     fn drop(&mut self) {
         self.stream.take();
+        #[cfg(feature = "media")]
         lock(&self.decodes).clear();
     }
 }

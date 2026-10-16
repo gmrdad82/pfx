@@ -10,7 +10,6 @@ const LOCK_LIMIT: Duration = Duration::from_secs(4 * 3600);
 const ROOT_VARIABLE: &str = "PFX_CACHE";
 
 const GROUPS: &[(&str, &str)] = &[
-    ("ffmpeg", "ffmpeg"),
     ("adapters", "adapters"),
     ("src", "checkouts"),
     ("archive-queue", "archive-queue"),
@@ -33,7 +32,7 @@ pub struct Entry {
 
 impl Entry {
     fn prunable(&self) -> bool {
-        matches!(self.section, "ffmpeg" | "adapters" | "checkouts" | "target")
+        matches!(self.section, "adapters" | "checkouts" | "target")
     }
 
     fn stale(&self, now: SystemTime) -> bool {
@@ -145,7 +144,7 @@ fn repo_of(section: &str, name: &str, origins: &BTreeMap<String, String>) -> Str
             .filter(|(checkout, _)| name.starts_with(&format!("{checkout}-")))
             .max_by_key(|(checkout, _)| checkout.len())
             .map(|(_, repo)| repo.clone()),
-        "ffmpeg" | "archive-queue" => Some(section.to_string()),
+        "archive-queue" => Some(section.to_string()),
         _ => None,
     };
     found.unwrap_or_else(|| name.to_string())
@@ -319,7 +318,6 @@ mod tests {
 
     fn synthetic(label: &str) -> PathBuf {
         let root = scratch(label);
-        fill(&root.join("ffmpeg/0123456789abcdef"), 100);
         fill(
             &root.join("adapters/alpha-alpha-repo-abcdef123456-src"),
             200,
@@ -367,7 +365,7 @@ mod tests {
         assert_eq!(value["root"], root.to_string_lossy().as_ref());
         assert!(value["root_set_by"].is_null());
         assert_eq!(value["at"].as_u64().unwrap(), millis(now));
-        assert!(value["bytes"].as_u64().unwrap() >= 3300);
+        assert!(value["bytes"].as_u64().unwrap() >= 3200);
         assert_eq!(value["prune"]["after_days"], 30);
         assert_eq!(value["prune"]["stale_bytes"], 0);
         assert_eq!(value["archive_queue"]["entries"], 2);
@@ -408,9 +406,6 @@ mod tests {
         let root = synthetic("sections");
         let value = report(&root, None, SystemTime::now()).unwrap();
         let entries = value["entries"].as_array().unwrap();
-        let ffmpeg = find(entries, "0123456789abcdef");
-        assert_eq!(ffmpeg["section"], "ffmpeg");
-        assert_eq!(ffmpeg["bytes"], 100);
         let adapter = find(entries, "alpha-alpha-repo-abcdef123456-src");
         assert_eq!(adapter["section"], "adapters");
         assert_eq!(adapter["repo"], "alpha-alpha-repo-abcdef123456-src");
@@ -429,7 +424,7 @@ mod tests {
         assert_eq!(find(entries, "scratch")["section"], "other");
         assert_eq!(find(entries, "note.txt")["section"], "other");
         assert_eq!(find(entries, "note.txt")["bytes"], 50);
-        assert_eq!(entries.len(), 9);
+        assert_eq!(entries.len(), 8);
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -503,7 +498,7 @@ mod tests {
         ] {
             assert_eq!(find(entries, name)["in_use"], true, "{name}");
         }
-        for name in ["target-beta", "0123456789abcdef", "scratch"] {
+        for name in ["target-beta", "scratch"] {
             assert_eq!(find(entries, name)["in_use"], false, "{name}");
         }
         std::fs::remove_file(root.join("src/alpha-alpha-repo.lock")).unwrap();
@@ -519,7 +514,6 @@ mod tests {
         let root = synthetic(label);
         let long_ago = SystemTime::now() - Duration::from_secs(40 * 86_400);
         for dir in [
-            "ffmpeg/0123456789abcdef",
             "adapters/alpha-alpha-repo-abcdef123456-src",
             "src/alpha-alpha-repo",
             "target-alpha",
@@ -535,10 +529,10 @@ mod tests {
     fn dry_run_reports_what_would_go_and_deletes_nothing() {
         let (root, now) = aged("dry");
         let value = report(&root, None, now).unwrap();
-        assert_eq!(value["prune"]["stale_bytes"], 1000);
+        assert_eq!(value["prune"]["stale_bytes"], 900);
         let done = prune(&root, now, true).unwrap();
-        assert_eq!(done.removed.len(), 4);
-        assert_eq!(done.freed, 1000);
+        assert_eq!(done.removed.len(), 3);
+        assert_eq!(done.freed, 900);
         assert_eq!(done.kept_in_use, 0);
         let answer = pruned(&done);
         assert_eq!(answer["v"], 1);
@@ -548,7 +542,6 @@ mod tests {
         assert!(answer["removed"][0]["section"].is_string());
         assert!(answer["removed"][0]["bytes"].is_u64());
         for dir in [
-            "ffmpeg/0123456789abcdef",
             "adapters/alpha-alpha-repo-abcdef123456-src",
             "src/alpha-alpha-repo",
             "target-alpha",
@@ -566,11 +559,8 @@ mod tests {
         let (root, now) = aged("prune");
         std::fs::write(root.join("src/alpha-alpha-repo.lock"), b"").unwrap();
         let done = prune(&root, now, false).unwrap();
-        assert_eq!(done.removed.len(), 1);
-        assert_eq!(done.removed[0].0, "ffmpeg");
-        assert_eq!(done.removed[0].1, "0123456789abcdef");
+        assert!(done.removed.is_empty());
         assert_eq!(done.kept_in_use, 3);
-        assert!(!root.join("ffmpeg/0123456789abcdef").exists());
         for dir in [
             "adapters/alpha-alpha-repo-abcdef123456-src",
             "src/alpha-alpha-repo",

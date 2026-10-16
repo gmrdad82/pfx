@@ -168,6 +168,7 @@ struct QueueInner {
     ended: bool,
 }
 
+#[cfg_attr(not(feature = "media"), allow(dead_code))]
 impl PcmQueue {
     pub(crate) fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -1216,6 +1217,7 @@ impl Mixer {
         self.scratch = scratch;
     }
 
+    #[cfg_attr(not(feature = "media"), allow(dead_code))]
     pub(crate) fn stream(&mut self, queue: Arc<PcmQueue>, channels: u16, level: Level) -> VoiceId {
         self.stream_on(ChannelId::EFFECTS, queue, channels, level)
     }

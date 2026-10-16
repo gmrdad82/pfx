@@ -23,7 +23,7 @@ authors.workspace = true
 default = ["harness", "editor", "bench", "shot-sound"]
 editor = ["harness", "dep:pfx-editor"]
 bench = ["harness", "dep:pfx-bench"]
-harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film"]
+harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "pfx-run/encode", "dep:pfx-sound", "pfx-sound/media", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film"]
 shot-sound = ["bench", "pfx-sound/shot"]
 
 [dependencies]
@@ -51,6 +51,9 @@ pfx-film = { path = "crates/film", features = ["video"], optional = true }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[dev-dependencies]
+pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.12.1", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"] }
+
 [[bin]]
 name = "pfx"
 path = "src/main.rs"
@@ -69,6 +72,9 @@ debug = false
 
 [profile.dev.package.pfx]
 opt-level = 2
+
+[profile.dev.package.pito-codecs]
+opt-level = 3
 
 [profile.dev.package.png]
 opt-level = 2

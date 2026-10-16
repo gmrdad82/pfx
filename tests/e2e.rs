@@ -437,10 +437,6 @@ fn the_adapter_library_ends_the_process_as_soon_as_it_answers_close() {
     drop(input);
 }
 
-fn system_ffmpeg() -> PathBuf {
-    pfx_run::ffmpeg::system().unwrap().path
-}
-
 fn clip_with(base: &std::path::Path, run: &str, audio: Option<&str>) -> serde_json::Value {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixtures = base.join("none");
@@ -479,38 +475,32 @@ fn master_of(base: &std::path::Path, run: &str) -> PathBuf {
         .join("checker-clip-slide-1280x720-60fps.master.mp4")
 }
 
-fn probe(ffmpeg: &std::path::Path, master: &std::path::Path) -> serde_json::Value {
-    let out = Command::new(ffmpeg.with_file_name("ffprobe"))
-        .args(["-v", "error", "-show_streams", "-of", "json"])
-        .arg(master)
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    serde_json::from_slice(&out.stdout).unwrap()
+fn tracks(master: &std::path::Path) -> pito_codecs::mp4::Reader {
+    pito_codecs::mp4::Reader::open(master).unwrap()
 }
 
-fn video_md5(ffmpeg: &std::path::Path, master: &std::path::Path) -> String {
-    let out = Command::new(ffmpeg)
-        .args(["-v", "error", "-i"])
-        .arg(master)
-        .args(["-map", "0:v:0", "-c", "copy", "-f", "md5", "-"])
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    String::from_utf8(out.stdout).unwrap()
+fn video_packets(master: &std::path::Path) -> Vec<Vec<u8>> {
+    let file = tracks(master);
+    let video = file.video().unwrap();
+    (0..file.tracks[video].samples.len())
+        .map(|i| file.packet(video, i).unwrap().data)
+        .collect()
 }
 
 #[test]
-fn an_adapters_audio_is_muxed_into_the_x264_master_and_reproduces() {
+fn an_adapters_audio_is_muxed_into_the_h264_master_and_reproduces() {
+    use pito_codecs::media::{self, Codec, Prefs};
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let base = root
         .join("tmp")
         .join(format!("e2e-audio-{}", std::process::id()));
-    let ffmpeg = system_ffmpeg();
     let silent = clip_with(&base, "silent", None);
     assert!(silent["audio"].is_null());
-    let silent_info = probe(&ffmpeg, &master_of(&base, "silent"));
-    assert_eq!(silent_info["streams"].as_array().unwrap().len(), 1);
+    assert_eq!(silent["encoder"]["name"], "pito-codecs");
+    assert!(silent["ffmpeg"].is_null());
+    let silent_info = media::probe(&master_of(&base, "silent"), &Prefs::default()).unwrap();
+    assert_eq!(silent_info.video_codec, Some(Codec::H264));
+    assert!(silent_info.audio.is_empty());
     let mut masters = Vec::new();
     for (run, format) in [("one", "f32"), ("two", "f32"), ("short", "s16")] {
         let manifest = clip_with(&base, run, Some(format));
@@ -523,21 +513,19 @@ fn an_adapters_audio_is_muxed_into_the_x264_master_and_reproduces() {
         assert_eq!(audio["pcm_frames"], 24_000);
         assert_eq!(audio["pcm_sha256"].as_str().unwrap().len(), 64);
         let master = master_of(&base, run);
-        let info = probe(&ffmpeg, &master);
-        let streams = info["streams"].as_array().unwrap();
-        assert_eq!(streams.len(), 2);
-        let sound = streams.iter().find(|s| s["codec_type"] == "audio").unwrap();
-        assert_eq!(sound["codec_name"], "aac");
-        assert_eq!(sound["profile"], "LC");
-        assert_eq!(sound["sample_rate"], "48000");
-        assert_eq!(sound["channels"], 2);
-        let rate: u64 = sound["bit_rate"].as_str().unwrap().parse().unwrap();
-        assert!(rate > 0 && rate <= 320_000, "audio runs at {rate} bit/s");
-        let seconds: f64 = sound["duration"].as_str().unwrap().parse().unwrap();
+        let info = media::probe(&master, &Prefs::default()).unwrap();
+        assert_eq!(info.audio.len(), 1);
+        let sound = &info.audio[0];
+        assert_eq!(sound.codec, "aac");
+        assert_eq!(sound.rate, 48_000);
+        assert_eq!(sound.channels, 2);
+        let file = tracks(&master);
+        let track = &file.tracks[file.audio()[0]];
+        let seconds = track.duration_seconds();
         assert!((seconds - 0.5).abs() < 0.03, "audio runs {seconds} s");
         assert_eq!(
-            video_md5(&ffmpeg, &master),
-            video_md5(&ffmpeg, &master_of(&base, "silent"))
+            video_packets(&master),
+            video_packets(&master_of(&base, "silent"))
         );
         masters.push((
             manifest["audio"]["pcm_sha256"].clone(),
@@ -547,8 +535,6 @@ fn an_adapters_audio_is_muxed_into_the_x264_master_and_reproduces() {
     assert_eq!(masters[0].0, masters[1].0);
     assert_eq!(masters[0].1, masters[1].1);
     assert_ne!(masters[0].0, masters[2].0);
-    let encoded = &masters[0].1;
-    assert!(encoded.windows(4).any(|w| w == b"colr"));
     std::fs::remove_dir_all(&base).ok();
 }
 

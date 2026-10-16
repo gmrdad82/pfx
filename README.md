@@ -165,7 +165,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-theme` | the colours, fonts and type the editor and the dev HUD paint with |
 | `pfx-bench` | `pfx bench` |
 | `pfx-assets` | path-traced renders of logos, icons and scenes from SVG masters and small specs |
-| `pfx-run` | the `pfx` tool's process plumbing: GPU queueing, ending children cleanly, the system ffmpeg and the alpha master ([docs/alpha-master.md](docs/alpha-master.md)) |
+| `pfx-run` | the `pfx` tool's process plumbing: GPU queueing, ending children cleanly, the clip master's H.264 and AAC encode through pito-codecs ([docs/render-a-still.md](docs/render-a-still.md#clip-masters)) and the alpha master ([docs/alpha-master.md](docs/alpha-master.md)) |
 
 The `pfx` tool's commands:
 

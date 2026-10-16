@@ -1,6 +1,6 @@
 # The alpha master
 
-H.264 carries no alpha, so a clip whose shot asks for cutouts (`cutouts = true`) gets a second master beside its x264 `.master.mp4`: a folder of 16-bit RGBA PNG frames that pfx writes itself, with no encoder in between. `pfx_run::alpha` writes and reads it.
+H.264 carries no alpha, so a clip whose shot asks for cutouts (`cutouts = true`) gets a second master beside its H.264 `.master.mp4`: a folder of 16-bit RGBA PNG frames that pfx writes itself, with no encoder in between. `pfx_run::alpha` writes and reads it.
 
 ```
 <stem>.alpha.master/

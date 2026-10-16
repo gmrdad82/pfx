@@ -1,4 +1,3 @@
-pub use pfx_run::ffmpeg::Ffmpeg;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -210,7 +209,7 @@ const STAMP: &str = ".used";
 const PRUNE_DAYS: u64 = 30;
 
 pub fn cache() -> Result<PathBuf, String> {
-    pfx_run::ffmpeg::cache()
+    pfx_run::cache::dir()
 }
 
 pub fn touch(entry: &Path) {
@@ -253,7 +252,7 @@ fn grew(cache: &Path) {
 
 fn entries(cache: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    for group in ["ffmpeg", "adapters", "src"] {
+    for group in ["adapters", "src"] {
         if let Ok(dir) = std::fs::read_dir(cache.join(group)) {
             out.extend(dir.flatten().map(|e| e.path()).filter(|p| p.is_dir()));
         }
@@ -378,10 +377,6 @@ pub fn hash_tree(root: &Path) -> Result<BTreeMap<String, String>, String> {
         }
     }
     Ok(out)
-}
-
-pub fn ffmpeg() -> Result<Ffmpeg, String> {
-    pfx_run::ffmpeg::system()
 }
 
 pub struct Built {
@@ -1060,7 +1055,7 @@ source = "git+ssh://git@github.com/gmrdad82/pfx.git?tag=v0.21.0#edd84808a6a906c5
         assert!(inside(&tmp, &tmp.join("render-test")).is_ok());
         let cache = tmp.join(format!("cache-test-{}", std::process::id()));
         let (old, fresh, target) = (
-            cache.join("ffmpeg/aaa"),
+            cache.join("adapters/alpha-old"),
             cache.join("adapters/alpha-x"),
             cache.join("target"),
         );

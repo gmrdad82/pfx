@@ -225,7 +225,7 @@ mixer.glide_pitch_at(mixer.clock() + 24_000, voice, 0.5, 2.0);
 
 ## Vorbis (feature `vorbis`)
 
-Games ship with no ffmpeg, so the feature decodes Ogg Vorbis in pure Rust with [lewton](https://crates.io/crates/lewton) 0.10.2 (pinned). lewton over symphonia: it is only an Ogg Vorbis decoder, about four small crates against symphonia's container and codec framework, and it is all the games need. It is off by default; the ffmpeg path (`Decode`, `DecodeSpec`) is untouched and stays for the renderers.
+The feature decodes Ogg Vorbis in pure Rust with [lewton](https://crates.io/crates/lewton) 0.10.2 (pinned). lewton over symphonia: it is only an Ogg Vorbis decoder, about four small crates against symphonia's container and codec framework, and it is all the games need. It is off by default; other media files go through the `media` feature below.
 
 ```rust
 let clip = Clip::from_vorbis(&bytes)?;
@@ -239,6 +239,31 @@ mixer.stream_vorbis(ChannelId::DIALOG, &source, None, Level::default())?;
 - The stream decodes on its own thread, two seconds ahead of the mixer, and resamples to the mixer's rate with the same windowed-sinc as pitch (below). Looping streams (frames of the file's own rate) re-open the source and skip to the loop start, so the wrap is sample exact; the thread exits when its voice is dropped.
 - `VorbisSource` is bytes held in memory or a file path.
 - Stereo and mono play as they are; a file with more channels plays its first two.
+
+## Media files (feature `media`)
+
+`Decode::start(&DecodeSpec)` and `Output::stream` decode a media file to f32 PCM at the spec's rate and channel count, on their own thread two seconds ahead of the mixer, through [pito-codecs](https://github.com/gmrdad82/pito-codecs) v1.12.1 (MIT, pinned by tag, CPU decoders only); no other program runs. The feature is off by default and the `pfx` tool turns it on. pito-codecs builds its media front only with its video codecs on, so a build with `media` also compiles its H.264, HEVC and VP9 decoders and its GPU loaders, though the sound never uses them.
+
+```rust
+let spec = DecodeSpec {
+    media: "reel.mov".into(),
+    start: 1.5,
+    length: 10.0,
+    rate: 48_000,
+    channels: 2,
+    tracks: vec![(1, 0.4), (2, 1.0)],
+};
+let voice = output.stream(&spec, Level::default())?;
+```
+
+- MP4, MOV, MKV and WebM tracks in AAC, Opus, AC-3, E-AC-3, MP1, MP2, MP3 or PCM are read sample-exact from `start` for `length` seconds through pito-codecs' `audio_stream` (one track) or `audio_mix_stream` (several), and resampled with its windowed-sinc.
+- WAV (PCM 8, 16, 24 and 32-bit, float 32 and 64-bit), raw MP3 (MPEG-1, 2 and 2.5, layers I to III, an ID3v2 tag skipped) and raw ADTS AAC are decoded whole, then shaped to the channel count, resampled and cut the same way.
+- `tracks` names audio tracks by their order among the file's audio tracks, 0 first, each with a gain; the tracks it leaves out are silent and the mix is stereo. Empty, the first audio track plays at `channels`. Mono becomes stereo on both sides and more channels fold down with pito-codecs' downmix.
+- Refused with a plain reason when `start` opens: Ogg (the `vorbis` feature reads Ogg Vorbis), FLAC, ALAC, DTS and any other codec pito-codecs does not decode, an audio track the file lacks, and more than two channels from a track with another count.
+
+What changed from the ffmpeg reader before it: `DecodeSpec` has no `ffmpeg` path, `tracks` count audio tracks instead of a container's stream numbers, the default is the first audio track instead of ffmpeg's pick, and a raw MP3's Xing frame and LAME encoder delay play as leading silence instead of being trimmed (47 ms on a LAME 192 kbit/s file; past it the samples are within 4e-7 of ffmpeg's). A raw ADTS AAC file decodes within 8e-4 of ffmpeg's, sample for sample.
+
+Cost, measured once on 10 s of 48 kHz stereo at 192 kbit/s (release build, Ryzen 9 9950X under a load average near 30, three runs): a raw MP3 decodes whole in 8 to 17 ms; an AAC track in MP4 opens in 20 to 32 ms, most of it pito-codecs' one-time look for a GPU decoder, and streams through in 18 to 47 ms. ffmpeg as a child process took 40 to 44 ms and 35 to 38 ms for the same files.
 
 ## Voice effects (feature `voicefx`)
 
@@ -410,4 +435,4 @@ Before, 92 % of the jittered case was the sinc: for every pitched frame `Kernel:
 
 ## Tests
 
-No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, drive off bit for bit, the three curves pinned by a hash, a compensated drive keeping a quiet tone's level, scheduled glides matching the plain call made at the same frame bit for bit (and leaving the frames before it alone), and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The voice effects' tests cover the crusher's bit-depth steps and sample-and-hold runs, the chorus's seed (the same seed the same samples, another seed others), the vocoder singing at the carrier's harmonics and falling silent with the voice, the segmentation finding synthesised bursts between silences (with and without onsets) and onsets splitting a run that steps up without a gap, and the grain helpers' lengths, seeded order and a repitch landing on the moved pitch. The crate's own tests turn `vorbis`, `voicefx` and `shot` on through a self dev-dependency, so the workspace gate runs them. The shot mix's tests (`crates/sound/tests/shot.rs`, feature `shot`) cover the mix's exact length for a frame count and rate, the same script giving the same samples (and another seed others), and the engine's cycle following its rpm curve (the autocorrelation's period within 2 % of 120 / rpm seconds at 2,000 and 5,000 rpm).
+No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, drive off bit for bit, the three curves pinned by a hash, a compensated drive keeping a quiet tone's level, scheduled glides matching the plain call made at the same frame bit for bit (and leaving the frames before it alone), and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The voice effects' tests cover the crusher's bit-depth steps and sample-and-hold runs, the chorus's seed (the same seed the same samples, another seed others), the vocoder singing at the carrier's harmonics and falling silent with the voice, the segmentation finding synthesised bursts between silences (with and without onsets) and onsets splitting a run that steps up without a gap, and the grain helpers' lengths, seeded order and a repitch landing on the moved pitch. The media reader's tests (feature `media`) cut, resample and shape a WAV to its spec, decode an AAC tone in MP4 to its exact length and at its track's gain, and refuse Ogg, FLAC and DTS by name. The crate's own tests turn `vorbis`, `voicefx`, `shot` and `media` on through a self dev-dependency, so the workspace gate runs them. The shot mix's tests (`crates/sound/tests/shot.rs`, feature `shot`) cover the mix's exact length for a frame count and rate, the same script giving the same samples (and another seed others), and the engine's cycle following its rpm curve (the autocorrelation's period within 2 % of 120 / rpm seconds at 2,000 and 5,000 rpm).
