@@ -1,5 +1,5 @@
 use super::footage::Picture;
-use super::{Blank, Fit};
+use super::{Atlas, Fit, Shown};
 use crate::camera::layout_in;
 use crate::overlay::Overlay;
 use crate::sheet::{Letter, Sheet};
@@ -56,7 +56,8 @@ pub struct Painter {
     icons: FlatIcons,
     font: Option<Font>,
     pages: GlyphPages,
-    sprite: Option<(u64, FlatSprites)>,
+    sprite: Option<((u64, u64), [u32; 2], FlatSprites)>,
+    images: Option<FlatSprites>,
     tokens: TokenSet,
     curve: ShadowCurve,
     size: [u32; 2],
@@ -124,7 +125,7 @@ fn place(font: &mut Font, text: &str, size: f32, weight: u16, scale: f32) -> Pla
 }
 
 impl Sheet for Page<'_> {
-    type Drawn = Blank;
+    type Drawn = Shown;
 
     fn size(&self) -> [f32; 2] {
         self.size
@@ -202,7 +203,10 @@ impl Sheet for Page<'_> {
         Some(Draw::new(Shape::Icon(Icon(self.tick + step))).transform(at))
     }
 
-    fn art(&mut self, _art: &Blank) {}
+    fn art(&mut self, art: &Shown) {
+        self.draws
+            .push(Draw::sprite(art.centre, art.size, art.uv).shadow(Shadow::None));
+    }
 }
 
 fn tick_height(step: u32) -> f32 {
@@ -264,6 +268,29 @@ fn bytes(halves: &[u16]) -> Vec<u8> {
     halves.iter().map(|&h| table[usize::from(h)]).collect()
 }
 
+pub fn cropped(picture: &Picture, crop: Option<[f32; 4]>) -> Result<([u32; 2], Vec<u8>), String> {
+    let [w, h] = picture.size;
+    let Some([x, y, cw, ch]) = crop else {
+        return Ok((picture.size, picture.rgba.clone()));
+    };
+    let x0 = (x.round().max(0.0) as u32).min(w);
+    let y0 = (y.round().max(0.0) as u32).min(h);
+    let x1 = ((x + cw).round().max(0.0) as u32).min(w);
+    let y1 = ((y + ch).round().max(0.0) as u32).min(h);
+    if x1 <= x0 || y1 <= y0 {
+        return Err(format!(
+            "the crop [{x}, {y}, {cw}, {ch}] lies outside the {w}x{h} picture"
+        ));
+    }
+    let row = (w * 4) as usize;
+    let mut out = Vec::with_capacity(((x1 - x0) * (y1 - y0) * 4) as usize);
+    for line in y0..y1 {
+        let at = line as usize * row;
+        out.extend_from_slice(&picture.rgba[at + x0 as usize * 4..at + x1 as usize * 4]);
+    }
+    Ok(([x1 - x0, y1 - y0], out))
+}
+
 pub fn placed(fit: Fit, source: [u32; 2], layout: [f32; 2]) -> ([f32; 2], [f32; 2]) {
     let [w, h] = [source[0].max(1) as f32, source[1].max(1) as f32];
     let (sx, sy) = (layout[0] / w, layout[1] / h);
@@ -282,11 +309,18 @@ impl Painter {
         font: Option<Font>,
         tick: u32,
         seed: u32,
+        atlas: Option<Atlas>,
     ) -> Result<Painter, String> {
         let renderer = Renderer::new(gpu.clone(), size[0], size[1]).map_err(|e| e.to_string())?;
         let target = gpu.offscreen(size[0], size[1], FORMAT)?;
         let upscale = Upscale::new(&gpu.device);
         let icons = FlatIcons::new(&gpu.device, &gpu.queue, icons);
+        let images = atlas
+            .map(|a| -> Result<FlatSprites, String> {
+                let image = SpriteImage::new(a.size[0], a.size[1], a.rgba, SpriteFilter::Linear)?;
+                Ok(FlatSprites::new(&gpu.device, &gpu.queue, image))
+            })
+            .transpose()?;
         Ok(Painter {
             gpu,
             renderer,
@@ -296,6 +330,7 @@ impl Painter {
             font,
             pages: GlyphPages::new(),
             sprite: None,
+            images,
             tokens: TokenSet::new(),
             curve: ShadowCurve::none(),
             size,
@@ -304,31 +339,31 @@ impl Painter {
         })
     }
 
-    fn sprite(&mut self, picture: &Picture) -> Result<(), String> {
-        if self
-            .sprite
-            .as_ref()
-            .is_some_and(|(s, _)| *s == picture.stamp)
+    fn sprite(
+        &mut self,
+        picture: &Picture,
+        key: (u64, u64),
+        crop: Option<[f32; 4]>,
+    ) -> Result<[u32; 2], String> {
+        if let Some((k, size, _)) = &self.sprite
+            && *k == key
         {
-            return Ok(());
+            return Ok(*size);
         }
-        let image = SpriteImage::new(
-            picture.size[0],
-            picture.size[1],
-            picture.rgba.clone(),
-            SpriteFilter::Linear,
-        )?;
+        let (size, rgba) = cropped(picture, crop)?;
+        let image = SpriteImage::new(size[0], size[1], rgba, SpriteFilter::Linear)?;
         self.sprite = Some((
-            picture.stamp,
+            key,
+            size,
             FlatSprites::new(&self.gpu.device, &self.gpu.queue, image),
         ));
-        Ok(())
+        Ok(size)
     }
 
     fn picture(
         &mut self,
-        frame: &FilmFrame<'_, Blank>,
-        picture: Option<&Picture>,
+        frame: &FilmFrame<'_, Shown>,
+        picture: Option<(&Picture, u64, Option<[f32; 4]>)>,
         fit: Fit,
         backdrop: Backdrop,
     ) -> Result<(), String> {
@@ -340,12 +375,12 @@ impl Painter {
             Backdrop::Solid(c) => back.fill(c),
             Backdrop::Fall(top, bottom) => back.vertical(top, bottom),
         });
-        if let Some(picture) = picture {
-            self.sprite(picture)?;
-            let (centre, size) = placed(fit, picture.size, wide);
+        if let Some((picture, serial, crop)) = picture {
+            let shown = self.sprite(picture, (serial, picture.stamp), crop)?;
+            let (centre, size) = placed(fit, shown, wide);
             draws.push(Draw::sprite(centre, size, [0.0, 0.0, 1.0, 1.0]).shadow(Shadow::None));
         }
-        let sprites = picture.and(self.sprite.as_ref().map(|(_, s)| s));
+        let sprites = picture.and(self.sprite.as_ref().map(|(_, _, s)| s));
         let scene = FlatScene {
             layout: wide,
             clear: Some(backdrop.clear()),
@@ -373,7 +408,7 @@ impl Painter {
 
     fn overlay(
         &mut self,
-        frame: &FilmFrame<'_, Blank>,
+        frame: &FilmFrame<'_, Shown>,
         overlay: &mut Overlay,
     ) -> Result<(), String> {
         let size = layout_in(frame.cut.grade.camera.wide, self.size);
@@ -432,7 +467,7 @@ impl Painter {
             groups: &groups,
             text: &texts,
             icons: Some(&self.icons),
-            sprites: None,
+            sprites: self.images.as_ref(),
             environment: None,
             post: false,
             frame: frame.index as u32,
@@ -472,9 +507,9 @@ impl Painter {
 
     pub fn paint(
         &mut self,
-        frame: &FilmFrame<'_, Blank>,
+        frame: &FilmFrame<'_, Shown>,
         overlay: &mut Overlay,
-        picture: Option<&Picture>,
+        picture: Option<(&Picture, u64, Option<[f32; 4]>)>,
         fit: Fit,
         backdrop: Backdrop,
     ) -> Result<Vec<u8>, String> {

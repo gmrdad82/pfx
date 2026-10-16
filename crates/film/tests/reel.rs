@@ -11,6 +11,9 @@ const FOLDER: [u32; 2] = [64, 36];
 const FOLDER_FPS: u32 = 15;
 const TONE: f32 = 330.0;
 const WAV_RATE: u32 = 24_000;
+const RAMP: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 40 20"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs><rect width="40" height="20" fill="url(#g)"/></svg>"##;
+const LINE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20"><path d="M2 10H18" fill="none" stroke="#00ff00" stroke-width="4" stroke-linecap="butt"/></svg>"##;
+const QUADRANTS: [[u8; 3]; 4] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255]];
 
 fn dir(name: &str) -> PathBuf {
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
@@ -106,8 +109,30 @@ fn clip(at: &Path) {
     .unwrap();
 }
 
+fn png(path: &Path, size: [u32; 2], pixel: impl Fn(u32, u32) -> [u8; 3]) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut png = png::Encoder::new(file, size[0], size[1]);
+    png.set_color(png::ColorType::Rgb);
+    png.set_depth(png::BitDepth::Eight);
+    let pixels: Vec<u8> = (0..size[1])
+        .flat_map(|y| (0..size[0]).map(move |x| (x, y)))
+        .flat_map(|(x, y)| pixel(x, y))
+        .collect();
+    png.write_header()
+        .unwrap()
+        .write_image_data(&pixels)
+        .unwrap();
+}
+
 fn script(at: &Path, clip: bool) -> PathBuf {
     folder(at);
+    std::fs::create_dir_all(at.join("quad")).unwrap();
+    png(&at.join("quad/000000.png"), FOLDER, |x, y| {
+        QUADRANTS[(usize::from(y >= FOLDER[1] / 2) * 2) + usize::from(x >= FOLDER[0] / 2)]
+    });
+    png(&at.join("logo.png"), [8, 4], |_, _| [255, 220, 0]);
+    std::fs::write(at.join("ramp.svg"), RAMP).unwrap();
+    std::fs::write(at.join("line.svg"), LINE).unwrap();
     std::fs::write(at.join("mark.svg"), MARK).unwrap();
     std::fs::write(at.join("score.toml"), SCORE).unwrap();
     std::fs::write(at.join("font.ttf"), pfx_text::fixture::EB_GARAMOND).unwrap();
@@ -122,10 +147,14 @@ fn script(at: &Path, clip: bool) -> PathBuf {
     }
     text.push_str(
         "[[scene]]\nname = \"shot\"\nkind = \"frames\"\ndir = \"shot\"\nseconds = 0.2\nfit = \"fill\"\n\n\
+         [[scene]]\nname = \"crop\"\nkind = \"frames\"\ndir = \"quad\"\nseconds = 0.1\nfit = \"fill\"\ncrop = [32, 0, 32, 18]\n\n\
          [[scene]]\nname = \"end\"\nkind = \"card\"\ngradient = [\"#203040\", \"#102030\"]\nseconds = 0.3\nstill = \"end\"\n\n\
          [[scene.key]]\nat = 0.0\nzoom = 1.0\n\n[[scene.key]]\nat = 0.3\nzoom = 1.2\nvignette = 0.5\n\n\
          [[scene.text]]\ntext = \"The End\"\nstyle = \"title\"\nat = 0.0\nplace = [160, 60]\n\n\
          [[scene.art]]\nkind = \"mark\"\nfile = \"mark.svg\"\nat = 0.0\nplace = [160, 120]\nsize = 30\ncheck = true\n\n\
+         [[scene.art]]\nkind = \"mark\"\nfile = \"ramp.svg\"\nat = 0.0\nplace = [70, 150]\nsize = 30\noutline = 0\nfade = 0.0\nout = 0.0\n\n\
+         [[scene.art]]\nkind = \"mark\"\nfile = \"line.svg\"\nat = 0.0\nplace = [250, 150]\nsize = 30\noutline = 0\nfade = 0.0\nout = 0.0\n\n\
+         [[scene.art]]\nkind = \"image\"\nfile = \"logo.png\"\nat = 0.0\nplace = [40, 30]\nwidth = 40\nheight = 20\nfade = 0.0\nout = 0.0\n\n\
          [[scene.sound]]\nat = 0.0\nsound = \"thump\"\n",
     );
     let path = at.join("reel.film.toml");
@@ -140,8 +169,8 @@ fn a_footage_film_plans_its_scenes_and_refuses_what_it_cannot_play() {
     let roll = Roll::open(&path).unwrap();
     let plan = roll.plan();
     let kinds: Vec<Kind> = plan.iter().map(|p| p.kind).collect();
-    assert_eq!(kinds, [Kind::Frames, Kind::Card]);
-    assert_eq!(roll.frames(), 6 + 9);
+    assert_eq!(kinds, [Kind::Frames, Kind::Frames, Kind::Card]);
+    assert_eq!(roll.frames(), 6 + 3 + 9);
     assert_eq!(plan[0].source, Some(at.join("shot")));
     let pcod = roll.pcod(Path::new("/o"), Path::new("/o/f.mp4")).join(" ");
     let out = Path::new("/o");
@@ -157,6 +186,10 @@ fn a_footage_film_plans_its_scenes_and_refuses_what_it_cannot_play() {
     for (from, to) in [
         ("kind = \"card\"", "kind = \"tape\""),
         ("kind = \"card\"", "kind = \"card\"\nfile = \"x.mp4\""),
+        ("crop = [32, 0, 32, 18]", "crop = [32, 0, 0, 18]"),
+        ("kind = \"card\"", "kind = \"card\"\ncrop = [0, 0, 4, 4]"),
+        ("file = \"logo.png\"", "file = \"none.png\""),
+        ("width = 40", "width = -4"),
         ("dir = \"shot\"", "dir = \"none\""),
         ("dir = \"shot\"", "file = \"shot\""),
         ("size = [320, 180]", "size = [321, 180]"),
@@ -203,6 +236,11 @@ impl Encoder for Tape {
 fn centre(frame: &[u8]) -> [u8; 3] {
     let at = ((SIZE[1] / 2 * SIZE[0] + SIZE[0] / 2) * 4) as usize;
     [frame[at], frame[at + 1], frame[at + 2]]
+}
+
+fn pixel(frame: &[u8], x: u32, y: u32) -> [u8; 3] {
+    let i = ((y * SIZE[0] + x) * 4) as usize;
+    [frame[i], frame[i + 1], frame[i + 2]]
 }
 
 fn near(a: [u8; 3], b: [u8; 3], by: i32) -> bool {
@@ -253,7 +291,36 @@ fn a_footage_film_renders_the_same_frames_and_audio_every_time() {
     let from = (lead * RATE as usize / FPS as usize) * 2;
     let folder_audio = &one.audio[from..from + (RATE as usize / 10) * 2];
     assert!(energy(folder_audio) > 0.05, "the folder's WAV plays");
-    let card = &one.frames[lead + 6 + 4];
+    for f in &one.frames[lead + 6..lead + 9] {
+        for (x, y) in [(2, 2), (317, 2), (2, 177), (317, 177), (160, 90)] {
+            let c = pixel(f, x, y);
+            assert!(near(c, QUADRANTS[1], 3), "the crop shows {c:?} at {x},{y}");
+        }
+    }
+    let card = &one.frames[lead + 9 + 4];
+    let (left, right) = (pixel(card, 48, 150), pixel(card, 92, 150));
+    assert!(
+        left[0] > 180 && left[2] < 80,
+        "the ramp starts red: {left:?}"
+    );
+    assert!(
+        right[2] > 180 && right[0] < 80,
+        "the ramp ends blue: {right:?}"
+    );
+    assert!(
+        near(pixel(card, 250, 150), [0, 255, 0], 30),
+        "the stroke draws"
+    );
+    for (x, y) in [(250, 141), (250, 159), (232, 150), (268, 150)] {
+        let c = pixel(card, x, y);
+        assert!(
+            c[1] < 120,
+            "the butt-capped stroke stays inside its line at {x},{y}: {c:?}"
+        );
+    }
+    let logo = pixel(card, 40, 30);
+    assert!(near(logo, [255, 220, 0], 6), "the image draws: {logo:?}");
+    let card = &one.frames[lead + 9 + 4];
     let lit = card
         .chunks_exact(4)
         .filter(|p| p[0] > 120 && p[1] > 120 && p[2] > 120)

@@ -19,6 +19,7 @@ use pfx_gpu::Gpu;
 use pfx_input::InputEvent;
 use pfx_live::flat::{Icons, Srgba};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub const FPS: u32 = 60;
@@ -31,16 +32,27 @@ const BLACK: Srgba = Srgba([0.0, 0.0, 0.0, 1.0]);
 #[derive(Clone, Debug, PartialEq)]
 pub struct Reel;
 
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Bare {}
+pub struct Image {
+    pub kind: String,
+    pub file: String,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    #[serde(default)]
+    pub fit: Fit,
+}
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Blank;
+pub struct Shown {
+    pub centre: [f32; 2],
+    pub size: [f32; 2],
+    pub uv: [f32; 4],
+}
 
-impl Drawn for Blank {
+impl Drawn for Shown {
     fn anchor(&self) -> Option<[f32; 2]> {
-        None
+        Some(self.centre)
     }
 
     fn flat(&self) -> bool {
@@ -92,6 +104,7 @@ pub struct Footage {
     pub track: usize,
     pub colour: Option<String>,
     pub gradient: Option<[String; 2]>,
+    pub crop: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -130,9 +143,24 @@ fn colour_ok(text: &Option<String>, key: &str) -> Result<(), String> {
 impl Kinds for Reel {
     type Scene = Footage;
     type Film = Setup;
-    type Art = Bare;
-    type Drawn = Blank;
-    const ART: &'static [&'static str] = &[];
+    type Art = Image;
+    type Drawn = Shown;
+    const ART: &'static [&'static str] = &["image"];
+
+    fn check_art(art: &crate::art::Art<Image>) -> Result<(), String> {
+        let crate::art::What::App(image) = &art.what else {
+            return Ok(());
+        };
+        let side =
+            |v: Option<f32>| v.is_none_or(|v| v.is_finite() && v > 0.0 && v <= SIDES[1] as f32);
+        if !(side(image.width) && side(image.height)) {
+            return Err(format!(
+                "an image's width and height are in (0, {}]",
+                SIDES[1]
+            ));
+        }
+        Ok(())
+    }
 
     fn check_film(film: &Setup) -> Result<(), String> {
         let [low, high] = SIDES;
@@ -170,6 +198,15 @@ impl Kinds for Reel {
         if f.colour.is_some() && f.gradient.is_some() {
             return Err("a scene's backdrop is a colour or a gradient, not both".into());
         }
+        if let Some([x, y, w, h]) = f.crop {
+            if f.kind == Kind::Card {
+                return Err("a card has no footage to crop".into());
+            }
+            let finite = [x, y, w, h].iter().all(|v| v.is_finite());
+            if !(finite && x >= 0.0 && y >= 0.0 && w >= 1.0 && h >= 1.0) {
+                return Err("crop is [x, y, width, height] in source pixels, x and y 0 or more, the sides 1 or more".into());
+            }
+        }
         colour_ok(&f.colour, "colour")?;
         for g in f.gradient.iter().flatten() {
             hex(g).map_err(|e| format!("gradient: {e}"))?;
@@ -178,16 +215,111 @@ impl Kinds for Reel {
     }
 }
 
-pub struct Words;
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Slot {
+    pub uv: [f32; 4],
+    pub size: [u32; 2],
+}
+
+#[derive(Default)]
+pub struct Words {
+    pub images: HashMap<String, Slot>,
+}
+
+pub fn posed(image: &Image, slot: Slot, centre: [f32; 2]) -> Shown {
+    let natural = [slot.size[0].max(1) as f32, slot.size[1].max(1) as f32];
+    let aspect = natural[0] / natural[1];
+    let boxed = match (image.width, image.height) {
+        (Some(w), Some(h)) => [w, h],
+        (Some(w), None) => [w, w / aspect],
+        (None, Some(h)) => [h * aspect, h],
+        (None, None) => natural,
+    };
+    let [u0, v0, u1, v1] = slot.uv;
+    let (size, uv) = match (image.fit, image.width.zip(image.height)) {
+        (Fit::Fit, Some(_)) => {
+            let s = (boxed[0] / natural[0]).min(boxed[1] / natural[1]);
+            ([natural[0] * s, natural[1] * s], slot.uv)
+        }
+        (Fit::Fill, Some(_)) => {
+            let s = (boxed[0] / natural[0]).max(boxed[1] / natural[1]);
+            let keep = [boxed[0] / (natural[0] * s), boxed[1] / (natural[1] * s)];
+            let mid = [(u0 + u1) * 0.5, (v0 + v1) * 0.5];
+            let half = [(u1 - u0) * keep[0] * 0.5, (v1 - v0) * keep[1] * 0.5];
+            (
+                boxed,
+                [
+                    mid[0] - half[0],
+                    mid[1] - half[1],
+                    mid[0] + half[0],
+                    mid[1] + half[1],
+                ],
+            )
+        }
+        (_, None) => (boxed, slot.uv),
+    };
+    Shown { centre, size, uv }
+}
 
 impl Cast<Reel> for Words {
     fn fill(&self, text: &str) -> String {
         text.to_string()
     }
 
-    fn pose(&self, _art: &Bare, _posed: Posed) -> Option<(Blank, f32)> {
-        None
+    fn pose(&self, art: &Image, posed_at: Posed) -> Option<(Shown, f32)> {
+        let slot = *self.images.get(&art.file)?;
+        Some((posed(art, slot, posed_at.centre), 1.0))
     }
+}
+
+const GUTTER: u32 = 2;
+const ATLAS_SIDE: u32 = 8192;
+
+pub struct Atlas {
+    pub size: [u32; 2],
+    pub rgba: Vec<u8>,
+    pub slots: HashMap<String, Slot>,
+}
+
+pub fn atlas(images: &[(String, [u32; 2], Vec<u8>)]) -> Result<Option<Atlas>, String> {
+    if images.is_empty() {
+        return Ok(None);
+    }
+    let width = images.iter().map(|(_, s, _)| s[0]).max().unwrap_or(1) + GUTTER * 2;
+    let height: u32 = images.iter().map(|(_, s, _)| s[1] + GUTTER * 2).sum();
+    if width > ATLAS_SIDE || height > ATLAS_SIDE {
+        return Err(format!(
+            "the film's images need a {width}x{height} atlas; together they fit in {ATLAS_SIDE}x{ATLAS_SIDE}"
+        ));
+    }
+    let mut rgba = vec![0u8; (width * height * 4) as usize];
+    let mut slots = HashMap::new();
+    let mut top = 0u32;
+    for (name, [w, h], pixels) in images {
+        let (w, h) = (*w, *h);
+        for y in 0..h + GUTTER * 2 {
+            let sy = y.saturating_sub(GUTTER).min(h - 1);
+            for x in 0..w + GUTTER * 2 {
+                let sx = x.saturating_sub(GUTTER).min(w - 1);
+                let from = ((sy * w + sx) * 4) as usize;
+                let to = (((top + y) * width + x) * 4) as usize;
+                rgba[to..to + 4].copy_from_slice(&pixels[from..from + 4]);
+            }
+        }
+        let uv = [
+            GUTTER as f32 / width as f32,
+            (top + GUTTER) as f32 / height as f32,
+            (GUTTER + w) as f32 / width as f32,
+            (top + GUTTER + h) as f32 / height as f32,
+        ];
+        slots.insert(name.clone(), Slot { uv, size: [w, h] });
+        top += h + GUTTER * 2;
+    }
+    Ok(Some(Atlas {
+        size: [width, height],
+        rgba,
+        slots,
+    }))
 }
 
 #[derive(Clone, Debug)]
@@ -214,6 +346,7 @@ pub struct Roll {
     pub path: PathBuf,
     base: PathBuf,
     marks: Vec<(String, String)>,
+    images: Vec<(String, [u32; 2], Vec<u8>)>,
     score: String,
     font: Option<Vec<u8>>,
 }
@@ -222,13 +355,13 @@ fn read_text(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-fn mark_files(raw: &toml::Table) -> Vec<String> {
+fn art_files(raw: &toml::Table, kind: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let scenes = raw.get("scene").and_then(|s| s.as_array());
     for scene in scenes.into_iter().flatten() {
         let arts = scene.get("art").and_then(|a| a.as_array());
         for art in arts.into_iter().flatten() {
-            let mark = art.get("kind").and_then(|k| k.as_str()) == Some("mark");
+            let mark = art.get("kind").and_then(|k| k.as_str()) == Some(kind);
             if let (true, Some(file)) = (mark, art.get("file").and_then(|f| f.as_str()))
                 && !out.iter().any(|f| f == file)
             {
@@ -262,7 +395,14 @@ impl Roll {
             .to_path_buf();
         let at = |e: String| format!("{}: {e}", path.display());
         let raw: toml::Table = toml::from_str(&text).map_err(|e| at(e.to_string()))?;
-        let marks = mark_files(&raw)
+        let images = art_files(&raw, "image")
+            .into_iter()
+            .map(|name| {
+                let (size, rgba) = footage::decode_png(&base.join(&name))?;
+                Ok((name, size, rgba))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let marks = art_files(&raw, "mark")
             .into_iter()
             .map(|name| Ok((name.clone(), read_text(&base.join(&name))?)))
             .collect::<Result<Vec<_>, String>>()?;
@@ -293,6 +433,7 @@ impl Roll {
             path: path.to_path_buf(),
             base,
             marks,
+            images,
             score,
             font,
         };
@@ -393,12 +534,18 @@ impl Roll {
             None => None,
         };
         let seed = self.script.film.seed as u32;
-        let painter = Painter::new(gpu, self.size(), icons, font, tick, seed)?;
+        let atlas = atlas(&self.images)?;
+        let words = Words {
+            images: atlas.as_ref().map(|a| a.slots.clone()).unwrap_or_default(),
+        };
+        let painter = Painter::new(gpu, self.size(), icons, font, tick, seed, atlas)?;
         let mut player = Player {
             roll: self,
             painter,
             overlay: Overlay::new(marks),
             playing: None,
+            serial: 0,
+            crop: None,
             fit: Fit::Fit,
             backdrop: Backdrop::Solid(BLACK),
             volume: 1.0,
@@ -410,7 +557,7 @@ impl Roll {
         let mut score = Score::new(&self.score, &[], self.script.film.seed, RATE)?;
         let crew = Crew {
             show: &mut player,
-            cast: &Words,
+            cast: &words,
             score: &mut score,
             encoder: encoder.map(|e| e as &mut dyn Encoder),
         };
@@ -451,6 +598,8 @@ struct Player<'a> {
     painter: Painter,
     overlay: Overlay,
     playing: Option<Box<dyn Source>>,
+    serial: u64,
+    crop: Option<[f32; 4]>,
     fit: Fit,
     backdrop: Backdrop,
     volume: f32,
@@ -501,6 +650,8 @@ impl Show for Player<'_> {
             Kind::Frames => Box::new(Folder::open(Sequence::find(&path, self.roll.fps())?)?),
             Kind::Card => Box::new(Card),
         });
+        self.serial += 1;
+        self.crop = f.crop;
         self.fit = f.fit;
         self.backdrop = backdrop(f, &self.roll.script.film.app);
         self.volume = f.volume;
@@ -515,7 +666,7 @@ impl Show for Player<'_> {
 
     fn tick(&mut self, _frame: u64, _input: &[InputEvent]) {}
 
-    fn draw(&mut self, frame: &FilmFrame<'_, Blank>) -> Result<(), String> {
+    fn draw(&mut self, frame: &FilmFrame<'_, Shown>) -> Result<(), String> {
         let source = self.playing.as_mut().ok_or("no scene was sought")?;
         let at = self.from + self.clock;
         let next = at + frame.seconds();
@@ -528,9 +679,13 @@ impl Show for Player<'_> {
         }
         self.clock += frame.seconds();
         let picture = source.picture(at)?;
-        self.frame =
-            self.painter
-                .paint(frame, &mut self.overlay, picture, self.fit, self.backdrop)?;
+        self.frame = self.painter.paint(
+            frame,
+            &mut self.overlay,
+            picture.map(|p| (p, self.serial, self.crop)),
+            self.fit,
+            self.backdrop,
+        )?;
         Ok(())
     }
 

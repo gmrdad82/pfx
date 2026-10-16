@@ -128,13 +128,43 @@ Every place in a script (a caption's `place`, a key's `focus`, an art's `place`)
 
 ## Marks and the check badge
 
-`Marks::load(base, &[(name, svg)])` turns each SVG's paths into flat icons, one per outer contour with its holes, from icon id `base` on; the app bakes `marks.shapes` into its icon atlas. A mark art draws one with an optional `label` and, with `check = true`, a check badge: a disc with the sheet's tick and a word beside it. The word and the disc's colour are the app's, set once on the marks:
+`Marks::load(base, &[(name, svg)])` reads each SVG as it is drawn, through pfx-live's `svg::read_mark`, into flat draws and icons from icon id `base` on; the app bakes `marks.shapes` into its icon atlas. A mark keeps:
+
+- **Fills:** `#rgb`, `#rrggbb`, `rgb()`, `rgba()` and the names black, white, red, green, blue and transparent; `currentColor` and a missing `fill` paint white (or the art's `colour`); `fill-opacity`; `fill-rule` (`nonzero`, the default, or `evenodd`), resolved into clean outlines with holes.
+- **Gradients:** `linearGradient` and `radialGradient` (centre and radius; a focal point is ignored) with up to 8 stops and `stop-opacity`, in `objectBoundingBox` or `userSpaceOnUse` units, with `gradientTransform` and `href` to another gradient's stops. A rotated or skewed radial gradient keeps its axis lengths, not its tilt.
+- **Strokes:** a colour or a gradient, `stroke-width`, `stroke-linejoin` (`miter`, the default, `round` or `bevel`), `stroke-miterlimit` (default 4), `stroke-linecap` (`butt`, the default, `round` or `square`), `stroke-dasharray` and `stroke-opacity`. A stroke is turned into its outline by [i_overlay](https://github.com/iShape-Rust/iOverlay) 9.0.0's stroker (MIT, already the workspace's polygon library), so joins and caps are exact and a stroke paints like a fill.
+- **Shapes and groups:** `path`, `rect` (with `rx`), `circle`, `ellipse`, `line`, `polyline`, `polygon` and `use`; `transform` on any element; `opacity` on an element; a group's `opacity` multiplies into each shape in it (shapes that overlap inside one translucent group show through each other, as they would without the group).
+
+The art's `colour` tints every shape of the mark one colour; without it the mark keeps its own colours. Its `outline` rings every shape in the `edge` colour; `outline = 0` draws none. A mark art draws one with an optional `label` and, with `check = true`, a check badge: a disc with the sheet's tick and a word beside it. The word and the disc's colour are the app's, set once on the marks:
 
 ```rust
 let marks = Marks::load(0, &files)?.with_check(Check { word: "Approved".into(), colour: Srgba::hex(0x2f8f4f) });
 ```
 
 `Check::default()` is the word "Checked" on a mid green.
+
+## Sound cues and bands
+
+A `[[scene.sound]]` cue plays one of the score's recipes:
+
+| Key | What |
+|---|---|
+| `at` | seconds into the scene, in [0, the scene's length) |
+| `sound` | the recipe's name in the score |
+| `gain` | a linear gain on the recipe, in [0, 4]; default 1 |
+| `pitch` | a transposition in semitones, within 24 either way; default 0 (every tone's frequency times 2^(pitch/12)) |
+| `seconds` | the recipe's length stretched or shortened to this many seconds, in (0, 60]; default the recipe's own |
+| `every`, `until` | repeat every so many seconds (at least 0.02, at most 400 repeats) until `until` or the scene's end |
+| `accel` | with `every`, each gap is the last one times `accel` (in [0.2, 2], default 1): below 1 the repeats speed up, above 1 they slow down |
+
+A `band` art is a horizontal strip across the whole layout, centred on its `place`'s height:
+
+| Key | What |
+|---|---|
+| `height` | the strip's height in layout units; default 120 |
+| `soft` | how far its top and bottom edges fade out, in layout units, in [0, 600]; default 0 (hard edges) |
+| `colour` | `#rrggbb`; default black |
+| `alpha` | its opacity, multiplied into the colour; default 1 |
 
 ## Input
 
@@ -244,11 +274,14 @@ A footage script is a film script (everything above works: keys, camera moves, l
 | `volume` | clip, frames | the footage's gain, in [0, 4]; default 1 |
 | `track` | clip | which audio track plays, 0 first; a clip with none is silent |
 | `colour` or `gradient` | any scene | the backdrop: a `#rrggbb`, or `["#top", "#bottom"]` falling from top to bottom |
+| `crop` | clip, frames | `[x, y, width, height]` in the source's pixels, cut before `fit` places it; the picture's own size when absent |
 
 A scene's `from` is where in its footage it starts, in seconds. Paths may also be absolute. Set the film's `layout` to the output's shape (`[1080, 1920]` for a vertical film) so captions and marks are placed in it.
 
 - **clip** plays a video from `from` for the scene's length, scaled to the layout by `fit`, with its audio as the scene's stem, resampled to 48 kHz stereo. Decoding goes through [pito-codecs](https://github.com/gmrdad82/pito-codecs) v1.9.0 (MIT, pinned by tag, behind pfx-film's `video` feature, which the `pfx` tool turns on): MP4, MOV, MKV and WebM in H.264, HEVC or VP9, with AAC or Opus audio, on the GPU (VA-API, VideoToolbox, Media Foundation) when it decodes the stream and on the CPU otherwise, bit-exact either way; ffmpeg is never run. A phone recording's rotation is applied. A build without `video` refuses clip scenes when it opens the script.
 - **frames** plays a folder of `000000.png`, `000001.png`... as `pfx shot` writes them (or a `frames/` folder inside it, as `pfx film` writes them), with its WAV. A `manifest.json` in the folder gives `fps`, `frames` and `wav` (absolute or relative to the folder); without one the frames count up from `000000.png` at the film's fps and `audio.wav` beside them is the sound. 8-bit and 16-bit RGB, RGBA and grey PNGs read; PCM 8, 16, 24 and 32-bit and float WAVs read, mono or stereo, at any rate (resampled linearly to 48 kHz).
+- **crop** keeps only its rectangle of each source frame, copied out of the decoded picture before it is uploaded, so nothing outside it bleeds in at the edges, and the cut picture is what `fit` or `fill` places. A crop that reaches past the picture is cut to it; one wholly outside it stops the film with an error.
+- **image** art, `[[scene.art]] kind = "image"`, draws a PNG on any scene, over the footage with the captions: `file` (relative to the script), `place` (its centre), `width` and `height` in layout units (one of them keeps the image's aspect; neither draws it at one layout unit per pixel; both make a box it fits, or fills and crops with `fit = "fill"`), and the art's timing keys (`at`, `until`, `fade`, `out`, `grow`, `slide`). The film's images are packed into one sprite atlas when the script opens (8192x8192 at most together) and drawn through the flat renderer's sprite path.
 - **card** is the backdrop alone: a colour or a gradient, with the scene's `[[scene.text]]` lines in the film's `[style.*]` and `[[scene.art]]` marks on it. A mark's `file` is an SVG the film's author supplies, read relative to the script; the film ships no wordmark.
 
 When a clip's or a folder's rate differs from the film's, each film frame shows the source frame at or before its time and nothing is blended: a 30 fps clip in a 60 fps film shows every frame twice, a 120 fps folder every other frame. The audio is never retimed; it plays at its own rate. A speed ramp (`speed` in a key) moves through the footage at that speed, and the film pitches its audio as it does a game's.
@@ -259,4 +292,4 @@ Each frame is drawn on the GPU through pfx-live's flat renderer: the footage fra
 
 ## Tests
 
-`cargo test -p pfx-film` renders `crates/film/tests/fixtures/film.toml` twice through a neutral app and checks the frames, the still and the audio match byte for byte; checks the looks pfx-live accepts at every key's limits, every fixture sound, the marks' bake and the script's refusals, and pins the fixture film's hash on Linux and macOS (Windows' maths library gives other bits, so there a film repeats itself exactly but not across systems). `tests/beat.rs` converts beat times exactly at 100 and 128 bpm, through a signature and a tempo map, and names the scene and the beat of every off-grid time; the ducker's unit tests drop a bed by its depth under a hit, bring it back over the release and turn it off per scene, and the film test shoots the fixture ducked under the score, under a cue kind and off. The fixtures are neutral files written by hand, listed in `crates/film/tests/fixtures/README.md` and `tests/agnostic/fixtures.txt`. `cargo test -p pfx-film --test reel` opens a footage script and checks its plan, frame counts, `pcod` command and refusals; its GPU test (`--features video -- --ignored`, under pgpu) generates a 15-frame H.264 and AAC clip with pito-codecs' own encoder, a 4-frame 15 fps PNG folder with a 24 kHz WAV and a manifest, and a card with a caption, a mark and a check badge, shoots the film twice and checks every frame and sample match, that the folder's frames are held across the 30 fps film, and that the clip, the folder and the card show and sound. Its inputs are generated in the test, so no new file is tracked.
+`cargo test -p pfx-film` renders `crates/film/tests/fixtures/film.toml` twice through a neutral app and checks the frames, the still and the audio match byte for byte; checks the looks pfx-live accepts at every key's limits, every fixture sound, the marks' bake and the script's refusals, and pins the fixture film's hash on Linux and macOS (Windows' maths library gives other bits, so there a film repeats itself exactly but not across systems). `tests/beat.rs` converts beat times exactly at 100 and 128 bpm, through a signature and a tempo map, and names the scene and the beat of every off-grid time; the ducker's unit tests drop a bed by its depth under a hit, bring it back over the release and turn it off per scene, and the film test shoots the fixture ducked under the score, under a cue kind and off. The fixtures are neutral files written by hand, listed in `crates/film/tests/fixtures/README.md` and `tests/agnostic/fixtures.txt`. `cargo test -p pfx-film --test reel` opens a footage script and checks its plan, frame counts, `pcod` command and refusals; its GPU test (`--features video -- --ignored`, under pgpu) generates a 15-frame H.264 and AAC clip with pito-codecs' own encoder, a 4-frame 15 fps PNG folder with a 24 kHz WAV and a manifest, a 4-frame cropped folder, and a card with a caption, a mark and a check badge, a gradient mark, a butt-capped stroked mark and a PNG image art, shoots the film twice and checks every frame and sample match, that the folder's frames are held across the 30 fps film, that the crop shows only its rectangle, that the gradient runs from its first colour to its last, that the stroke stops at its caps, and that the clip, the folder, the image and the card show and sound. pfx-live's `flat::svg` tests read a mark with a radial gradient, `fill-opacity` and butt and square caps, and check a board still keeps its SDF strokes. Its inputs are generated in the test, so no new file is tracked.
