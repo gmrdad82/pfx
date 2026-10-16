@@ -3,7 +3,9 @@ use super::dsp::{
     Noise, OnePole, Pink, Svf, Wander, decay_per_sample, fract, pan, sin_turns, smooth_step,
 };
 use super::engine::Model;
-use super::{CONTROL, Common, Ctx, Kind, Knob, RATE};
+use super::recording::{Bank, Range};
+use super::surface::{self, Cobbles, Gravel};
+use super::{CONTROL, Common, Ctx, Kind, Knob, RATE, Surface};
 use crate::DriveCurve;
 use crate::drive::shape;
 
@@ -19,34 +21,75 @@ pub(crate) trait Voice {
     fn block(&mut self, ctx: &Ctx, t: f32, out: &mut [[f32; 2]]);
 }
 
-pub(crate) fn voice(kind: &Kind, seed: u64, ctx: &Ctx) -> Box<dyn Voice> {
+pub(crate) fn voice(
+    kind: &Kind,
+    common: &Common,
+    seed: u64,
+    ctx: &Ctx,
+) -> Result<Box<dyn Voice>, String> {
     let mut seeds = Noise::new(seed);
-    match kind {
-        Kind::Engine(e) => Box::new(EngineVoice {
-            model: Model::new(e.cylinders as usize, seeds.seed()),
-            rpm: ctx.knob(&e.rpm),
-            load: ctx.knob(&e.load),
-            drive_db: e.drive,
-            lowpass: e.lowpass,
-            crackle: e.crackle,
-            filter: Svf::new(e.lowpass, 0.707),
-            floor: Svf::new(25.0, 0.707),
-            last_load: None,
-            lift: 0.0,
-            pops: Noise::new(seeds.seed()),
-            pop_level: 0.0,
-            pop_decay: 0.0,
-            pop_filter: Svf::new(1_200.0, 1.2),
-        }),
-        Kind::Road(r) => Box::new(RoadVoice {
-            speed: ctx.knob(&r.speed),
-            roughness: r.roughness,
-            pink: Pink::new(seeds.seed()),
-            white: Noise::new(seeds.seed()),
-            brown: OnePole::new(60.0),
-            body: Svf::new(400.0, 0.6),
-            hiss: Svf::new(2_000.0, 0.9),
-        }),
+    Ok(match kind {
+        Kind::Engine(e) => {
+            let model = Model::new(e.cylinders.unwrap_or(8) as usize, seeds.seed());
+            let pops = Noise::new(seeds.seed());
+            let rpm = ctx.knob(&e.rpm);
+            let bank = match &e.sample {
+                Some(spec) => Some(Bank::load(
+                    spec,
+                    seeds.seed(),
+                    &rpm_range(rpm, common, ctx),
+                    e.cylinders.is_some(),
+                )?),
+                None => None,
+            };
+            Box::new(EngineVoice {
+                model: e.cylinders.map(|_| model),
+                bank,
+                blend: ctx.knob(&e.blend),
+                at: None,
+                rpm,
+                load: ctx.knob(&e.load),
+                drive_db: e.drive,
+                lowpass: e.lowpass,
+                crackle: e.crackle,
+                filter: Svf::new(e.lowpass, 0.707),
+                floor: Svf::new(25.0, 0.707),
+                last_load: None,
+                lift: 0.0,
+                pops,
+                pop_level: 0.0,
+                pop_decay: 0.0,
+                pop_filter: Svf::new(1_200.0, 1.2),
+            })
+        }
+        Kind::Road(r) => {
+            let pink = Pink::new(seeds.seed());
+            let white = Noise::new(seeds.seed());
+            let uses = |s: Surface| r.surface.iter().any(|k| k.1 == s);
+            let surfaces = if r.surface.iter().all(|k| k.1 == Surface::Asphalt) {
+                Vec::new()
+            } else {
+                r.surface.clone()
+            };
+            let gravel = uses(Surface::Gravel).then(|| Gravel::new(seeds.seed()));
+            let cobbles = uses(Surface::Cobbles).then(|| Cobbles::new(seeds.seed(), r.spacing));
+            let wet = uses(Surface::Wet).then(|| Hiss::new(&mut seeds));
+            Box::new(RoadVoice {
+                speed: ctx.knob(&r.speed),
+                roughness: r.roughness,
+                pink,
+                white,
+                brown: OnePole::new(60.0),
+                body: Svf::new(400.0, 0.6),
+                hiss: Svf::new(2_000.0, 0.9),
+                surfaces,
+                load: ctx.knob(&r.load),
+                gravel,
+                cobbles,
+                wet,
+                scratch: [0.0; CONTROL],
+            })
+        }
         Kind::Squeal(s) => Box::new(SquealVoice {
             at: s.at.clone(),
             curve: s
@@ -66,10 +109,7 @@ pub(crate) fn voice(kind: &Kind, seed: u64, ctx: &Ctx) -> Box<dyn Voice> {
         Kind::Spray(s) => Box::new(SprayVoice {
             speed: ctx.knob(&s.speed),
             wet: ctx.knob(&s.wet),
-            white: Noise::new(seeds.seed()),
-            high: Svf::new(1_800.0, 0.7),
-            low: Svf::new(6_000.0, 0.7),
-            flutter: Wander::new(seeds.seed(), 18.0),
+            hiss: Hiss::new(&mut seeds),
         }),
         Kind::Whoosh(w) => Box::new(WhooshVoice {
             passes: w
@@ -89,6 +129,30 @@ pub(crate) fn voice(kind: &Kind, seed: u64, ctx: &Ctx) -> Box<dyn Voice> {
             length: w.length,
         }),
         Kind::Ambience(a) => Box::new(City::new(a, seeds.seed(), ctx.seconds)),
+    })
+}
+
+fn rpm_range(rpm: Knob, common: &Common, ctx: &Ctx) -> Range {
+    let start = common.start.min(ctx.seconds);
+    let end = common
+        .end
+        .unwrap_or(ctx.seconds)
+        .min(ctx.seconds)
+        .max(start);
+    let steps = ((end - start) * 100.0).ceil().max(1.0) as usize;
+    let (mut low, mut high) = (f32::MAX, 0.0f32);
+    for i in 0..=steps {
+        let v = ctx
+            .get(rpm, start + (end - start) * i as f32 / steps as f32)
+            .max(1.0);
+        low = low.min(v);
+        high = high.max(v);
+    }
+    Range {
+        low,
+        high,
+        start,
+        end,
     }
 }
 
@@ -158,7 +222,10 @@ fn frame_to_seconds(frame: usize) -> f32 {
 }
 
 struct EngineVoice {
-    model: Model,
+    model: Option<Model>,
+    bank: Option<Bank>,
+    blend: Knob,
+    at: Option<u64>,
     rpm: Knob,
     load: Knob,
     drive_db: f32,
@@ -179,12 +246,29 @@ impl Voice for EngineVoice {
         let rpm = ctx.get(self.rpm, t).max(0.0);
         let load = ctx.get(self.load, t).clamp(0.0, 1.0);
         let dt = out.len() as f32 / RATE as f32;
-        if self.last_load.is_none() {
+        if self.last_load.is_none()
+            && let Some(model) = &mut self.model
+        {
             for _ in 0..WARMUP {
-                let x = self.model.tick(rpm, load);
+                let x = model.tick(rpm, load);
                 self.floor.high(x);
             }
         }
+        let at = *self.at.get_or_insert(seconds_to_frame(t) as u64);
+        self.at = Some(at + out.len() as u64);
+        let blend = ctx.get(self.blend, t);
+        let mix = self.bank.as_ref().map(|bank| {
+            let share = if self.model.is_some() {
+                bank.share(blend, rpm)
+            } else {
+                0.0
+            };
+            (
+                bank.weights(rpm),
+                pfx_core::sim::sqrtf(share),
+                pfx_core::sim::sqrtf(1.0 - share),
+            )
+        });
         let drop = (self.last_load.unwrap_or(load) - load).max(0.0) / dt;
         self.last_load = Some(load);
         let keep = super::dsp::exp_seconds(-dt / 0.4);
@@ -198,8 +282,18 @@ impl Voice for EngineVoice {
         );
         let drive = pfx_core::sim::powf(10.0, self.drive_db * (0.4 + 0.6 * load) / 20.0);
         let trim = 1.0 / pfx_core::sim::sqrtf(drive);
-        for frame in out.iter_mut() {
-            let x = self.floor.high(self.model.tick(rpm, load)) * ENGINE_LEVEL;
+        for (i, frame) in out.iter_mut().enumerate() {
+            let synth = match &mut self.model {
+                Some(model) => self.floor.high(model.tick(rpm, load)) * ENGINE_LEVEL,
+                None => 0.0,
+            };
+            let x = match (&mut self.bank, &mix) {
+                (Some(bank), Some((weights, of_synth, of_sample))) => {
+                    let tick = bank.tick(rpm, weights, at + i as u64);
+                    tick.run * (synth * of_synth + tick.sample * of_sample) + tick.shots
+                }
+                _ => synth,
+            };
             let mut y = self.filter.low(shape(DriveCurve::Tanh, x * drive) * trim);
             if pop_chance > 0.0 {
                 if self.pops.unit() < pop_chance {
@@ -226,7 +320,15 @@ struct RoadVoice {
     brown: OnePole,
     body: Svf,
     hiss: Svf,
+    surfaces: Vec<(f32, Surface)>,
+    load: Knob,
+    gravel: Option<Gravel>,
+    cobbles: Option<Cobbles>,
+    wet: Option<Hiss>,
+    scratch: [f32; CONTROL],
 }
+
+const ASPHALT_UNDER: [f32; 4] = [1.0, 0.4, 1.0, 0.7];
 
 impl Voice for RoadVoice {
     fn block(&mut self, ctx: &Ctx, t: f32, out: &mut [[f32; 2]]) {
@@ -235,11 +337,46 @@ impl Voice for RoadVoice {
         self.body.tune(180.0 + 28.0 * speed, 0.6);
         self.hiss.tune(1_500.0 + 45.0 * speed, 0.9);
         let hiss = 0.25 * self.roughness;
+        if self.surfaces.is_empty() {
+            for frame in out.iter_mut() {
+                let w = self.white.white();
+                let rumble = self.brown.tick(w) * 8.0;
+                let y = self.body.low(self.pink.tick()) * 1.6 + rumble + self.hiss.band(w) * hiss;
+                frame[0] = y * level * 0.45;
+            }
+            return;
+        }
+        let weights = surface::weights(&self.surfaces, t);
+        let under: f32 = weights.iter().zip(ASPHALT_UNDER).map(|(w, u)| w * u).sum();
         for frame in out.iter_mut() {
             let w = self.white.white();
             let rumble = self.brown.tick(w) * 8.0;
             let y = self.body.low(self.pink.tick()) * 1.6 + rumble + self.hiss.band(w) * hiss;
-            frame[0] = y * level * 0.45;
+            frame[0] = y * level * 0.45 * under;
+        }
+        let scratch = &mut self.scratch[..out.len()];
+        let gravel_w = weights[Surface::Gravel as usize];
+        if let Some(gravel) = &mut self.gravel {
+            let load = ctx.get(self.load, t);
+            gravel.block(speed, load, scratch);
+            for (frame, y) in out.iter_mut().zip(scratch.iter()) {
+                frame[0] += y * gravel_w;
+            }
+        }
+        let cobbles_w = weights[Surface::Cobbles as usize];
+        if let Some(cobbles) = &mut self.cobbles {
+            cobbles.block(speed, scratch);
+            for (frame, y) in out.iter_mut().zip(scratch.iter()) {
+                frame[0] += y * cobbles_w;
+            }
+        }
+        let wet_w = weights[Surface::Wet as usize];
+        if let Some(wet) = &mut self.wet {
+            let level = Hiss::level(speed, 1.0) * 0.8 * wet_w;
+            wet.tune(speed);
+            for frame in out.iter_mut() {
+                frame[0] += wet.tick() * level;
+            }
         }
     }
 }
@@ -292,25 +429,53 @@ impl Voice for SquealVoice {
     }
 }
 
-struct SprayVoice {
-    speed: Knob,
-    wet: Knob,
+struct Hiss {
     white: Noise,
     high: Svf,
     low: Svf,
     flutter: Wander,
 }
 
+impl Hiss {
+    fn new(seeds: &mut Noise) -> Self {
+        let white = Noise::new(seeds.seed());
+        Self {
+            white,
+            high: Svf::new(1_800.0, 0.7),
+            low: Svf::new(6_000.0, 0.7),
+            flutter: Wander::new(seeds.seed(), 18.0),
+        }
+    }
+
+    fn level(speed: f32, wet: f32) -> f32 {
+        wet * pfx_core::sim::powf((speed / 25.0).min(2.0), 1.2)
+    }
+
+    fn tune(&mut self, speed: f32) {
+        self.low.tune(5_000.0 + 120.0 * speed, 0.7);
+    }
+
+    fn tick(&mut self) -> f32 {
+        let y = self.low.low(self.high.high(self.white.white()));
+        let flutter = 0.7 + 0.3 * self.flutter.tick();
+        y * flutter
+    }
+}
+
+struct SprayVoice {
+    speed: Knob,
+    wet: Knob,
+    hiss: Hiss,
+}
+
 impl Voice for SprayVoice {
     fn block(&mut self, ctx: &Ctx, t: f32, out: &mut [[f32; 2]]) {
         let speed = ctx.get(self.speed, t).max(0.0);
         let wet = ctx.get(self.wet, t).clamp(0.0, 1.0);
-        let level = wet * pfx_core::sim::powf((speed / 25.0).min(2.0), 1.2);
-        self.low.tune(5_000.0 + 120.0 * speed, 0.7);
+        let level = Hiss::level(speed, wet);
+        self.hiss.tune(speed);
         for frame in out.iter_mut() {
-            let y = self.low.low(self.high.high(self.white.white()));
-            let flutter = 0.7 + 0.3 * self.flutter.tick();
-            frame[0] = y * flutter * level * 0.8;
+            frame[0] = self.hiss.tick() * level * 0.8;
         }
     }
 }
