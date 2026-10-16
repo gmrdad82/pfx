@@ -1,5 +1,6 @@
 use std::borrow::Cow;
-use std::path::Path;
+
+use pfx_scene::manf;
 
 pub const MESH_SUFFIXES: [&str; 3] = [".glb", ".gltf", ".manf"];
 
@@ -26,7 +27,7 @@ pub(crate) fn reader(bytes: &[u8]) -> Result<manf::Reader<'_>, String> {
 pub(crate) fn document(reader: &manf::Reader<'_>) -> Result<gltf::Gltf, String> {
     let Some(json) = reader.chunk(manf::GLTF).map_err(|e| format!("mesh: {e}"))? else {
         if reader.find(manf::SCNE).is_some() {
-            return Err(format!("mesh: {SCENE_NOT_YET}"));
+            return Err("mesh: the .manf holds a scene and no GLTF; open it as a scene".into());
         }
         return Err("mesh: the .manf holds no GLTF chunk".into());
     };
@@ -50,18 +51,4 @@ pub(crate) fn file(reader: &manf::Reader<'_>, uri: &str) -> Result<Option<Vec<u8
     found
         .map(|chunk| chunk.map(Cow::into_owned))
         .map_err(|e| format!("mesh: {uri}: {e}"))
-}
-
-pub(crate) const SCENE_NOT_YET: &str =
-    "scenes inside a .manf (SCNE) are not read yet; open the scene's .scene.toml";
-
-pub(crate) fn scene_seam(path: &Path) -> Result<(), String> {
-    let manf = path
-        .extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("manf"));
-    if manf {
-        Err(SCENE_NOT_YET.into())
-    } else {
-        Ok(())
-    }
 }

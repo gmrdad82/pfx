@@ -2150,7 +2150,7 @@ checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 [[package]]
 name = "manf"
 version = "0.1.0"
-source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.4.0#53239774a48df28890bb4dc58cc273b63cbd6ab2"
+source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.5.0#76eabe11aa659056c36fc03d9573617d3e7488c4"
 dependencies = [
  "miniz_oxide 0.9.1",
 ]
@@ -3363,7 +3363,6 @@ name = "pfx-load"
 version = "2.4.0"
 dependencies = [
  "gltf",
- "manf",
  "notify",
  "pfx-core",
  "pfx-materials",
@@ -3486,9 +3485,10 @@ dependencies = [
 
 [[package]]
 name = "pfx-scene"
-version = "1.4.0"
-source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.4.0#53239774a48df28890bb4dc58cc273b63cbd6ab2"
+version = "1.5.0"
+source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.5.0#76eabe11aa659056c36fc03d9573617d3e7488c4"
 dependencies = [
+ "manf",
  "serde",
  "toml 1.1.6+spec-1.1.0",
  "toml_edit",

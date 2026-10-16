@@ -7,6 +7,8 @@ mod image;
 mod lod_tests;
 mod manf;
 #[cfg(test)]
+mod manf_scene_tests;
+#[cfg(test)]
 mod manf_tests;
 mod mesh;
 #[cfg(test)]

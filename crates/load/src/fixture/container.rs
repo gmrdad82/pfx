@@ -1,3 +1,5 @@
+use pfx_scene::manf;
+
 pub fn manf_from_glb(glb: &[u8], files: &[(&str, &[u8])], compress: bool) -> Vec<u8> {
     let codec = if compress {
         manf::Codec::Auto

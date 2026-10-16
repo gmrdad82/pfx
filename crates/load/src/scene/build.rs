@@ -27,6 +27,7 @@ pub(super) struct Reader<'a> {
     pub(super) files: BTreeMap<PathBuf, [u8; 32]>,
     root: &'a Path,
     overlay: &'a BTreeMap<PathBuf, String>,
+    mount: Option<&'a Project>,
 }
 
 impl Reader<'_> {
@@ -38,6 +39,11 @@ impl Reader<'_> {
         let bytes = match held {
             Some(text) => text.clone().into_bytes(),
             None => {
+                if let Some(found) =
+                    super::mounted::read(self.mount, self.root, path, &mut self.files)
+                {
+                    return found;
+                }
                 std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?
             }
         };
@@ -71,6 +77,7 @@ pub(super) struct Places<'a> {
     pub(super) root: PathBuf,
     texts: RefCell<BTreeMap<PathBuf, Option<String>>>,
     overlay: &'a BTreeMap<PathBuf, String>,
+    pub(super) mount: Option<&'a Project>,
 }
 
 fn descend<'t, 'i>(
@@ -107,6 +114,7 @@ impl<'a> Places<'a> {
             root: root.to_path_buf(),
             texts: RefCell::new(BTreeMap::new()),
             overlay,
+            mount: None,
         }
     }
 
@@ -117,7 +125,10 @@ impl<'a> Places<'a> {
         self.texts
             .borrow_mut()
             .entry(file.to_path_buf())
-            .or_insert_with(|| std::fs::read_to_string(self.root.join(file)).ok())
+            .or_insert_with(|| {
+                super::mounted::text(self.mount, file)
+                    .unwrap_or_else(|| std::fs::read_to_string(self.root.join(file)).ok())
+            })
             .clone()
     }
 
@@ -163,7 +174,7 @@ impl<'a> Places<'a> {
     ) -> SceneError {
         let (line, column) = self.locate(file, steps);
         SceneError {
-            file: self.root.join(file),
+            file: super::mounted::shown(self.mount, &self.root, file),
             line,
             column,
             message: message.into(),
@@ -234,7 +245,9 @@ pub(super) fn project(root: &Path) -> Result<Project, SceneError> {
 }
 
 pub(super) fn open(path: &Path, hour: Option<f64>) -> Result<Scene, SceneError> {
-    crate::manf::scene_seam(path).map_err(|message| SceneError::new(path, None, message))?;
+    if super::mounted::is_manf_path(path) {
+        return super::mounted::open(path, hour);
+    }
     let root = project_root(path);
     let project = project(&root)?;
     let absolute = absolute(path);
@@ -251,11 +264,24 @@ pub(super) fn build(
     hour: Option<f64>,
     overlay: &BTreeMap<PathBuf, String>,
 ) -> Result<Scene, SceneError> {
-    let places = Places::new(root, overlay);
+    build_with(path, root, resolved, hour, overlay, None)
+}
+
+pub(super) fn build_with(
+    path: &Path,
+    root: &Path,
+    resolved: &pfx_scene::Scene,
+    hour: Option<f64>,
+    overlay: &BTreeMap<PathBuf, String>,
+    mount: Option<&Project>,
+) -> Result<Scene, SceneError> {
+    let mut places = Places::new(root, overlay);
+    places.mount = mount;
     let mut reader = Reader {
         files: BTreeMap::new(),
         root,
         overlay,
+        mount,
     };
     for file in &resolved.files {
         reader
@@ -554,21 +580,18 @@ fn build_mesh(
     let steps = [Step::Key("mesh"), Step::Key(inner(name))];
     let error = |message: String| places.refusal(&entry.file, &steps, message);
     let mesh = &entry.value;
-    let file = places.root.join(&mesh.file);
+    let file = match super::mounted::own_gltf(places.mount, &places.root, &mesh.file) {
+        Some(found) => found.map_err(error)?,
+        None => places.root.join(&mesh.file),
+    };
     let bytes = reader.read(&file).map_err(error)?;
-    let buffers: RefCell<Vec<(PathBuf, Vec<u8>)>> = RefCell::new(Vec::new());
     let directory = file.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+    let buffers = RefCell::new(&mut *reader);
     let parsed = Mesh::parse_with(&bytes, |uri| {
         let path = directory.join(crate::source::normalize(uri)?);
-        let data =
-            std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        buffers.borrow_mut().push((path, data.clone()));
-        Ok(data)
+        buffers.borrow_mut().read(&path)
     })
     .map_err(|message| SceneError::new(&file, None, message))?;
-    for (path, data) in buffers.into_inner() {
-        reader.files.insert(path, sha256(&data));
-    }
     let roots: Vec<(u32, bool)> = match &mesh.node {
         Some(node) => {
             let found: Vec<u32> = parsed

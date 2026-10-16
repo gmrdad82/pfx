@@ -1,3 +1,4 @@
+use pfx_scene::manf;
 use std::path::{Path, PathBuf};
 
 use crate::Mesh;

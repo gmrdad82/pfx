@@ -153,7 +153,7 @@ impl Editor {
         let edit = SceneEdit::open(&path).map_err(|error| error.to_string())?;
         let mut files = Files::new();
         for file in edit.files() {
-            files.load(file).map_err(|error| error.to_string())?;
+            crate::held::load(&mut files, file)?;
         }
         let viewport = Box::new(Viewport::open("pfx edit viewport", &path));
         let mut editor = Editor {
@@ -593,10 +593,12 @@ impl Editor {
     pub fn save(&mut self, changed: &Changed) -> bool {
         let mut saved = true;
         for file in &changed.files {
-            match self.files.save(file) {
-                Ok(_) => self.saves.push(file.clone()),
+            let outcome = crate::held::save(&mut self.files, file)
+                .unwrap_or_else(|| self.files.save(file).map(|_| ()).map_err(|e| e.to_string()));
+            match outcome {
+                Ok(()) => self.saves.push(file.clone()),
                 Err(error) => {
-                    self.log.error(error.to_string());
+                    self.log.error(error);
                     saved = false;
                 }
             }
@@ -625,9 +627,9 @@ impl Editor {
         let wanted = self.files();
         for file in &wanted {
             if self.files.get(file).is_none()
-                && let Err(error) = self.files.load(file)
+                && let Err(error) = crate::held::load(&mut self.files, file)
             {
-                self.log.error(error.to_string());
+                self.log.error(error);
             }
         }
         let gone: Vec<PathBuf> = self
@@ -684,7 +686,9 @@ impl Editor {
         let mut outside = false;
         let paths: Vec<PathBuf> = self.files.paths().map(Path::to_path_buf).collect();
         for path in paths {
-            match self.files.disk(&path) {
+            let disk = crate::held::disk(&self.files, &path)
+                .unwrap_or_else(|| self.files.disk(&path).map_err(|e| e.to_string()));
+            match disk {
                 Ok(Disk::Outside(text)) => {
                     outside = true;
                     if let Err(error) = self.files.reload(&path, text) {
@@ -698,7 +702,7 @@ impl Editor {
         let changed = self
             .edit
             .files()
-            .any(|file| std::fs::read_to_string(file).ok().as_deref() != self.edit.text(file));
+            .any(|file| crate::held::read(file).as_deref() != self.edit.text(file));
         if !outside && !changed {
             return;
         }
