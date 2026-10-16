@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.3.0 — 2026-10-16
+
+### Added
+
+- Wet surfaces and puddles: a material's `[wet]` (amount, puddles, puddle_scale, seed) darkens it, turns on a water film and lays world-space puddles that reflect, the same in the live renderer and the path tracer.
+- Figurine materials: cloth sheen (`fabric`), anisotropic highlights for hair (`anisotropy`) and a cheap subsurface stand-in for skin and vinyl (`scatter`), in both renderers.
+- A GLB's own materials are drawn when the library has no entry of that name: base colour, normal, metallic-roughness with occlusion, sheen and anisotropy extensions, texture transforms and a detail normal on the second UV set, in both renderers; maps of different sizes are resampled by pfx.
+- Prebuilt levels of detail from a GLB's `MSFT_lod` nodes (with each level's error), morphed heads included, and `LodSet::add_chain` for levels made in code.
+
+### Changed
+
+- Scenes use pfx-scene v1.2.0.
+- `pfx shot --from N` renders the frames before N without writing them, so frame N matches the same frame of a full run.
+- The lens flare's ghosts and halo fade in smoothly above the threshold, so dim sources such as tail lights no longer paint ghosts over the frame.
+
 ## v2.2.0 — 2026-10-16
 
 ### Added
