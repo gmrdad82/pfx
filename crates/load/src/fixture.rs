@@ -1,6 +1,8 @@
+mod ball;
 mod head;
 mod lod;
 
+pub use ball::{BALL_RADIUS, BALL_RINGS, BALL_SEGMENTS, ball, ball_png};
 pub use head::{
     HEAD_KEYS, HEAD_RINGS, HEAD_SEGMENTS, HEAD_TARGETS, HEAD_TIMES, HEAD_VERTICES, HEAD_WEIGHTS,
     head,

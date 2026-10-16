@@ -46,6 +46,7 @@ impl Floor {
             normals: &self.normals,
             tangents: &self.tangents,
             uvs: &self.uvs,
+            uvs1: None,
             alpha: None,
             indices: &self.indices,
         }

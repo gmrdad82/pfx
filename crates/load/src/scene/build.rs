@@ -403,6 +403,7 @@ pub(super) fn build(
             .collect(),
     };
     super::tiles::expand(&mut scene, root, resolved, &places, overlay)?;
+    super::textures::tangents_for_lobes(&mut scene);
     scene.files.extend(reader.files);
     Ok(scene)
 }
@@ -751,6 +752,11 @@ fn walk(
                     .material
                     .map(|material| mesh.materials[material as usize].name.clone()),
                 overrides: node_override.clone(),
+                surface: primitive
+                    .material
+                    .and_then(|material| mesh.surfaces.get(material as usize))
+                    .filter(|surface| surface.declared)
+                    .map(|surface| Arc::new(surface.clone())),
             });
         }
     }
@@ -858,6 +864,25 @@ impl Geometry {
         }
         self.hash = hasher.finalize().into();
         self.morph = Some(Arc::new(morph));
+        self
+    }
+
+    pub fn placeholder_tangents(&self) -> bool {
+        !self.uvs.iter().all(|uv| *uv == [0.0; 2])
+            && self
+                .tangents
+                .iter()
+                .all(|tangent| *tangent == [1.0, 0.0, 0.0, 1.0])
+    }
+
+    pub fn with_uv_tangents(mut self) -> Self {
+        self.tangents =
+            crate::surface::tangents(&self.positions, &self.normals, &self.uvs, &self.indices);
+        let mut hasher = Sha256::new();
+        hasher.update(self.hash);
+        hasher.update([4]);
+        hasher_add(&mut hasher, self.tangents.iter().flatten().copied());
+        self.hash = hasher.finalize().into();
         self
     }
 

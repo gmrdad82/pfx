@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::content::ContentLayer;
+use crate::lobes::{Anisotropy, Fabric, Scatter, Textures, UvTransform};
 use crate::wet::Wet;
 
 pub const LAYER_CAP: usize = 4;
@@ -397,6 +398,11 @@ pub struct Material {
     pub layers: [NoiseLayer; LAYER_CAP],
     pub ageing: Ageing,
     pub wet: Wet,
+    pub fabric: Fabric,
+    pub anisotropy: Anisotropy,
+    pub scatter: Scatter,
+    #[serde(skip)]
+    pub textures: Textures,
 }
 
 impl Default for Material {
@@ -429,6 +435,10 @@ impl Default for Material {
             layers: [NoiseLayer::default(); LAYER_CAP],
             ageing: Ageing::default(),
             wet: Wet::default(),
+            fabric: Fabric::default(),
+            anisotropy: Anisotropy::default(),
+            scatter: Scatter::default(),
+            textures: Textures::default(),
         }
     }
 }
@@ -486,6 +496,12 @@ pub(crate) struct Recipe {
     ageing: Ageing,
     #[serde(skip_serializing_if = "Wet::is_default")]
     wet: Wet,
+    #[serde(skip_serializing_if = "Fabric::off")]
+    fabric: Fabric,
+    #[serde(skip_serializing_if = "Anisotropy::off")]
+    anisotropy: Anisotropy,
+    #[serde(skip_serializing_if = "Scatter::off")]
+    scatter: Scatter,
 }
 
 impl Default for Recipe {
@@ -528,6 +544,9 @@ impl From<Material> for Recipe {
                 .collect(),
             ageing: m.ageing,
             wet: m.wet,
+            fabric: m.fabric,
+            anisotropy: m.anisotropy,
+            scatter: m.scatter,
         }
     }
 }
@@ -572,6 +591,10 @@ impl Recipe {
             layers,
             ageing: self.ageing,
             wet: self.wet,
+            fabric: self.fabric,
+            anisotropy: self.anisotropy,
+            scatter: self.scatter,
+            textures: Textures::default(),
         })
     }
 }
@@ -604,12 +627,22 @@ pub struct PackedMaterial {
     pub tail: [f32; 4],
     pub params: [[f32; 4]; PARAM_ROWS],
     pub wet: [f32; 4],
+    pub sheen: [f32; 4],
+    pub lobes: [f32; 4],
+    pub scatter: [f32; 4],
+    pub textures: [f32; 4],
+    pub texture_scales: [f32; 4],
+    pub texture_extra: [f32; 4],
+    pub texture_transform: [f32; 4],
+    pub detail_transform: [f32; 4],
 }
 
 pub const PARAM_ROWS: usize = LAYER_CAP * GPU_PARAMS / 4;
+pub const LOBE_ROWS: usize = 8;
 
 impl PackedMaterial {
-    pub const SIZE: usize = 256 + PARAM_ROWS * 16;
+    pub const SIZE: usize = 256 + PARAM_ROWS * 16 + LOBE_ROWS * 16;
+    pub const LOBES_OFFSET: usize = 256 + PARAM_ROWS * 16;
     pub const ALIGN: usize = 16;
 
     pub fn pack(m: &Material) -> Self {
@@ -674,6 +707,54 @@ impl PackedMaterial {
                 [params[at], params[at + 1], params[at + 2], params[at + 3]]
             }),
             wet: m.wet.packed(),
+            sheen: [
+                m.fabric.color[0],
+                m.fabric.color[1],
+                m.fabric.color[2],
+                m.fabric.roughness,
+            ],
+            lobes: [
+                m.anisotropy.strength,
+                m.anisotropy.rotation,
+                m.scatter.amount,
+                m.scatter.radius,
+            ],
+            scatter: [
+                m.scatter.color[0],
+                m.scatter.color[1],
+                m.scatter.color[2],
+                0.0,
+            ],
+            textures: [
+                m.textures.base as f32,
+                m.textures.normal as f32,
+                m.textures.orm as f32,
+                m.textures.detail as f32,
+            ],
+            texture_scales: [
+                m.textures.normal_scale,
+                m.textures.occlusion,
+                m.textures.detail_scale,
+                (m.textures.main.set + 2 * m.textures.detail_uv.set) as f32,
+            ],
+            texture_extra: [
+                m.textures.anisotropy as f32,
+                0.0,
+                m.textures.main.rotation,
+                m.textures.detail_uv.rotation,
+            ],
+            texture_transform: [
+                m.textures.main.offset[0],
+                m.textures.main.offset[1],
+                m.textures.main.scale[0],
+                m.textures.main.scale[1],
+            ],
+            detail_transform: [
+                m.textures.detail_uv.offset[0],
+                m.textures.detail_uv.offset[1],
+                m.textures.detail_uv.scale[0],
+                m.textures.detail_uv.scale[1],
+            ],
         }
     }
 
@@ -756,6 +837,41 @@ impl PackedMaterial {
                 puddles: self.wet[1],
                 puddle_scale: self.wet[2],
                 seed: u64::from(self.wet[3].to_bits()),
+            },
+            fabric: Fabric {
+                color: [self.sheen[0], self.sheen[1], self.sheen[2]],
+                roughness: self.sheen[3],
+            },
+            anisotropy: Anisotropy {
+                strength: self.lobes[0],
+                rotation: self.lobes[1],
+            },
+            scatter: Scatter {
+                color: [self.scatter[0], self.scatter[1], self.scatter[2]],
+                radius: self.lobes[3],
+                amount: self.lobes[2],
+            },
+            textures: Textures {
+                base: self.textures[0] as i32,
+                normal: self.textures[1] as i32,
+                orm: self.textures[2] as i32,
+                detail: self.textures[3] as i32,
+                anisotropy: self.texture_extra[0] as i32,
+                normal_scale: self.texture_scales[0],
+                occlusion: self.texture_scales[1],
+                detail_scale: self.texture_scales[2],
+                main: UvTransform {
+                    set: self.texture_scales[3] as u32 % 2,
+                    offset: [self.texture_transform[0], self.texture_transform[1]],
+                    rotation: self.texture_extra[2],
+                    scale: [self.texture_transform[2], self.texture_transform[3]],
+                },
+                detail_uv: UvTransform {
+                    set: self.texture_scales[3] as u32 / 2,
+                    offset: [self.detail_transform[0], self.detail_transform[1]],
+                    rotation: self.texture_extra[3],
+                    scale: [self.detail_transform[2], self.detail_transform[3]],
+                },
             },
         }
     }

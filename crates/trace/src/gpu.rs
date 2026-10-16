@@ -81,11 +81,11 @@ const LAYER_LIMIT: usize = 1 << 18;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct GpuContent {
-    offset: u32,
-    width: u32,
-    height: u32,
-    kind: u32,
+pub(crate) struct GpuContent {
+    pub(crate) offset: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) kind: u32,
 }
 
 #[repr(C)]
@@ -499,6 +499,8 @@ impl SceneBuffers {
                 content_texels.extend_from_slice(&text.records);
             }
         }
+        let texture_slots =
+            crate::textured::place(&detail.textures, &mut content_info, &mut content_texels);
         if content_texels.len() > u32::MAX as usize {
             return Err("trace content is too large".into());
         }
@@ -546,6 +548,15 @@ impl SceneBuffers {
             }
         }
         let mut packed_materials: Vec<_> = materials.iter().map(PackedMaterial::pack).collect();
+        for packed in &mut packed_materials {
+            texture_slots.remap(packed);
+        }
+        if packed_materials.iter().any(crate::textured::wants_uvs1) {
+            effects.texture_extra[1] = f32::from_bits(crate::textured::place_uvs1(
+                bvh.order.iter().map(|&index| detailed[index as usize].uvs1),
+                &mut content_texels,
+            )?);
+        }
         let emitting: Vec<bool> = packed_materials
             .iter()
             .zip(&content_layers)
@@ -1126,13 +1137,15 @@ fn shader_source(lit: bool, rt: bool) -> String {
         end.to_string()
     };
     let source = format!(
-        "{}\n{}\n{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
         pfx_materials::NOISE,
         pfx_materials::BRDF,
+        pfx_materials::LOBES,
         pfx_materials::WET,
         pfx_materials::CONTENT,
         ENVIRONMENT_WGSL.as_str(),
         start,
+        crate::TEXTURED_WGSL,
         end
     );
     if !rt {
@@ -2070,6 +2083,7 @@ mod tests {
             normals: [[0.0, 0.0, 1.0]; 3],
             uvs: [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
             material: 0,
+            uvs1: [[0.0; 2]; 3],
         };
         let texel = [0.12, 0.04, 0.02, 0.5];
         let mut material = Material {
@@ -2190,6 +2204,7 @@ mod tests {
             vertices: [[-0.3, -0.3, -2.0], [0.3, -0.3, -2.0], [0.0, 0.3, -2.0]],
             normals: [[-0.3, 0.0, 0.95], [0.3, 0.0, 0.95], [0.0, 0.3, 0.95]],
             uvs: [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]],
+            uvs1: [[0.0; 2]; 3],
             material: 0,
         };
         let baseline = Detail {
@@ -2327,12 +2342,14 @@ mod tests {
         assert!(lit.contains("@binding(16)"));
         assert!(!dark.contains("@binding(14)"));
         let baked = format!(
-            "{}\n{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}",
             pfx_materials::BRDF,
+            pfx_materials::LOBES,
             pfx_materials::WET,
             pfx_materials::CONTENT,
             ENVIRONMENT_WGSL.as_str(),
-            include_str!("trace.wgsl")
+            include_str!("trace.wgsl"),
+            crate::TEXTURED_WGSL
         );
         for source in [lit, dark, baked] {
             let module = naga::front::wgsl::parse_str(&source).unwrap();
@@ -3169,6 +3186,7 @@ mod tests {
             vertices: [[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
             normals: [[0.0, 0.0, 1.0]; 3],
             uvs: [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            uvs1: [[0.0; 2]; 3],
             material: 0,
         };
         let instance = |surface: InstanceSurface, shadow_only: bool, two_sided: bool, x: f32| {

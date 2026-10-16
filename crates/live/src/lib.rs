@@ -34,6 +34,7 @@ pub mod sky;
 pub mod stats;
 pub mod taa;
 pub mod text;
+pub mod textured;
 pub mod upscale;
 pub mod viewport;
 pub mod warm;

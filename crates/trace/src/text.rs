@@ -139,6 +139,7 @@ impl Carrier {
             uvs: &self.uvs,
             alpha: None,
             indices: &self.indices,
+            uvs1: None,
         }
     }
 }
@@ -1251,6 +1252,7 @@ mod tests {
                 uvs: &self.uvs,
                 alpha: None,
                 indices: &self.indices,
+                uvs1: None,
             }
         }
     }

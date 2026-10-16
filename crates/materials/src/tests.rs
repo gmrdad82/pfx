@@ -190,7 +190,9 @@ fn packed_layout() {
         std::mem::align_of::<PackedMaterial>(),
         PackedMaterial::ALIGN
     );
-    assert_eq!(PackedMaterial::SIZE, 512);
+    assert_eq!(PackedMaterial::SIZE, 640);
+    assert_eq!(std::mem::offset_of!(PackedMaterial, sheen), 512);
+    assert_eq!(PackedMaterial::LOBES_OFFSET, 512);
     assert_eq!(PackedMaterial::ALIGN, 16);
     assert_eq!(std::mem::offset_of!(PackedMaterial, base_roughness), 0);
     assert_eq!(std::mem::offset_of!(PackedMaterial, metal_spec_coat), 16);
@@ -211,7 +213,7 @@ fn packed_layout() {
     assert_eq!(std::mem::offset_of!(PackedMaterial, wet), 496);
     assert_eq!(
         bytemuck::bytes_of(&PackedMaterial::pack(&Material::default())).len(),
-        512
+        640
     );
     let zero = PackedMaterial::zeroed();
     let unpacked = PackedMaterial::unpack(zero);
@@ -410,4 +412,43 @@ fn wgsl_library_carries_the_same_functions() {
     let brdf = lib.find("fn ggx_d").unwrap();
     let ageing = lib.find("fn yellow").unwrap();
     assert!(noise < brdf && brdf < ageing);
+}
+
+#[test]
+fn the_sheen_table_is_the_charlie_albedo_integral() {
+    assert_eq!(
+        crate::lobes::SHEEN_TABLE_TEXT
+            .split(',')
+            .filter(|text| !text.trim().is_empty())
+            .count(),
+        crate::SHEEN_TABLE_SIDE * crate::SHEEN_TABLE_SIDE
+    );
+    for (ndv, roughness) in [(1.0, 1.0), (0.4, 0.6), (2.0 / 15.0, 1.0 / 3.0), (1.0, 0.2)] {
+        let exact = crate::sheen_albedo_exact(ndv, roughness);
+        close(
+            crate::sheen_albedo(ndv, roughness),
+            exact,
+            1e-3 + exact * 1e-3,
+        );
+    }
+}
+
+#[test]
+fn lobe_keys_round_trip_and_stay_out_of_plain_materials() {
+    let plain = Material::default().to_toml().unwrap();
+    for key in ["fabric", "anisotropy", "scatter"] {
+        assert!(!plain.contains(key), "{key} in {plain}");
+    }
+    let lobed = Material::from_toml(
+        "fabric = { color = [0.5, 0.4, 0.3], roughness = 0.6 }\nanisotropy = { strength = 0.7, rotation = 1.2 }\nscatter = { color = [1.0, 0.3, 0.2], radius = 0.02, amount = 0.8 }",
+    )
+    .unwrap();
+    assert_eq!(lobed.fabric.color, [0.5, 0.4, 0.3]);
+    assert_eq!(lobed.scatter.radius, 0.02);
+    assert_eq!(
+        Material::from_toml(&lobed.to_toml().unwrap()).unwrap(),
+        lobed
+    );
+    assert_eq!(PackedMaterial::pack(&lobed).unpack(), lobed);
+    assert!(Material::from_toml("fabric = { colour = [1.0, 1.0, 1.0] }").is_err());
 }

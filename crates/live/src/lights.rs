@@ -121,7 +121,7 @@ fn clustered_radiance(surface: Shaded, wo: vec3f, t: vec3f, b: vec3f, n: vec3f, 
         lit.roughness = max(surface.roughness, sqrt(clamp(light.position_radius.w / (2.0 * distance), 0.0, 1.0)));
         let wi = vec3f(dot(l, t), dot(l, b), dot(l, n));
         let radiance = light.colour_range.xyz * (window * window * cone) / (reach * reach);
-        total += eval_filmed(lit, wo, wi, film) * radiance * ndl;
+        total += eval_lobed(lit, wo, wi, film) * radiance * ndl;
     }
     return total;
 }
@@ -221,7 +221,7 @@ fn local_light_radiance(surface: Shaded, wo: vec3f, t: vec3f, b: vec3f, n: vec3f
             }
             radiance *= cone;
         }
-        total += eval_filmed(lit, wo, wi, film) * radiance * ndl * light_shadow(light, world, geometric, l) * light_tint(light, world, geometric, l);
+        total += eval_lobed(lit, wo, wi, film) * radiance * ndl * light_shadow(light, world, geometric, l) * light_tint(light, world, geometric, l);
     }
     if (local_lights.clusters.z != 0u) {
         total += clustered_radiance(surface, wo, t, b, n, world, geometric, film);

@@ -5,6 +5,7 @@ pub struct Mesh {
     pub nodes: Vec<Node>,
     pub groups: Vec<Group>,
     pub materials: Vec<Material>,
+    pub surfaces: Vec<crate::surface::Surface>,
     pub roots: Vec<u32>,
     pub scenes: Vec<Scene>,
     pub skins: Vec<Skin>,
@@ -199,8 +200,10 @@ impl Mesh {
         let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| format!("mesh: {e}"))?;
         let buffers = buffers(&gltf, &read)?;
         let nodes = nodes(&gltf)?;
-        let groups = groups(&gltf, &buffers)?;
+        let mut groups = groups(&gltf, &buffers)?;
         let materials = materials(&gltf)?;
+        let surfaces = crate::surface::surfaces(&gltf, &buffers, &read);
+        fill_tangents(&mut groups, &surfaces);
         let skins = skins(&gltf, &buffers)?;
         let animations = animations(&gltf, &buffers, &nodes, &groups)?;
         for node in &nodes {
@@ -235,6 +238,7 @@ impl Mesh {
             nodes,
             groups,
             materials,
+            surfaces,
             roots,
             scenes,
             skins,
@@ -444,6 +448,27 @@ fn groups(gltf: &gltf::Gltf, buffers: &[Vec<u8>]) -> Result<Vec<Group>, String> 
         });
     }
     Ok(groups)
+}
+
+fn fill_tangents(groups: &mut [Group], surfaces: &[crate::surface::Surface]) {
+    for primitive in groups.iter_mut().flat_map(|group| &mut group.primitives) {
+        let wants = primitive
+            .material
+            .and_then(|material| surfaces.get(material as usize))
+            .is_some_and(|surface| surface.maps.wants_tangents());
+        if wants
+            && primitive.tangents.is_empty()
+            && !primitive.uvs.is_empty()
+            && primitive.normals.len() == primitive.positions.len()
+        {
+            primitive.tangents = crate::surface::tangents(
+                &primitive.positions,
+                &primitive.normals,
+                &primitive.uvs,
+                &primitive.indices,
+            );
+        }
+    }
 }
 
 fn materials(gltf: &gltf::Gltf) -> Result<Vec<Material>, String> {

@@ -923,6 +923,7 @@ fn live_and_traced_colour_agree_through_the_same_finish() {
             uvs: &f.uvs,
             alpha: None,
             indices: &f.indices,
+            uvs1: None,
         })
         .collect();
     let placements: Vec<Placement<'_>> = (0..flats.len())

@@ -137,6 +137,7 @@ pub struct Staged {
     rig: Vec<pfx_load::scene::Light>,
     lights: Option<Vec<LocalLight>>,
     leveled: Vec<MeshHandle>,
+    textured: bool,
 }
 
 fn mesh_data(geometry: &Geometry) -> MeshData<'_> {
@@ -391,6 +392,7 @@ impl Renderer {
     pub fn stage(&mut self, scene: &Scene) -> Result<Staged, String> {
         let draws = scene.draws();
         let wanted = content_slots(scene, &draws)?;
+        let textured = crate::textured::upload(self, &draws.textures, false)?;
         let mut meshes = HashMap::new();
         let mut glass_meshes = HashMap::new();
         for (index, draw) in draws.items.iter().enumerate() {
@@ -437,6 +439,7 @@ impl Renderer {
             rig: Vec::new(),
             lights: None,
             leveled: Vec::new(),
+            textured,
         };
         staged.plate.load(self, scene, true)?;
         staged.place(self, scene, draws, wanted)?;
@@ -642,6 +645,9 @@ impl Staged {
             self.plate.load(renderer, scene, diff.plates)?;
             let draws = scene.draws();
             let wanted = content_slots(scene, &draws)?;
+            if draws.textures != self.draws.textures {
+                self.textured = crate::textured::upload(renderer, &draws.textures, self.textured)?;
+            }
             let mut needed: Vec<&Geometry> = Vec::new();
             let mut needed_glass: Vec<&Geometry> = Vec::new();
             for (index, draw) in draws.items.iter().enumerate() {
@@ -1025,6 +1031,9 @@ impl Staged {
             renderer.lod_mut().clear_levels(*base);
         }
         self.plate.release(renderer)?;
+        if self.textured {
+            renderer.set_maps(&crate::maps::MapImages::default())?;
+        }
         for handle in self.meshes.into_values() {
             renderer.release_mesh(handle)?;
         }

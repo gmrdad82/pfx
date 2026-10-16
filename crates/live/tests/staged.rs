@@ -131,6 +131,7 @@ fn staged_mesh<'a>(data: &MeshData<'a>) -> Mesh<'a> {
         uvs: data.uvs,
         alpha: data.alpha,
         indices: data.indices,
+        uvs1: None,
     }
 }
 

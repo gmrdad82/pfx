@@ -5,6 +5,12 @@ pub const BRDF: &str = concat!(
     "\n",
     include_str!("wgsl/brdf.wgsl")
 );
+pub const LOBES: &str = concat!(
+    "const SHEEN_TABLE = array<f32, 256>(\n",
+    include_str!("wgsl/sheen_table.txt"),
+    ");\n",
+    include_str!("wgsl/lobes.wgsl")
+);
 pub const AGEING: &str = include_str!("wgsl/ageing.wgsl");
 pub const CONTENT: &str = include_str!("wgsl/content.wgsl");
 pub const WET: &str = include_str!("wgsl/wet.wgsl");

@@ -1438,6 +1438,7 @@ pub fn shader_source() -> String {
 pub fn shader_source_with(gobo: &Gobo) -> String {
     [
         BRDF,
+        pfx_materials::LOBES,
         SHADOW_WGSL,
         LOD_WGSL,
         &deform_source(),
@@ -1448,6 +1449,7 @@ pub fn shader_source_with(gobo: &Gobo) -> String {
         pfx_materials::AGEING,
         pfx_materials::WET,
         maps::MAPS_WGSL,
+        crate::textured::TEXTURED_WGSL,
         &maps::content_wgsl(),
         PROBE_WGSL,
         reflect::PROBE_WGSL,
@@ -4420,6 +4422,14 @@ struct MaterialData {
     tail: vec4f,
     params: array<vec4f, 16>,
     wet: vec4f,
+    sheen: vec4f,
+    lobes: vec4f,
+    scatter: vec4f,
+    textures: vec4f,
+    texture_scales: vec4f,
+    texture_extra: vec4f,
+    texture_transform: vec4f,
+    detail_transform: vec4f,
 }
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 @group(0) @binding(1) var<storage, read> instances: array<InstanceData>;
@@ -4776,6 +4786,10 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     let caustic_dx = dpdx(caustic_at);
     let caustic_dy = dpdy(caustic_at);
     let wet_footprint = max(length(dpdx(input.world_position)), length(dpdy(input.world_position)));
+    let uv1 = vec2f(input.uv_alpha.w, input.normal.w);
+    let uv1_dx = dpdx(uv1);
+    let uv1_dy = dpdy(uv1);
+    let curvature = length(fwidth(input.normal.xyz)) / max(length(fwidth(input.world_position)), 1e-6);
     map_footprint(input.object_position);
     cutout(input);
     let material = materials[input.material];
@@ -4783,7 +4797,10 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     if (!front) {
         geometric = -geometric;
     }
-    let mapped = map_evaluate_with(material.base_roughness.xyz, material.base_roughness.w, material.metal_spec_coat.x, material.metal_spec_coat.w, material.thick_sub_film.z, geometric, input.tangent, input.uv_alpha.xy, vec2f(input.uv_alpha.w, input.normal.w), input.object_position, 0.0, input.settings.z, frame.time_size.x, input.material);
+    var mapped = map_evaluate_with(material.base_roughness.xyz, material.base_roughness.w, material.metal_spec_coat.x, material.metal_spec_coat.w, material.thick_sub_film.z, geometric, input.tangent, input.uv_alpha.xy, vec2f(input.uv_alpha.w, input.normal.w), input.object_position, 0.0, input.settings.z, frame.time_size.x, input.material);
+    if (textured_on(material)) {
+        mapped = textured_maps(mapped, material, input.tangent, input.uv_alpha.xy, uv1, uv_dx, uv_dy, uv1_dx, uv1_dy);
+    }
     var surface = shaded(material, mapped.normal);
     surface.base = mapped.base;
     surface.roughness = mapped.roughness;
@@ -4806,6 +4823,7 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     let n = surface.normal;
     let t = normalize(input.tangent.xyz - n * dot(input.tangent.xyz, n));
     let b = cross(n, t) * input.tangent.w;
+    lobes_live(material, curvature);
     let view = normalize(frame.camera_position.xyz - input.world_position);
     let light = normalize(frame.sun_direction.xyz);
     let wo = vec3f(dot(view, t), dot(view, b), dot(view, n));
@@ -4837,7 +4855,10 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
         film = film_colour(surface, clamp(wo.z, 0.0, 1.0));
         film_normal = film_colour(surface, 1.0);
     }
-    var direct = eval_filmed(surface, wo, wi, film) * sun;
+    var direct = eval_lobed(surface, wo, wi, film) * sun;
+    if (facing <= 0.0 && scatter_reach() > 0.0) {
+        direct += scatter_beyond(surface, dot(n, light)) * frame.sun_colour_intensity.xyz * frame.sun_colour_intensity.w * shadow_visibility(input.world_position, geometric);
+    }
     if (lit) {
         var local = local_light_radiance(surface, wo, t, b, n, input.world_position, geometric, film);
         if (contacted) {
@@ -4854,7 +4875,7 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     if (contacted) {
         irradiance *= contact;
     }
-    let diffuse = surface.base * irradiance / PI * reflection_diffuse_weight(surface, view, n, film, film_normal);
+    var diffuse = surface.base * irradiance / PI * reflection_diffuse_weight(surface, view, n, film, film_normal);
     let previous_uv = input.previous_clip.xy / input.previous_clip.w * vec2f(0.5, -0.5) + vec2f(0.5);
     let view_normal = normalize((frame.view * vec4f(n, 0.0)).xyz);
     var ssr = vec4f(0.0);
@@ -4866,12 +4887,21 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
         lookup = local_lookup(selected_reflections.first, selected_reflections.second, selected_reflections.weights_mip.xy, input.world_position, sky_direction, local_probes, reflect_sampler, selected_reflections.weights_mip.z);
     }
     let sky_visible = select(1.0, reflection_sky_visibility(seen, sky_direction, lookup, grid, release), any(toward != vec3f(0.0)));
-    var specular = reflection_radiance(surface, view, n, ssr, sky_cube, local_probes, selected_reflections.first, selected_reflections.second, lookup, reflect_sampler, selected_reflections.weights_mip.z, selected_reflections.weights_mip.w, film, film_normal, sky_visible);
+    var specular = reflection_radiance(surface, view, lobes_reflection_normal(n, t, b, view, surface.roughness), ssr, sky_cube, local_probes, selected_reflections.first, selected_reflections.second, lookup, reflect_sampler, selected_reflections.weights_mip.z, selected_reflections.weights_mip.w, film, film_normal, sky_visible);
     if (probe_grid.shade.x > 0.0 && grid.x >= 0.0) {
         let occlusion = mix(probe_reflection_occlusion(grid, reflection_irradiance(n, input.world_position, sky_visible)), 1.0, release);
         if (occlusion < 1.0) {
             specular *= mix(occlusion, 1.0, clamp(ssr.a, 0.0, 1.0));
         }
+    }
+    if (textured_occlusion < 1.0) {
+        diffuse *= textured_occlusion;
+        specular *= textured_occlusion;
+    }
+    if (lobes_sheen_on()) {
+        let scaling = sheen_scaling(clamp(wo.z, 0.0, 1.0));
+        diffuse = diffuse * scaling + lobes_ambient_sheen(irradiance, clamp(wo.z, 0.0, 1.0));
+        specular *= scaling;
     }
     var output: OpaqueOutput;
     output.colour = vec4f(max(direct + diffuse + specular + surface.emission, vec3f(0.0)), 1.0);

@@ -201,6 +201,7 @@ impl Built<'_> {
                 uvs: &m.uvs,
                 alpha: None,
                 indices: &m.indices,
+                uvs1: None,
             })
             .collect();
         let placements: Vec<Placement> = self

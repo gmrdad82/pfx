@@ -76,6 +76,7 @@ impl Arrays {
             uvs: &self.uvs,
             alpha: None,
             indices: &self.indices,
+            uvs1: None,
         }
     }
 
