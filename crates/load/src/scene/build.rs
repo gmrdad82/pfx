@@ -615,6 +615,8 @@ fn build_mesh(
     let mut visited = BTreeSet::new();
     let mut rigs = Rigging {
         lod_levels: super::lod::level_nodes(&parsed),
+        lod_groups: super::lod::groups(&parsed)
+            .map_err(|message| error(format!("mesh {name}: {}: {message}", mesh.file)))?,
         ..Rigging::default()
     };
     for (root, own) in roots {
@@ -711,6 +713,7 @@ struct Rigging {
     nodes: Vec<(u32, bool)>,
     morphs: Vec<(u32, Morph)>,
     lod_levels: BTreeSet<u32>,
+    lod_groups: BTreeMap<u32, String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -767,6 +770,9 @@ fn walk(
                 let levels = super::lod::levels(mesh, node, slot, group, morph, &geometry)
                     .map_err(|message| format!("mesh {name}, node {}: {message}", node.name))?;
                 geometry = geometry.with_levels(levels);
+                if let Some(group) = rigs.lod_groups.get(&index) {
+                    geometry = geometry.with_group(group.clone());
+                }
             }
             if let Some(morph) = morph {
                 geometry = geometry.with_morph(GeometryMorph {
@@ -888,6 +894,7 @@ impl Geometry {
             skin: None,
             morph: None,
             levels: Vec::new(),
+            group: None,
             hash: hasher.finalize().into(),
         }
     }

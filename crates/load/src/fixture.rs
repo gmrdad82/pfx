@@ -9,8 +9,9 @@ pub use head::{
     head,
 };
 pub use lod::{
-    LOD_RADIUS, LOD_RINGS, LOD_SLIDE, LOD_TARGETS, lod_error, lod_glb, lod_morph_glb, lod_sphere,
-    lod_targets, plain_glb,
+    GROUP_BEARD_ERROR, GROUP_BEARD_RINGS, GROUP_HEAD_RINGS, LOD_RADIUS, LOD_RINGS, LOD_SLIDE,
+    LOD_TARGETS, lod_error, lod_glb, lod_group_glb, lod_morph_glb, lod_sphere, lod_targets,
+    plain_glb,
 };
 use pfx_core::anim::fixture::{column, rig};
 use pfx_core::anim::{Interpolation, Property};

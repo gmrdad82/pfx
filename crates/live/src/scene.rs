@@ -575,6 +575,11 @@ impl Staged {
             |index| is_glass(&draws, index) || self.plate.baked(&draws.items[index]),
             &self.leveled,
         )?;
+        let links = crate::lod_levels::groups(&draws, |index| match slots[index] {
+            Slot::Opaque(at) => Some(at),
+            _ => None,
+        });
+        renderer.lod_mut().set_groups(&links)?;
         self.plate.cast(renderer, &stand_ins)?;
         let mut written = 0;
         for (slot, name) in &wanted {
@@ -1143,6 +1148,7 @@ impl Staged {
         for base in &self.leveled {
             renderer.lod_mut().clear_levels(*base);
         }
+        renderer.lod_mut().set_groups(&[])?;
         self.plate.release(renderer)?;
         if self.textured {
             renderer.set_maps(&crate::maps::MapImages::default())?;
