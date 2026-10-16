@@ -3302,6 +3302,30 @@ impl Frame {
         live_mesh(&self.meshes, handle).is_some_and(|mesh| mesh.morph.base != NO_MORPH)
     }
 
+    pub(crate) fn deform_source(
+        &self,
+        index: usize,
+        handle: MeshHandle,
+    ) -> Option<crate::overlay::DeformSource<'_>> {
+        let mesh = live_mesh(&self.meshes, handle)?;
+        let instance = self.uploaded_instances.get(index)?;
+        Some(crate::overlay::DeformSource {
+            positions: &mesh.positions,
+            vertices: mesh.vertex_capacity as u32,
+            model: instance.model,
+            skin: instance.skin,
+            morph: instance.morph,
+        })
+    }
+
+    pub(crate) fn deform_stores(&self) -> (&wgpu::Buffer, &wgpu::Buffer) {
+        (self.skins.buffer(), self.morphs.buffer())
+    }
+
+    pub fn jitter(&self) -> [f32; 2] {
+        self.jitter
+    }
+
     fn deforms(&self, handle: MeshHandle) -> bool {
         live_mesh(&self.meshes, handle).is_some_and(|mesh| {
             mesh.sway != NO_SWAY || mesh.skin != NO_SKIN || mesh.morph.base != NO_MORPH

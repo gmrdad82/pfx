@@ -658,6 +658,7 @@ pub struct Renderer {
     impostors: Option<ImpostorPass>,
     petals: Option<Petals>,
     sprays: Option<crate::particles::SprayPass>,
+    deformed: Option<crate::overlay::DeformedPositions>,
     lod: LodSet,
     post: GpuChain,
     dof: dof::GpuDof,
@@ -1327,6 +1328,7 @@ impl Renderer {
             impostors: None,
             petals: None,
             sprays: None,
+            deformed: None,
             lod: LodSet::new(2_000_000),
             post,
             dof: dof::GpuDof::new(device, width, height),
@@ -1521,6 +1523,29 @@ impl Renderer {
 
     pub fn frame(&self) -> &Frame {
         &self.frame
+    }
+
+    pub fn last_jitter(&self) -> [f32; 2] {
+        self.frame.jitter()
+    }
+
+    pub fn depth_view(&self) -> &wgpu::TextureView {
+        &self.frame.targets.depth_view
+    }
+
+    pub fn set_deformed_positions(&mut self, instances: &[usize]) {
+        if instances.is_empty() {
+            self.deformed = None;
+            return;
+        }
+        let device = self.frame.gpu.device.clone();
+        self.deformed
+            .get_or_insert_with(|| crate::overlay::DeformedPositions::new(&device))
+            .request(instances);
+    }
+
+    pub fn deformed_positions(&self, instance: usize) -> Option<crate::overlay::Deformed<'_>> {
+        self.deformed.as_ref()?.get(instance)
     }
 
     pub fn warm(&mut self, scenes: &[Scene<'_>]) -> Result<Warming, String> {
@@ -3769,6 +3794,17 @@ impl Renderer {
             }
             let coverage = self.coverage.is_some();
             self.encode_blit(device, &mut encoder, &source, output, coverage);
+        }
+        if let Some(deformed) = self.deformed.as_mut() {
+            deformed.encode(
+                device,
+                &queue,
+                &mut encoder,
+                &self.frame,
+                scene.instances,
+                &mut self.profiler,
+            )?;
+            self.pass_log.push("deformed positions");
         }
         self.finish_encoder(device, &queue, encoder, true)
     }
