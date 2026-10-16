@@ -1156,7 +1156,7 @@ fn the_camera_lens_shifts_and_focuses() {
     );
     let camera = scene.camera.unwrap();
     assert_eq!(camera.shift, [0.1, -0.2]);
-    let depth = camera.depth_of_field.unwrap();
+    let depth = camera.depth_of_field.clone().unwrap();
     assert!(close(depth.distance, 5.0));
     assert!(close(depth.focal, 0.05));
     assert!(close(depth.aperture(), 0.025));
@@ -1180,6 +1180,17 @@ fn the_camera_lens_shifts_and_focuses() {
     );
     let depth = focused.camera.unwrap().depth_of_field.unwrap();
     assert!(close(depth.distance, 2.5));
+    assert!(depth.keys.is_empty() && close(depth.distance_at(3.0), 2.5));
+    let pulled = opened(
+        "camera-focus-keys",
+        "[camera]\nat = [0.0, 0.0, 5.0]\nfov = 40.0\nfstop = 4.0\nfocus = 2.5\nfocus_keys = [[1.0, 4.0], [3.0, 8.0]]\n",
+    );
+    let pull = pulled.camera.unwrap().depth_of_field.unwrap();
+    assert_eq!(pull.keys, vec![[1.0, 4.0], [3.0, 8.0]]);
+    assert!(close(pull.distance_at(2.0), 6.0));
+    assert!(close(pull.distance_at(0.0), 4.0));
+    assert!(close(pull.distance_at(5.0), 8.0));
+    assert!(close(pull.distance, 2.5));
     assert!(close(
         depth.focal,
         0.024 / (2.0 * 20.0_f32.to_radians().tan())

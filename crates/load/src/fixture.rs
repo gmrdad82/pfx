@@ -1,6 +1,7 @@
 mod ball;
 mod head;
 mod lod;
+mod timeline;
 
 pub use ball::{BALL_RADIUS, BALL_RINGS, BALL_SEGMENTS, ball, ball_png};
 pub use head::{
@@ -14,6 +15,10 @@ pub use lod::{
 use pfx_core::anim::fixture::{column, rig};
 use pfx_core::anim::{Interpolation, Property};
 use serde_json::{Value, json};
+pub use timeline::{
+    TIMELINE_CLIP, TIMELINE_KEYS, TIMELINE_NODE, TIMELINE_STEP, TIMELINE_TRAVEL, timeline_glb,
+    timeline_x,
+};
 
 struct Writer {
     bin: Vec<u8>,

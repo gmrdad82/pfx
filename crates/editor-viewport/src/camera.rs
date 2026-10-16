@@ -62,7 +62,7 @@ pub fn through(camera: &Camera, reach: [f64; 2]) -> Camera {
     Camera {
         projection: eye.projection(),
         shift: eye.shift.map(narrow),
-        ..*camera
+        ..camera.clone()
     }
 }
 

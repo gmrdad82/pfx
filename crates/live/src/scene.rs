@@ -18,6 +18,7 @@ use crate::height_fog::HeightFog;
 use crate::lights::{LocalLight, local_light};
 use crate::maps::ContentFormat;
 use crate::morph::{MorphData, MorphTargetData};
+use crate::particles::Palettes;
 use crate::renderer::{Effects, Finish, Renderer, Text, TextQuadItem};
 use crate::skin::SkinData;
 use crate::sky::SkySource;
@@ -134,8 +135,10 @@ pub struct Staged {
     shown: Option<Matrix>,
     sprays: crate::particles::Sprays,
     spray_instances: Vec<crate::particles::SprayInstance>,
+    animators: BTreeMap<usize, pfx_core::anim::Animator>,
     rig: Vec<pfx_load::scene::Light>,
     lights: Option<Vec<LocalLight>>,
+    focus: Option<dof::Lens>,
     leveled: Vec<MeshHandle>,
     textured: bool,
 }
@@ -210,15 +213,42 @@ pub fn local_lights(scene: &Scene) -> Vec<LocalLight> {
     scene.lights.values().map(local_light).collect()
 }
 
-pub fn posed_lights(lights: &[pfx_load::scene::Light], posed: &[Matrix]) -> Vec<LocalLight> {
+pub fn posed_lights<'a>(
+    lights: impl IntoIterator<Item = &'a pfx_load::scene::Light>,
+    posed: &[Matrix],
+    palettes: &Palettes,
+) -> Vec<LocalLight> {
     lights
-        .iter()
-        .map(|light| local_light(&light.placed(posed)))
+        .into_iter()
+        .map(|light| local_light(&light.placed_with(posed, palettes)))
         .collect()
 }
 
-fn light_rig(scene: &Scene) -> Vec<pfx_load::scene::Light> {
-    if scene.animated() && scene.lights.values().any(|light| light.attach.is_some()) {
+pub fn posed_models(draws: &Draws, posed: &[Matrix], palettes: &Palettes) -> Vec<Matrix> {
+    let models = draws.models_posed(posed, palettes);
+    if palettes.is_empty() || draws.items.iter().all(|draw| draw.geometry.skin.is_none()) {
+        return models;
+    }
+    models
+        .into_iter()
+        .zip(draws.models(posed))
+        .zip(&draws.items)
+        .map(|((model, rest), draw)| {
+            if draw.geometry.skin.is_some() {
+                rest
+            } else {
+                model
+            }
+        })
+        .collect()
+}
+
+fn clip_rate(scene: &Scene) -> u32 {
+    scene.physics_or_default().rate.round().max(1.0) as u32
+}
+
+fn light_rig(scene: &Scene, clipped: bool) -> Vec<pfx_load::scene::Light> {
+    if (scene.animated() || clipped) && scene.lights.values().any(|light| light.attach.is_some()) {
         scene.lights.values().copied().collect()
     } else {
         Vec::new()
@@ -263,14 +293,23 @@ fn apply_haze(renderer: &mut Renderer, haze: Option<&Haze>) {
 }
 
 pub fn lens(camera: &SceneCamera, aspect: f32) -> Option<dof::Lens> {
-    let depth = camera.depth_of_field?;
+    focused(camera, aspect, None)
+}
+
+pub fn lens_at(camera: &SceneCamera, aspect: f32, time: f32) -> Option<dof::Lens> {
+    focused(camera, aspect, Some(time))
+}
+
+fn focused(camera: &SceneCamera, aspect: f32, time: Option<f32>) -> Option<dof::Lens> {
+    let depth = camera.depth_of_field.as_ref()?;
+    let distance = time.map_or(depth.distance, |time| depth.distance_at(time));
     let tan_half_width = camera.tan_half_height()? * aspect;
     Some(dof::Lens {
         focal_m: depth.focal,
-        sensor_m: dof::Lens::sensor_for_view(depth.focal, depth.distance, tan_half_width),
+        sensor_m: dof::Lens::sensor_for_view(depth.focal, distance, tan_half_width),
         fstop: depth.fstop,
         aperture: 1.0,
-        focus_m: depth.distance,
+        focus_m: distance,
         near_m: 0.0,
         near_blur: 0.0,
         far_m: 0.0,
@@ -436,8 +475,10 @@ impl Renderer {
             shown: None,
             sprays: crate::particles::Sprays::of(scene),
             spray_instances: Vec::new(),
+            animators: BTreeMap::new(),
             rig: Vec::new(),
             lights: None,
+            focus: None,
             leveled: Vec::new(),
             textured,
         };
@@ -553,18 +594,23 @@ impl Staged {
             .retain(|slot, _| wanted.contains_key(slot));
         self.models = draws.items.iter().map(|draw| draw.model).collect();
         self.previous = self.models.clone();
-        self.posing = scene.animated().then(|| scene.clone());
-        self.rig = light_rig(scene);
+        self.animators = if scene.clipped() {
+            scene.animators(clip_rate(scene))?
+        } else {
+            BTreeMap::new()
+        };
+        let clipped = !self.animators.is_empty();
+        self.posing = (scene.animated() || clipped).then(|| scene.clone());
+        self.rig = light_rig(scene, clipped);
         self.draws = draws;
         self.slots = slots;
         self.base = base;
         self.base_glass = base_glass;
         self.surfaces = surfaces;
-        if let Some(posing) = &self.posing {
-            let posed = posing.posed(&self.camera, 0.0);
-            self.models = self.draws.models(&posed);
+        if let Some((posed, palettes)) = self.posed_at(0.0) {
+            self.models = posed_models(&self.draws, &posed, &palettes);
             self.previous = self.models.clone();
-            self.place_lights(&posed);
+            self.place_lights(&posed, &palettes);
         }
         self.refresh();
         Ok(written)
@@ -748,8 +794,8 @@ impl Staged {
             applied.contents = self.place(renderer, scene, draws, wanted)?;
             applied.draws = true;
         } else if diff.camera && self.posing.is_some() {
-            if let Some(posing) = &self.posing {
-                self.models = self.draws.models(&posing.posed(&self.camera, 0.0));
+            if let Some((posed, palettes)) = self.posed_at(0.0) {
+                self.models = posed_models(&self.draws, &posed, &palettes);
                 self.previous = self.models.clone();
             }
             self.refresh();
@@ -760,7 +806,7 @@ impl Staged {
         }
         if !diff.lights.is_empty() {
             renderer.set_lights(&local_lights(scene))?;
-            self.rig = light_rig(scene);
+            self.rig = light_rig(scene, !self.animators.is_empty());
             self.lights = None;
             applied.lights = true;
         }
@@ -793,30 +839,40 @@ impl Staged {
         Ok(applied)
     }
 
+    fn posed_at(&self, time: f32) -> Option<(Vec<Matrix>, Palettes)> {
+        let posing = self.posing.as_ref()?;
+        Some((
+            posing.posed(&self.camera, time),
+            pfx_load::scene::palettes(&self.animators, time),
+        ))
+    }
+
     pub fn pose(&mut self, time: f32) {
-        if let Some(posing) = &self.posing {
-            let posed = posing.posed(&self.camera, time);
-            let models = self.draws.models(&posed);
+        if let Some((posed, palettes)) = self.posed_at(time) {
+            let models = posed_models(&self.draws, &posed, &palettes);
             self.previous = std::mem::replace(&mut self.models, models);
-            self.place_lights(&posed);
+            self.place_lights(&posed, &palettes);
             self.repose();
         }
     }
 
     pub fn pose_at(&mut self, time: f32, interval: f32) {
-        if let Some(posing) = &self.posing {
-            self.previous = self
-                .draws
-                .models(&posing.posed(&self.camera, time - interval));
-            let posed = posing.posed(&self.camera, time);
-            self.models = self.draws.models(&posed);
-            self.place_lights(&posed);
+        if let Some((before, before_palettes)) = self.posed_at(time - interval)
+            && let Some((posed, palettes)) = self.posed_at(time)
+        {
+            self.previous = posed_models(&self.draws, &before, &before_palettes);
+            self.models = posed_models(&self.draws, &posed, &palettes);
+            self.place_lights(&posed, &palettes);
             self.repose();
         }
     }
 
-    fn place_lights(&mut self, posed: &[Matrix]) {
-        self.lights = (!self.rig.is_empty()).then(|| posed_lights(&self.rig, posed));
+    pub fn palettes(&self, time: f32) -> Palettes {
+        pfx_load::scene::palettes(&self.animators, time)
+    }
+
+    fn place_lights(&mut self, posed: &[Matrix], palettes: &Palettes) {
+        self.lights = (!self.rig.is_empty()).then(|| posed_lights(&self.rig, posed, palettes));
     }
 
     fn repose(&mut self) {
@@ -884,6 +940,12 @@ impl Staged {
 
     fn staged_frame(&mut self, aspect: f32, time: f32, seed: u32) -> StagedFrame<'_> {
         self.spray(time);
+        self.focus = self
+            .camera
+            .depth_of_field
+            .as_ref()
+            .filter(|depth| !depth.keys.is_empty())
+            .and_then(|_| lens_at(&self.camera, aspect, time));
         let shown = camera(&self.camera, aspect).previous_view_projection;
         let previous = self.shown.filter(|_| self.blurred).unwrap_or(shown);
         self.shown = Some(shown);
@@ -928,10 +990,22 @@ impl Staged {
         if self.sprays.is_empty() {
             return;
         }
-        let camera = self.camera;
+        let camera = &self.camera;
         let posing = self.posing.as_ref();
-        self.sprays
-            .seek_posed(time, |t| posing.map(|scene| scene.posed(&camera, t)));
+        if self.animators.is_empty() {
+            self.sprays
+                .seek_posed(time, |t| posing.map(|scene| scene.posed(camera, t)));
+        } else {
+            let animators = &self.animators;
+            self.sprays.seek_rigged(time, |t| {
+                posing.map(|scene| {
+                    (
+                        scene.posed(camera, t),
+                        pfx_load::scene::palettes(animators, t),
+                    )
+                })
+            });
+        }
         self.sprays.pack(&mut self.spray_instances);
     }
 
@@ -944,6 +1018,7 @@ impl Staged {
             glass: &self.glass,
             sprays: &self.spray_instances,
             lights: self.lights.as_deref(),
+            lens: self.focus,
             ..Effects::default()
         }
     }
@@ -1015,7 +1090,7 @@ impl Staged {
     }
 
     pub fn camera(&self) -> SceneCamera {
-        self.camera
+        self.camera.clone()
     }
 
     pub fn sun(&self) -> SceneSun {

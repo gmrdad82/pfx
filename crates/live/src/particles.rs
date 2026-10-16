@@ -191,15 +191,23 @@ impl Sprays {
     }
 
     pub fn seek_posed(&mut self, time: f32, mut objects: impl FnMut(f32) -> Option<Vec<Matrix>>) {
+        self.seek_rigged(time, |t| objects(t).map(|posed| (posed, Palettes::new())));
+    }
+
+    pub fn seek_rigged(
+        &mut self,
+        time: f32,
+        mut posing: impl FnMut(f32) -> Option<(Vec<Matrix>, Palettes)>,
+    ) {
         let links = std::mem::take(&mut self.links);
         let empty = Palettes::new();
         self.seek(time, |t, out| {
-            let posed = objects(t);
-            out.extend(
-                links
-                    .iter()
-                    .map(|link| link.world(posed.as_deref(), &empty)),
-            );
+            let posed = posing(t);
+            let (objects, palettes) = match &posed {
+                Some((objects, palettes)) => (Some(objects.as_slice()), palettes),
+                None => (None, &empty),
+            };
+            out.extend(links.iter().map(|link| link.world(objects, palettes)));
         });
         self.links = links;
     }

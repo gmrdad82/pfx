@@ -161,9 +161,9 @@ impl Presenter {
         }
         self.sync(world, renderer)?;
         let camera = world.fx.camera(&world.camera);
-        if self.lens_camera != Some(camera) {
+        if self.lens_camera.as_ref() != Some(&camera) {
             renderer.set_lens(live_scene::lens(&camera, aspect));
-            self.lens_camera = Some(camera);
+            self.lens_camera = Some(camera.clone());
         }
         let posed = world.faced_models(&camera);
         let draws = staged.draws();
@@ -176,11 +176,7 @@ impl Presenter {
         }
         let palettes = &self.palettes;
         if world.lights().values().any(|light| light.attach.is_some()) {
-            let lights: Vec<_> = world
-                .lights()
-                .values()
-                .map(|light| pfx_live::lights::local_light(&light.placed_with(&posed, palettes)))
-                .collect();
+            let lights = live_scene::posed_lights(world.lights().values(), &posed, palettes);
             if self.placed != lights {
                 renderer.set_lights(&lights).map_err(PlayError::Render)?;
                 self.placed = lights;

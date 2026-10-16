@@ -244,12 +244,12 @@ fn a_project_names_its_rigs_file_or_keeps_rigs_toml() {
 #[test]
 fn a_game_drives_the_camera_with_a_rig_and_stop_leaves_the_scene_alone() {
     let (_folder, mut session) = play(Walker::new("chase").walking([0.05, 0.0, 0.0]), RIGS);
-    let scene_camera = session.world().camera;
+    let scene_camera = session.world().camera.clone();
     run(&mut session, 60);
     assert_eq!(session.world().active_rig(), Some("chase"));
     let id = session.world().object("crate").unwrap();
     let hero = session.world().at(id);
-    let camera = session.world().camera;
+    let camera = session.world().camera.clone();
     near(camera.look_at[0], hero[0], 0.06);
     near(camera.at[1] - camera.look_at[1], 3.0, 1e-4);
     near(camera.at[2] - camera.look_at[2], 6.0, 1e-4);
@@ -403,7 +403,7 @@ fn the_third_person_camera_stops_at_a_wall_the_world_physics_knows() {
     run(&mut session, 120);
     let id = session.world().object("crate").unwrap();
     let hero = session.world().at(id);
-    let camera = session.world().camera;
+    let camera = session.world().camera.clone();
     let rig = session
         .world()
         .rig_state("behind")
@@ -441,16 +441,16 @@ fn switching_rigs_blends_the_camera_and_an_unknown_rig_changes_nothing() {
     );
     let (_folder, mut session) = play(Walker::new("chase"), &text);
     run(&mut session, 5);
-    let before = session.world().camera;
+    let before = session.world().camera.clone();
     assert!(!session.world_mut().rig("nowhere"));
     assert_eq!(session.world().active_rig(), Some("chase"));
     assert!(session.world_mut().rig("slow"));
     run(&mut session, 1);
-    let during = session.world().camera;
+    let during = session.world().camera.clone();
     let travelled = (during.at[1] - before.at[1]).abs();
     assert!(travelled < 1.0, "{travelled}");
     run(&mut session, 90);
-    let after = session.world().camera;
+    let after = session.world().camera.clone();
     near(after.at[1] - after.look_at[1], 8.0, 1e-3);
     assert!(after.at[1] > during.at[1]);
 }

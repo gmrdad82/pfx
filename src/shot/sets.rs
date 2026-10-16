@@ -5,7 +5,6 @@ use pfx_load::scene::{EditError, Scene, SceneEdit, Target, Value, project_root};
 pub struct Applied {
     pub scene: Scene,
     pub sound: Option<PathBuf>,
-    pub focus_keys: Vec<[f32; 2]>,
 }
 
 fn named(kind: &str, name: &str) -> Option<Target> {
@@ -113,11 +112,6 @@ pub fn applied(path: &Path, sets: &[String]) -> Result<Applied, String> {
     Ok(Applied {
         scene,
         sound: resolved.sound_file.as_ref().map(|file| root.join(file)),
-        focus_keys: resolved
-            .camera
-            .as_ref()
-            .and_then(|camera| camera.focus_keys.clone())
-            .unwrap_or_default(),
     })
 }
 

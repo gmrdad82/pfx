@@ -364,7 +364,7 @@ pub fn scene(scene: &LoadedScene, aspect: f32) -> Result<Staged<Environment>, St
 }
 
 pub fn scene_lens(camera: &SceneCamera) -> Lens {
-    match camera.depth_of_field {
+    match &camera.depth_of_field {
         Some(depth) => Lens {
             shift: camera.shift,
             aperture: depth.aperture(),

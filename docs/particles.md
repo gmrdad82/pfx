@@ -29,7 +29,7 @@ Tests (`crates/core/src/sim/tests_particles.rs`): the same seed gives the same p
 
 `pfx_live::particles::Sprays` runs a scene's emitters in lockstep on the 1/120 s grid:
 
-- `Staged::frame(aspect, time, seed)` seeks them to `time` with the objects posed by the scene's movers (`Staged::sprays()` exposes them), so the viewer, `pfx edit`'s viewport and anything that renders a `Staged` frame show them at that time; a scene watch reload restarts them when their tables or their parents change.
+- `Staged::frame(aspect, time, seed)` seeks them to `time` with the objects posed by the scene's movers and, when an `[object.animation]` clip plays, the nodes posed by it at each 1/120 s step (`Sprays::seek_rigged`; `Staged::sprays()` exposes them), so the viewer, `pfx edit`'s viewport and anything that renders a `Staged` frame show them at that time; a scene watch reload restarts them when their tables or their parents change.
 - Play mode (`pfx-play`'s presenter) steps them from the last presented time to this one, with the parents' transforms interpolated between the last frame's and this frame's poses (glTF node animation included).
 - A catch-up longer than 120 s restarts from 120 s before the target, so a far seek stays bounded.
 

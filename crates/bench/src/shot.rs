@@ -52,7 +52,6 @@ pub struct Shot<'a> {
     pub quality: Quality,
     pub seed: u64,
     pub shutter: Option<f32>,
-    pub focus_keys: Vec<[f32; 2]>,
 }
 
 #[derive(Clone, Debug)]
@@ -176,22 +175,6 @@ fn aimed(base: Camera, matrix: Matrix, lens: &Lens) -> Camera {
     camera
 }
 
-pub fn focus_at(keys: &[[f32; 2]], time: f32) -> Option<f32> {
-    let first = keys.first()?;
-    if time <= first[0] {
-        return Some(first[1]);
-    }
-    for pair in keys.windows(2) {
-        let ([t0, m0], [t1, m1]) = (pair[0], pair[1]);
-        if time <= t1 {
-            let span = t1 - t0;
-            let u = if span > 0.0 { (time - t0) / span } else { 1.0 };
-            return Some(m0 + (m1 - m0) * u);
-        }
-    }
-    keys.last().map(|last| last[1])
-}
-
 fn advance_to(session: &mut PlaySession, seconds: f64) {
     let now = session.world().clock().time();
     let real = (seconds - now) as f32;
@@ -246,7 +229,7 @@ pub fn play(
     )
     .map_err(|error| error.to_string())?;
 
-    let base = session.world().camera;
+    let base = session.world().camera.clone();
     let follow = match &shot.camera {
         Some(follow) => {
             let (found, named) =
@@ -264,14 +247,12 @@ pub fn play(
     let place = |session: &mut PlaySession, time: f64| {
         if let Some((found, _, lens)) = &follow {
             let matrix = anchored(session.world(), found);
-            session.world_mut().camera = aimed(base, matrix, lens);
+            session.world_mut().camera = aimed(base.clone(), matrix, lens);
         }
-        let camera = &mut session.world_mut().camera;
-        if let (Some(focus), Some(field)) = (
-            focus_at(&shot.focus_keys, time as f32),
-            camera.depth_of_field.as_mut(),
-        ) {
-            field.distance = focus;
+        if let Some(field) = session.world_mut().camera.depth_of_field.as_mut()
+            && !field.keys.is_empty()
+        {
+            field.distance = field.distance_at(time as f32);
         }
     };
 
@@ -331,7 +312,7 @@ pub fn play(
         if number < shot.from {
             continue;
         }
-        let camera = session.world().camera;
+        let camera = session.world().camera.clone();
         let pixels = gpu.readback_rgba16(&output)?;
         each(Frame {
             index: number - shot.from,
@@ -366,10 +347,6 @@ mod tests {
         assert_eq!(tick_rate(60.0, 60, Some(0.5)), 120.0);
         assert_eq!(tick_rate(60.0, 24, Some(0.5)), 96.0);
         assert_eq!(tick_rate(120.0, 60, Some(0.25)), 240.0);
-        assert_eq!(focus_at(&[[0.0, 4.0], [2.0, 8.0]], 1.0), Some(6.0));
-        assert_eq!(focus_at(&[[1.0, 4.0], [2.0, 8.0]], 0.0), Some(4.0));
-        assert_eq!(focus_at(&[[1.0, 4.0], [2.0, 8.0]], 3.0), Some(8.0));
-        assert_eq!(focus_at(&[], 1.0), None);
         assert_eq!(warm_frames(Quality::Draft, 300, true), 300);
         assert_eq!(warm_frames(Quality::Final, 300, true), 300);
         assert_eq!(warm_frames(Quality::Draft, 300, false), 0);

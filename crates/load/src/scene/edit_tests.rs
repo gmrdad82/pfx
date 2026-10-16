@@ -730,7 +730,7 @@ fn sun_sky_camera_and_finish_fields_are_set_where_they_live() {
         .unwrap();
     edit.set(&Target::Camera, &["fstop"], 2.8f32).unwrap();
     edit.set(&Target::Camera, &["focus"], 4.0f32).unwrap();
-    let camera = edit.scene().camera.unwrap();
+    let camera = edit.scene().camera.clone().unwrap();
     assert!(camera.depth_of_field.is_some());
     let text = folder.read("room.scene.toml");
     assert!(

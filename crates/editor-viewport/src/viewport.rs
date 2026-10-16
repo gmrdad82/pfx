@@ -906,7 +906,7 @@ impl Viewport {
         let live = &mut self.live;
         let outcome = (|| {
             if live.is_none() {
-                *live = Some(Live::new(gpu, egui, rest, revision, camera, size)?);
+                *live = Some(Live::new(gpu, egui, rest, revision, camera.clone(), size)?);
             }
             let Some(live) = live.as_mut() else {
                 return Err("the live renderer is gone".to_string());

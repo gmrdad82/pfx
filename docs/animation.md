@@ -148,7 +148,7 @@ renderer.set_poses(&[InstancePose { instance: 0, joints: &palette, previous: &la
 - The prepass takes the previous palette for the previous position, so a moving joint writes its own motion vector and TAA holds; a still joint writes none.
 - `set_poses` holds until the next call and counts as a change for frames on demand. An instance whose mesh is skinned and has no pose draws its bind pose. A pose with fewer joints than its mesh names is an error from `render`.
 - Skinned instances are moving batches: they never enter the static shadow cache.
-- `Staged` uploads skinned scene geometry with `upload_skinned_mesh` and shows a sprite object's still frame.
+- `Staged` uploads skinned scene geometry with `upload_skinned_mesh` and shows a sprite object's still frame. It poses node clips itself (`[object.animation]`, [live-renderer.md](live-renderer.md#staged-scenes-clips-and-focus)) but sets no skin poses, so a skinned part draws its bind pose at its rest model; play's `present` skins it.
 - Not covered: a skinned mesh does not also take a deformer or tree sway, cannot be replaced in place (`replace_mesh` refuses it; the staged path uploads a new mesh), and a skinned part with a glass material draws its bind pose in the glass pass. LOD sets, impostors and baked plates have not been tried with skinned meshes. Morphed meshes take prebuilt levels of detail from `MSFT_lod`, each level with its own targets ([live-renderer.md](live-renderer.md#prebuilt-levels-of-detail)); skinned ones do not.
 
 The binding floor holds: the shadow casters' vertex stage now binds 7 storage buffers of the default 8, morph targets included ([gpu-floor.md](gpu-floor.md)), and `tests/binding_floor.rs` checks the layouts.

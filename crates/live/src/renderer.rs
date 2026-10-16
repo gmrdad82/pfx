@@ -190,6 +190,7 @@ pub struct Effects<'a> {
     pub liquid: Option<Liquid<'a>>,
     pub props: &'a [ImpostorInstance],
     pub lights: Option<&'a [LocalLight]>,
+    pub lens: Option<dof::Lens>,
 }
 
 pub const HISTORY_GAP: f32 = 0.25;
@@ -2695,6 +2696,9 @@ impl Renderer {
             && self.frame.lights().lights() != lights
         {
             self.set_lights(lights)?;
+        }
+        if effects.lens.is_some() {
+            self.set_lens(effects.lens);
         }
         self.pass_log.clear();
         let (width, height) = self.size();

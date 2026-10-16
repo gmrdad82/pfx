@@ -312,7 +312,7 @@ fn the_pass_cost_at_2160x3840() {
                     camera.look_at[1],
                     camera.look_at[2],
                 ],
-                ..camera
+                ..camera.clone()
             });
             let diff = SceneDiff {
                 camera: true,

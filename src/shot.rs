@@ -253,7 +253,6 @@ pub fn run(plan: &Plan) -> Result<(), String> {
         quality: quality(plan),
         seed: plan.seed,
         shutter: plan.shutter,
-        focus_keys: applied.focus_keys.clone(),
     };
     let played = play::play(&shot, |frame| {
         if let Some(ms) = frame.gpu_ms {

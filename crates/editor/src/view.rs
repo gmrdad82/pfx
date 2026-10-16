@@ -349,7 +349,7 @@ impl View {
         }
         if self.trace.is_none() {
             let mut scene = scene.clone();
-            scene.camera = Some(of.0);
+            scene.camera = Some(of.0.clone());
             let [width, height] = self.size();
             let staged = pfx_trace::stage::scene(&scene, self.aspect())?;
             let trace = staged

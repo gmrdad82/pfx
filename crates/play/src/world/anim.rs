@@ -72,37 +72,9 @@ impl Animations {
                 out.sprites.insert(index, player);
                 continue;
             }
-            let rig = data.and_then(|data| data.rig.clone()).or_else(|| {
-                scene
-                    .meshes
-                    .get(&object.mesh)
-                    .and_then(|mesh| mesh.rig.clone())
-            });
-            let Some(rig) = rig else {
-                continue;
-            };
-            let mut animator = Animator::new(rig, rate);
-            if let Some(data) = data.filter(|data| data.plays()) {
-                let clips: Vec<(&str, f32)> = if data.blend.is_empty() {
-                    data.clip.iter().map(|clip| (clip.as_str(), 1.0)).collect()
-                } else {
-                    data.blend
-                        .iter()
-                        .map(|(clip, weight)| (clip.as_str(), *weight))
-                        .collect()
-                };
-                animator
-                    .play_blend(&clips, 0)
-                    .map_err(|error| object_error(&object.name, error))?;
-                for (clip, _) in &clips {
-                    animator
-                        .set_playback(clip, data.playback)
-                        .and_then(|()| animator.set_start(clip, data.start, 0))
-                        .and_then(|()| animator.set_speed(clip, data.speed, 0))
-                        .map_err(|error| object_error(&object.name, error))?;
-                }
+            if let Some(animator) = scene.animator(index, rate)? {
+                out.animators.insert(index, animator);
             }
-            out.animators.insert(index, animator);
         }
         Ok(out)
     }
