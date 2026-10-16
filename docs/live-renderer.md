@@ -344,7 +344,7 @@ The steam and smoke volume has a clock of its own: `Volume::time_scale` multipli
 
 Particle counts and overdraw are capped independently; a dense full-screen dust sheet can cost more than the count implies. Flocks/schools use product behavior parameters, while the engine provides deterministic movement, culling and drawing. An app's noise steam and painted birds can be replaced one effect at a time. For fast transparent effects, use weighted blended transparency only where its compositing error is acceptable; sort prominent petals and glass explicitly.
 
-**Scene particles (`sprays`).** A scene's `[[particles]]` emitters are simulated on the CPU (`pfx_core::sim::particles`) and drawn by their own pass after the effects' particles: lit by the sun's cascades, the probes or sky and local lights, depth-soft, alpha or additive, velocity-stretched, and blended into the velocity buffer so motion blur and TAA follow them. [particles.md](particles.md) has the pass and its measured cost at 2160 × 3840.
+**Scene particles (`sprays`).** A scene's `[[particles]]` emitters are simulated on the CPU (`pfx_core::sim::particles`) and drawn by their own pass after the effects' particles: lit as a scattering medium by the sun's cascades, the probes or sky and local lights, depth-soft, alpha or additive, stretched along their motion on screen, and (unstretched) blended into the velocity buffer so motion blur and TAA follow them. [particles.md](particles.md) has the pass and its measured cost at 2160 × 3840.
 
 ## Anti-aliasing and finish
 

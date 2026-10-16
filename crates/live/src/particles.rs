@@ -12,6 +12,7 @@ use crate::probes::{PROBE_WGSL, ProbeLighting};
 
 pub const MAX_LIGHTS: usize = 16;
 pub const CATCH_UP: f32 = 120.0;
+pub const MAX_SPAN: f32 = 0.1;
 pub const VELOCITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 
 #[repr(C)]
@@ -25,10 +26,11 @@ pub struct SprayInstance {
 }
 
 impl SprayInstance {
-    pub fn new(sprite: &Sprite, stretch: f32, blend: Blend, lit: bool) -> Self {
+    pub fn new(sprite: &Sprite, stretch: f32, blend: Blend, lit: bool, span: f32) -> Self {
         let [x, y, z] = sprite.position;
-        let [px, py, pz] = sprite.previous;
         let [vx, vy, vz] = sprite.velocity;
+        let span = if span.is_finite() { span.max(0.0) } else { 0.0 };
+        let [px, py, pz] = [x - vx * span, y - vy * span, z - vz * span];
         let [r, g, b] = sprite.colour;
         Self {
             position_size: [x, y, z, sprite.size],
@@ -38,7 +40,7 @@ impl SprayInstance {
             flags: [
                 f32::from(u8::from(lit)),
                 f32::from(u8::from(blend == Blend::Add)),
-                0.0,
+                span,
                 0.0,
             ],
         }
@@ -83,6 +85,8 @@ pub struct Sprays {
     emitters: Vec<Emitter>,
     steps: u64,
     sprites: Vec<Sprite>,
+    last: Option<f32>,
+    span: f32,
 }
 
 fn target(time: f32) -> u64 {
@@ -120,6 +124,8 @@ impl Sprays {
             emitters,
             steps: 0,
             sprites: Vec::new(),
+            last: None,
+            span: 0.0,
         }
     }
 
@@ -153,6 +159,8 @@ impl Sprays {
             emitter.reset();
         }
         self.steps = 0;
+        self.last = None;
+        self.span = 0.0;
     }
 
     pub fn parents(&self, objects: Option<&[Matrix]>, palettes: &Palettes, out: &mut Vec<Matrix>) {
@@ -164,12 +172,19 @@ impl Sprays {
         if self.emitters.is_empty() || !time.is_finite() {
             return;
         }
+        let span = self
+            .last
+            .map(|last| time - last)
+            .filter(|span| (0.0..=MAX_SPAN).contains(span))
+            .unwrap_or(0.0);
         let goal = target(time);
         let window = (CATCH_UP / STEP) as u64;
         if goal < self.steps || goal - self.steps > window {
             self.reset();
             self.steps = goal.saturating_sub(window);
         }
+        self.last = Some(time);
+        self.span = span;
         if self.steps == goal {
             return;
         }
@@ -224,7 +239,7 @@ impl Sprays {
             emitter.sprites(&mut self.sprites);
             let recipe = emitter.recipe();
             out.extend(self.sprites.iter().map(|sprite| {
-                SprayInstance::new(sprite, recipe.stretch, recipe.blend, recipe.lit)
+                SprayInstance::new(sprite, recipe.stretch, recipe.blend, recipe.lit, self.span)
             }));
         }
     }
@@ -235,6 +250,8 @@ impl Sprays {
 struct GpuLight {
     position_radius: [f32; 4],
     colour_range: [f32; 4],
+    spot: [f32; 4],
+    cone: [f32; 4],
 }
 
 #[repr(C)]
@@ -243,6 +260,7 @@ struct SprayFrame {
     view_proj: [[f32; 4]; 4],
     motion_view_proj: [[f32; 4]; 4],
     previous_view_proj: [[f32; 4]; 4],
+    inverse_motion: [[f32; 4]; 4],
     eye: [f32; 4],
     right: [f32; 4],
     up: [f32; 4],
@@ -250,6 +268,7 @@ struct SprayFrame {
     sun: [f32; 4],
     sun_color: [f32; 4],
     info: [f32; 4],
+    scatter: [f32; 4],
     sky: [[f32; 4]; 9],
     lights: [GpuLight; MAX_LIGHTS],
 }
@@ -267,6 +286,8 @@ pub struct SprayView {
     pub sun_intensity: f32,
     pub sky_sh: [[f32; 3]; 9],
     pub size: [u32; 2],
+    pub phase: f32,
+    pub shafts: f32,
 }
 
 pub struct SprayTargets<'a> {
@@ -450,6 +471,18 @@ impl SprayPass {
             .filter(|light| light.lit())
             .take(MAX_LIGHTS)
         {
+            let (spot, cone) = match light.spot {
+                Some(spot) => {
+                    let (scale, offset) = spot.scale_offset();
+                    let d = spot.direction;
+                    let length = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+                    (
+                        [d[0] / length, d[1] / length, d[2] / length, scale],
+                        [offset, 1.0, 0.0, 0.0],
+                    )
+                }
+                None => ([0.0; 4], [0.0; 4]),
+            };
             packed[count] = GpuLight {
                 position_radius: [
                     light.position[0],
@@ -463,14 +496,18 @@ impl SprayPass {
                     light.colour[2] * light.intensity,
                     light.range,
                 ],
+                spot,
+                cone,
             };
             count += 1;
         }
         let four = |v: [f32; 3]| [v[0], v[1], v[2], 0.0];
+        let inverse = crate::renderer::invert(view.motion_view_proj);
         let frame = SprayFrame {
             view_proj: view.view_proj,
             motion_view_proj: view.motion_view_proj,
             previous_view_proj: view.previous_view_proj,
+            inverse_motion: inverse.unwrap_or(IDENTITY),
             eye: four(view.eye),
             right: four(view.right),
             up: four(view.up),
@@ -482,7 +519,18 @@ impl SprayPass {
                 view.sun_color[2],
                 view.sun_intensity,
             ],
-            info: [count as f32, view.size[0] as f32, view.size[1] as f32, 0.0],
+            info: [
+                count as f32,
+                view.size[0] as f32,
+                view.size[1] as f32,
+                f32::from(u8::from(inverse.is_some())),
+            ],
+            scatter: [
+                view.phase.clamp(-0.9, 0.9),
+                view.shafts.clamp(0.0, 1.0),
+                0.0,
+                0.0,
+            ],
             sky: view.sky_sh.map(four),
             lights: packed,
         };
@@ -552,10 +600,12 @@ impl SprayPass {
 }
 
 pub const SPRAY_WGSL: &str = r#"
-struct SprayLight { position_radius: vec4f, colour_range: vec4f, }
+const SPRAY_PI: f32 = 3.14159265;
+const SPRAY_FRAC_4_PI: f32 = 0.07957747154594767;
+struct SprayLight { position_radius: vec4f, colour_range: vec4f, spot: vec4f, cone: vec4f, }
 struct SprayFrame {
-    view_proj: mat4x4f, motion_view_proj: mat4x4f, previous_view_proj: mat4x4f,
-    eye: vec4f, right: vec4f, up: vec4f, forward: vec4f, sun: vec4f, sun_color: vec4f, info: vec4f,
+    view_proj: mat4x4f, motion_view_proj: mat4x4f, previous_view_proj: mat4x4f, inverse_motion: mat4x4f,
+    eye: vec4f, right: vec4f, up: vec4f, forward: vec4f, sun: vec4f, sun_color: vec4f, info: vec4f, scatter: vec4f,
     sky: array<vec4f, 9>,
     lights: array<SprayLight, 16>,
 }
@@ -581,6 +631,13 @@ struct SprayOut {
     @location(5) axis_y: vec3f,
     @location(6) @interpolate(flat) flags: vec4f,
 }
+fn spray_relative(p: Spray) -> vec3f {
+    let span = p.flags.z;
+    if (span <= 0.0 || spray.info.w < 0.5) { return p.velocity_stretch.xyz; }
+    let seen = spray.inverse_motion * (spray.previous_view_proj * vec4f(p.previous_angle.xyz, 1.0));
+    if (abs(seen.w) <= 1e-6) { return p.velocity_stretch.xyz; }
+    return (p.position_size.xyz - seen.xyz / seen.w) / span;
+}
 @vertex fn vs_main(@builtin(vertex_index) vertex: u32, @builtin(instance_index) index: u32) -> SprayOut {
     let p = sprays[index];
     let corners = array<vec2f, 6>(vec2f(-1.0, -1.0), vec2f(1.0, -1.0), vec2f(-1.0, 1.0), vec2f(-1.0, 1.0), vec2f(1.0, -1.0), vec2f(1.0, 1.0));
@@ -590,13 +647,19 @@ struct SprayOut {
     var axis_x = spray.right.xyz * cos(spin) + spray.up.xyz * sin(spin);
     var axis_y = spray.up.xyz * cos(spin) - spray.right.xyz * sin(spin);
     var along = half;
-    let v = p.velocity_stretch.xyz;
-    let across = v - spray.forward.xyz * dot(v, spray.forward.xyz);
-    let speed = length(across);
-    if (p.velocity_stretch.w > 0.0 && speed > 1e-4) {
-        axis_y = across / speed;
-        axis_x = normalize(cross(axis_y, spray.forward.xyz));
-        along = half + 0.5 * p.velocity_stretch.w * speed;
+    var stretched = 0.0;
+    if (p.velocity_stretch.w > 0.0) {
+        let to_eye = p.position_size.xyz - spray.eye.xyz;
+        let ray = select(spray.forward.xyz, normalize(to_eye), dot(to_eye, to_eye) > 1e-10);
+        let v = spray_relative(p);
+        let across = v - ray * dot(v, ray);
+        let speed = length(across);
+        if (speed > 1e-4) {
+            axis_y = across / speed;
+            axis_x = normalize(cross(axis_y, ray));
+            along = half + 0.5 * p.velocity_stretch.w * speed;
+            stretched = 1.0;
+        }
     }
     let offset = axis_x * corner.x * half + axis_y * corner.y * along;
     let world = p.position_size.xyz + offset;
@@ -611,15 +674,15 @@ struct SprayOut {
     out.world = world;
     out.axis_x = axis_x;
     out.axis_y = axis_y;
-    out.flags = vec4f(p.flags.x, p.flags.y, half, 0.0);
+    out.flags = vec4f(p.flags.x, p.flags.y, half, stretched);
     return out;
 }
-fn spray_sun(world: vec3f, distance: f32) -> f32 {
+fn spray_sun(world: vec3f, depth: f32) -> f32 {
     if (spray_shadow.splits.w <= 0.0) { return 1.0; }
     var layer = 0;
     var matrix = spray_shadow.view_proj_0;
-    if (distance > spray_shadow.splits.y) { layer = 1; matrix = spray_shadow.view_proj_1; }
-    if (distance > spray_shadow.splits.z) { layer = 2; matrix = spray_shadow.view_proj_2; }
+    if (depth > spray_shadow.splits.y) { layer = 1; matrix = spray_shadow.view_proj_1; }
+    if (depth > spray_shadow.splits.z) { layer = 2; matrix = spray_shadow.view_proj_2; }
     let clip = matrix * vec4f(world, 1.0);
     let point = clip.xyz / clip.w;
     let uv = point.xy * vec2f(0.5, -0.5) + vec2f(0.5);
@@ -645,6 +708,18 @@ fn spray_sky(n: vec3f) -> vec3f {
 fn spray_wrap(n: vec3f, l: vec3f) -> f32 {
     return max(dot(n, l) + 0.5, 0.0) / 1.5;
 }
+fn spray_phase(cosine: f32) -> f32 {
+    let g = spray.scatter.x;
+    let denom = 1.0 + g * g - 2.0 * g * cosine;
+    return SPRAY_FRAC_4_PI * (1.0 - g * g) / (denom * sqrt(denom));
+}
+fn spray_scatter(ray: vec3f, n: vec3f, l: vec3f, thick: f32) -> f32 {
+    return mix(spray_phase(dot(ray, l)), spray_wrap(n, l) / SPRAY_PI, thick);
+}
+fn spray_ambient(world: vec3f, n: vec3f) -> vec3f {
+    let grid = sample_live_irradiance(world, n);
+    return select(spray_sky(n), grid, grid.x >= 0.0);
+}
 struct SprayTargets { @location(0) colour: vec4f, @location(1) velocity: vec4f, }
 @fragment fn fs_main(in: SprayOut) -> SprayTargets {
     let r2 = dot(in.uv, in.uv);
@@ -657,11 +732,13 @@ struct SprayTargets { @location(0) colour: vec4f, @location(1) velocity: vec4f, 
     if (alpha <= 0.0) { discard; }
     var radiance = in.colour.rgb;
     if (in.flags.x > 0.5) {
-        let n = normalize(in.axis_x * in.uv.x + in.axis_y * in.uv.y - spray.forward.xyz * sqrt(1.0 - r2));
+        let ray = normalize(in.world - spray.eye.xyz);
+        let n = normalize(in.axis_x * in.uv.x + in.axis_y * in.uv.y - ray * sqrt(1.0 - r2));
+        let thick = alpha;
         let sun = normalize(spray.sun.xyz);
-        var light = spray.sun_color.rgb * spray.sun_color.w * spray_sun(in.world, length(in.world - spray.eye.xyz)) * spray_wrap(n, sun);
-        let grid = sample_live_irradiance(in.world, n);
-        light += select(spray_sky(n), grid, grid.x >= 0.0);
+        var light = spray.sun_color.rgb * spray.sun_color.w * mix(1.0, spray_sun(in.world, depth), spray.scatter.y) * spray_scatter(ray, n, sun, thick);
+        let facing = spray_ambient(in.world, n);
+        light += mix(0.5 * (facing + spray_ambient(in.world, -n)), facing, thick) / SPRAY_PI;
         let count = u32(spray.info.x);
         for (var k = 0u; k < count; k++) {
             let lamp = spray.lights[k];
@@ -669,16 +746,23 @@ struct SprayTargets { @location(0) colour: vec4f, @location(1) velocity: vec4f, 
             let distance = length(to_light);
             let range = lamp.colour_range.w;
             if (distance >= range || distance <= 1e-6) { continue; }
+            let l = to_light / distance;
+            var cone = 1.0;
+            if (lamp.cone.y > 0.5) {
+                let along = clamp(dot(lamp.spot.xyz, -l) * lamp.spot.w + lamp.cone.x, 0.0, 1.0);
+                cone = along * along;
+                if (cone <= 0.0) { continue; }
+            }
             let ratio = distance / range;
             let window = clamp(1.0 - ratio * ratio * ratio * ratio, 0.0, 1.0);
             let reach = max(distance, lamp.position_radius.w);
-            light += lamp.colour_range.rgb * window * window / (reach * reach) * spray_wrap(n, to_light / distance);
+            light += lamp.colour_range.rgb * window * window * cone / (reach * reach) * spray_scatter(ray, n, l, thick);
         }
-        radiance = in.colour.rgb * light / 3.14159265;
+        radiance = in.colour.rgb * light;
     }
     var out: SprayTargets;
     out.colour = vec4f(radiance * alpha, select(alpha, 0.0, in.flags.y > 0.5));
-    out.velocity = vec4f(in.motion, 0.0, alpha);
+    out.velocity = vec4f(in.motion, 0.0, select(alpha, 0.0, in.flags.w > 0.5));
     return out;
 }
 "#;

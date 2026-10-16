@@ -3397,6 +3397,8 @@ impl Renderer {
                 sun_intensity: scene.sun.intensity,
                 sky_sh: self.frame.sky().lighting.sh,
                 size: [width, height],
+                phase: self.height_fog.as_ref().map_or(0.5, |(fog, _)| fog.phase),
+                shafts: self.height_fog.as_ref().map_or(1.0, |(fog, _)| fog.shafts),
             };
             let pass = self.sprays.get_or_insert_with(|| {
                 crate::particles::SprayPass::new(device, self.frame.probes())

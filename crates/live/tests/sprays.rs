@@ -24,6 +24,10 @@ specular = 0.0
 ";
 
 fn scene(name: &str, irradiance: f32, particles: &str) -> Scene {
+    backdrop(name, 1.0, [0.3, 0.8, 0.5], irradiance, particles)
+}
+
+fn backdrop(name: &str, glow: f32, toward: [f32; 3], irradiance: f32, particles: &str) -> Scene {
     let root: PathBuf = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("sprays")
         .join(name);
@@ -31,12 +35,20 @@ fn scene(name: &str, irradiance: f32, particles: &str) -> Scene {
     std::fs::create_dir_all(&root).unwrap();
     let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../load/tests/scenes");
     std::fs::copy(fixtures.join("block.gltf"), root.join("block.gltf")).unwrap();
-    std::fs::write(root.join("sprays.materials.toml"), MATERIALS).unwrap();
+    std::fs::write(
+        root.join("sprays.materials.toml"),
+        MATERIALS.replace(
+            "emission = [1.0, 1.0, 1.0]",
+            &format!("emission = [{glow}, {glow}, {glow}]"),
+        ),
+    )
+    .unwrap();
     let path = root.join("sprays.scene.toml");
     std::fs::write(
         &path,
         format!(
-            "materials = [\"sprays.materials.toml\"]\nfallback = \"matte\"\n\n[mesh.block]\nfile = \"block.gltf\"\n\n[[object]]\nname = \"wall\"\nmesh = \"block\"\nat = [0.0, 0.5, -1.5]\nscale = [6.0, 4.0, 0.2]\nmaterial = \"glow\"\n\n[sun]\nmodel = \"authored\"\ntoward = [0.3, 0.8, 0.5]\nirradiance = {irradiance}\n\n[sky]\nkind = \"room\"\n\n[sky.room]\nwidth = 64\nfloor = [0.05, 0.05, 0.05]\nwall = [0.05, 0.05, 0.05]\nceiling = [0.05, 0.05, 0.05]\n\n[camera]\nat = [0.0, 0.5, 4.0]\nlook_at = [0.0, 0.5, 0.0]\nfov = 40.0\n{particles}"
+            "materials = [\"sprays.materials.toml\"]\nfallback = \"matte\"\n\n[mesh.block]\nfile = \"block.gltf\"\n\n[[object]]\nname = \"wall\"\nmesh = \"block\"\nat = [0.0, 0.5, -1.5]\nscale = [6.0, 4.0, 0.2]\nmaterial = \"glow\"\nshadow = \"none\"\n\n[sun]\nmodel = \"authored\"\ntoward = [{}, {}, {}]\nirradiance = {irradiance}\n\n[sky]\nkind = \"room\"\n\n[sky.room]\nwidth = 64\nfloor = [0.05, 0.05, 0.05]\nwall = [0.05, 0.05, 0.05]\nceiling = [0.05, 0.05, 0.05]\n\n[camera]\nat = [0.0, 0.5, 4.0]\nlook_at = [0.0, 0.5, 0.0]\nfov = 40.0\n{particles}",
+            toward[0], toward[1], toward[2]
         ),
     )
     .unwrap();
@@ -162,6 +174,73 @@ fn particles_draw_lit_and_blended() {
     assert!(
         sum(&bright) > sum(&dim) * 1.2,
         "lit particles follow the sun"
+    );
+}
+
+fn mist() -> String {
+    "\n[[particles]]\nname = \"mist\"\nat = [0.0, 0.5, 0.0]\nburst = 2000\nmax = 2000\nlifetime = [30.0, 30.0]\nspeed = [0.0, 0.5]\ncone = 180.0\ndrag = 4.0\nsize = [0.3, 0.3]\nalpha = [[0.0, 0.25], [1.0, 0.25]]\ncolor = \"#c9d3dc\"\nlit = true\nseed = 3\n".into()
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn backlit_mist_is_lighter_than_the_bright_wall_behind_it() {
+    let toward = [0.0, 0.15, -1.0];
+    let bare = frames(&backdrop("mist-bare", 0.4, toward, 8.0, ""), 1.0, 4);
+    let misted = frames(&backdrop("mist", 0.4, toward, 8.0, &mist()), 1.0, 4);
+    let centre = |pixels: &[[f32; 3]]| -> f32 {
+        let (cx, cy) = (WIDTH as usize / 2, HEIGHT as usize / 2);
+        let mut sum = 0.0;
+        for y in cy - 4..=cy + 4 {
+            for x in cx - 4..=cx + 4 {
+                sum += luminance(&pixels[y * WIDTH as usize + x]);
+            }
+        }
+        sum / 81.0
+    };
+    let (wall, dense) = (centre(&bare), centre(&misted));
+    println!("wall {wall:.3}, backlit mist over it {dense:.3}");
+    assert!(
+        dense > wall + 0.05,
+        "light grey mist lit from behind scatters the sun toward the eye: {dense:.3} over a wall of {wall:.3}"
+    );
+}
+
+fn mover(direction: [f32; 3]) -> String {
+    format!(
+        "\n[[particles]]\nname = \"mover\"\nat = [0.8, 0.5, 0.0]\nburst = 1\nmax = 1\nlifetime = [30.0, 30.0]\nspeed = [3.0, 3.0]\ndirection = [{}, {}, {}]\ncone = 0.0\ndrag = 0.0\ngravity = [0.0, 0.0, 0.0]\nsize = [0.1, 0.1]\nalpha = [[0.0, 1.0], [1.0, 1.0]]\ncolor = \"#000000\"\nlit = false\nstretch = 0.4\nseed = 2\n",
+        direction[0], direction[1], direction[2]
+    )
+}
+
+fn footprint(bare: &[[f32; 3]], drawn: &[[f32; 3]]) -> (usize, usize) {
+    let covered: Vec<(usize, usize)> = (0..bare.len())
+        .filter(|&i| luminance(&bare[i]) - luminance(&drawn[i]) > 0.1)
+        .map(|i| (i % WIDTH as usize, i / WIDTH as usize))
+        .collect();
+    assert!(!covered.is_empty(), "the particle is drawn");
+    let span = |pick: fn(&(usize, usize)) -> usize| {
+        covered.iter().map(pick).max().unwrap() - covered.iter().map(pick).min().unwrap() + 1
+    };
+    (span(|p| p.0), span(|p| p.1))
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn stretch_follows_the_screen_motion() {
+    let bare = frames(&scene("still", 4.0, ""), 0.2, 2);
+    let toward = frames(&scene("toward", 4.0, &mover([0.0, 0.0, 1.0])), 0.2, 2);
+    let rising = frames(&scene("rising", 4.0, &mover([0.0, 1.0, 0.0])), 0.2, 2);
+    let (wide, tall) = footprint(&bare, &toward);
+    println!("coming at the eye off centre: {wide} x {tall} px");
+    assert!(
+        wide >= 2 * tall,
+        "a particle coming at the eye right of centre streaks outward across the screen: {wide} x {tall} px"
+    );
+    let (wide, tall) = footprint(&bare, &rising);
+    println!("rising: {wide} x {tall} px");
+    assert!(
+        tall >= 2 * wide,
+        "a rising particle streaks up: {wide} x {tall} px"
     );
 }
 

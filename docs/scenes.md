@@ -185,9 +185,9 @@ A deterministic emitter simulated on a 1/120 s grid and drawn by the live render
 | `color` (`colour`) | one colour, `"#rrggbb"` (sRGB) or `[r, g, b]` linear | | white |
 | `colors` (`colours`) | `[[t, "#rrggbb"], ...]` over life; replaces `color` | t 0 to 1 | none |
 | `spin` | `[min, max]` spin, either way | rad/s | `[0, 0]` |
-| `stretch` | velocity stretch: the quad lengthens by `stretch · speed` metres along its screen motion | ≥ 0 seconds | `0` |
+| `stretch` | velocity stretch: the quad lengthens by `stretch · speed` metres along its motion on screen, `speed` its velocity against the camera's; 0.01 to 0.05 streaks it by one to three frames at 60 fps | ≥ 0 seconds | `0` |
 | `blend` | `"alpha"` covers what is behind, `"add"` adds light | | `"alpha"` |
-| `lit` | lit by the sun and its shadows, the probes or sky and local lights; unlit emits its colour | | `true` |
+| `lit` | lit as a scattering puff: thin parts glow toward a light behind them by the haze's phase, dense parts shade diffusely; by the sun and its shadows (lit in shade as much as the haze is), the probes or sky and local lights; unlit emits its colour | | `true` |
 | `seed` | the emitter's random stream | u64 | a hash of `name` |
 
 From the CLI and the editor these are keys of `Target::Particles(name)`, so `--set particles.<name>.<key>=<value>` (`--set particles.spray.rate=800`) goes through the same `SceneEdit` path as a hand edit and reaches the window through the scene watch.
