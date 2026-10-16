@@ -249,9 +249,6 @@ struct VolumeOut { @location(0) radiance: vec4f, @location(1) distance: f32, }
     let shafts = fog.march.x;
     let count = min(u32(fog.march.w), 8u);
     let extinction = ABSORPTION + SCATTERING;
-    let sun_rise = fog.shape.y * sun.y * fog.shape.w;
-    var sun_reach = fog.shape.w;
-    if (abs(sun_rise) > 0.00125) { sun_reach = (1.0 - exp(min(-sun_rise, 30.0))) / (fog.shape.y * sun.y); }
     let shadowed = shafts > 0.0 && shadow.splits.w > 0.0;
     let atlas = textureDimensions(shadow_atlas);
     let origin_0 = shadow.view_proj_0 * vec4f(frame.eye.xyz, 1.0);
@@ -277,8 +274,7 @@ struct VolumeOut { @location(0) radiance: vec4f, @location(1) distance: f32, }
             if (depth > shadow.splits.z) { clip = origin_2 + delta_2 * distance; layer = 2; }
             sunlit = mix(1.0, sunlight(clip, layer, atlas), shafts);
         }
-        let sun_path = exp(-density * sun_reach * extinction);
-        var sample_color = sun_light * sunlit * sun_path + fog.ambient.rgb;
+        var sample_color = sun_light * sunlit + fog.ambient.rgb;
         light += fog.color.rgb * SCATTERING * density * step_length * sample_color * background;
     }
     for (var l = 0u; l < count; l++) {
