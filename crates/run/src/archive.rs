@@ -862,7 +862,7 @@ pub fn archive(manifest_path: &Path, no_archive: bool) -> State {
         record_skip(manifest_path, &root, reason);
         return State::Skipped;
     }
-    let cache = match crate::ffmpeg::cache() {
+    let cache = match crate::cache::dir() {
         Ok(cache) => cache,
         Err(message) => {
             eprintln!("pfx: archive cache unavailable: {message}");
@@ -1088,7 +1088,7 @@ fn import_manifest(import: &Import, made: &str) -> Result<PathBuf, String> {
 }
 
 pub fn retry() -> Result<(usize, usize), String> {
-    retry_in(&crate::ffmpeg::cache()?, &lock_path()?)
+    retry_in(&crate::cache::dir()?, &lock_path()?)
 }
 
 pub fn retry_at_startup() -> Result<(usize, usize), String> {

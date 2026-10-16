@@ -3056,6 +3056,7 @@ dependencies = [
  "pfx-run",
  "pfx-sound",
  "pfx-text",
+ "pito-codecs",
  "png 0.18.1",
  "pollster",
  "serde",
@@ -3462,6 +3463,8 @@ dependencies = [
  "fs2",
  "hex",
  "libc",
+ "pfx-run",
+ "pito-codecs",
  "png 0.18.1",
  "rustix 1.1.5",
  "serde",
@@ -3488,6 +3491,7 @@ dependencies = [
  "lewton",
  "pfx-core",
  "pfx-sound",
+ "pito-codecs",
  "toml 0.9.12+spec-1.1.0",
 ]
 
@@ -3575,8 +3579,8 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pito-codecs"
-version = "1.9.0"
-source = "git+https://github.com/gmrdad82/pito-codecs?tag=v1.9.0#48710d82bd32d6c792423df18f7a6f4a41e17ffd"
+version = "1.12.1"
+source = "git+https://github.com/gmrdad82/pito-codecs?tag=v1.12.1#2e6793c68b20f36aded0514ce4edca3999bab370"
 dependencies = [
  "libloading",
  "objc2-core-foundation",

@@ -118,7 +118,7 @@ enum Kind {
         #[arg(long = "recipes", help = "The recipes folder, or <product>=<dir>")]
         recipes: Vec<String>,
     },
-    #[command(about = "Turn an older clip's FFV1 master into an x264 master")]
+    #[command(about = "Turn an older clip's MKV master into an H.264 MP4 master; FFV1 is refused")]
     Encode {
         #[arg(help = "The clip's manifest .json")]
         manifest: PathBuf,
@@ -1695,16 +1695,16 @@ fn still(opts: &Opts, scene: &Scene, live: &mut Job) -> Result<(), String> {
     Ok(())
 }
 
-fn frame_bytes(image: &image::Rgba32FImage) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity((image.width() * image.height() * 8) as usize);
+fn frame_values(image: &image::Rgba32FImage) -> Vec<u16> {
+    let mut values = Vec::with_capacity((image.width() * image.height() * 4) as usize);
     for p in image.pixels() {
         for c in 0..3 {
             let v = encode_channel(p[c].clamp(0.0, 1.0));
-            bytes.extend_from_slice(&((v * 65535.0 + 0.5) as u16).to_le_bytes());
+            values.push((v * 65535.0 + 0.5) as u16);
         }
-        bytes.extend_from_slice(&u16::MAX.to_le_bytes());
+        values.push(u16::MAX);
     }
-    bytes
+    values
 }
 
 fn opaque(image: &image::Rgba32FImage) -> image::Rgba32FImage {
@@ -1809,7 +1809,7 @@ fn clip(opts: &Opts, scene: &Scene, live: &mut Job) -> Result<(), String> {
     let mut pipe = if opts.no_encode {
         None
     } else {
-        Some(video::Pipe::open(size.0, size.1, fps, &master)?)
+        Some(video::Pipe::create(size.0, size.1, fps, &master)?)
     };
     let loose = if opts.no_encode {
         let path = out_dir.join(format!("{stem}.frames"));
@@ -1844,17 +1844,17 @@ fn clip(opts: &Opts, scene: &Scene, live: &mut Job) -> Result<(), String> {
             made.push(frame_path);
         }
         if let Some(encoder) = &mut pipe {
-            encoder.send(&frame_bytes(&frame))?;
+            encoder.push(&frame_values(&frame))?;
         }
         live.progress(k as u64 + 1);
     }
     if let Some(encoder) = pipe {
-        encoder.finish()?;
         live.stage(stages::ENCODE, Some(1), "outputs");
+        encoder.finish(None)?;
         let mut entry = file_entry(&master);
         entry["tier"] = json!("master");
         entry["fps"] = json!(fps);
-        entry["args"] = json!(pfx_run::encode::master_args(fps));
+        entry["settings"] = pfx_run::encode::settings(fps);
         entry["depth"] = json!(8);
         entry["chroma"] = json!("4:2:0");
         entry["color"] = json!(pfx_run::encode::COLOR);
@@ -1868,14 +1868,16 @@ fn clip(opts: &Opts, scene: &Scene, live: &mut Job) -> Result<(), String> {
     params["frames"] = json!(total);
     params["closure"] = scene.closure.label();
     let outputs = json!({
-        "master": "x264 CRF 12, High, yuv420p, BT.709 limited",
+        "master": video::MASTER_WHAT,
         "poster": "the first frame, 8-bit sRGB PNG",
         "resampling": "Lanczos3 in linear light, premultiplied",
     });
     let mut manifest = manifest(scene, "clip", &result, params, outputs, files);
     manifest["made"] = json!(made_at);
     manifest["pinned"] = json!(pinned(opts) && recipes_pinned(scene));
-    manifest["ffmpeg"] = pfx_run::ffmpeg::system()?.record();
+    if !opts.no_encode {
+        manifest["encoder"] = pfx_run::encode::record();
+    }
     let manifest_path = out_dir.join(format!("{stem}.json"));
     write_manifest(&manifest_path, &manifest)?;
     if !opts.keep_frames && !opts.no_encode {
@@ -1941,13 +1943,13 @@ fn reencode(manifest_path: &Path, live: &mut Job) -> Result<(), String> {
     let mut entry = file_entry(&master);
     entry["tier"] = json!("master");
     entry["fps"] = json!(fps);
-    entry["args"] = json!(pfx_run::encode::master_args(fps));
+    entry["settings"] = pfx_run::encode::settings(fps);
     entry["depth"] = json!(8);
     entry["chroma"] = json!("4:2:0");
     entry["color"] = json!(pfx_run::encode::COLOR);
     files.push(entry);
     manifest["files"] = json!(files);
-    manifest["outputs"]["master"] = json!("x264 CRF 12, High, yuv420p, BT.709 limited");
+    manifest["outputs"]["master"] = json!(video::MASTER_WHAT);
     if manifest["version"].is_null() {
         let digest = manifest["shot_sha256"]
             .as_str()
@@ -1955,7 +1957,10 @@ fn reencode(manifest_path: &Path, live: &mut Job) -> Result<(), String> {
             .unwrap_or("unknown");
         manifest["version"] = json!(digest.chars().take(12).collect::<String>());
     }
-    manifest["ffmpeg"] = pfx_run::ffmpeg::system()?.record();
+    if let Some(map) = manifest.as_object_mut() {
+        map.remove("ffmpeg");
+    }
+    manifest["encoder"] = pfx_run::encode::record();
     write_manifest(manifest_path, &manifest)?;
     std::fs::remove_file(old_path).map_err(|e| e.to_string())?;
     live.progress(1);

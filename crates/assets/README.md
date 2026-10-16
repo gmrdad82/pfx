@@ -59,7 +59,7 @@ Every pixel samples adaptively, by default to a noise threshold of 0.01 with a c
 
 ## Output
 
-Output lands in `tmp/renders/<product>/<kind>/` with a `.json` manifest beside each output. Clip masters are x264 CRF 12 on the CPU with a poster, from the system ffmpeg (the one on `PATH`, recorded in the manifest by path, version and sha256). Stills keep 16-bit PNG masters and dithered 8-bit PNG deliveries.
+Output lands in `tmp/renders/<product>/<kind>/` with a `.json` manifest beside each output. Clip masters are H.264 CRF 12 MP4s with a poster, encoded on the CPU by pito-codecs (recorded in the manifest's `encoder` by name and version; [docs/render-a-still.md](../../docs/render-a-still.md#clip-masters)). Stills keep 16-bit PNG masters and dithered 8-bit PNG deliveries.
 
 When an archive root is set (`PITO_ARCHIVE`), deliberate masters, posters, a still's PNG deliveries (with its `--derive` sizes and `--web` copies) and their `manifest.json` are copied into a dated leaf, `$PITO_ARCHIVE/Masters/pfx/<product>/<shot>/<YYYY-MM-DD>_<HHMMSS>_<version>_<caller>/`, with one line appended to `$PITO_ARCHIVE/Masters/catalog.jsonl`. An offline archive is queued and `pfx archive --retry` finishes it. `--no-archive` skips the step.
 

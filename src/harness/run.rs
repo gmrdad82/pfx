@@ -27,7 +27,7 @@ const KIND: &str = "clip";
 const STILL: &str = "still";
 const CHUNK: u32 = 4;
 const STDERR_TAIL: usize = 20;
-const MASTER_WHAT: &str = "x264 CRF 12 master, High, yuv420p, BT.709 limited";
+const MASTER_WHAT: &str = "H.264 CRF 12 master from pito-codecs, High, yuv420p, BT.709 limited";
 
 struct Scratch {
     path: PathBuf,
@@ -342,7 +342,8 @@ struct Manifest {
     resolved: Shot,
     fixtures: FixtureRecord,
     driver: String,
-    ffmpeg: Option<EncoderRecord>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    encoder: Option<Value>,
     master: Target,
     targets: Vec<Target>,
     stages: BTreeMap<String, f64>,
@@ -396,13 +397,6 @@ struct Target {
     size: String,
     width: u32,
     height: u32,
-}
-
-#[derive(Serialize)]
-struct EncoderRecord {
-    path: String,
-    version: String,
-    sha256: String,
 }
 
 struct Made {
@@ -1247,11 +1241,6 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
     job.pgpu(None);
     stages.insert("trace".into(), t1.elapsed().as_secs_f64());
     let t2 = Instant::now();
-    let ffmpeg = if o.encode {
-        Some(tools::ffmpeg()?)
-    } else {
-        None
-    };
     let master_target = Target {
         fps: master_fps,
         size: master_size.clone(),
@@ -1300,10 +1289,8 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
         pcm_frames: pcm.frames,
         pcm_sha256: pcm.sha256,
     });
-    let silent = scratch.path.join("silent.master.mp4");
-    let video_out = if with_audio { &silent } else { &master };
-    let mut encoder = if let Some(tools::Ffmpeg { path: ff, .. }) = &ffmpeg {
-        Some(encode::from_raw(ff, mw, mh, master_fps, video_out)?)
+    let mut encoder = if o.encode {
+        Some(master_encode::Master::create(mw, mh, master_fps, &master)?)
     } else {
         None
     };
@@ -1342,32 +1329,21 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
             frame.save(&output)?;
             outputs_made.push(made(output, "delivery frame, 16-bit sRGB PNG"));
         }
-        if let Some(child) = &mut encoder {
-            child
-                .stdin
-                .as_mut()
-                .ok_or("encoder stdin")?
-                .write_all(&frame.raw())
-                .map_err(|e| format!("encoder: {e}"))?;
+        if let Some(encoder) = &mut encoder {
+            encoder.push(&frame.rgba)?;
         }
         job.progress(n as u64 + 1);
     }
-    if let Some(mut child) = encoder {
-        drop(child.stdin.take());
-        if !child.wait().map_err(|e| e.to_string())?.success() {
-            return Err(format!("ffmpeg failed encoding {}", master.display()));
-        }
-        if with_audio {
-            let ff = &ffmpeg.as_ref().ok_or("ffmpeg unavailable")?.path;
-            master_encode::mux_audio(ff, &silent, &wav, clip_seconds, &master)?;
-        }
+    let encoded = encoder.is_some();
+    if let Some(encoder) = encoder {
         job.stage(stages::ENCODE, Some(1), "outputs");
+        encoder.finish(with_audio.then_some(wav.as_path()))?;
         let size = format!("{mw}x{mh}");
-        let args = master_encode::master_args(master_fps);
+        let settings = master_encode::settings(master_fps);
         outputs_made.push(Made {
             path: master,
             what: MASTER_WHAT.into(),
-            encoded: Some(json!({"tier": "master", "size": size, "fps": master_fps, "args": args, "depth": 8, "chroma": "4:2:0", "color": master_encode::COLOR, "audio": audio_record.as_ref().map(|a| a.codec)})),
+            encoded: Some(json!({"tier": "master", "size": size, "fps": master_fps, "settings": settings, "depth": 8, "chroma": "4:2:0", "color": master_encode::COLOR, "audio": audio_record.as_ref().map(|a| a.codec)})),
         });
         job.progress(1);
     }
@@ -1423,11 +1399,7 @@ fn render_clip(o: &Options, job: &mut Job) -> Result<PathBuf, String> {
             files: tools::hash_tree(&fixtures)?,
         },
         driver: opened.driver,
-        ffmpeg: ffmpeg.map(|f| EncoderRecord {
-            path: f.path.display().to_string(),
-            version: f.version,
-            sha256: f.sha256,
-        }),
+        encoder: encoded.then(master_encode::record),
         master: master_target.clone(),
         targets: vec![master_target],
         stages,
@@ -1510,11 +1482,16 @@ fn reencode_mode(path: &Path, archive_enabled: bool) -> Result<(), String> {
             .as_u64()
             .or_else(|| manifest["params"]["fps"].as_u64())
             .unwrap_or(60) as u32;
-        let system = tools::ffmpeg()?;
-        let ffmpeg = system.path.clone();
         let new_path = dir.join(encode::master(stem));
+        let poster = dir.join(encode::poster(stem));
+        let posted = !poster.exists();
         job.stage(stages::ENCODE, Some(1), "outputs");
-        encode::from_file(&ffmpeg, &old_path, fps, &new_path)?;
+        master_encode::from_file(
+            &old_path,
+            fps,
+            &new_path,
+            posted.then_some(poster.as_path()),
+        )?;
         let mut files: Vec<Value> = manifest["files"]
             .as_array()
             .cloned()
@@ -1533,11 +1510,9 @@ fn reencode_mode(path: &Path, archive_enabled: bool) -> Result<(), String> {
         files.push(entry(dir, &Made {
             path: new_path,
             what: MASTER_WHAT.into(),
-            encoded: Some(json!({"tier": "master", "fps": fps, "args": master_encode::master_args(fps), "depth": 8, "chroma": "4:2:0", "color": master_encode::COLOR})),
+            encoded: Some(json!({"tier": "master", "fps": fps, "settings": master_encode::settings(fps), "depth": 8, "chroma": "4:2:0", "color": master_encode::COLOR})),
         })?);
-        let poster = dir.join(encode::poster(stem));
-        if !poster.exists() {
-            encode::first_frame(&ffmpeg, &dir.join(encode::master(stem)), &poster)?;
+        if posted {
             files.push(entry(
                 dir,
                 &made(poster, "poster, the first frame, 8-bit sRGB PNG"),
@@ -1568,7 +1543,10 @@ fn reencode_mode(path: &Path, archive_enabled: bool) -> Result<(), String> {
         }
         manifest["files"] = json!(files);
         manifest["outputs"] = outputs();
-        manifest["ffmpeg"] = system.record();
+        if let Some(map) = manifest.as_object_mut() {
+            map.remove("ffmpeg");
+        }
+        manifest["encoder"] = master_encode::record();
         manifest["encoded_by"] = json!({"name": TOOL, "version": env!("CARGO_PKG_VERSION")});
         if let Some(value) = &converted_version {
             manifest["version"] = json!(value);
@@ -1752,35 +1730,50 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    fn h264_mkv(path: &Path, size: u32, frames: i64) {
+        use pito_codecs::h264;
+        use pito_codecs::media::{Frame as Picture, PixelFormat, TimeBase};
+        use pito_codecs::mkv;
+        let mut encoder = h264::Encoder::new(h264::EncoderConfig {
+            width: size,
+            height: size,
+            fps: (4, 1),
+            ..h264::EncoderConfig::default()
+        })
+        .unwrap();
+        let mut writer = mkv::Writer::create(path).unwrap();
+        let track = writer
+            .add_track(mkv::TrackConfig::h264(
+                encoder.avcc(),
+                size,
+                size,
+                TimeBase::new(1, 4),
+            ))
+            .unwrap();
+        let mut packets = Vec::new();
+        for n in 0..frames {
+            let mut picture =
+                Picture::new(PixelFormat::Yuv420p8, size, size, n, TimeBase::new(1, 4));
+            for (plane, value) in picture.planes.iter_mut().zip([60 + n as u8 * 30, 90, 200]) {
+                plane.data.fill(value);
+            }
+            packets.extend(encoder.encode(&picture).unwrap());
+        }
+        packets.extend(encoder.flush().unwrap());
+        for packet in &packets {
+            writer.push(track, packet).unwrap();
+        }
+        writer.finish().unwrap();
+    }
+
     #[test]
-    fn older_ffv1_manifest_becomes_x264_without_writing_an_archive() {
+    fn an_older_mkv_master_becomes_an_mp4_master_without_writing_an_archive() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tmp")
-            .join(format!("ffv1-convert-{}", std::process::id()));
+            .join(format!("mkv-convert-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let old = dir.join("alpha-clip-fixture-64x64-4fps.master.mkv");
-        let ffmpeg = tools::ffmpeg().unwrap().path;
-        let status = Command::new(&ffmpeg)
-            .args([
-                "-hide_banner",
-                "-v",
-                "error",
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                "testsrc2=size=64x64:rate=4",
-                "-frames:v",
-                "4",
-                "-c:v",
-                "ffv1",
-                "-pix_fmt",
-                "gbrp16le",
-            ])
-            .arg(&old)
-            .status()
-            .unwrap();
-        assert!(status.success());
+        h264_mkv(&old, 64, 4);
         let manifest = dir.join("alpha-clip-fixture-64x64-4fps.json");
         let old_name = old.file_name().unwrap().to_string_lossy().to_string();
         std::fs::write(
@@ -1800,6 +1793,12 @@ mod tests {
         let converted: Value = serde_json::from_slice(&std::fs::read(&manifest).unwrap()).unwrap();
         assert_eq!(converted["version"], "aabbccddeeff");
         assert!(converted["archive"].is_null());
+        assert_eq!(converted["encoder"]["name"], "pito-codecs");
+        assert!(converted["ffmpeg"].is_null());
+        assert!(
+            dir.join("alpha-clip-fixture-64x64-4fps.poster.png")
+                .is_file()
+        );
         assert!(
             dir.join("alpha-clip-fixture-64x64-4fps.master.mp4")
                 .is_file()

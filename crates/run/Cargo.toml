@@ -3,7 +3,7 @@ name = "pfx-run"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "pfx's process plumbing for its renderers: pgpu and the build slice, ending children cleanly, job progress, the system ffmpeg"
+description = "pfx's process plumbing for its renderers: pgpu and the build slice, ending children cleanly, job progress, and the master encode through pito-codecs"
 publish.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -16,8 +16,15 @@ serde_json = "1"
 chrono = "0.4"
 fs2 = "0.4"
 png = "0.18"
+pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.12.1", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"], optional = true }
+
+[features]
+encode = ["dep:pito-codecs"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }
 signal-hook = "0.3"
+
+[dev-dependencies]
+pfx-run = { path = ".", features = ["encode"] }
