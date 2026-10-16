@@ -144,9 +144,14 @@ fn a_footage_film_plans_its_scenes_and_refuses_what_it_cannot_play() {
     assert_eq!(roll.frames(), 6 + 9);
     assert_eq!(plan[0].source, Some(at.join("shot")));
     let pcod = roll.pcod(Path::new("/o"), Path::new("/o/f.mp4")).join(" ");
+    let out = Path::new("/o");
     assert_eq!(
         pcod,
-        "pcod frames /o/frames --audio /o/audio.wav --fps 30 /o/f.mp4"
+        format!(
+            "pcod frames {} --audio {} --fps 30 /o/f.mp4",
+            out.join("frames").display(),
+            out.join("audio.wav").display()
+        )
     );
     let good = std::fs::read_to_string(&path).unwrap();
     for (from, to) in [
