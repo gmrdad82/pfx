@@ -11,6 +11,7 @@ pub const BLUR_SPREAD: f32 = 2.0 * (10.0 / 6.0) * (10.0 / 6.0);
 pub const STARBURST_TEXELS: u32 = 256;
 pub const STARBURST_SEED: u32 = 0x2545_f491;
 pub const MAX_GHOSTS: u32 = 16;
+pub const KNEE: f32 = 4.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Flare {
@@ -123,6 +124,16 @@ fn fract(x: f32) -> f32 {
     x - x.floor()
 }
 
+pub fn knee(s: [f32; 3], threshold: f32) -> [f32; 3] {
+    let peak = max3(s);
+    if peak <= 0.0 {
+        return [0.0; 3];
+    }
+    let over = ((peak - threshold) / (threshold.max(1e-4) * KNEE)).clamp(0.0, 1.0);
+    let gain = over * over / peak;
+    s.map(|c| c.max(0.0) * gain)
+}
+
 fn ghosts(image: &Image, flare: &Flare, vertex: [f32; 2]) -> [f32; 3] {
     let uv = [1.0 - vertex[0], 1.0 - vertex[1]];
     let v = [
@@ -133,9 +144,9 @@ fn ghosts(image: &Image, flare: &Flare, vertex: [f32; 2]) -> [f32; 3] {
     for i in 0..flare.ghosts.min(MAX_GHOSTS) {
         let i = i as f32;
         let suv = [fract(uv[0] + v[0] * i), fract(uv[1] + v[1] * i)];
-        let s = sample_color(image, suv);
+        let s = knee(sample_color(image, suv), flare.threshold);
         for ch in 0..3 {
-            color[ch] += (s[ch] - flare.threshold).clamp(0.0, 1.0);
+            color[ch] += s[ch];
         }
     }
     color
@@ -157,7 +168,7 @@ fn halo(image: &Image, flare: &Flare, uv: [f32; 2], aspect: [f32; 2]) -> [f32; 3
     let wy = uv[1];
     let d = ((wx - 0.5) * (wx - 0.5) + (wy - 0.5) * (wy - 0.5)).sqrt();
     let weight = ring(d, flare.halo_radius, flare.halo);
-    s.map(|c| (c - flare.threshold).clamp(0.0, 1.0) * weight)
+    knee(s, flare.threshold).map(|c| c * weight)
 }
 
 pub fn features(prepared: &Image, flare: &Flare) -> Image {

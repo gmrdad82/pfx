@@ -147,6 +147,33 @@ fn a_flare_off_changes_nothing_and_on_mirrors_the_sun() {
     );
 }
 
+#[test]
+fn a_source_just_over_the_threshold_ghosts_faintly_and_a_sun_fully() {
+    let spot = |level: f32| {
+        Image::from_fn(96, 128, |x, y| {
+            let (dx, dy) = (x as f32 - 28.8, y as f32 - 32.0);
+            let c = if dx * dx + dy * dy < 36.0 { level } else { 0.1 };
+            [c, c * 0.02, c * 0.01, 1.0]
+        })
+    };
+    let mut chain = Chain::new();
+    chain.set_flare(Flare {
+        amount: 0.4,
+        threshold: 1.5,
+        ..Flare::default()
+    });
+    let ghost = |level: f32| {
+        let source = spot(level);
+        chain.apply(&source, None, None).at(66, 95)[0] - source.at(66, 95)[0]
+    };
+    let (tail, sun) = (ghost(3.2), ghost(60.0));
+    assert!(sun > 0.05, "{sun}");
+    assert!(
+        tail < sun * 0.05,
+        "a tail light at 3.2 ghosts {tail}, the sun {sun}"
+    );
+}
+
 mod gpu {
     use super::*;
     use crate::gpu::GpuChain;

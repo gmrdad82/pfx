@@ -1544,6 +1544,13 @@ fn flare_color(uv: vec2<f32>) -> vec3<f32> {
     );
 }
 
+fn flare_knee(s: vec3<f32>, threshold: f32) -> vec3<f32> {
+    let peak = max(s.r, max(s.g, s.b));
+    if (peak <= 0.0) { return vec3<f32>(0.0); }
+    let over = clamp((peak - threshold) / (max(threshold, 1e-4) * 4.0), 0.0, 1.0);
+    return max(s, vec3<f32>(0.0)) * (over * over / peak);
+}
+
 fn flare_ring(x: f32, c: f32, r: f32) -> f32 {
     let t = min(abs(x - c) / r, 1.0);
     return 1.0 - t * t * (3.0 - 2.0 * t);
@@ -1562,7 +1569,7 @@ fn flare_ring(x: f32, c: f32, r: f32) -> f32 {
         let v = (vec2<f32>(0.5) - uv) * post.p0.y;
         for (var i = 0u; i < count; i = i + 1u) {
             let suv = fract(uv + v * f32(i));
-            color = color + clamp(flare_color(suv) - vec3<f32>(threshold), vec3<f32>(0.0), vec3<f32>(1.0));
+            color = color + flare_knee(flare_color(suv), threshold);
         }
     }
     if (post.p1.x > 0.0) {
@@ -1570,7 +1577,7 @@ fn flare_ring(x: f32, c: f32, r: f32) -> f32 {
         v.x = v.x * aspect.x;
         v = flare_normalize(v);
         v.x = v.x * aspect.y;
-        let s = clamp(flare_color(vertex + v * post.p1.y) - vec3<f32>(threshold), vec3<f32>(0.0), vec3<f32>(1.0));
+        let s = flare_knee(flare_color(vertex + v * post.p1.y), threshold);
         let w = vec2<f32>((vertex.x - 0.5) * aspect.x + 0.5, vertex.y);
         let d = distance(w, vec2<f32>(0.5));
         color = color + s * flare_ring(d, post.p1.y, post.p1.x);
