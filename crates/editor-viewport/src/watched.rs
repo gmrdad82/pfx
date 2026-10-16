@@ -59,9 +59,9 @@ impl Watched {
     }
 
     fn stamp(&self) -> Option<Stamp> {
-        std::fs::read_to_string(&self.path)
+        std::fs::read(&self.path)
             .ok()
-            .map(|text| Stamp::of(&text))
+            .map(|bytes| Stamp::of(&String::from_utf8_lossy(&bytes)))
     }
 
     fn reopen(&mut self) -> bool {
