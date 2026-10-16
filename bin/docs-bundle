@@ -125,6 +125,8 @@ GUIDES = [
     ("bake", 318, "pfx bake traces a scene's probe volumes, prerendered props, plates and detail maps on the GPU and writes versioned, checked artifacts the live renderer shows."),
     ("geom-assets", 319, "pfx-geom's asset geometry on the CPU: SVG marks as extruded, bevelled solids and icon parts fused through a distance field."),
     ("render-a-scene", 320, "pfx shot renders a scene file offline on the live renderer at a fixed clock: numbered frames, a manifest and a WAV for pcod, the same bytes every run."),
+    ("particles", 321, None),
+    ("alpha-master", 322, None),
     ("editor", 401, None),
     ("editor-crates", 402, None),
     ("windows", 501, "Games on pfx build for Windows: the one build Steam ships, which Linux and the Steam Deck run through Proton."),
