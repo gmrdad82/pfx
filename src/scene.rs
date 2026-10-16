@@ -45,7 +45,7 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
                 }
                 None => mode = Some(flag),
             },
-            other if other.starts_with('-') || paths.len() >= 1 + usize::from(mode.is_some()) => {
+            other if other.starts_with('-') || paths.len() > usize::from(mode.is_some()) => {
                 return Err(Refusal::new(cli::unexpected(other)).under(usage));
             }
             file => paths.push(PathBuf::from(file)),

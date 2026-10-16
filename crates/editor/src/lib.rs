@@ -71,6 +71,6 @@ pub fn run_project(
 }
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod manf_tests;
+#[cfg(test)]
+mod tests;
