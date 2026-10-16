@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.4.0 — 2026-10-16
+
+### Added
+
+- The path tracer keeps one structure per mesh and a top level over instances: `Trace::set_instance_transforms` moves objects in a fraction of a second instead of rebuilding the whole scene, and a camera move rebuilds nothing.
+- A staged scene plays its objects' animation clips itself, with attached lights and parented particles following, and a camera's focus keys stay on the loaded camera (`DepthOfField::distance_at`).
+- Overlay hooks for tools that draw on top of a frame: `Renderer::last_jitter`, `Renderer::depth_view`, and opt-in deformed positions of skinned and morphed instances.
+- `pfx shot` and `pfx film` show one progress line on a terminal; JSON only with `--json`.
+- Film cards and scenes: SVG marks keep their gradients, strokes and opacity, scenes take PNG image art, clip and frame scenes take a `crop`, the score can duck named sounds under named cues (bass under the kick), and a scene can set its score gain.
+
+### Changed
+
+- Rough surfaces blur what they reflect: screen-space reflections sample the surface's GGX lobe and are denoised, so a wet road no longer mirrors windows as sharp squares.
+- Lens flare ghosts come only from sources near the centre of the frame, so bright windows no longer scatter coloured ghosts across the image.
+- The low sun glows through outdoor haze as it should.
+- The pfx tool hides Mesa's non-conformant-driver warning unless you set it yourself.
+- `pfx_load::scene::Camera` and `DepthOfField` are no longer `Copy` (they carry focus keys).
+
 ## v2.3.0 — 2026-10-16
 
 ### Added
