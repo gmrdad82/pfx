@@ -8,6 +8,7 @@ mod flare;
 #[cfg(test)]
 mod flare_tests;
 mod haze;
+mod keyed;
 mod lights;
 mod lod;
 mod mix;
@@ -21,6 +22,8 @@ pub mod textures;
 pub mod tiles;
 mod watch;
 
+#[cfg(test)]
+mod keyed_tests;
 #[cfg(test)]
 mod particles_tests;
 #[cfg(test)]
@@ -52,13 +55,18 @@ pub use diff::{Changes, SceneDiff};
 pub use draws::{Draw, Draws};
 pub use edit::{EditError, Kind, Patch, PatchGroup, SceneEdit, Target, Value};
 pub use haze::OutdoorHaze;
+pub use keyed::{
+    CameraKeys, FinishAt, FinishKeys, HazeKeys, LightAt, PlanSource, SceneKeys, SkyKeys, SkyLook,
+    SkyPlan, SunKeys, gather,
+};
 pub use lights::{Attach as LightAttach, SPOT_CONE, SPOT_DIRECTION, Spot};
 pub use lod::{COVERAGE_HEIGHT, GeometryLevel};
 pub use particles::{Attach, Node as ParticleNode, Particles};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
 pub use pfx_scene::types::{
-    Tunable as DeclaredTunable, TunableKind as DeclaredKind, TunableValue as DeclaredValue,
+    Key, KeyShape, KeyValue, Keys, Tunable as DeclaredTunable, TunableKind as DeclaredKind,
+    TunableValue as DeclaredValue,
 };
 pub use plates::{PlateCasters, Plates, Proxies, Proxy, ProxyShape};
 pub use play::{
@@ -306,6 +314,7 @@ impl Environment {
 pub struct SceneSky {
     pub kind: String,
     pub environment: Environment,
+    pub look: SkyLook,
     pub hash: [u8; 32],
 }
 
@@ -440,33 +449,12 @@ pub struct DepthOfField {
     pub fstop: f32,
     pub distance: f32,
     pub focal: f32,
-    pub keys: Vec<[f32; 2]>,
 }
 
 impl DepthOfField {
     pub fn aperture(&self) -> f32 {
         self.focal / self.fstop
     }
-
-    pub fn distance_at(&self, time: f32) -> f32 {
-        focus_at(&self.keys, time).unwrap_or(self.distance)
-    }
-}
-
-pub fn focus_at(keys: &[[f32; 2]], time: f32) -> Option<f32> {
-    let first = keys.first()?;
-    if time <= first[0] {
-        return Some(first[1]);
-    }
-    for pair in keys.windows(2) {
-        let ([t0, m0], [t1, m1]) = (pair[0], pair[1]);
-        if time <= t1 {
-            let span = t1 - t0;
-            let u = if span > 0.0 { (time - t0) / span } else { 1.0 };
-            return Some(m0 + (m1 - m0) * u);
-        }
-    }
-    keys.last().map(|last| last[1])
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -701,6 +689,7 @@ pub struct Scene {
     pub triggers: BTreeMap<String, Trigger>,
     pub layers: BTreeMap<String, Vec<String>>,
     pub sounds: BTreeMap<String, Sound>,
+    pub keys: SceneKeys,
     pub warnings: Vec<SceneError>,
 }
 

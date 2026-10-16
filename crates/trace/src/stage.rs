@@ -574,6 +574,9 @@ pub fn scene_posed(
     staged.detail.transmissive_shadows = scene.trace.transmissive_shadows;
     staged.detail.clamp_indirect = scene.trace.clamp_indirect;
     staged.detail.filter_glossy = scene.trace.filter_glossy;
+    if let Some(sky) = &scene.sky {
+        staged.detail.sky_look = sky.look;
+    }
     Ok(staged)
 }
 

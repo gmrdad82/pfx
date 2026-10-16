@@ -23,7 +23,7 @@ The files are format 1 of the public crate `pfx-scene`, which owns the format: e
 - **Wet materials.** A material's `[wet]` table (in a materials file or a scene's own `[materials.<name>]`) soaks it in both renderers: `amount` (0 to 1, default 0) is the overall dampness, `puddles` (0 to 1, default 0) roughly the share of flat ground under standing water, `puddle_scale` (metres, above 0, default 2) the size of the puddle pattern and `seed` (default 0) which pattern. The table reads into `Material::wet` through the library, so scene watch and the editor change it live, and `--set materials.<name>.wet.amount=0.7` sets it from the CLI through the same edit. Without `[wet]`, or with `amount` and `puddles` both 0, the material renders exactly as before. The model, the puddle mask and its cost are in [Wet surfaces](materials.md#wet-surfaces).
 - **Material lobes.** A material's `fabric = { color, roughness }` (sheen, colour 0 to 1 default `[0, 0, 0]` = off, roughness 0 to 1 default 0), `anisotropy = { strength, rotation }` (strength 0 to 1 default 0 = off, rotation in radians default 0) and `scatter = { color, radius, amount }` (colour 0 to 1 default `[1, 0.35, 0.2]`, radius in metres above 0 default 0.01, amount 0 to 1 default 0 = off) shade in both renderers; `docs/materials.md` has the lobes and their cost.
 - **Sun.** An authored sun follows `hour`: its direction, colour and intensity come from `Daylight::authored(&Authored, reference_hour)` for that hour, day, latitude and heading, so at `hour = reference_hour` it is exactly as authored, and away from it the sun turns, lowers, warms and dims as the day does. Its colour keeps the authored colour's peak; its intensity is `irradiance` times the day's intensity at `hour`. `hour` also picks the light probes' hour. `radius` is the soft sun: live soft shadows (`Quality::sun_radius_deg`) and the tracer's sun disc (`Detail::sun_radius_deg`). Without `[sun]` the sun is dark.
-- **Sky.** An analytic sky follows the sun. A mix sky is baked once, on load, into one HDR at the width of its widest HDR or room layer (`256` when every layer is analytic); an analytic layer is evaluated per texel with `AnalyticSky::diffuse`, the sky without its sun disc. The live renderer and the tracer both draw that HDR. Without `[sky]` the sky is black.
+- **Sky.** An analytic sky follows the sun. A mix sky is baked once, on load, into one HDR at the width of its widest HDR or room layer (`256` when every layer is analytic); an analytic layer is evaluated per texel with `AnalyticSky::diffuse`, the sky without its sun disc. The live renderer and the tracer both draw that HDR. `intensity` scales every kind's radiance, as seen and as the light it casts: an HDR or room sky's texels, and an analytic sky's dome (`AnalyticSky::ambient`; its sun disc stays the sun's). `backdrop` and the `horizon_` keys change only the sky as seen behind the scene ([`[sky]` backdrop and horizon](#sky-backdrop-and-horizon)). Without `[sky]` the sky is black.
 - **Lights.** A `[[light]]` is a point light by default and a spot with `kind = "spot"`. Its keys, all optional but `name` and `intensity`:
 
   | Key | Default | Range | Meaning |
@@ -43,7 +43,7 @@ The files are format 1 of the public crate `pfx-scene`, which owns the format: e
 
   A refused light names itself: a `node` without a `parent`, a `parent` that is no object, a `node` not in the parent's mesh, a cone out of range or a zero direction. `Light::spot` (`Spot { direction, inner, outer }`, world space) and `Light::attach` (`Attach { object, joint, rest, at, direction }`) carry them; `Light::position` and `spot.direction` are already placed at the objects' rest. `Light::placed(&posed)` places it on posed objects, and `Light::placed_with(&posed, &palettes)` on posed objects and their animated nodes; `Staged::frame` does the second at its time (with the node palettes of the scene's playing `[object.animation]` clips, empty when none plays), `pfx_play`'s presenter the second with the world's animators, both through `pfx_live::scene::posed_lights`, and `pfx_trace::stage::scene_posed` the second for the tracer, so live and traced lights stand in the same place. Every key is live under a scene watch and settable with `--set light.<name>.<key>=<value>`. The live renderer takes any number up to `MAX_LIGHTS + MAX_CLUSTERED` (4 + 1,024): with four lights or fewer they all go through the shadowed path as before; with more, the first four lit lights with `shadow = true` keep their shadows and every other light is lit through the clustered list, unshadowed ([live-renderer.md](live-renderer.md#many-lights-clustered-forward)).
 - **Emitters.** An emitter is a 12 × 24 sphere with a black, fully rough, emissive material named `emitter <name>` radiating `intensity / (π radius²)` per channel; it casts no shadow.
-- **Camera.** `shift` is live's off-centre projection and the tracer's `Lens::shift`. `fstop` is depth of field through a thin lens of the camera's focal length: live `dof::Lens`, traced `Lens::aperture` (`focal / fstop`). `[camera.preset]` tunes `pfx_core::camera::Preset`. `focus_keys = [[t, metres], ...]` (needs `fstop`; t in seconds, at least 0 and in order, distances above 0; default none) pulls focus over time: `DepthOfField::keys` keeps them on the loaded camera and `DepthOfField::distance_at(t)` interpolates linearly between keys and holds the first before them and the last after them (`pfx_load::scene::focus_at`); with no keys it is `distance` (`focus`, else the distance to `look_at`). `Staged::frame` sets the live lens from it at each frame's time (`pfx_live::scene::lens_at`, handed to the renderer through `Effects::lens`), and `pfx shot` sets the play camera's distance from it each frame. A scene without `focus_keys` renders as before. It is live under a scene watch and settable with `--set camera.focus_keys=[[0.0,3.0],[2.0,6.0]]`.
+- **Camera.** `shift` is live's off-centre projection and the tracer's `Lens::shift`. `fstop` is depth of field through a thin lens of the camera's focal length: live `dof::Lens`, traced `Lens::aperture` (`focal / fstop`). `[camera.preset]` tunes `pfx_core::camera::Preset`. `keys` animates `fov`, `fstop` and `focus` over time ([Keys over time](#keys-over-time)); `focus_keys = [[t, metres], ...]` is another spelling of `keys.focus`. A keyed `fstop` without a static one gives the camera depth of field from its first key, and a keyed `fov` moves the lens's focal length with it when `focal` is not set. Every key is live under a scene watch and settable with `--set camera.<key>=<value>`.
 - **Finish.** `file`, or the inline keys, build the chain as `pfx_post::parse` does: a style's passes first, then each key adds or tunes its pass at that parser's own place. `[[finish.pass]]` tables apply in the order written, each built from nothing, after the base. A pass that builds nothing is refused with its line. Without `[finish]` the renderer's standard finish. `lut = "<path.cube>"` grades through an Adobe or Resolve `.cube` file (see [`[finish] lut`](#finish-lut-a-cube-file)); `lut` as a table (`size`, `values`) is the inline cube.
 - **Haze.** The live renderer marches it: a room haze in its `lo`/`hi` box (`Renderer::set_haze`), or, when `height` or `falloff` is set, an outdoor height fog over the whole view (`Renderer::set_height_fog`, [`[haze]` outdoor](#haze-outdoor) below). The tracer has no haze and draws the scene clear.
 - **Movers.** At time `t`, `u = (t + offset) / period` and the mover stands at `from + (to − from) · f(u)`. A child's own mover applies first, then its parent's, up the chain. The time is the one the viewer passes to `Staged::frame` (and `pfx_trace::stage::scene_at`); at `0` every swing and once mover stands at `from`.
@@ -51,6 +51,57 @@ The files are format 1 of the public crate `pfx-scene`, which owns the format: e
 - **Text.** The block is laid out with the font at `size` per em and centred on `at`; it reads along its local +X with +Y up and faces +Z. `Staged` draws it through the live text pass (`Staged::text`), and the tracer letters it on a carrier card, so both agree.
 - **A prefab's text moves with its placement.** Its `at` and `rotate` are in the prefab's space: `Text::place` is the placement object's world matrix (the identity for a scene's own text), and `Text::model()` applies it, so the text moves, turns and scales with its group, and a prefab placed twice draws its text twice.
 - **Bound text.** A `{key}` in `text` is filled when the scene loads, with the value bound to `key`: `pfx_load::scene::bind(key, value)` sets it for the process, `bound(key)` reads it and `filled(text)` fills a string. A key is letters, digits, `_`, `-` and `.`; a token with no value, and anything else in braces, stays as written. `pfx_game::Config::bind_text()` binds `name` and `version` from the game's config: the game's window, `Headless` and `<game> edit` call it before a scene loads, and `pfx edit <project>` binds the project's name and its `Cargo.toml`'s `[package] version` (`Project::version()`). The text is filled at load, so play, the editor's viewport, hot reload and the tracer show the same text. `pfx bake` runs with nothing bound, so a bound text in a plated scene is `dynamic = true`.
+
+### Keys over time
+
+`[[light]]`, `[camera]`, `[[particles]]`, `[finish]`, `[haze]`, `[sun]`, `[sky]` and each `[[sky.layer]]` take an inline `keys` table that animates some of their keys over the scene's time (pfx-scene's `docs/format.md`, "Keys over time"):
+
+```toml
+[[light]]
+name = "lamp"
+position = [0.0, 2.0, 0.0]
+intensity = 2.0
+keys = { intensity = [[0.0, 2.0], [1.5, 8.0]], color = [[0.0, [1.0, 0.2, 0.1]], [1.5, [1.0, 0.9, 0.8]]] }
+
+[sun]
+model = "daylight"
+hour = 17.5
+keys = { hour = [[0.0, 17.5], [10.0, 18.2]] }
+```
+
+Each entry is a keyed key and its `[seconds, value]` keys: seconds of scene time, at least 0 and rising; the value has the key's shape and range (a number, `[r, g, b]` for a colour, two numbers for `cone`, `speed` and `size`). Between keys each component is linear; before the first key the value holds the first, after the last the last (`pfx_scene::types::sample`). A keyed key overrides its static value. pfx-scene refuses a name a table does not key, a wrong shape, a value out of range and times that do not rise, each at its line.
+
+| Table | Keyed keys | Where it lands |
+|---|---|---|
+| `[[light]]` | `intensity`, `color`, `range`, `cone` (spot) | the frame's lights (`Effects::lights`, the presenter's `set_lights`) |
+| `[camera]` | `fov`, `fstop`, `focus` (`focus_keys`) | the frame's camera and lens (`Effects::lens`) |
+| `[[particles]]` | `rate` (`rate_keys`), `speed`, `size`, `color`, `alpha` | the emitter's `Recipe::keys` |
+| `[finish]` | `exposure`, `lut_amount` | the post chain's gain and its LUT's amount, without a new chain |
+| `[haze]` | `amount`, `color` | `Renderer::set_haze` and `set_height_fog` |
+| `[sun]` | `hour` | the frame's sun, the plates' and probes' hour, and an analytic sky |
+| `[sky]` | `intensity`, `backdrop`, `horizon_color`, `horizon_width`, `horizon_amount` | the sky's environment, rebuilt when its keyed values change, and the sky pass's look |
+| `[[sky.layer]]` | `intensity` | the mix, baked again when a layer's value changes |
+
+The tracks stay on the loaded scene: `Scene::keys` is a `SceneKeys` with one entry per keyed table (the lights by name), and samples them at a time: `light(name, t)` (a `LightAt` that tunes a light), `camera(&camera, t)`, `sun(t)` (the sun at the keyed hour, built as at load), `haze(t)`, `finish(t)` (`FinishAt { gain, lut_amount }`, the keyed exposure over the static one), `look(t)` (`SkyLook`) and `environment(t)` with `sky_stamp(t)`, which changes only when the sky's keyed values do. `SceneDiff` flags a section whose keys changed, so scene watch and `--set` make keys live like any other key.
+
+Both live paths sample them at the frame's time through `pfx_live::keyed::Keyer`: `Staged::frame` (and `frame_at`) keys the camera and the sun before posing, the lights after, and hands the rest to the renderer as `Effects::tuned` (a `Tuned`), which `render` applies before it draws (`Renderer::tune`); `pfx-play`'s presenter, which `pfx shot` renders through, samples the same keyer at the world's tick time and applies it to the renderer itself, so a shot waits for a rebuilt sky (`wait_sky`) before it draws the frame. The same scene through `pfx shot` and through `Staged::frame` at the same times draws the same bytes (`keyed_light_and_sun_hour_draw_the_same_frames_in_a_shot_and_staged`). A window shows a rebuilt sky when its worker is done, a frame or two later; call `renderer.tune(frame.effects.tuned)` and `wait_sky` before `render` to have it at once. A scene without `keys` builds no keyer and renders byte-identical to before.
+
+**Cost.** Keyed lights, camera, sun, haze and finish add no GPU work: the frame takes other values. The finish's exposure is a uniform factor and its LUT amount a uniform, so no pipeline is built. A keyed sun hour over an analytic sky, or a keyed sky or layer `intensity`, rebuilds the sky's SH and GGX cube on its worker whenever the sampled value changes (about 31 ms for the analytic sky, see [the sky's settle](live-renderer.md#submission-late-timings-and-the-skys-settle)), and resets history as any new sky does; `pfx shot` waits for it each frame the value moves. A keyed hour over an HDR sky only sets the probes' hour.
+
+### `[sky]` backdrop and horizon
+
+These shape the sky the camera sees behind the scene, after any mix; the light the sky casts, its reflections and the haze's ambient are untouched. Every kind takes them, and they are live under scene watch and settable with `--set sky.<key>=<value>`.
+
+| Key | Range | Default | Meaning |
+|---|---|---|---|
+| `backdrop` | > 0 | `1` | scales the seen sky (its sun disc too) |
+| `horizon_color` | `[r, g, b]`, each ≥ 0 | none | the tint's linear colour; without it there is no tint |
+| `horizon_width` | above 0, at most 90 degrees | `10` | the elevation over which the tint fades out |
+| `horizon_amount` | 0 to 1 | `0` | the tint's strength at the horizon |
+
+The seen sky is `mix(backdrop · sky, horizon_color, amount · (1 − smoothstep(0, width, |elevation|)))`, elevation in degrees from the horizon, so the tint is full on the horizon line and gone `width` degrees above it (and below it). The live sky pass (`sky_seen` in `pfx_core::sky::SKY_MODEL_WGSL`, set with `Renderer::set_sky_look`) and the tracer's camera rays that leave the scene draw it the same; a ray that has bounced sees the plain sky. `pfx_core::sky::seen` is the same formula on the CPU. With the defaults the pass returns the sky unchanged, bit for bit.
+
+**Cost.** Measured once on this machine's AMD RDNA 4 (Linux, RADV) under `pgpu run --class bench` with `cargo run --release -p pfx-live --example sky_look_cost`: a 2160 × 3840 frame of an analytic sky filling the view, GPU medians over 120 frames after 30. The sky pass takes 0.154 ms plain, 0.154 ms with `backdrop` (one multiply) and 0.185 ms with the horizon tint (+0.031 ms: an `asin` and a `smoothstep` per sky pixel); the frame 1.897, 1.894 and 1.935 ms. The tracer adds the same few instructions to camera rays that leave the scene.
 
 ### `[haze]` outdoor
 
@@ -170,7 +221,8 @@ A deterministic emitter simulated on a 1/120 s grid and drawn by the live render
 | `node` | a glTF node inside the parent's mesh (`hero.wheel_rl`); its animated motion in play mode, its file placement otherwise; refused when the mesh has no such node, or without `parent` | node name | none |
 | `at` | the spawn point, in the node's (else the parent's) local space | metres | `[0, 0, 0]` |
 | `rate` | particles per second | ≥ 0 | `0` |
-| `rate_keys` | `[[t, rate], ...]` over scene time `t` in seconds, linear between keys and held past the ends; replaces `rate` when set | t in order, rate ≥ 0 | none |
+| `rate_keys` | `[[t, rate], ...]` over scene time `t` in seconds; another spelling of `keys.rate` | t in order, rate ≥ 0 | none |
+| `keys` | `rate`, `speed`, `size`, `color` and `alpha` over scene time ([Keys over time](#keys-over-time)): a keyed `speed` is the spawn speed at each particle's birth, a keyed `size` and `color` are the whole system's at the frame's time (`color` replaces `color` and `colors`), and a keyed `alpha` (0 to 1) scales the `alpha` curve | | none |
 | `burst` | particles spawned at once on the first step | ≥ 0 | `0` |
 | `max` | the pool cap; spawns past it are dropped | ≥ 0 | `1024` |
 | `lifetime` | `[min, max]` life, uniform | seconds, 0 ≤ min ≤ max, max > 0 | `[1, 1]` |

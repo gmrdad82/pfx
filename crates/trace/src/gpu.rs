@@ -257,6 +257,7 @@ pub struct Trace {
     pub(crate) frame: wgpu::Buffer,
     binding: wgpu::BindGroup,
     environment_binding: wgpu::BindGroup,
+    look: [[f32; 4]; 2],
     pipeline: wgpu::ComputePipeline,
     pub(crate) materials: u32,
     pub(crate) accum: wgpu::Buffer,
@@ -1278,6 +1279,7 @@ fn environment_binding(
     gpu: &Gpu,
     pipeline: &wgpu::ComputePipeline,
     environment: &Environment,
+    look: [[f32; 4]; 2],
 ) -> Result<wgpu::BindGroup, String> {
     let (width, height, texels) = match environment {
         Environment::Hdr(hdr) => {
@@ -1328,7 +1330,11 @@ fn environment_binding(
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("trace environment uniform"),
-            contents: bytemuck::bytes_of(&environment.uniform()),
+            contents: bytemuck::bytes_of(&crate::sky::EnvironmentUniform {
+                look: look[0],
+                horizon: look[1],
+                ..environment.uniform()
+            }),
             usage: wgpu::BufferUsages::UNIFORM,
         });
     let rows = storage(
@@ -1652,7 +1658,9 @@ impl Trace {
             layout: &pipeline.get_bind_group_layout(0),
             entries: &entries,
         });
-        let environment_binding = environment_binding(gpu, &pipeline, &scene.sky.clone().into())?;
+        let look = crate::sky::look(&detail.sky_look);
+        let environment_binding =
+            environment_binding(gpu, &pipeline, &scene.sky.clone().into(), look)?;
         let base = Frame {
             size: [width, height, 0, 0],
             counts: [buffers.triangle_count, buffers.shape_count, 0, 0],
@@ -1683,6 +1691,7 @@ impl Trace {
             frame,
             binding,
             environment_binding,
+            look,
             pipeline,
             materials: scene.materials.len() as u32,
             accum: accum_buffer,
@@ -1847,7 +1856,8 @@ impl Trace {
     }
 
     pub fn set_environment(&mut self, gpu: &Gpu, environment: &Environment) -> Result<(), String> {
-        self.environment_binding = environment_binding(gpu, &self.pipeline, environment)?;
+        self.environment_binding =
+            environment_binding(gpu, &self.pipeline, environment, self.look)?;
         self.samples = 0;
         Ok(())
     }

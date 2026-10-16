@@ -244,15 +244,10 @@ pub fn play(
         }
         None => None,
     };
-    let place = |session: &mut PlaySession, time: f64| {
+    let place = |session: &mut PlaySession| {
         if let Some((found, _, lens)) = &follow {
             let matrix = anchored(session.world(), found);
             session.world_mut().camera = aimed(base.clone(), matrix, lens);
-        }
-        if let Some(field) = session.world_mut().camera.depth_of_field.as_mut()
-            && !field.keys.is_empty()
-        {
-            field.distance = field.distance_at(time as f32);
         }
     };
 
@@ -272,14 +267,14 @@ pub fn play(
             let before = time - f64::from(open) / f64::from(fps);
             if before + LEAD_SECONDS > session.world().clock().time() {
                 advance_to(&mut session, before + LEAD_SECONDS);
-                place(&mut session, before);
+                place(&mut session);
                 session
                     .present(&staged, &mut renderer, aspect, seed)
                     .map_err(|error| error.to_string())?;
             }
         }
         advance_to(&mut session, time + LEAD_SECONDS);
-        place(&mut session, time);
+        place(&mut session);
         if let Some(exit) = session.world().exit() {
             return Err(format!("the scene stopped at frame {number}: {exit:?}"));
         }

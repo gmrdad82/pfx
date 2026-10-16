@@ -191,6 +191,7 @@ pub struct Effects<'a> {
     pub props: &'a [ImpostorInstance],
     pub lights: Option<&'a [LocalLight]>,
     pub lens: Option<dof::Lens>,
+    pub tuned: Option<&'a crate::keyed::Tuned>,
 }
 
 pub const HISTORY_GAP: f32 = 0.25;
@@ -705,6 +706,7 @@ pub struct Renderer {
     resolution_content: Option<[u32; 2]>,
     resolution_frame: bool,
     sky_hours: Vec<(u64, f32)>,
+    tuned_sky: Option<u64>,
     history: History,
     history_valid: bool,
     hour: f32,
@@ -1385,6 +1387,7 @@ impl Renderer {
             resolution_content: None,
             resolution_frame: false,
             sky_hours: Vec::new(),
+            tuned_sky: None,
             history: History::default(),
             history_valid: false,
             hour: 12.0,
@@ -1937,6 +1940,7 @@ impl Renderer {
 
     pub fn set_sky(&mut self, source: SkySource, hour: f32) -> Result<(), String> {
         self.touch();
+        self.tuned_sky = None;
         if !hour.is_finite() {
             return Err("hour must be finite".into());
         }
@@ -1950,12 +1954,52 @@ impl Renderer {
 
     pub fn request_sky(&mut self, source: SkySource, hour: f32) -> Result<u64, String> {
         self.touch();
+        self.tuned_sky = None;
         if !hour.is_finite() {
             return Err("hour must be finite".into());
         }
         let request = self.frame.set_sky(source, false);
         self.sky_hours.push((request, hour));
         Ok(request)
+    }
+
+    pub fn tuned_sky(&self) -> Option<u64> {
+        self.tuned_sky
+    }
+
+    pub fn request_tuned_sky(
+        &mut self,
+        stamp: u64,
+        source: SkySource,
+        hour: f32,
+    ) -> Result<(), String> {
+        if self.tuned_sky == Some(stamp) {
+            return Ok(());
+        }
+        self.request_sky(source, hour)?;
+        self.tuned_sky = Some(stamp);
+        Ok(())
+    }
+
+    pub fn set_finish_tuning(&mut self, gain: f32, lut_amount: Option<f32>) {
+        let mut changed = gain != self.post.gain();
+        self.post.set_gain(gain);
+        if let Some(amount) = lut_amount {
+            changed |= self.post.set_lut_amount(amount);
+        }
+        if changed {
+            self.touch();
+        }
+    }
+
+    pub fn sky_look(&self) -> [[f32; 4]; 2] {
+        self.frame.sky().look()
+    }
+
+    pub fn set_sky_look(&mut self, look: [[f32; 4]; 2]) {
+        if self.frame.sky_mut().set_look(look) {
+            self.touch();
+        }
     }
 
     pub fn set_hour(&mut self, hour: f32) -> Result<(), String> {
@@ -2724,6 +2768,9 @@ impl Renderer {
         }
         if effects.lens.is_some() {
             self.set_lens(effects.lens);
+        }
+        if let Some(tuned) = effects.tuned {
+            self.tune(tuned)?;
         }
         self.pass_log.clear();
         let (width, height) = self.size();

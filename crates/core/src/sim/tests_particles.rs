@@ -1,4 +1,4 @@
-use super::particles::{Emitter, Gradient, IDENTITY, Matrix, Recipe, STEP};
+use super::particles::{Emitter, Gradient, IDENTITY, Matrix, Recipe, RecipeKeys, STEP};
 
 fn moved(x: f32) -> Matrix {
     let mut m = IDENTITY;
@@ -126,10 +126,13 @@ fn a_fast_parent_leaves_no_gap_between_steps() {
 fn rate_keys_drive_the_rate_deterministically() {
     let keyed = Recipe {
         rate: 1000.0,
-        rate_keys: Some(Gradient::new(
-            vec![(0.0, 0.0), (1.0, 0.0), (1.0, 600.0)],
-            0.0,
-        )),
+        keys: RecipeKeys {
+            rate: Some(Gradient::new(
+                vec![(0.0, 0.0), (1.0, 0.0), (1.0, 600.0)],
+                0.0,
+            )),
+            ..RecipeKeys::default()
+        },
         lifetime: [5.0, 5.0],
         max: 10_000,
         seed: 3,
@@ -147,4 +150,41 @@ fn rate_keys_drive_the_rate_deterministically() {
     assert_eq!(ramp.sample(-1.0), 10.0);
     assert_eq!(ramp.sample(1.0), 20.0);
     assert_eq!(ramp.sample(9.0), 30.0);
+}
+
+#[test]
+fn keyed_size_colour_and_alpha_follow_the_scene_time() {
+    let recipe = Recipe {
+        burst: 4,
+        lifetime: [10.0, 10.0],
+        speed: [0.0, 0.0],
+        alpha: Gradient::constant(1.0),
+        keys: RecipeKeys {
+            size: Some(Gradient::new(
+                vec![(0.0, [0.1, 0.1]), (2.0, [0.3, 0.3])],
+                [0.1; 2],
+            )),
+            colour: Some(Gradient::new(
+                vec![(0.0, [1.0, 0.0, 0.0]), (2.0, [0.0, 0.0, 1.0])],
+                [1.0; 3],
+            )),
+            alpha: Some(Gradient::new(vec![(0.0, 1.0), (2.0, 0.5)], 1.0)),
+            ..RecipeKeys::default()
+        },
+        ..Recipe::default()
+    };
+    let mut emitter = Emitter::new(recipe, [0.0; 3]);
+    emitter.seek(1.0, STEP, |_| IDENTITY);
+    let mut sprites = Vec::new();
+    emitter.sprites(&mut sprites);
+    assert_eq!(sprites.len(), 4);
+    let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
+    for sprite in &sprites {
+        assert!(near(sprite.size, 0.2), "{sprite:?}");
+        assert!(
+            near(sprite.colour[0], 0.5) && near(sprite.colour[2], 0.5),
+            "{sprite:?}"
+        );
+        assert!(near(sprite.alpha, 0.75), "{sprite:?}");
+    }
 }

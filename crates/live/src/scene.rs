@@ -15,6 +15,7 @@ use crate::frame::{
 };
 use crate::glass;
 use crate::height_fog::HeightFog;
+use crate::keyed::{Keyer, scene_look};
 use crate::lights::{LocalLight, local_light};
 use crate::maps::ContentFormat;
 use crate::morph::{MorphData, MorphTargetData};
@@ -129,7 +130,11 @@ pub struct Staged {
     texts: Vec<StagedText>,
     posing: Option<Scene>,
     camera: SceneCamera,
+    rest: SceneCamera,
     sun: SceneSun,
+    shown_sun: SceneSun,
+    keyer: Option<Keyer>,
+    keyed_lights: Option<Vec<LocalLight>>,
     plate: crate::plates::PlateMode,
     blurred: bool,
     shown: Option<Matrix>,
@@ -293,16 +298,8 @@ fn apply_haze(renderer: &mut Renderer, haze: Option<&Haze>) {
 }
 
 pub fn lens(camera: &SceneCamera, aspect: f32) -> Option<dof::Lens> {
-    focused(camera, aspect, None)
-}
-
-pub fn lens_at(camera: &SceneCamera, aspect: f32, time: f32) -> Option<dof::Lens> {
-    focused(camera, aspect, Some(time))
-}
-
-fn focused(camera: &SceneCamera, aspect: f32, time: Option<f32>) -> Option<dof::Lens> {
     let depth = camera.depth_of_field.as_ref()?;
-    let distance = time.map_or(depth.distance, |time| depth.distance_at(time));
+    let distance = depth.distance;
     let tan_half_width = camera.tan_half_height()? * aspect;
     Some(dof::Lens {
         focal_m: depth.focal,
@@ -469,7 +466,11 @@ impl Renderer {
             texts: stage_texts(self, scene)?,
             posing: None,
             camera: scene.camera_or_default(),
+            rest: scene.camera_or_default(),
             sun: scene.sun_or_dark(),
+            shown_sun: scene.sun_or_dark(),
+            keyer: Keyer::of(scene),
+            keyed_lights: None,
             plate: crate::plates::PlateMode::default(),
             blurred: blurred(scene),
             shown: None,
@@ -489,6 +490,7 @@ impl Renderer {
         self.set_sky(sky_source(scene.environment()), staged.sun.hour)?;
         apply_haze(self, scene.haze.as_ref());
         set_sun_radius(self, staged.sun.radius);
+        self.set_sky_look(scene_look(scene));
         self.set_lens(lens(&staged.camera, aspect_of(self)));
         if let Some(finish) = &scene.finish {
             self.set_finish(finish.chain.clone());
@@ -684,8 +686,19 @@ impl Staged {
         }
         if diff.camera {
             self.camera = scene.camera_or_default();
+            self.rest = self.camera.clone();
             renderer.set_lens(lens(&self.camera, aspect_of(renderer)));
             applied.lens = true;
+        }
+        if !diff.lights.is_empty()
+            || diff.camera
+            || diff.sun
+            || diff.sky
+            || diff.haze
+            || diff.finish
+        {
+            self.keyer = Keyer::of(scene);
+            self.keyed_lights = None;
         }
         if diff.plates || diff.draws() {
             self.plate.load(renderer, scene, diff.plates)?;
@@ -812,12 +825,14 @@ impl Staged {
         }
         if diff.sun {
             self.sun = scene.sun_or_dark();
+            self.shown_sun = self.sun;
             applied.sun = set_sun_radius(renderer, self.sun.radius);
             renderer.set_plate_hour(self.sun.hour);
         }
         if diff.sky {
             applied.sky_request =
                 Some(renderer.request_sky(sky_source(scene.environment()), self.sun.hour)?);
+            renderer.set_sky_look(scene_look(scene));
             applied.sky = true;
         }
         if diff.haze {
@@ -910,7 +925,7 @@ impl Staged {
             camera: camera(&self.camera, aspect),
             time,
             seed,
-            sun: sun(&self.sun),
+            sun: sun(&self.shown_sun),
             instances: &self.instances,
             materials: &self.materials,
             deformers: &[],
@@ -919,8 +934,23 @@ impl Staged {
     }
 
     pub fn frame(&mut self, aspect: f32, time: f32, seed: u32) -> StagedFrame<'_> {
+        self.key(time);
         self.pose(time);
         self.staged_frame(aspect, time, seed)
+    }
+
+    fn key(&mut self, time: f32) {
+        let Some(keyer) = &self.keyer else {
+            return;
+        };
+        if keyer.keys().camera.is_some() {
+            self.camera = keyer.camera(&self.rest, time);
+        }
+        self.shown_sun = keyer.sun(self.sun, time);
+    }
+
+    pub fn keyer(&self) -> Option<&Keyer> {
+        self.keyer.as_ref()
     }
 
     pub fn frame_at(
@@ -930,6 +960,7 @@ impl Staged {
         interval: f32,
         seed: u32,
     ) -> StagedFrame<'_> {
+        self.key(time);
         self.pose_at(time, interval);
         self.staged_frame(aspect, time, seed)
     }
@@ -941,11 +972,17 @@ impl Staged {
     fn staged_frame(&mut self, aspect: f32, time: f32, seed: u32) -> StagedFrame<'_> {
         self.spray(time);
         self.focus = self
-            .camera
-            .depth_of_field
+            .keyer
             .as_ref()
-            .filter(|depth| !depth.keys.is_empty())
-            .and_then(|_| lens_at(&self.camera, aspect, time));
+            .filter(|keyer| keyer.keys().camera.is_some())
+            .and_then(|_| lens(&self.camera, aspect));
+        self.keyed_lights = match self.keyer.as_mut() {
+            Some(keyer) => {
+                keyer.tune(time);
+                keyer.lights(self.lights.as_deref(), time)
+            }
+            None => None,
+        };
         let shown = camera(&self.camera, aspect).previous_view_projection;
         let previous = self.shown.filter(|_| self.blurred).unwrap_or(shown);
         self.shown = Some(shown);
@@ -1017,8 +1054,9 @@ impl Staged {
         Effects {
             glass: &self.glass,
             sprays: &self.spray_instances,
-            lights: self.lights.as_deref(),
+            lights: self.keyed_lights.as_deref().or(self.lights.as_deref()),
             lens: self.focus,
+            tuned: self.keyer.as_ref().map(Keyer::tuned),
             ..Effects::default()
         }
     }

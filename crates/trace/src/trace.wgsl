@@ -1219,7 +1219,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             if (seen && sky_cdf.width>0u) { break; }
             let pdf=sky_pdf(d);
             let weight=select(1.0,previous_pdf/(previous_pdf+pdf),bounce>0u && previous_pdf>0.0);
-            let environment=select(sky_radiance(d),sky_surface_radiance(d),bounce>0u);
+            let environment=select(sky_seen(d,sky_radiance(d)),sky_surface_radiance(d),bounce>0u);
             result+=indirect_capped(throughput*environment*weight,bounce>1u);
             break;
         }
