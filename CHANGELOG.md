@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.5.0 — 2026-10-16
+
+### Added
+
+- A recorded engine in the shot mix: `[[engine]] sample = "<file.wav>"` extends a real recording to any length and rpm (seeded grains of the idle cycle, recorded revs crossfaded by rpm, start and stop one-shots, load shaping), and blends with the synthesised engine above the recording's range.
+- Road surfaces: `[[road]] surface = "asphalt" | "wet" | "gravel" | "cobbles"`, or a list over time that crossfades between them; asphalt stays the default and sounds as before.
+- `[[sample]]` cues take trims, fades and seamless loops.
+- Round bloom: a wide, photographic glow, now the default when a finish's bloom names no kind (`kind = "box"` keeps the old one).
+
+### Changed
+
+- ffmpeg is gone: clip masters, audio muxing and audio decoding run through pito-codecs v1.12.1. Masters are H.264 High at CRF 12 with AAC 320k, and are larger than the old x264 ones; `pfx encode` refuses FFV1 masters. Clip scenes in films read AV1, and WebM with alpha keeps its transparency.
+- Particles light like haze when the light is behind them, their streaks follow their motion on screen, and they no longer smear the image under them.
+- `pfx shot --camera` takes the `object/node` names its manifest writes, the manifest says which scene frame file 000000 is, and an output folder left by an interrupted run is reused.
+
+### Fixed
+
+- Motion blur could turn still objects in front of moving ones into black blocks.
+- `pfx shot` refuses a camera that can't form a view instead of drawing garbage.
+
 ## v2.4.0 — 2026-10-16
 
 ### Added
