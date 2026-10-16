@@ -22,6 +22,14 @@ pub trait Sounds {
     fn render_apart(&mut self, frames: usize) -> [Vec<f32>; 3] {
         [self.render(frames), Vec::new(), Vec::new()]
     }
+
+    fn stems(&mut self, _selectors: &[Vec<String>]) -> Result<Vec<Vec<bool>>, String> {
+        Err("[duck.<name>] needs a score that renders its sounds on stems".into())
+    }
+
+    fn render_stems(&mut self, frames: usize) -> Vec<Vec<f32>> {
+        vec![self.render(frames)]
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -50,16 +58,15 @@ impl Default for Play {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Act {
-    Stop(VoiceId, f32, Bus),
+    Stop(VoiceId, f32, usize),
 }
 
 pub struct Score {
     table: Table,
     mixer: Mixer,
-    bed: Option<Mixer>,
-    dry: Option<Mixer>,
-    routes: BTreeMap<String, Bus>,
-    to: Bus,
+    stems: Vec<Option<Mixer>>,
+    routes: BTreeMap<String, usize>,
+    to: usize,
     seed: u64,
     rate: u32,
     clock: u64,
@@ -74,10 +81,9 @@ impl Score {
         Ok(Score {
             table,
             mixer,
-            bed: None,
-            dry: None,
+            stems: Vec::new(),
             routes: BTreeMap::new(),
-            to: Bus::Key,
+            to: 0,
             seed,
             rate: rate.max(1),
             clock: 0,
@@ -124,20 +130,71 @@ impl Score {
             } else {
                 Bus::Dry
             };
-            if bus != Bus::Key {
-                self.routes.insert(name.clone(), bus);
-            }
+            match bus {
+                Bus::Key => None,
+                Bus::Bed => self.routes.insert(name.clone(), 1),
+                Bus::Dry => self.routes.insert(name.clone(), 2),
+            };
         }
-        let uses = |b: Bus| self.routes.values().any(|v| *v == b);
-        let (bed, dry) = (uses(Bus::Bed), uses(Bus::Dry));
-        self.bed = bed.then(|| Score::mixer(&self.table, self.seed.wrapping_add(1), self.rate));
-        self.dry = dry.then(|| Score::mixer(&self.table, self.seed.wrapping_add(2), self.rate));
+        let uses = |i: usize| self.routes.values().any(|v| *v == i);
+        let used = [false, uses(1), uses(2)];
+        self.make(&used);
         Ok(())
     }
 
-    fn mix(&mut self, bus: Bus) -> &mut Mixer {
-        match (bus, &mut self.bed, &mut self.dry) {
-            (Bus::Bed, Some(m), _) | (Bus::Dry, _, Some(m)) => m,
+    fn make(&mut self, used: &[bool]) {
+        self.stems = used
+            .iter()
+            .enumerate()
+            .map(|(i, u)| {
+                (i > 0 && *u)
+                    .then(|| Score::mixer(&self.table, self.seed.wrapping_add(i as u64), self.rate))
+            })
+            .collect();
+    }
+
+    fn holds(&self, name: &str, r: &Recipe, names: &[String]) -> bool {
+        names
+            .iter()
+            .any(|n| n == name || r.kind.as_ref() == Some(n))
+    }
+
+    pub fn stems(&mut self, selectors: &[Vec<String>]) -> Result<Vec<Vec<bool>>, String> {
+        for u in selectors.iter().flatten() {
+            let named = self.table.recipes.contains_key(u);
+            let kind = self
+                .table
+                .recipes
+                .values()
+                .any(|r| r.kind.as_deref() == Some(u.as_str()));
+            if !(named || kind) {
+                return Err(format!("[duck] '{u}' is no sound or kind in the score"));
+            }
+        }
+        let mut masks: Vec<Vec<bool>> = vec![vec![false; selectors.len()]];
+        let mut routes = BTreeMap::new();
+        for (name, r) in &self.table.recipes {
+            let mask: Vec<bool> = selectors.iter().map(|s| self.holds(name, r, s)).collect();
+            if !mask.iter().any(|m| *m) {
+                continue;
+            }
+            let i = match masks.iter().position(|m| *m == mask) {
+                Some(i) => i,
+                None => {
+                    masks.push(mask);
+                    masks.len() - 1
+                }
+            };
+            routes.insert(name.clone(), i);
+        }
+        self.routes = routes;
+        self.make(&vec![true; masks.len()]);
+        Ok(masks)
+    }
+
+    fn mix(&mut self, stem: usize) -> &mut Mixer {
+        match self.stems.get_mut(stem) {
+            Some(Some(m)) => m,
             _ => &mut self.mixer,
         }
     }
@@ -186,13 +243,13 @@ impl Score {
             }),
         );
         let end = at + self.frames(decay * 1000.0) + 1;
-        self.acts.push((end, Act::Stop(id, END, Bus::Key)));
+        self.acts.push((end, Act::Stop(id, END, 0)));
     }
 
     pub fn cue(&mut self, name: &str, at: u64, play: Play) -> Result<(), String> {
         let recipe = self.recipe(name)?;
         let at = at.max(self.clock);
-        self.to = self.routes.get(name).copied().unwrap_or(Bus::Key);
+        self.to = self.routes.get(name).copied().unwrap_or(0);
         let channel = self.channel();
         let stretch = play
             .seconds
@@ -201,7 +258,7 @@ impl Score {
         for layer in &recipe.layers {
             self.layer(layer, channel, at, stretch, play);
         }
-        self.to = Bus::Key;
+        self.to = 0;
         Ok(())
     }
 
@@ -317,8 +374,14 @@ impl Score {
     }
 
     pub fn render_apart(&mut self, frames: usize) -> [Vec<f32>; 3] {
+        let mut stems = self.render_stems(frames).into_iter();
+        let mut next = || stems.next().unwrap_or_default();
+        [next(), next(), next()]
+    }
+
+    pub fn render_stems(&mut self, frames: usize) -> Vec<Vec<f32>> {
         let mut out = Vec::with_capacity(frames * usize::from(CHANNELS));
-        let (mut bed, mut dry) = (Vec::new(), Vec::new());
+        let mut parts = vec![Vec::new(); self.stems.len().saturating_sub(1)];
         let end = self.clock + frames as u64;
         while self.clock < end {
             self.due();
@@ -332,15 +395,17 @@ impl Score {
                 .min(end);
             let n = (next - self.clock) as usize;
             out.extend(self.mixer.render(n));
-            if let Some(m) = &mut self.bed {
-                bed.extend(m.render(n));
-            }
-            if let Some(m) = &mut self.dry {
-                dry.extend(m.render(n));
+            for (part, m) in parts.iter_mut().zip(self.stems.iter_mut().skip(1)) {
+                if let Some(m) = m {
+                    part.extend(m.render(n));
+                }
             }
             self.clock = next;
         }
-        [out, bed, dry]
+        let mut all = Vec::with_capacity(parts.len() + 1);
+        all.push(out);
+        all.extend(parts);
+        all
     }
 }
 
@@ -367,5 +432,13 @@ impl Sounds for Score {
 
     fn render_apart(&mut self, frames: usize) -> [Vec<f32>; 3] {
         Score::render_apart(self, frames)
+    }
+
+    fn stems(&mut self, selectors: &[Vec<String>]) -> Result<Vec<Vec<bool>>, String> {
+        Score::stems(self, selectors)
+    }
+
+    fn render_stems(&mut self, frames: usize) -> Vec<Vec<f32>> {
+        Score::render_stems(self, frames)
     }
 }

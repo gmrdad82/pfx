@@ -1,0 +1,50 @@
+limiter = 0.95
+master = 0.9
+
+[recipe.kick]
+kind = "kick"
+length = 220
+lowpass = [[0, 2000], [80, 300]]
+
+[[recipe.kick.layer]]
+wave = "sine"
+hz = 55.0
+volume = 0.8
+attack = 1
+decay = 200
+bend = -12
+glide = 60
+
+[recipe.bass]
+length = 470
+
+[[recipe.bass.layer]]
+wave = "saw"
+note = 33
+volume = 0.3
+attack = 5
+sustain = 1.0
+hold = 440
+release = 30
+
+[recipe.hat]
+length = 60
+highpass = [[0, 6000]]
+
+[[recipe.hat.layer]]
+wave = "white"
+volume = 0.12
+attack = 1
+decay = 50
+
+[recipe.pad]
+length = 3750
+
+[[recipe.pad.layer]]
+wave = "saw"
+note = 57
+volume = 0.15
+attack = 300
+sustain = 0.8
+hold = 3200
+release = 250

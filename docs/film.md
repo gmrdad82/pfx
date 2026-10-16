@@ -204,6 +204,39 @@ depth_db = 0
 - **Routing:** the `Sounds` trait's `route(under, beds)` and `render_apart(frames)` (key, bed, dry) split the score; their defaults put everything on the key. `Score` routes by name and kind, refuses an `under` that is no sound or kind, and plays the bed and the dry sounds on mixers of their own, made only when a script asks for them. An app's own `Sounds` wrapper routes its samples the same way.
 - A film without `[duck]` or `[scene.duck]` mixes exactly as before, byte for byte.
 
+### Sidechains inside the score
+
+`[duck.<name>]` ducks score sounds under other score sounds, the bass under the kick, several at once:
+
+```toml
+[duck.bass]
+under = ["kick"]
+beds = ["bass", "sub"]
+depth_db = 12
+attack = 2
+release = 40
+lookahead = 2
+
+[duck.pads]
+under = ["kick", "braam"]
+beds = ["pad"]
+depth_db = 6
+```
+
+- `under` and `beds` each name score sounds or cue kinds (`kind = "kick"` on a recipe), each once and never in both; `under = ["score"]` keys on every score sound that isn't one of its beds. A name the score has neither as a sound nor a kind is refused when the film is shot.
+- The law is the same six fields with the same defaults, one law for the whole film. The sidechains run in name order, each keyed by the stems as the ones before it left them, so a bed of one can be the key of the next.
+- `[duck]`'s own keys still duck the app's audio under the score. A `[duck]` table holding only named sidechains leaves the app's audio alone; with its own keys, or empty, it ducks the app too, after the sidechains.
+- **How:** `Score::stems` puts every score sound that a sidechain names on a stem of its own (one pfx-sound mixer for each set of sidechains a sound belongs to, made only for such a film); the mixdown keeps each stem apart and ducks the beds at the end, with the same follower and gain computer. The `Sounds` trait's `stems(selectors)` and `render_stems(frames)` are the hooks; their defaults refuse named sidechains, so an app's own `Sounds` wrapper overrides both to take part.
+
+## The drop and the limiters
+
+A drop hits when it is louder than the build. Two things set that:
+
+- **The score's gain by scene:** `[scene.score] gain_db = -6` (in [-60, 12]) scales every score cue that starts in that scene, so a build written at the drop's levels sits 6 dB under it. It applies to cues by where they start: a sound cued in the build keeps the build's gain as it rings into the drop.
+- **The limiters don't flatten it.** The score's mixer soft-clips each sample above the score table's `limiter` and clamps at full scale, and the film's master soft-clips each sample above `[film] limit` (0.72 by default) with a tanh, then scales the whole film down at once if its peak is over `[film] ceiling` (0.89 by default, in (0.1, 1]). The last is one gain for the whole film, so it keeps the build's and the drop's levels apart; the clips touch only peaks. In the test fixture, at 128 bpm, the build and the drop sit at -15.8 and -14.7 dB RMS as written, -21.8 and -14.7 with the build at `gain_db = -6`, and a drop pushed until it limits loses 0.1 dB of its lead to the clips. Raise `limit` and `ceiling` towards 1 for more headroom.
+
+A film that sets neither `[scene.score]`, `limit` nor `ceiling` mixes exactly as before.
+
 ## Determinism
 
 pfx-film never reads the wall clock or a global random source. The film's time is the frame index over the fps, the shake runs from a fixed seed, the score's noise from the seed the app gives `Score::new` (the script's `seed`), and the app gets its time only from `frame.seconds()`. So the same script, revision, seed and app give the same frames, stills and samples byte for byte; the crate's test renders a film twice and compares every byte.
@@ -212,7 +245,7 @@ pfx-film never reads the wall clock or a global random source. The film's time i
 
 - The film's audio is 48 kHz (`RATE`) stereo (`CHANNELS`, interleaved left and right) in `f32` samples.
 - Each film frame the app hands back what it heard in that frame in the same format; the film resamples it by the frame's speed, so a slowed scene sounds pitched down and muffled; in a scene `Kinds::shown` hides, the app's audio is silent and the score plays on.
-- The score is mixed on top, then softly limited under a 0.89 ceiling. `Encoder::finish` gets the mixed samples with the rate and channel count; `Files` writes them as a 16-bit PCM WAV, `audio.wav`.
+- The score is mixed on top, then softly limited above `[film] limit` (0.72) and scaled under `[film] ceiling` (0.89). `Encoder::finish` gets the mixed samples with the rate and channel count; `Files` writes them as a 16-bit PCM WAV, `audio.wav`.
 - A frame's audio is `frame * RATE / fps` samples in, so any fps that divides evenly gives frames of equal length and every fps keeps the audio in step with the frames.
 
 ## Footage films
@@ -259,4 +292,4 @@ Each frame is drawn on the GPU through pfx-live's flat renderer: the footage fra
 
 ## Tests
 
-`cargo test -p pfx-film` renders `crates/film/tests/fixtures/film.toml` twice through a neutral app and checks the frames, the still and the audio match byte for byte; checks the looks pfx-live accepts at every key's limits, every fixture sound, the marks' bake and the script's refusals, and pins the fixture film's hash on Linux and macOS (Windows' maths library gives other bits, so there a film repeats itself exactly but not across systems). `tests/beat.rs` converts beat times exactly at 100 and 128 bpm, through a signature and a tempo map, and names the scene and the beat of every off-grid time; the ducker's unit tests drop a bed by its depth under a hit, bring it back over the release and turn it off per scene, and the film test shoots the fixture ducked under the score, under a cue kind and off. The fixtures are neutral files written by hand, listed in `crates/film/tests/fixtures/README.md` and `tests/agnostic/fixtures.txt`. `cargo test -p pfx-film --test reel` opens a footage script and checks its plan, frame counts, `pcod` command and refusals; its GPU test (`--features video -- --ignored`, under pgpu) generates a 15-frame H.264 and AAC clip with pito-codecs' own encoder, a 4-frame 15 fps PNG folder with a 24 kHz WAV and a manifest, and a card with a caption, a mark and a check badge, shoots the film twice and checks every frame and sample match, that the folder's frames are held across the 30 fps film, and that the clip, the folder and the card show and sound. Its inputs are generated in the test, so no new file is tracked.
+`cargo test -p pfx-film` renders `crates/film/tests/fixtures/film.toml` twice through a neutral app and checks the frames, the still and the audio match byte for byte; checks the looks pfx-live accepts at every key's limits, every fixture sound, the marks' bake and the script's refusals, and pins the fixture film's hash on Linux and macOS (Windows' maths library gives other bits, so there a film repeats itself exactly but not across systems). `tests/beat.rs` converts beat times exactly at 100 and 128 bpm, through a signature and a tempo map, and names the scene and the beat of every off-grid time; the ducker's unit tests drop a bed by its depth under a hit, bring it back over the release and turn it off per scene, and the film test shoots the fixture ducked under the score, under a cue kind and off. `tests/drop.rs` mixes a build and a drop from `fixtures/drop.toml` and measures that `[scene.score] gain_db = -6` puts the build 7 dB under the drop and the limiters keep that lead, that a `[duck.bass]` sidechain drops the bass by its depth under each kick and brings it back before the next while the kick-less build stays bit for bit, and that sidechains naming what the score lacks are refused. The fixtures are neutral files written by hand, listed in `crates/film/tests/fixtures/README.md` and `tests/agnostic/fixtures.txt`. `cargo test -p pfx-film --test reel` opens a footage script and checks its plan, frame counts, `pcod` command and refusals; its GPU test (`--features video -- --ignored`, under pgpu) generates a 15-frame H.264 and AAC clip with pito-codecs' own encoder, a 4-frame 15 fps PNG folder with a 24 kHz WAV and a manifest, and a card with a caption, a mark and a check badge, shoots the film twice and checks every frame and sample match, that the folder's frames are held across the 30 fps film, and that the clip, the folder and the card show and sound. Its inputs are generated in the test, so no new file is tracked.

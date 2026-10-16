@@ -135,11 +135,11 @@ impl Duck {
             lookahead: raw.lookahead,
         };
         law.check()?;
-        let under = match raw.under {
-            None => vec!["score".into()],
-            Some(Names::One(n)) => vec![n],
-            Some(Names::Many(n)) => n,
-        };
+        let given = raw.under.is_some();
+        let mut under = names(raw.under);
+        if !given {
+            under.push("score".into());
+        }
         if under.is_empty() {
             return Err("[duck] under names at least one bus".into());
         }
@@ -164,6 +164,80 @@ impl Duck {
             law: Law::default().with(&law),
         })
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Side {
+    pub name: String,
+    pub under: Vec<String>,
+    pub beds: Vec<String>,
+    pub law: Law,
+}
+
+fn names(n: Option<Names>) -> Vec<String> {
+    match n {
+        None => Vec::new(),
+        Some(Names::One(n)) => vec![n],
+        Some(Names::Many(n)) => n,
+    }
+}
+
+impl Side {
+    fn read(name: String, table: toml::Table) -> Result<Side, String> {
+        let at = |e: String| format!("[duck.{name}] {}", e.trim_start_matches("[duck] "));
+        if !plain(&name) {
+            return Err(at("a name is letters, digits, '-' and '_'".into()));
+        }
+        let raw: DuckRaw = crate::script::read(table).map_err(at)?;
+        let law = DuckPart {
+            depth_db: raw.depth_db,
+            attack: raw.attack,
+            release: raw.release,
+            threshold_db: raw.threshold_db,
+            knee: raw.knee,
+            lookahead: raw.lookahead,
+        };
+        law.check().map_err(at)?;
+        let under = names(raw.under);
+        if under.is_empty() || raw.beds.is_empty() {
+            return Err(at("names the sounds it ducks under and its beds".into()));
+        }
+        let all: Vec<&String> = under.iter().chain(&raw.beds).collect();
+        for (i, n) in all.iter().enumerate() {
+            if !plain(n) || all[..i].contains(n) || (*n == "score" && i >= under.len()) {
+                return Err(at(format!("'{n}' is a score sound or kind, named once")));
+            }
+        }
+        Ok(Side {
+            name,
+            under,
+            beds: raw.beds,
+            law: Law::default().with(&law),
+        })
+    }
+}
+
+pub fn read_all(
+    mut table: toml::Table,
+    known: &dyn Fn(&str) -> bool,
+) -> Result<(Option<Duck>, Vec<Side>), String> {
+    let named: Vec<String> = table
+        .iter()
+        .filter(|(_, v)| v.is_table())
+        .map(|(k, _)| k.clone())
+        .collect();
+    let mut sides = Vec::with_capacity(named.len());
+    for name in &named {
+        if let Some(toml::Value::Table(t)) = table.remove(name) {
+            sides.push(Side::read(name.clone(), t)?);
+        }
+    }
+    let app = if sides.is_empty() || !table.is_empty() {
+        Some(Duck::read(table, known)?)
+    } else {
+        None
+    };
+    Ok((app, sides))
 }
 
 pub fn gains(key: &[f32], rate: u32, laws: &[(u64, Law)]) -> Vec<f32> {

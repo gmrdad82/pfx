@@ -1,7 +1,7 @@
 use crate::art::Art;
 use crate::beat::{self, Grid, TempoPart};
 use crate::camera::WIDE;
-use crate::duck::{Duck, DuckPart};
+use crate::duck::{self, Duck, DuckPart, Side};
 use crate::input::Touch;
 use crate::layers::{Flash, Shake, Sound, Style, Text};
 use crate::track::Key;
@@ -63,6 +63,7 @@ pub struct Script<K: Kinds> {
     pub scenes: Vec<Scene<K>>,
     pub style: BTreeMap<String, Style>,
     pub duck: Option<Duck>,
+    pub sides: Vec<Side>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -77,6 +78,8 @@ pub struct Film<K: Kinds> {
     pub theme: Option<Scheme>,
     pub safe: [f32; 2],
     pub layout: [f32; 2],
+    pub ceiling: f32,
+    pub limit: f32,
     pub beat: Option<Grid>,
     pub app: K::Film,
 }
@@ -95,6 +98,7 @@ pub struct Scene<K: Kinds> {
     pub shake: Vec<Shake>,
     pub input: Vec<Touch>,
     pub duck: Option<DuckPart>,
+    pub score_db: f32,
     pub app: K::Scene,
 }
 
@@ -111,6 +115,8 @@ struct FilmPart {
     theme: Option<Scheme>,
     safe: [f32; 2],
     layout: [f32; 2],
+    ceiling: f32,
+    limit: f32,
     bpm: Option<f64>,
     beats_per_bar: Option<u32>,
     signature: Option<Vec<u32>>,
@@ -133,6 +139,8 @@ impl Default for FilmPart {
             theme: None,
             safe: [0.0; 2],
             layout: WIDE,
+            ceiling: CEILING,
+            limit: LIMIT,
             bpm: None,
             beats_per_bar: None,
             signature: None,
@@ -144,7 +152,10 @@ impl Default for FilmPart {
     }
 }
 
-const FILM_KEYS: [&str; 17] = [
+pub const CEILING: f32 = 0.89;
+pub const LIMIT: f32 = 0.72;
+
+const FILM_KEYS: [&str; 19] = [
     "frames",
     "audio",
     "bars",
@@ -155,6 +166,8 @@ const FILM_KEYS: [&str; 17] = [
     "theme",
     "safe",
     "layout",
+    "ceiling",
+    "limit",
     "bpm",
     "beats_per_bar",
     "signature",
@@ -189,11 +202,19 @@ struct ScenePart {
     input: Vec<Touch>,
     #[serde(default)]
     duck: Option<DuckPart>,
+    #[serde(default)]
+    score: Option<ScorePart>,
 }
 
-const SCENE_KEYS: [&str; 12] = [
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScorePart {
+    gain_db: f32,
+}
+
+const SCENE_KEYS: [&str; 13] = [
     "name", "seconds", "from", "still", "key", "text", "art", "sound", "flash", "shake", "input",
-    "duck",
+    "duck", "score",
 ];
 
 #[derive(Deserialize)]
@@ -282,6 +303,8 @@ impl<K: Kinds> Film<K> {
             theme: f.theme,
             safe: f.safe,
             layout: f.layout,
+            ceiling: f.ceiling,
+            limit: f.limit,
             beat,
             app,
         })
@@ -304,6 +327,12 @@ impl<K: Kinds> Film<K> {
             .all(|v| v.is_finite() && (16.0..=16_384.0).contains(v))
         {
             return Err("[film] layout is a width and height in [16, 16384]".into());
+        }
+        if !(self.ceiling.is_finite() && self.ceiling > 0.1 && self.ceiling <= 1.0) {
+            return Err("[film] ceiling is the master's peak in (0.1, 1]".into());
+        }
+        if !(self.limit.is_finite() && (0.1..1.0).contains(&self.limit)) {
+            return Err("[film] limit is where the master's soft limit starts, in [0.1, 1)".into());
         }
         K::check_film(&self.app)
     }
@@ -340,6 +369,7 @@ impl<K: Kinds> Scene<K> {
             shake: s.shake,
             input: s.input,
             duck: s.duck,
+            score_db: s.score.map_or(0.0, |p| p.gain_db),
             app,
         })
     }
@@ -363,6 +393,9 @@ impl<K: Kinds> Scene<K> {
         crate::input::check(&self.input).map_err(at)?;
         if let Some(d) = &self.duck {
             d.check().map_err(at)?;
+        }
+        if !(self.score_db.is_finite() && (-60.0..=12.0).contains(&self.score_db)) {
+            return Err(at("[scene.score] gain_db is in [-60, 12]".into()));
         }
         K::check_scene(self).map_err(at)?;
         self.check_layers(styles, known).map_err(at)
@@ -422,9 +455,9 @@ impl<K: Kinds> Script<K> {
             style.check().map_err(at)?;
             styles.insert(name, style);
         }
-        let duck = match raw.duck {
-            Some(table) => Some(Duck::read(table, known.sounds)?),
-            None => None,
+        let (duck, sides) = match raw.duck {
+            Some(table) => duck::read_all(table, known.sounds)?,
+            None => (None, Vec::new()),
         };
         let mut scenes: Vec<Scene<K>> = Vec::with_capacity(raw.scenes.len());
         let mut start = 0.0;
@@ -448,6 +481,7 @@ impl<K: Kinds> Script<K> {
             scenes,
             style: styles,
             duck,
+            sides,
         };
         K::check_script(&script)?;
         Ok(script)

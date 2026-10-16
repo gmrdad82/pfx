@@ -1,13 +1,11 @@
-use crate::duck::{self, Duck, Law};
+use crate::duck::{self, Duck, Law, Side};
 use crate::score::{Play, Sounds};
 use crate::script::{Kinds, Script};
 use std::collections::VecDeque;
 
 const STEREO: usize = 2;
-const CEILING: f32 = 0.89;
 const OPEN: f32 = 0.98;
 const STILL: f64 = 0.02;
-const KNEE: f32 = 0.72;
 const GLIDE: f32 = 0.002;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -28,7 +26,35 @@ pub struct Mixdown<'a> {
     duck: Option<(Duck, Vec<(u64, Law)>)>,
     key: Vec<f32>,
     bed: Vec<f32>,
+    sides: Vec<Side>,
+    split: Option<Split>,
+    ceiling: f32,
+    limit: f32,
     pub track: Vec<f32>,
+}
+
+struct Split {
+    masks: Vec<Vec<bool>>,
+    stems: Vec<Vec<f32>>,
+    game: Vec<f32>,
+}
+
+fn named(names: &[String]) -> (bool, Vec<String>) {
+    let all = names.iter().any(|n| n == "score");
+    (
+        all,
+        names.iter().filter(|n| *n != "score").cloned().collect(),
+    )
+}
+
+fn sum(stems: &[Vec<f32>], len: usize, pick: impl Fn(usize) -> bool) -> Vec<f32> {
+    let mut out = vec![0.0f32; len];
+    for (_, stem) in stems.iter().enumerate().filter(|(i, _)| pick(*i)) {
+        for (o, v) in out.iter_mut().zip(stem) {
+            *o += v;
+        }
+    }
+    out
 }
 
 fn ducking<K: Kinds>(script: &Script<K>, rate: u32) -> Option<(Duck, Vec<(u64, Law)>)> {
@@ -68,7 +94,11 @@ fn queue<K: Kinds>(script: &Script<K>, rate: u32) -> Vec<Due> {
                     at,
                     name: sound.sound.clone(),
                     play: Play {
-                        gain: sound.gain,
+                        gain: if scene.score_db == 0.0 {
+                            sound.gain
+                        } else {
+                            sound.gain * 10f32.powf(scene.score_db / 20.0)
+                        },
                         pitch: sound.pitch,
                         seconds: sound.seconds,
                     },
@@ -94,11 +124,37 @@ impl<'a> Mixdown<'a> {
             duck: ducking(script, rate),
             key: Vec::new(),
             bed: Vec::new(),
+            sides: script.sides.clone(),
+            split: None,
+            ceiling: script.film.ceiling,
+            limit: script.film.limit,
             track: Vec::new(),
         }
     }
 
+    fn selectors(&self) -> Vec<Vec<String>> {
+        let mut out = Vec::new();
+        for side in &self.sides {
+            out.push(named(&side.under).1);
+            out.push(side.beds.clone());
+        }
+        if let Some((d, _)) = &self.duck {
+            out.push(named(&d.under).1);
+            out.push(d.beds.clone());
+        }
+        out
+    }
+
     pub fn route(&mut self) -> Result<(), String> {
+        if !self.sides.is_empty() {
+            let masks = self.score.stems(&self.selectors())?;
+            self.split = Some(Split {
+                stems: vec![Vec::new(); masks.len()],
+                masks,
+                game: Vec::new(),
+            });
+            return Ok(());
+        }
         match &self.duck {
             Some((d, _)) => self.score.route(&d.under, &d.beds),
             None => Ok(()),
@@ -155,6 +211,17 @@ impl<'a> Mixdown<'a> {
             }
         }
         let game = self.game(frames, speed, gain);
+        if let Some(split) = &mut self.split {
+            let fresh = self.score.render_stems(frames);
+            for (i, stem) in split.stems.iter_mut().enumerate() {
+                match fresh.get(i).filter(|f| !f.is_empty()) {
+                    Some(f) => stem.extend(f),
+                    None => stem.resize(stem.len() + game.len(), 0.0),
+                }
+            }
+            split.game.extend(game);
+            return Ok(());
+        }
         if self.duck.is_none() {
             let score = self.score.render(frames);
             self.track
@@ -171,23 +238,68 @@ impl<'a> Mixdown<'a> {
         Ok(())
     }
 
+    fn sidechain(&mut self) {
+        let Some(mut split) = self.split.take() else {
+            return;
+        };
+        let len = split.game.len();
+        for (j, side) in self.sides.iter().enumerate() {
+            let all = named(&side.under).0;
+            let (under, beds) = (2 * j, 2 * j + 1);
+            let masks = &split.masks;
+            let key = sum(&split.stems, len, |i| {
+                !masks[i][beds] && (masks[i][under] || all)
+            });
+            let gains = duck::gains(&key, self.rate, &[(0, side.law)]);
+            for (i, stem) in split.stems.iter_mut().enumerate() {
+                if !masks[i][beds] {
+                    continue;
+                }
+                for (frame, g) in stem.chunks_exact_mut(STEREO).zip(&gains) {
+                    frame[0] *= g;
+                    frame[1] *= g;
+                }
+            }
+        }
+        let Some((d, _)) = &self.duck else {
+            self.track = sum(&split.stems, len, |_| true);
+            for (t, g) in self.track.iter_mut().zip(&split.game) {
+                *t += g;
+            }
+            return;
+        };
+        let all = named(&d.under).0;
+        let n = 2 * self.sides.len();
+        let masks = &split.masks;
+        let bedded = |i: usize| masks[i][n + 1];
+        let keyed = |i: usize| !bedded(i) && (all || masks[i][n]);
+        self.key = sum(&split.stems, len, keyed);
+        self.bed = sum(&split.stems, len, bedded);
+        for (b, g) in self.bed.iter_mut().zip(&split.game) {
+            *b += g;
+        }
+        self.track = sum(&split.stems, len, |i| !keyed(i) && !bedded(i));
+    }
+
     pub fn master(mut self) -> Vec<f32> {
+        self.sidechain();
         if let Some((_, laws)) = &self.duck {
             duck::apply(&mut self.bed, &self.key, self.rate, laws);
             for ((t, b), k) in self.track.iter_mut().zip(&self.bed).zip(&self.key) {
                 *t += b + k;
             }
         }
+        let knee = self.limit;
         for s in &mut self.track {
             let a = s.abs();
-            if a > KNEE {
-                let over = (a - KNEE) / (1.0 - KNEE);
-                *s = s.signum() * (KNEE + (1.0 - KNEE) * over.tanh());
+            if a > knee {
+                let over = (a - knee) / (1.0 - knee);
+                *s = s.signum() * (knee + (1.0 - knee) * over.tanh());
             }
         }
         let peak = self.track.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-        if peak > CEILING {
-            let k = CEILING / peak;
+        if peak > self.ceiling {
+            let k = self.ceiling / peak;
             for s in &mut self.track {
                 *s *= k;
             }
