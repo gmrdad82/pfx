@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 mod bake;
 mod cache_report;
+mod film;
 mod project;
 mod scene;
 mod steam;
@@ -34,6 +35,7 @@ const USAGE: &str = "usage:
   pfx bench <scene.toml> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
   pfx scene migrate <scene.toml> [--dry-run]
   pfx scene fix <scene.toml> [--dry-run]
+  pfx film <script.film.toml> --out <dir> [--json] [--plan]
   pfx --version
   pfx --help
 clip masters are x264 at 60 fps; pconv makes video deliveries
@@ -45,6 +47,7 @@ an app renders only itself: run from its own git tree, whose render/engine.toml 
 steam stage writes Steam's build scripts and stages depots; it does not upload
 bench plays a scene headless for N seconds at 60 fps, from its own camera, an object's (--camera) or a recorded input stream (--replay), writes the engine's frame stats to --stats (default tmp/pfx/bench/<scene>-<time>.jsonl) and prints one JSON summary line (docs/frame-stats.md, Bench); it paces like pgpu's manners ask, so run it under pgpu
 scene migrate rewrites a scene's format 0 files as format 1, keeping comments; scene fix writes the ids its entries lack; both refuse to write when the check fails
+film assembles a script of clips, rendered frame folders and cards into PNG frames, a WAV and a manifest.json naming the pcod command that encodes them, under the caller's tmp/ (docs/film.md, Footage films); --plan prints the scenes without rendering
 new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)";
 
 const SWITCHES: &[&str] = &[
@@ -280,7 +283,7 @@ const STEAM_FLAGS: &[&str] = &["--manifest", "--out"];
 
 const COMMANDS: &[&str] = &[
     "render", "encode", "archive", "list", "bake", "steam", "cache", "font", "edit", "new",
-    "bench", "scene", "help",
+    "bench", "scene", "film", "help",
 ];
 
 const TOP: &str = "pfx <COMMAND>";
@@ -304,6 +307,7 @@ fn shape(command: &str) -> &'static str {
         "new" => "pfx new [OPTIONS] <GAME>",
         "bench" => "pfx bench [OPTIONS] --seconds <SECONDS> <SCENE>",
         "scene" => "pfx scene <COMMAND>",
+        "film" => film::USAGE,
         _ => TOP,
     }
 }
@@ -374,6 +378,7 @@ enum Plan {
     Edit(Vec<String>),
     Bench(Vec<String>),
     Scene(scene::Command),
+    Film(film::Command),
     Project(project::Command),
 }
 
@@ -921,6 +926,7 @@ fn plan(args: &[String]) -> Result<Plan, Refusal> {
         "edit" => plan_edit(rest).map_err(Refusal::from),
         "bench" => plan_bench(rest).map_err(Refusal::from),
         "scene" => scene::plan(rest).map(Plan::Scene),
+        "film" => film::plan(rest).map(Plan::Film),
         "new" => project::plan(rest)
             .map(Plan::Project)
             .map_err(Refusal::from),
@@ -1056,6 +1062,7 @@ fn perform(plan: Plan) -> Result<(), String> {
         Plan::Edit(args) => edit(&args),
         Plan::Bench(args) => bench(&args),
         Plan::Scene(command) => scene::run(&command),
+        Plan::Film(command) => film::run(&command),
         Plan::Project(command) => project::run(&command),
     }
 }
@@ -1484,7 +1491,7 @@ mod tests {
         for (line, message, usage) in [
             (
                 "",
-                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, scene, help]",
+                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, scene, film, help]",
                 TOP,
             ),
             ("tui", "unrecognized subcommand 'tui'", TOP),
@@ -1524,6 +1531,11 @@ mod tests {
                 "scene tidy",
                 "unrecognized subcommand 'tidy'",
                 shape("scene"),
+            ),
+            (
+                "film",
+                "the following required arguments were not provided:\n  --out <OUT>\n  <SCRIPT>",
+                shape("film"),
             ),
         ] {
             assert_eq!(

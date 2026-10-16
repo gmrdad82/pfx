@@ -10,6 +10,7 @@ pub mod mix;
 pub mod motion;
 pub mod overlay;
 pub mod pieces;
+pub mod reel;
 pub mod score;
 pub mod script;
 pub mod sheet;
