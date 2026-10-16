@@ -50,6 +50,7 @@ pub fn shoot<S: Show>(
     show.set_theme(script.film.theme);
     let mut director = Director::new(script, cast, layout_in(script.film.layout, rig.size));
     let mut mix = Mixdown::new(script, RATE, score);
+    mix.route()?;
     let mut count = Reeled::default();
     let mut fresh = Vec::new();
     for (scene, take) in script.scenes.iter().zip(&takes) {

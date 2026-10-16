@@ -74,6 +74,7 @@ pub fn plan<S: Show>(
     script: &Script<S::Kinds>,
     fps: u32,
 ) -> Result<Vec<Take<S::Cue>>, String> {
+    script.off_grid(fps)?;
     let cues = show.plan(script)?;
     if cues.len() != script.scenes.len() {
         return Err(format!(

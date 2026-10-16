@@ -1,7 +1,9 @@
 pub mod art;
+pub mod beat;
 pub mod camera;
 pub mod colour;
 pub mod cut;
+pub mod duck;
 pub mod grade;
 pub mod input;
 pub mod layers;
@@ -20,8 +22,10 @@ pub mod track;
 pub mod write;
 
 pub use art::{Art, Plain, What};
+pub use beat::Grid;
 pub use camera::{Camera, Picture, WIDE, layout, layout_in, picture, picture_in};
 pub use cut::{Cast, Cut, Director, Posed};
+pub use duck::Duck;
 pub use grade::Grade;
 pub use marks::{Badge, Check, Marks};
 pub use overlay::Overlay;

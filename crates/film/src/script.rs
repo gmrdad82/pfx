@@ -1,5 +1,7 @@
 use crate::art::Art;
+use crate::beat::{self, Grid, TempoPart};
 use crate::camera::WIDE;
+use crate::duck::{Duck, DuckPart};
 use crate::input::Touch;
 use crate::layers::{Flash, Shake, Sound, Style, Text};
 use crate::track::Key;
@@ -60,6 +62,7 @@ pub struct Script<K: Kinds> {
     pub film: Film<K>,
     pub scenes: Vec<Scene<K>>,
     pub style: BTreeMap<String, Style>,
+    pub duck: Option<Duck>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -74,6 +77,7 @@ pub struct Film<K: Kinds> {
     pub theme: Option<Scheme>,
     pub safe: [f32; 2],
     pub layout: [f32; 2],
+    pub beat: Option<Grid>,
     pub app: K::Film,
 }
 
@@ -90,6 +94,7 @@ pub struct Scene<K: Kinds> {
     pub flash: Vec<Flash>,
     pub shake: Vec<Shake>,
     pub input: Vec<Touch>,
+    pub duck: Option<DuckPart>,
     pub app: K::Scene,
 }
 
@@ -106,6 +111,13 @@ struct FilmPart {
     theme: Option<Scheme>,
     safe: [f32; 2],
     layout: [f32; 2],
+    bpm: Option<f64>,
+    beats_per_bar: Option<u32>,
+    signature: Option<Vec<u32>>,
+    tempo: Vec<TempoPart>,
+    offset: Option<f64>,
+    snap: Option<String>,
+    strict: Option<bool>,
 }
 
 impl Default for FilmPart {
@@ -121,12 +133,35 @@ impl Default for FilmPart {
             theme: None,
             safe: [0.0; 2],
             layout: WIDE,
+            bpm: None,
+            beats_per_bar: None,
+            signature: None,
+            tempo: Vec::new(),
+            offset: None,
+            snap: None,
+            strict: None,
         }
     }
 }
 
-const FILM_KEYS: [&str; 10] = [
-    "frames", "audio", "bars", "grain", "vignette", "glow", "seed", "theme", "safe", "layout",
+const FILM_KEYS: [&str; 17] = [
+    "frames",
+    "audio",
+    "bars",
+    "grain",
+    "vignette",
+    "glow",
+    "seed",
+    "theme",
+    "safe",
+    "layout",
+    "bpm",
+    "beats_per_bar",
+    "signature",
+    "tempo",
+    "offset",
+    "snap",
+    "strict",
 ];
 
 #[derive(Deserialize)]
@@ -152,10 +187,13 @@ struct ScenePart {
     shake: Vec<Shake>,
     #[serde(default)]
     input: Vec<Touch>,
+    #[serde(default)]
+    duck: Option<DuckPart>,
 }
 
-const SCENE_KEYS: [&str; 11] = [
+const SCENE_KEYS: [&str; 12] = [
     "name", "seconds", "from", "still", "key", "text", "art", "sound", "flash", "shake", "input",
+    "duck",
 ];
 
 #[derive(Deserialize)]
@@ -166,7 +204,9 @@ struct Raw {
     #[serde(rename = "scene", default)]
     scenes: Vec<toml::Table>,
     #[serde(default)]
-    style: BTreeMap<String, Style>,
+    style: BTreeMap<String, toml::Table>,
+    #[serde(default)]
+    duck: Option<toml::Table>,
 }
 
 pub fn split(mut table: toml::Table, keys: &[&str]) -> (toml::Table, toml::Table) {
@@ -200,6 +240,37 @@ impl<K: Kinds> Film<K> {
         let (ours, rest) = split(table, &FILM_KEYS);
         let f: FilmPart = read(ours).map_err(|e| format!("[film] {e}"))?;
         let app: K::Film = read(rest).map_err(|e| format!("[film] {e}"))?;
+        let beat = match f.bpm {
+            Some(bpm) => {
+                let signature = match (&f.signature, f.beats_per_bar) {
+                    (Some(_), Some(_)) => {
+                        return Err("[film] signature or beats_per_bar, not both".into());
+                    }
+                    (Some(s), None) => beat::signature(s)?,
+                    (None, n) => [n.unwrap_or(4), 4],
+                };
+                let mut grid = Grid::new(bpm, signature, f.offset.unwrap_or(0.0))?;
+                grid.snap = f.snap.as_deref().map_or(Ok(Some(4)), beat::snap)?;
+                grid.strict = f.strict.unwrap_or(false);
+                for change in &f.tempo {
+                    grid.change(change)?;
+                }
+                Some(grid)
+            }
+            None if f.beats_per_bar.is_some()
+                || f.signature.is_some()
+                || !f.tempo.is_empty()
+                || f.offset.is_some()
+                || f.snap.is_some()
+                || f.strict.is_some() =>
+            {
+                return Err(
+                    "[film] beats_per_bar, signature, tempo, offset, snap and strict need bpm"
+                        .into(),
+                );
+            }
+            None => None,
+        };
         Ok(Film {
             frames: f.frames,
             audio: f.audio,
@@ -211,6 +282,7 @@ impl<K: Kinds> Film<K> {
             theme: f.theme,
             safe: f.safe,
             layout: f.layout,
+            beat,
             app,
         })
     }
@@ -238,13 +310,14 @@ impl<K: Kinds> Film<K> {
 }
 
 impl<K: Kinds> Scene<K> {
-    fn read(table: toml::Table) -> Result<Scene<K>, String> {
+    fn read(mut table: toml::Table, grid: Option<&Grid>, start: f64) -> Result<Scene<K>, String> {
         let name = table
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("?")
             .to_string();
         let at = |e: String| format!("scene '{name}': {e}");
+        beat::scene(&mut table, grid, start).map_err(at)?;
         let (ours, rest) = split(table, &SCENE_KEYS);
         let s: ScenePart = read(ours).map_err(at)?;
         let app: K::Scene = read(rest).map_err(at)?;
@@ -266,6 +339,7 @@ impl<K: Kinds> Scene<K> {
             flash: s.flash,
             shake: s.shake,
             input: s.input,
+            duck: s.duck,
             app,
         })
     }
@@ -287,6 +361,9 @@ impl<K: Kinds> Scene<K> {
             return Err(at("a still's name is letters, digits, '-' and '_'".into()));
         }
         crate::input::check(&self.input).map_err(at)?;
+        if let Some(d) = &self.duck {
+            d.check().map_err(at)?;
+        }
         K::check_scene(self).map_err(at)?;
         self.check_layers(styles, known).map_err(at)
     }
@@ -331,23 +408,33 @@ impl<K: Kinds> Script<K> {
         if raw.scenes.is_empty() {
             return Err("a film has at least one [[scene]]".into());
         }
-        for (name, style) in &raw.style {
-            if !plain(name) {
-                return Err(format!(
-                    "style '{name}': a name is letters, digits, '-' and '_'"
-                ));
-            }
-            style.check().map_err(|e| format!("style '{name}': {e}"))?;
-        }
         let film = Film::read(raw.film)?;
         film.check()?;
-        let scenes = raw
-            .scenes
-            .into_iter()
-            .map(Scene::read)
-            .collect::<Result<Vec<_>, String>>()?;
+        let grid = film.beat.as_ref();
+        let mut styles = BTreeMap::new();
+        for (name, mut table) in raw.style {
+            let at = |e: String| format!("style '{name}': {e}");
+            if !plain(&name) {
+                return Err(at("a name is letters, digits, '-' and '_'".into()));
+            }
+            beat::convert(&mut table, &beat::STYLE, grid, 0.0).map_err(at)?;
+            let style: Style = read(table).map_err(at)?;
+            style.check().map_err(at)?;
+            styles.insert(name, style);
+        }
+        let duck = match raw.duck {
+            Some(table) => Some(Duck::read(table, known.sounds)?),
+            None => None,
+        };
+        let mut scenes: Vec<Scene<K>> = Vec::with_capacity(raw.scenes.len());
+        let mut start = 0.0;
+        for table in raw.scenes {
+            let scene = Scene::read(table, grid, start)?;
+            start += scene.seconds;
+            scenes.push(scene);
+        }
         for (i, scene) in scenes.iter().enumerate() {
-            scene.check(&raw.style, known)?;
+            scene.check(&styles, known)?;
             if scenes[..i].iter().any(|s| s.name == scene.name) {
                 return Err(format!("scene '{}' is named twice", scene.name));
             }
@@ -359,7 +446,8 @@ impl<K: Kinds> Script<K> {
         let script = Script {
             film,
             scenes,
-            style: raw.style,
+            style: styles,
+            duck,
         };
         K::check_script(&script)?;
         Ok(script)
@@ -371,6 +459,17 @@ impl<K: Kinds> Script<K> {
 
     pub fn seconds(&self) -> f64 {
         self.scenes.iter().map(|s| s.seconds).sum()
+    }
+
+    pub fn off_grid(&self, fps: u32) -> Result<Vec<String>, String> {
+        let Some(grid) = &self.film.beat else {
+            return Ok(Vec::new());
+        };
+        let misses = beat::misses(grid, &self.scenes, fps);
+        match misses.first() {
+            Some(first) if grid.strict => Err(first.clone()),
+            _ => Ok(misses),
+        }
     }
 
     pub fn stills(&self) -> usize {

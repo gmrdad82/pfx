@@ -12,6 +12,8 @@ It depends on `pfx-core`, `pfx-live`, `pfx-sound` and `pfx-input` (without defau
 - **Captions:** text with named styles, outlines, slams, slides, growth and letter spacing that spreads, set letter by letter on the app's sheet.
 - **Art:** rules, bands, glows, shades, spots and SVG marks with a label and a check badge; the app adds its own kinds.
 - **The score:** recipes of tones and noise with envelopes, bends, filter sweeps and drive on pfx-sound's mixer, cued from the script and mixed under the app's audio, which follows the speed ramps (pitched and muffled when slowed).
+- **The beat grid:** a tempo, a time signature and a tempo map, so every time in the script may be written in beats and bars, with a check that cuts and cues land on the grid.
+- **Ducking:** the app's audio and any named bed sounds duck under the score, a sidechain compressor keyed by the score's envelope, set per film and per scene.
 - **The writer and the plan:** `shoot` runs the film; `plan` gives each scene's frame count and the moment the app starts it from.
 
 ## The traits an app implements
@@ -138,6 +140,70 @@ let marks = Marks::load(0, &files)?.with_check(Check { word: "Approved".into(), 
 
 A scene's `[[scene.input]]` touches drive the app at given times: `pointer = [x, y]` in the layout, `click = true` for a left click, and `key` for a press and release. A key is any pfx-input `Key`, named by its variant without regard to case or underscores (`enter`, `space`, `a`, `f5`, `page_up`, `numpad_1`), or a digit `0` to `9`.
 
+## Beat grid
+
+A film cut to music sets its tempo in `[film]`:
+
+```toml
+[film]
+bpm = 128
+signature = [4, 4]
+offset = 0.5
+snap = "1/4"
+strict = false
+
+[[film.tempo]]
+at = "16bar"
+bpm = 140
+```
+
+- `bpm` is the tempo from beat 1, in [10, 1000]. `offset` is the seconds from the film's start to beat 1 (0 by default); the time before it is the lead-in.
+- `signature = [beats, note]` sets the bar (`[4, 4]` by default); `beats_per_bar = n` says the same in one number, and a script uses one or the other. A beat is what `bpm` counts.
+- `[[film.tempo]]` changes the tempo from a place: `at` is film seconds (a number) or a place counted from beat 1 (`"16bar"` is where the seventeenth bar starts). Each change comes after the one before it, at most 256.
+- With `bpm` set, every time in the script may be a string of beats and bars instead of seconds: a scene's `seconds` and `from`, a key's, text's, art's, sound's, flash's, shake's and touch's `at` and `until`, a text's and art's `fade` and `out`, a sound's `every` and `seconds`, a flash's `seconds`, and a style's `fade` and `out`. Write `"8b"`, `"1.5b"`, `"2bar"` or `"2bar+1b"` (`b`, `beat`, `beats`, `bar`, `bars`, joined by `+`). A number is still seconds.
+- Each is turned into seconds once, at parse, through the tempo map: a scene's length from where the scene starts, a cue's `at` and `until` from the scene's start, a length on a cue (`fade`, `every`, …) from the cue's `at`, and a style's from the first tempo. Within one tempo it is `beats × 60 / bpm` in a single division, so `"8b"` is exactly 4.8 s at 100 bpm and 3.75 s at 128, and `frames()` gives 288 and 225 frames at 60 fps. Without `bpm` a string time is refused.
+
+### The snap check
+
+`Script::off_grid(fps)` lists what misses the grid by more than one frame at that fps: a scene whose length isn't a whole number of beats, a cut (counted in whole frames, as the film shoots it) off the `snap` subdivision, and a key, flash, shake, text or sound cue's `at` off it. `snap` is `"1"`, `"1/2"`, `"1/4"` (the default) up to `"1/64"` of a beat, or `"off"` to check lengths only. Anything in the lead-in isn't checked. Each line names the scene and the time in beats, from the scene's start and from beat 1:
+
+```text
+scene 'drop': a key at 1.4b is off the 1/4-beat grid by 3.0 frames (1.4b from beat 1)
+```
+
+It only warns: `off_grid` returns the lines for the app to print. With `strict = true` it refuses with the first line, and `plan` (so `shoot`) refuses with it too.
+
+## Ducking
+
+A `[duck]` table ducks the bed under the score:
+
+```toml
+[duck]
+under = ["score"]
+beds = ["crowd"]
+depth_db = 12
+attack = 10
+release = 250
+threshold_db = -30
+knee = 6
+lookahead = 5
+
+[[scene]]
+name = "quiet"
+seconds = "4bar"
+
+[scene.duck]
+depth_db = 0
+```
+
+- **The bed** is what ducks: the app's own audio (what `Show::audio` returns, after the speed ramp) and every sound named in `beds`, the app's samples and stems included.
+- **The key** is what it ducks under: `under` (a name or a list) is `"score"` for every score sound not in `beds`, or names score sounds and cue kinds. A recipe in the score names its kind with `kind = "hit"` (braams, hits and the like); a score sound neither keyed nor a bed plays dry, beside both.
+- **The law:** `depth_db` is the most the bed drops, in [0, 60]; `threshold_db` (in [-90, 0]) and `knee` (dB in [0, 24]) set where it starts; `attack` and `release` are milliseconds; `lookahead` (ms, in [0, 100]) reads the key that much ahead, so the bed starts down before a hit lands, with nothing delayed. The defaults are 12 dB, 10 ms, 250 ms, -30 dB, 6 dB and 5 ms.
+- **Per scene:** `[scene.duck]` overrides any of the law's six fields from that scene's start; `depth_db = 0` turns ducking off there (the bed comes back over the release). A scene override without a `[duck]` table ducks only in those scenes, under the whole score.
+- **How:** the key's level is the louder of its two channels, in dB; a soft-knee gain computer gives how far it is over the threshold, capped at `depth_db`; an envelope follower smooths that with the attack and release; the bed is multiplied by the resulting gain. The mixdown keeps the bed, the key and the dry sounds apart while the film is shot and ducks the bed once at the end, before the soft limiter, so it is offline, sample exact and deterministic. It costs about 27 ms per minute of film audio on one core.
+- **Routing:** the `Sounds` trait's `route(under, beds)` and `render_apart(frames)` (key, bed, dry) split the score; their defaults put everything on the key. `Score` routes by name and kind, refuses an `under` that is no sound or kind, and plays the bed and the dry sounds on mixers of their own, made only when a script asks for them. An app's own `Sounds` wrapper routes its samples the same way.
+- A film without `[duck]` or `[scene.duck]` mixes exactly as before, byte for byte.
+
 ## Determinism
 
 pfx-film never reads the wall clock or a global random source. The film's time is the frame index over the fps, the shake runs from a fixed seed, the score's noise from the seed the app gives `Score::new` (the script's `seed`), and the app gets its time only from `frame.seconds()`. So the same script, revision, seed and app give the same frames, stills and samples byte for byte; the crate's test renders a film twice and compares every byte.
@@ -151,4 +217,4 @@ pfx-film never reads the wall clock or a global random source. The film's time i
 
 ## Tests
 
-`cargo test -p pfx-film` renders `crates/film/tests/fixtures/film.toml` twice through a neutral app and checks the frames, the still and the audio match byte for byte; checks the looks pfx-live accepts at every key's limits, every fixture sound, the marks' bake and the script's refusals. The fixtures are neutral files written by hand, listed in `crates/film/tests/fixtures/README.md` and `tests/agnostic/fixtures.txt`.
+`cargo test -p pfx-film` renders `crates/film/tests/fixtures/film.toml` twice through a neutral app and checks the frames, the still and the audio match byte for byte; checks the looks pfx-live accepts at every key's limits, every fixture sound, the marks' bake and the script's refusals, and pins the fixture film's hash. `tests/beat.rs` converts beat times exactly at 100 and 128 bpm, through a signature and a tempo map, and names the scene and the beat of every off-grid time; the ducker's unit tests drop a bed by its depth under a hit, bring it back over the release and turn it off per scene, and the film test shoots the fixture ducked under the score, under a cue kind and off. The fixtures are neutral files written by hand, listed in `crates/film/tests/fixtures/README.md` and `tests/agnostic/fixtures.txt`.

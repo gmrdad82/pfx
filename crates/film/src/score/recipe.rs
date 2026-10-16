@@ -125,6 +125,8 @@ pub struct Recipe {
     pub drive: Option<Saturate>,
     #[serde(rename = "layer", default)]
     pub layers: Vec<Layer>,
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -214,6 +216,14 @@ impl Table {
             }
             if !(r.length.is_finite() && r.length > 0.0) {
                 return Err(at("length is positive milliseconds".into()));
+            }
+            if r.kind
+                .as_deref()
+                .is_some_and(|k| !crate::script::plain(k) || k == "score")
+            {
+                return Err(at(
+                    "a kind is letters, digits, '-' and '_', and not 'score'".into(),
+                ));
             }
             sweep(&r.lowpass).map_err(at)?;
             sweep(&r.highpass).map_err(at)?;
