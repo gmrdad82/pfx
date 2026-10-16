@@ -33,6 +33,31 @@ let glass = library.get("glass").copied().unwrap_or_default();
 - `from_toml` refuses an unknown top-level key, an unknown material field or family, a non-table entry, a duplicate name and a fifth noise layer, naming the material.
 - `pfx bake` reads a library through the recipe's `materials = "<library.toml>"` (`docs/bake.md`), resolving each glTF material by its name, then by its name before the first `.`, then by the recipe's `fallback`.
 
+## See-through and tinted surfaces
+
+A material lets light through when `transmission` is above 0, and the live renderer then draws it in the glass pass (`glass::Surface`), not as an opaque instance: a staged scene does that for every material of the `glass` family and every material whose `transmission` is above 0, whatever its family. What shows is the material's own mix, the same split the tracer makes:
+
+- **Transmitted:** the scene behind the surface times `base`, times `transmission`. `base` is the tint: a yellow lens is `base = [0.9, 0.8, 0.05]`.
+- **Body:** the remaining `1 - transmission` is the surface's own lit `base` (diffuse, from the sky and the sun), so a half-clear lens reads as tinted plastic, not as a mirror.
+- **Reflected:** dielectric Fresnel from `ior` over both, and `clearcoat` (with `clearcoat_roughness`) on top.
+- `transmission = 0` is an opaque surface and stays an opaque instance; `transmission = 1` is clear glass, drawn as before.
+
+**Thin and solid.** A closed mesh with some thickness refracts: the glass pass finds its entry and exit faces and bends the view through them, with `absorption` over the distance inside. A single open sheet, or a closed lens thinner than the pass can resolve (its front and back depths are stored as 16-bit floats, so about 4 mm at 5 m and 1 mm at 1.5 m), draws as a thin wall: the scene straight behind it, tinted, with Fresnel and the coat, and no offset. Spectacle lenses, visors and windows that are modelled as one sheet or a 1–3 mm box are thin walls; nothing has to be set for it. A sheet shows its front face only, the side its winding faces.
+
+What to write for a tinted lens, in a library or a recipe's `[materials.*]`:
+
+```toml
+[materials.lens]
+base = [0.9, 0.8, 0.05]
+roughness = 0.05
+transmission = 0.6
+ior = 1.5
+clearcoat = 1.0
+clearcoat_roughness = 0.03
+```
+
+From glTF, a material maps as `base` ← `pbrMetallicRoughness.baseColorFactor` (rgb), `roughness` ← `roughnessFactor`, `transmission` ← `KHR_materials_transmission.transmissionFactor`, `ior` ← `KHR_materials_ior.ior` (1.5 without it), `clearcoat` and `clearcoat_roughness` ← `KHR_materials_clearcoat`. glTF's `KHR_materials_volume` says a surface is a solid with a `thicknessFactor`; without it the material is thin-walled, which is what a sheet or a 2 mm lens draws as here. A refracting solid (a glass block, a bottle, a water tank) is `family = "glass"` on a closed mesh, with `absorption` (from `attenuationDistance`) and `subsurface_tint` (`attenuationColor`) absorbing over the distance the view travels inside, and `thickness` (`thicknessFactor`) for the tint of its cast shadow. The scene loader takes materials from the library by the glTF material's name, not from the glTF extensions, so the exporter writes these keys into the library.
+
 ## The engine's fixture library
 
 `crates/materials/fixtures/library.toml` (`pfx_materials::FIXTURE`, parsed by `Library::fixture()`) holds eleven neutral materials for the engine's own tests: `plain`, `grey`, `metal`, `chrome`, `glass`, `water`, `lacquer`, `card`, `wood`, `felt` and `lamp`. Their values are round, made-up numbers, named after the stuff and not after any product. The engine holds no product's presets any more: a product ships its own library.

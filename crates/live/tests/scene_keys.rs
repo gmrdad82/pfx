@@ -36,6 +36,15 @@ roughness = 0.02
 transmission = 1.0
 ior = 1.5
 thickness = 0.01
+
+[materials.tint]
+base = [0.9, 0.8, 0.05]
+roughness = 0.1
+transmission = 0.6
+
+[materials.untinted]
+base = [0.9, 0.8, 0.05]
+roughness = 0.1
 ";
 
 fn folder(name: &str) -> PathBuf {
@@ -479,6 +488,31 @@ fn glass_draws_through_the_effects() {
     assert!(viewer.staged.glass().is_empty());
     viewer.staged.clear_overrides();
     assert_eq!(viewer.staged.glass().len(), 1);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_plain_material_with_transmission_draws_as_a_tinted_lens_and_without_it_stays_opaque() {
+    let body = |material: &str| {
+        format!(
+            "[[object]]\nname = \"back\"\nmesh = \"panel\"\nat = [0.0, 0.0, -1.0]\nscale = 3.0\nmaterial = \"glow\"\n\n[[object]]\nname = \"lens\"\nmesh = \"block\"\nscale = [1.2, 1.2, 0.004]\nmaterial = \"{material}\"\n\n[camera]\nat = [0.0, 0.0, 4.0]\nlook_at = [0.0, 0.0, 0.0]\nfov = 40.0\n"
+        )
+    };
+    let centre = (HEIGHT / 2 * WIDTH + WIDTH / 2) as usize;
+    let tinted = scene("tint", &body("tint"));
+    let mut viewer = Viewer::new(&tinted);
+    assert_eq!(viewer.staged.glass().len(), 1);
+    assert_eq!(viewer.staged.instances().len(), 1);
+    let through = viewer.frames(0.0, 6)[centre];
+    let opaque = scene("untinted", &body("untinted"));
+    let mut viewer = Viewer::new(&opaque);
+    assert!(viewer.staged.glass().is_empty());
+    assert_eq!(viewer.staged.instances().len(), 2);
+    let covered = viewer.frames(0.0, 6)[centre];
+    println!("through the tinted lens {through:?}, the untinted one {covered:?}");
+    assert!(luminance(&through) > 0.3, "{through:?}");
+    assert!(through[2] < through[0] * 0.6, "{through:?}");
+    assert!(luminance(&through) > luminance(&covered) + 0.1);
 }
 
 #[test]
