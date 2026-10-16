@@ -103,9 +103,9 @@ Lens flare and sun glare from the frame's brightest parts: ghosts mirrored throu
 | `halo` | 0 and up | 0.1 | halo ring thickness, in screen heights; 0 drops it |
 | `halo_radius` | 0 and up, 0 to 0.5 in use | 0.4 | halo ring radius, in screen heights |
 | `starburst` | 0 to 1 | 1 | how much of the starburst mask the flare takes |
-| `threshold` | 0 and up | 10 | the HDR level, above the bloom input's 1, that a pixel must pass to make ghosts and halo |
+| `threshold` | 0 and up | 10 | where ghosts and halo start, in HDR above the bloom input's 1: a source makes none at or below it, faint ones just over it (rising as the square of how far over it is) and full ones from 5 × `threshold` up |
 
-`--set flare.amount=0.2` and the editor edit it through the scene edit path (`Target::Flare`). The renderer side and its cost are in [live-renderer.md](live-renderer.md#lens-flare-and-cube-luts).
+Pick `threshold` above the scene's ordinary emitters. In a dusk street with lit windows, tail lights and lamps at emission 3 to 6, a threshold of 1.5 still lets the windows make faint amber ghosts, 3 leaves fainter ones, and the default 10 leaves ghosts only to the sun and sources far brighter than the street's lights. `--set flare.amount=0.2` and the editor edit it through the scene edit path (`Target::Flare`). The renderer side and its cost are in [live-renderer.md](live-renderer.md#lens-flare-and-cube-luts).
 
 ### `[trace]`
 
