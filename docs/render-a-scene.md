@@ -15,7 +15,7 @@ pfx shot <scene.toml> (--seconds S | --frames N) [--size WxH] [--fps N] [--from 
 | `--seconds S` or `--frames N` | one is required | the shot's length; seconds become `round(S × fps)` frames |
 | `--size WxH` | 1920x1080 | any even size from 2 to 16384 a side, within the GPU's texture limit; 2160x3840 is a vertical 4K frame |
 | `--fps N` | 60 | 1 to 240 |
-| `--from F` | 0 | the first frame to write; the frames before it are simulated, not written |
+| `--from F` | 0 | the first frame to write; the frames before it are simulated, not written, and the files still number from `000000` (file k is frame F + k) |
 | `--camera <name>` | the scene's camera | follows an object, or an animated glTF node, every frame (below) |
 | `--draft` or `--final` | draft | quality, below |
 | `--hour H` | the scene's | the sun's hour, 0 to 24, set as `sun.hour` |
@@ -28,7 +28,7 @@ pfx shot <scene.toml> (--seconds S | --frames N) [--size WxH] [--fps N] [--from 
 | `--seed S` | 0 | the play session's seed |
 | `--json` | off | one JSON line per frame and the summary as JSON |
 
-Input pfx can't parse gets clap's short answer with exit 2. A refusal after the parse is one line, `pfx: …`, with exit 1: a missing scene file, a `--set` the scene's checks refuse, a camera name the scene doesn't hold, a size over the GPU's limit, or an `--out` folder holding files pfx shot did not write. A folder pfx shot wrote before (it has its `manifest.json`) is cleared of its frames and manifest and written again.
+Input pfx can't parse gets clap's short answer with exit 2. A refusal after the parse is one line, `pfx: …`, with exit 1: a missing scene file, a `--set` the scene's checks refuse, a camera name the scene doesn't hold, a size over the GPU's limit, an `--out` folder holding files pfx shot did not write, or a degenerate camera at a drawn frame (a `look_at` equal to its `at`, an `up` within 1e-4 of the view direction or of zero length, a field of view outside 0 to 180 degrees, a near plane at or below 0, a far plane not beyond the near one): `pfx: <scene>: at frame N the scene's camera looks from [..] at [..], no direction to look along; pfx shot renders no degenerate view`. A folder pfx shot wrote before (it has its `manifest.json`, or holds only numbered `NNNNNN.png` or `.exr` frames and `audio.wav`, as an interrupted run leaves it) is cleared of every numbered frame and its manifest and written again, so no frame of an earlier, longer run survives.
 
 ## Progress and stderr
 
@@ -44,7 +44,7 @@ Animations play through the play session as in a game ([Animation](animation.md#
 
 ## The camera
 
-`--camera <name>` places the camera every frame. The name is looked up first as an object, then as a node of an object's rigged mesh. `chase` also finds `camera.chase`. An object's camera sits at the object's origin, looking down its −Z with +Y up. A node's camera sits at the object's matrix times the node's animated pose, the same place the node's parts are drawn. When the node carries a glTF perspective camera, its `yfov` becomes the vertical field of view and its `znear` the near plane. An `aspectRatio` that differs from the frame's by more than 1% leaves a warning in the manifest and keeps the vertical field of view. Depth of field follows the scene camera's settings. When `[camera] focus_keys = [[t, metres], ...]` is set, the focus distance is interpolated linearly from those keys at each frame's t, holding the first and last (`DepthOfField::distance_at`, the helper `Staged::frame` uses for its lens).
+`--camera <name>` places the camera every frame. The name is looked up first as an object, then as a node of an object's rigged mesh. `chase` also finds `camera.chase`. `object/node`, the form the manifest records in `camera`, looks the node up only in that object's rig and its glTF camera only in that object's mesh, so `--camera street/camera.chase` (or `street/chase`) renders the shot the manifest describes again. An object's camera sits at the object's origin, looking down its −Z with +Y up. A node's camera sits at the object's matrix times the node's animated pose, the same place the node's parts are drawn. When the node carries a glTF perspective camera, its `yfov` becomes the vertical field of view and its `znear` the near plane. An `aspectRatio` that differs from the frame's by more than 1% leaves a warning in the manifest and keeps the vertical field of view. Depth of field follows the scene camera's settings. When `[camera] focus_keys = [[t, metres], ...]` is set, the focus distance is interpolated linearly from those keys at each frame's t, holding the first and last (`DepthOfField::distance_at`, the helper `Staged::frame` uses for its lens).
 
 ## Draft and final
 
@@ -76,12 +76,13 @@ Every key the scene format knows is settable, including keys added after this pa
 
 ## Out
 
-The out folder holds `000000.png`, `000001.png`, … (or `.exr`), numbered from 0 whatever `--from` is, in the order `pcod frames` reads them, and `manifest.json`:
+The out folder holds `000000.png`, `000001.png`, … (or `.exr`), numbered from 0 whatever `--from` is, in the order `pcod frames` reads them: file k is the scene's frame `from + k`, so `--from 300 --seconds 5` at 60 fps writes `000000.png` as frame 300 and `000299.png` as frame 599. It also holds `manifest.json`:
 
 | Key | |
 |---|---|
 | `shot` | the manifest's schema, 1 |
 | `frames`, `from`, `fps`, `size`, `seconds` | what was written; `seconds` is frames / fps |
+| `first_number` | the scene frame `000000` holds, equal to `from`; file k is frame `first_number + k` |
 | `format` | `png` or `exr` |
 | `wav`, `audio` | the WAV's absolute path or null; its source (`script` or `silence`), script, rate, channels and a note |
 | `scene`, `scene_sha256`, `rev` | the scene file, its SHA-256, and the Git HEAD of its folder (`+dirty` when it has changes), or null |

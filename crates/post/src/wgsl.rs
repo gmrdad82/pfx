@@ -279,6 +279,11 @@ fn quantize(v: f32, levels: f32) -> f32 {
     return q / (levels - 1.0);
 }
 
+fn finite_rgb(c: vec3<f32>) -> vec3<f32> {
+    let bad = (bitcast<vec3<u32>>(c) & vec3<u32>(0x7f800000u)) == vec3<u32>(0x7f800000u);
+    return select(c, vec3<f32>(0.0), any(bad));
+}
+
 fn keep_rgb(rgb: vec3<f32>, threshold: f32, knee: f32, knee_width: f32, soft: f32) -> vec3<f32> {
     let l = max(rgb.r, max(rgb.g, rgb.b));
     var hard = 0.0;
@@ -1336,6 +1341,7 @@ pub const BLOOM_DOWN: &str = shader!(
         }
         acc = acc / max(n, 1.0);
     }
+    acc = finite_rgb(acc);
     let kept = keep_rgb(acc * post.p1.z, post.p0.y, post.p0.z, post.p0.w, post.p1.x);
     store(p, vec4<f32>(kept, 1.0));
 "#
@@ -1345,12 +1351,12 @@ pub const BLOOM_DOWN_BOX2: &str = shader!(
     "",
     r#"
     let base = vec2<i32>(p) * 2;
-    let acc = (
+    let acc = finite_rgb((
         load_src(base).rgb
         + load_src(base + vec2<i32>(1, 0)).rgb
         + load_src(base + vec2<i32>(0, 1)).rgb
         + load_src(base + vec2<i32>(1, 1)).rgb
-    ) * 0.25;
+    ) * 0.25);
     let kept = keep_rgb(acc * post.p1.z, post.p0.y, post.p0.z, post.p0.w, post.p1.x);
     store(p, vec4<f32>(kept, 1.0));
 "#
@@ -1585,7 +1591,7 @@ pub const BLOOM_RING_DOWN: &str = shader!(
     let factor = max(post.p0.x, 1.0);
     let x = f32(p.x) * factor + factor * 0.5 - 0.5;
     let y = f32(p.y) * factor + factor * 0.5 - 0.5;
-    let c = (sample_src(x - 1.0, y - 1.0).rgb + sample_src(x + 1.0, y - 1.0).rgb + sample_src(x - 1.0, y + 1.0).rgb + sample_src(x + 1.0, y + 1.0).rgb) * 0.25;
+    let c = finite_rgb((sample_src(x - 1.0, y - 1.0).rgb + sample_src(x + 1.0, y - 1.0).rgb + sample_src(x - 1.0, y + 1.0).rgb + sample_src(x + 1.0, y + 1.0).rgb) * 0.25);
     var v = max(c * post.p0.w - vec3<f32>(post.p0.y), vec3<f32>(0.0));
     if (post.p0.z > 0.0) { v = min(v, vec3<f32>(post.p0.z)); }
     store(p, vec4<f32>(v, 1.0));

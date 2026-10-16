@@ -65,7 +65,11 @@ fn prepare(dir: &Path) -> Result<(), String> {
             .map_err(|error| format!("{}: {error}", dir.display()))?
             .filter_map(Result::ok)
             .collect();
-        if !entries.is_empty() && !ours(dir) {
+        let frames_only = entries.iter().all(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            write::is_frame_name(&name) || name == AUDIO
+        });
+        if !frames_only && !ours(dir) {
             return Err(format!(
                 "{} holds files pfx shot did not write; name an empty or new --out",
                 dir.display()
@@ -291,6 +295,7 @@ pub fn run(plan: &Plan) -> Result<(), String> {
     fields.insert("shot".into(), json!(SCHEMA));
     fields.insert("frames".into(), json!(plan.frames));
     fields.insert("from".into(), json!(plan.from));
+    fields.insert("first_number".into(), json!(plan.from));
     fields.insert("fps".into(), json!(plan.fps));
     fields.insert("size".into(), json!([plan.size.0, plan.size.1]));
     fields.insert(

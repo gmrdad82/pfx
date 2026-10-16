@@ -13,6 +13,8 @@ pub const DRAFT_SHADOW_MIN: u32 = 512;
 pub const LEAD_SECONDS: f64 = 1e-6;
 pub const MAX_STEPS: u32 = 64;
 pub const CAMERA_PREFIX: &str = "camera.";
+pub const NODE_SEPARATOR: char = '/';
+pub const DEGENERATE: f32 = 1e-4;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Quality {
@@ -111,12 +113,33 @@ enum Anchor {
     Node(ObjectId, usize),
 }
 
-fn candidates(name: &str) -> Vec<String> {
+pub fn candidates(name: &str) -> Vec<String> {
     let mut names = vec![name.to_string()];
     if !name.starts_with(CAMERA_PREFIX) {
         names.push(format!("{CAMERA_PREFIX}{name}"));
     }
     names
+}
+
+pub fn named(object: &str, node: &str) -> String {
+    format!("{object}{NODE_SEPARATOR}{node}")
+}
+
+pub fn splits(name: &str) -> impl Iterator<Item = (&str, &str)> {
+    name.match_indices(NODE_SEPARATOR)
+        .map(move |(at, _)| (&name[..at], &name[at + 1..]))
+        .filter(|(object, node)| !object.is_empty() && !node.is_empty())
+}
+
+fn joint(world: &World, id: ObjectId, names: &[String]) -> Option<(usize, String)> {
+    let animator = world.animator(id)?;
+    let joints = animator.rig().skeleton().joints();
+    names.iter().find_map(|wanted| {
+        joints
+            .iter()
+            .position(|joint| &joint.name == wanted)
+            .map(|joint| (joint, wanted.clone()))
+    })
 }
 
 fn anchor(scene: &Scene, world: &World, name: &str) -> Option<(Anchor, String)> {
@@ -126,24 +149,74 @@ fn anchor(scene: &Scene, world: &World, name: &str) -> Option<(Anchor, String)> 
             return Some((Anchor::Object(id), wanted.clone()));
         }
     }
+    for (object, node) in splits(name) {
+        if let Some(id) = world.object(object)
+            && let Some((joint, wanted)) = joint(world, id, &candidates(node))
+        {
+            return Some((Anchor::Node(id, joint), named(object, &wanted)));
+        }
+    }
     for wanted in &names {
         for object in &scene.objects {
             let Some(id) = world.object(&object.name) else {
                 continue;
             };
-            let Some(animator) = world.animator(id) else {
-                continue;
-            };
-            if let Some(joint) = animator
-                .rig()
-                .skeleton()
-                .joints()
-                .iter()
-                .position(|joint| &joint.name == wanted)
-            {
-                return Some((Anchor::Node(id, joint), format!("{}/{wanted}", object.name)));
+            if let Some((joint, _)) = joint(world, id, std::slice::from_ref(wanted)) {
+                return Some((Anchor::Node(id, joint), named(&object.name, wanted)));
             }
         }
+    }
+    None
+}
+
+pub fn degenerate(camera: &Camera) -> Option<String> {
+    let forward: [f32; 3] = std::array::from_fn(|axis| camera.look_at[axis] - camera.at[axis]);
+    let length = forward.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if !(length > 0.0 && length.is_finite()) {
+        return Some(format!(
+            "looks from {:?} at {:?}, no direction to look along",
+            camera.at, camera.look_at
+        ));
+    }
+    let up = camera.up;
+    let tall = up.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if !(tall > 0.0 && tall.is_finite()) {
+        return Some(format!("has no up direction ({up:?})"));
+    }
+    let f = forward.map(|v| v / length);
+    let u = up.map(|v| v / tall);
+    let side = [
+        f[1] * u[2] - f[2] * u[1],
+        f[2] * u[0] - f[0] * u[2],
+        f[0] * u[1] - f[1] * u[0],
+    ];
+    if side.iter().map(|v| v * v).sum::<f32>().sqrt() < DEGENERATE {
+        return Some(format!("looks along its up direction ({up:?})"));
+    }
+    match camera.projection {
+        Projection::Perspective { fov } => {
+            if !(fov > 0.0 && fov < 180.0) {
+                return Some(format!(
+                    "has a field of view of {fov} degrees, outside 0 to 180"
+                ));
+            }
+            if !(camera.near > 0.0 && camera.near.is_finite()) {
+                return Some(format!("has a near plane at {}, not above 0", camera.near));
+            }
+        }
+        Projection::Orthographic { height } => {
+            if !(height > 0.0 && height.is_finite()) {
+                return Some(format!(
+                    "has an orthographic height of {height}, not above 0"
+                ));
+            }
+        }
+    }
+    if !(camera.far > camera.near && camera.far.is_finite()) {
+        return Some(format!(
+            "has its far plane at {}, not beyond its near plane at {}",
+            camera.far, camera.near
+        ));
     }
     None
 }
@@ -256,6 +329,17 @@ pub fn play(
         }
     };
 
+    let viewer = match &follow {
+        Some((_, named, _)) => format!("the camera on {named}"),
+        None => "the scene's camera".to_string(),
+    };
+    let sound = |session: &PlaySession, number: u64| match degenerate(&session.world().camera) {
+        Some(problem) => Err(format!(
+            "{}: at frame {number} {viewer} {problem}; pfx shot renders no degenerate view",
+            scene.path.display()
+        )),
+        None => Ok(()),
+    };
     let adapts = matches!(renderer.exposure_mode(), Exposure::Auto { .. });
     let warm = warm_frames(shot.quality, shot.from, adapts);
     let first = shot.from - warm;
@@ -273,6 +357,7 @@ pub fn play(
             if before + LEAD_SECONDS > session.world().clock().time() {
                 advance_to(&mut session, before + LEAD_SECONDS);
                 place(&mut session, before);
+                sound(&session, number)?;
                 session
                     .present(&staged, &mut renderer, aspect, seed)
                     .map_err(|error| error.to_string())?;
@@ -286,6 +371,7 @@ pub fn play(
         if number < first {
             continue;
         }
+        sound(&session, number)?;
         let drawn = session
             .present(&staged, &mut renderer, aspect, seed)
             .map_err(|error| error.to_string())?;
@@ -352,5 +438,68 @@ mod tests {
         assert_eq!(warm_frames(Quality::Draft, 300, false), 0);
         assert_eq!(warm_frames(Quality::Final, 300, false), WARM_FRAMES);
         assert_eq!(warm_frames(Quality::Final, 3, false), 3);
+    }
+
+    #[test]
+    fn the_name_a_shot_records_finds_its_node_again() {
+        let recorded = named("street", "camera.chase");
+        assert_eq!(recorded, "street/camera.chase");
+        assert_eq!(
+            splits(&recorded).collect::<Vec<_>>(),
+            [("street", "camera.chase")]
+        );
+        assert!(candidates("chase").contains(&"camera.chase".to_string()));
+        assert_eq!(
+            splits("a/b/c").collect::<Vec<_>>(),
+            [("a", "b/c"), ("a/b", "c")]
+        );
+        assert_eq!(splits("/chase").count(), 0);
+        assert_eq!(splits("chase").count(), 0);
+    }
+
+    #[test]
+    fn a_camera_with_no_view_is_refused() {
+        let fine = Camera::default();
+        assert_eq!(degenerate(&fine), None);
+        let refused = |camera: Camera| degenerate(&camera).is_some();
+        assert!(refused(Camera {
+            look_at: fine.at,
+            ..fine.clone()
+        }));
+        assert!(refused(Camera {
+            up: [0.0, 0.0, 2.0],
+            ..fine.clone()
+        }));
+        assert!(refused(Camera {
+            up: [0.0; 3],
+            ..fine.clone()
+        }));
+        assert!(refused(Camera {
+            at: [f32::NAN, 0.0, 5.0],
+            ..fine.clone()
+        }));
+        for fov in [0.0, 180.0, -5.0, f32::NAN] {
+            assert!(refused(Camera {
+                projection: Projection::Perspective { fov },
+                ..fine.clone()
+            }));
+        }
+        assert!(refused(Camera {
+            near: 0.0,
+            ..fine.clone()
+        }));
+        assert!(refused(Camera {
+            far: fine.near,
+            ..fine.clone()
+        }));
+        assert!(!refused(Camera {
+            up: [0.0, 3.0, 0.0],
+            ..fine.clone()
+        }));
+        assert!(!refused(Camera {
+            projection: Projection::Orthographic { height: 2.0 },
+            near: 0.0,
+            ..fine.clone()
+        }));
     }
 }

@@ -229,8 +229,18 @@ fn two_shots_of_an_animated_glb_give_the_same_bytes_and_follow_its_camera_node()
     let args = ["--camera", "chase", "--final", "--json"];
     let first = lines(&shot(&folder, "a", &args));
     let second = lines(&shot(&folder, "b", &args));
+    let recorded = first.last().unwrap()["camera"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    lines(&shot(
+        &folder,
+        "c",
+        &["--camera", &recorded, "--final", "--json"],
+    ));
     let a = frames(&folder.join("a"));
     assert_eq!(a, frames(&folder.join("b")));
+    assert_eq!(a, frames(&folder.join("c")), "{recorded} is another view");
     assert_ne!(a[0], a[3], "the node animation moves the frames");
     assert_eq!(first.len(), 5);
     for (index, line) in first.iter().take(4).enumerate() {
@@ -273,23 +283,35 @@ fn two_shots_of_an_animated_glb_give_the_same_bytes_and_follow_its_camera_node()
 #[ignore = "needs a GPU; run under pgpu"]
 fn a_shot_started_late_writes_the_frame_a_full_run_writes() {
     let folder = folder("late");
+    std::fs::create_dir_all(folder.join("late")).unwrap();
+    std::fs::write(folder.join("late").join("000009.png"), b"stale").unwrap();
     let late = shot_of(
         &folder,
         "late",
-        &["--frames", "1", "--from", "30"],
+        &["--frames", "2", "--from", "5"],
         &["--json"],
     );
     let full = shot_of(
         &folder,
         "full",
-        &["--frames", "31", "--from", "0"],
+        &["--frames", "7", "--from", "0"],
         &["--json"],
     );
-    assert_eq!(lines(&late).last().unwrap()["warm_frames"], json!(30));
+    let summary = lines(&late).last().unwrap().clone();
+    assert_eq!(summary["warm_frames"], json!(5));
+    assert_eq!(summary["first_number"], json!(5));
     lines(&full);
-    assert_eq!(
-        std::fs::read(folder.join("late").join("000000.png")).unwrap(),
-        std::fs::read(folder.join("full").join("000030.png")).unwrap()
-    );
+    let mut written: Vec<String> = std::fs::read_dir(folder.join("late"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    written.sort();
+    assert_eq!(written, ["000000.png", "000001.png", "manifest.json"]);
+    for (file, number) in [(0, 5), (1, 6)] {
+        assert_eq!(
+            std::fs::read(folder.join("late").join(format!("{file:06}.png"))).unwrap(),
+            std::fs::read(folder.join("full").join(format!("{number:06}.png"))).unwrap()
+        );
+    }
     std::fs::remove_dir_all(&folder).unwrap();
 }
