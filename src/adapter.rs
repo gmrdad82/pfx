@@ -948,12 +948,16 @@ mod tests {
             .env_remove(FROZEN_VAR)
             .env("PFX_TURN_CHILD", "1")
             .env("TURN_LOG", &log)
-            .stdout(std::process::Stdio::null())
-            .status()
+            .output()
             .unwrap();
         let lines = std::fs::read_to_string(&log).unwrap_or_default();
         std::fs::remove_dir_all(&scratch).unwrap();
-        assert!(status.success());
+        assert!(
+            status.status.success(),
+            "the turn child failed:\n{}\n{}\nturns so far:\n{lines}",
+            String::from_utf8_lossy(&status.stdout),
+            String::from_utf8_lossy(&status.stderr)
+        );
         assert_eq!(
             lines.lines().collect::<Vec<_>>(),
             [
