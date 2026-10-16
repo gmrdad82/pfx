@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use pfx_bench::shot::{CAMERA_PREFIX, Lens};
+use pfx_bench::shot::{Lens, candidates, splits};
 use pfx_load::scene::Scene;
 use serde_json::Value;
 
@@ -21,16 +21,8 @@ fn document(path: &Path) -> Option<Value> {
     serde_json::from_slice(&bytes).ok()
 }
 
-fn names(name: &str) -> Vec<String> {
-    let mut names = vec![name.to_string()];
-    if !name.starts_with(CAMERA_PREFIX) {
-        names.push(format!("{CAMERA_PREFIX}{name}"));
-    }
-    names
-}
-
 pub fn of_node(json: &Value, name: &str) -> Option<Found> {
-    let wanted = names(name);
+    let wanted = candidates(name);
     let nodes = json.get("nodes")?.as_array()?;
     let node = wanted.iter().find_map(|wanted| {
         nodes
@@ -55,6 +47,18 @@ pub fn of_node(json: &Value, name: &str) -> Option<Found> {
 }
 
 pub fn find(scene: &Scene, name: &str) -> Option<Found> {
+    if !scene.objects.iter().any(|object| object.name == name) {
+        for (object, node) in splits(name) {
+            if let Some(mesh) = scene
+                .objects
+                .iter()
+                .find(|found| found.name == object)
+                .and_then(|found| scene.meshes.get(&found.mesh))
+            {
+                return document(&mesh.file).and_then(|json| of_node(&json, node));
+            }
+        }
+    }
     let mut files: Vec<&Path> = scene
         .meshes
         .values()

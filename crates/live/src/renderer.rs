@@ -621,27 +621,36 @@ const EXPOSURE_WGSL: &str = r#"
 @group(0) @binding(1) var<storage, read_write> output: array<f32>;
 @group(0) @binding(2) var<uniform> extent: vec4u;
 var<workgroup> values: array<f32, 256>;
+var<workgroup> counts: array<u32, 256>;
 @compute @workgroup_size(256)
 fn main(@builtin(local_invocation_index) index: u32) {
     let size = min(textureDimensions(source), extent.xy);
     var total = 0.0;
+    var count = 0u;
     for (var sample = 0u; sample < 4u; sample += 1u) {
         let point = index * 4u + sample;
         let x = min((point % 64u) * size.x / 64u + size.x / 128u, size.x - 1u);
         let y = min((point / 64u) * size.y / 16u + size.y / 32u, size.y - 1u);
         let rgb = textureLoad(source, vec2i(i32(x), i32(y)), 0).rgb;
-        total += log(max(dot(rgb, vec3f(0.2126, 0.7152, 0.0722)), 0.001));
+        if (all((bitcast<vec3u>(rgb) & vec3u(0x7f800000u)) != vec3u(0x7f800000u))) {
+            total += log(max(dot(rgb, vec3f(0.2126, 0.7152, 0.0722)), 0.001));
+            count += 1u;
+        }
     }
     values[index] = total;
+    counts[index] = count;
     workgroupBarrier();
     var stride = 128u;
     loop {
-        if (index < stride) { values[index] += values[index + stride]; }
+        if (index < stride) {
+            values[index] += values[index + stride];
+            counts[index] += counts[index + stride];
+        }
         workgroupBarrier();
         if (stride == 1u) { break; }
         stride /= 2u;
     }
-    if (index == 0u) { output[0] = values[0] / 1024.0; }
+    if (index == 0u) { output[0] = values[0] / max(f32(counts[0]), 1.0); }
 }
 "#;
 

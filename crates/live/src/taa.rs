@@ -194,6 +194,14 @@ fn outside(uv: vec2<f32>) -> bool {
     return uv.x < 0.0 || uv.y < 0.0 || uv.x >= 1.0 || uv.y >= 1.0;
 }
 
+fn finite3(c: vec3<f32>) -> bool {
+    return all((bitcast<vec3<u32>>(c) & vec3<u32>(0x7f800000u)) != vec3<u32>(0x7f800000u));
+}
+
+fn kept3(c: vec3<f32>) -> vec3<f32> {
+    return select(vec3<f32>(0.0), c, finite3(c));
+}
+
 fn clamp_pixel(p: vec2<i32>, size: vec2<i32>) -> vec2<i32> {
     return clamp(p, vec2<i32>(0), size - vec2<i32>(1));
 }
@@ -238,7 +246,7 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let pix = vec2<i32>(gid.xy);
     let uv = (vec2<f32>(gid.xy) + vec2<f32>(0.5)) / vec2<f32>(size);
-    let current = textureLoad(colour_tex, pix, 0).rgb;
+    let current = kept3(textureLoad(colour_tex, pix, 0).rgb);
     let depth = textureLoad(depth_tex, pix, 0).r;
     let motion = textureLoad(motion_tex, pix, 0).rg;
     let reactive = clamp(textureLoad(reactive_tex, pix, 0).r, 0.0, 1.0);
@@ -256,7 +264,7 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     let s = vec2<i32>(size);
     for (var oy = -1; oy <= 1; oy = oy + 1) {
         for (var ox = -1; ox <= 1; ox = ox + 1) {
-            let texel = load3(colour_tex, pix + vec2<i32>(ox, oy), s) * u.exposure;
+            let texel = kept3(load3(colour_tex, pix + vec2<i32>(ox, oy), s)) * u.exposure;
             let ycocg = rgb_to_ycocg(texel);
             acc = acc + ycocg;
             acc2 = acc2 + ycocg * ycocg;
@@ -271,12 +279,15 @@ fn resolve(@builtin(global_invocation_id) gid: vec3<u32>) {
     var weight = 0.0;
     if ((u.flags & 1u) != 0u) {
         let prev = uv + motion;
-        if (!outside(prev)) {
+        if (!outside(prev) && finite3(vec3<f32>(motion, 0.0))) {
             let stored = max(u.history_exposure, 1.0e-8);
             let history_size = vec2<u32>(u.history_width, u.history_height);
             let history_hdr = bilinear3(history_colour, prev, history_size);
             history_e = (history_hdr * stored) * (u.exposure / stored);
-            var accept = true;
+            var accept = finite3(history_e);
+            if (!accept) {
+                history_e = current_e;
+            }
             let at = nearest(prev, history_size);
             let previous_depth = textureLoad(history_depth, at, 0).r;
             let scale = max(max(abs(depth), abs(previous_depth)), 1.0e-5);
@@ -349,6 +360,14 @@ fn ycocg_to_rgb(c: [f32; 3]) -> [f32; 3] {
 
 fn outside(uv: [f32; 2]) -> bool {
     uv[0] < 0.0 || uv[1] < 0.0 || uv[0] >= 1.0 || uv[1] >= 1.0
+}
+
+fn kept3(c: [f32; 3]) -> [f32; 3] {
+    if c.iter().all(|value| value.is_finite()) {
+        c
+    } else {
+        [0.0; 3]
+    }
 }
 
 fn clamp_index(value: i32, size: i32) -> i32 {
@@ -496,7 +515,7 @@ pub fn resolve(inputs: &Inputs, history: &History, settings: &Settings) -> Resul
                 (x as f32 + 0.5) / inputs.width as f32,
                 (y as f32 + 0.5) / inputs.height as f32,
             ];
-            let current = inputs.colour[index];
+            let current = kept3(inputs.colour[index]);
             let depth = inputs.depth[index];
             let motion = inputs.motion[index];
             let reactive = inputs.reactive[index].clamp(0.0, 1.0);
@@ -510,7 +529,13 @@ pub fn resolve(inputs: &Inputs, history: &History, settings: &Settings) -> Resul
             let mut acc2 = [0.0; 3];
             for oy in -1..=1 {
                 for ox in -1..=1 {
-                    let texel = load3(&inputs.colour, width, height, x as i32 + ox, y as i32 + oy);
+                    let texel = kept3(load3(
+                        &inputs.colour,
+                        width,
+                        height,
+                        x as i32 + ox,
+                        y as i32 + oy,
+                    ));
                     let exposed = [
                         texel[0] * inputs.exposure,
                         texel[1] * inputs.exposure,
@@ -542,7 +567,7 @@ pub fn resolve(inputs: &Inputs, history: &History, settings: &Settings) -> Resul
             let mut weight = 0.0;
             if use_history {
                 let prev = [uv[0] + motion[0], uv[1] + motion[1]];
-                if !outside(prev) {
+                if !outside(prev) && motion.iter().all(|value| value.is_finite()) {
                     let history_hdr = bilinear3(&history_hdr, history.width, history.height, prev);
                     history_e = [
                         (history_hdr[0] * stored_exposure) * (inputs.exposure / stored_exposure),
@@ -552,7 +577,12 @@ pub fn resolve(inputs: &Inputs, history: &History, settings: &Settings) -> Resul
                     let at_x = nearest(prev[0], history.width);
                     let at_y = nearest(prev[1], history.height);
                     let at = (at_y as u32 * history.width + at_x as u32) as usize;
-                    let mut accept = !depth_rejects(depth, history.depth[at], depth_threshold);
+                    let usable = history_e.iter().all(|value| value.is_finite());
+                    if !usable {
+                        history_e = current_e;
+                    }
+                    let mut accept =
+                        usable && !depth_rejects(depth, history.depth[at], depth_threshold);
                     if accept && inputs.id.is_some() && history.id[at] != pixel_id {
                         accept = false;
                     }
@@ -1579,6 +1609,38 @@ mod tests {
         assert!(RESOLVE_WGSL.contains("rgb_to_ycocg"));
     }
 
+    fn broken(inputs: &mut Inputs) {
+        inputs.colour[1] = [f32::NAN, 0.5, 0.5];
+        inputs.colour[5] = [f32::INFINITY, 0.0, 0.0];
+        for motion in &mut inputs.motion {
+            *motion = [f32::NAN, f32::NAN];
+        }
+    }
+
+    #[test]
+    fn non_finite_samples_motion_and_history_never_reach_the_output() {
+        let settled = resolve(
+            &pattern(0.0, 0.5, [0.0, 0.0], 1.0),
+            &History::empty(),
+            &Settings::default(),
+        )
+        .unwrap();
+        let mut inputs = pattern(0.0, 0.5, [0.0, 0.0], 1.0);
+        broken(&mut inputs);
+        let out = resolve(&inputs, &settled.history, &Settings::default()).unwrap();
+        assert!(out.colour.iter().flatten().all(|value| value.is_finite()));
+        let mut poisoned = filled(0.5, 1.0, 0.5);
+        poisoned.rgba[4] = [f32::NAN, f32::NAN, f32::NAN, 1.0];
+        let out = resolve(
+            &pattern(0.0, 0.5, [0.0, 0.0], 1.0),
+            &poisoned,
+            &Settings::default(),
+        )
+        .unwrap();
+        assert!(out.colour.iter().flatten().all(|value| value.is_finite()));
+        assert_eq!(out.colour[4], [0.25; 3]);
+    }
+
     fn upload(queue: &wgpu::Queue, texture: &wgpu::Texture, width: u32, height: u32, bytes: &[u8]) {
         let row = bytes.len() as u32 / height;
         queue.write_texture(
@@ -1845,6 +1907,34 @@ mod tests {
             let got = gpu_resolve(&mut pass, &gpu, &frame, &inputs);
             for (index, pixel) in cpu.colour.iter().enumerate() {
                 for channel in 0..3 {
+                    assert_near(got[index][channel], pixel[channel], 1.5e-3);
+                }
+            }
+            history = cpu.history;
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn gpu_a_degenerate_previous_view_leaves_finite_pixels() {
+        let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
+        let mut pass = Pass::new(&gpu.device);
+        pass.resize(&gpu.device, 3, 3);
+        let frame = GpuFrame::new(&gpu.device, 3, 3);
+        let mut history = History::empty();
+        let mut degenerate = pattern(0.0, 0.5, [0.0, 0.0], 1.0);
+        broken(&mut degenerate);
+        let sequence = [
+            pattern(0.0, 0.5, [0.0, 0.0], 1.0),
+            degenerate,
+            pattern(0.0, 0.5, [0.0, 0.0], 1.0),
+        ];
+        for inputs in sequence {
+            let cpu = resolve(&inputs, &history, &Settings::default()).unwrap();
+            let got = gpu_resolve(&mut pass, &gpu, &frame, &inputs);
+            for (index, pixel) in cpu.colour.iter().enumerate() {
+                for channel in 0..3 {
+                    assert!(got[index][channel].is_finite(), "{index}: {:?}", got[index]);
                     assert_near(got[index][channel], pixel[channel], 1.5e-3);
                 }
             }

@@ -195,7 +195,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let vd = sample_velocity(at);
         let fg = saturate((vd_p.z - vd.z) * 20.0 * rcp_d_p);
         let l_v = mix(l_v_bg, length(vd.xy), fg);
-        let w = saturate(l_v - l_t) / l_v * (1.2 - t);
+        let w = select(saturate(l_v - l_t) / l_v, 0.0, l_v <= 0.0) * (1.2 - t);
         acc += vec4f(c, 1.0) * w;
         l_v_bg = max(l_v_bg, l_v);
         t = select(t, t - dt, interval(count, 2.0));
@@ -668,6 +668,19 @@ mod tests {
                 [20.0, 0.0, 0.0, 0.0]
             }
         });
+        blurred(gpu, blur, &source, &motion, &depth)
+            .chunks(4)
+            .map(|texel| texel[0])
+            .collect()
+    }
+
+    fn blurred(
+        gpu: &pfx_gpu::Gpu,
+        blur: &mut GpuMotionBlur,
+        source: &pfx_gpu::OffscreenTarget,
+        motion: &pfx_gpu::OffscreenTarget,
+        depth: &pfx_gpu::OffscreenTarget,
+    ) -> Vec<f32> {
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -697,9 +710,38 @@ mod tests {
                 height: SIZE.1,
             })
             .unwrap();
-        out.chunks(4)
-            .map(|texel| half::f16::from_bits(texel[0]).to_f32())
+        out.into_iter()
+            .map(|bits| half::f16::from_bits(bits).to_f32())
             .collect()
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn a_still_object_in_front_of_a_moving_background_stays_finite() {
+        let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
+        let mut blur = GpuMotionBlur::new(&gpu.device, SIZE.0, SIZE.1);
+        let still = |x: u32, y: u32| (80..112).contains(&x) && (32..64).contains(&y);
+        let source = upload(&gpu, |x, _| [x as f32 / SIZE.0 as f32, 0.5, 0.25, 1.0]);
+        let motion = upload(&gpu, |x, y| {
+            if still(x, y) {
+                [0.0; 4]
+            } else {
+                [-24.0 / SIZE.0 as f32, 0.0, 0.0, 0.0]
+            }
+        });
+        let depth = upload(&gpu, |x, y| {
+            if still(x, y) {
+                [2.0, 0.0, 0.0, 0.0]
+            } else {
+                [20.0, 0.0, 0.0, 0.0]
+            }
+        });
+        let out = blurred(&gpu, &mut blur, &source, &motion, &depth);
+        assert!(
+            out.iter().all(|value| value.is_finite()),
+            "{} values are not finite",
+            out.iter().filter(|value| !value.is_finite()).count()
+        );
     }
 
     #[test]
