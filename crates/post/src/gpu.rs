@@ -167,6 +167,21 @@ pub struct GpuChain {
     width: u32,
     height: u32,
     viewport: (u32, u32),
+    gain: f32,
+}
+
+fn retune_lut(pass: &mut Pass, amount: f32) -> bool {
+    match pass {
+        Pass::Lut(lut) => {
+            let changed = lut.amount != amount;
+            lut.amount = amount;
+            changed
+        }
+        Pass::Grade(passes) => passes
+            .iter_mut()
+            .fold(false, |changed, pass| retune_lut(pass, amount) | changed),
+        _ => false,
+    }
 }
 
 struct Scissor<'a> {
@@ -837,7 +852,30 @@ impl GpuChain {
             width,
             height,
             viewport: (width, height),
+            gain: 1.0,
         }
+    }
+
+    pub fn gain(&self) -> f32 {
+        self.gain
+    }
+
+    pub fn set_gain(&mut self, gain: f32) {
+        self.gain = gain;
+    }
+
+    pub fn set_lut_amount(&mut self, amount: f32) -> bool {
+        let mut changed = false;
+        for group in self.groups.iter_mut().chain(&mut self.tape.groups) {
+            if retune_lut(&mut group.pass, amount) {
+                group.params = all_params(&group.pass);
+                changed = true;
+            }
+        }
+        for pass in &mut self.tape.source {
+            retune_lut(pass, amount);
+        }
+        changed
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -1224,7 +1262,7 @@ impl GpuChain {
                 if group_index == 0
                     && let Some(slot) = group.exposure[stage_index]
                 {
-                    params[slot] *= exposure;
+                    params[slot] *= exposure * self.gain;
                 }
                 let area = match (&scissor, stage.target) {
                     (Some(scissor), ImageSlot::Main) => Some(scissor.grown(group_index, self)),

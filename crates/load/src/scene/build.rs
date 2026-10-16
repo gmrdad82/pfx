@@ -12,6 +12,7 @@ use pfx_scene::types as file;
 use pfx_scene::{Diagnostic, Entry, Project};
 use sha2::{Digest, Sha256};
 
+use super::keyed::{PlanSource, SkyPlan};
 use super::{
     ALPHA_CUTOFF, Camera, Content, DepthOfField, Emitter, Environment, Finish, Geometry,
     GeometryMorph, GeometrySkin, Haze, IDENTITY, Location, Matrix, Motion, Mover, MoverKind,
@@ -273,10 +274,24 @@ pub(super) fn build(
         }
         None => None,
     };
+    let mut keys = super::keyed::SceneKeys {
+        sun: resolved.sun.as_ref().and_then(|file| {
+            super::keyed::gather(file::Sun::KEYED, |name| file.track(name)).map(|keys| {
+                super::keyed::SunKeys {
+                    keys,
+                    sun: file.clone(),
+                }
+            })
+        }),
+        ..Default::default()
+    };
     let sky = match &resolved.sky {
         Some(sky) => {
             let holder = places.holder(&resolved.files, "sky");
-            Some(build_sky(&places, &holder, sky, sun.as_ref(), &mut reader)?)
+            let keep = super::keyed::keeps(sky, resolved.sun.as_ref());
+            let (built, plan) = build_sky(&places, &holder, sky, sun.as_ref(), &mut reader, keep)?;
+            keys.sky = super::keyed::sky_keys(sky, plan, sun);
+            Some(built)
         }
         None => None,
     };
@@ -306,6 +321,14 @@ pub(super) fn build(
         .iter()
         .map(|entry| (entry.key.clone(), build_mover(&entry.value)))
         .collect();
+    keys.lights = resolved
+        .lights
+        .iter()
+        .filter_map(|entry| {
+            super::keyed::gather(file::Light::KEYED, |name| entry.value.track(name))
+                .map(|keys| (entry.key.clone(), keys))
+        })
+        .collect();
     let lights = super::lights::build_lights(
         &places,
         &resolved.lights,
@@ -321,20 +344,34 @@ pub(super) fn build(
         .map(|entry| (entry.key.clone(), build_emitter(&entry.value)))
         .collect();
     let particles = super::particles::build(&places, &resolved.particles, &objects, &meshes)?;
-    let camera = match &resolved.camera {
-        Some(camera) => {
-            let holder = places.holder(&resolved.files, "camera");
-            Some(build_camera(&places, &holder, camera)?)
-        }
-        None => None,
-    };
-    let finish = match &resolved.finish {
-        Some(finish) => {
-            let holder = places.holder(&resolved.files, "finish");
-            Some(build_finish(&places, &holder, finish, &mut reader)?)
-        }
-        None => None,
-    };
+    let camera =
+        match &resolved.camera {
+            Some(camera) => {
+                let holder = places.holder(&resolved.files, "camera");
+                keys.camera = super::keyed::gather(file::Camera::KEYED, |name| camera.track(name))
+                    .map(|found| super::keyed::CameraKeys {
+                        keys: found,
+                        sensor: camera.sensor.unwrap_or(file::Camera::SENSOR),
+                        focal: camera.focal,
+                    });
+                Some(build_camera(&places, &holder, camera)?)
+            }
+            None => None,
+        };
+    let finish =
+        match &resolved.finish {
+            Some(finish) => {
+                let holder = places.holder(&resolved.files, "finish");
+                let built = build_finish(&places, &holder, finish, &mut reader)?;
+                keys.finish = super::keyed::gather(file::Finish::KEYED, |name| finish.track(name))
+                    .map(|found| super::keyed::FinishKeys {
+                        keys: found,
+                        exposure: super::keyed::finish_exposure(&built.chain),
+                    });
+                Some(built)
+            }
+            None => None,
+        };
     let finish = super::flare::fold(finish, resolved.flare.as_ref());
     let plates = match &resolved.plates {
         Some(plates) => {
@@ -371,6 +408,17 @@ pub(super) fn build(
         sun,
         sky,
         haze: resolved.haze.as_ref().map(build_haze),
+        keys: super::keyed::SceneKeys {
+            haze: resolved.haze.as_ref().and_then(|file| {
+                super::keyed::gather(file::Haze::KEYED, |name| file.track(name)).map(|found| {
+                    super::keyed::HazeKeys {
+                        keys: found,
+                        haze: file.clone(),
+                    }
+                })
+            }),
+            ..keys
+        },
         movers,
         lights,
         emitters,
@@ -438,7 +486,7 @@ fn build_library(
     Ok(library)
 }
 
-fn build_haze(haze: &file::Haze) -> Haze {
+pub(super) fn build_haze(haze: &file::Haze) -> Haze {
     let amount = haze.amount.unwrap_or(0.0);
     Haze {
         lo: haze.lo.unwrap_or([0.0; 3]),
@@ -1030,8 +1078,11 @@ fn build_sun(
     sun: &file::Sun,
     hour: Option<f64>,
 ) -> Result<Sun, SceneError> {
-    let steps = [Step::Key("sun")];
-    let hour = hour.or(sun.hour);
+    sun_of(sun, hour.or(sun.hour))
+        .map_err(|message| places.refusal(holder, &[Step::Key("sun")], message))
+}
+
+pub(super) fn sun_of(sun: &file::Sun, hour: Option<f64>) -> Result<Sun, String> {
     let radius = sun.radius.unwrap_or(0.0);
     let reference_hour = sun.reference_hour.unwrap_or(REFERENCE_HOUR);
     let daylight = |hour: Option<f64>| {
@@ -1043,7 +1094,7 @@ fn build_sun(
         ]
         .into_iter()
         .filter_map(|(key, value)| value.map(|value| (key, Reading::Number(value))));
-        Daylight::parse(fields).map_err(|message| places.refusal(holder, &steps, message))
+        Daylight::parse(fields)
     };
     match sun.model {
         file::SunModel::Daylight => {
@@ -1061,11 +1112,7 @@ fn build_sun(
         }
         file::SunModel::Authored => {
             let (Some(toward), Some(irradiance)) = (sun.toward, sun.irradiance) else {
-                return places.error(
-                    holder,
-                    &steps,
-                    "an authored sun needs toward and irradiance",
-                );
+                return Err("an authored sun needs toward and irradiance".into());
             };
             let color = sun.color.unwrap_or([1.0; 3]);
             let daylight = daylight(Some(hour.unwrap_or(reference_hour)))?;
@@ -1136,43 +1183,50 @@ fn room_of(room: &file::Room) -> RoomSky {
     }
 }
 
+pub(super) fn analytic_of(sky: &file::Sky, sun: Option<&Sun>, intensity: f32) -> AnalyticSky {
+    let turbidity = sky.turbidity.unwrap_or(file::Sky::TURBIDITY);
+    let albedo = sky.ground_albedo.unwrap_or(file::Sky::GROUND_ALBEDO);
+    let mut analytic =
+        match sun.and_then(|sun| sun.daylight.map(|daylight| (daylight, sun.reference_hour))) {
+            Some((daylight, reference)) => AnalyticSky::new(daylight, reference, turbidity, albedo),
+            None => {
+                let sun = sun.copied().unwrap_or_else(Sun::dark);
+                AnalyticSky {
+                    sun: sun.direction,
+                    sun_colour: sun.color,
+                    sun_intensity: sun.intensity,
+                    ambient: 1.0,
+                    turbidity,
+                    ground_albedo: albedo.map(|v| v.clamp(0.0, 1.0)),
+                }
+            }
+        };
+    if let Some(ambient) = sky.ambient {
+        analytic.ambient = ambient;
+    }
+    if intensity != 1.0 {
+        analytic.ambient *= intensity;
+    }
+    analytic
+}
+
 fn build_sky(
     places: &Places,
     holder: &Path,
     sky: &file::Sky,
     sun: Option<&Sun>,
     reader: &mut Reader,
-) -> Result<SceneSky, SceneError> {
+    keep: bool,
+) -> Result<(SceneSky, Option<SkyPlan>), SceneError> {
     let steps = [Step::Key("sky")];
     let mut hasher = Sha256::new();
     hasher.update(kind_name(sky.kind).as_bytes());
     let rotation = sky.rotation_deg.unwrap_or(0.0);
     let intensity = sky.intensity.unwrap_or(file::Sky::INTENSITY);
-    let environment = match sky.kind {
+    let keys = sky.keys.clone().filter(|keys| keys.has("intensity"));
+    let (environment, source) = match sky.kind {
         file::SkyKind::Analytic => {
-            let turbidity = sky.turbidity.unwrap_or(file::Sky::TURBIDITY);
-            let albedo = sky.ground_albedo.unwrap_or(file::Sky::GROUND_ALBEDO);
-            let mut analytic = match sun
-                .and_then(|sun| sun.daylight.map(|daylight| (daylight, sun.reference_hour)))
-            {
-                Some((daylight, reference)) => {
-                    AnalyticSky::new(daylight, reference, turbidity, albedo)
-                }
-                None => {
-                    let sun = sun.copied().unwrap_or_else(Sun::dark);
-                    AnalyticSky {
-                        sun: sun.direction,
-                        sun_colour: sun.color,
-                        sun_intensity: sun.intensity,
-                        ambient: 1.0,
-                        turbidity,
-                        ground_albedo: albedo.map(|v| v.clamp(0.0, 1.0)),
-                    }
-                }
-            };
-            if let Some(ambient) = sky.ambient {
-                analytic.ambient = ambient;
-            }
+            let analytic = analytic_of(sky, sun, intensity);
             hasher_add(
                 &mut hasher,
                 analytic
@@ -1182,7 +1236,10 @@ fn build_sky(
                     .chain([analytic.sun_intensity, analytic.ambient, analytic.turbidity])
                     .chain(analytic.ground_albedo),
             );
-            Environment::Analytic(analytic)
+            (
+                Environment::Analytic(analytic),
+                keep.then(|| PlanSource::Analytic(Box::new(sky.clone()))),
+            )
         }
         file::SkyKind::Hdr => {
             let Some(relative) = &sky.path else {
@@ -1214,9 +1271,7 @@ fn build_sky(
                 }
             }
             hasher_add(&mut hasher, [rotation, intensity]);
-            Environment::Hdr(Arc::new(
-                parsed.rotated(-rotation.to_radians()).exposed(intensity),
-            ))
+            image_plan(parsed.rotated(-rotation.to_radians()), intensity, keep)
         }
         file::SkyKind::Room => {
             let Some(room) = &sky.room else {
@@ -1227,19 +1282,40 @@ fn build_sky(
                 .map_err(|message| places.refusal(holder, &steps, message))?;
             hasher.update(format!("{room:?}").as_bytes());
             hasher_add(&mut hasher, [rotation, intensity]);
-            Environment::Hdr(Arc::new(
-                Sky::room(&room)
-                    .rotated(-rotation.to_radians())
-                    .exposed(intensity),
-            ))
+            image_plan(
+                Sky::room(&room).rotated(-rotation.to_radians()),
+                intensity,
+                keep,
+            )
         }
-        file::SkyKind::Mix => return build_mix(places, holder, sky, sun, reader),
+        file::SkyKind::Mix => return build_mix(places, holder, sky, sun, reader, keep),
     };
-    Ok(SceneSky {
-        kind: kind_name(sky.kind).into(),
-        environment,
-        hash: hasher.finalize().into(),
-    })
+    let look = super::keyed::look_of(sky);
+    look.hash(&mut hasher);
+    Ok((
+        SceneSky {
+            kind: kind_name(sky.kind).into(),
+            environment,
+            look,
+            hash: hasher.finalize().into(),
+        },
+        source.map(|source| SkyPlan {
+            source,
+            intensity,
+            keys,
+        }),
+    ))
+}
+
+fn image_plan(sky: Sky, intensity: f32, keep: bool) -> (Environment, Option<PlanSource>) {
+    if !keep {
+        return (Environment::Hdr(Arc::new(sky.exposed(intensity))), None);
+    }
+    let base = Arc::new(sky);
+    (
+        Environment::Hdr(Arc::new((*base).clone().exposed(intensity))),
+        Some(PlanSource::Image(base)),
+    )
 }
 
 fn build_mix(
@@ -1248,22 +1324,35 @@ fn build_mix(
     sky: &file::Sky,
     sun: Option<&Sun>,
     reader: &mut Reader,
-) -> Result<SceneSky, SceneError> {
+    keep: bool,
+) -> Result<(SceneSky, Option<SkyPlan>), SceneError> {
     let mut hasher = Sha256::new();
     hasher.update(b"mix");
     let mut layers = Vec::new();
+    let mut plans = Vec::new();
     for layer in &sky.layer {
         let weight = layer.weight.unwrap_or(file::Sky::WEIGHT);
-        let built = build_sky(places, holder, layer, sun, reader)?;
+        let (built, plan) = build_sky(places, holder, layer, sun, reader, keep)?;
         hasher.update(built.hash);
         hasher_add(&mut hasher, [weight]);
         layers.push((weight, built.environment));
+        plans.extend(plan.map(|plan| (weight, plan)));
     }
-    Ok(SceneSky {
-        kind: "mix".into(),
-        environment: Environment::Hdr(Arc::new(super::mix::bake(&layers))),
-        hash: hasher.finalize().into(),
-    })
+    let look = super::keyed::look_of(sky);
+    look.hash(&mut hasher);
+    Ok((
+        SceneSky {
+            kind: "mix".into(),
+            environment: Environment::Hdr(Arc::new(super::mix::bake(&layers))),
+            look,
+            hash: hasher.finalize().into(),
+        },
+        keep.then_some(SkyPlan {
+            source: PlanSource::Mix(plans),
+            intensity: 1.0,
+            keys: None,
+        }),
+    ))
 }
 
 fn build_camera(
@@ -1307,7 +1396,10 @@ fn build_camera(
         depth_of_field: None,
         preset: preset(camera.preset.as_ref()),
     };
-    if let (Projection::Perspective { fov }, Some(fstop)) = (built.projection, camera.fstop) {
+    let fstop = camera
+        .fstop
+        .or_else(|| super::keyed::first_number(camera.track("fstop")));
+    if let (Projection::Perspective { fov }, Some(fstop)) = (built.projection, fstop) {
         let distance = camera.focus.unwrap_or_else(|| {
             super::dot(
                 super::sub(built.look_at, built.at),
@@ -1331,7 +1423,6 @@ fn build_camera(
             fstop,
             distance,
             focal,
-            keys: camera.focus_keys.clone().unwrap_or_default(),
         });
     }
     Ok(built)
@@ -1442,6 +1533,7 @@ fn build_finish(
         .unwrap_or_default();
     let mut hasher = Sha256::new();
     let mut base = raw.clone();
+    base.remove("keys");
     let passes = match base.remove("pass") {
         Some(toml::Value::Array(items)) => items,
         _ => Vec::new(),

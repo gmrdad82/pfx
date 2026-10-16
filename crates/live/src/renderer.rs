@@ -191,6 +191,7 @@ pub struct Effects<'a> {
     pub props: &'a [ImpostorInstance],
     pub lights: Option<&'a [LocalLight]>,
     pub lens: Option<dof::Lens>,
+    pub tuned: Option<&'a crate::keyed::Tuned>,
 }
 
 pub const HISTORY_GAP: f32 = 0.25;
@@ -714,6 +715,7 @@ pub struct Renderer {
     resolution_content: Option<[u32; 2]>,
     resolution_frame: bool,
     sky_hours: Vec<(u64, f32)>,
+    tuned_sky: Option<u64>,
     history: History,
     history_valid: bool,
     hour: f32,
@@ -997,7 +999,7 @@ fn depth_pipeline(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::Comput
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("live linear depth"), source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let z = textureLoad(source, id.xy, 0); let distance = limits.y / (z + limits.x); textureStore(destination, id.xy, vec4f(select(limits.z, distance, z < 1.0 && distance > 0.0), 0.0, 0.0, 0.0)); }".into()) });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("live linear depth"), source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let z = textureLoad(source, id.xy, 0); let distance = select(limits.y / (z + limits.x), (limits.y - z) / limits.x, limits.w > 0.5); textureStore(destination, id.xy, vec4f(select(limits.z, distance, z < 1.0 && distance > 0.0), 0.0, 0.0, 0.0)); }".into()) });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("live linear depth"),
         layout: Some(&pipeline_layout),
@@ -1394,6 +1396,7 @@ impl Renderer {
             resolution_content: None,
             resolution_frame: false,
             sky_hours: Vec::new(),
+            tuned_sky: None,
             history: History::default(),
             history_valid: false,
             hour: 12.0,
@@ -1946,6 +1949,7 @@ impl Renderer {
 
     pub fn set_sky(&mut self, source: SkySource, hour: f32) -> Result<(), String> {
         self.touch();
+        self.tuned_sky = None;
         if !hour.is_finite() {
             return Err("hour must be finite".into());
         }
@@ -1959,12 +1963,52 @@ impl Renderer {
 
     pub fn request_sky(&mut self, source: SkySource, hour: f32) -> Result<u64, String> {
         self.touch();
+        self.tuned_sky = None;
         if !hour.is_finite() {
             return Err("hour must be finite".into());
         }
         let request = self.frame.set_sky(source, false);
         self.sky_hours.push((request, hour));
         Ok(request)
+    }
+
+    pub fn tuned_sky(&self) -> Option<u64> {
+        self.tuned_sky
+    }
+
+    pub fn request_tuned_sky(
+        &mut self,
+        stamp: u64,
+        source: SkySource,
+        hour: f32,
+    ) -> Result<(), String> {
+        if self.tuned_sky == Some(stamp) {
+            return Ok(());
+        }
+        self.request_sky(source, hour)?;
+        self.tuned_sky = Some(stamp);
+        Ok(())
+    }
+
+    pub fn set_finish_tuning(&mut self, gain: f32, lut_amount: Option<f32>) {
+        let mut changed = gain != self.post.gain();
+        self.post.set_gain(gain);
+        if let Some(amount) = lut_amount {
+            changed |= self.post.set_lut_amount(amount);
+        }
+        if changed {
+            self.touch();
+        }
+    }
+
+    pub fn sky_look(&self) -> [[f32; 4]; 2] {
+        self.frame.sky().look()
+    }
+
+    pub fn set_sky_look(&mut self, look: [[f32; 4]; 2]) {
+        if self.frame.sky_mut().set_look(look) {
+            self.touch();
+        }
     }
 
     pub fn set_hour(&mut self, hour: f32) -> Result<(), String> {
@@ -2734,6 +2778,9 @@ impl Renderer {
         if effects.lens.is_some() {
             self.set_lens(effects.lens);
         }
+        if let Some(tuned) = effects.tuned {
+            self.tune(tuned)?;
+        }
         self.pass_log.clear();
         let (width, height) = self.size();
         self.text.set_viewport(Some([width, height]));
@@ -3033,7 +3080,11 @@ impl Renderer {
                 scene.camera.projection[2][2],
                 scene.camera.projection[3][2],
                 view.far,
-                0.0,
+                if scene.camera.projection[2][3] == 0.0 {
+                    1.0
+                } else {
+                    0.0
+                },
             ]),
         );
         let bind = self.depth_groups[self.depth_index].get(

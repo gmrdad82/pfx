@@ -3271,6 +3271,7 @@ dependencies = [
 name = "pfx-game"
 version = "2.4.0"
 dependencies = [
+ "arboard",
  "pfx-core",
  "pfx-gpu",
  "pfx-input",
@@ -3283,6 +3284,7 @@ dependencies = [
  "pfx-text",
  "pollster",
  "serde_json",
+ "smithay-clipboard",
  "toml 0.9.12+spec-1.1.0",
  "windows-sys 0.61.2",
  "winit",

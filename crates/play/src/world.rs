@@ -20,6 +20,7 @@ use pfx_physics::rigid::{
 use pfx_sound::{ChannelId, Clip, Level, Mixer, MusicTrack, PcmSender, Prepared, VoiceId};
 
 use crate::PlayError;
+use crate::clipboard::Clipboard;
 use crate::events::{Phase, TriggerEvent, WorldEvent};
 use crate::layers::Layers;
 use crate::math;
@@ -438,6 +439,7 @@ pub struct World {
     warp: Option<[f32; 2]>,
     focus: Focus,
     scheme: Option<Scheme>,
+    clipboard: Option<Box<dyn Clipboard>>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -662,6 +664,7 @@ impl World {
             cursor: Cursor::Shown,
             focus: Focus::default(),
             scheme: None,
+            clipboard: None,
             warp: None,
             scene,
         };
@@ -956,10 +959,30 @@ impl World {
 
     pub(crate) fn attend(&mut self, attention: Attention) {
         match attention {
-            Attention::Focused(focused) => self.focus.lost = !focused,
+            Attention::Focused(focused) => {
+                self.focus.lost = !focused;
+                if focused && let Some(clipboard) = &self.clipboard {
+                    clipboard.refresh();
+                }
+            }
             Attention::Occluded(occluded) => self.focus.occluded = occluded,
             Attention::Minimized(minimized) => self.focus.minimized = minimized,
         }
+    }
+
+    pub fn attach_clipboard(&mut self, clipboard: Box<dyn Clipboard>) {
+        clipboard.refresh();
+        self.clipboard = Some(clipboard);
+    }
+
+    pub fn set_clipboard(&mut self, text: &str) -> bool {
+        self.clipboard
+            .as_ref()
+            .is_some_and(|clipboard| clipboard.set_text(text))
+    }
+
+    pub fn clipboard_text(&self) -> Option<String> {
+        self.clipboard.as_ref()?.get_text()
     }
 
     pub fn warp_pointer(&mut self, point: [f32; 2]) {

@@ -19,6 +19,55 @@ base = [0.0, 0.0, 0.0]
 roughness = 1.0
 specular = 0.0
 emission = [1.0, 1.0, 1.0]
+
+[materials.lime]
+base = [0.0, 0.0, 0.0]
+roughness = 1.0
+specular = 0.0
+emission = [0.0, 1.0, 0.0]
+
+[materials.ember]
+base = [0.0, 0.0, 0.0]
+roughness = 1.0
+specular = 0.0
+emission = [1.0, 0.0, 0.0]
+";
+
+const DEEP: &str = "format = 1
+
+materials = [\"blur.materials.toml\"]
+fallback = \"glow\"
+
+[mesh.block]
+file = \"block.gltf\"
+
+[[object]]
+name = \"post\"
+mesh = \"block\"
+at = [0.0, 0.0, 0.0]
+material = \"lime\"
+
+[[object]]
+name = \"wall\"
+mesh = \"block\"
+at = [-6.0, 0.0, -40.0]
+scale = 40.0
+material = \"ember\"
+
+[[mover]]
+name = \"sweep\"
+objects = [\"wall\"]
+kind = \"slide\"
+axis = [1.0, 0.0, 0.0]
+travel = [0.0, 60.0]
+period = 1.0
+motion = \"once\"
+
+[camera]
+at = [0.0, 0.0, 40.0]
+look_at = [0.0, 0.0, 0.0]
+projection = \"orthographic\"
+height = 6.0
 ";
 
 const SCENE: &str = "format = 1
@@ -59,6 +108,10 @@ fov = 40.0
 ";
 
 fn scene(name: &str, extra: &str) -> Scene {
+    scene_from(name, &format!("{SCENE}{extra}"))
+}
+
+fn scene_from(name: &str, text: &str) -> Scene {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("motion-blur")
         .join(name);
@@ -68,7 +121,7 @@ fn scene(name: &str, extra: &str) -> Scene {
     std::fs::copy(fixtures.join("block.gltf"), root.join("block.gltf")).unwrap();
     std::fs::write(root.join("blur.materials.toml"), MATERIALS).unwrap();
     let path: PathBuf = root.join("blur.scene.toml");
-    std::fs::write(&path, format!("{SCENE}{extra}")).unwrap();
+    std::fs::write(&path, text).unwrap();
     Scene::open(&path).unwrap()
 }
 
@@ -279,6 +332,76 @@ fn the_cameras_own_motion_blurs_a_still_object() {
         across(&runs[1]) >= across(&runs[0]) + 6,
         "the pan streaks the still post"
     );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_still_object_tens_of_metres_away_keeps_its_edge_over_a_fast_background() {
+    const FRAMES: u32 = 13;
+    let off = Viewer::new(&scene_from("deep-off", DEEP)).frames(FRAMES);
+    let mut on = Viewer::new(&scene_from(
+        "deep-on",
+        &format!("{DEEP}\n[motion_blur]\nshutter = 1.0\nmax_px = 16.0\nsamples = 16\n"),
+    ));
+    let open = on.frames(FRAMES);
+    assert!(on.blurred(), "an open shutter runs the pass");
+    let post = bright(&off, 0..WIDTH);
+    let band = |x: u32| {
+        (post[0] - 14..post[0] - 2).contains(&x) || (post[2] + 3..post[2] + 15).contains(&x)
+    };
+    let mut leaks = Vec::new();
+    for y in post[1] + 2..post[3] - 1 {
+        for x in (0..WIDTH).filter(|&x| band(x)) {
+            leaks.push((at(&open, x, y) - at(&off, x, y)).max(0.0));
+        }
+    }
+    let mean = leaks.iter().sum::<f32>() / leaks.len() as f32;
+    let bled = leaks.iter().filter(|&&leak| leak > 0.05).count() as f32 / leaks.len() as f32;
+    let core = at(&open, (post[0] + post[2]) / 2, (post[1] + post[3]) / 2);
+    println!(
+        "post {post:?}: mean green leak {mean}, {:.1}% of the band bled, core {core}",
+        bled * 100.0
+    );
+    assert!(core > 0.9, "the still post kept its colour: {core}");
+    assert!(
+        mean < 0.02 && bled < 0.1,
+        "the still post bled over its edge into the moving wall: mean {mean}, {:.1}% of the band",
+        bled * 100.0
+    );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn an_orthographic_cameras_linear_depth_is_the_view_distance() {
+    let mut text = String::from(
+        "format = 1\n\nmaterials = [\"blur.materials.toml\"]\nfallback = \"glow\"\n\n[mesh.block]\nfile = \"block.gltf\"\n",
+    );
+    let blocks = [(-4.0, 30.0), (-1.5, 0.0), (1.5, -10.0), (4.0, -45.0)];
+    for (index, (x, z)) in blocks.iter().enumerate() {
+        text += &format!(
+            "\n[[object]]\nname = \"block{index}\"\nmesh = \"block\"\nat = [{x:.1}, 0.0, {z:.1}]\n"
+        );
+    }
+    text += "\n[camera]\nat = [0.0, 0.0, 40.0]\nlook_at = [0.0, 0.0, 0.0]\nprojection = \"orthographic\"\nheight = 6.0\n";
+    let mut viewer = Viewer::new(&scene_from("ortho-depth", &text));
+    viewer.frames(2);
+    for (x, z) in blocks {
+        let column = ((x / (6.0 * ASPECT) + 0.5) * WIDTH as f32) as u32;
+        viewer.renderer.pick(column, HEIGHT / 2).unwrap();
+        let picked = (0..16)
+            .find_map(|_| {
+                viewer.render();
+                viewer.renderer.picked()
+            })
+            .expect("the pick came back");
+        let distance = 40.0 - (z + 0.5);
+        println!("block at z {z}: depth {} for {distance} m", picked.depth);
+        assert!(
+            (picked.depth - distance).abs() < distance * 1e-4 + 1e-3,
+            "an orthographic depth of {} at {distance} m",
+            picked.depth
+        );
+    }
 }
 
 #[test]

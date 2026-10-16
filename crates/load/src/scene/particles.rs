@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
 use pfx_core::sim::mix64;
-use pfx_core::sim::particles::{Blend, Gradient, Recipe};
+use pfx_core::sim::particles::{Blend, Gradient, Lerp, Recipe, RecipeKeys};
 use pfx_scene::Entry;
-use pfx_scene::types as file;
+use pfx_scene::types::{self as file, KeyValue};
 
 use super::build::{Places, Step, inner};
 use super::{Matrix, Object, Scene, SceneError, SceneMesh, multiply};
@@ -38,6 +38,30 @@ fn colour(color: &file::Color) -> [f32; 3] {
     color.rgb().unwrap_or([1.0; 3])
 }
 
+fn track<T: Lerp>(
+    value: &file::Particles,
+    name: &str,
+    pick: impl Fn(&KeyValue) -> Option<T>,
+    fallback: T,
+) -> Option<Gradient<T>> {
+    let keys: Vec<(f32, T)> = value
+        .track(name)?
+        .iter()
+        .filter_map(|(t, key)| Some((*t, pick(key)?)))
+        .collect();
+    (!keys.is_empty()).then(|| Gradient::new(keys, fallback))
+}
+
+fn keys(value: &file::Particles) -> RecipeKeys {
+    RecipeKeys {
+        rate: track(value, "rate", KeyValue::number, 0.0),
+        speed: track(value, "speed", KeyValue::pair, [0.0; 2]),
+        size: track(value, "size", KeyValue::pair, [0.0; 2]),
+        colour: track(value, "color", KeyValue::triple, [1.0; 3]),
+        alpha: track(value, "alpha", KeyValue::number, 1.0),
+    }
+}
+
 pub(super) fn recipe(name: &str, value: &file::Particles) -> Recipe {
     let base = Recipe::default();
     let colour = match (&value.colors, &value.color) {
@@ -50,11 +74,7 @@ pub(super) fn recipe(name: &str, value: &file::Particles) -> Recipe {
     };
     Recipe {
         rate: value.rate.unwrap_or(base.rate),
-        rate_keys: value
-            .rate_keys
-            .as_ref()
-            .filter(|keys| !keys.is_empty())
-            .map(|keys| Gradient::new(keys.iter().map(|[t, r]| (*t, *r)).collect(), 0.0)),
+        keys: keys(value),
         burst: value.burst.unwrap_or(base.burst),
         max: value.max.unwrap_or(base.max),
         lifetime: value.lifetime.unwrap_or(base.lifetime),

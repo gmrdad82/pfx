@@ -1,3 +1,4 @@
+mod clipboard;
 mod config;
 mod cursor;
 mod driver;
@@ -21,6 +22,8 @@ pub mod steam;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_clipboard;
+#[cfg(test)]
 mod tests_flat;
 #[cfg(test)]
 mod tests_host;
@@ -42,9 +45,9 @@ pub use pfx_live::flat;
 pub use pfx_live::renderer::Exposure;
 pub use pfx_live::renderer::Renderer;
 pub use pfx_play::{
-    Anchor, Audio, Cap, Cursor, Exit, FrameTime, Game, GameError, Label, Level, Notice, Pacing,
-    PaintFrame, PcmStream, Prompt, PromptOf, Reload, RumbleRequest, SceneGame, Scheme, Settings,
-    Ui, UiFrame, UiLook, Warm, Warming, World,
+    Anchor, Audio, Cap, Clipboard, Cursor, Exit, FrameTime, Game, GameError, Label, Level, Notice,
+    Pacing, PaintFrame, PcmStream, Prompt, PromptOf, Reload, RumbleRequest, SceneGame, Scheme,
+    Settings, Ui, UiFrame, UiLook, Warm, Warming, World,
 };
 pub use prompt::Part;
 pub use scheme::system_scheme;

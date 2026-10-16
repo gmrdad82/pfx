@@ -141,8 +141,7 @@ const RECONSTRUCT_WGSL: &str = r#"
 @group(0) @binding(1) var source: texture_2d<f32>;
 @group(0) @binding(2) var packed: texture_2d<f32>;
 @group(0) @binding(3) var neighbors: texture_2d<f32>;
-@group(0) @binding(4) var linear_clamp: sampler;
-@group(0) @binding(5) var output_tex: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(4) var output_tex: texture_storage_2d<rgba16float, write>;
 fn interval(phase: f32, period: f32) -> bool {
     return fract(phase / period) > 0.499;
 }
@@ -155,11 +154,8 @@ fn jitter_tile(at: vec2f) -> vec2f {
     let angle = gradient_noise(at + vec2f(2.0 * f32(params.size.x), 0.0)) * 6.2831853;
     return vec2f(cos(angle), sin(angle)) / 4.0;
 }
-fn screen_uv(at: vec2f, dims: vec2u) -> vec2f {
-    return clamp(at, vec2f(0.5), vec2f(params.size) - vec2f(0.5)) / vec2f(dims);
-}
-fn sample_velocity(at: vec2f) -> vec3f {
-    return textureSampleLevel(packed, linear_clamp, screen_uv(at, textureDimensions(packed)), 0.0).xyz;
+fn texel(at: vec2f) -> vec2i {
+    return vec2i(clamp(at, vec2f(0.5), vec2f(params.size) - vec2f(0.5)));
 }
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
@@ -171,7 +167,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     let l_v_p = max(length(vd_p.xy), 0.5);
     let rcp_d_p = 1.0 / vd_p.z;
     let tile_pos = clamp(centre / params.extra.x + jitter_tile(centre), vec2f(0.5), vec2f(params.tiles) - vec2f(0.5));
-    let v_max = textureSampleLevel(neighbors, linear_clamp, tile_pos / vec2f(textureDimensions(neighbors)), 0.0).xy;
+    let v_max = textureLoad(neighbors, vec2i(tile_pos), 0).xy;
     let l_v_max = length(v_max);
     if (l_v_max < 2.0) {
         textureStore(output_tex, pixel, c_p);
@@ -191,8 +187,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         let t_s = select(t, -t, interval(count, 2.0)) + t_offs;
         let l_t = l_v_max * abs(t_s);
         let at = centre + v_s * t_s;
-        let c = textureSampleLevel(source, linear_clamp, screen_uv(at, textureDimensions(source)), 0.0).rgb;
-        let vd = sample_velocity(at);
+        let c = textureLoad(source, texel(at), 0).rgb;
+        let vd = textureLoad(packed, texel(at), 0).xyz;
         let fg = saturate((vd_p.z - vd.z) * 20.0 * rcp_d_p);
         let l_v = mix(l_v_bg, length(vd.xy), fg);
         let w = select(saturate(l_v - l_t) / l_v, 0.0, l_v <= 0.0) * (1.2 - t);
@@ -232,15 +228,6 @@ fn texture_entry(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
             view_dimension: wgpu::TextureViewDimension::D2,
             multisampled: false,
         },
-        count: None,
-    }
-}
-
-fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
-    wgpu::BindGroupLayoutEntry {
-        binding,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
         count: None,
     }
 }
@@ -348,7 +335,6 @@ pub struct GpuMotionBlur {
     _output: wgpu::Texture,
     output: wgpu::TextureView,
     tiles: Option<Tiles>,
-    sampler: wgpu::Sampler,
     setup_layout: wgpu::BindGroupLayout,
     setup_pipeline: wgpu::ComputePipeline,
     tile_layout: wgpu::BindGroupLayout,
@@ -390,21 +376,12 @@ impl GpuMotionBlur {
             RECONSTRUCT_WGSL,
             &[
                 uniform_entry(),
-                texture_entry(1, true),
-                texture_entry(2, true),
-                texture_entry(3, true),
-                sampler_entry(4),
-                storage_entry(5),
+                texture_entry(1, false),
+                texture_entry(2, false),
+                texture_entry(3, false),
+                storage_entry(4),
             ],
         );
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("motion blur linear clamp"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
         let (packed_texture, packed) = texture(device, "motion blur velocity", width, height);
         let (output_texture, output) = texture(device, "motion blur target", width, height);
         Self {
@@ -417,7 +394,6 @@ impl GpuMotionBlur {
             _output: output_texture,
             output,
             tiles: None,
-            sampler,
             setup_layout,
             setup_pipeline,
             tile_layout,
@@ -557,7 +533,6 @@ impl GpuMotionBlur {
                 wgpu::BindingResource::TextureView(source),
                 wgpu::BindingResource::TextureView(&self.packed),
                 wgpu::BindingResource::TextureView(&tiles.neighbors),
-                wgpu::BindingResource::Sampler(&self.sampler),
                 wgpu::BindingResource::TextureView(&self.output),
             ],
         );

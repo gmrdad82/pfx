@@ -13,6 +13,7 @@ pub mod height_fog;
 #[cfg(feature = "dev-hud")]
 pub mod hud;
 pub mod impostor;
+pub mod keyed;
 pub mod lacquer;
 pub mod lights;
 pub mod lod;

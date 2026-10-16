@@ -20,11 +20,12 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["harness", "editor", "bench", "shot-sound"]
+default = ["harness", "editor", "bench", "shot-sound", "sound-clean"]
 editor = ["harness", "dep:pfx-editor"]
 bench = ["harness", "dep:pfx-bench"]
 harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "pfx-run/encode", "dep:pfx-sound", "pfx-sound/media", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film"]
 shot-sound = ["bench", "pfx-sound/shot"]
+sound-clean = ["harness", "pfx-sound/clean"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
