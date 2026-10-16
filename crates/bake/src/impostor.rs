@@ -458,6 +458,7 @@ pub fn prop_hash(
     h.update(env!("CARGO_PKG_VERSION"));
     h.update(pfx_trace::TRACE_WGSL);
     h.update(pfx_materials::BRDF);
+    h.update(pfx_materials::WET);
     h.update(serde_json::to_vec(spec).map_err(|e| e.to_string())?);
     h.update(serde_json::to_vec(&bounds).map_err(|e| e.to_string())?);
     for triangle in &scene.triangles {

@@ -26,6 +26,8 @@ mod particles_tests;
 mod play_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod wet_tests;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

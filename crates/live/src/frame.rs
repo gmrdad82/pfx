@@ -1446,6 +1446,7 @@ pub fn shader_source_with(gobo: &Gobo) -> String {
         TREE_SWAY_WGSL,
         pfx_materials::NOISE,
         pfx_materials::AGEING,
+        pfx_materials::WET,
         maps::MAPS_WGSL,
         &maps::content_wgsl(),
         PROBE_WGSL,
@@ -4418,6 +4419,7 @@ struct MaterialData {
     layer3: vec4f,
     tail: vec4f,
     params: array<vec4f, 16>,
+    wet: vec4f,
 }
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 @group(0) @binding(1) var<storage, read> instances: array<InstanceData>;
@@ -4773,6 +4775,7 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     let caustic_at = caustic_uv(input.world_position);
     let caustic_dx = dpdx(caustic_at);
     let caustic_dy = dpdy(caustic_at);
+    let wet_footprint = max(length(dpdx(input.world_position)), length(dpdy(input.world_position)));
     map_footprint(input.object_position);
     cutout(input);
     let material = materials[input.material];
@@ -4794,6 +4797,12 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     let content_t = normalize(input.tangent.xyz - mapped.normal * dot(input.tangent.xyz, mapped.normal));
     let content_b = cross(mapped.normal, content_t) * input.tangent.w;
     surface = content_apply(surface, input.material, input.uv_alpha.xy, uv_dx, uv_dy, placed.content_uv, content_crop, content_t, content_b, geometric);
+    let wetted = wet_active(material.wet);
+    if (wetted) {
+        let soaked = wet_soak(surface, surface.normal, geometric, input.world_position, material.wet, wet_footprint);
+        surface = soaked.shade;
+        surface.normal = soaked.normal;
+    }
     let n = surface.normal;
     let t = normalize(input.tangent.xyz - n * dot(input.tangent.xyz, n));
     let b = cross(n, t) * input.tangent.w;
@@ -4866,7 +4875,7 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     }
     var output: OpaqueOutput;
     output.colour = vec4f(max(direct + diffuse + specular + surface.emission, vec3f(0.0)), 1.0);
-    output.normal_roughness = vec4f(view_normal, surface.roughness);
+    output.normal_roughness = vec4f(view_normal, select(surface.roughness, min(surface.roughness, surface.clearcoat_roughness), wetted));
     return output;
 }
 "#;
