@@ -916,6 +916,7 @@ impl Bench {
                 ripple: &self.ripple.1,
             }),
             props: &self.props,
+            lights: None,
         };
         if self.submit {
             return self

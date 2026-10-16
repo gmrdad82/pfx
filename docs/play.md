@@ -262,7 +262,7 @@ session.edit(Edit::tunable("jump_height", TunableValue::Float(2.5)))?;
 | `Object(name)`, `body.<key>` | `mass`, `density`, `friction`, `restitution`, `offset`, `half`, `radius`, `half_height` | the body's collider, rebuilt in Rapier with the new values (its mass recomputed), no restart |
 | | `damping`, `gravity_scale`, `velocity`, `spin` | the body in Rapier directly |
 | `Material(name)` | every key a materials file takes, nested keys included | the live copy of the library material, which `present` draws in place of the staged one (through `Staged`'s draws, by name), glass and looks included |
-| `Light(name)` | `position`, `color`, `intensity`, `radius`, `range`, `shadow` | the renderer's local lights, set again at the next `present` |
+| `Light(name)` | `position`, `color`, `intensity`, `radius`, `range`, `shadow`, `spot`, `attach` | the renderer's local lights, set again at the next `present` |
 | `Camera` | `at`, `look_at`, `up`, `fov` (or `height` when orthographic), `near`, `far`, `fstop`, `focus` | `world.camera`, so the lens and view follow at the next `present` |
 | `Finish` | `exposure` | the leading exposure of the scene's finish (or of the standard chain), set at the next `present` |
 | `Sound(name)` | `volume`, `pan`, `loop` | the sound's level for its next play; volume and pan also reach a voice that plays |

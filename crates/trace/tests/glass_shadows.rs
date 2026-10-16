@@ -227,6 +227,7 @@ impl Shot {
             radius: 0.05,
             range: 8.0,
             shadow: true,
+            spot: None,
         }]
     }
 }

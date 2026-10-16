@@ -4,6 +4,7 @@ mod build;
 mod diff;
 mod draws;
 mod edit;
+mod lights;
 mod mix;
 mod plates;
 mod play;
@@ -38,6 +39,7 @@ pub use build::project_root;
 pub use diff::{Changes, SceneDiff};
 pub use draws::{Draw, Draws};
 pub use edit::{EditError, Kind, Patch, PatchGroup, SceneEdit, Target, Value};
+pub use lights::{Attach, SPOT_CONE, SPOT_DIRECTION, Spot};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
 pub use pfx_scene::types::{
@@ -304,6 +306,8 @@ pub struct Light {
     pub radius: f32,
     pub range: f32,
     pub shadow: bool,
+    pub spot: Option<Spot>,
+    pub attach: Option<Attach>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

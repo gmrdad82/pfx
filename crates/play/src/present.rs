@@ -45,6 +45,7 @@ pub(crate) struct Presenter {
     lens_camera: Option<Camera>,
     cut: bool,
     lit: u64,
+    placed: Vec<pfx_live::lights::LocalLight>,
     exposed: u64,
     touched: Touched,
 }
@@ -125,6 +126,7 @@ impl Presenter {
                 .map(pfx_live::lights::local_light)
                 .collect();
             renderer.set_lights(&lights).map_err(PlayError::Render)?;
+            self.placed.clear();
             self.lit = world.lights_revision();
             self.touched.lights = true;
         }
@@ -165,6 +167,18 @@ impl Presenter {
             self.palette_key = Some(key);
         }
         let palettes = &self.palettes;
+        if world.lights().values().any(|light| light.attach.is_some()) {
+            let lights: Vec<_> = world
+                .lights()
+                .values()
+                .map(|light| pfx_live::lights::local_light(&light.placed_with(&posed, palettes)))
+                .collect();
+            if self.placed != lights {
+                renderer.set_lights(&lights).map_err(PlayError::Render)?;
+                self.placed = lights;
+                self.touched.lights = true;
+            }
+        }
         let frames = world.sprite_frames();
         let models = draws.models_posed(&posed, palettes);
         let mut skinned: Vec<(usize, usize)> = Vec::new();

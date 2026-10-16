@@ -100,7 +100,7 @@ A new texture in group 3 therefore turns the gate red until the floor rises with
 | `max_compute_workgroup_size_z` | 64 | 4 | Room haze field (4×4×4) |
 | `max_compute_workgroup_storage_size` | 16384 | 1024 | Exposure reduction (`array<f32, 256>`) |
 | `max_compute_workgroups_per_dimension` | 65535 | 480 | Post chain at 3840 wide (8×8 groups) |
-| `max_storage_buffers_per_shader_stage` | 8 | 6 | Shadow casters, vertex: instances, sway, skins, the deformers and their plan, light tints. Opaque shading, fragment: 5 (instances, materials, probe anchors, map materials, light tints) |
+| `max_storage_buffers_per_shader_stage` | 8 | 6 | Shadow casters, vertex: instances, sway, skins, the deformers and their plan, light tints. Opaque shading, fragment: 6 (instances, materials, probe anchors, map materials, light tints, clustered lights) |
 | `max_uniform_buffers_per_shader_stage` | 12 | **11** | Tree cards and lit text, fragment: 7 in group 3, 2 in the shadow group, 1 scene, 1 their own. One more uniform in group 3 and this limit needs raising too; the test above catches it. |
 | `max_samplers_per_shader_stage` | 16 | 7 | Tree cards and lit text, fragment (5 filtering, 2 comparison) |
 | `max_dynamic_uniform_buffers_per_pipeline_layout` | 8 | 1 | Shadow cascades (`CASTER_BYTES` 80 per caster slot) |
@@ -114,7 +114,7 @@ A new texture in group 3 therefore turns the gate red until the floor rises with
 | `max_vertex_buffer_array_stride` | 2048 | 96 | Text instances |
 | `max_texture_dimension_3d` | 2048 | 256 | Room haze field (256³ Rgba8Unorm, clamped in code) |
 | `max_texture_array_layers` | 256 | 27, plus app-sized | The transmission map (group 1 binding 4): 3 cascades, then the light faces glass casts into as tiles, 24 layers at worst where a face's tile fills a layer (one extra layer for two lights at the default sizes); local light faces (4 lights × 6). Glass's light tiles add no binding. Material map arrays check the device limit; impostor radiance takes one layer per anchor. |
-| `max_uniform_buffer_binding_size` | 64 KiB | 1808 B | Local lights |
+| `max_uniform_buffer_binding_size` | 64 KiB | 1904 B | Local lights |
 | `max_storage_buffer_binding_size` | 128 MiB | grows with the scene | See buffer sizes |
 | `max_buffer_size` | 256 MiB | 63–66 MiB at 4K | TAA colour readback, geometry readback (8-byte normals) |
 | `min_uniform_buffer_offset_alignment` | 256 | 256 | Shadow cascades and light slots: offsets use the device's alignment |

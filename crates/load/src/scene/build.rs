@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use super::{
     ALPHA_CUTOFF, Camera, Content, DepthOfField, Emitter, Environment, Finish, Geometry,
-    GeometryMorph, GeometrySkin, Haze, IDENTITY, Light, Location, Matrix, Motion, Mover, MoverKind,
+    GeometryMorph, GeometrySkin, Haze, IDENTITY, Location, Matrix, Motion, Mover, MoverKind,
     NodeOverride, Object, Part, Projection, Scene, SceneError, SceneMesh, SceneSky, Shadow, Sun,
     Text, TraceSettings, model, multiply,
 };
@@ -305,11 +305,15 @@ pub(super) fn build(
         .iter()
         .map(|entry| (entry.key.clone(), build_mover(&entry.value)))
         .collect();
-    let lights = resolved
-        .lights
-        .iter()
-        .map(|entry| (entry.key.clone(), build_light(&entry.value)))
-        .collect();
+    let lights = super::lights::build_lights(
+        &places,
+        &resolved.lights,
+        &objects,
+        &resolved.objects,
+        &meshes,
+    )?
+    .into_iter()
+    .collect();
     let emitters = resolved
         .emitters
         .iter()
@@ -431,8 +435,8 @@ fn build_library(
 fn build_haze(haze: &file::Haze) -> Haze {
     let amount = haze.amount.unwrap_or(0.0);
     Haze {
-        lo: haze.lo,
-        hi: haze.hi,
+        lo: haze.lo.unwrap_or_default(),
+        hi: haze.hi.unwrap_or_default(),
         fog: haze.fog.unwrap_or(amount / 6.0),
         smoke: haze.smoke.unwrap_or(amount * 20.0),
         mist: haze.mist.unwrap_or(amount * 0.2),
@@ -959,17 +963,6 @@ fn build_objects(
         objects[place].model = matrix;
     }
     Ok(objects)
-}
-
-fn build_light(light: &file::Light) -> Light {
-    Light {
-        position: light.position,
-        color: light.color.unwrap_or(file::Light::COLOR),
-        intensity: light.intensity,
-        radius: light.radius.unwrap_or(file::Light::RADIUS),
-        range: light.range.unwrap_or(file::Light::RANGE),
-        shadow: light.shadow.unwrap_or(file::Light::SHADOW),
-    }
 }
 
 fn build_emitter(emitter: &file::Emitter) -> Emitter {

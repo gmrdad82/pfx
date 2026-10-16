@@ -134,6 +134,7 @@ fn light(position: [f32; 3]) -> LocalLight {
         radius: 0.05,
         range: 8.0,
         shadow: true,
+        spot: None,
     }
 }
 

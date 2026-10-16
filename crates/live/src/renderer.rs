@@ -184,6 +184,7 @@ pub struct Effects<'a> {
     pub glass: &'a [glass::Surface],
     pub liquid: Option<Liquid<'a>>,
     pub props: &'a [ImpostorInstance],
+    pub lights: Option<&'a [LocalLight]>,
 }
 
 pub const HISTORY_GAP: f32 = 0.25;
@@ -2570,6 +2571,11 @@ impl Renderer {
     ) -> Result<u64, String> {
         if !cached {
             self.begin_frame(FrameKind::Full);
+        }
+        if let Some(lights) = effects.lights
+            && self.frame.lights().lights() != lights
+        {
+            self.set_lights(lights)?;
         }
         self.pass_log.clear();
         let (width, height) = self.size();

@@ -126,6 +126,8 @@ pub struct Staged {
     camera: SceneCamera,
     sun: SceneSun,
     plate: crate::plates::PlateMode,
+    rig: Vec<pfx_load::scene::Light>,
+    lights: Option<Vec<LocalLight>>,
 }
 
 fn mesh_data(geometry: &Geometry) -> MeshData<'_> {
@@ -187,6 +189,21 @@ pub fn sky_source(environment: Environment) -> SkySource {
 
 pub fn local_lights(scene: &Scene) -> Vec<LocalLight> {
     scene.lights.values().map(local_light).collect()
+}
+
+pub fn posed_lights(lights: &[pfx_load::scene::Light], posed: &[Matrix]) -> Vec<LocalLight> {
+    lights
+        .iter()
+        .map(|light| local_light(&light.placed(posed)))
+        .collect()
+}
+
+fn light_rig(scene: &Scene) -> Vec<pfx_load::scene::Light> {
+    if scene.animated() && scene.lights.values().any(|light| light.attach.is_some()) {
+        scene.lights.values().copied().collect()
+    } else {
+        Vec::new()
+    }
 }
 
 pub fn room_haze(haze: &Haze) -> RoomHaze {
@@ -366,6 +383,8 @@ impl Renderer {
             camera: scene.camera_or_default(),
             sun: scene.sun_or_dark(),
             plate: crate::plates::PlateMode::default(),
+            rig: Vec::new(),
+            lights: None,
         };
         staged.plate.load(self, scene, true)?;
         staged.place(self, scene, draws, wanted)?;
@@ -472,14 +491,17 @@ impl Staged {
         self.models = draws.items.iter().map(|draw| draw.model).collect();
         self.previous = self.models.clone();
         self.posing = scene.animated().then(|| scene.clone());
+        self.rig = light_rig(scene);
         self.draws = draws;
         self.slots = slots;
         self.base = base;
         self.base_glass = base_glass;
         self.surfaces = surfaces;
         if let Some(posing) = &self.posing {
-            self.models = self.draws.models(&posing.posed(&self.camera, 0.0));
+            let posed = posing.posed(&self.camera, 0.0);
+            self.models = self.draws.models(&posed);
             self.previous = self.models.clone();
+            self.place_lights(&posed);
         }
         self.refresh();
         Ok(written)
@@ -665,6 +687,8 @@ impl Staged {
         }
         if !diff.lights.is_empty() {
             renderer.set_lights(&local_lights(scene))?;
+            self.rig = light_rig(scene);
+            self.lights = None;
             applied.lights = true;
         }
         if diff.sun {
@@ -693,10 +717,16 @@ impl Staged {
 
     pub fn pose(&mut self, time: f32) {
         if let Some(posing) = &self.posing {
-            let models = self.draws.models(&posing.posed(&self.camera, time));
+            let posed = posing.posed(&self.camera, time);
+            let models = self.draws.models(&posed);
             self.previous = std::mem::replace(&mut self.models, models);
+            self.place_lights(&posed);
             self.repose();
         }
+    }
+
+    fn place_lights(&mut self, posed: &[Matrix]) {
+        self.lights = (!self.rig.is_empty()).then(|| posed_lights(&self.rig, posed));
     }
 
     fn repose(&mut self) {
@@ -782,6 +812,7 @@ impl Staged {
     pub fn effects(&self) -> Effects<'_> {
         Effects {
             glass: &self.glass,
+            lights: self.lights.as_deref(),
             ..Effects::default()
         }
     }

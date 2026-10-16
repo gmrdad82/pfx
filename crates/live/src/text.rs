@@ -322,8 +322,34 @@ fn ink_local_light(world: vec3f, n: vec3f) -> vec3f {
         let ratio = distance / range;
         let window = clamp(1.0 - ratio * ratio * ratio * ratio, 0.0, 1.0);
         let reach = max(distance, light.position_radius.w);
-        let radiance = light.colour_range.xyz * window * window / (reach * reach);
+        var radiance = light.colour_range.xyz * window * window / (reach * reach);
+        if (light.bias.w > 0.5) {
+            radiance *= spot_cone(light, l);
+        }
         total += radiance * ndl * light_shadow(light, world, n, l) * light_tint(light, world, n, l);
+    }
+    let span = cluster_span(world);
+    for (var k = 0u; k < span.y; k++) {
+        let light = cluster_light(cluster_word(span.x + k));
+        let to_light = light.position_radius.xyz - world;
+        let distance = length(to_light);
+        let range = light.colour_range.w;
+        if (distance >= range || distance <= 1e-6) {
+            continue;
+        }
+        let l = to_light / distance;
+        let ndl = dot(n, l);
+        if (ndl <= 0.0) {
+            continue;
+        }
+        let ratio = distance / range;
+        let window = clamp(1.0 - ratio * ratio * ratio * ratio, 0.0, 1.0);
+        let reach = max(distance, light.position_radius.w);
+        var cone = 1.0;
+        if (light.bias.w > 0.5) {
+            cone = spot_cone(light, l);
+        }
+        total += light.colour_range.xyz * (window * window * cone) / (reach * reach) * ndl;
     }
     return total;
 }
@@ -3452,6 +3478,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
             radius: 0.01,
             range: 4.0,
             shadow: false,
+            spot: None,
         };
         let lighted = lab.render(0.0, sun, &[], &quads, space, &[lamp]);
         let before = lab.at(&bare, [0.0, 0.0, 0.0]);
@@ -3742,6 +3769,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
             radius: 0.05,
             range: 4.0,
             shadow: true,
+            spot: None,
         };
         let mut median = |label: &str, lit: bool| {
             let space = ink_space(&lab, lit);
