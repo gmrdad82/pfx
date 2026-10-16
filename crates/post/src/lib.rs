@@ -10,6 +10,7 @@ pub mod hash;
 pub mod image;
 pub mod lines;
 pub mod look;
+pub mod motion_blur;
 pub mod parse;
 pub mod preset;
 pub mod tape;
@@ -34,6 +35,7 @@ pub use grade::{
 pub use hash::{BLUE_NOISE, BLUE_NOISE_SIZE, bayer, grain_hash};
 pub use image::{Image, ImageError};
 pub use lines::{Edge, Gbuffer, Lines};
+pub use motion_blur::{GpuMotionBlur, MotionBlur};
 pub use parse::{KEYS, ParseError, parse, parse_str};
 pub use preset::{Style, names};
 pub use tape::{Direction, Tape};

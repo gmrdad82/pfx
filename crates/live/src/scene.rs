@@ -36,6 +36,7 @@ pub struct Applied {
     pub sun: bool,
     pub lens: bool,
     pub finish: bool,
+    pub motion_blur: bool,
 }
 
 impl Applied {
@@ -48,6 +49,7 @@ impl Applied {
             || self.sun
             || self.lens
             || self.finish
+            || self.motion_blur
     }
 }
 
@@ -126,6 +128,8 @@ pub struct Staged {
     camera: SceneCamera,
     sun: SceneSun,
     plate: crate::plates::PlateMode,
+    blurred: bool,
+    shown: Option<Matrix>,
 }
 
 fn mesh_data(geometry: &Geometry) -> MeshData<'_> {
@@ -232,6 +236,10 @@ pub fn camera(camera: &SceneCamera, aspect: f32) -> Camera {
         previous_view_projection: multiply(projection, view),
         position: camera.at,
     }
+}
+
+fn blurred(scene: &Scene) -> bool {
+    scene.motion_blur.is_some_and(|blur| blur.active())
 }
 
 pub fn sun(sun: &SceneSun) -> Sun {
@@ -366,6 +374,8 @@ impl Renderer {
             camera: scene.camera_or_default(),
             sun: scene.sun_or_dark(),
             plate: crate::plates::PlateMode::default(),
+            blurred: blurred(scene),
+            shown: None,
         };
         staged.plate.load(self, scene, true)?;
         staged.place(self, scene, draws, wanted)?;
@@ -378,6 +388,7 @@ impl Renderer {
         if let Some(finish) = &scene.finish {
             self.set_finish(finish.chain.clone());
         }
+        self.set_motion_blur(scene.motion_blur);
         Ok(staged)
     }
 }
@@ -688,6 +699,11 @@ impl Staged {
             }
             applied.finish = true;
         }
+        if diff.motion_blur {
+            self.blurred = blurred(scene);
+            renderer.set_motion_blur(scene.motion_blur);
+            applied.motion_blur = true;
+        }
         Ok(applied)
     }
 
@@ -695,6 +711,16 @@ impl Staged {
         if let Some(posing) = &self.posing {
             let models = self.draws.models(&posing.posed(&self.camera, time));
             self.previous = std::mem::replace(&mut self.models, models);
+            self.repose();
+        }
+    }
+
+    pub fn pose_at(&mut self, time: f32, interval: f32) {
+        if let Some(posing) = &self.posing {
+            self.previous = self
+                .draws
+                .models(&posing.posed(&self.camera, time - interval));
+            self.models = self.draws.models(&posing.posed(&self.camera, time));
             self.repose();
         }
     }
@@ -744,8 +770,32 @@ impl Staged {
 
     pub fn frame(&mut self, aspect: f32, time: f32, seed: u32) -> StagedFrame<'_> {
         self.pose(time);
+        self.staged_frame(aspect, time, seed)
+    }
+
+    pub fn frame_at(
+        &mut self,
+        aspect: f32,
+        time: f32,
+        interval: f32,
+        seed: u32,
+    ) -> StagedFrame<'_> {
+        self.pose_at(time, interval);
+        self.staged_frame(aspect, time, seed)
+    }
+
+    pub fn cut(&mut self) {
+        self.shown = None;
+    }
+
+    fn staged_frame(&mut self, aspect: f32, time: f32, seed: u32) -> StagedFrame<'_> {
+        let shown = camera(&self.camera, aspect).previous_view_projection;
+        let previous = self.shown.filter(|_| self.blurred).unwrap_or(shown);
+        self.shown = Some(shown);
+        let mut scene = self.scene(aspect, time, seed);
+        scene.camera.previous_view_projection = previous;
         StagedFrame {
-            scene: self.scene(aspect, time, seed),
+            scene,
             text: self.text(aspect),
             effects: self.effects(),
         }

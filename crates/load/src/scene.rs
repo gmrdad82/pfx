@@ -5,6 +5,7 @@ mod diff;
 mod draws;
 mod edit;
 mod mix;
+mod motion_blur;
 mod plates;
 mod play;
 mod pose;
@@ -649,6 +650,7 @@ pub struct Scene {
     pub texts: BTreeMap<String, Text>,
     pub plates: Option<Plates>,
     pub physics: Option<Physics>,
+    pub motion_blur: Option<pfx_post::MotionBlur>,
     pub bodies: BTreeMap<String, Body>,
     pub body_layers: BTreeMap<String, String>,
     pub characters: BTreeMap<String, Character>,

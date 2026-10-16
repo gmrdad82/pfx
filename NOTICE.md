@@ -120,6 +120,18 @@ In the package `pfx-sound` (feature `voicefx`), the spectral-flux onsets in `cra
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## KinoMotion, under the MIT licence
+
+`crates/post/src/motion_blur.rs` (in the package `pfx-post`), the live renderer's motion blur, is ported from Keijiro Takahashi's KinoMotion (https://github.com/keijiro/KinoMotion, commit `35d5d5179e60703d1db5eac967715f5ea416e387`, `Assets/Kino/Motion/Shader/Prefilter.cginc`, `Reconstruction.cginc` and `Script/ReconstructionFilter.cs`), itself after McGuire, Hennessy, Bukowski and Osman, "A Reconstruction Filter for Plausible Motion Blur" (I3D 2012), Copyright (c) 2016, 2017 Keijiro Takahashi, licensed MIT:
+
+> Copyright (c) 2016, 2017 Keijiro Takahashi
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 pfx's mark and wordmark are © Catalin Ilinca, all rights reserved, and not covered by the MIT licence ([TRADEMARKS.md](TRADEMARKS.md)):
 
 - `assets/marks/` and `.github/icon.png`, copied by `bin/marks` from the PITO MD brand masters at `aa3aee8b232a1b848995bf3d9a012a01d4aff8ec`; the README shows the lockup at its Licence section, `lockup.svg` on a dark theme and `lockup-light.svg` on a light one;
