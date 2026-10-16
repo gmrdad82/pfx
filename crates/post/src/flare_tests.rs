@@ -151,7 +151,7 @@ fn a_flare_off_changes_nothing_and_on_mirrors_the_sun() {
 fn a_source_just_over_the_threshold_ghosts_faintly_and_a_sun_fully() {
     let spot = |level: f32| {
         Image::from_fn(96, 128, |x, y| {
-            let (dx, dy) = (x as f32 - 28.8, y as f32 - 32.0);
+            let (dx, dy) = (x as f32 - 43.2, y as f32 - 53.8);
             let c = if dx * dx + dy * dy < 36.0 { level } else { 0.1 };
             [c, c * 0.02, c * 0.01, 1.0]
         })
@@ -164,7 +164,7 @@ fn a_source_just_over_the_threshold_ghosts_faintly_and_a_sun_fully() {
     });
     let ghost = |level: f32| {
         let source = spot(level);
-        chain.apply(&source, None, None).at(66, 95)[0] - source.at(66, 95)[0]
+        chain.apply(&source, None, None).at(52, 73)[0] - source.at(52, 73)[0]
     };
     let (tail, sun) = (ghost(3.2), ghost(60.0));
     assert!(sun > 0.05, "{sun}");
@@ -317,6 +317,79 @@ mod gpu {
                 0.004,
             );
         }
+    }
+
+    fn lit_windows(width: u32, height: u32, near: [f32; 2]) -> Image {
+        Image::from_fn(width, height, |x, y| {
+            let window =
+                y < height / 2 - 90 && x % 24 >= 8 && x % 24 < 14 && y % 32 >= 12 && y % 32 < 20;
+            let (u, v) = (
+                (x as f32 + 0.5) / width as f32,
+                (y as f32 + 0.5) / height as f32,
+            );
+            let central = (u - near[0]).abs() < 0.015 && (v - near[1]).abs() < 0.01;
+            let value = if window || central { 12.0 } else { 0.05 };
+            [value, value * 0.9, value * 0.7, 1.0]
+        })
+    }
+
+    fn added(gpu: &Gpu, chain: &Chain, source: &Image, rows: std::ops::Range<u32>) -> f32 {
+        let out = run(gpu, chain, source);
+        let mut most = 0.0f32;
+        for y in rows {
+            for x in 0..source.width {
+                let index = source.index(x, y);
+                for ch in 0..3 {
+                    let got = half::f16::from_bits(out[index * 4 + ch]).to_f32();
+                    most = most.max(got - source.pixels[index][ch]);
+                }
+            }
+        }
+        most
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn gpu_flare_ghosts_only_lights_near_the_centre() {
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let (width, height) = (216, 384);
+        let mut chain = Chain {
+            passes: vec![Pass::Exposure(1.0)],
+            seed: 0,
+            frame: 0,
+        };
+        chain.set_flare(Flare {
+            amount: 0.4,
+            ghosts: 4,
+            ghost_spacing: 0.3,
+            halo: 0.0,
+            starburst: 0.0,
+            threshold: 1.5,
+            ..Flare::default()
+        });
+        let floor = height / 2 + 24..height;
+        let windows = added(
+            &gpu,
+            &chain,
+            &lit_windows(width, height, [-1.0, -1.0]),
+            floor,
+        );
+        let centred = lit_windows(width, height, [0.47, 0.45]);
+        let ghost = added(
+            &gpu,
+            &chain,
+            &centred,
+            (height as f32 * 0.55) as u32..(height as f32 * 0.56) as u32,
+        );
+        println!("floor {windows:.4} ghost {ghost:.4}");
+        assert!(
+            windows < 0.02,
+            "windows across the upper frame tile the floor with ghosts: {windows}"
+        );
+        assert!(
+            ghost > 0.02,
+            "a light by the centre keeps its ghost: {ghost}"
+        );
     }
 
     #[test]

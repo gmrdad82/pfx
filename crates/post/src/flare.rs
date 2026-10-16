@@ -12,6 +12,7 @@ pub const STARBURST_TEXELS: u32 = 256;
 pub const STARBURST_SEED: u32 = 0x2545_f491;
 pub const MAX_GHOSTS: u32 = 16;
 pub const KNEE: f32 = 4.0;
+pub const GHOST_FALLOFF: f32 = 10.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Flare {
@@ -134,6 +135,12 @@ pub fn knee(s: [f32; 3], threshold: f32) -> [f32; 3] {
     s.map(|c| c.max(0.0) * gain)
 }
 
+pub fn ghost_weight(uv: [f32; 2]) -> f32 {
+    let (dx, dy) = (0.5 - uv[0], 0.5 - uv[1]);
+    let reach = (dx * dx + dy * dy).sqrt() / std::f32::consts::FRAC_1_SQRT_2;
+    (1.0 - reach).max(0.0).powf(GHOST_FALLOFF)
+}
+
 fn ghosts(image: &Image, flare: &Flare, vertex: [f32; 2]) -> [f32; 3] {
     let uv = [1.0 - vertex[0], 1.0 - vertex[1]];
     let v = [
@@ -145,8 +152,9 @@ fn ghosts(image: &Image, flare: &Flare, vertex: [f32; 2]) -> [f32; 3] {
         let i = i as f32;
         let suv = [fract(uv[0] + v[0] * i), fract(uv[1] + v[1] * i)];
         let s = knee(sample_color(image, suv), flare.threshold);
+        let weight = ghost_weight(suv);
         for ch in 0..3 {
-            color[ch] += s[ch];
+            color[ch] += s[ch] * weight;
         }
     }
     color
