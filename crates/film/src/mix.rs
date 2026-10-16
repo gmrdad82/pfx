@@ -1,3 +1,4 @@
+use crate::duck::{self, Duck, Law};
 use crate::score::{Play, Sounds};
 use crate::script::{Kinds, Script};
 use std::collections::VecDeque;
@@ -24,7 +25,36 @@ pub struct Mixdown<'a> {
     level: f32,
     score: &'a mut dyn Sounds,
     due: Vec<Due>,
+    duck: Option<(Duck, Vec<(u64, Law)>)>,
+    key: Vec<f32>,
+    bed: Vec<f32>,
     pub track: Vec<f32>,
+}
+
+fn ducking<K: Kinds>(script: &Script<K>, rate: u32) -> Option<(Duck, Vec<(u64, Law)>)> {
+    let scened = script.scenes.iter().any(|s| s.duck.is_some());
+    let duck = match &script.duck {
+        Some(d) => d.clone(),
+        None if scened => Duck {
+            law: Law {
+                depth_db: 0.0,
+                ..Law::default()
+            },
+            ..Duck::default()
+        },
+        None => return None,
+    };
+    let mut laws = Vec::with_capacity(script.scenes.len());
+    let mut start = 0.0;
+    for scene in &script.scenes {
+        let law = scene
+            .duck
+            .as_ref()
+            .map_or(duck.law, |part| duck.law.with(part));
+        laws.push(((start * f64::from(rate)).round() as u64, law));
+        start += scene.seconds;
+    }
+    Some((duck, laws))
 }
 
 fn queue<K: Kinds>(script: &Script<K>, rate: u32) -> Vec<Due> {
@@ -61,7 +91,17 @@ impl<'a> Mixdown<'a> {
             level: 0.0,
             score,
             due: queue(script, rate),
+            duck: ducking(script, rate),
+            key: Vec::new(),
+            bed: Vec::new(),
             track: Vec::new(),
+        }
+    }
+
+    pub fn route(&mut self) -> Result<(), String> {
+        match &self.duck {
+            Some((d, _)) => self.score.route(&d.under, &d.beds),
+            None => Ok(()),
         }
     }
 
@@ -115,13 +155,29 @@ impl<'a> Mixdown<'a> {
             }
         }
         let game = self.game(frames, speed, gain);
-        let score = self.score.render(frames);
-        self.track
-            .extend(game.iter().zip(&score).map(|(g, s)| g + s));
+        if self.duck.is_none() {
+            let score = self.score.render(frames);
+            self.track
+                .extend(game.iter().zip(&score).map(|(g, s)| g + s));
+            return Ok(());
+        }
+        let [key, bed, dry] = self.score.render_apart(frames);
+        let at = |v: &[f32], i: usize| v.get(i).copied().unwrap_or(0.0);
+        for (i, g) in game.iter().enumerate() {
+            self.key.push(at(&key, i));
+            self.bed.push(g + at(&bed, i));
+            self.track.push(at(&dry, i));
+        }
         Ok(())
     }
 
     pub fn master(mut self) -> Vec<f32> {
+        if let Some((_, laws)) = &self.duck {
+            duck::apply(&mut self.bed, &self.key, self.rate, laws);
+            for ((t, b), k) in self.track.iter_mut().zip(&self.bed).zip(&self.key) {
+                *t += b + k;
+            }
+        }
         for s in &mut self.track {
             let a = s.abs();
             if a > KNEE {
