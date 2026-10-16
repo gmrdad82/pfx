@@ -60,7 +60,7 @@ impl BenchGame {
     }
 }
 
-fn placed(model: Matrix, base: Camera) -> Camera {
+pub(crate) fn placed(model: Matrix, base: Camera) -> Camera {
     let at = [model[3][0], model[3][1], model[3][2]];
     let ahead = [-model[2][0], -model[2][1], -model[2][2]];
     let up = [model[1][0], model[1][1], model[1][2]];
