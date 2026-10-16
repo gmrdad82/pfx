@@ -20,10 +20,10 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["harness", "editor", "bench"]
+default = ["harness", "editor", "bench", "shot-sound"]
 editor = ["harness", "dep:pfx-editor"]
 bench = ["harness", "dep:pfx-bench", "dep:pfx-sound"]
-shot-sound = ["bench"]
+shot-sound = ["bench", "pfx-sound/shot"]
 harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project"]
 
 [dependencies]
