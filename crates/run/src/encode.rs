@@ -5,8 +5,6 @@ pub const COLOR: &str = "BT.709 primaries, transfer and matrix, limited range (S
 
 const TO_LIMITED: &str = "format=rgb48le,zscale=matrix=709:range=limited:filter=bicubic:chromal=left,format=yuv420p,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv";
 
-const TO_ALPHA: &str = "zscale=matrix=709:range=limited,format=yuva444p10le,setparams=color_primaries=bt709:color_trc=bt709:colorspace=bt709:range=tv";
-
 fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_string()).collect()
 }
@@ -117,33 +115,6 @@ pub fn mux_audio(
     }
 }
 
-pub fn alpha_args() -> Vec<String> {
-    strings(&[
-        "-vf",
-        TO_ALPHA,
-        "-c:v",
-        "prores_ks",
-        "-profile:v",
-        "4444",
-        "-pix_fmt",
-        "yuva444p10le",
-        "-filter_threads",
-        "1",
-        "-filter_complex_threads",
-        "1",
-        "-color_primaries",
-        "bt709",
-        "-color_trc",
-        "bt709",
-        "-colorspace",
-        "bt709",
-        "-color_range",
-        "tv",
-        "-movflags",
-        "+write_colr",
-    ])
-}
-
 pub fn raw(
     ffmpeg: &Path,
     width: u32,
@@ -211,25 +182,6 @@ pub fn file(ffmpeg: &Path, input: &Path, args: &[String], out: &Path) -> Result<
     }
 }
 
-pub fn alpha_sequence(ffmpeg: &Path, cutouts: &Path, fps: u32, out: &Path) -> Result<(), String> {
-    let input = cutouts.join("%05d.png");
-    let status = Command::new(ffmpeg)
-        .args(["-hide_banner", "-v", "error", "-y", "-framerate"])
-        .arg(fps.to_string())
-        .arg("-i")
-        .arg(input)
-        .arg("-an")
-        .args(alpha_args())
-        .arg(out)
-        .status()
-        .map_err(|e| format!("ffmpeg: {e}"))?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("ffmpeg could not encode {}", out.display()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -259,119 +211,6 @@ mod tests {
         assert!(args.contains("apad=whole_dur=1.500000,atrim=end=1.500000"));
         assert!(args.contains("-fflags +bitexact -flags:a +bitexact"));
         assert!(args.ends_with("-movflags +faststart+write_colr"));
-    }
-
-    #[test]
-    fn prores_settings_preserve_alpha_and_tag_bt709() {
-        let args = alpha_args().join(" ");
-        assert!(args.contains("-c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le"));
-        assert!(args.contains("zscale=matrix=709:range=limited,format=yuva444p10le,"));
-        assert!(args.contains("-filter_threads 1 -filter_complex_threads 1"));
-        assert!(
-            args.contains(
-                "-color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv"
-            )
-        );
-    }
-
-    #[test]
-    fn alpha_master_keeps_its_colour_through_a_bt709_reader() {
-        let system = crate::ffmpeg::system().unwrap();
-        let major: u32 = system
-            .version
-            .trim_start_matches('n')
-            .split(|c: char| !c.is_ascii_digit())
-            .next()
-            .and_then(|m| m.parse().ok())
-            .unwrap_or(0);
-        let ffmpeg = system.path;
-        let ffprobe = ffmpeg.with_file_name("ffprobe");
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tmp")
-            .join(format!("prores-colour-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let output = dir.join("swatch.alpha.master.mov");
-        let mut child = raw(&ffmpeg, 16, 16, 4, &alpha_args(), &output).unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        let swatch = [192u16, 64, 32].map(|value| value * 257);
-        for _ in 0..2 {
-            for _ in 0..16 * 16 {
-                for channel in [swatch[0], swatch[1], swatch[2], u16::MAX] {
-                    stdin.write_all(&channel.to_le_bytes()).unwrap();
-                }
-            }
-        }
-        drop(stdin);
-        assert!(child.wait().unwrap().success());
-        let info = Command::new(&ffprobe)
-            .args([
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_streams",
-                "-of",
-                "json",
-            ])
-            .arg(&output)
-            .output()
-            .unwrap();
-        assert!(info.status.success());
-        let json: serde_json::Value = serde_json::from_slice(&info.stdout).unwrap();
-        let stream = &json["streams"][0];
-        assert_eq!(stream["codec_name"], "prores");
-        assert_eq!(stream["color_primaries"], "bt709");
-        assert_eq!(stream["color_transfer"], "bt709");
-        assert_eq!(stream["color_space"], "bt709");
-        if major >= 9 {
-            assert_eq!(stream["color_range"], "tv");
-        }
-        let stored = Command::new(&ffmpeg)
-            .args(["-hide_banner", "-v", "error", "-i"])
-            .arg(&output)
-            .args([
-                "-frames:v",
-                "1",
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "yuva444p10le",
-                "-",
-            ])
-            .output()
-            .unwrap();
-        assert!(stored.status.success());
-        assert_eq!(
-            yuva444p10_centre(&stored.stdout),
-            [369, 404, 742, 1023],
-            "stored 10-bit {}",
-            stored.stdout.len()
-        );
-        let decoded = Command::new(&ffmpeg)
-            .args(["-hide_banner", "-v", "error", "-i"])
-            .arg(&output)
-            .args([
-                "-frames:v",
-                "1",
-                "-vf",
-                "scale=in_color_matrix=bt709:in_range=tv",
-                "-f",
-                "rawvideo",
-                "-pix_fmt",
-                "rgba",
-                "-",
-            ])
-            .output()
-            .unwrap();
-        assert!(decoded.status.success());
-        let centre = &decoded.stdout[(8 * 16 + 8) * 4..(8 * 16 + 8) * 4 + 4];
-        for (got, want) in centre.iter().zip([192u8, 64, 32, 255]) {
-            assert!(
-                (i16::from(*got) - i16::from(want)).abs() <= 1,
-                "decoded {centre:?} against (192, 64, 32, 255)"
-            );
-        }
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -567,26 +406,17 @@ mod tests {
             .join(format!("master-threads-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let frames = frames_rgba64(320, 180, 12);
-        for (name, args) in [
-            ("a.master.mp4", master_args(6)),
-            ("a.alpha.master.mov", alpha_args()),
-        ] {
-            let one = encode_on(Some("0"), &ffmpeg, &args, &frames, &dir.join(name));
-            let all = encode_on(None, &ffmpeg, &args, &frames, &dir.join(name));
-            assert!(!one.is_empty());
-            assert!(one == all, "{name} differs between 1 CPU and all CPUs");
-        }
+        let (name, args) = ("a.master.mp4", master_args(6));
+        let one = encode_on(Some("0"), &ffmpeg, &args, &frames, &dir.join(name));
+        let all = encode_on(None, &ffmpeg, &args, &frames, &dir.join(name));
+        assert!(!one.is_empty());
+        assert!(one == all, "{name} differs between 1 CPU and all CPUs");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn sample16(buf: &[u8], start: usize, stride: usize, x: usize, y: usize) -> u16 {
         let i = (start + y * stride + x) * 2;
         u16::from_le_bytes([buf[i], buf[i + 1]])
-    }
-
-    fn yuva444p10_centre(buf: &[u8]) -> [u16; 4] {
-        let n = 16 * 16;
-        [0, 1, 2, 3].map(|plane| sample16(buf, plane * n, 16, 8, 8))
     }
 
     fn yuv420p_centre(buf: &[u8]) -> [u8; 3] {

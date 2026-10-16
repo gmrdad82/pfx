@@ -188,12 +188,18 @@ fn has_master(manifest: &Value) -> bool {
     manifest["files"].as_array().is_some_and(|files| {
         files.iter().any(|item| {
             item["file"].as_str().is_some_and(|name| {
-                name.ends_with(".master.mp4")
-                    || name.ends_with(".master.png")
-                    || name.ends_with(".alpha.master.mov")
+                name.ends_with(".master.mp4") || name.ends_with(".master.png") || alpha_master(name)
             })
         })
     })
+}
+
+fn alpha_master(name: &str) -> bool {
+    name.ends_with(".alpha.master.mov")
+        || name
+            .strip_suffix(crate::alpha::MANIFEST)
+            .and_then(|folder| folder.strip_suffix('/'))
+            .is_some_and(|folder| folder.ends_with(crate::alpha::SUFFIX))
 }
 
 fn under_tmp(root: &Path) -> bool {
@@ -337,6 +343,7 @@ fn leaf_under(
 fn selected(name: &str, still: bool) -> bool {
     name.ends_with(".master.mp4")
         || name.ends_with(".alpha.master.mov")
+        || name.contains(".alpha.master/")
         || name.ends_with(".master.png")
         || name.ends_with(".poster.png")
         || name.contains(".cutouts/")
@@ -1018,13 +1025,40 @@ fn import_manifest(import: &Import, made: &str) -> Result<PathBuf, String> {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| format!("{}: not a file name", path.display()))?;
+        if !import.still && name.ends_with(crate::alpha::SUFFIX) && path.is_dir() {
+            let mut inner: Vec<String> = fs::read_dir(path)
+                .map_err(|e| format!("{}: {e}", path.display()))?
+                .map(|entry| {
+                    entry
+                        .map_err(|e| format!("{}: {e}", path.display()))
+                        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                })
+                .collect::<Result<_, _>>()?;
+            inner.sort();
+            for file in inner {
+                let inside = path.join(&file);
+                if !inside.is_file() || !safe(&file) {
+                    return Err(format!(
+                        "{}: an alpha master holds only its frames and manifest",
+                        inside.display()
+                    ));
+                }
+                let listed_name = format!("{name}/{file}");
+                master |= alpha_master(&listed_name);
+                let bytes = fs::metadata(&inside)
+                    .map_err(|e| format!("{}: {e}", inside.display()))?
+                    .len();
+                listed.push(json!({"file": listed_name, "bytes": bytes, "sha256": hash(&inside)?}));
+            }
+            continue;
+        }
         let bytes = fs::metadata(path)
             .map_err(|e| format!("{}: {e}", path.display()))?
             .len();
         master |= if import.still {
             name.ends_with(".master.png")
         } else {
-            name.ends_with(".master.mp4") || name.ends_with(".alpha.master.mov")
+            name.ends_with(".master.mp4") || alpha_master(name)
         };
         listed.push(json!({"file": name, "bytes": bytes, "sha256": hash(path)?}));
     }
@@ -1411,13 +1445,25 @@ mod tests {
             {"file": "c.master.mp4", "sha256": "0"},
             {"file": "c.poster.png", "sha256": "0"},
             {"file": "c-640.png", "sha256": "0"},
-            {"file": "c.frames/00000.png", "sha256": "0"}
+            {"file": "c.frames/00000.png", "sha256": "0"},
+            {"file": "c.alpha.master/000000.png", "sha256": "0"},
+            {"file": "c.alpha.master/manifest.json", "sha256": "0"}
         ]});
         let kept: Vec<PathBuf> = files(&clip).unwrap().into_iter().map(|(p, _)| p).collect();
         assert_eq!(
             kept,
-            [PathBuf::from("c.master.mp4"), PathBuf::from("c.poster.png")]
+            [
+                PathBuf::from("c.master.mp4"),
+                PathBuf::from("c.poster.png"),
+                PathBuf::from("c.alpha.master/000000.png"),
+                PathBuf::from("c.alpha.master/manifest.json")
+            ]
         );
+        let alpha_only = json!({"files": [{"file": "c.alpha.master/manifest.json"}]});
+        assert!(has_master(&alpha_only));
+        assert!(!has_master(
+            &json!({"files": [{"file": "c.alpha.master/000000.png"}]})
+        ));
         fs::remove_dir_all(&base).ok();
     }
 
@@ -2329,6 +2375,27 @@ mod tests {
                 line.files.len()
             ),
             ("splicer", "desk", "v1.2.3", 2)
+        );
+        let clips = base.join("clips");
+        let alpha = clips.join("desk.alpha.master");
+        fs::create_dir_all(&alpha).unwrap();
+        fs::write(alpha.join("000000.png"), b"frame").unwrap();
+        assert!(refused(import("v1.2.3", false, vec![alpha.clone()])).contains(".master.mp4"));
+        fs::write(alpha.join(crate::alpha::MANIFEST), b"{}").unwrap();
+        let clip_path = import_manifest(&import("v1.2.3", false, vec![alpha]), made).unwrap();
+        let clip: Value = serde_json::from_slice(&fs::read(&clip_path).unwrap()).unwrap();
+        let names: Vec<&str> = clip["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["file"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "desk.alpha.master/000000.png",
+                "desk.alpha.master/manifest.json"
+            ]
         );
         let _ = fs::remove_dir_all(&base);
     }
