@@ -1618,6 +1618,11 @@ pub fn shadow_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
             ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
             count: None,
         },
+        buffer_entry(
+            9,
+            wgpu::ShaderStages::FRAGMENT,
+            wgpu::BufferBindingType::Storage { read_only: true },
+        ),
     ]
 }
 
@@ -2334,7 +2339,7 @@ impl Frame {
         sampler: &'a wgpu::Sampler,
         transmission: &'a wgpu::TextureView,
         lights: &'a Lights,
-    ) -> [wgpu::BindGroupEntry<'a>; 7] {
+    ) -> [wgpu::BindGroupEntry<'a>; 8] {
         [
             wgpu::BindGroupEntry {
                 binding: 0,
@@ -2363,6 +2368,10 @@ impl Frame {
             wgpu::BindGroupEntry {
                 binding: 7,
                 resource: wgpu::BindingResource::Sampler(lights.sampler()),
+            },
+            wgpu::BindGroupEntry {
+                binding: 9,
+                resource: lights.clustered_buffer().as_entire_binding(),
             },
         ]
     }
@@ -3870,13 +3879,23 @@ impl Frame {
             );
             shadow_hook(&self.gpu, encoder, shadows, fit)?;
             self.encode_lights(key, &batches, encoder, profiler.as_deref_mut());
-            self.lights
-                .write_uniform(&self.gpu.queue, transmitting, shadows.face_tiles());
+            self.lights.write_uniform(
+                &self.gpu.device,
+                &self.gpu.queue,
+                transmitting,
+                shadows.face_tiles(),
+                &scene.camera,
+            );
             self.set_shadows(shadows, fit);
         } else {
             self.encode_lights(key, &batches, encoder, profiler.as_deref_mut());
-            self.lights
-                .write_uniform(&self.gpu.queue, false, Default::default());
+            self.lights.write_uniform(
+                &self.gpu.device,
+                &self.gpu.queue,
+                false,
+                Default::default(),
+                &scene.camera,
+            );
             self.set_unshadowed();
         }
         let features = self.opaque_features(&batches);

@@ -169,7 +169,9 @@ pfx's mark and wordmark are © Catalin Ilinca, all rights reserved, and not cove
 
 The outdoor height fog's ray march in `crates/live/src/height_fog.rs` (in the package `pfx-live`) is ported from Bevy's volumetric fog (https://github.com/bevyengine/bevy, `crates/bevy_pbr/src/volumetric_fog/volumetric_fog.wesl` and `crates/bevy_pbr/src/render/utils.wesl`, release 0.20.0, commit `b3bdd75becaffe9a16677cf5bae5bd6d198f052b`), Copyright the Bevy Contributors, licensed MIT OR Apache-2.0 and used here under the MIT licence:
 
-> Copyright the Bevy Contributors
+`crates/live/src/clusters.rs` and the clustered lookup in `LIGHTS_WGSL` (`cluster_span`, in `crates/live/src/lights.rs`), in the package `pfx-live`, are ported from Bevy's clustered forward shading (https://github.com/bevyengine/bevy, tag `v0.16.1`, commit `383b3510455c431f34cf3f2c6e3c2d40eddce744`): the `ClusterConfig::FixedZ` grid of 4,096 clusters in 24 depth slices with a 5 m first slice and its x and y split by the aspect ratio (`crates/bevy_pbr/src/cluster/mod.rs`), the exponential depth slicing and its factors (`calculate_cluster_factors`, `crates/bevy_pbr/src/render/light.rs`; `view_z_to_z_slice` and `fragment_cluster_index`, `crates/bevy_pbr/src/render/clustered_forward.wgsl`), the far plane at the farthest light's reach, and the spot cone test against a cluster's bounding sphere (`crates/bevy_pbr/src/cluster/assign.rs`, after Bart Wronski's "Cull that cone"). Copyright (c) 2020 Carter Anderson, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+
+> Copyright (c) 2020 Carter Anderson
 >
 > Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 >

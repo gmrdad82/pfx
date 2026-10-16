@@ -1,4 +1,5 @@
 pub mod canopy;
+pub mod clusters;
 pub mod content_atlas;
 mod coverage;
 pub mod crisp;

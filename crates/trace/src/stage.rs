@@ -15,7 +15,7 @@ use crate::detail::{
     ContentFace, ContentImage, Detail, Instance, InstanceSurface, Lens, Transform, TriangleDetail,
 };
 use crate::gpu::{Camera, Projection, Scene, Sun, Trace, TraceError};
-use crate::lights::LocalLight;
+use crate::lights::{LightShape, LocalLight};
 use crate::sky::Environment;
 use crate::text::TextContent;
 
@@ -553,9 +553,17 @@ pub fn scene_posed(
     staged.detail.lights = scene
         .lights
         .values()
+        .map(|light| light.placed_with(objects, &posed.palettes))
         .map(|light| LocalLight {
             radius: light.radius,
             shadow: light.shadow,
+            shape: light
+                .spot
+                .map_or(LightShape::Point, |spot| LightShape::Spot {
+                    direction: spot.direction,
+                    inner_deg: spot.inner,
+                    outer_deg: spot.outer,
+                }),
             ..LocalLight::point(light.position, light.color, light.intensity, light.range)
         })
         .collect();

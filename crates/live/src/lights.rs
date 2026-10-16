@@ -2,13 +2,15 @@ use std::hash::{Hash, Hasher};
 
 use bytemuck::{Pod, Zeroable};
 use pfx_gpu::{GpuProfiler, wgpu};
-use pfx_load::scene::Light;
+use pfx_load::scene::{Light, Spot};
 use pfx_materials::Material;
 
-use crate::frame::{Matrix, multiply};
+use crate::clusters::{Assignment, Cone, LIGHT_WORDS, Sphere};
+use crate::frame::{Camera, Matrix, multiply};
 use crate::shadow::{CASCADE_COUNT, FaceTiles};
 
 pub const MAX_LIGHTS: usize = 4;
+pub const MAX_CLUSTERED: usize = 1024;
 pub const FACES: usize = 6;
 pub const CASTER_SLOTS: usize = CASCADE_COUNT + MAX_LIGHTS * FACES;
 pub const CASTER_BYTES: u64 = 80;
@@ -31,17 +33,98 @@ struct LocalLight {
     colour_range: vec4f,
     shadow: vec4f,
     bias: vec4f,
+    spot: vec4f,
 }
 struct LocalLights {
     info: vec4u,
     lights: array<LocalLight, 4>,
     faces: array<mat4x4f, 24>,
+    clusters: vec4u,
+    cluster_factors: vec4f,
 }
 @group(1) @binding(4) var shadow_transmission: texture_2d_array<u32>;
 @group(1) @binding(5) var<uniform> local_lights: LocalLights;
 @group(1) @binding(6) var light_faces: texture_depth_2d_array;
 @group(1) @binding(7) var light_sampler: sampler_comparison;
 @group(1) @binding(8) var<storage, read> caster_tints: array<vec4f>;
+@group(1) @binding(9) var<storage, read> clustered: array<vec4u>;
+
+fn spot_cone(light: LocalLight, l: vec3f) -> f32 {
+    let along = clamp(dot(light.spot.xyz, -l) * light.spot.w + light.bias.z, 0.0, 1.0);
+    return along * along;
+}
+
+fn cluster_word(word: u32) -> u32 {
+    return clustered[word >> 2u][word & 3u];
+}
+
+fn cluster_light(index: u32) -> LocalLight {
+    let at = index * 5u;
+    var light: LocalLight;
+    light.position_radius = bitcast<vec4f>(clustered[at]);
+    light.colour_range = bitcast<vec4f>(clustered[at + 1u]);
+    light.shadow = bitcast<vec4f>(clustered[at + 2u]);
+    light.bias = bitcast<vec4f>(clustered[at + 3u]);
+    light.spot = bitcast<vec4f>(clustered[at + 4u]);
+    return light;
+}
+
+fn cluster_span(world: vec3f) -> vec2u {
+    let dims = local_lights.clusters.xyz;
+    if (dims.z == 0u) {
+        return vec2u(0u);
+    }
+    let clip = frame.motion_view_projection * vec4f(world, 1.0);
+    if (clip.w <= 0.0) {
+        return vec2u(0u);
+    }
+    let ndc = clip.xy / clip.w;
+    let cell = vec2u(clamp(floor((ndc * 0.5 + vec2f(0.5)) * vec2f(dims.xy)), vec2f(0.0), vec2f(dims.xy - vec2u(1u))));
+    let depth = -(frame.view * vec4f(world, 1.0)).z;
+    let factors = local_lights.cluster_factors;
+    var slice = depth * factors.x - factors.y;
+    if (factors.z < 0.5) {
+        slice = log(max(depth, 1e-6)) * factors.x - factors.y + 1.0;
+    }
+    let z = min(u32(max(slice, 0.0)), dims.z - 1u);
+    let entry = local_lights.clusters.w + ((cell.y * dims.x + cell.x) * dims.z + z) * 2u;
+    return vec2u(cluster_word(entry), cluster_word(entry + 1u));
+}
+
+fn clustered_radiance(surface: Shaded, wo: vec3f, t: vec3f, b: vec3f, n: vec3f, world: vec3f, geometric: vec3f, film: vec3f) -> vec3f {
+    var total = vec3f(0.0);
+    let span = cluster_span(world);
+    for (var k = 0u; k < span.y; k++) {
+        let light = cluster_light(cluster_word(span.x + k));
+        let to_light = light.position_radius.xyz - world;
+        let distance = length(to_light);
+        let range = light.colour_range.w;
+        if (distance >= range || distance <= 1e-6) {
+            continue;
+        }
+        let l = to_light / distance;
+        let ndl = dot(n, l);
+        if (ndl <= 0.0 || dot(geometric, l) <= 0.0) {
+            continue;
+        }
+        var cone = 1.0;
+        if (light.bias.w > 0.5) {
+            cone = spot_cone(light, l);
+            if (cone <= 0.0) {
+                continue;
+            }
+        }
+        let ratio = distance / range;
+        let window = clamp(1.0 - ratio * ratio * ratio * ratio, 0.0, 1.0);
+        let reach = max(distance, light.position_radius.w);
+        var lit = surface;
+        lit.roughness = max(surface.roughness, sqrt(clamp(light.position_radius.w / (2.0 * distance), 0.0, 1.0)));
+        let wi = vec3f(dot(l, t), dot(l, b), dot(l, n));
+        let radiance = light.colour_range.xyz * (window * window * cone) / (reach * reach);
+        total += eval_filmed(lit, wo, wi, film) * radiance * ndl;
+    }
+    return total;
+}
 
 fn caster_skips(material: u32) -> bool {
     return caster.mode.x > 0.5 && caster_tints[material].w > 0.5;
@@ -130,8 +213,18 @@ fn local_light_radiance(surface: Shaded, wo: vec3f, t: vec3f, b: vec3f, n: vec3f
         var lit = surface;
         lit.roughness = max(surface.roughness, sqrt(clamp(light.position_radius.w / (2.0 * distance), 0.0, 1.0)));
         let wi = vec3f(dot(l, t), dot(l, b), dot(l, n));
-        let radiance = light.colour_range.xyz * window * window / (reach * reach);
+        var radiance = light.colour_range.xyz * window * window / (reach * reach);
+        if (light.bias.w > 0.5) {
+            let cone = spot_cone(light, l);
+            if (cone <= 0.0) {
+                continue;
+            }
+            radiance *= cone;
+        }
         total += eval_filmed(lit, wo, wi, film) * radiance * ndl * light_shadow(light, world, geometric, l) * light_tint(light, world, geometric, l);
+    }
+    if (local_lights.clusters.z != 0u) {
+        total += clustered_radiance(surface, wo, t, b, n, world, geometric, film);
     }
     return total;
 }
@@ -210,6 +303,7 @@ pub struct LocalLight {
     pub radius: f32,
     pub range: f32,
     pub shadow: bool,
+    pub spot: Option<Spot>,
 }
 
 pub fn local_light(light: &Light) -> LocalLight {
@@ -220,6 +314,7 @@ pub fn local_light(light: &Light) -> LocalLight {
         radius: light.radius,
         range: light.range,
         shadow: light.shadow,
+        spot: light.spot,
     }
 }
 
@@ -245,6 +340,60 @@ impl LocalLight {
             && self.intensity >= 0.0
             && self.radius >= 0.0
             && self.range >= 0.0
+            && self.spot.is_none_or(|spot| {
+                spot.direction.iter().all(|value| value.is_finite())
+                    && dot(spot.direction, spot.direction) > 1e-12
+                    && spot.inner.is_finite()
+                    && spot.outer.is_finite()
+                    && (0.0..=spot.outer).contains(&spot.inner)
+                    && spot.outer <= 90.0
+            })
+    }
+
+    fn gpu(&self, layer: f32, quality: LightQuality) -> GpuLight {
+        let (spot, offset, kind) = match self.spot {
+            Some(spot) => {
+                let (scale, offset) = spot.scale_offset();
+                let length = dot(spot.direction, spot.direction).sqrt();
+                let d = spot.direction.map(|value| value / length);
+                ([d[0], d[1], d[2], scale], offset, 1.0)
+            }
+            None => ([0.0; 4], 0.0, 0.0),
+        };
+        let resolution = quality.resolution;
+        GpuLight {
+            position_radius: [
+                self.position[0],
+                self.position[1],
+                self.position[2],
+                self.radius,
+            ],
+            colour_range: [
+                self.colour[0] * self.intensity,
+                self.colour[1] * self.intensity,
+                self.colour[2] * self.intensity,
+                self.range,
+            ],
+            shadow: [
+                layer,
+                2.0 * tan_half(resolution) / resolution as f32,
+                0.0,
+                quality.pcf_radius,
+            ],
+            bias: [quality.normal_bias, quality.depth_bias, offset, kind],
+            spot,
+        }
+    }
+
+    fn sphere(&self) -> Sphere {
+        Sphere {
+            centre: self.position,
+            radius: self.range,
+            cone: self.spot.map(|spot| Cone {
+                direction: spot.direction,
+                outer: spot.outer.to_radians(),
+            }),
+        }
     }
 
     pub fn near(&self) -> f32 {
@@ -328,6 +477,23 @@ pub fn falloff(light: &LocalLight, distance: f32) -> f32 {
     light.intensity * window * window / (reach * reach)
 }
 
+pub fn irradiance_at(light: &LocalLight, point: [f32; 3]) -> f32 {
+    let toward = [0, 1, 2].map(|k| point[k] - light.position[k]);
+    let distance = dot(toward, toward).sqrt();
+    let cone = match light.spot {
+        Some(spot) if distance > 1e-6 => {
+            let length = dot(spot.direction, spot.direction).sqrt();
+            Spot {
+                direction: spot.direction.map(|value| value / length),
+                ..spot
+            }
+            .falloff(toward.map(|value| value / distance))
+        }
+        _ => 1.0,
+    };
+    falloff(light, distance) * cone
+}
+
 fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
@@ -347,6 +513,7 @@ struct GpuLight {
     colour_range: [f32; 4],
     shadow: [f32; 4],
     bias: [f32; 4],
+    spot: [f32; 4],
 }
 
 #[repr(C)]
@@ -355,7 +522,11 @@ struct GpuLights {
     info: [u32; 4],
     lights: [GpuLight; MAX_LIGHTS],
     faces: [Matrix; MAX_LIGHTS * FACES],
+    clusters: [u32; 4],
+    cluster_factors: [f32; 4],
 }
+
+const _: () = assert!(std::mem::size_of::<GpuLight>() == LIGHT_WORDS * 4);
 
 struct FaceMaps {
     resolution: u32,
@@ -384,6 +555,13 @@ pub struct Lights {
     clean: bool,
     reused: bool,
     extended: bool,
+    assignment: Assignment,
+    clustered: wgpu::Buffer,
+    clustered_capacity: usize,
+    clustered_key: Option<u64>,
+    clustered_words: Vec<u32>,
+    clustered_count: usize,
+    grid: ([u32; 4], [f32; 4]),
 }
 
 impl Lights {
@@ -445,6 +623,7 @@ impl Lights {
             ..Default::default()
         });
         let table_capacity = 1;
+        let clustered_capacity = 1;
         Self {
             lights: Vec::new(),
             quality: LightQuality::default(),
@@ -461,12 +640,22 @@ impl Lights {
             clean: false,
             reused: false,
             extended: false,
+            assignment: Assignment::default(),
+            clustered: clustered_buffer(device, clustered_capacity),
+            clustered_capacity,
+            clustered_key: None,
+            clustered_words: Vec::new(),
+            clustered_count: 0,
+            grid: ([0; 4], [0.0; 4]),
         }
     }
 
     pub fn set(&mut self, lights: &[LocalLight]) -> Result<(), String> {
-        if lights.len() > MAX_LIGHTS {
-            return Err(format!("at most {MAX_LIGHTS} local lights"));
+        if lights.len() > MAX_LIGHTS + MAX_CLUSTERED {
+            return Err(format!(
+                "at most {} local lights",
+                MAX_LIGHTS + MAX_CLUSTERED
+            ));
         }
         if !lights.iter().all(LocalLight::valid) {
             return Err("local lights need finite, nonnegative values".into());
@@ -556,14 +745,44 @@ impl Lights {
         grown
     }
 
-    pub fn shadowed(&self) -> Vec<(usize, u32)> {
-        self.lights
+    pub fn split(&self) -> (Vec<usize>, Vec<usize>) {
+        let lit = self
+            .lights
             .iter()
             .enumerate()
-            .filter(|(_, light)| light.lit() && light.shadow)
+            .filter(|(_, light)| light.lit())
+            .map(|(index, _)| index);
+        if self.lights.len() <= MAX_LIGHTS {
+            return (lit.collect(), Vec::new());
+        }
+        let mut uniform = Vec::new();
+        let mut clustered = Vec::new();
+        for index in lit {
+            if self.lights[index].shadow && uniform.len() < MAX_LIGHTS {
+                uniform.push(index);
+            } else {
+                clustered.push(index);
+            }
+        }
+        (uniform, clustered)
+    }
+
+    pub fn shadowed(&self) -> Vec<(usize, u32)> {
+        self.split()
+            .0
+            .into_iter()
+            .filter(|&index| self.lights[index].shadow)
             .enumerate()
-            .map(|(slot, (index, _))| (index, (slot * FACES) as u32))
+            .map(|(slot, index)| (index, (slot * FACES) as u32))
             .collect()
+    }
+
+    pub fn clustered_count(&self) -> usize {
+        self.clustered_count
+    }
+
+    pub fn clustered_buffer(&self) -> &wgpu::Buffer {
+        &self.clustered
     }
 
     pub fn faces(&self) -> Vec<(u32, Matrix)> {
@@ -608,42 +827,29 @@ impl Lights {
         self.extended
     }
 
-    pub fn write_uniform(&mut self, queue: &wgpu::Queue, transmission: bool, tiles: FaceTiles) {
+    pub fn write_uniform(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        transmission: bool,
+        tiles: FaceTiles,
+        camera: &Camera,
+    ) {
         let mut data = GpuLights::zeroed();
         let shadowed = self.shadowed();
-        let resolution = self.quality.resolution;
+        let (uniform, clustered) = self.split();
         let mut count = 0;
-        for (index, light) in self.lights.iter().enumerate() {
-            if !light.lit() {
-                continue;
-            }
+        for index in uniform {
             let layer = shadowed
                 .iter()
                 .find(|(shadowed, _)| *shadowed == index)
                 .map_or(-1.0, |(_, first)| *first as f32);
-            data.lights[count] = GpuLight {
-                position_radius: [
-                    light.position[0],
-                    light.position[1],
-                    light.position[2],
-                    light.radius,
-                ],
-                colour_range: [
-                    light.colour[0] * light.intensity,
-                    light.colour[1] * light.intensity,
-                    light.colour[2] * light.intensity,
-                    light.range,
-                ],
-                shadow: [
-                    layer,
-                    2.0 * tan_half(resolution) / resolution as f32,
-                    0.0,
-                    self.quality.pcf_radius,
-                ],
-                bias: [self.quality.normal_bias, self.quality.depth_bias, 0.0, 0.0],
-            };
+            data.lights[count] = self.lights[index].gpu(layer, self.quality);
             count += 1;
         }
+        self.write_clusters(device, queue, &clustered, camera);
+        data.clusters = self.grid.0;
+        data.cluster_factors = self.grid.1;
         for (layer, matrix) in self.faces() {
             data.faces[layer as usize] = matrix;
         }
@@ -658,8 +864,64 @@ impl Lights {
             tiles.tile,
             tiles.columns,
         ];
-        self.extended = count > 0 || transmission;
+        self.extended = count > 0 || transmission || self.clustered_count > 0;
         queue.write_buffer(&self.uniform, 0, bytemuck::bytes_of(&data));
+    }
+
+    fn write_clusters(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        clustered: &[usize],
+        camera: &Camera,
+    ) {
+        self.clustered_count = clustered.len();
+        if clustered.is_empty() {
+            self.clustered_key = None;
+            self.grid = ([0; 4], [0.0; 4]);
+            return;
+        }
+        let records: Vec<GpuLight> = clustered
+            .iter()
+            .map(|&index| self.lights[index].gpu(-1.0, self.quality))
+            .collect();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytemuck::cast_slice::<GpuLight, u8>(&records).hash(&mut hasher);
+        for value in camera.view.iter().chain(&camera.projection).flatten() {
+            value.to_bits().hash(&mut hasher);
+        }
+        let key = hasher.finish();
+        if self.clustered_key == Some(key) {
+            return;
+        }
+        let spheres: Vec<Sphere> = clustered
+            .iter()
+            .map(|&index| self.lights[index].sphere())
+            .collect();
+        self.assignment
+            .build(&camera.view, &camera.projection, &spheres);
+        let words = &mut self.clustered_words;
+        words.clear();
+        words.extend_from_slice(bytemuck::cast_slice(&records));
+        let table = words.len();
+        let first = (table + 2 * self.assignment.table.len()) as u32;
+        for entry in &self.assignment.table {
+            words.extend([first + entry[0], entry[1]]);
+        }
+        words.extend_from_slice(&self.assignment.indices);
+        words.resize(words.len().div_ceil(4).max(1) * 4, 0);
+        let rows = words.len() / 4;
+        if rows > self.clustered_capacity {
+            self.clustered_capacity = rows.next_power_of_two();
+            self.clustered = clustered_buffer(device, self.clustered_capacity);
+        }
+        queue.write_buffer(&self.clustered, 0, bytemuck::cast_slice(words));
+        let grid = self.assignment.grid;
+        self.grid = (
+            [grid.dims[0], grid.dims[1], grid.dims[2], table as u32],
+            grid.factors,
+        );
+        self.clustered_key = Some(key);
     }
 
     pub fn render(
@@ -806,6 +1068,15 @@ fn table_buffer(device: &wgpu::Device, rows: usize) -> wgpu::Buffer {
     })
 }
 
+fn clustered_buffer(device: &wgpu::Device, rows: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("live clustered lights"),
+        size: (rows.max(1) * 16) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 fn face_maps(device: &wgpu::Device, resolution: u32, layers: u32) -> FaceMaps {
     let size = wgpu::Extent3d {
         width: resolution,
@@ -897,6 +1168,7 @@ mod tests {
             radius: 0.0,
             range: 10.0,
             shadow: true,
+            spot: None,
         }
     }
 
@@ -1144,6 +1416,194 @@ mod tests {
         let to = [0, 1, 2].map(|k| light.position[k] - point[k]);
         let distance = dot(to, to).sqrt();
         albedo / std::f32::consts::PI * falloff(light, distance) * to[1] / distance
+    }
+
+    fn centre(x: f32, z: f32) -> [f32; 3] {
+        let extent = 2.0 * (25.0_f32).to_radians().tan();
+        let at = |value: f32| {
+            let cell = ((value / extent * 0.5 + 0.5) * SIZE as f32).floor();
+            ((cell + 0.5) / SIZE as f32 - 0.5) * 2.0 * extent
+        };
+        [at(x), 0.0, at(z)]
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn a_spot_lights_only_inside_its_cone() {
+        let mut bench = bench();
+        let dark = bench.render(0.0);
+        let lamp = LocalLight {
+            shadow: false,
+            position: [0.0, 1.0, 0.0],
+            spot: Some(Spot {
+                direction: [0.0, -1.0, 0.0],
+                inner: 20.0,
+                outer: 30.0,
+            }),
+            ..light()
+        };
+        let quiet = LocalLight {
+            intensity: 0.0,
+            ..light()
+        };
+        let peak = lambert(0.5, &lamp, [0.0; 3]);
+        for (path, lights) in [
+            ("uniform", vec![lamp]),
+            ("clustered", vec![quiet, quiet, quiet, quiet, lamp]),
+        ] {
+            bench.frame.set_lights(&lights).unwrap();
+            let image = bench.render(0.0);
+            assert_eq!(
+                bench.frame.lights().clustered_count(),
+                usize::from(lights.len() > 1)
+            );
+            for x in [0.0, 0.2, 0.33, 0.42, 0.5, 0.56, 0.62, 0.8] {
+                let point = centre(x, 0.1);
+                let to = [0, 1, 2].map(|k| lamp.position[k] - point[k]);
+                let distance = dot(to, to).sqrt();
+                let expected =
+                    0.5 / std::f32::consts::PI * irradiance_at(&lamp, point) * to[1] / distance;
+                let at = pixel(x, 0.1);
+                let measured = image[at][1] - dark[at][1];
+                println!("{path} x {x}: {measured:.5} (expected {expected:.5})");
+                assert!(
+                    (measured - expected).abs() < expected * 0.03 + peak * 0.004,
+                    "{path} at {x}: {measured} against {expected}"
+                );
+                if (point[0].powi(2) + point[2].powi(2)).sqrt() > 30.0_f32.to_radians().tan() {
+                    assert!(measured.abs() < peak * 1e-3, "{path} lit outside the cone");
+                }
+            }
+        }
+    }
+
+    fn look(eye: [f32; 3], target: [f32; 3]) -> Matrix {
+        let unit = |v: [f32; 3]| {
+            let length = dot(v, v).sqrt();
+            v.map(|value| value / length)
+        };
+        let forward = unit([0, 1, 2].map(|k| target[k] - eye[k]));
+        let right = unit(cross(forward, [0.0, 1.0, 0.0]));
+        let up = cross(right, forward);
+        [
+            [right[0], up[0], -forward[0], 0.0],
+            [right[1], up[1], -forward[1], 0.0],
+            [right[2], up[2], -forward[2], 0.0],
+            [-dot(right, eye), -dot(up, eye), dot(forward, eye), 1.0],
+        ]
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn sixty_four_clustered_lights_match_the_brute_force_sum() {
+        const WIDE: u32 = 384;
+        const TALL: u32 = 256;
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let mut frame = Frame::new(gpu, WIDE, TALL).unwrap();
+        let floor = upload(&mut frame, [0.0, 0.0, -14.0], [16.0, 18.0]);
+        let instances = vec![Instance::new(floor, identity(), 0, 1)];
+        let materials = vec![matte([0.6; 3])];
+        let eye = [0.0, 1.6, 4.0];
+        let view = look(eye, [0.0, 0.0, -20.0]);
+        let near = 0.1;
+        let far = 200.0;
+        let f = 1.0 / (50.0_f32.to_radians() * 0.5).tan();
+        let projection = [
+            [f * TALL as f32 / WIDE as f32, 0.0, 0.0, 0.0],
+            [0.0, f, 0.0, 0.0],
+            [0.0, 0.0, far / (near - far), -1.0],
+            [0.0, 0.0, far * near / (near - far), 0.0],
+        ];
+        let render = |frame: &mut Frame| -> Vec<[f32; 3]> {
+            let scene = Scene {
+                camera: Camera {
+                    view,
+                    projection,
+                    previous_view_projection: multiply(projection, view),
+                    position: eye,
+                },
+                time: 0.0,
+                seed: 7,
+                sun: Sun {
+                    direction: [0.0, 1.0, 0.0],
+                    colour: [1.0; 3],
+                    intensity: 0.0,
+                },
+                instances: &instances,
+                materials: &materials,
+                deformers: &[],
+                wind: SceneWind::default(),
+            };
+            let mut encoder = frame.gpu.device.create_command_encoder(&Default::default());
+            frame.encode(&scene, &mut encoder, None, None).unwrap();
+            frame.gpu.queue.submit(Some(encoder.finish()));
+            frame
+                .gpu
+                .readback_rgba16(&frame.targets.hdr)
+                .unwrap()
+                .chunks_exact(4)
+                .map(|texel| [0, 1, 2].map(|k| f16::from_bits(texel[k]).to_f32()))
+                .collect()
+        };
+        let mut seed = 0x9e37_79b9_u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as f32 / u32::MAX as f32
+        };
+        let lights: Vec<LocalLight> = (0..64)
+            .map(|index| LocalLight {
+                position: [next() * 14.0 - 7.0, 0.1 + next() * 0.9, 2.0 - next() * 34.0],
+                colour: [0.4 + next() * 0.6, 0.4 + next() * 0.6, 0.4 + next() * 0.6],
+                intensity: 0.3 + next() * 1.5,
+                radius: 0.02,
+                range: 1.0 + next() * 4.0,
+                shadow: false,
+                spot: (index % 3 == 0).then(|| Spot {
+                    direction: [next() - 0.5, -1.0, next() - 0.5],
+                    inner: 5.0 + next() * 20.0,
+                    outer: 30.0 + next() * 30.0,
+                }),
+            })
+            .collect();
+        let dark = render(&mut frame);
+        let mut brute = dark.clone();
+        for batch in lights.chunks(MAX_LIGHTS) {
+            frame.set_lights(batch).unwrap();
+            let image = render(&mut frame);
+            assert_eq!(frame.lights().clustered_count(), 0);
+            for (sum, (lit, unlit)) in brute.iter_mut().zip(image.iter().zip(&dark)) {
+                for k in 0..3 {
+                    sum[k] += lit[k] - unlit[k];
+                }
+            }
+        }
+        frame.set_lights(&lights).unwrap();
+        let clustered = render(&mut frame);
+        assert_eq!(frame.lights().clustered_count(), 64);
+        let peak = brute
+            .iter()
+            .flatten()
+            .fold(0.0_f32, |most, &value| most.max(value));
+        let mut worst = 0.0_f32;
+        let mut total = 0.0_f64;
+        let mut lit = 0;
+        for (a, b) in clustered.iter().zip(&brute) {
+            for k in 0..3 {
+                let gap = (a[k] - b[k]).abs() / (b[k].abs() + peak * 0.01);
+                worst = worst.max(gap);
+                total += f64::from((a[k] - b[k]).abs());
+            }
+            lit += usize::from(b[1] > peak * 0.01);
+        }
+        let mean = total / (clustered.len() * 3) as f64;
+        println!(
+            "64 lights: peak {peak:.4}, worst relative gap {worst:.5}, mean gap {mean:.6}, {lit} lit pixels"
+        );
+        assert!(lit > (WIDE * TALL / 20) as usize, "{lit} lit pixels");
+        assert!(worst < 0.02, "worst relative gap {worst}");
+        assert!(mean < f64::from(peak) * 1e-4, "mean gap {mean}");
     }
 
     #[test]
