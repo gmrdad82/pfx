@@ -1362,7 +1362,7 @@ fn clamp_ratio(ratio: f32) -> f32 {
     }
 }
 
-fn soft_limit(sample: f32, threshold: f32) -> f32 {
+pub(crate) fn soft_limit(sample: f32, threshold: f32) -> f32 {
     let magnitude = sample.abs();
     if magnitude <= threshold {
         return sample;

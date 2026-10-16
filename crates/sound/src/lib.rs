@@ -10,6 +10,8 @@ mod live;
 mod mix;
 mod music;
 mod pcm;
+#[cfg(feature = "shot")]
+pub mod shot;
 mod sound;
 mod synth;
 mod voice;
