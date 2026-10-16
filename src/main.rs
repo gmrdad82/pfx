@@ -13,6 +13,8 @@ mod project;
 mod scene;
 #[cfg(feature = "bench")]
 mod shot;
+#[cfg(feature = "sound-clean")]
+mod sound;
 mod steam;
 
 const ABOUT: &str = "pfx, a game and render engine: scaffold, edit, bench and bake games and scenes, stage Steam builds, and render apps' shots, logos, icons and scenes offline on its path tracer.";
@@ -40,6 +42,7 @@ const USAGE: &str = "usage:
   pfx scene migrate <scene.toml> [--dry-run]
   pfx scene fix <scene.toml> [--dry-run]
   pfx film <script.film.toml> --out <dir> [--json] [--plan]
+  pfx sound clean <in.wav> <out.wav> [--keep harmonic [--f0 LOW,HIGH]] [--remove transients] [--gate [--noise START,END] [--reduce DB]] [--mask <png>] [--json]
   pfx --version
   pfx --help
 clip masters are x264 at 60 fps; pcod (pito-codecs) makes video deliveries
@@ -53,6 +56,7 @@ bench plays a scene headless for N seconds at 60 fps, from its own camera, an ob
 shot renders a scene file offline on the live renderer at a fixed clock (frame n at t = n / fps), headless, into numbered PNG or EXR frames, a manifest.json and an optional WAV for pcod (docs/render-a-scene.md); --draft halves the shadow maps, --final keeps the scene's; the frames before --from render unwritten, so frame N matches a full run's
 scene migrate rewrites a scene's format 0 files as format 1, keeping comments; scene fix writes the ids its entries lack; both refuse to write when the check fails
 film assembles a script of clips, rendered frame folders and cards into PNG frames, a WAV and a manifest.json naming the pcod command that encodes them, under the caller's tmp/ (docs/film.md, Footage films); --plan prints the scenes without rendering
+sound clean cleans a field recording offline and keeps its length: --keep harmonic tracks a moving fundamental (default 40..400 Hz) and keeps only its harmonic series, --remove transients finds short events that stand out of the background (barks, slams, voices, clicks) and inpaints them from the frames around them, --gate gates the noise under a print taken from --noise or the quietest second (fully, or by --reduce dB); it reports what it removed and --mask writes a time by frequency PNG, kept grey and removed red (docs/sound.md, Cleaning recordings)
 new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)";
 
 const SWITCHES: &[&str] = &[
@@ -309,7 +313,7 @@ const STEAM_FLAGS: &[&str] = &["--manifest", "--out"];
 
 const COMMANDS: &[&str] = &[
     "render", "encode", "archive", "list", "bake", "steam", "cache", "font", "edit", "new",
-    "bench", "shot", "scene", "film", "help",
+    "bench", "shot", "scene", "film", "sound", "help",
 ];
 
 const TOP: &str = "pfx <COMMAND>";
@@ -335,6 +339,7 @@ fn shape(command: &str) -> &'static str {
         "shot" => "pfx shot [OPTIONS] <--seconds <SECONDS>|--frames <FRAMES>> <SCENE>",
         "scene" => "pfx scene <COMMAND>",
         "film" => film::USAGE,
+        "sound" => "pfx sound <COMMAND>",
         _ => TOP,
     }
 }
@@ -407,6 +412,8 @@ enum Plan {
     Shot(Vec<String>),
     Scene(scene::Command),
     Film(film::Command),
+    #[cfg(feature = "sound-clean")]
+    Sound(sound::Command),
     Project(project::Command),
 }
 
@@ -941,6 +948,18 @@ fn plan_shot(args: &[String]) -> Result<Plan, String> {
     Ok(Plan::Shot(args.to_vec()))
 }
 
+#[cfg(feature = "sound-clean")]
+fn plan_sound(args: &[String]) -> Result<Plan, Refusal> {
+    sound::plan(args).map(Plan::Sound)
+}
+
+#[cfg(not(feature = "sound-clean"))]
+fn plan_sound(_args: &[String]) -> Result<Plan, Refusal> {
+    Err(Refusal::new(
+        "this pfx was built without the sound-clean feature",
+    ))
+}
+
 fn plan(args: &[String]) -> Result<Plan, Refusal> {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
         return Ok(Plan::Help);
@@ -967,6 +986,7 @@ fn plan(args: &[String]) -> Result<Plan, Refusal> {
         "shot" => plan_shot(rest).map_err(Refusal::from),
         "scene" => scene::plan(rest).map(Plan::Scene),
         "film" => film::plan(rest).map(Plan::Film),
+        "sound" => plan_sound(rest),
         "new" => project::plan(rest)
             .map(Plan::Project)
             .map_err(Refusal::from),
@@ -1104,6 +1124,8 @@ fn perform(plan: Plan) -> Result<(), String> {
         Plan::Shot(args) => render_shot(&args),
         Plan::Scene(command) => scene::run(&command),
         Plan::Film(command) => film::run(&command),
+        #[cfg(feature = "sound-clean")]
+        Plan::Sound(command) => sound::run(&command),
         Plan::Project(command) => project::run(&command),
     }
 }
@@ -1560,7 +1582,7 @@ mod tests {
         for (line, message, usage) in [
             (
                 "",
-                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, shot, scene, film, help]",
+                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, shot, scene, film, sound, help]",
                 TOP,
             ),
             ("tui", "unrecognized subcommand 'tui'", TOP),

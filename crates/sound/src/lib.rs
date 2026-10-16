@@ -1,4 +1,6 @@
 mod channel;
+#[cfg(feature = "clean")]
+pub mod clean;
 mod clip;
 mod decode;
 mod drive;

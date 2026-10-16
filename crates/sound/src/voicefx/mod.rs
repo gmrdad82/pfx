@@ -1,6 +1,6 @@
 pub mod chorus;
 pub mod crush;
-mod fft;
+pub(crate) mod fft;
 pub mod flanger;
 mod line;
 pub mod ring;

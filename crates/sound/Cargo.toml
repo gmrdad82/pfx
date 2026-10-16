@@ -17,7 +17,8 @@ toml = { version = "0.9", optional = true }
 [features]
 vorbis = ["dep:lewton"]
 voicefx = []
+clean = ["voicefx"]
 shot = ["dep:toml"]
 
 [dev-dependencies]
-pfx-sound = { path = ".", features = ["vorbis", "voicefx", "shot"] }
+pfx-sound = { path = ".", features = ["vorbis", "voicefx", "shot", "clean"] }
