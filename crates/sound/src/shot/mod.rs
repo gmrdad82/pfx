@@ -4,6 +4,7 @@ mod dsp;
 mod engine;
 mod layers;
 mod read;
+mod recording;
 
 pub use curve::{Curve, Ease};
 
@@ -36,10 +37,26 @@ pub struct Common {
 pub struct Engine {
     pub rpm: Value,
     pub load: Value,
-    pub cylinders: u32,
+    pub cylinders: Option<u32>,
     pub drive: f32,
     pub lowpass: f32,
     pub crackle: f32,
+    pub sample: Option<Recording>,
+    pub blend: Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Recording {
+    pub path: PathBuf,
+    pub idle: Option<[f32; 2]>,
+    pub idle_rpm: Option<f32>,
+    pub revs: Vec<[f32; 3]>,
+    pub reach: f32,
+    pub keep_formants: bool,
+    pub crank: Option<[f32; 2]>,
+    pub crank_at: Option<f32>,
+    pub shutdown: Option<[f32; 2]>,
+    pub shutdown_at: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -103,6 +120,13 @@ pub struct Sample {
     pub at: f32,
     pub gain: f32,
     pub pan: f32,
+    pub start: f32,
+    pub end: Option<f32>,
+    pub fade_in: f32,
+    pub fade_out: f32,
+    pub looped: bool,
+    pub loop_crossfade: f32,
+    pub length: Option<f32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -162,7 +186,7 @@ impl Script {
         let mut layers = Vec::new();
         for kind in KINDS {
             for (i, table) in tables(&root, kind)?.into_iter().enumerate() {
-                layers.push(layer(kind, table, i)?);
+                layers.push(layer(kind, table, i, dir)?);
             }
             top.mark(kind);
         }
@@ -177,6 +201,13 @@ impl Script {
                 at: f.number_or("at", 0.0)?,
                 gain: f.number_or("gain", 1.0)?,
                 pan: f.number_or("pan", 0.0)?.clamp(-1.0, 1.0),
+                start: f.number_or("start", 0.0)?.max(0.0),
+                end: f.number("end")?,
+                fade_in: f.number_or("fade_in", 0.0)?.max(0.0),
+                fade_out: f.number_or("fade_out", 0.0)?.max(0.0),
+                looped: f.flag("loop")?.unwrap_or(false),
+                loop_crossfade: f.number_or("loop_crossfade", 0.01)?.max(0.0),
+                length: f.number("length")?.map(|v| v.max(0.0)),
             });
             f.finish()?;
         }
@@ -213,6 +244,7 @@ impl Script {
                 Kind::Engine(e) => {
                     known(&e.rpm)?;
                     known(&e.load)?;
+                    known(&e.blend)?;
                 }
                 Kind::Road(r) => known(&r.speed)?,
                 Kind::Squeal(s) => {
@@ -242,7 +274,7 @@ impl Script {
             let seed = layer.common.seed.unwrap_or_else(|| {
                 pfx_core::sim::mix64(self.seed ^ pfx_core::sim::mix64(index as u64 + 1))
             });
-            let voice = layers::voice(&layer.kind, seed, &ctx);
+            let voice = layers::voice(&layer.kind, &layer.common, seed, &ctx)?;
             layers::run(voice, &layer.common, &ctx, &mut out);
         }
         for sample in &self.samples {
@@ -269,13 +301,60 @@ fn place(sample: &Sample, out: &mut [f32]) -> Result<(), String> {
         (1.0 - sample.pan).min(1.0) * sample.gain,
         (1.0 + sample.pan).min(1.0) * sample.gain,
     );
-    let at = (sample.at.max(0.0) * RATE as f32).round() as usize * 2;
-    for (i, frame) in pcm.chunks_exact(2).enumerate() {
-        let Some(dst) = out.get_mut(at + i * 2..at + i * 2 + 2) else {
-            break;
-        };
-        dst[0] += frame[0] * l;
-        dst[1] += frame[1] * r;
+    let to_frame = |s: f32| (f64::from(s.max(0.0)) * f64::from(RATE)).round() as usize;
+    let frames = pcm.len() / 2;
+    let first = to_frame(sample.start).min(frames);
+    let last = sample.end.map_or(frames, |e| to_frame(e).min(frames));
+    if last <= first {
+        return Ok(());
+    }
+    let clip = &pcm[first * 2..last * 2];
+    let len = last - first;
+    let at = (sample.at.max(0.0) * RATE as f32).round() as usize;
+    let room = (out.len() / 2).saturating_sub(at);
+    let wanted = sample.length.map(to_frame);
+    let total = if sample.looped {
+        wanted.unwrap_or(room)
+    } else {
+        wanted.map_or(len, |w| w.min(len))
+    }
+    .min(room);
+    let cross = if sample.looped {
+        to_frame(sample.loop_crossfade).min(len / 2)
+    } else {
+        0
+    };
+    let period = len - cross;
+    let fade_in = to_frame(sample.fade_in);
+    let fade_out = to_frame(sample.fade_out);
+    let read = |n: usize| -> [f32; 2] {
+        let pick = |i: usize| [clip[i * 2], clip[i * 2 + 1]];
+        if !sample.looped || n < cross {
+            return pick(n);
+        }
+        let i = (n - cross) % period;
+        let tail = period - cross;
+        if i < tail {
+            return pick(cross + i);
+        }
+        let k = (i - tail) as f32 / cross.max(1) as f32 * 0.25;
+        let (fo, fi) = (dsp::sin_turns(0.25 + k), dsp::sin_turns(k));
+        let a = pick(cross + i);
+        let b = pick(i - tail);
+        [a[0] * fo + b[0] * fi, a[1] * fo + b[1] * fi]
+    };
+    for n in 0..total {
+        let mut g = 1.0;
+        if fade_in > 0 {
+            g *= dsp::smooth_step(n as f32 / fade_in as f32);
+        }
+        if fade_out > 0 {
+            g *= dsp::smooth_step((total - n) as f32 / fade_out as f32);
+        }
+        let frame = read(n);
+        let dst = &mut out[(at + n) * 2..(at + n) * 2 + 2];
+        dst[0] += frame[0] * l * g;
+        dst[1] += frame[1] * r * g;
     }
     Ok(())
 }
@@ -340,8 +419,68 @@ fn curve(table: &toml::Table, i: usize) -> Result<Curve, String> {
     Ok(Curve { name, keys, ease })
 }
 
-fn layer(kind: &str, table: &toml::Table, i: usize) -> Result<Layer, String> {
-    let mut f = Fields::new(table, format!("[[{kind}]] {}", i + 1));
+fn recording(f: &mut Fields, at: &str, dir: &Path) -> Result<Option<Recording>, String> {
+    let path = f.text("sample")?;
+    let idle = f.numbers("idle")?;
+    let idle_rpm = f.number("idle_rpm")?;
+    let revs = f.triples("revs")?;
+    let reach = f.number("reach")?;
+    let keep_formants = f.flag("keep_formants")?;
+    let crank = f.numbers("crank")?;
+    let crank_at = f.number("crank_at")?;
+    let shutdown = f.numbers("shutdown")?;
+    let shutdown_at = f.number("shutdown_at")?;
+    let Some(path) = path else {
+        let given = idle.is_some()
+            || idle_rpm.is_some()
+            || revs.is_some()
+            || reach.is_some()
+            || keep_formants.is_some()
+            || crank.is_some()
+            || crank_at.is_some()
+            || shutdown.is_some()
+            || shutdown_at.is_some();
+        if given {
+            return Err(format!("{at}: the recording's keys need `sample`"));
+        }
+        return Ok(None);
+    };
+    let span = |v: Option<Vec<f32>>, key: &str| match v {
+        None => Ok(None),
+        Some(v) if v.len() == 2 && v[1] > v[0] && v[0] >= 0.0 => Ok(Some([v[0], v[1]])),
+        Some(_) => Err(format!(
+            "{at}: `{key}` must be [start_s, end_s] with end after start"
+        )),
+    };
+    let revs = revs.unwrap_or_default();
+    if revs
+        .iter()
+        .any(|r| r[0] <= 0.0 || r[2] <= r[1] || r[1] < 0.0)
+    {
+        return Err(format!(
+            "{at}: `revs` must be [[rpm, start_s, end_s], ...] with rpm above 0 and end after start"
+        ));
+    }
+    if idle_rpm.is_some_and(|r| r <= 0.0) {
+        return Err(format!("{at}: `idle_rpm` must be above 0"));
+    }
+    Ok(Some(Recording {
+        path: dir.join(path),
+        idle: span(idle, "idle")?,
+        idle_rpm,
+        revs,
+        reach: reach.unwrap_or(1.25).max(1.0),
+        keep_formants: keep_formants.unwrap_or(true),
+        crank: span(crank, "crank")?,
+        crank_at: crank_at.map(|v| v.max(0.0)),
+        shutdown: span(shutdown, "shutdown")?,
+        shutdown_at: shutdown_at.map(|v| v.max(0.0)),
+    }))
+}
+
+fn layer(kind: &str, table: &toml::Table, i: usize, dir: &Path) -> Result<Layer, String> {
+    let at = format!("[[{kind}]] {}", i + 1);
+    let mut f = Fields::new(table, at.clone());
     let common = Common {
         name: f.text("name")?,
         gain: f.value("gain", 1.0)?,
@@ -353,14 +492,24 @@ fn layer(kind: &str, table: &toml::Table, i: usize) -> Result<Layer, String> {
         seed: f.whole("seed")?,
     };
     let kind = match kind {
-        "engine" => Kind::Engine(Engine {
-            rpm: f.value("rpm", 900.0)?,
-            load: f.value("load", 1.0)?,
-            cylinders: f.whole("cylinders")?.unwrap_or(8).clamp(1, 16) as u32,
-            drive: f.number_or("drive", 6.0)?.clamp(0.0, 40.0),
-            lowpass: f.number_or("lowpass", 6_000.0)?.clamp(50.0, 20_000.0),
-            crackle: f.number_or("crackle", 0.0)?.clamp(0.0, 1.0),
-        }),
+        "engine" => {
+            let sample = recording(&mut f, &at, dir)?;
+            let cylinders = f.whole("cylinders")?.map(|c| c.clamp(1, 16) as u32);
+            Kind::Engine(Engine {
+                rpm: f.value("rpm", 900.0)?,
+                load: f.value("load", 1.0)?,
+                cylinders: if sample.is_none() {
+                    cylinders.or(Some(8))
+                } else {
+                    cylinders
+                },
+                drive: f.number_or("drive", 6.0)?.clamp(0.0, 40.0),
+                lowpass: f.number_or("lowpass", 6_000.0)?.clamp(50.0, 20_000.0),
+                crackle: f.number_or("crackle", 0.0)?.clamp(0.0, 1.0),
+                blend: f.value("blend", 0.5)?,
+                sample,
+            })
+        }
         "road" => Kind::Road(Road {
             speed: f.value("speed", 0.0)?,
             roughness: f.number_or("roughness", 0.4)?.clamp(0.0, 1.0),

@@ -3,6 +3,7 @@ use super::dsp::{
     Noise, OnePole, Pink, Svf, Wander, decay_per_sample, fract, pan, sin_turns, smooth_step,
 };
 use super::engine::Model;
+use super::recording::{Bank, Range};
 use super::{CONTROL, Common, Ctx, Kind, Knob, RATE};
 use crate::DriveCurve;
 use crate::drive::shape;
@@ -19,25 +20,47 @@ pub(crate) trait Voice {
     fn block(&mut self, ctx: &Ctx, t: f32, out: &mut [[f32; 2]]);
 }
 
-pub(crate) fn voice(kind: &Kind, seed: u64, ctx: &Ctx) -> Box<dyn Voice> {
+pub(crate) fn voice(
+    kind: &Kind,
+    common: &Common,
+    seed: u64,
+    ctx: &Ctx,
+) -> Result<Box<dyn Voice>, String> {
     let mut seeds = Noise::new(seed);
-    match kind {
-        Kind::Engine(e) => Box::new(EngineVoice {
-            model: Model::new(e.cylinders as usize, seeds.seed()),
-            rpm: ctx.knob(&e.rpm),
-            load: ctx.knob(&e.load),
-            drive_db: e.drive,
-            lowpass: e.lowpass,
-            crackle: e.crackle,
-            filter: Svf::new(e.lowpass, 0.707),
-            floor: Svf::new(25.0, 0.707),
-            last_load: None,
-            lift: 0.0,
-            pops: Noise::new(seeds.seed()),
-            pop_level: 0.0,
-            pop_decay: 0.0,
-            pop_filter: Svf::new(1_200.0, 1.2),
-        }),
+    Ok(match kind {
+        Kind::Engine(e) => {
+            let model = Model::new(e.cylinders.unwrap_or(8) as usize, seeds.seed());
+            let pops = Noise::new(seeds.seed());
+            let rpm = ctx.knob(&e.rpm);
+            let bank = match &e.sample {
+                Some(spec) => Some(Bank::load(
+                    spec,
+                    seeds.seed(),
+                    &rpm_range(rpm, common, ctx),
+                    e.cylinders.is_some(),
+                )?),
+                None => None,
+            };
+            Box::new(EngineVoice {
+                model: e.cylinders.map(|_| model),
+                bank,
+                blend: ctx.knob(&e.blend),
+                at: None,
+                rpm,
+                load: ctx.knob(&e.load),
+                drive_db: e.drive,
+                lowpass: e.lowpass,
+                crackle: e.crackle,
+                filter: Svf::new(e.lowpass, 0.707),
+                floor: Svf::new(25.0, 0.707),
+                last_load: None,
+                lift: 0.0,
+                pops,
+                pop_level: 0.0,
+                pop_decay: 0.0,
+                pop_filter: Svf::new(1_200.0, 1.2),
+            })
+        }
         Kind::Road(r) => Box::new(RoadVoice {
             speed: ctx.knob(&r.speed),
             roughness: r.roughness,
@@ -89,6 +112,30 @@ pub(crate) fn voice(kind: &Kind, seed: u64, ctx: &Ctx) -> Box<dyn Voice> {
             length: w.length,
         }),
         Kind::Ambience(a) => Box::new(City::new(a, seeds.seed(), ctx.seconds)),
+    })
+}
+
+fn rpm_range(rpm: Knob, common: &Common, ctx: &Ctx) -> Range {
+    let start = common.start.min(ctx.seconds);
+    let end = common
+        .end
+        .unwrap_or(ctx.seconds)
+        .min(ctx.seconds)
+        .max(start);
+    let steps = ((end - start) * 100.0).ceil().max(1.0) as usize;
+    let (mut low, mut high) = (f32::MAX, 0.0f32);
+    for i in 0..=steps {
+        let v = ctx
+            .get(rpm, start + (end - start) * i as f32 / steps as f32)
+            .max(1.0);
+        low = low.min(v);
+        high = high.max(v);
+    }
+    Range {
+        low,
+        high,
+        start,
+        end,
     }
 }
 
@@ -158,7 +205,10 @@ fn frame_to_seconds(frame: usize) -> f32 {
 }
 
 struct EngineVoice {
-    model: Model,
+    model: Option<Model>,
+    bank: Option<Bank>,
+    blend: Knob,
+    at: Option<u64>,
     rpm: Knob,
     load: Knob,
     drive_db: f32,
@@ -179,12 +229,29 @@ impl Voice for EngineVoice {
         let rpm = ctx.get(self.rpm, t).max(0.0);
         let load = ctx.get(self.load, t).clamp(0.0, 1.0);
         let dt = out.len() as f32 / RATE as f32;
-        if self.last_load.is_none() {
+        if self.last_load.is_none()
+            && let Some(model) = &mut self.model
+        {
             for _ in 0..WARMUP {
-                let x = self.model.tick(rpm, load);
+                let x = model.tick(rpm, load);
                 self.floor.high(x);
             }
         }
+        let at = *self.at.get_or_insert(seconds_to_frame(t) as u64);
+        self.at = Some(at + out.len() as u64);
+        let blend = ctx.get(self.blend, t);
+        let mix = self.bank.as_ref().map(|bank| {
+            let share = if self.model.is_some() {
+                bank.share(blend, rpm)
+            } else {
+                0.0
+            };
+            (
+                bank.weights(rpm),
+                pfx_core::sim::sqrtf(share),
+                pfx_core::sim::sqrtf(1.0 - share),
+            )
+        });
         let drop = (self.last_load.unwrap_or(load) - load).max(0.0) / dt;
         self.last_load = Some(load);
         let keep = super::dsp::exp_seconds(-dt / 0.4);
@@ -198,8 +265,18 @@ impl Voice for EngineVoice {
         );
         let drive = pfx_core::sim::powf(10.0, self.drive_db * (0.4 + 0.6 * load) / 20.0);
         let trim = 1.0 / pfx_core::sim::sqrtf(drive);
-        for frame in out.iter_mut() {
-            let x = self.floor.high(self.model.tick(rpm, load)) * ENGINE_LEVEL;
+        for (i, frame) in out.iter_mut().enumerate() {
+            let synth = match &mut self.model {
+                Some(model) => self.floor.high(model.tick(rpm, load)) * ENGINE_LEVEL,
+                None => 0.0,
+            };
+            let x = match (&mut self.bank, &mix) {
+                (Some(bank), Some((weights, of_synth, of_sample))) => {
+                    let tick = bank.tick(rpm, weights, at + i as u64);
+                    tick.run * (synth * of_synth + tick.sample * of_sample) + tick.shots
+                }
+                _ => synth,
+            };
             let mut y = self.filter.low(shape(DriveCurve::Tanh, x * drive) * trim);
             if pop_chance > 0.0 {
                 if self.pops.unit() < pop_chance {

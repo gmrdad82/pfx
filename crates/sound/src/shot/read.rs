@@ -112,6 +112,37 @@ impl<'a> Fields<'a> {
         }
     }
 
+    pub(crate) fn flag(&mut self, key: &'a str) -> Result<Option<bool>, String> {
+        match self.get(key) {
+            None => Ok(None),
+            Some(Toml::Boolean(b)) => Ok(Some(*b)),
+            Some(_) => Err(self.wrong(key, "true or false")),
+        }
+    }
+
+    pub(crate) fn triples(&mut self, key: &'a str) -> Result<Option<Vec<[f32; 3]>>, String> {
+        let Some(value) = self.get(key) else {
+            return Ok(None);
+        };
+        let want = || self.wrong(key, "an array of [a, b, c] triples");
+        let Toml::Array(items) = value else {
+            return Err(want());
+        };
+        items
+            .iter()
+            .map(|item| match item {
+                Toml::Array(row) if row.len() == 3 => {
+                    match (number(&row[0]), number(&row[1]), number(&row[2])) {
+                        (Some(a), Some(b), Some(c)) => Ok([a, b, c]),
+                        _ => Err(want()),
+                    }
+                }
+                _ => Err(want()),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some)
+    }
+
     pub(crate) fn mark(&mut self, key: &'a str) {
         if self.table.contains_key(key) {
             self.used.insert(key);
