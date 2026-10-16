@@ -3,16 +3,28 @@ name = "pfx-film"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "pfx's films: scripted films rendered offline at a fixed frame rate from any app behind the Show trait, with a scene timeline, a camera, looks, captions, SVG marks, a synthesised score and the frame and audio writer"
+description = "pfx's films: scripted films rendered offline at a fixed frame rate from any app behind the Show trait, with a scene timeline, a camera, looks, captions, SVG marks, a synthesised score and the frame and audio writer, and a built-in reel of footage, frame folders and cards"
 publish.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+video = ["dep:pito-codecs"]
+
 [dependencies]
 pfx-core = { path = "../core" }
+pfx-gpu = { path = "../gpu" }
 pfx-input = { path = "../input", default-features = false }
 pfx-live = { path = "../live" }
 pfx-sound = { path = "../sound" }
+pfx-text = { path = "../text" }
+pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.9.0", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"], optional = true }
 png = "0.18"
+pollster = "0.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+swash = "=0.2.10"
 toml = "0.9"
+
+[dev-dependencies]
+pfx-text = { path = "../text", features = ["fixture"] }

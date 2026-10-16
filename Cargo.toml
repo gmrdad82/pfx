@@ -22,9 +22,9 @@ authors.workspace = true
 [features]
 default = ["harness", "editor", "bench", "shot-sound"]
 editor = ["harness", "dep:pfx-editor"]
-bench = ["harness", "dep:pfx-bench", "dep:pfx-sound"]
+bench = ["harness", "dep:pfx-bench"]
+harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film"]
 shot-sound = ["bench", "pfx-sound/shot"]
-harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -46,6 +46,7 @@ pfx-editor = { path = "crates/editor", optional = true }
 pfx-bench = { path = "crates/bench", optional = true }
 pfx-sound = { path = "crates/sound", optional = true }
 pfx-project = { path = "crates/project", features = ["scaffold"], optional = true }
+pfx-film = { path = "crates/film", features = ["video"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

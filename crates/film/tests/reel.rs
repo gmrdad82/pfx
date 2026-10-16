@@ -1,0 +1,261 @@
+use pfx_film::reel::{Kind, Roll};
+use pfx_film::score::CHANNELS;
+use pfx_film::{Encoder, RATE};
+use std::path::{Path, PathBuf};
+
+const MARK: &str = include_str!("fixtures/mark.svg");
+const SCORE: &str = include_str!("fixtures/score.toml");
+const SIZE: [u32; 2] = [320, 180];
+const FPS: u32 = 30;
+const FOLDER: [u32; 2] = [64, 36];
+const FOLDER_FPS: u32 = 15;
+const TONE: f32 = 330.0;
+const WAV_RATE: u32 = 24_000;
+
+fn dir(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn shade(i: u32) -> [u8; 3] {
+    [40 + 50 * i as u8, 200 - 40 * i as u8, 90]
+}
+
+fn folder(at: &Path) {
+    let shot = at.join("shot");
+    std::fs::create_dir_all(&shot).unwrap();
+    for i in 0..4 {
+        let file = std::fs::File::create(shot.join(format!("{i:06}.png"))).unwrap();
+        let mut png = png::Encoder::new(file, FOLDER[0], FOLDER[1]);
+        png.set_color(png::ColorType::Rgb);
+        png.set_depth(png::BitDepth::Eight);
+        let pixels: Vec<u8> = (0..FOLDER[0] * FOLDER[1]).flat_map(|_| shade(i)).collect();
+        png.write_header()
+            .unwrap()
+            .write_image_data(&pixels)
+            .unwrap();
+    }
+    let n = WAV_RATE as usize * 4 / FOLDER_FPS as usize;
+    let samples: Vec<f32> = (0..n)
+        .flat_map(|k| {
+            let v = (std::f32::consts::TAU * TONE * k as f32 / WAV_RATE as f32).sin() * 0.5;
+            [v, v]
+        })
+        .collect();
+    pfx_film::write::wav(&shot.join("audio.wav"), &samples, WAV_RATE, 2).unwrap();
+    let manifest = format!(
+        "{{\"shot\": 1, \"frames\": 4, \"fps\": {FOLDER_FPS}, \"size\": [{}, {}], \"wav\": \"audio.wav\"}}",
+        FOLDER[0], FOLDER[1]
+    );
+    std::fs::write(shot.join("manifest.json"), manifest).unwrap();
+}
+
+#[cfg(feature = "video")]
+fn clip(at: &Path) {
+    use pito_codecs::media::{
+        AudioBuffer, Canvas, Choice, ExportOptions, Frame, PixelFormat, Prefs, TimeBase,
+        VideoFrame, export_frames,
+    };
+    let (w, h) = (96, 64);
+    let canvas = Canvas {
+        width: w,
+        height: h,
+        fps: (FPS, 1),
+        frames: Some(15),
+    };
+    let opts = ExportOptions {
+        prefs: Prefs {
+            decode: Choice::Cpu,
+            encode: Choice::Cpu,
+            ..Prefs::default()
+        },
+        ..ExportOptions::default()
+    };
+    export_frames(
+        &at.join("clip.mp4"),
+        canvas,
+        opts,
+        |n, _| {
+            if n >= 15 {
+                return Ok(None);
+            }
+            let mut frame =
+                Frame::new(PixelFormat::Yuv420p8, w, h, n as i64, TimeBase::new(1, FPS));
+            for (plane, value) in frame.planes.iter_mut().zip([81u8, 90, 240]) {
+                plane.data.fill(value);
+            }
+            Ok(Some(VideoFrame::Cpu(frame)))
+        },
+        |_, samples| {
+            Ok(AudioBuffer {
+                samples: (0..samples)
+                    .flat_map(|k| {
+                        let v =
+                            (std::f32::consts::TAU * 220.0 * k as f32 / RATE as f32).sin() * 0.4;
+                        [v, v]
+                    })
+                    .collect(),
+                rate: RATE,
+                channels: 2,
+            })
+        },
+        |_| true,
+    )
+    .unwrap();
+}
+
+fn script(at: &Path, clip: bool) -> PathBuf {
+    folder(at);
+    std::fs::write(at.join("mark.svg"), MARK).unwrap();
+    std::fs::write(at.join("score.toml"), SCORE).unwrap();
+    std::fs::write(at.join("font.ttf"), pfx_text::fixture::EB_GARAMOND).unwrap();
+    let mut text = format!(
+        "[film]\nsize = [{}, {}]\nfps = {FPS}\nscore = \"score.toml\"\nfont = \"font.ttf\"\nlayout = [{}, {}]\nseed = 5\n\n[style.title]\nsize = 40\nweight = 700\noutline = 2\n\n",
+        SIZE[0], SIZE[1], SIZE[0], SIZE[1]
+    );
+    if clip {
+        text.push_str(
+            "[[scene]]\nname = \"rec\"\nkind = \"clip\"\nfile = \"clip.mp4\"\nfrom = 0.1\nseconds = 0.2\nfit = \"fill\"\n\n[[scene.key]]\nat = 0.0\ngrain = 0.2\n\n[[scene.text]]\ntext = \"Rec\"\nstyle = \"title\"\nat = 0.0\n\n",
+        );
+    }
+    text.push_str(
+        "[[scene]]\nname = \"shot\"\nkind = \"frames\"\ndir = \"shot\"\nseconds = 0.2\nfit = \"fill\"\n\n\
+         [[scene]]\nname = \"end\"\nkind = \"card\"\ngradient = [\"#203040\", \"#102030\"]\nseconds = 0.3\nstill = \"end\"\n\n\
+         [[scene.key]]\nat = 0.0\nzoom = 1.0\n\n[[scene.key]]\nat = 0.3\nzoom = 1.2\nvignette = 0.5\n\n\
+         [[scene.text]]\ntext = \"The End\"\nstyle = \"title\"\nat = 0.0\nplace = [160, 60]\n\n\
+         [[scene.art]]\nkind = \"mark\"\nfile = \"mark.svg\"\nat = 0.0\nplace = [160, 120]\nsize = 30\ncheck = true\n\n\
+         [[scene.sound]]\nat = 0.0\nsound = \"thump\"\n",
+    );
+    let path = at.join("reel.film.toml");
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+fn a_footage_film_plans_its_scenes_and_refuses_what_it_cannot_play() {
+    let at = dir("reel-plan");
+    let path = script(&at, false);
+    let roll = Roll::open(&path).unwrap();
+    let plan = roll.plan();
+    let kinds: Vec<Kind> = plan.iter().map(|p| p.kind).collect();
+    assert_eq!(kinds, [Kind::Frames, Kind::Card]);
+    assert_eq!(roll.frames(), 6 + 9);
+    assert_eq!(plan[0].source, Some(at.join("shot")));
+    let pcod = roll.pcod(Path::new("/o"), Path::new("/o/f.mp4")).join(" ");
+    assert_eq!(
+        pcod,
+        "pcod frames /o/frames --audio /o/audio.wav --fps 30 /o/f.mp4"
+    );
+    let good = std::fs::read_to_string(&path).unwrap();
+    for (from, to) in [
+        ("kind = \"card\"", "kind = \"tape\""),
+        ("kind = \"card\"", "kind = \"card\"\nfile = \"x.mp4\""),
+        ("dir = \"shot\"", "dir = \"none\""),
+        ("dir = \"shot\"", "file = \"shot\""),
+        ("size = [320, 180]", "size = [321, 180]"),
+        ("fps = 30", "fps = 0"),
+        ("seconds = 0.2\nfit", "volume = 9\nseconds = 0.2\nfit"),
+        (
+            "gradient = [\"#203040\", \"#102030\"]",
+            "gradient = [\"#203040\", \"red\"]",
+        ),
+    ] {
+        let bad = at.join("bad.film.toml");
+        std::fs::write(&bad, good.replacen(from, to, 1)).unwrap();
+        assert!(Roll::open(&bad).is_err(), "{to}");
+    }
+}
+
+#[derive(Default)]
+struct Tape {
+    frames: Vec<Vec<u8>>,
+    stills: usize,
+    audio: Vec<f32>,
+}
+
+impl Encoder for Tape {
+    fn frame(&mut self, _index: u64, rgba: Vec<u8>, size: [u32; 2]) -> Result<(), String> {
+        assert_eq!(size, SIZE);
+        assert_eq!(rgba.len(), (SIZE[0] * SIZE[1] * 4) as usize);
+        self.frames.push(rgba);
+        Ok(())
+    }
+
+    fn still(&mut self, _name: &str, _rgba: Vec<u8>, _size: [u32; 2]) -> Result<(), String> {
+        self.stills += 1;
+        Ok(())
+    }
+
+    fn finish(&mut self, audio: Option<&[f32]>, rate: u32, channels: u16) -> Result<(), String> {
+        assert_eq!((rate, channels), (RATE, CHANNELS));
+        self.audio = audio.unwrap_or_default().to_vec();
+        Ok(())
+    }
+}
+
+fn centre(frame: &[u8]) -> [u8; 3] {
+    let at = ((SIZE[1] / 2 * SIZE[0] + SIZE[0] / 2) * 4) as usize;
+    [frame[at], frame[at + 1], frame[at + 2]]
+}
+
+fn near(a: [u8; 3], b: [u8; 3], by: i32) -> bool {
+    a.iter()
+        .zip(b)
+        .all(|(x, y)| (i32::from(*x) - i32::from(y)).abs() <= by)
+}
+
+fn energy(samples: &[f32]) -> f32 {
+    samples.iter().map(|s| s * s).sum::<f32>() / samples.len().max(1) as f32
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_footage_film_renders_the_same_frames_and_audio_every_time() {
+    let video = cfg!(feature = "video");
+    let at = dir("reel-shoot");
+    #[cfg(feature = "video")]
+    clip(&at);
+    let roll = Roll::open(&script(&at, video)).unwrap();
+    let mut one = Tape::default();
+    let mut two = Tape::default();
+    let done = roll.roll(Some(&mut one)).unwrap();
+    roll.roll(Some(&mut two)).unwrap();
+    assert_eq!(done.frames, roll.frames());
+    assert_eq!(one.frames.len() as u64, roll.frames());
+    assert_eq!(one.stills, 1);
+    assert!(one.frames == two.frames, "the frames differ between runs");
+    assert!(one.audio == two.audio, "the audio differs between runs");
+    let lead = if video { 6 } else { 0 };
+    if video {
+        let red = centre(&one.frames[2]);
+        assert!(
+            red[0] > 150 && red[1] < 90 && red[2] < 90,
+            "the clip shows: {red:?}"
+        );
+        let clip_audio = &one.audio[..(RATE as usize / 10) * 2];
+        assert!(energy(clip_audio) > 0.01, "the clip's audio plays");
+    }
+    let shown: Vec<[u8; 3]> = (0..6).map(|i| centre(&one.frames[lead + i])).collect();
+    for (i, colour) in shown.iter().enumerate() {
+        assert!(
+            near(*colour, shade(i as u32 / 2), 3),
+            "frame {i} of the folder shows {colour:?}, not {:?}",
+            shade(i as u32 / 2)
+        );
+    }
+    let from = (lead * RATE as usize / FPS as usize) * 2;
+    let folder_audio = &one.audio[from..from + (RATE as usize / 10) * 2];
+    assert!(energy(folder_audio) > 0.05, "the folder's WAV plays");
+    let card = &one.frames[lead + 6 + 4];
+    let lit = card
+        .chunks_exact(4)
+        .filter(|p| p[0] > 120 && p[1] > 120 && p[2] > 120)
+        .count();
+    assert!(
+        lit > 50,
+        "the card's caption and mark draw ({lit} light pixels)"
+    );
+    assert!(one.audio.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
+}

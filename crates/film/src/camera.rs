@@ -74,7 +74,7 @@ pub fn layout(out: [u32; 2]) -> [f32; 2] {
 }
 
 pub fn layout_in(wide: [f32; 2], out: [u32; 2]) -> [f32; 2] {
-    if out[1] > out[0] {
+    if (out[1] > out[0]) != (wide[1] > wide[0]) {
         [wide[1], wide[0]]
     } else {
         wide
