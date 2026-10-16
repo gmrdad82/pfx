@@ -329,6 +329,7 @@ pub(super) fn build(
         }
         None => None,
     };
+    let finish = super::flare::fold(finish, resolved.flare.as_ref());
     let plates = match &resolved.plates {
         Some(plates) => {
             let holder = places.holder(&resolved.files, "plates");
@@ -431,8 +432,8 @@ fn build_library(
 fn build_haze(haze: &file::Haze) -> Haze {
     let amount = haze.amount.unwrap_or(0.0);
     Haze {
-        lo: haze.lo,
-        hi: haze.hi,
+        lo: haze.lo.unwrap_or_default(),
+        hi: haze.hi.unwrap_or_default(),
         fog: haze.fog.unwrap_or(amount / 6.0),
         smoke: haze.smoke.unwrap_or(amount * 20.0),
         mist: haze.mist.unwrap_or(amount * 0.2),
@@ -1371,6 +1372,18 @@ fn pass_line(text: &str, place: usize) -> Option<usize> {
         .map(|(number, _)| number + 1)
 }
 
+fn finish_file(
+    places: &Places,
+    reader: &mut Reader,
+    hasher: &mut Sha256,
+    relative: &str,
+) -> Result<Vec<u8>, String> {
+    let bytes = reader.read(&places.root.join(relative))?;
+    hasher.update(relative.as_bytes());
+    hasher.update(sha256(&bytes));
+    Ok(bytes)
+}
+
 fn build_finish(
     places: &Places,
     holder: &Path,
@@ -1399,12 +1412,14 @@ fn build_finish(
             hasher.update(sha256(&bytes));
             let text = String::from_utf8(bytes)
                 .map_err(|_| SceneError::new(&path, None, "the finish is not UTF-8"))?;
-            pfx_post::parse_str(&text)
+            let mut files = |relative: &str| finish_file(places, reader, &mut hasher, relative);
+            pfx_post::parse_str_with(&text, &mut files)
                 .map_err(|error| SceneError::new(&path, None, error.to_string()))?
         }
         None => {
             hasher.update(base.to_string().as_bytes());
-            pfx_post::parse(&base)
+            let mut files = |relative: &str| finish_file(places, reader, &mut hasher, relative);
+            pfx_post::parse_with(&base, &mut files)
                 .map_err(|error| places.refusal(holder, &steps, format!("[finish]: {error}")))?
         }
     };
@@ -1420,8 +1435,9 @@ fn build_finish(
         let Some(pass) = item.as_table() else {
             return Err(refuse("a [[finish.pass]] is a table of finish keys".into()));
         };
-        let built =
-            pfx_post::parse(pass).map_err(|error| refuse(format!("[[finish.pass]]: {error}")))?;
+        let mut files = |relative: &str| finish_file(places, reader, &mut hasher, relative);
+        let built = pfx_post::parse_with(pass, &mut files)
+            .map_err(|error| refuse(format!("[[finish.pass]]: {error}")))?;
         if built.passes.is_empty() {
             return Err(refuse("a [[finish.pass]] builds no pass".into()));
         }

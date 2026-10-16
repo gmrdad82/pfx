@@ -24,13 +24,50 @@ The files are format 1 of the public crate `pfx-scene`, which owns the format: e
 - **Sky.** An analytic sky follows the sun. A mix sky is baked once, on load, into one HDR at the width of its widest HDR or room layer (`256` when every layer is analytic); an analytic layer is evaluated per texel with `AnalyticSky::diffuse`, the sky without its sun disc. The live renderer and the tracer both draw that HDR. Without `[sky]` the sky is black.
 - **Emitters.** An emitter is a 12 × 24 sphere with a black, fully rough, emissive material named `emitter <name>` radiating `intensity / (π radius²)` per channel; it casts no shadow.
 - **Camera.** `shift` is live's off-centre projection and the tracer's `Lens::shift`. `fstop` is depth of field through a thin lens of the camera's focal length: live `dof::Lens`, traced `Lens::aperture` (`focal / fstop`). `[camera.preset]` tunes `pfx_core::camera::Preset`.
-- **Finish.** `file`, or the inline keys, build the chain as `pfx_post::parse` does: a style's passes first, then each key adds or tunes its pass at that parser's own place. `[[finish.pass]]` tables apply in the order written, each built from nothing, after the base. A pass that builds nothing is refused with its line. Without `[finish]` the renderer's standard finish.
+- **Finish.** `file`, or the inline keys, build the chain as `pfx_post::parse` does: a style's passes first, then each key adds or tunes its pass at that parser's own place. `[[finish.pass]]` tables apply in the order written, each built from nothing, after the base. A pass that builds nothing is refused with its line. Without `[finish]` the renderer's standard finish. `lut = "<path.cube>"` grades through an Adobe or Resolve `.cube` file (see [`[finish] lut`](#finish-lut-a-cube-file)); `lut` as a table (`size`, `values`) is the inline cube.
 - **Haze.** The live renderer marches it (`Renderer::set_haze`); the tracer has no room haze and draws the scene clear.
 - **Movers.** At time `t`, `u = (t + offset) / period` and the mover stands at `from + (to − from) · f(u)`. A child's own mover applies first, then its parent's, up the chain. The time is the one the viewer passes to `Staged::frame` (and `pfx_trace::stage::scene_at`); at `0` every swing and once mover stands at `from`.
 - **Content.** An object that names a content shows its image in its material's content layer slot; two objects showing different content through one slot are refused when staged.
 - **Text.** The block is laid out with the font at `size` per em and centred on `at`; it reads along its local +X with +Y up and faces +Z. `Staged` draws it through the live text pass (`Staged::text`), and the tracer letters it on a carrier card, so both agree.
 - **A prefab's text moves with its placement.** Its `at` and `rotate` are in the prefab's space: `Text::place` is the placement object's world matrix (the identity for a scene's own text), and `Text::model()` applies it, so the text moves, turns and scales with its group, and a prefab placed twice draws its text twice.
 - **Bound text.** A `{key}` in `text` is filled when the scene loads, with the value bound to `key`: `pfx_load::scene::bind(key, value)` sets it for the process, `bound(key)` reads it and `filled(text)` fills a string. A key is letters, digits, `_`, `-` and `.`; a token with no value, and anything else in braces, stays as written. `pfx_game::Config::bind_text()` binds `name` and `version` from the game's config: the game's window, `Headless` and `<game> edit` call it before a scene loads, and `pfx edit <project>` binds the project's name and its `Cargo.toml`'s `[package] version` (`Project::version()`). The text is filled at load, so play, the editor's viewport, hot reload and the tracer show the same text. `pfx bake` runs with nothing bound, so a bound text in a plated scene is `dynamic = true`.
+
+### `[finish] lut`: a `.cube` file
+
+```toml
+[finish]
+lut = "looks/lilac.cube"
+lut_amount = 0.8
+```
+
+| Key | Range | Default | What it does |
+|---|---|---|---|
+| `lut` | a `.cube` path from the project root, or a `{ size, values }` table | none | adds the LUT pass before the tone curve |
+| `lut_amount` | 0 to 1 | 1 | mixes the graded colour over the ungraded one; needs a `lut` |
+
+The file is read through the scene's reader, so scene watch reloads the finish when the `.cube` changes, and its bytes are in the finish's hash. `pfx_post::cube::parse` reads `LUT_3D_SIZE` (2 to 64), `LUT_1D_SIZE` (2 to 65536, one curve per channel), `DOMAIN_MIN` and `DOMAIN_MAX` (the input is mapped from them to 0 to 1), Resolve's `LUT_1D_INPUT_RANGE` and `LUT_3D_INPUT_RANGE`, `TITLE`, `#` comments and other upper-case keywords before the data; red changes fastest. It refuses, with the line, a file over 16 MiB, one that is not UTF-8, no size or two sizes, a size out of range, a keyword after the data, an entry that is not three finite numbers, too few or too many entries, and a domain whose minimum is not below its maximum; nothing in a malformed file panics. The table form's `size` is 2 to 64. `pfx_post::cube::generate(size, map)` and `cube::format` write a `.cube` from a colour function, which is how the tests make their identity and lilac cubes.
+
+### `[flare]`
+
+```toml
+[flare]
+amount = 0.15
+threshold = 6.0
+```
+
+Lens flare and sun glare from the frame's brightest parts: ghosts mirrored through the centre, a halo ring and a starburst, as Filament draws them. Without `[flare]` nothing changes; with it the flare pass goes into the finish after its bloom (before the LUT and tone curve when there is no bloom), and a scene with `[flare]` but no `[finish]` runs it on the standard finish (bloom, flare, ACES). Every key is optional:
+
+| Key | Range | Default | What it does |
+|---|---|---|---|
+| `amount` | 0 and up | 0.1 | strength of the composite; 0 turns the pass off |
+| `ghosts` | 0 to 16 | 4 | mirrored ghosts; 0 drops them |
+| `ghost_spacing` | 0 and up, under 1 in use | 0.6 | spacing of the ghosts toward the centre, in screen units |
+| `halo` | 0 and up | 0.1 | halo ring thickness, in screen heights; 0 drops it |
+| `halo_radius` | 0 and up, 0 to 0.5 in use | 0.4 | halo ring radius, in screen heights |
+| `starburst` | 0 to 1 | 1 | how much of the starburst mask the flare takes |
+| `threshold` | 0 and up | 10 | the HDR level, above the bloom input's 1, that a pixel must pass to make ghosts and halo |
+
+`--set flare.amount=0.2` and the editor edit it through the scene edit path (`Target::Flare`). The renderer side and its cost are in [live-renderer.md](live-renderer.md#lens-flare-and-cube-luts).
 
 ### `[trace]`
 
