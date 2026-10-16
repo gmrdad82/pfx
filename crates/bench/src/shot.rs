@@ -1,6 +1,6 @@
-use pfx_gpu::Gpu;
 use pfx_gpu::pace::{Pace, WallClock, gpu_ms};
-use pfx_live::renderer::Renderer;
+use pfx_gpu::{Gpu, wgpu};
+use pfx_live::renderer::{Exposure, Renderer};
 use pfx_live::shadow::Quality as Shadows;
 use pfx_load::scene::{Camera, Matrix, Physics, Projection, Scene, multiply};
 use pfx_play::{ObjectId, Options, PlaySession, SceneGame, World};
@@ -99,10 +99,11 @@ pub fn draft_shadows(quality: Shadows) -> Shadows {
     }
 }
 
-pub fn warm_frames(quality: Quality, from: u64) -> u64 {
-    match quality {
-        Quality::Draft => 0,
-        Quality::Final => WARM_FRAMES.min(from),
+pub fn warm_frames(quality: Quality, from: u64, adapts: bool) -> u64 {
+    match (adapts, quality) {
+        (true, _) => from,
+        (false, Quality::Draft) => 0,
+        (false, Quality::Final) => WARM_FRAMES.min(from),
     }
 }
 
@@ -274,7 +275,8 @@ pub fn play(
         }
     };
 
-    let warm = warm_frames(shot.quality, shot.from);
+    let adapts = matches!(renderer.exposure_mode(), Exposure::Auto { .. });
+    let warm = warm_frames(shot.quality, shot.from, adapts);
     let first = shot.from - warm;
     let last = shot.from + shot.frames;
     let aspect = width as f32 / height as f32;
@@ -323,6 +325,9 @@ pub fn play(
         if let Some(error) = failed {
             return Err(error);
         }
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|error| format!("{error:?}"))?;
         if number < shot.from {
             continue;
         }
@@ -365,5 +370,10 @@ mod tests {
         assert_eq!(focus_at(&[[1.0, 4.0], [2.0, 8.0]], 0.0), Some(4.0));
         assert_eq!(focus_at(&[[1.0, 4.0], [2.0, 8.0]], 3.0), Some(8.0));
         assert_eq!(focus_at(&[], 1.0), None);
+        assert_eq!(warm_frames(Quality::Draft, 300, true), 300);
+        assert_eq!(warm_frames(Quality::Final, 300, true), 300);
+        assert_eq!(warm_frames(Quality::Draft, 300, false), 0);
+        assert_eq!(warm_frames(Quality::Final, 300, false), WARM_FRAMES);
+        assert_eq!(warm_frames(Quality::Final, 3, false), 3);
     }
 }

@@ -168,11 +168,11 @@ fn rig_glb() -> Vec<u8> {
     glb(&document, &bin)
 }
 
-fn folder() -> PathBuf {
+fn folder(name: &str) -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let folder = root
         .join("tmp")
-        .join(format!("shot-e2e-{}", std::process::id()));
+        .join(format!("shot-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&folder);
     std::fs::create_dir_all(&folder).unwrap();
     for entry in std::fs::read_dir(root.join("crates/load/tests/scenes")).unwrap() {
@@ -185,11 +185,16 @@ fn folder() -> PathBuf {
 }
 
 fn shot(folder: &Path, out: &str, extra: &[&str]) -> Output {
+    shot_of(folder, out, &["--frames", "4", "--from", "2"], extra)
+}
+
+fn shot_of(folder: &Path, out: &str, range: &[&str], extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pfx"))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .arg("shot")
         .arg(folder.join("shot.scene.toml"))
-        .args(["--frames", "4", "--from", "2", "--size", "64x64", "--fps"])
+        .args(range)
+        .args(["--size", "64x64", "--fps"])
         .arg(FPS.to_string())
         .arg("--out")
         .arg(folder.join(out))
@@ -220,7 +225,7 @@ fn frames(dir: &Path) -> Vec<Vec<u8>> {
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
 fn two_shots_of_an_animated_glb_give_the_same_bytes_and_follow_its_camera_node() {
-    let folder = folder();
+    let folder = folder("twice");
     let args = ["--camera", "chase", "--final", "--json"];
     let first = lines(&shot(&folder, "a", &args));
     let second = lines(&shot(&folder, "b", &args));
@@ -253,5 +258,30 @@ fn two_shots_of_an_animated_glb_give_the_same_bytes_and_follow_its_camera_node()
             .unwrap();
     assert_eq!(manifest["fps"], json!(FPS));
     assert_eq!(manifest["size"], json!([64, 64]));
+    std::fs::remove_dir_all(&folder).unwrap();
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_shot_started_late_writes_the_frame_a_full_run_writes() {
+    let folder = folder("late");
+    let late = shot_of(
+        &folder,
+        "late",
+        &["--frames", "1", "--from", "30"],
+        &["--json"],
+    );
+    let full = shot_of(
+        &folder,
+        "full",
+        &["--frames", "31", "--from", "0"],
+        &["--json"],
+    );
+    assert_eq!(lines(&late).last().unwrap()["warm_frames"], json!(30));
+    lines(&full);
+    assert_eq!(
+        std::fs::read(folder.join("late").join("000000.png")).unwrap(),
+        std::fs::read(folder.join("full").join("000030.png")).unwrap()
+    );
     std::fs::remove_dir_all(&folder).unwrap();
 }

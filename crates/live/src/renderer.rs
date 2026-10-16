@@ -1678,6 +1678,10 @@ impl Renderer {
         };
     }
 
+    pub fn exposure_mode(&self) -> Exposure {
+        self.exposure_mode
+    }
+
     pub fn set_exposure(&mut self, exposure: Exposure) -> Result<(), String> {
         if exposure != self.exposure_mode {
             self.touch();

@@ -42,8 +42,10 @@ Animations play through the play session as in a game ([Animation](animation.md#
 
 ## Draft and final
 
-- **Draft** (the default) uses the scene's settings, with the sun's shadow map at half its resolution (never below 512). Every frame renders once, and TAA settles over the first frames as it does live.
-- **Final** keeps the scene's full shadow resolution. It also renders the up to 8 frames before `--from` and discards them, so TAA's history and auto exposure are settled on the first written frame. With `--from 0` there is nothing before the first frame to warm on, so start a final shot a few frames in when its first frame matters.
+- **Draft** (the default) uses the scene's settings, with the sun's shadow map at half its resolution (never below 512).
+- **Final** keeps the scene's full shadow resolution.
+
+Frame N of a shot started with `--from N` is the same, byte for byte, as frame N of a run from 0. The live renderer meters exposure automatically: it starts at 1.0 and adapts towards the frame's mean luminance over about half a second. That state depends on every frame before, so under auto exposure, the renderer's default, both draft and final render frames 0 to N − 1 first without writing or reading them back. A warm frame costs its GPU time and the simulation, about a draft frame without its readback and PNG: 4.8 ms each for the room at 2160x3840 (below), so `--from 300` adds about 1.5 s. After each frame the shot waits for the GPU, exposure meter readback included, so the next frame's exposure never depends on when a readback lands. When exposure is fixed, final renders only the up to 8 frames before `--from` to settle TAA's history, and draft none; frames then match a full run once TAA has settled, not bit for bit. The manifest records `warm_frames`. With `--from 0` there is nothing before the first frame, and TAA settles over the first frames as it does live.
 
 The live renderer's TAA jitter follows the scene clock (its sample index is round(t × 60)). Rendering one frame time several times therefore adds no samples, and final does not supersample. A larger internal size would change every pixel-sized effect and cost four times the GPU time. The manifest records `shadow_resolution` and `warm_frames`.
 
