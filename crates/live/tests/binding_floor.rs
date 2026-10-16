@@ -1,6 +1,6 @@
 use pfx_gpu::floor::SAMPLED_TEXTURES_PER_STAGE;
 use pfx_gpu::{layout_shortfall, live_floor, stage_bindings, wgpu};
-use pfx_live::{canopy, deform, flat, frame, glass, maps, plates, shadow, text};
+use pfx_live::{canopy, deform, flat, frame, glass, maps, particles, plates, probes, shadow, text};
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -83,6 +83,15 @@ fn layouts() -> Vec<(&'static str, Vec<Entries>)> {
         (
             "plate composite",
             vec![plates::composite_entries(), plates::cascade_entries()],
+        ),
+        (
+            "live spray layout",
+            vec![
+                particles::spray_entries(),
+                Vec::new(),
+                Vec::new(),
+                probes::ProbeLighting::layout_entries(),
+            ],
         ),
     ]
 }

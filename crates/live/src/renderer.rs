@@ -179,6 +179,7 @@ pub struct Liquid<'a> {
 pub struct Effects<'a> {
     pub volume: Option<Volume>,
     pub particles: &'a [ParticleInstance],
+    pub sprays: &'a [crate::particles::SprayInstance],
     pub creatures: &'a [CreatureInstance],
     pub creature_mesh: Option<&'a CreatureMesh>,
     pub glass: &'a [glass::Surface],
@@ -651,6 +652,7 @@ pub struct Renderer {
     glass: glass::Pass,
     impostors: Option<ImpostorPass>,
     petals: Option<Petals>,
+    sprays: Option<crate::particles::SprayPass>,
     lod: LodSet,
     post: GpuChain,
     dof: dof::GpuDof,
@@ -1307,6 +1309,7 @@ impl Renderer {
             glass: glass::Pass::new(device, width, height),
             impostors: None,
             petals: None,
+            sprays: None,
             lod: LodSet::new(2_000_000),
             post,
             dof: dof::GpuDof::new(device, width, height),
@@ -3226,6 +3229,42 @@ impl Renderer {
                 self.profiler.render_writes(timing),
             );
             self.pass_log.push("particles");
+        }
+        if !cached && !effects.sprays.is_empty() {
+            let spray_view = crate::particles::SprayView {
+                view_proj: jittered,
+                motion_view_proj: frame::multiply(scene.camera.projection, scene.camera.view),
+                previous_view_proj: scene.camera.previous_view_projection,
+                eye: scene.camera.position,
+                right,
+                up: view.up,
+                forward: view.forward,
+                sun: scene.sun.direction,
+                sun_color: scene.sun.colour,
+                sun_intensity: scene.sun.intensity,
+                sky_sh: self.frame.sky().lighting.sh,
+                size: [width, height],
+            };
+            let pass = self.sprays.get_or_insert_with(|| {
+                crate::particles::SprayPass::new(device, self.frame.probes())
+            });
+            let timing = self.profiler.pass("sprays");
+            pass.render(
+                device,
+                &mut encoder,
+                &spray_view,
+                crate::particles::SprayTargets {
+                    hdr: &self.frame.targets.hdr.view,
+                    velocity: &self.frame.targets.velocity_view,
+                    depth: current_depth,
+                    shadow: (self.shadows.atlas_view(), self.frame.shadow_uniform()),
+                    lights: self.frame.lights().lights(),
+                    probes: self.frame.probes(),
+                },
+                effects.sprays,
+                self.profiler.render_writes(timing),
+            );
+            self.pass_log.push("sprays");
         }
         if let Some(mesh) = effects.creature_mesh
             && !effects.creatures.is_empty()

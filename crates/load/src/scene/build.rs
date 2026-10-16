@@ -315,6 +315,7 @@ pub(super) fn build(
         .iter()
         .map(|entry| (entry.key.clone(), build_emitter(&entry.value)))
         .collect();
+    let particles = super::particles::build(&places, &resolved.particles, &objects, &meshes)?;
     let camera = match &resolved.camera {
         Some(camera) => {
             let holder = places.holder(&resolved.files, "camera");
@@ -367,6 +368,7 @@ pub(super) fn build(
         movers,
         lights,
         emitters,
+        particles,
         camera,
         finish,
         trace: resolved
@@ -431,8 +433,8 @@ fn build_library(
 fn build_haze(haze: &file::Haze) -> Haze {
     let amount = haze.amount.unwrap_or(0.0);
     Haze {
-        lo: haze.lo,
-        hi: haze.hi,
+        lo: haze.lo.unwrap_or_default(),
+        hi: haze.hi.unwrap_or_default(),
         fog: haze.fog.unwrap_or(amount / 6.0),
         smoke: haze.smoke.unwrap_or(amount * 20.0),
         mist: haze.mist.unwrap_or(amount * 0.2),

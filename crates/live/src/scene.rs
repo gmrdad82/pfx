@@ -126,6 +126,8 @@ pub struct Staged {
     camera: SceneCamera,
     sun: SceneSun,
     plate: crate::plates::PlateMode,
+    sprays: crate::particles::Sprays,
+    spray_instances: Vec<crate::particles::SprayInstance>,
 }
 
 fn mesh_data(geometry: &Geometry) -> MeshData<'_> {
@@ -366,6 +368,8 @@ impl Renderer {
             camera: scene.camera_or_default(),
             sun: scene.sun_or_dark(),
             plate: crate::plates::PlateMode::default(),
+            sprays: crate::particles::Sprays::of(scene),
+            spray_instances: Vec::new(),
         };
         staged.plate.load(self, scene, true)?;
         staged.place(self, scene, draws, wanted)?;
@@ -547,6 +551,9 @@ impl Staged {
         let mut applied = Applied::default();
         if diff.is_empty() {
             return Ok(applied);
+        }
+        if !self.sprays.same(scene) {
+            self.sprays = crate::particles::Sprays::of(scene);
         }
         if diff.camera {
             self.camera = scene.camera_or_default();
@@ -744,6 +751,7 @@ impl Staged {
 
     pub fn frame(&mut self, aspect: f32, time: f32, seed: u32) -> StagedFrame<'_> {
         self.pose(time);
+        self.spray(time);
         StagedFrame {
             scene: self.scene(aspect, time, seed),
             text: self.text(aspect),
@@ -779,9 +787,25 @@ impl Staged {
         }
     }
 
+    pub fn spray(&mut self, time: f32) {
+        if self.sprays.is_empty() {
+            return;
+        }
+        let camera = self.camera;
+        let posing = self.posing.as_ref();
+        self.sprays
+            .seek_posed(time, |t| posing.map(|scene| scene.posed(&camera, t)));
+        self.sprays.pack(&mut self.spray_instances);
+    }
+
+    pub fn sprays(&self) -> &crate::particles::Sprays {
+        &self.sprays
+    }
+
     pub fn effects(&self) -> Effects<'_> {
         Effects {
             glass: &self.glass,
+            sprays: &self.spray_instances,
             ..Effects::default()
         }
     }

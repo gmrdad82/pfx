@@ -2,6 +2,7 @@ pub mod director;
 pub mod journal;
 mod math;
 mod overlap;
+pub mod particles;
 mod rng;
 pub mod shots;
 
@@ -22,5 +23,7 @@ mod tests_journal;
 mod tests_math;
 #[cfg(test)]
 mod tests_overlap;
+#[cfg(test)]
+mod tests_particles;
 #[cfg(test)]
 mod tests_rng;

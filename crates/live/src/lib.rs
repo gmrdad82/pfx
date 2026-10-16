@@ -16,6 +16,7 @@ pub mod lod;
 pub mod maps;
 pub mod morph;
 pub mod noise_tiles;
+pub mod particles;
 pub mod pipeline_cache;
 pub mod plates;
 pub mod probes;

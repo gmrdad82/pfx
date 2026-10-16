@@ -98,6 +98,18 @@ In the package `pfx-sound` (feature `voicefx`), the chorus in `crates/sound/src/
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## bevy_hanabi, under the MIT licence
+
+In the package `pfx-core`, `crates/core/src/sim/particles.rs` ports bevy_hanabi's GPU-free parts (https://github.com/djeedai/bevy_hanabi, version 0.19.0 at commit `cf35d53d54fb973e30c635e7097ff3e6abf33099`): the spawner's fractional remainder (`src/spawn.rs`, `EffectSpawner::tick`), the gradient's sampling with its first-of-duplicates rule (`src/gradient.rs`, `Gradient::sample`) and the circle basis of `SetPositionCircleModifier` (`src/modifier/position.rs`), by Jerome Humbert, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+
+> Copyright (c) 2021 Jerome Humbert
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 ## librosa, under the ISC licence
 
 In the package `pfx-sound` (feature `voicefx`), the spectral-flux onsets in `crates/sound/src/voicefx/syllables.rs` (the positive rise in dB averaged over bands with lag 1, `power_to_db`'s 1e-10 floor and 80 dB range, the min and max normalisation, `onset_detect`'s peak-picking windows of 30 ms, 100 ms and a 0.07 threshold, and the greedy `peak_pick`) are ported from librosa (https://github.com/librosa/librosa, `librosa/onset.py` and `librosa/util/utils.py`, commit `08e2c0a20d650fe00f10aaf3a1eaa9698ac19641`), licensed ISC:

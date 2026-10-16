@@ -70,6 +70,39 @@ A tile layer is pfx-scene's grid of prefab placements in a plane (`[[tiles]]`: `
 
 An object's glTF clips or a sprite of an image atlas, played in play mode and drawn live ([animation.md](animation.md)). pfx-load reads it into `Scene::animations`, keyed by the object, and checks the glTF clip names and the sprite frames against the files. An animated object is dynamic, so a plate never bakes it. A sprite's atlas becomes the object's content (`sprite:<object>`), shown through its material's content layer at its first frame until play steps it.
 
+### `[[particles]]`: 3D emitters
+
+A deterministic emitter simulated on a 1/120 s grid and drawn by the live renderer's `sprays` pass ([particles.md](particles.md)). pfx-load reads each into `Scene::particles` (`pfx_load::scene::Particles`, keyed by `name`), and `SceneDiff::particles` flags an edit; a scene watch reload restarts the emitters. Every key but `name` is optional; without `[[particles]]` nothing is drawn and the frame is byte-identical. The tracer draws no particles.
+
+| Key | Meaning | Range | Default |
+|---|---|---|---|
+| `name` | the emitter's key | text | required |
+| `parent` | the object it rides; refused when the scene has no such object | object key | none, world space |
+| `node` | a glTF node inside the parent's mesh (`hero.wheel_rl`); its animated motion in play mode, its file placement otherwise; refused when the mesh has no such node, or without `parent` | node name | none |
+| `at` | the spawn point, in the node's (else the parent's) local space | metres | `[0, 0, 0]` |
+| `rate` | particles per second | ≥ 0 | `0` |
+| `rate_keys` | `[[t, rate], ...]` over scene time `t` in seconds, linear between keys and held past the ends; replaces `rate` when set | t in order, rate ≥ 0 | none |
+| `burst` | particles spawned at once on the first step | ≥ 0 | `0` |
+| `max` | the pool cap; spawns past it are dropped | ≥ 0 | `1024` |
+| `lifetime` | `[min, max]` life, uniform | seconds, 0 ≤ min ≤ max, max > 0 | `[1, 1]` |
+| `speed` | `[min, max]` spawn speed, uniform | m/s, 0 ≤ min ≤ max | `[1, 1]` |
+| `direction` | the cone's axis, turned with the parent | vector | `[0, 1, 0]` |
+| `cone` | the cone's half-angle; `180` is every direction | 0 to 180 degrees | `0` |
+| `inherit` | share of the spawn point's own velocity added | 0 to 1 | `0` |
+| `gravity` | acceleration | m/s² | `[0, 0, 0]` |
+| `drag` | `v *= exp(−drag · dt)` | ≥ 0, 1/s | `0` |
+| `size` | `[start, end]` across, linear over life | metres, ≥ 0 | `[0.1, 0.1]` |
+| `alpha` | `[[t, a], ...]` over life `t` | both 0 to 1 | `[[0, 1], [1, 0]]` |
+| `color` (`colour`) | one colour, `"#rrggbb"` (sRGB) or `[r, g, b]` linear | | white |
+| `colors` (`colours`) | `[[t, "#rrggbb"], ...]` over life; replaces `color` | t 0 to 1 | none |
+| `spin` | `[min, max]` spin, either way | rad/s | `[0, 0]` |
+| `stretch` | velocity stretch: the quad lengthens by `stretch · speed` metres along its screen motion | ≥ 0 seconds | `0` |
+| `blend` | `"alpha"` covers what is behind, `"add"` adds light | | `"alpha"` |
+| `lit` | lit by the sun and its shadows, the probes or sky and local lights; unlit emits its colour | | `true` |
+| `seed` | the emitter's random stream | u64 | a hash of `name` |
+
+From the CLI and the editor these are keys of `Target::Particles(name)`, so `--set particles.<name>.<key>=<value>` (`--set particles.spray.rate=800`) goes through the same `SceneEdit` path as a hand edit and reaches the window through the scene watch.
+
 ## Reload
 
 `SceneWatch::open(path)` loads the scene and watches the folder of every file it read: the scene, its includes, libraries, glTF files and their buffers, the HDR, the finish file, content images and fonts. It decides by content: an event leads to rehashing every file (SHA-256), and only a changed hash re-reads the scene. Events are debounced (100 ms by default, `set_debounce`), so an editor's write-then-rename lands as one reload.

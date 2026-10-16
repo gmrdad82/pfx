@@ -5,6 +5,7 @@ mod diff;
 mod draws;
 mod edit;
 mod mix;
+mod particles;
 mod plates;
 mod play;
 mod pose;
@@ -12,6 +13,8 @@ mod rewrite;
 pub mod tiles;
 mod watch;
 
+#[cfg(test)]
+mod particles_tests;
 #[cfg(test)]
 mod play_tests;
 #[cfg(test)]
@@ -38,6 +41,7 @@ pub use build::project_root;
 pub use diff::{Changes, SceneDiff};
 pub use draws::{Draw, Draws};
 pub use edit::{EditError, Kind, Patch, PatchGroup, SceneEdit, Target, Value};
+pub use particles::{Attach, Node as ParticleNode, Particles};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
 pub use pfx_scene::types::{
@@ -642,6 +646,7 @@ pub struct Scene {
     pub movers: BTreeMap<String, Mover>,
     pub lights: BTreeMap<String, Light>,
     pub emitters: BTreeMap<String, Emitter>,
+    pub particles: BTreeMap<String, Particles>,
     pub camera: Option<Camera>,
     pub finish: Option<Finish>,
     pub trace: TraceSettings,
