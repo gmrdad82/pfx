@@ -1,5 +1,29 @@
 # Changelog
 
+## v2.1.0 — 2026-10-16
+
+### Added
+
+- `pfx shot`: render a scene file offline on the live renderer at a fixed clock (frame n at n/fps), any size up to vertical 4K, with `--draft`/`--final`, `--hour`, `--set key=value` for any scene key, a camera from an animated glTF node, `--json`, PNG or EXR frames, a 48 kHz WAV of the scene's sound script, and a manifest with the one-line encode command.
+- Motion blur from each object's motion (`[motion_blur]`), and outdoor height fog with sun shafts (`[haze]` `height`/`falloff`).
+- Morph targets: loaded from glTF, played by the animator, set per frame with `World::set_morph_weights`, and blended on the GPU before skinning.
+- A sprite atlas the live renderer draws into (`FlatSprites::live`) and alpha from coverage, so lit 3D heads sit inside flat UI cards.
+- pfx-film: scripted films on the flat view with camera moves, looks, captions and a score, now with a beat grid (bpm, tempo map, times in beats and bars, a snap check) and ducking under the score.
+- pfx-sound: offline voice effects behind the `voicefx` feature (pitch, formant and time stretch ported from Signalsmith Stretch, ring modulation, vocoder, bitcrusher, chorus, flanger, syllable cutting) and an offline shot mix from a sound script (engine, road, squeal, spray, passing cars, city bed).
+- Icon atlases saved and loaded as bytes (`Icons::to_raw`, `Icons::from_raw`), and a flat group baked into a sprite (`SpriteImage::from_premultiplied`).
+
+### Changed
+
+- Scenes use pfx-scene v1.1.0 (spot and attached lights, particles, flare, motion blur, outdoor haze, wet materials, LUT files, focus keys, scene sound).
+- The pacer's GPU-queue and uncapped-frame hooks need the new `pfx-gpu/dev-hooks` feature, so a shipped game carries no dev tools.
+- A pierce-0 shot lands on its earliest target without sorting its hits.
+- `Primitive`, `Group` and `Animation` gained morph fields, so code that builds them by hand needs the new fields.
+
+### Fixed
+
+- A window size larger than the GPU allows is clamped instead of crashing at launch.
+- SVG paths with compact arc flags (`a.5.5 0 01.2.3`) read correctly.
+
 ## v2.0.0 — 2026-10-15
 
 ### Added
