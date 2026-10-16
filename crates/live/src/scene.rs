@@ -136,6 +136,7 @@ pub struct Staged {
     spray_instances: Vec<crate::particles::SprayInstance>,
     rig: Vec<pfx_load::scene::Light>,
     lights: Option<Vec<LocalLight>>,
+    leveled: Vec<MeshHandle>,
 }
 
 fn mesh_data(geometry: &Geometry) -> MeshData<'_> {
@@ -399,10 +400,14 @@ impl Renderer {
                 {
                     entry.insert(self.upload_glass(&glass_mesh(&draw.geometry))?);
                 }
-            } else if let std::collections::hash_map::Entry::Vacant(entry) =
-                meshes.entry(draw.geometry.hash)
-            {
-                entry.insert(upload_geometry(self, &draw.geometry)?);
+            } else {
+                for geometry in crate::lod_levels::with_levels(&draw.geometry) {
+                    if let std::collections::hash_map::Entry::Vacant(entry) =
+                        meshes.entry(geometry.hash)
+                    {
+                        entry.insert(upload_geometry(self, geometry)?);
+                    }
+                }
             }
         }
         let mut staged = Staged {
@@ -431,6 +436,7 @@ impl Renderer {
             spray_instances: Vec::new(),
             rig: Vec::new(),
             lights: None,
+            leveled: Vec::new(),
         };
         staged.plate.load(self, scene, true)?;
         staged.place(self, scene, draws, wanted)?;
@@ -516,6 +522,13 @@ impl Staged {
             }
         }
         renderer.frame().set_surfaces(&surfaces)?;
+        self.leveled = crate::lod_levels::register(
+            renderer,
+            &draws,
+            &self.meshes,
+            |index| is_glass(&draws, index) || self.plate.baked(&draws.items[index]),
+            &self.leveled,
+        )?;
         self.plate.cast(renderer, &stand_ins)?;
         let mut written = 0;
         for (slot, name) in &wanted {
@@ -637,11 +650,15 @@ impl Staged {
                 } else {
                     &mut needed
                 };
-                if !list
-                    .iter()
-                    .any(|geometry| geometry.hash == draw.geometry.hash)
-                {
-                    list.push(&draw.geometry);
+                let glass = is_glass(&draws, index);
+                for geometry in crate::lod_levels::with_levels(&draw.geometry).take(if glass {
+                    1
+                } else {
+                    usize::MAX
+                }) {
+                    if !list.iter().any(|known| known.hash == geometry.hash) {
+                        list.push(geometry);
+                    }
                 }
             }
             let mut spare: Vec<[u8; 32]> = self
@@ -1004,6 +1021,9 @@ impl Staged {
     }
 
     pub fn release(self, renderer: &mut Renderer) -> Result<(), String> {
+        for base in &self.leveled {
+            renderer.lod_mut().clear_levels(*base);
+        }
         self.plate.release(renderer)?;
         for handle in self.meshes.into_values() {
             renderer.release_mesh(handle)?;

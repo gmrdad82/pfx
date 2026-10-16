@@ -564,7 +564,10 @@ fn build_mesh(
         .collect();
     let mut parts = Vec::new();
     let mut visited = BTreeSet::new();
-    let mut rigs = Rigging::default();
+    let mut rigs = Rigging {
+        lod_levels: super::lod::level_nodes(&parsed),
+        ..Rigging::default()
+    };
     for (root, own) in roots {
         walk(
             &parsed,
@@ -658,6 +661,7 @@ struct Rigging {
     skins: BTreeMap<u32, SkinRig>,
     nodes: Vec<(u32, bool)>,
     morphs: Vec<(u32, Morph)>,
+    lod_levels: BTreeSet<u32>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -672,6 +676,9 @@ fn walk(
     visited: &mut BTreeSet<String>,
     rigs: &mut Rigging,
 ) -> Result<(), String> {
+    if rigs.lod_levels.contains(&index) {
+        return Ok(());
+    }
     let node = &mesh.nodes[index as usize];
     visited.insert(node.name.clone());
     rigs.nodes.push((index, own));
@@ -698,9 +705,21 @@ fn walk(
             ));
             rigs.morphs.len() - 1
         });
-        for primitive in &group.primitives {
+        if !node.lod.is_empty() && (morph.is_some() || node.skin.is_some()) {
+            return Err(format!(
+                "mesh {name}, node {}: MSFT_lod levels take a static mesh, not a skinned or morphed one",
+                node.name
+            ));
+        }
+        for (slot, primitive) in group.primitives.iter().enumerate() {
             let mut geometry = geometry(primitive)
                 .map_err(|message| format!("mesh {name}, node {}: {message}", node.name))?;
+            if !node.lod.is_empty() {
+                let levels =
+                    super::lod::levels(mesh, node, slot, group.primitives.len(), &geometry)
+                        .map_err(|message| format!("mesh {name}, node {}: {message}", node.name))?;
+                geometry = geometry.with_levels(levels);
+            }
             if let Some(morph) = morph {
                 geometry = geometry.with_morph(GeometryMorph {
                     morph,
@@ -815,6 +834,7 @@ impl Geometry {
             indices,
             skin: None,
             morph: None,
+            levels: Vec::new(),
             hash: hasher.finalize().into(),
         }
     }

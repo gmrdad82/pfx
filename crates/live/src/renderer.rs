@@ -2745,7 +2745,8 @@ impl Renderer {
             lod_instances = uploaded?;
             self.pass_log.push("lod");
         }
-        let dynamic = scene.instances;
+        let leveled = self.lod.swap_levels(scene.instances, scene.camera, height);
+        let dynamic = leveled.as_deref().unwrap_or(scene.instances);
         let stand_ins: &[Instance] = if self.plates.is_some() {
             &self.plate_casters
         } else {
@@ -2753,11 +2754,11 @@ impl Renderer {
         };
         let combined: Vec<Instance>;
         let instances = if lod_instances.is_empty() && stand_ins.is_empty() {
-            scene.instances
+            dynamic
         } else {
             combined = lod_instances
                 .into_iter()
-                .chain(scene.instances.iter().copied())
+                .chain(dynamic.iter().copied())
                 .chain(stand_ins.iter().copied())
                 .collect();
             &combined

@@ -16,6 +16,7 @@ pub mod impostor;
 pub mod lacquer;
 pub mod lights;
 pub mod lod;
+mod lod_levels;
 pub mod maps;
 pub mod morph;
 pub mod noise_tiles;

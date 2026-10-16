@@ -96,6 +96,42 @@ Uploaded meshes can be freed and edited. `Renderer::release_mesh(handle)` frees 
 
 Glass meshes follow the same model. `Renderer::upload_glass(&Mesh)` returns a `glass::MeshHandle`, now a `u32` with a 20-bit slot and a 12-bit generation like `frame::MeshHandle` (`MeshHandle(n)` is slot `n`, generation 0). `Renderer::release_glass(handle)` frees the mesh's vertex and index buffers and puts the slot on a free list, so upload and release in a loop reuse slots. `Renderer::replace_glass(handle, &Mesh)` swaps the data under the same handle: it writes into the existing buffers when the new vertices and indices fit and allocates new ones, dropping the old, only when the mesh grew; it also resets TAA history. A stale handle (released, or from a retired slot) is refused by `release_glass` and `replace_glass`, `glass_mesh_buffers` returns `None` for it, and a `glass::Surface` that still points at it makes `render` return an error naming a missing or released mesh instead of drawing another mesh. A slot whose generation reaches 4095 retires. `MeshStats` gains `glass_live`, `glass_slots` and `glass_buffers`, counted by the buffers' own life exactly as `buffers` is, so a flat-memory test sees a glass leak. The renderer keeps no CPU copy of a glass mesh: a resize rebuilds the glass pass's targets but hands its mesh storage, handles and all, to the new pass, because the meshes do not depend on the frame size, so a mesh is released once and nothing else holds it.
 
+### Prebuilt levels of detail
+
+The LOD set builds its own chain at run time (`LodSet::add_mesh` halves a mesh with `pfx_geom::lod::chain`; `add_shape` tessellates an analytic shape per error bucket). Levels baked offline, by Manfred or any tool that writes glTF's `MSFT_lod`, come in two ways, and both pick a level exactly as the run-time chain does: the level's geometric error in metres, times the model's largest stretch and a 1.25 safety factor, projected at the object's closest bound, must stay under half a pixel (`pfx_geom::detail::detail_level`, with its 20% hysteresis band).
+
+- **`LodSet::add_chain(instance, &[(mesh, error_m)])`** registers an object with its own levels, finest first; errors must be finite and grow from level to level. The set uploads and owns the meshes, like `add_mesh`, and draws the selected one in front of the scene's instances.
+- **`LodSet::set_levels(bounds, &[(handle, error_m)])`** names uploaded meshes as the levels of the first handle; `clear_levels(base)` drops them. Every instance in the frame whose mesh is that base draws the selected level in its place, keeping its slot, id, material, surface and shadow flags, so staged scenes, play and the editor need nothing more. `swapped_level(index)` reports the level an instance drew. The caller keeps owning those meshes. A frame with no levels registered takes the old path unchanged: no copy of the instances, no lookup.
+
+A staged scene does this itself: `Renderer::stage` and `Staged::apply` upload each part's levels beside it (shared by geometry hash, reused and released with the scene's other meshes) and register them, and `Staged::release` clears them.
+
+**The GLB layout Manfred writes.** A figurine head `head` keeps its full mesh on node `head`; its levels are nodes `head.lod1`, `head.lod2`, … with their own meshes, listed coarsest-last on the head's node:
+
+```json
+{
+  "extensionsUsed": ["MSFT_lod"],
+  "nodes": [
+    { "name": "head", "mesh": 0,
+      "extensions": { "MSFT_lod": { "ids": [1, 2] } },
+      "extras": { "MSFT_screencoverage": [0.5, 0.2, 0.01] } },
+    { "name": "head.lod1", "mesh": 1,
+      "extras": { "lod": { "of": "head", "level": 1, "triangles": 2400, "target": 0.25, "error": 0.0004 } } },
+    { "name": "head.lod2", "mesh": 2,
+      "extras": { "lod": { "of": "head", "level": 2, "triangles": 600, "target": 0.0625, "error": 0.0021 } } }
+  ]
+}
+```
+
+pfx-load reads it (`crates/load/src/scene/lod.rs`):
+
+- A node's `extensions.MSFT_lod.ids` are its levels (`Node::lod`), refused when an id names no node or the node itself. Level nodes are never drawn as parts of their own, wherever they sit in the tree, and their children are skipped with them. A level node's own transform is ignored: a level draws in its base's place, under the base node's transform and the object's.
+- Each primitive of the base takes primitive `i` of every level node, as `Geometry::levels` (`GeometryLevel { geometry, error }`, part of the geometry's hash, so scene watch sees a rebaked level). A level must have as many primitives as the base and be static; levels on a skinned or morphed node are refused.
+- The error is `extras.lod.error` in metres in the node's own space. Without it, `extras.MSFT_screencoverage[i - 1]` on the base stands in: a level that takes over at screen coverage `c` gets the error that projects to half a pixel there at 2160 pixels high, `radius / (c × 2160)` with the base primitive's bounding radius (`COVERAGE_HEIGHT`). The last coverage, the spec's cut-off, is not used: pfx never culls an object by coverage. A level with neither is refused, as are errors that shrink from level to level. `of`, `level`, `triangles` and `target` are Manfred's notes and are not read.
+- A level draws with its base part's material (the library entry its glTF material names, or the object's override), so the same material applies at every level. Levels take their own POSITION, NORMAL, TANGENT and UVs; the baked tangent-space `normalTexture` Manfred writes is not read, since pfx-load takes no textures from glTF (materials come from the scene's library).
+- A file without `MSFT_lod` loads as before, and its objects draw byte-identical.
+
+The selection is the run-time chain's, kept rather than three.js's (whose `MSFT_lod` loader switches at a distance of `1 / coverage`) or Babylon's (screen coverage of the bounding sphere): a projected error in pixels holds the 4K silhouette budget at any resolution and field of view, where a coverage threshold holds only at the resolution it was picked for. Measured: picking levels for 1,000 leveled instances at 3840 pixels high costs 72 µs on the CPU per frame, 0.07 µs an instance with the copy of the instance list (`selection_of_a_thousand_leveled_instances_is_measured`, release build); the GPU pass list gains no pass, and a coarser level only removes triangles.
+
 ## Shared materials and ageing
 
 One versioned, linear-light material description drives the live shader and offline path tracer. Its core fields are base color, opacity, metallic, perceptual roughness, specular F0 or IOR, normal/detail, clearcoat/coat roughness, transmission, thickness, absorption color/distance, subsurface or thin-sheet translucency, emission, and UV texture references. The evaluators share parameter meanings and texture transforms, even where the live approximation differs from traced transport. Direct diffuse/specular use an energy-conserving GGX microfacet model, with multiple-scattering compensation checked against the offline reference. The path tracer owns true multi-bounce transport; live indirect diffuse comes from bakes and specular from reflection sources.

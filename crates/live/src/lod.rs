@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use pfx_geom::{
     detail::detail_level,
@@ -79,10 +79,64 @@ pub struct LodStats {
     pub cached_levels: usize,
 }
 
+struct Prebuilt {
+    bounds: Bounds,
+    levels: Vec<(MeshHandle, f32)>,
+}
+
 pub struct LodSet {
     objects: Vec<Object>,
     triangle_budget: usize,
     stats: LodStats,
+    prebuilt: HashMap<MeshHandle, Prebuilt>,
+    chosen: Vec<Option<(MeshHandle, usize)>>,
+    errors: Vec<f32>,
+}
+
+fn field_of_view(camera: Camera) -> f32 {
+    2.0 * (1.0 / camera.projection[1][1].abs().max(1e-8)).atan()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn level_for(
+    bounds: Bounds,
+    model: Matrix,
+    errors: impl Iterator<Item = f32>,
+    scratch: &mut Vec<f32>,
+    eye: [f32; 3],
+    fov_y: f32,
+    height: f32,
+    previous: Option<usize>,
+) -> (usize, f32) {
+    let bounds = world_bounds(bounds, model);
+    let distance = bounds
+        .center()
+        .iter()
+        .zip(eye)
+        .map(|(a, b)| (*a - b) * (*a - b))
+        .sum::<f32>()
+        .sqrt();
+    let scale = maximum_stretch(model);
+    scratch.clear();
+    scratch.extend(errors.map(|error| error * scale * ERROR_SAFETY));
+    let index = detail_level(bounds, scratch, distance, fov_y, height, previous);
+    (index, distance)
+}
+
+fn check_chain(errors: impl Iterator<Item = f32>) -> Result<(), String> {
+    let mut last = 0.0_f32;
+    let mut count = 0;
+    for error in errors {
+        if !error.is_finite() || error < last {
+            return Err("LOD chain errors must be finite and grow from level to level".into());
+        }
+        last = error;
+        count += 1;
+    }
+    if count == 0 {
+        return Err("a LOD chain needs at least one level".into());
+    }
+    Ok(())
 }
 
 fn bucket_error(bucket: i32) -> f32 {
@@ -163,7 +217,106 @@ impl LodSet {
             objects: Vec::new(),
             triangle_budget,
             stats: LodStats::default(),
+            prebuilt: HashMap::new(),
+            chosen: Vec::new(),
+            errors: Vec::new(),
         }
+    }
+
+    pub fn add_chain(
+        &mut self,
+        instance: Instance,
+        levels: &[(Mesh, f32)],
+    ) -> Result<usize, String> {
+        check_chain(levels.iter().map(|(_, error)| *error))?;
+        if levels.iter().any(|(mesh, _)| mesh.triangle_count() == 0) {
+            return Err("LOD mesh has no triangles".into());
+        }
+        let index = self.objects.len();
+        self.objects.push(Object {
+            instance,
+            bounds: levels[0].0.bounds,
+            source: Source::Chain(
+                levels
+                    .iter()
+                    .map(|(mesh, error)| level(mesh.clone(), *error))
+                    .collect(),
+            ),
+            selected: 0,
+            previous: None,
+            distance: 0.0,
+            ideal_triangles: 0,
+        });
+        Ok(index)
+    }
+
+    pub fn set_levels(
+        &mut self,
+        bounds: Bounds,
+        chain: &[(MeshHandle, f32)],
+    ) -> Result<(), String> {
+        check_chain(chain.iter().map(|(_, error)| *error))?;
+        self.prebuilt.insert(
+            chain[0].0,
+            Prebuilt {
+                bounds,
+                levels: chain.to_vec(),
+            },
+        );
+        Ok(())
+    }
+
+    pub fn clear_levels(&mut self, base: MeshHandle) -> bool {
+        self.prebuilt.remove(&base).is_some()
+    }
+
+    pub fn has_levels(&self) -> bool {
+        !self.prebuilt.is_empty()
+    }
+
+    pub fn swapped_level(&self, instance: usize) -> Option<usize> {
+        self.chosen
+            .get(instance)
+            .copied()
+            .flatten()
+            .map(|(_, level)| level)
+    }
+
+    pub fn swap_levels(
+        &mut self,
+        instances: &[Instance],
+        camera: Camera,
+        viewport_height: u32,
+    ) -> Option<Vec<Instance>> {
+        if self.prebuilt.is_empty() {
+            self.chosen.clear();
+            return None;
+        }
+        let fov_y = field_of_view(camera);
+        self.chosen.resize(instances.len(), None);
+        let mut swapped = instances.to_vec();
+        for (index, instance) in swapped.iter_mut().enumerate() {
+            let Some(prebuilt) = self.prebuilt.get(&instance.mesh) else {
+                self.chosen[index] = None;
+                continue;
+            };
+            let previous = self.chosen[index]
+                .filter(|(base, _)| *base == instance.mesh)
+                .map(|(_, level)| level);
+            let (level, _) = level_for(
+                prebuilt.bounds,
+                instance.model,
+                prebuilt.levels.iter().map(|(_, error)| *error),
+                &mut self.errors,
+                camera.position,
+                fov_y,
+                viewport_height as f32,
+                previous,
+            );
+            self.chosen[index] = Some((instance.mesh, level));
+            instance.mesh = prebuilt.levels[level].0;
+        }
+        Some(swapped)
     }
 
     pub fn add_mesh(&mut self, instance: Instance, mesh: &Mesh) -> Result<usize, String> {
@@ -235,48 +388,33 @@ impl LodSet {
     }
 
     pub fn select(&mut self, camera: Camera, viewport_height: u32) -> LodStats {
-        let fov_y = 2.0 * (1.0 / camera.projection[1][1].abs().max(1e-8)).atan();
+        let fov_y = field_of_view(camera);
         let mut stats = LodStats::default();
+        let scratch = &mut self.errors;
         for object in &mut self.objects {
-            let bounds = world_bounds(object.bounds, object.instance.model);
-            let center = bounds.center();
-            let distance = center
-                .iter()
-                .zip(camera.position)
-                .map(|(a, b)| (*a - b) * (*a - b))
-                .sum::<f32>()
-                .sqrt();
-            object.distance = distance;
-            let scale = maximum_stretch(object.instance.model);
-            let index = match &object.source {
-                Source::Chain(levels) => {
-                    let errors = levels
-                        .iter()
-                        .map(|level| level.error * scale * ERROR_SAFETY)
-                        .collect::<Vec<_>>();
-                    detail_level(
-                        bounds,
-                        &errors,
-                        distance,
-                        fov_y,
-                        viewport_height as f32,
-                        object.previous,
-                    )
-                }
-                Source::Analytic { last_bucket, .. } => {
-                    let errors = (FIRST_BUCKET..=*last_bucket)
-                        .map(|bucket| bucket_error(bucket) * scale * ERROR_SAFETY)
-                        .collect::<Vec<_>>();
-                    detail_level(
-                        bounds,
-                        &errors,
-                        distance,
-                        fov_y,
-                        viewport_height as f32,
-                        object.previous,
-                    )
-                }
+            let (index, distance) = match &object.source {
+                Source::Chain(levels) => level_for(
+                    object.bounds,
+                    object.instance.model,
+                    levels.iter().map(|level| level.error),
+                    scratch,
+                    camera.position,
+                    fov_y,
+                    viewport_height as f32,
+                    object.previous,
+                ),
+                Source::Analytic { last_bucket, .. } => level_for(
+                    object.bounds,
+                    object.instance.model,
+                    (FIRST_BUCKET..=*last_bucket).map(bucket_error),
+                    scratch,
+                    camera.position,
+                    fov_y,
+                    viewport_height as f32,
+                    object.previous,
+                ),
             };
+            object.distance = distance;
             object.selected = index;
             object.previous = Some(index);
             object.ensure_level(index);
@@ -409,6 +547,23 @@ mod tests {
         assert!(close.0 < far.0);
         assert!(close.2 > far.2);
         assert_eq!(stats.degraded_objects, 0);
+    }
+
+    #[test]
+    fn a_prebuilt_chain_coarsens_with_distance_and_refuses_shrinking_errors() {
+        let chain: Vec<(Mesh, f32)> = [0.0005, 0.005, 0.05]
+            .map(|error| (slab().mesh(error), error))
+            .into();
+        let mut set = LodSet::new(2_000_000);
+        set.add_chain(instance(0.0, 1), &chain).unwrap();
+        set.add_chain(instance(-60.0, 2), &chain).unwrap();
+        set.add_chain(instance(-600.0, 3), &chain).unwrap();
+        set.select(camera(5.0), 2160);
+        let levels: Vec<usize> = (0..3).map(|at| set.selected_level(at).unwrap().0).collect();
+        assert_eq!(levels, [0, 1, 2]);
+        let mut backwards = chain.clone();
+        backwards.reverse();
+        assert!(set.add_chain(instance(0.0, 4), &backwards).is_err());
     }
 
     #[test]

@@ -27,6 +27,7 @@ pub struct Node {
     pub group: Option<u32>,
     pub skin: Option<u32>,
     pub extras: Option<serde_json::Value>,
+    pub lod: Vec<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -340,7 +341,17 @@ fn nodes(gltf: &gltf::Gltf) -> Result<Vec<Node>, String> {
             group: node.mesh().map(|mesh| mesh.index() as u32),
             skin: node.skin().map(|skin| skin.index() as u32),
             extras: read_extras(node.extras())?,
+            lod: lod_ids(&node)?,
         });
+    }
+    for (index, node) in nodes.iter().enumerate() {
+        if node
+            .lod
+            .iter()
+            .any(|&id| id as usize >= nodes.len() || id as usize == index)
+        {
+            return Err("mesh: MSFT_lod names a missing node".into());
+        }
     }
     let children: Vec<Vec<u32>> = nodes.iter().map(|node| node.children.clone()).collect();
     for (index, child_list) in children.iter().enumerate() {
@@ -374,6 +385,23 @@ fn nodes(gltf: &gltf::Gltf) -> Result<Vec<Node>, String> {
         chain.clear();
     }
     Ok(nodes)
+}
+
+fn lod_ids(node: &gltf::Node) -> Result<Vec<u32>, String> {
+    let Some(value) = node.extension_value("MSFT_lod") else {
+        return Ok(Vec::new());
+    };
+    value
+        .get("ids")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("mesh: MSFT_lod has no ids")?
+        .iter()
+        .map(|id| {
+            id.as_u64()
+                .and_then(|id| u32::try_from(id).ok())
+                .ok_or_else(|| "mesh: an MSFT_lod id is not a node index".to_string())
+        })
+        .collect()
 }
 
 fn groups(gltf: &gltf::Gltf, buffers: &[Vec<u8>]) -> Result<Vec<Group>, String> {

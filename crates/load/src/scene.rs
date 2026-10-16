@@ -9,6 +9,7 @@ mod flare;
 mod flare_tests;
 mod haze;
 mod lights;
+mod lod;
 mod mix;
 mod motion_blur;
 mod particles;
@@ -49,6 +50,7 @@ pub use draws::{Draw, Draws};
 pub use edit::{EditError, Kind, Patch, PatchGroup, SceneEdit, Target, Value};
 pub use haze::OutdoorHaze;
 pub use lights::{Attach as LightAttach, SPOT_CONE, SPOT_DIRECTION, Spot};
+pub use lod::{COVERAGE_HEIGHT, GeometryLevel};
 pub use particles::{Attach, Node as ParticleNode, Particles};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
@@ -171,6 +173,7 @@ pub struct Geometry {
     pub indices: Vec<u32>,
     pub skin: Option<Arc<GeometrySkin>>,
     pub morph: Option<Arc<GeometryMorph>>,
+    pub levels: Vec<GeometryLevel>,
     pub hash: [u8; 32],
 }
 
