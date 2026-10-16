@@ -1,5 +1,6 @@
 pub const RENDER_TOML: &str = include_str!("../render.toml");
 
+pub mod alpha;
 pub mod archive;
 pub mod encode;
 pub mod ending;

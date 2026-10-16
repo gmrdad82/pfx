@@ -65,6 +65,37 @@ struct Checker {
 }
 
 impl Checker {
+    fn over(&self, rgba: &mut [u16], ground: [f32; 3]) {
+        let square = 60.0 * self.width as f64 / 1920.0;
+        let shift = self.time * square;
+        let decode = |v: u16| {
+            let c = v as f32 / 65535.0;
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let encode = |c: f32| {
+            let c = c.clamp(0.0, 1.0);
+            let s = if c <= 0.0031308 {
+                c * 12.92
+            } else {
+                1.055 * c.powf(1.0 / 2.4) - 0.055
+            };
+            (s * 65535.0 + 0.5) as u16
+        };
+        for (n, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+            let x = (n % self.width as usize) as f64;
+            let column = ((x + shift) / square).floor() as i64;
+            let alpha = (column.rem_euclid(4) + 1) as f32 / 4.0;
+            for (value, g) in pixel.iter_mut().zip(ground) {
+                *value = encode(decode(*value) * alpha + g * (1.0 - alpha));
+            }
+            pixel[3] = u16::MAX;
+        }
+    }
+
     fn cpu_frame(&self) -> Vec<u16> {
         let square = 60.0 * self.width as f64 / 1920.0;
         let shift = self.time * square;
@@ -215,7 +246,7 @@ impl Adapter for Checker {
             app: "checker".into(),
             rev: "example".into(),
             depth: 16,
-            cutouts: false,
+            cutouts: std::env::var_os("CHECKER_CUTOUTS").is_some(),
         }
     }
 
@@ -270,18 +301,21 @@ impl Adapter for Checker {
         Ok(())
     }
 
-    fn frame(&mut self, _ground: Option<[f32; 3]>, _linear: bool) -> Result<Image, String> {
-        let rgba = if self.gpu.is_some() {
+    fn frame(&mut self, ground: Option<[f32; 3]>, _linear: bool) -> Result<Image, String> {
+        let mut rgba = if self.gpu.is_some() {
             self.render(None)?.0
         } else {
             self.cpu_frame()
         };
+        if let Some(ground) = ground {
+            self.over(&mut rgba, ground);
+        }
         self.turns.reset();
         Ok(Image {
             width: self.width,
             height: self.height,
             rgba,
-            ground: None,
+            ground,
         })
     }
 

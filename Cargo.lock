@@ -3405,6 +3405,7 @@ dependencies = [
  "fs2",
  "hex",
  "libc",
+ "png 0.18.1",
  "rustix 1.1.5",
  "serde",
  "serde_json",
