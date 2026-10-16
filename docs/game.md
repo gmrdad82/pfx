@@ -101,6 +101,26 @@ fn tick(&mut self, world: &mut World, _tick: &Tick, _input: &Input) {
 
 **The colour path.** The renderer's `Rgba16Float` frame holds sRGB-encoded values (its finish chain ends with `Encode`), and the window's surface is sRGB, which encodes in hardware. The upscale decodes the frame once before writing it (`Compose::source_format`, `docs/screens.md`, "The colour path"), the bars are decoded the same way, and the UI's flat pass writes linear values, so everything reaches the window encoded once. At render scale 1 and a fixed exposure a game's window, the renderer's own `Rgba8UnormSrgb` output and pfx edit's viewport agree within 1/255 (`crates/editor/tests/colour.rs`, which renders one flat-backed neutral scene all three ways and also reads the editor's offscreen shot).
 
+## Clipboard
+
+A game copies and pastes text through its world, from `tick` or `events` (and reads it from `frame` or `ui`):
+
+```rust
+if input.action("copy").pressed {
+    world.set_clipboard(&self.seed_code);
+}
+if input.action("paste").pressed && let Some(text) = world.clipboard_text() {
+    self.name_field.insert(&text);
+}
+```
+
+- `world.set_clipboard(text) -> bool` hands the text to the system clipboard. It returns at once: true when the clipboard took the request, false when there is none (a headless run, a build without the feature, a system that refused it), and it never panics.
+- `world.clipboard_text() -> Option<String>` returns at once with the last text fetched from the system, or what the game set last, and asks for a fresh copy. It is `None` until the first answer lands, when the clipboard holds no text, and wherever there is no clipboard. The window fetches once when the game starts and again each time the window gains focus, so text the player copied in another app is normally there before the paste key is read. Call it when the game needs it (a paste key, a field gaining focus), not every frame: each call asks the system again.
+- The clipboard's I/O never runs on the frame thread. A thread of its own (`pfx-clipboard`) owns the system clipboard and answers requests in order; queued sets collapse to the last one, and a fetch that was overtaken by a set is dropped, so a get after a set reads what was set. A system that blocks (a Wayland data-device roundtrip, a slow X11 selection owner) delays only that thread, and the window waits at most 250 ms for it on exit.
+- The backend is the one the editor's shell uses through egui-winit: on Wayland, smithay-clipboard on winit's own display connection; on X11, Windows and macOS, arboard; under gamescope, whichever of the two matches the connection winit opened. Neither opens a window of its own. Steam Deck's gaming mode (gamescope) may offer no clipboard or refuse a set; a get then stays `None` and a set does nothing, quietly. Windows is built (and checked in CI) but untested; macOS is written but not built here; gamescope is untested.
+- pfx-game's `clipboard` feature, on by default, brings arboard (MIT or Apache-2.0) and smithay-clipboard (MIT); with it off, or under `PFX_HEADLESS=1`, the world has no clipboard and both calls return false and `None`.
+- The world reaches the clipboard through `pfx_play::Clipboard` (`set_text`, `get_text`, `refresh`); a host of its own attaches one with `world.attach_clipboard(Box::new(..))`. The clipboard is attached after `Game::start` returns, so it answers from the first tick on. The editor keeps its own clipboard in its egui shell, unchanged; a game playing in its viewport has no clipboard of its own.
+
 ## The trait
 
 `pfx_play::Game` grew hooks with defaults (`ui`, `warm`, `paint`, `settings` and `modules`), so `PlaySession`, `SceneGame` and `pfx edit` are unchanged:
@@ -325,6 +345,7 @@ let count = run.run_for(1.0)?;
 - `exited()` says the game asked to quit or failed; no frame runs after it. `finish()` stops the run as the window would: `Game::stop`, then `Ok(code)`, or `Err(error)` reported to stderr and the crash hook.
 - `warm()` runs the game's warm-up now and returns the calls it made (`warm_passes`); the first frame runs it otherwise. `painter()` reaches the GPU painter: its text engine, glyph pages, last prompt quads and upscale.
 - A `Pads::Backend` is polled each frame; `Pads::Gilrs` is never opened headless.
+- There is no clipboard: `world.set_clipboard` returns false and `world.clipboard_text()` `None`.
 
 ## Shot adapters
 

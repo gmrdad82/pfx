@@ -9,6 +9,8 @@ license.workspace = true
 authors.workspace = true
 
 [features]
+default = ["clipboard"]
+clipboard = ["dep:arboard", "dep:smithay-clipboard"]
 tools = []
 dev-hud = ["pfx-play/dev-hud", "pfx-live/dev-hud"]
 steam = ["dep:pfx-steam"]
@@ -30,6 +32,12 @@ pollster = "0.4"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_System_Registry"] }
+
+[target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
+arboard = { version = "=3.6.1", default-features = false, optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+smithay-clipboard = { version = "=0.7.3", optional = true }
 
 [dev-dependencies]
 pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }
