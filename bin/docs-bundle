@@ -163,6 +163,7 @@ GUIDES = [
     ("steam", 502, None),
     ("wgpu30", 503, None),
     ("agnostic", 504, None),
+    ("measured", 505, "How the numbers on the front page were measured: the live renderer and the 2D pass at 4K, the game systems, and the size of an empty game."),
 ]
 
 FORMATS = [
