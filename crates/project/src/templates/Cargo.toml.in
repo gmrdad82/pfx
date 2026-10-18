@@ -6,12 +6,12 @@ publish = false
 
 [features]
 default = ["tools"]
-tools = ["pfx-game/tools", "dep:pfx-editor"]
+tools = ["pfx-game/tools", "dep:pfx-workbench"]
 
 [dependencies]
 pfx-game = { git = "{{source}}", tag = "{{tag}}" }
 pfx-project = { git = "{{source}}", tag = "{{tag}}" }
-pfx-editor = { git = "{{source}}", tag = "{{tag}}", optional = true }
+pfx-workbench = { git = "{{source}}", tag = "{{tag}}", optional = true }
 
 [dev-dependencies]
 pfx-gpu = { git = "{{source}}", tag = "{{tag}}" }

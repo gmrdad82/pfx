@@ -5,6 +5,7 @@ use pfx_mesh::Mesh;
 use serde_json::Value;
 
 pub const LIP: f64 = 0.02;
+pub const POINTS: usize = 4096;
 
 const FIELDS: [&str; 6] = ["name", "view", "curve", "material", "mode", "lip"];
 
@@ -36,10 +37,18 @@ pub fn parse(value: Option<&Value>, at: &str) -> Result<Vec<Region>, String> {
                 Some(Some("cut")) => Mode::Cut,
                 _ => return Err(format!("{at}.mode: expected one of: surface, cut")),
             };
+            let name = imprint::name(t, &at)?;
+            let curve = imprint::polygon(&imprint::curve(t, &at, 3)?);
+            if curve.len() > POINTS {
+                return Err(format!(
+                    "{at}.curve: region `{name}` has {} points, at most {POINTS}; thin the outline",
+                    curve.len()
+                ));
+            }
             Ok(Region {
-                name: imprint::name(t, &at)?,
+                name,
                 view: imprint::view(t, &at)?,
-                curve: imprint::polygon(&imprint::curve(t, &at, 3)?),
+                curve,
                 material: imprint::text(t, &at, "material")?,
                 mode,
                 lip: imprint::number(t, &at, "lip", Some(LIP), 0.0)?,
@@ -132,6 +141,42 @@ mod tests {
         let frame = Frame::along(glam::DVec3::X).unwrap();
         let along = apply(&mut turned, &rs, frame);
         assert!((area(&along[0].mesh) - area(window)).abs() < 1e-5);
+    }
+
+    fn wobbly(points: usize, scale: f64, phase: f64) -> Vec<[f64; 2]> {
+        (0..points)
+            .map(|i| {
+                let a = (i as f64 + phase) / points as f64 * std::f64::consts::TAU;
+                let r = 0.55 + 0.08 * (7.0 * a).sin() + 0.03 * (19.0 * a).cos();
+                [scale * r * a.cos(), scale * (0.1 + 0.8 * r * a.sin())]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_dense_outline_over_coarse_triangles_finishes() {
+        let original = body();
+        let rs = regions(json!([{ "name": "badge", "view": "side",
+            "curve": wobbly(366, 0.05, 0.093) }]));
+        let mut mesh = original.clone();
+        let pieces = apply(&mut mesh, &rs, Frame::WORLD);
+        let made = (mesh.indices.len() + pieces[0].mesh.indices.len()) / 3;
+        assert!(made < original.indices.len() / 3 + 16 * 366, "{made}");
+        assert!((area(&mesh) + area(&pieces[0].mesh) - area(&original)).abs() < 1e-5);
+        assert!(open_edges(&[&mesh, &pieces[0].mesh]).is_empty());
+    }
+
+    #[test]
+    fn an_outline_over_the_point_limit_is_refused() {
+        let err = parse(
+            Some(&json!([{ "name": "badge", "view": "side", "curve": wobbly(POINTS + 1, 1.0, 0.0) }])),
+            "params.regions",
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "params.regions.0.curve: region `badge` has 4097 points, at most 4096; thin the outline"
+        );
     }
 
     #[test]

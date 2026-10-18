@@ -1,5 +1,5 @@
-# A floor grid of one metre squares, ten by ten, with the X axis in red and the Z axis in blue through the origin; build with manfred build.
-manfred = 1
+# A floor grid of one metre squares, ten by ten, with the X axis in red and the Z axis in blue through the origin; build with pfx build.
+recipe = 1
 name = "pfx-grid"
 seed = 7
 

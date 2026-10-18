@@ -35,7 +35,7 @@ impl Morph {
         for list in &mut self.positions {
             turn(list, matrix);
         }
-        let normal = matrix.inverse().transpose();
+        let normal = matrix.inverse().transpose() * matrix.determinant().abs().cbrt();
         for list in &mut self.normals {
             turn(list, normal);
         }

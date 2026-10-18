@@ -15,6 +15,7 @@ use pfx_recipe::{
 use pfx_scene::types::{FORMAT, MaterialsFile, SceneFile};
 use pfx_scene::{Id, Project};
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
@@ -43,6 +44,7 @@ const CONTENT_SLOTS: usize = 4;
 const STILL: [f64; 2] = [1586.0, 992.0];
 const LIFT: f64 = 0.0005;
 const BOLD_FROM: u32 = 501;
+const ASSETS: &str = "assets";
 const REGULAR_FONT: &str = "JetBrainsMonoNerdFont-Regular.ttf";
 const BOLD_FONT: &str = "JetBrainsMonoNerdFont-Bold.ttf";
 static REGULAR: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMonoNerdFont-Regular.ttf");
@@ -189,7 +191,7 @@ pub(crate) fn text_named(
             "this key is scene format 1's, expected `[output] scene_format = 1` or the key removed",
         ));
     }
-    let paths = Paths::of(scene, format)?;
+    let paths = Paths::of(scene, format, recipe, base)?;
     let mut out = String::new();
     let library_path = library_file(scene);
     let (library, cards) = library(built, recipe, base)?;
@@ -202,7 +204,7 @@ pub(crate) fn text_named(
         None => None,
     };
     if let Some(sound) = &recipe.effects.sound {
-        let sound = effects::file(&paths, base, sound, "sound")?;
+        let sound = effects::file(&paths, recipe, base, sound, "sound")?;
         let _ = writeln!(out, "sound = {}", string(&sound));
     }
     let light = Light::of(recipe);
@@ -236,7 +238,7 @@ pub(crate) fn text_named(
         )?,
         None => objects(&mut out, built, recipe, &glb_name, &cards, paths.pick())?,
     }
-    contents(&mut out, &cards, &paths, base)?;
+    contents(&mut out, &cards, (recipe, &paths, base))?;
     let mut fonts = texts(&mut out, built, recipe, scene, &paths, base)?;
     fonts.extend(lut);
     let mut written = Written {
@@ -244,16 +246,18 @@ pub(crate) fn text_named(
         library,
         files: fonts,
     };
-    match format {
+    let mut done = match format {
         0 => {
             if let Some((file, stands)) = stands {
                 let text = proxies::text(&stands, &[], "", None)?;
                 written.files.push((file, Cow::Owned(text.into_bytes())));
             }
-            Ok(written)
+            written
         }
-        _ => one(written, built, recipe, &paths, stands),
-    }
+        _ => one(written, built, recipe, &paths, stands)?,
+    };
+    done.files.extend(paths.copied()?);
+    Ok(done)
 }
 
 fn plates(
@@ -354,7 +358,7 @@ fn library(built: &Built, recipe: &Recipe, base: &Path) -> Result<(Option<String
     };
     for part in built.parts.iter().filter(|part| shown(part)) {
         let object = &recipe.objects[part.object];
-        let layer = card(&mut cards, object, part.object, base)?;
+        let layer = card(&mut cards, object, part.object, (recipe, base))?;
         for slot in &part.node.mesh.slots {
             if add(&mut library, &slot.material, layer)? {
                 cards.glb.insert(slot.material.clone());
@@ -390,7 +394,7 @@ fn card(
     cards: &mut Cards,
     object: &Object,
     index: usize,
-    base: &Path,
+    (recipe, base): (&Recipe, &Path),
 ) -> Result<Option<usize>, Error> {
     let Kind::Card {
         image, face_camera, ..
@@ -408,13 +412,18 @@ fn card(
     let Some(image) = image else {
         return Ok(None);
     };
-    let file = base.join(image);
+    let file = recipe
+        .asset(base, image)
+        .map_err(|e| Error::new(format!("{at}.image"), e))?;
     let bytes = pfx_recipe::files::read(&file)
         .map_err(|e| Error::new(format!("{at}.image"), format!("{}: {e}", file.display())))?;
     png_header(&bytes).map_err(|e| {
         Error::new(
             format!("{at}.image"),
-            format!("{}: the scene's content is a PNG: {e}", file.display()),
+            format!(
+                "{}: the scene's content is a PNG or a JPEG: {e}",
+                file.display()
+            ),
         )
     })?;
     let slot = match cards.slots.iter().position(|(_, path)| path == image) {
@@ -534,7 +543,7 @@ fn sky(
         return analytic_ambient(&mut s, light, 1.0);
     };
     if sky.kind == SkyKind::Mix {
-        return mix(out, sky, light, paths, base);
+        return mix(out, (recipe, sky), light, paths, base);
     }
     let mut s = Section::new(out, "[sky]", "sky");
     let scale = match sky.kind {
@@ -562,10 +571,10 @@ fn sky(
                 ));
             };
             s.put("kind", &string("hdr"));
-            s.put(
-                "path",
-                &string(&paths.relative(&base.join(path), "sky.path")?),
-            );
+            let file = recipe
+                .asset(base, path)
+                .map_err(|e| Error::new("sky.path", e))?;
+            s.put("path", &string(&paths.relative(&file, "sky.path")?));
             light.ambient
         }
         SkyKind::Room => {
@@ -690,7 +699,7 @@ fn room_tables(
 
 fn mix(
     out: &mut String,
-    sky: &pfx_recipe::Sky,
+    (recipe, sky): (&Recipe, &pfx_recipe::Sky),
     light: &Light,
     paths: &Paths,
     base: &Path,
@@ -709,7 +718,9 @@ fn mix(
     };
     let capped = capped(sky)?;
     let tint = grey_tint(sky, light)?;
-    let file = base.join(path);
+    let file = recipe
+        .asset(base, path)
+        .map_err(|e| Error::new("sky.path", e))?;
     let bytes = pfx_recipe::files::read(&file)
         .map_err(|e| Error::new("sky.path", format!("{}: {e}", file.display())))?;
     let mut daylight = Sky::parse(&bytes)
@@ -1002,7 +1013,9 @@ fn finish(
 ) -> Result<Option<File>, Error> {
     let copy = match recipe.look.as_ref().and_then(|look| look.lut.as_ref()) {
         Some(lut) => {
-            let from = base.join(lut);
+            let from = recipe
+                .asset(base, lut)
+                .map_err(|e| Error::new("look.lut", e))?;
             let bytes = pfx_recipe::files::read(&from).map_err(|e| {
                 Error::new(
                     "look.lut",
@@ -1471,11 +1484,16 @@ fn clips(recipe: &Recipe, name: &str) -> Vec<[f64; 4]> {
         .unwrap_or_default()
 }
 
-fn contents(out: &mut String, cards: &Cards, paths: &Paths, base: &Path) -> Result<(), Error> {
+fn contents(
+    out: &mut String,
+    cards: &Cards,
+    (recipe, paths, base): (&Recipe, &Paths, &Path),
+) -> Result<(), Error> {
     for (name, image) in &cards.slots {
         let at = format!("object[{name}].image");
+        let file = recipe.asset(base, image).map_err(|e| Error::new(&at, e))?;
         let mut s = Section::new(out, &format!("[content.{}]", key(name)), &at);
-        s.put("image", &string(&paths.relative(&base.join(image), &at)?));
+        s.put("image", &string(&paths.relative(&file, &at)?));
     }
     Ok(())
 }
@@ -1545,7 +1563,12 @@ fn texts(
                 }
                 font
             }
-            Some(family) => paths.relative(&base.join(family), &format!("{ip}.spans"))?,
+            Some(family) => {
+                let file = recipe
+                    .asset(base, family)
+                    .map_err(|e| Error::new(format!("{ip}.spans"), e))?;
+                paths.relative(&file, &format!("{ip}.spans"))?
+            }
         };
         let mut s = Section::new(out, &format!("[text.{}]", key(&object.name)), &ip);
         s.put("text", &string(&span.text));
@@ -1625,13 +1648,20 @@ struct Paths {
     folder: PathBuf,
     root: PathBuf,
     format: u32,
+    scene: PathBuf,
+    sources: Vec<PathBuf>,
+    copies: RefCell<BTreeMap<PathBuf, PathBuf>>,
 }
 
 impl Paths {
-    fn of(scene: &Path, format: u32) -> Result<Paths, Error> {
-        let root = Project::root_of(&absolute(scene, "output.scene")?);
+    fn of(scene: &Path, format: u32, recipe: &Recipe, base: &Path) -> Result<Paths, Error> {
+        let scene = absolute(scene, "output.scene")?;
+        let root = match recipe.project_folder(base) {
+            Some(root) => declared(&scene, &root)?,
+            None => Project::root_of(&scene),
+        };
         let folder = if format == 0 {
-            folder(scene)?
+            folder(&scene)?
         } else {
             root.clone()
         };
@@ -1639,6 +1669,9 @@ impl Paths {
             folder,
             root,
             format,
+            scene,
+            sources: recipe.asset_roots_at(base),
+            copies: RefCell::new(BTreeMap::new()),
         })
     }
 
@@ -1648,18 +1681,86 @@ impl Paths {
 
     fn relative(&self, file: &Path, key: &str) -> Result<String, Error> {
         let path = relative(&self.folder, file, key)?;
-        if relative(&self.root, file, key)?.split('/').next() == Some("..") {
+        if relative(&self.root, file, key)?.split('/').next() != Some("..") {
+            return Ok(path);
+        }
+        let file = absolute(file, key)?;
+        let Some((at, source)) = self
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(_, source)| file.starts_with(source))
+            .max_by_key(|(_, source)| source.components().count())
+        else {
+            let named = if self.sources.is_empty() {
+                "`asset_roots` names none".to_string()
+            } else {
+                format!(
+                    "its asset_roots are {}",
+                    self.sources
+                        .iter()
+                        .map(|source| source.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            };
             return Err(Error::new(
                 key,
                 format!(
-                    "{} is outside the project root {}, and the engine reads every path of a scene inside its root, expected a file under the root, or a project.toml in a folder above both",
-                    absolute(file, key)?.display(),
-                    self.root.display()
+                    "{} is outside the project root {}, and the engine reads every path of a scene inside its root; {named}, expected a file under the root, an `asset_roots` folder holding it, or a project.toml in a folder above both",
+                    file.display(),
+                    self.root.display(),
                 ),
             ));
-        }
-        Ok(path)
+        };
+        let inside = file.strip_prefix(source).unwrap_or(&file);
+        let kept = self
+            .scene
+            .parent()
+            .unwrap_or(&self.root)
+            .join(ASSETS)
+            .join(at.to_string())
+            .join(inside);
+        self.copies.borrow_mut().insert(kept.clone(), file);
+        relative(&self.folder, &kept, key)
     }
+
+    fn copied(&self) -> Result<Beside, Error> {
+        self.copies
+            .borrow()
+            .iter()
+            .map(|(kept, source)| {
+                let bytes = pfx_recipe::files::read(source).map_err(|e| {
+                    Error::new("assets", format!("cannot read {}: {e}", source.display()))
+                })?;
+                Ok((kept.clone(), Cow::Owned(bytes)))
+            })
+            .collect()
+    }
+}
+
+fn declared(scene: &Path, root: &Path) -> Result<PathBuf, Error> {
+    let root = absolute(root, "project_root")?;
+    if !scene.starts_with(&root) {
+        return Err(Error::new(
+            "project_root",
+            format!(
+                "{} does not hold the scene {}, expected a folder above the scene file",
+                root.display(),
+                scene.display()
+            ),
+        ));
+    }
+    if !root.join("project.toml").is_file() {
+        return Err(Error::new(
+            "project_root",
+            format!(
+                "{} has no project.toml, which is how the engine finds a scene's root",
+                root.display()
+            ),
+        ));
+    }
+    Ok(root)
 }
 
 struct Ids {
@@ -1752,7 +1853,7 @@ pub fn object_ids(
         base,
         out,
     );
-    let paths = Paths::of(&scene, 1)?;
+    let paths = Paths::of(&scene, 1, recipe, base)?;
     let source = source_of(recipe, &paths.folder)?.unwrap_or_else(|| recipe.name.clone());
     let nodes = built.map(nodes_of).unwrap_or_default();
     let (_, bases) = bases(recipe, &nodes, &source, built.is_some());
@@ -1945,6 +2046,9 @@ fn relative(folder: &Path, file: &Path, key: &str) -> Result<String, Error> {
 }
 
 fn png_header(bytes: &[u8]) -> Result<(), String> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return pfx_load::Image::jpeg_size(bytes).map(|_| ());
+    }
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::EXPAND);
     let reader = decoder.read_info().map_err(|e| format!("png: {e}"))?;

@@ -21,6 +21,7 @@ pub enum Asset {
 enum Kind {
     Mesh,
     Png,
+    Jpeg,
     Rgba16 {
         width: u32,
         height: u32,
@@ -83,6 +84,20 @@ impl Cache {
 
     pub fn load_png(&mut self, bytes: &[u8]) -> Result<Handle, String> {
         self.insert(bytes, Kind::Png, || Ok(Asset::Image(Image::png(bytes)?)))
+    }
+
+    pub fn load_jpeg(&mut self, bytes: &[u8]) -> Result<Handle, String> {
+        self.insert(bytes, Kind::Jpeg, || Ok(Asset::Image(Image::jpeg(bytes)?)))
+    }
+
+    pub fn load_image(&mut self, bytes: &[u8]) -> Result<Handle, String> {
+        if bytes.starts_with(b"\x89PNG") {
+            self.load_png(bytes)
+        } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+            self.load_jpeg(bytes)
+        } else {
+            Err("the image is neither a PNG nor a JPEG".into())
+        }
     }
 
     pub fn load_rgba16(
@@ -185,6 +200,18 @@ mod tests {
         assert_ne!(image, first);
         assert!(cache.load_mesh(png).is_err());
         assert_eq!(cache.len(), 2);
+        assert_eq!(cache.load_image(png).unwrap(), image);
+
+        let jpeg = include_bytes!("../tests/data/baseline420.jpg");
+        let photo = cache.load_image(jpeg).unwrap();
+        assert_eq!(cache.load_jpeg(jpeg).unwrap(), photo);
+        assert!(cache.load_png(jpeg).is_err());
+        match cache.get(photo) {
+            Some(Asset::Image(image)) => assert_eq!((image.width, image.height), (33, 17)),
+            other => panic!("image, got {other:?}"),
+        }
+        assert!(cache.load_image(b"nope").is_err());
+        assert_eq!(cache.len(), 3);
 
         let embedded = Source::embedded(FILES);
         let folder = Source::folder(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data"));

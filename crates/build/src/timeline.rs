@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use glam::{DQuat, DVec3};
+use glam::{DMat4, DQuat, DVec3};
 use pfx_glb::{CAMERA_PREFIX, Lens, Node, Track, ZNEAR};
-use pfx_motion::{Route, Timeline, Trs, matrix, sample};
+use pfx_motion::{Route, Timeline, Trs, matrix, sample, trs_from_matrix};
 use pfx_recipe::{Camera, Recipe};
 
 use crate::{Built, Error, Registry};
@@ -86,10 +86,13 @@ pub(crate) fn bake(
                     .is_some_and(|rest| rest.starts_with('.'))
         })
     };
-    let mut tracks: Vec<Track> = built
+    let (carried, own): (Vec<_>, Vec<_>) = built
         .clips
         .iter()
-        .filter(|(piece, k)| !followed(piece) && k.len() == keys)
+        .filter(|(_, k)| k.len() == keys)
+        .partition(|(piece, _)| followed(piece));
+    let mut tracks: Vec<Track> = own
+        .into_iter()
         .map(|(piece, k)| Track {
             node: piece.clone(),
             keys: k.clone(),
@@ -99,6 +102,13 @@ pub(crate) fn bake(
         })
         .collect();
     if registry.bakers.is_empty() {
+        tracks.extend(carried.into_iter().map(|(piece, k)| Track {
+            node: piece.clone(),
+            keys: k.clone(),
+            camera: None,
+            focus: None,
+            fov: None,
+        }));
         return Ok(tracks);
     }
     let nodes: Vec<Node> = built.parts.iter().map(|p| p.node.clone()).collect();
@@ -144,6 +154,38 @@ pub(crate) fn bake(
                 ));
             }
             tracks.push(track);
+        }
+    }
+    for (piece, clip) in carried {
+        let Some(track) = tracks.iter_mut().find(|t| t.node == *piece) else {
+            tracks.push(Track {
+                node: piece.clone(),
+                keys: clip.clone(),
+                camera: None,
+                focus: None,
+                fov: None,
+            });
+            continue;
+        };
+        let owner = recipe
+            .objects
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| {
+                *piece == o.name
+                    || piece
+                        .strip_prefix(o.name.as_str())
+                        .is_some_and(|rest| rest.starts_with('.'))
+            })
+            .max_by_key(|(_, o)| o.name.len())
+            .map(|(at, _)| at);
+        let placed = match owner {
+            Some(at) => crate::world(recipe, at)?,
+            None => DMat4::IDENTITY,
+        };
+        let back = placed.inverse();
+        for (key, own) in track.keys.iter_mut().zip(clip) {
+            *key = trs_from_matrix(matrix(key) * back * matrix(own));
         }
     }
     Ok(tracks)
@@ -232,6 +274,15 @@ pub fn pose(recipe: &Recipe, built: &Built, time: f64) -> Result<(Recipe, Built)
         for part in built.parts.iter_mut().filter(|p| p.node.name == track.node) {
             part.node.transform = matrix(&trs);
             part.node.keep_transform = true;
+        }
+    }
+    for posed in built.skinned_parts(time) {
+        for part in built
+            .parts
+            .iter_mut()
+            .filter(|p| p.node.name == posed.node.name)
+        {
+            part.node.mesh = posed.node.mesh.clone();
         }
     }
     Ok((recipe, built))

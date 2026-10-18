@@ -6,6 +6,8 @@ use pfx_mesh::{Mesh, bounds, rounded_box};
 use pfx_recipe::{Recipe, validate};
 use std::path::{Path, PathBuf};
 
+pub mod model;
+
 pub fn golden(set: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/golden")

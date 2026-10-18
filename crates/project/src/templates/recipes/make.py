@@ -81,8 +81,8 @@ def points(c):
 def wordmark():
     svg = (ROOT / "assets/marks/wordmark.svg").read_text()
     lines = [
-        "# pfx's wordmark in 3D: assets/marks/wordmark.svg extruded, the glyphs' quadratic curves in eight steps, 0.00065 m per SVG unit, baseline at y 0; build with manfred build.",
-        "manfred = 1",
+        "# pfx's wordmark in 3D: assets/marks/wordmark.svg extruded, the glyphs' quadratic curves in eight steps, 0.00065 m per SVG unit, baseline at y 0; build with pfx build.",
+        "recipe = 1",
         'name = "pfx-wordmark"',
         "seed = 7",
     ]
@@ -117,8 +117,8 @@ def wordmark():
 
 def grid():
     lines = [
-        "# A floor grid of one metre squares, ten by ten, with the X axis in red and the Z axis in blue through the origin; build with manfred build.",
-        "manfred = 1",
+        "# A floor grid of one metre squares, ten by ten, with the X axis in red and the Z axis in blue through the origin; build with pfx build.",
+        "recipe = 1",
         'name = "pfx-grid"',
         "seed = 7",
     ]

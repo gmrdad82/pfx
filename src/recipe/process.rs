@@ -114,6 +114,16 @@ fn run(command: &str, line: &[String]) -> ExitCode {
     }
 }
 
+pub(super) fn real(path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    let real = path.canonicalize()?;
+    Ok(
+        match real.to_str().and_then(|text| text.strip_prefix(r"\\?\")) {
+            Some(rest) if cfg!(windows) && rest.as_bytes().get(1) == Some(&b':') => rest.into(),
+            _ => real,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

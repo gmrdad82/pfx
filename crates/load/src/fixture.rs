@@ -107,8 +107,14 @@ pub const SKY_HDR: &[u8] = include_bytes!("../tests/data/sky.hdr");
 
 pub fn skinned_column(bones: usize) -> Vec<u8> {
     let bones = bones.max(1);
+    skinned_column_with(bones, rig(bones).clips().to_vec())
+}
+
+pub fn skinned_column_with(bones: usize, clips: Vec<pfx_core::anim::Clip>) -> Vec<u8> {
+    let bones = bones.max(1);
     let column = column(bones);
-    let rig = rig(bones);
+    let rig = pfx_core::anim::Rig::new(pfx_core::anim::fixture::skeleton(bones), clips)
+        .expect("the fixture clips fit the column's skeleton");
     let mut writer = Writer {
         bin: Vec::new(),
         views: Vec::new(),

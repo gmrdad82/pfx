@@ -65,7 +65,11 @@ impl Fonts {
         })
     }
 
-    fn family(&mut self, base: &Path, family: Option<&str>) -> Result<String, String> {
+    fn family(
+        &mut self,
+        (recipe, base): (&Recipe, &Path),
+        family: Option<&str>,
+    ) -> Result<String, String> {
         let path = match family {
             None => return Ok(self.mono.clone()),
             Some(name) if name == pfx_recipe::MONO => return Ok(self.mono.clone()),
@@ -74,7 +78,7 @@ impl Fonts {
         if let Some(name) = self.files.get(path) {
             return Ok(name.clone());
         }
-        let file = base.join(path);
+        let file = recipe.asset(base, path)?;
         let bytes = pfx_recipe::files::read(&file)
             .map_err(|e| format!("cannot read the font {path}: {e}"))?;
         let name = family_name(&bytes)
@@ -129,7 +133,7 @@ fn lay_one(
     let mut faces = Vec::with_capacity(spans.len());
     for (i, span) in spans.iter().enumerate() {
         let family = fonts
-            .family(base, span.family.as_deref())
+            .family((recipe, base), span.family.as_deref())
             .map_err(|text| Error(format!("{path}.spans[{i}].family: {text}")))?;
         let size = span.size as f32;
         faces.push(Span {
@@ -687,7 +691,7 @@ mod tests {
         assert!(
             error
                 .0
-                .starts_with("object[label].spans[0].family: cannot read the font fonts/none.ttf"),
+                .starts_with("object[label].spans[0].family: fonts/none.ttf is not a file under "),
             "{error}"
         );
     }
@@ -725,15 +729,16 @@ mod tests {
         assert_eq!(laid.items.len(), 1);
         assert_eq!(laid.items[0].quads.len(), "byfiletwice".len());
 
+        let plain = parse(SCENE).unwrap();
         let mut fonts = Fonts::new().unwrap();
-        let first = fonts.family(&repo(), Some(BOLD_FILE)).unwrap();
+        let first = fonts.family((&plain, &repo()), Some(BOLD_FILE)).unwrap();
         assert_eq!(Some(first.as_str()), family_name(BOLD).as_deref());
         assert_eq!(fonts.files.len(), 1);
-        let second = fonts.family(&repo(), Some(BOLD_FILE)).unwrap();
+        let second = fonts.family((&plain, &repo()), Some(BOLD_FILE)).unwrap();
         assert_eq!(second, first);
         assert_eq!(fonts.files.len(), 1);
         let unseen = fonts
-            .family(Path::new("/nowhere"), Some(BOLD_FILE))
+            .family((&plain, Path::new("/nowhere")), Some(BOLD_FILE))
             .unwrap();
         assert_eq!(unseen, first);
     }
@@ -750,8 +755,9 @@ mod tests {
                 "object[label].spans[0].family: {NOTICE_FILE} is not a font with a family name"
             )
         );
+        let plain = parse(SCENE).unwrap();
         let mut fonts = Fonts::new().unwrap();
-        assert!(fonts.family(&repo(), Some(NOTICE_FILE)).is_err());
+        assert!(fonts.family((&plain, &repo()), Some(NOTICE_FILE)).is_err());
         assert!(fonts.files.is_empty());
     }
 

@@ -1,5 +1,40 @@
 # Changelog
 
+## v3.0.0-alpha.1 — 2026-10-18
+
+A pre-release of pfx with the scene builder and its window folded in.
+
+### Added
+
+- `pfx edit` is a new window for recipes, scenes, projects and games: panels for the recipe, outliner, cameras, lights, viewport, properties and render, in a black, lime and violet theme. It has undo and redo across every edit, a history list, and cut, copy, paste and duplicate of objects with their materials and keys, within and between documents.
+- Play while editing: run the open scene with a game's WebAssembly module (`[play] module`, `--play`, F4 to pick, F5 to play, F8 to stop); stopping puts the scene back exactly as it was.
+- Scene recipes and their commands: build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import and export, plus `pfx render --recipe`, `pfx shot <recipe> --still`, `pfx new <out> --from street` and `pfx scene list/save/fold`, with the object library and samples.
+- `.pfx` is pfx's own compressed scene file (TOML inside, chunked and LZ4-compressed); opening a `.toml` in the window imports it into a `.pfx` once.
+- JPEG textures in glTF images, recipe cards and maps; JPEG kinds pfx can't read are refused by name.
+- Level groups: a part's detail levels follow its group root (`extras.lod.group`).
+- Camera presets (chase, orbit, dolly, crane, drone, drive-by) and lighting presets (three-point, golden hour, overcast, night) in recipes; a preset expands into the rig, path and lights it stands for, so it stays keyable.
+- glTF skins and clips on a library or mesh object play on the recipe's timeline, blend into a second clip, and keep playing while the object follows a route.
+- Import of split `.gltf` files with separate buffers and images, and of OBJ files with their MTL materials.
+- Object names with dots can be reached in `set`, `get`, `key` and `--set` as `object."a.b".material` or `object[a.b].material`; every value takes bare or quoted strings alike; a recipe overrides entries of its includes by name, and `set --through` writes into the include.
+- Objects parented to a followed object move with it, and parts of a wheel steer and spin with it unless they say `spin = false`.
+- `pfx library add` and `pfx import` take `--licence`, `--credit`, `--author` and `--source`, and never claim a licence they weren't given.
+
+### Changed
+
+- 4K path-traced stills are faster: the tracer skips the material features a scene doesn't use and reads a smaller material record per hit (the workshop final went from 7.4 s to 6.0 s on the GPU, the same picture).
+- Running out of memory on a file or recipe that asks for too much now stops with one line and exit 1 instead of crashing.
+- Cutting regions with long outlines finishes quickly (a 366-point region over a 2-million-triangle body went from 11.2 s to 1.7 s); outlines over 4096 points are refused.
+- pito-codecs v1.14.3; pfx-sound's media build uses its audio-only set.
+- Every ported origin's licence text in NOTICE.md is now the upstream file's own.
+
+### Removed
+
+- `.manf` files are no longer read; use `.pfx`.
+
+### Fixed
+
+- An outline union of overlapping skewed rectangles could crash `pfx check` and `pfx build`.
+
 ## v2.6.0 — 2026-10-16
 
 ### Added

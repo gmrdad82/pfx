@@ -497,6 +497,51 @@ impl Editor {
         }
     }
 
+    pub fn delete(&mut self) -> Vec<String> {
+        if !self.editable() {
+            return Vec::new();
+        }
+        self.end_group();
+        let names: Vec<String> = self
+            .movable("delete")
+            .into_iter()
+            .filter(|name| {
+                let placed = name.contains('/');
+                if placed {
+                    self.log.warn(format!(
+                        "delete: {name} is placed by a prefab; delete its placement"
+                    ));
+                }
+                !placed
+            })
+            .collect();
+        if names.is_empty() {
+            return Vec::new();
+        }
+        let label = match names.len() {
+            1 => format!("delete {}", names[0]),
+            count => format!("delete {count} objects"),
+        };
+        let outcome = self.edit.dry_run(|edit| {
+            for name in &names {
+                edit.remove(&Target::Object(name.clone()))?;
+            }
+            Ok(())
+        });
+        match outcome {
+            Ok(group) => {
+                self.land(labelled(group, label));
+                self.select(None);
+                self.level.picked.clear();
+                names
+            }
+            Err(error) => {
+                self.log.warn(format!("{label}: {error}"));
+                Vec::new()
+            }
+        }
+    }
+
     fn moves(&mut self, label: String, moves: Vec<(String, DVec3)>) -> bool {
         let scene = self.scene().clone();
         let mut writes = Vec::new();

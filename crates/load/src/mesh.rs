@@ -209,7 +209,22 @@ impl Mesh {
         Self::from_gltf(gltf, read)
     }
 
-    fn from_gltf<F>(mut gltf: gltf::Gltf, read: F) -> Result<Self, String>
+    pub fn rigging_with<F>(bytes: &[u8], read: F) -> Result<Self, String>
+    where
+        F: Fn(&str) -> Result<Vec<u8>, String>,
+    {
+        let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| format!("mesh: {e}"))?;
+        Self::read_gltf(gltf, read, false)
+    }
+
+    fn from_gltf<F>(gltf: gltf::Gltf, read: F) -> Result<Self, String>
+    where
+        F: Fn(&str) -> Result<Vec<u8>, String>,
+    {
+        Self::read_gltf(gltf, read, true)
+    }
+
+    fn read_gltf<F>(mut gltf: gltf::Gltf, read: F, looks: bool) -> Result<Self, String>
     where
         F: Fn(&str) -> Result<Vec<u8>, String>,
     {
@@ -217,8 +232,14 @@ impl Mesh {
         let buffers = buffers(&gltf, blob, &read)?;
         let nodes = nodes(&gltf)?;
         let mut groups = groups(&gltf, &buffers)?;
-        let materials = materials(&gltf)?;
-        let surfaces = crate::surface::surfaces(&gltf, &buffers, &read);
+        let (materials, surfaces) = if looks {
+            (
+                materials(&gltf)?,
+                crate::surface::surfaces(&gltf, &buffers, &read)?,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
         fill_tangents(&mut groups, &surfaces);
         let skins = skins(&gltf, &buffers)?;
         let animations = animations(&gltf, &buffers, &nodes, &groups)?;
@@ -229,7 +250,7 @@ impl Mesh {
                 return Err("mesh: a node names a missing mesh".into());
             }
         }
-        for group in &groups {
+        for group in groups.iter().filter(|_| looks) {
             for primitive in &group.primitives {
                 if let Some(material) = primitive.material
                     && materials.get(material as usize).is_none()
@@ -305,7 +326,9 @@ where
             gltf::buffer::Source::Bin => blob
                 .take()
                 .ok_or_else(|| "mesh: missing BIN chunk".to_string())?,
-            gltf::buffer::Source::Uri(uri) => load_uri(uri, read)?,
+            gltf::buffer::Source::Uri(uri) => {
+                crate::uri::load(uri, read).map_err(|e| format!("mesh: {e}"))?
+            }
         };
         if data.len() < buffer.length() {
             return Err(format!(
@@ -321,25 +344,6 @@ where
         out.push(data);
     }
     Ok(out)
-}
-
-fn load_uri<F>(uri: &str, read: &F) -> Result<Vec<u8>, String>
-where
-    F: Fn(&str) -> Result<Vec<u8>, String>,
-{
-    if let Some(rest) = uri.strip_prefix("data:") {
-        let (meta, payload) = rest
-            .split_once(',')
-            .ok_or_else(|| "mesh: bad data uri".to_string())?;
-        if meta.split(';').any(|part| part == "base64") {
-            return decode_base64(payload).map_err(|e| format!("mesh: {e}"));
-        }
-        return percent_decode(payload).map(|text| text.into_bytes());
-    }
-    if uri.contains(':') {
-        return Err(format!("mesh: unsupported buffer uri {uri}"));
-    }
-    read(&percent_decode(uri)?)
 }
 
 fn nodes(gltf: &gltf::Gltf) -> Result<Vec<Node>, String> {
@@ -799,74 +803,6 @@ fn fit<T>(values: Vec<T>, len: usize, what: &str) -> Result<Vec<T>, String> {
     }
 }
 
-fn percent_decode(input: &str) -> Result<String, String> {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%' {
-            if index + 2 >= bytes.len() {
-                return Err("mesh: bad percent escape".into());
-            }
-            let hex = std::str::from_utf8(&bytes[index + 1..index + 3])
-                .map_err(|_| "mesh: bad percent escape")?;
-            let value = u8::from_str_radix(hex, 16).map_err(|_| "mesh: bad percent escape")?;
-            out.push(value);
-            index += 3;
-        } else {
-            out.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(out).map_err(|_| "mesh: buffer uri is not utf-8".into())
-}
-
-fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
-    fn value(byte: u8) -> Option<u8> {
-        match byte {
-            b'A'..=b'Z' => Some(byte - b'A'),
-            b'a'..=b'z' => Some(byte - b'a' + 26),
-            b'0'..=b'9' => Some(byte - b'0' + 52),
-            b'+' => Some(62),
-            b'/' => Some(63),
-            _ => None,
-        }
-    }
-    let bytes: Vec<u8> = input
-        .bytes()
-        .filter(|byte| !byte.is_ascii_whitespace())
-        .collect();
-    if !bytes.len().is_multiple_of(4) {
-        return Err("bad base64".into());
-    }
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
-    for chunk in bytes.chunks_exact(4) {
-        let pad = chunk.iter().rev().take_while(|byte| **byte == b'=').count();
-        if pad > 2 {
-            return Err("bad base64".into());
-        }
-        let mut packed = 0u32;
-        for (index, &byte) in chunk.iter().enumerate() {
-            if byte == b'=' {
-                if index < 4 - pad {
-                    return Err("bad base64".into());
-                }
-                continue;
-            }
-            let value = value(byte).ok_or("bad base64")?;
-            packed |= u32::from(value) << (18 - 6 * index);
-        }
-        out.push((packed >> 16) as u8);
-        if pad < 2 {
-            out.push((packed >> 8) as u8);
-        }
-        if pad < 1 {
-            out.push(packed as u8);
-        }
-    }
-    Ok(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -921,10 +857,43 @@ mod tests {
             &format!("\"uri\":\"data:application/octet-stream;base64,{encoded}\""),
         );
         assert_eq!(Mesh::parse(inline.as_bytes()).unwrap(), glb);
-        assert_eq!(decode_base64("TQ==").unwrap(), b"M");
-        assert_eq!(decode_base64("TWE=").unwrap(), b"Ma");
-        assert_eq!(decode_base64("TWFu").unwrap(), b"Man");
-        assert_eq!(percent_decode("a%2Fb.bin").unwrap(), "a/b.bin");
+        assert_eq!(crate::uri::decode_base64("TQ==").unwrap(), b"M");
+        assert_eq!(crate::uri::decode_base64("TWE=").unwrap(), b"Ma");
+        assert_eq!(crate::uri::decode_base64("TWFu").unwrap(), b"Man");
+    }
+
+    #[test]
+    fn images_load_from_data_uris_and_percent_encoded_names_beside_the_file() {
+        let folder = Source::folder(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data"));
+        let json = String::from_utf8(folder.read("triangle.gltf").unwrap()).unwrap();
+        let png = include_bytes!("../tests/data/swatch8.png");
+        let with_image = |uri: &str| {
+            json.replace(
+                "\"materials\":[{\"name\":\"ink\"}]",
+                &format!(
+                    "\"materials\":[{{\"name\":\"ink\",\"pbrMetallicRoughness\":{{\"baseColorTexture\":{{\"index\":0}}}}}}],\
+                     \"textures\":[{{\"source\":0}}],\"images\":[{{\"uri\":\"{uri}\"}}]"
+                ),
+            )
+        };
+        let read = |uri: &str| match uri {
+            "maps/swatch 8.png" => Ok(png.to_vec()),
+            "maps/escape.png" => Err("refused".to_string()),
+            other => folder.read(other),
+        };
+        let inline = format!("data:image/png;base64,{}", base64_encode(png));
+        for uri in [
+            inline.as_str(),
+            "maps/swatch%208.png",
+            "maps/x/../swatch%208.png",
+        ] {
+            let mesh = Mesh::parse_with(with_image(uri).as_bytes(), read).unwrap();
+            assert!(mesh.surfaces[0].maps.base.is_some(), "{uri} gave no map");
+        }
+        for uri in ["../swatch8.png", "https://example.com/swatch8.png"] {
+            let mesh = Mesh::parse_with(with_image(uri).as_bytes(), read).unwrap();
+            assert!(mesh.surfaces[0].maps.base.is_none(), "{uri} was read");
+        }
     }
 
     fn scenes_json(scenes: &str, default: &str) -> String {

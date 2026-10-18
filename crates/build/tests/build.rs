@@ -327,7 +327,10 @@ fn plate_uvs_build_and_imports_without_a_file_and_generators_are_refused_by_name
         r.objects.retain(|o| o.name == name);
         build(&r, &fixtures()).unwrap_err().to_string()
     };
-    assert!(only("imported").starts_with("object[imported].path: cannot read parts/handle.glb"));
+    assert!(
+        only("imported")
+            .starts_with("object[imported].path: parts/handle.glb is not a file under ")
+    );
     assert!(only("birds").starts_with(
         "object[birds].generator: `app/birds` is built by the app's own build binary"
     ));
@@ -909,7 +912,7 @@ fov_y_deg = 30.0
     );
     let glb = summary(&std::fs::read(&into[0]).unwrap()).unwrap();
     assert_eq!(glb.generator.as_deref(), Some(pfx_build::GENERATOR));
-    assert!(pfx_build::GENERATOR.starts_with("pfx "));
+    assert_eq!(pfx_build::GENERATOR, "pfx");
     let mut left: Vec<String> = std::fs::read_dir(&out)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

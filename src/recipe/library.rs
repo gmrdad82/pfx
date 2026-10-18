@@ -199,6 +199,7 @@ fn check(args: &Common) -> ExitCode {
     };
     let mut problems = library::check(&dir);
     let validated = validator(&dir, &mut problems);
+    let warnings = library::unlicensed(&dir);
     let objects = library::index(&dir).map_or(0, |e| e.len());
     if args.json {
         let list: Vec<Value> = problems
@@ -212,11 +213,18 @@ fn check(args: &Common) -> ExitCode {
                 "objects": objects,
                 "validator": validated.is_some(),
                 "problems": list,
+                "warnings": warnings
+                    .iter()
+                    .map(|p| json!({ "path": p.path, "text": p.text }))
+                    .collect::<Vec<_>>(),
             })
         );
     } else {
         for p in &problems {
             println!("{}: {}", p.path, p.text);
+        }
+        for p in &warnings {
+            println!("warning: {}: {}", p.path, p.text);
         }
         if validated.is_none() {
             eprintln!(

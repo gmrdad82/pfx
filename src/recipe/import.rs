@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use pfx_build::gltf_io::{self, Imported};
-use pfx_build::{Registry, build_with};
+use pfx_build::{Registry, build_with, library};
 use serde_json::{Value, json};
 
 use super::refuse;
@@ -14,8 +14,8 @@ const THUMB: [u32; 2] = [256, 256];
 #[command(group(clap::ArgGroup::new("into").required(true).args(["as_name", "out"])))]
 pub(super) struct Args {
     #[arg(
-        value_name = "file.glb",
-        help = "A glTF 2.0 binary (a Blender export included)"
+        value_name = "model",
+        help = "A glTF 2.0 model: a .glb, a .gltf with its buffers and images beside it, or an .obj with its .mtl and textures"
     )]
     file: PathBuf,
     #[arg(
@@ -34,6 +34,22 @@ pub(super) struct Args {
         help = "Tags kept in the document's facts"
     )]
     tags: Vec<String>,
+    #[arg(
+        long,
+        value_name = "SPDX id",
+        help = "The model's licence as an SPDX id; left empty when not given"
+    )]
+    licence: Option<String>,
+    #[arg(
+        long,
+        value_name = "line",
+        help = "The credit line the licence asks for (author, source URL)"
+    )]
+    credit: Option<String>,
+    #[arg(long, value_name = "name", help = "The model's author")]
+    author: Option<String>,
+    #[arg(long, value_name = "url", help = "Where the model came from")]
+    source: Option<String>,
     #[arg(
         long,
         help = "Render a 256x256 thumbnail into the document (GPU, headless)"
@@ -91,6 +107,22 @@ fn framed(facts: &serde_json::Map<String, Value>) -> ([f64; 3], [f64; 3]) {
 }
 
 fn thumbnail(
+    glb: &[u8],
+    out: &Path,
+    imported: &Imported,
+    registry: &Registry,
+) -> Result<Vec<u8>, String> {
+    let model = out.with_extension("thumb.glb");
+    if let Some(dir) = model.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(&model, glb).map_err(|e| format!("{}: {e}", model.display()))?;
+    let shot = shoot(&model, out, imported, registry);
+    let _ = std::fs::remove_file(&model);
+    shot
+}
+
+fn shoot(
     file: &Path,
     out: &Path,
     imported: &Imported,
@@ -118,27 +150,40 @@ fn thumbnail(
     bytes
 }
 
+fn validator(file: &Path) -> Option<Result<(), String>> {
+    let gltf = file
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("glb") || e.eq_ignore_ascii_case("gltf"));
+    gltf.then(|| gltf_io::validator(file)).flatten()
+}
+
 pub fn run(args: &Args, registry: &Registry) -> ExitCode {
     let (out, name) = match target(args) {
         Ok(found) => found,
         Err(text) => return refuse(COMMAND, &text),
     };
     let file = args.file.display().to_string();
-    let bytes = match std::fs::read(&args.file) {
+    let bytes = match pfx_load::pack::model(&args.file) {
         Ok(bytes) => bytes,
-        Err(e) => return refuse(COMMAND, &format!("{file}: {e}")),
+        Err(text) => return refuse(COMMAND, &text),
     };
-    let validated = match gltf_io::validator(&args.file) {
+    let validated = match validator(&args.file) {
         None => "absent",
         Some(Ok(())) => "passed",
         Some(Err(text)) => return refuse(COMMAND, &format!("{file}: {text}")),
     };
-    let imported = match gltf_io::import(&bytes, &name, &args.tags) {
+    let provenance = library::Provenance {
+        licence: args.licence.clone().unwrap_or_default(),
+        credit: args.credit.clone(),
+        author: args.author.clone(),
+        source: args.source.clone(),
+    };
+    let imported = match gltf_io::import(&bytes, &name, &args.tags, &provenance) {
         Ok(imported) => imported,
         Err(text) => return refuse(COMMAND, &format!("{file}: {text}")),
     };
     let thumb = if args.thumb {
-        match thumbnail(&args.file, &out, &imported, registry) {
+        match thumbnail(&bytes, &out, &imported, registry) {
             Ok(png) => Some(png),
             Err(text) => return refuse(COMMAND, &format!("--thumb: {text}")),
         }

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
+mod assets;
 mod constraint;
 mod curve;
 mod entries;
@@ -11,6 +12,7 @@ mod include;
 mod keyframes;
 mod patch;
 mod path;
+mod preset;
 mod read;
 mod route;
 mod set;
@@ -19,6 +21,7 @@ mod text;
 mod validate;
 mod variant;
 
+pub use assets::{LIBRARY_PREFIX, Library, library_reference};
 pub use curve::{CurveEdit, CurveParam, curve_keys, curve_patch, curve_points, curves_of};
 pub use entries::{
     Entry, TABLES, add_patch, duplicate_patch, entries, label_key, referrers, remove_patch,
@@ -30,14 +33,14 @@ pub use keyframes::{
     Table, key_patches, place, properties, property,
 };
 pub use patch::{
-    apply, apply_all, edit, flag, number, numbers, params_in, path_text, reread, save, save_to,
-    string, value_at, write,
+    apply, apply_all, apply_over, edit, flag, number, numbers, params_in, path_text, reread, save,
+    save_to, string, value_at, write,
 };
 pub use path::{CameraPath, Ease, Orbit, PathKey, PathKind};
 pub use read::effects::{Colour, Effects, Particles, Setting, Settings};
 pub use read::{load, materials, parse};
 pub use route::{PointEdit, route_patch};
-pub use set::{Change, apply_set, json_of, set_values, tidy, value_of};
+pub use set::{Change, apply_set, json_of, set_values, set_values_with, tidy, value_of};
 pub use stage::{Pick, apply_only, apply_stage, stage_index};
 pub use text::{ANCHORS, MONO, anchor_names, anchor_point, default_anchor};
 pub use validate::{bake_product, missing_material_text, slug, validate};
@@ -64,6 +67,8 @@ pub struct Recipe {
     pub seed: u64,
     pub params: Option<String>,
     pub library: Option<String>,
+    pub project_root: Option<String>,
+    pub asset_roots: Vec<String>,
     pub plate: Option<Plate>,
     pub output: Output,
     pub objects: Vec<Object>,
@@ -77,6 +82,8 @@ pub struct Recipe {
     pub references: Vec<Reference>,
     pub follows: Vec<Follow>,
     pub stages: Vec<Stage>,
+    pub scatters: Vec<Scatter>,
+    pub collections: Vec<Collection>,
     pub keep: Vec<Vec<String>>,
     pub markers: Vec<Marker>,
     pub constraints: Vec<Constrained>,
@@ -186,6 +193,8 @@ pub struct Object {
     pub smooth_angle: Option<f64>,
     pub smooth: bool,
     pub flat_faces: bool,
+    pub keep_normals: Option<bool>,
+    pub pieces: Vec<PieceRule>,
     pub bevel: Option<Bevel>,
     pub uv: Option<Uv>,
     pub detail_uv: Option<DetailUv>,
@@ -195,6 +204,13 @@ pub struct Object {
     pub dynamic: Option<bool>,
     pub proxy: Option<Proxy>,
     pub lod: Vec<Lod>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PieceRule {
+    pub select: String,
+    pub material: Option<String>,
+    pub hidden: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -311,6 +327,9 @@ pub enum Kind {
         path: String,
         node: Option<String>,
         morph: BTreeMap<String, f64>,
+        clip: Option<String>,
+        looped: bool,
+        play: Play,
     },
     Generator {
         generator: String,
@@ -320,6 +339,7 @@ pub enum Kind {
         object: String,
         clip: Option<String>,
         looped: bool,
+        play: Play,
     },
     Card {
         size: [f64; 2],
@@ -809,6 +829,64 @@ pub struct Follow {
     pub speed: Vec<[f64; 2]>,
     pub drift: Option<Drift>,
     pub ride: f64,
+    pub root_motion: RootMotion,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RootMotion {
+    #[default]
+    Ignore,
+    Apply,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Play {
+    pub start: f64,
+    pub speed: f64,
+    pub next: Option<String>,
+    pub next_at: f64,
+    pub blend: f64,
+}
+
+impl Default for Play {
+    fn default() -> Play {
+        Play {
+            start: 0.0,
+            speed: 1.0,
+            next: None,
+            next_at: 0.0,
+            blend: 0.0,
+        }
+    }
+}
+
+impl Play {
+    pub fn local(&self, time: f64, from: f64, length: f64, looped: bool) -> f64 {
+        let t = (time - from).max(0.0) * self.speed;
+        if looped && length > 0.0 {
+            t.rem_euclid(length)
+        } else {
+            t.min(length.max(0.0))
+        }
+    }
+
+    pub fn first(&self, time: f64, length: f64, looped: bool) -> f64 {
+        self.local(time, self.start, length, looped)
+    }
+
+    pub fn second(&self, time: f64, length: f64, looped: bool) -> f64 {
+        self.local(time, self.next_at, length, looped)
+    }
+
+    pub fn weight(&self, time: f64) -> f64 {
+        if self.next.is_none() || time < self.next_at {
+            return 0.0;
+        }
+        if self.blend <= 0.0 {
+            return 1.0;
+        }
+        ((time - self.next_at) / self.blend).clamp(0.0, 1.0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -816,6 +894,30 @@ pub struct Stage {
     pub name: String,
     pub objects: Vec<String>,
     pub camera: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Scatter {
+    pub name: String,
+    pub object: String,
+    pub on: String,
+    pub seed: Option<u64>,
+    pub spacing: Option<f64>,
+    pub density: Option<f64>,
+    pub map: Option<String>,
+    pub rotate_min: [f64; 3],
+    pub rotate_max: [f64; 3],
+    pub scale_min: f64,
+    pub scale_max: f64,
+    pub align: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Collection {
+    pub name: String,
+    pub objects: Vec<String>,
+    pub hidden: bool,
+    pub solo: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1265,6 +1367,21 @@ impl Recipe {
             }
         }
         false
+    }
+
+    pub fn collected(&self, name: &str) -> Vec<&str> {
+        self.collections
+            .iter()
+            .filter(|c| c.objects.iter().any(|g| variant::glob_matches(g, name)))
+            .map(|c| c.name.as_str())
+            .collect()
+    }
+
+    pub fn collection_hides(&self, name: &str) -> bool {
+        let within = |c: &&Collection| c.objects.iter().any(|g| variant::glob_matches(g, name));
+        let solo = self.collections.iter().any(|c| c.solo);
+        self.collections.iter().filter(within).any(|c| c.hidden)
+            || (solo && !self.collections.iter().filter(within).any(|c| c.solo))
     }
 
     pub fn keeps(&self, object: &str, node: &str) -> bool {

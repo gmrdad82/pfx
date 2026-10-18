@@ -1,7 +1,9 @@
 use toml_edit::{InlineTable, Item, Table, Value};
 
 use crate::include::{Edit, is_array};
-use crate::patch::{Reach, apply, edit_root, morph_room, path_text, reach, value_in, write};
+use crate::patch::{
+    Reach, apply, apply_over, edit_root, morph_room, path_text, reach, value_in, write,
+};
 use crate::read::params_ref;
 use crate::variant::{keys, replay};
 use crate::{Error, Key, Loaded, Patch, Recipe};
@@ -23,20 +25,25 @@ fn dotted(set: &str) -> Result<(&str, &str), Error> {
         )
     })?;
     let dotted = dotted.trim();
-    if dotted.is_empty() || dotted.split('.').any(str::is_empty) {
+    if let Err(why) = keys(dotted) {
         return Err(Error::new(
             dotted,
             None,
-            format!("`{dotted}` is not a dotted key, as camera.main.fov_y_deg"),
+            format!(
+                "`{dotted}` is not a dotted key, as camera.main.fov_y_deg or object.\"car.shell\".material ({why})"
+            ),
         ));
     }
     Ok((dotted, text))
 }
 
-fn fresh(text: &str) -> Value {
-    text.trim()
+pub(crate) fn parsed(text: &str) -> Value {
+    let mut value = text
+        .trim()
         .parse::<Value>()
-        .unwrap_or_else(|_| Value::from(text))
+        .unwrap_or_else(|_| Value::from(text.trim()));
+    value.decor_mut().clear();
+    value
 }
 
 fn nested(path: &[Key], value: Value, inline: bool) -> Item {
@@ -74,7 +81,7 @@ fn texts(l: &Loaded) -> Vec<(String, String)> {
 
 fn patch_for(l: &Loaded, dotted: &str, text: &str) -> Result<(Option<Value>, Patch), Error> {
     let fail = |text: String| Error::new(dotted, None, text);
-    let path = keys(dotted);
+    let path = keys(dotted).map_err(fail)?;
     let name = |at: usize| match &path[at] {
         Key::Table(n) | Key::Object(n) => n.clone(),
         Key::Index(i) => i.to_string(),
@@ -95,7 +102,7 @@ fn patch_for(l: &Loaded, dotted: &str, text: &str) -> Result<(Option<Value>, Pat
             name(0)
         ))),
         Reach::Missing(at, inline) => {
-            let item = nested(&path[at + 1..], fresh(text), inline);
+            let item = nested(&path[at + 1..], parsed(text), inline);
             Ok((
                 None,
                 Patch {
@@ -120,12 +127,25 @@ fn patch_for(l: &Loaded, dotted: &str, text: &str) -> Result<(Option<Value>, Pat
 }
 
 pub fn set_values(l: &mut Loaded, sets: &[String]) -> Result<Vec<Change>, Error> {
+    set_values_with(l, sets, false)
+}
+
+pub fn set_values_with(
+    l: &mut Loaded,
+    sets: &[String],
+    through: bool,
+) -> Result<Vec<Change>, Error> {
     let mut changes = Vec::with_capacity(sets.len());
     for set in sets {
         let (dotted, text) = dotted(set)?;
         let (old, patch) = patch_for(l, dotted, text)?;
         let before = texts(l);
-        apply(l, &patch).map_err(|mut e| {
+        let applied = if through {
+            apply(l, &patch)
+        } else {
+            apply_over(l, &patch)
+        };
+        applied.map_err(|mut e| {
             if e.path.is_empty() {
                 e.path = dotted.to_string();
             }
@@ -149,12 +169,12 @@ pub fn set_values(l: &mut Loaded, sets: &[String]) -> Result<Vec<Change>, Error>
 
 pub fn value_of(l: &Loaded, dotted: &str) -> Result<Value, Error> {
     let fail = |text: String| Error::new(dotted, None, text);
-    if dotted.is_empty() || dotted.split('.').any(str::is_empty) {
-        return Err(fail(format!(
-            "`{dotted}` is not a dotted key, as camera.main.fov_y_deg"
-        )));
-    }
-    match reach(l.doc.as_table(), &keys(dotted)) {
+    let path = keys(dotted).map_err(|why| {
+        fail(format!(
+            "`{dotted}` is not a dotted key, as camera.main.fov_y_deg or object.\"car.shell\".material ({why})"
+        ))
+    })?;
+    match reach(l.doc.as_table(), &path) {
         Reach::Value(v) => Ok(v),
         Reach::Item(Item::Table(t)) => Ok(Value::InlineTable(t.into_inline_table())),
         Reach::Item(Item::ArrayOfTables(a)) => Ok(Value::Array(a.into_array())),
@@ -217,12 +237,11 @@ pub(crate) fn set_in(table: &mut Table, sets: &[String]) -> Result<(), Error> {
         })?;
         let dotted = dotted.trim();
         let fail = |text: String| Error::new(dotted, None, format!("--set: {text}"));
-        if dotted.is_empty() || dotted.split('.').any(str::is_empty) {
-            return Err(fail(format!(
-                "`{dotted}` is not a dotted key, as object.liquid.params.liquid"
-            )));
-        }
-        let path = keys(dotted);
+        let path = keys(dotted).map_err(|why| {
+            fail(format!(
+                "`{dotted}` is not a dotted key, as object.liquid.params.liquid or object.\"car.shell\".material ({why})"
+            ))
+        })?;
         let old = match value_in(table, &path) {
             Some(old) => old,
             None if morph_room(table, &path) => Value::from(0.0),
@@ -243,7 +262,10 @@ fn value_like(old: &Value, text: &str) -> Result<Value, String> {
     if let Value::String(_) = old
         && !reference
     {
-        return Ok(Value::from(text));
+        return Ok(match text.trim().parse::<Value>() {
+            Ok(quoted @ Value::String(_)) => quoted,
+            _ => Value::from(text.trim()),
+        });
     }
     let new: Value = text
         .trim()

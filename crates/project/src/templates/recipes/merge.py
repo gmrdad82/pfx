@@ -77,7 +77,7 @@ def write(path, node_name, groups, colours):
         materials.append({"name": name, "pbrMetallicRoughness": {"baseColorFactor": colours[name] + [1.0]}})
         prims.append({"attributes": {"POSITION": p, "NORMAL": n, "TEXCOORD_0": t}, "indices": i, "material": len(materials) - 1})
     doc = {
-        "asset": {"version": "2.0", "generator": "pfx crates/project/src/templates/recipes/merge.py from manfred 0.16.0"},
+        "asset": {"version": "2.0", "generator": "pfx crates/project/src/templates/recipes/merge.py"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
         "nodes": [{"name": node_name, "mesh": 0}],

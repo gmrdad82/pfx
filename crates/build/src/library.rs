@@ -1,4 +1,6 @@
+use crate::pieces::{Rules, Step};
 use crate::shape::{Source, fail, read_mesh};
+use crate::skin::{self, Player, Skin};
 use crate::{Built, Error, GENERATOR, Generated, GeneratedLight, Piece, world};
 use glam::{DMat4, DQuat, DVec3};
 use pfx_glb::{Looks, Node, Order, Targets};
@@ -7,6 +9,7 @@ use pfx_recipe::{Kind, Object, Recipe};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub const LICENCE: &str = "MIT, Catalin Ilinca; original, no third-party models or brand marks";
 pub const FOLDER: &str = "library";
@@ -27,6 +30,9 @@ pub struct Sidecar {
     pub name: String,
     pub tags: Vec<String>,
     pub licence: String,
+    pub credit: Option<String>,
+    pub author: Option<String>,
+    pub source: Option<String>,
     pub generator: Option<String>,
     pub params: BTreeMap<String, Value>,
     pub pfx: String,
@@ -81,6 +87,15 @@ impl Sidecar {
         object.insert("name".into(), json!(self.name));
         object.insert("tags".into(), json!(self.tags));
         object.insert("licence".into(), json!(self.licence));
+        for (key, value) in [
+            ("credit", &self.credit),
+            ("author", &self.author),
+            ("source", &self.source),
+        ] {
+            if let Some(value) = value {
+                object.insert(key.into(), json!(value));
+            }
+        }
         let mut source = Map::new();
         if let Some(generator) = &self.generator {
             source.insert("generator".into(), json!(generator));
@@ -113,7 +128,13 @@ impl Sidecar {
                 .map(str::to_string)
                 .ok_or_else(|| format!("{at}.{key}: missing, expected a string"))
         };
-        known(&object, "object", &["kind", "name", "tags", "licence"])?;
+        known(
+            &object,
+            "object",
+            &[
+                "kind", "name", "tags", "licence", "credit", "author", "source",
+            ],
+        )?;
         known(&source, "source", &["generator", "pfx", "params"])?;
         let tags = match object.get("tags") {
             None => Vec::new(),
@@ -123,6 +144,11 @@ impl Sidecar {
                 .collect::<Option<Vec<_>>>()
                 .ok_or("object.tags: expected an array of strings")?,
             Some(_) => return Err("object.tags: expected an array of strings".into()),
+        };
+        let optional = |key: &str| match object.get(key) {
+            None => Ok(None),
+            Some(Value::String(text)) => Ok(Some(text.clone())),
+            Some(_) => Err(format!("object.{key}: expected a string")),
         };
         let generator = match source.get("generator") {
             None => None,
@@ -139,6 +165,9 @@ impl Sidecar {
             name: text_of(&object, "object", "name")?,
             tags,
             licence: text_of(&object, "object", "licence")?,
+            credit: optional("credit")?,
+            author: optional("author")?,
+            source: optional("source")?,
             generator,
             params,
             pfx: text_of(&source, "source", "pfx")?,
@@ -354,6 +383,9 @@ pub fn export(
             name: name.to_string(),
             tags: Vec::new(),
             licence: LICENCE.to_string(),
+            credit: None,
+            author: None,
+            source: None,
             generator,
             params,
             pfx: env!("CARGO_PKG_VERSION").to_string(),
@@ -739,6 +771,34 @@ fn pbr(glb: &[u8], materials: &BTreeMap<String, Value>) -> Result<Vec<u8>, Strin
     Ok(join_glb(&json, &bin))
 }
 
+pub(crate) fn material_name(name: Option<&str>, index: Option<usize>) -> String {
+    match (name, index) {
+        (Some(name), _) => name.to_string(),
+        (None, Some(index)) => format!("material{index}"),
+        (None, None) => String::new(),
+    }
+}
+
+pub(crate) fn file_materials(bytes: &[u8]) -> BTreeMap<String, Value> {
+    let json = match bytes.get(0..4) {
+        Some(b"glTF") => split_glb(bytes).ok().map(|(json, _)| json),
+        _ => serde_json::from_slice::<Value>(bytes).ok(),
+    };
+    json.as_ref()
+        .and_then(|json| json.get("materials"))
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    let name = material_name(m.get("name").and_then(Value::as_str), Some(i));
+                    (name, material_of(m))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn material_of(m: &Value) -> Value {
     let pbr = m.get("pbrMetallicRoughness");
     let factor = |key: &str, default: f64| {
@@ -822,9 +882,69 @@ pub fn find_root(from: &Path) -> Option<PathBuf> {
 
 pub fn root_for(recipe: &Recipe, base: &Path) -> Option<PathBuf> {
     match &recipe.library {
-        Some(path) => Some(base.join(path)),
+        Some(path) => Some(
+            recipe
+                .asset_where(base, path, "a library folder", &has_index)
+                .unwrap_or_else(|_| base.join(path)),
+        ),
         None => find_root(base),
     }
+}
+
+struct Shelf {
+    dir: PathBuf,
+    _mount: Option<pfx_recipe::files::Mount>,
+}
+
+fn shelf(
+    recipe: &Recipe,
+    base: &Path,
+    reference: &str,
+    named: Result<(&str, &str), String>,
+) -> Result<Shelf, String> {
+    if let Some(lib) = pfx_recipe::library_reference(reference) {
+        let (kind, name) = split_name(lib.entry)?;
+        let file = recipe.asset(base, lib.file)?;
+        let mount = mount_pfx(&file)?;
+        return Ok(Shelf {
+            dir: file.join(kind).join(name),
+            _mount: Some(mount),
+        });
+    }
+    let (kind, name) = named?;
+    let searched = match &recipe.library {
+        Some(path) => recipe
+            .asset_where(base, path, "a library folder", &has_index)
+            .map_err(|e| format!("{reference}: {e}"))?,
+        None => find_root(base).ok_or_else(|| {
+            "no library: set the recipe's top-level `library = \"<path>\"`, or keep the recipe under a folder whose `library/` holds an index.json".to_string()
+        })?,
+    };
+    Ok(Shelf {
+        dir: searched.join(kind).join(name),
+        _mount: None,
+    })
+}
+
+fn mount_pfx(file: &Path) -> Result<pfx_recipe::files::Mount, String> {
+    let bytes = pfx_recipe::files::read(file)
+        .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+    let reader =
+        pfx_file::Reader::from_bytes(&bytes).map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut held = BTreeMap::new();
+    for (index, entry) in reader.entries().iter().enumerate() {
+        let plain = Path::new(&entry.name)
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)));
+        if entry.tag != pfx_file::FILE || !plain {
+            continue;
+        }
+        let data = reader
+            .read(index)
+            .map_err(|e| format!("{}: {}: {e}", file.display(), entry.name))?;
+        held.insert(file.join(&entry.name), data.into_owned());
+    }
+    Ok(pfx_recipe::files::mount(held))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -868,6 +988,7 @@ pub(crate) struct TreeNode {
     pub rest: DMat4,
     pub world: DMat4,
     pub piece: Option<String>,
+    pub skinned: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -880,8 +1001,11 @@ pub(crate) struct Imported {
     pub generated: Generated,
     pub looks: Looks,
     pub morphs: Vec<Option<Morph>>,
+    pub skins: Vec<Option<Skin>>,
+    pub player: Option<Player>,
     pub tree: Tree,
     pub clips: Vec<(String, Vec<DMat4>)>,
+    pub hidden: BTreeSet<String>,
 }
 
 fn clips_of(
@@ -984,22 +1108,49 @@ fn duration(clip: &Clip) -> f64 {
         .fold(0.0, |m, &t| m.max(f64::from(t)))
 }
 
-fn posed(tree: &Tree, clip: &Clip, t: f64) -> Vec<DMat4> {
+fn local_trs(tree: &Tree, clip: &Clip, at: usize, t: f64) -> (DVec3, DQuat, DVec3) {
+    let (mut scale, mut rotation, mut translation) =
+        tree.nodes[at].rest.to_scale_rotation_translation();
+    for channel in clip.channels.iter().filter(|c| c.node == at) {
+        let Some(v) = keyed(channel, t) else {
+            continue;
+        };
+        match (channel.property, v.as_slice()) {
+            (Property::Translation, [x, y, z]) => translation = DVec3::new(*x, *y, *z),
+            (Property::Scale, [x, y, z]) => scale = DVec3::new(*x, *y, *z),
+            (Property::Rotation, [x, y, z, w]) => {
+                rotation = DQuat::from_xyzw(*x, *y, *z, *w).normalize();
+            }
+            _ => {}
+        }
+    }
+    (scale, rotation, translation)
+}
+
+pub(crate) struct Playing<'a> {
+    pub first: (&'a Clip, f64),
+    pub second: Option<(&'a Clip, f64, f64)>,
+    pub grounded: bool,
+}
+
+fn posed(tree: &Tree, playing: &Playing) -> Vec<DMat4> {
     let mut out: Vec<DMat4> = Vec::with_capacity(tree.nodes.len());
     for (at, node) in tree.nodes.iter().enumerate() {
-        let (mut scale, mut rotation, mut translation) = node.rest.to_scale_rotation_translation();
-        for channel in clip.channels.iter().filter(|c| c.node == at) {
-            let Some(v) = keyed(channel, t) else {
-                continue;
-            };
-            match (channel.property, v.as_slice()) {
-                (Property::Translation, [x, y, z]) => translation = DVec3::new(*x, *y, *z),
-                (Property::Scale, [x, y, z]) => scale = DVec3::new(*x, *y, *z),
-                (Property::Rotation, [x, y, z, w]) => {
-                    rotation = DQuat::from_xyzw(*x, *y, *z, *w).normalize();
-                }
-                _ => {}
-            }
+        let (clip, local) = playing.first;
+        let (mut scale, mut rotation, mut translation) = local_trs(tree, clip, at, local);
+        if let Some((clip, local, weight)) = playing.second
+            && weight > 0.0
+        {
+            let (s, r, p) = local_trs(tree, clip, at, local);
+            scale = scale.lerp(s, weight);
+            translation = translation.lerp(p, weight);
+            let r = if rotation.dot(r) < 0.0 { -r } else { r };
+            rotation = rotation.lerp(r, weight).normalize();
+        }
+        if playing.grounded && node.parent.is_none() {
+            let (_, _, rest) = node.rest.to_scale_rotation_translation();
+            translation.x = rest.x;
+            translation.z = rest.z;
         }
         let local = DMat4::from_scale_rotation_translation(scale, rotation, translation);
         let parent = node.parent.and_then(|p| out.get(p).copied());
@@ -1008,61 +1159,104 @@ fn posed(tree: &Tree, clip: &Clip, t: f64) -> Vec<DMat4> {
     out
 }
 
+fn named<'a>(object: &Object, tree: &'a Tree, key: &str, want: &str) -> Result<&'a Clip, Error> {
+    tree.clips
+        .iter()
+        .find(|c| c.name.as_deref() == Some(want))
+        .ok_or_else(|| {
+            let names: Vec<&str> = tree
+                .clips
+                .iter()
+                .filter_map(|c| c.name.as_deref())
+                .collect();
+            fail(
+                object,
+                key,
+                format!(
+                    "the model has no animation named `{want}`, expected one of: {}",
+                    if names.is_empty() {
+                        "none".to_string()
+                    } else {
+                        names.join(", ")
+                    }
+                ),
+            )
+        })
+}
+
+pub(crate) fn grounded(recipe: &Recipe, object: &Object) -> bool {
+    let owner = pfx_recipe::Owner::Object(object.name.clone());
+    recipe
+        .constrained()
+        .into_iter()
+        .filter(|c| c.owner == owner)
+        .flat_map(|c| c.list)
+        .any(|c| {
+            matches!(c.kind, pfx_recipe::ConstraintKind::FollowPath(f)
+                if f.root_motion == pfx_recipe::RootMotion::Ignore)
+        })
+}
+
+pub(crate) type Chosen<'a> = (&'a Clip, Option<&'a Clip>, &'a pfx_recipe::Play, bool);
+
+pub(crate) fn chosen<'a>(object: &'a Object, tree: &'a Tree) -> Result<Option<Chosen<'a>>, Error> {
+    let (clip, looped, play) = match &object.kind {
+        Kind::Library {
+            clip, looped, play, ..
+        }
+        | Kind::Mesh {
+            clip, looped, play, ..
+        } => (clip, *looped, play),
+        _ => return Ok(None),
+    };
+    let first = match clip {
+        Some(want) => Some(named(object, tree, "clip", want)?),
+        None => tree.clips.first(),
+    };
+    let Some(first) = first else {
+        return Ok(None);
+    };
+    let second = match &play.next {
+        Some(want) => Some(named(object, tree, "next_clip", want)?),
+        None => None,
+    };
+    Ok(Some((first, second, play, looped)))
+}
+
+pub(crate) fn playing<'a>(
+    (first, second, play, looped): Chosen<'a>,
+    grounded: bool,
+    t: f64,
+) -> Playing<'a> {
+    Playing {
+        first: (first, play.first(t, duration(first), looped)),
+        second: second.map(|clip| (clip, play.second(t, duration(clip), looped), play.weight(t))),
+        grounded,
+    }
+}
+
 fn sampled(
     recipe: &Recipe,
     object: &Object,
     tree: &Tree,
 ) -> Result<Vec<(String, Vec<DMat4>)>, Error> {
-    let (Some(timeline), Kind::Library { clip, looped, .. }) = (&recipe.timeline, &object.kind)
-    else {
+    let Some(timeline) = &recipe.timeline else {
         return Ok(Vec::new());
     };
-    let chosen = match clip {
-        Some(want) => Some(
-            tree.clips
-                .iter()
-                .find(|c| c.name.as_deref() == Some(want.as_str()))
-                .ok_or_else(|| {
-                    let names: Vec<&str> = tree
-                        .clips
-                        .iter()
-                        .filter_map(|c| c.name.as_deref())
-                        .collect();
-                    fail(
-                        object,
-                        "clip",
-                        format!(
-                            "the model has no animation named `{want}`, expected one of: {}",
-                            if names.is_empty() {
-                                "none".to_string()
-                            } else {
-                                names.join(", ")
-                            }
-                        ),
-                    )
-                })?,
-        ),
-        None => tree.clips.first(),
-    };
-    let Some(chosen) = chosen else {
+    let Some(found) = chosen(object, tree)? else {
         return Ok(Vec::new());
     };
-    let length = duration(chosen);
+    let grounded = grounded(recipe, object);
     let fps = f64::from(timeline.fps.max(1));
     let frames: Vec<Vec<DMat4>> = (0..=timeline.frames)
         .map(|n| {
             let t = f64::from(n) / fps;
-            let t = if *looped && length > 0.0 {
-                t.rem_euclid(length)
-            } else {
-                t
-            };
-            posed(tree, chosen, t)
+            posed(tree, &playing(found, grounded, t))
         })
         .collect();
     let mut out = Vec::new();
     for (at, node) in tree.nodes.iter().enumerate() {
-        let Some(piece) = &node.piece else {
+        let Some(piece) = node.piece.as_ref().filter(|_| !node.skinned) else {
             continue;
         };
         let rest = node.world.inverse();
@@ -1075,6 +1269,23 @@ fn sampled(
     Ok(out)
 }
 
+pub(crate) fn provenance(recipe: &Recipe, object: &Object, base: &Path) -> Option<Provenance> {
+    let Kind::Library {
+        object: reference, ..
+    } = &object.kind
+    else {
+        return None;
+    };
+    let shelf = shelf(recipe, base, reference, split_name(reference)).ok()?;
+    let sidecar = Sidecar::read(&shelf.dir.join(SIDECAR)).ok()?;
+    Some(Provenance {
+        licence: sidecar.licence,
+        credit: sidecar.credit,
+        author: sidecar.author,
+        source: sidecar.source,
+    })
+}
+
 pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Imported, Error> {
     let Kind::Library {
         object: reference, ..
@@ -1082,15 +1293,9 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
     else {
         return Err(fail(object, "kind", "expected a library object"));
     };
-    let (kind, name) = split_name(reference).map_err(|t| fail(object, "object", t))?;
-    let root = root_for(recipe, base).ok_or_else(|| {
-        fail(
-            object,
-            "object",
-            "no library: set the recipe's top-level `library = \"<path>\"`, or keep the recipe under a folder whose `library/` holds an index.json",
-        )
-    })?;
-    let dir = root.join(kind).join(name);
+    let shelf = shelf(recipe, base, reference, split_name(reference))
+        .map_err(|t| fail(object, "object", t))?;
+    let dir = shelf.dir.clone();
     let sidecar = Sidecar::read(&dir.join(SIDECAR))
         .map_err(|t| fail(object, "object", format!("{reference}: {t}")))?;
     let model = dir.join(MODEL);
@@ -1131,6 +1336,8 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
     let mut looks = Looks::new();
     let mut pieces = Vec::new();
     let mut morphs = Vec::new();
+    let mut skins = Vec::new();
+    let mut rig: Option<(usize, pfx_load::SkinRig)> = None;
     let mut tree = Tree::default();
     let mut at = BTreeMap::new();
     let mut facts = sidecar.facts.clone();
@@ -1139,6 +1346,9 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
     let mut stack: Vec<(gltf::Node, Option<usize>)> =
         roots.into_iter().rev().map(|n| (n, None)).collect();
     let mut taken = BTreeSet::new();
+    let mut rules = Rules::new(object);
+    let mut steps = Vec::new();
+    let mut hidden = BTreeSet::new();
     while let Some((n, parent)) = stack.pop() {
         if visited
             .get_mut(n.index())
@@ -1159,18 +1369,62 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             node = format!("{node}.{}", n.index());
             taken.insert(node.clone());
         }
+        steps.push(Step {
+            index: n.index(),
+            name: n.name().map(str::to_string),
+            unique: node.clone(),
+            parent,
+        });
+        let choice = rules.choose(&steps, steps.len() - 1);
         let mut piece = None;
+        let skinned = n.mesh().is_some() && n.skin().is_some();
         if let Some(m) = n.mesh() {
             let mut mesh = Mesh::default();
             let mut morph = Morph::default();
-            read_mesh(&source, &m, world, &mut mesh, &mut morph, &mut looks)?;
+            let skin = match n.skin() {
+                Some(found) => {
+                    let placed = (DMat4::IDENTITY, choice.material);
+                    read_mesh(&source, &m, placed, &mut mesh, &mut morph, &mut looks)?;
+                    let index = found.index();
+                    if rig.as_ref().is_some_and(|(at, _)| *at != index) {
+                        return Err(fail(
+                            object,
+                            "object",
+                            format!(
+                                "{reference}: the model has two skins, and an object takes one"
+                            ),
+                        ));
+                    }
+                    if rig.is_none() {
+                        let found = skin::rigged(&bytes, &dir, index)
+                            .map_err(|e| fail(object, "object", format!("{reference}: {e}")))?;
+                        rig = Some((index, found));
+                    }
+                    let (raw, weights) = skin::influences(&m, &buffers);
+                    let made = rig
+                        .as_ref()
+                        .map(|(_, found)| skin::skinned(&mut mesh, 0, &raw, &weights, found))
+                        .transpose()
+                        .map_err(|e| fail(object, "object", format!("{reference}: {e}")))?;
+                    made.filter(|made| made.joints.len() == mesh.positions.len())
+                }
+                None => {
+                    let placed = (world, choice.material);
+                    read_mesh(&source, &m, placed, &mut mesh, &mut morph, &mut looks)?;
+                    None
+                }
+            };
             if let Some(corner) = node.strip_prefix("wheel_") {
                 wheel_fact(&mut facts, corner, world, &mesh);
             }
             let full = format!("{}.{node}", object.name);
+            if choice.hidden {
+                hidden.insert(full.clone());
+            }
             piece = Some(full.clone());
             pieces.push(Piece { name: full, mesh });
             morphs.push((!morph.is_empty()).then_some(morph));
+            skins.push(skin);
         }
         at.insert(n.index(), tree.nodes.len());
         tree.nodes.push(TreeNode {
@@ -1179,22 +1433,22 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             rest,
             world,
             piece,
+            skinned,
         });
         let me = tree.nodes.len() - 1;
         for child in n.children().collect::<Vec<_>>().into_iter().rev() {
             stack.push((child, Some(me)));
         }
     }
+    rules.finish(&label, &steps)?;
     tree.clips = clips_of(document, &buffers, &at);
     let clips = sampled(recipe, object, &tree)?;
+    let player = match rig {
+        Some((_, found)) => skin::player(recipe, object, Arc::new(found.rig), false)?,
+        None => None,
+    };
     looks.retain(|_, look| look.has_maps());
-    let materials = split_glb(&bytes)
-        .ok()
-        .and_then(|(json, _)| json.get("materials").and_then(Value::as_array).cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|m| Some((m.get("name")?.as_str()?.to_string(), material_of(m))))
-        .collect();
+    let materials = file_materials(&bytes);
     let lights = facts
         .get("lights")
         .and_then(Value::as_array)
@@ -1210,8 +1464,11 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
         },
         looks,
         morphs,
+        skins,
+        player,
         tree,
         clips,
+        hidden,
     })
 }
 
@@ -1464,6 +1721,125 @@ pub fn pfx_extras(glb: &[u8]) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+pub fn licence_problem(licence: &str, credit: Option<&str>) -> Option<String> {
+    let licence = licence.trim();
+    if licence.is_empty() || licence == LICENCE {
+        return None;
+    }
+    if let Err(text) = pfx_core::spdx::validate(licence) {
+        return Some(format!(
+            "object.licence: \"{licence}\" is not an SPDX licence expression ({text})"
+        ));
+    }
+    match credit.map(str::trim) {
+        Some(credit) if !credit.is_empty() => None,
+        _ => Some(format!(
+            "object.credit: licence {licence} needs a credit line (author, source URL)"
+        )),
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Provenance {
+    pub licence: String,
+    pub credit: Option<String>,
+    pub author: Option<String>,
+    pub source: Option<String>,
+}
+
+impl Provenance {
+    pub fn fields(&self) -> Map<String, Value> {
+        let mut out = Map::new();
+        out.insert("licence".into(), json!(self.licence));
+        for (key, value) in [
+            ("credit", &self.credit),
+            ("author", &self.author),
+            ("source", &self.source),
+        ] {
+            if let Some(value) = value {
+                out.insert(key.into(), json!(value));
+            }
+        }
+        out
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        match licence_problem(&self.licence, self.credit.as_deref()) {
+            Some(text) => Err(text),
+            None => Ok(()),
+        }
+    }
+}
+
+fn sidecars(root: &Path) -> Result<Vec<Sidecar>, Vec<Problem>> {
+    let refused = |e: Error| {
+        vec![Problem {
+            path: e.path,
+            text: e.text,
+        }]
+    };
+    let mut out = Vec::new();
+    for kind in folders(root).map_err(refused)? {
+        for name in folders(&root.join(&kind)).map_err(refused)? {
+            let path = root.join(&kind).join(&name).join(SIDECAR);
+            let sidecar = Sidecar::read(&path).map_err(|text| {
+                vec![Problem {
+                    path: format!("{kind}/{name}/{SIDECAR}"),
+                    text,
+                }]
+            })?;
+            out.push(sidecar);
+        }
+    }
+    Ok(out)
+}
+
+fn unlicensed_in(sidecars: &[Sidecar]) -> Vec<Problem> {
+    sidecars
+        .iter()
+        .filter(|s| s.licence.trim().is_empty())
+        .map(|s| Problem {
+            path: format!("{}/{}/{SIDECAR}", s.kind, s.name),
+            text: "unlicensed: object.licence is empty; `pfx library add --licence <SPDX id> --credit \"<author, source URL>\"` records it".into(),
+        })
+        .collect()
+}
+
+pub fn unlicensed(root: &Path) -> Vec<Problem> {
+    sidecars(root)
+        .map(|s| unlicensed_in(&s))
+        .unwrap_or_default()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Credit {
+    pub kind: String,
+    pub name: String,
+    pub licence: String,
+    pub credit: Option<String>,
+    pub author: Option<String>,
+    pub source: Option<String>,
+}
+
+pub fn credits(root: &Path) -> Result<Vec<Credit>, Vec<Problem>> {
+    let all = sidecars(root)?;
+    let missing = unlicensed_in(&all);
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+    Ok(all
+        .into_iter()
+        .map(|s| Credit {
+            kind: s.kind,
+            name: s.name,
+            licence: s.licence,
+            credit: s.credit,
+            author: s.author,
+            source: s.source,
+        })
+        .collect())
+}
+
 pub fn check(root: &Path) -> Vec<Problem> {
     let mut out = Vec::new();
     let mut problem = |path: String, text: String| out.push(Problem { path, text });
@@ -1503,11 +1879,9 @@ pub fn check(root: &Path) -> Vec<Problem> {
                             ),
                         );
                     }
-                    if sidecar.licence != LICENCE {
-                        problem(
-                            at(SIDECAR),
-                            format!("object.licence: expected \"{LICENCE}\""),
-                        );
+                    if let Some(text) = licence_problem(&sidecar.licence, sidecar.credit.as_deref())
+                    {
+                        problem(at(SIDECAR), text);
                     }
                 }
                 Err(text) => problem(at(SIDECAR), text),

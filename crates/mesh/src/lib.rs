@@ -239,6 +239,15 @@ pub fn smooth_morphed(m: &mut Mesh, morph: &mut Morph, degrees: f64, flat_faces:
     normals::split_morphed(m, degrees, flat_faces, morph);
 }
 
+pub fn smooth_traced(
+    m: &mut Mesh,
+    degrees: f64,
+    flat_faces: bool,
+    morph: Option<&mut Morph>,
+) -> Vec<u32> {
+    normals::split_traced(m, degrees, flat_faces, morph)
+}
+
 fn digits_end(text: &[u8], from: usize) -> usize {
     from + text[from..]
         .iter()

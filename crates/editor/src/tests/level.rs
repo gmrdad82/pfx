@@ -374,3 +374,23 @@ fn shift_clicks_pick_several_and_align_distribute_and_duplicate_are_one_undo_ste
             .any(|entry| entry.text.contains("is a tile"))
     );
 }
+
+#[test]
+fn delete_removes_the_picked_objects_in_one_undo_step() {
+    let (mut editor, root) = open("delete");
+    let scene = root.join("level.scene.toml");
+    let block = root.join("prefabs/block.prefab.toml");
+    let a = editor.place_at(&block, [0.0, 0.0, 1.0], [0.0; 3]).unwrap();
+    let b = editor.place_at(&block, [1.0, 0.0, 2.0], [0.0; 3]).unwrap();
+    let before = text(&scene);
+    editor.level.picked = vec![a.clone(), b.clone()];
+    let steps = editor.history.undo_len();
+    assert_eq!(editor.delete(), [a.clone(), b.clone()]);
+    assert_eq!(editor.history.undo_len(), steps + 1);
+    assert_eq!(editor.history.undo_label(), Some("delete 2 objects"));
+    assert!(editor.scene().object(&a).is_none() && editor.scene().object(&b).is_none());
+    assert_eq!(editor.selection, None);
+    editor.undo();
+    assert_eq!(text(&scene), before);
+    assert!(editor.scene().object(&a).is_some());
+}

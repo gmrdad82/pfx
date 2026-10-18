@@ -93,8 +93,11 @@ pub fn validate(r: &Recipe) -> Vec<Problem> {
     follows(&mut out);
     stages(&mut out);
     markers(&mut out);
+    scatters(&mut out);
+    collections(&mut out);
     constraints(&mut out);
     output(&mut out);
+    roots(&mut out);
     sky(&mut out);
     look(&mut out);
     trace(&mut out);
@@ -474,6 +477,13 @@ fn objects(out: &mut Out<'_>) {
                 &at,
                 "smooth_angle",
                 "`smooth` and `smooth_angle` are both set, expected only one",
+            );
+        }
+        if o.keep_normals == Some(true) && (o.smooth || o.smooth_angle.is_some()) {
+            out.at(
+                &at,
+                "keep_normals",
+                "`keep_normals` keeps the file's normals and `smooth` or `smooth_angle` makes new ones, expected only one",
             );
         }
         if o.flat_faces && o.smooth_angle.is_none() {
@@ -1248,6 +1258,98 @@ fn references(out: &mut Out<'_>) {
     }
 }
 
+fn scatters(out: &mut Out<'_>) {
+    let r = out.r;
+    let names: Vec<&str> = r.scatters.iter().map(|s| s.name.as_str()).collect();
+    duplicates(out, "scatter", "name", &names);
+    let objects: Vec<&str> = r.objects.iter().map(|o| o.name.as_str()).collect();
+    let expected = "the name of an [[object]]";
+    for (i, s) in r.scatters.iter().enumerate() {
+        let at = At::new(format!("scatter[{}]", s.name), format!("scatter#{i}"));
+        if objects.contains(&s.name.as_str()) {
+            out.at(
+                &at,
+                "name",
+                format!(
+                    "`{}` is also an object's name, expected a name of its own",
+                    s.name
+                ),
+            );
+        }
+        if !objects.contains(&s.object.as_str()) {
+            out.missing(&at, "object", "object", &s.object, expected);
+        }
+        if !objects.contains(&s.on.as_str()) {
+            out.missing(&at, "on", "object", &s.on, expected);
+        } else if s.on == s.object {
+            out.at(
+                &at,
+                "on",
+                "a scatter places copies of one object on another, expected two objects",
+            );
+        }
+        let positive = |v: Option<f64>| v.is_none_or(|v| v.is_finite() && v > 0.0);
+        if !positive(s.spacing) {
+            out.at(&at, "spacing", "expected a distance in metres above 0");
+        }
+        if !positive(s.density) {
+            out.at(&at, "density", "expected copies per square metre above 0");
+        }
+        if s.spacing.is_none() && s.density.is_none() {
+            out.near(
+                &at,
+                "spacing",
+                "expected `spacing` (Poisson-disk, a least distance in metres) or `density` (copies per square metre), or both",
+            );
+        }
+        if !(s.scale_min.is_finite() && s.scale_min > 0.0) {
+            out.at(&at, "scale_min", "expected a scale above 0");
+        }
+        if !(s.scale_max.is_finite() && s.scale_max >= s.scale_min) {
+            out.at(&at, "scale_max", "expected a scale at or above `scale_min`");
+        }
+        if (0..3).any(|k| {
+            !(s.rotate_max[k].is_finite()
+                && s.rotate_min[k].is_finite()
+                && s.rotate_max[k] >= s.rotate_min[k])
+        }) {
+            out.at(
+                &at,
+                "rotate_max",
+                "expected every axis of `rotate_max` at or above `rotate_min`, in degrees",
+            );
+        }
+        if let Some(map) = &s.map
+            && !map.to_ascii_lowercase().ends_with(".png")
+        {
+            out.at(&at, "map", "expected a grey PNG image");
+        }
+    }
+}
+
+fn collections(out: &mut Out<'_>) {
+    let r = out.r;
+    let names: Vec<&str> = r.collections.iter().map(|c| c.name.as_str()).collect();
+    duplicates(out, "collection", "name", &names);
+    for (i, c) in r.collections.iter().enumerate() {
+        let at = At::new(format!("collection[{}]", c.name), format!("collection#{i}"));
+        for glob in &c.objects {
+            let objects = r
+                .objects
+                .iter()
+                .any(|o| crate::stage::selects(glob, &o.name));
+            let scatters = r.scatters.iter().any(|s| glob_matches(glob, &s.name));
+            if !objects && !scatters {
+                out.at(
+                    &at,
+                    "objects",
+                    format!("`{glob}` matches no object or scatter, expected a name or a glob"),
+                );
+            }
+        }
+    }
+}
+
 fn markers(out: &mut Out<'_>) {
     let r = out.r;
     let names: Vec<&str> = r.markers.iter().map(|m| m.name.as_str()).collect();
@@ -1447,6 +1549,27 @@ fn scene(out: &mut Out<'_>) {
             camera,
             "the name of a `[[camera]]`",
         );
+    }
+}
+
+fn roots(out: &mut Out<'_>) {
+    let r = out.r;
+    if r.project_root
+        .as_deref()
+        .is_some_and(|root| root.trim().is_empty())
+    {
+        out.same(
+            "project_root",
+            "is empty, expected a folder above the scene file, absolute or relative to the recipe, holding a project.toml",
+        );
+    }
+    for (i, root) in r.asset_roots.iter().enumerate() {
+        if root.trim().is_empty() {
+            out.same(
+                &format!("asset_roots[{i}]"),
+                "is empty, expected a read-only folder of assets, absolute or relative to the recipe",
+            );
+        }
     }
 }
 

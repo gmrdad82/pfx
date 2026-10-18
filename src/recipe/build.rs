@@ -309,14 +309,13 @@ mod tests {
         let out_dir = dir.to_string_lossy().into_owned();
         let file = "crates/recipe/tests/fixtures/full.toml";
         let (code, out, err) = run_on(&[file, "--out", &out_dir]);
-        let missing =
-            std::fs::read(Path::new(file).with_file_name("parts/handle.glb")).unwrap_err();
         assert_eq!((code, out.as_str()), (1, ""));
-        assert_eq!(
-            err,
-            format!(
-                "pfx build: {file}: object[imported].path: cannot read parts/handle.glb: {missing}\n"
-            )
+        assert!(
+            err.starts_with(&format!(
+                "pfx build: {file}: object[imported].path: parts/handle.glb is not a file under "
+            )) && err.ends_with('\n')
+                && err.matches('\n').count() == 1,
+            "{err}"
         );
     }
 

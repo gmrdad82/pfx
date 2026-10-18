@@ -286,7 +286,7 @@ fn parse_errors_name_the_key_the_line_and_what_was_expected() {
         ),
         (
             "unknown_top",
-            "line 3: sky_colour: unknown key `sky_colour` in the top level, expected one of: recipe, include, name, seed, params, library, plate, output, object, use, camera, sun, sky, light, mover, route, reference, follow, stage, marker, variant, sidecar, look, trace, bake, timeline, materials, particles, flare, motion_blur, haze, sound",
+            "line 3: sky_colour: unknown key `sky_colour` in the top level, expected one of: recipe, include, name, seed, params, library, project_root, asset_roots, plate, output, object, use, camera, sun, sky, light, mover, route, reference, follow, stage, marker, scatter, collection, variant, sidecar, look, trace, bake, timeline, materials, particles, flare, motion_blur, haze, sound",
         ),
         (
             "missing_recipe",

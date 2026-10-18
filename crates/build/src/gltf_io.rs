@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 pub const GLTF_PATH: &str = "@gltf";
-pub const LICENCE: &str = library::LICENCE;
 
 const STANDARD: &[&str] = &["KHR_", "EXT_", "MSFT_"];
 
@@ -584,7 +583,13 @@ pub fn recipe_text(name: &str) -> String {
     )
 }
 
-pub fn import(glb: &[u8], name: &str, tags: &[String]) -> Result<Imported, String> {
+pub fn import(
+    glb: &[u8],
+    name: &str,
+    tags: &[String],
+    provenance: &library::Provenance,
+) -> Result<Imported, String> {
+    provenance.validate()?;
     let parts = split(glb)?;
     let json: Value = serde_json::from_slice(parts.json)
         .map_err(|e| format!("the JSON chunk does not parse: {e}"))?;
@@ -599,7 +604,7 @@ pub fn import(glb: &[u8], name: &str, tags: &[String]) -> Result<Imported, Strin
     facts.insert("kind".into(), json!(kind));
     facts.insert("name".into(), json!(name));
     facts.insert("tags".into(), json!(tags));
-    facts.insert("licence".into(), json!(LICENCE));
+    facts.extend(provenance.fields());
     facts.extend(detected);
     let mut nodes = BTreeMap::new();
     if let Some(list) = json.get("nodes").and_then(Value::as_array) {
@@ -668,10 +673,11 @@ pub fn import_pfx(
     glb: &[u8],
     name: &str,
     tags: &[String],
+    provenance: &library::Provenance,
     thumb: Option<Vec<u8>>,
     out: &Path,
 ) -> Result<Imported, String> {
-    let imported = import(glb, name, tags)?;
+    let imported = import(glb, name, tags, provenance)?;
     imported.write(out, thumb.as_deref())?;
     Ok(imported)
 }

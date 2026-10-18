@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::{pair, read_failure, refuse};
 
-const TABLES: [&str; 10] = [
+const TABLES: [&str; 12] = [
     "object",
     "camera",
     "light",
@@ -20,6 +20,8 @@ const TABLES: [&str; 10] = [
     "use",
     "mover",
     "marker",
+    "scatter",
+    "collection",
 ];
 
 #[derive(clap::Args)]

@@ -8,9 +8,10 @@ use sha2::{Digest, Sha256};
 
 use crate::{Built, Registry, build_with, glb_path};
 
-pub const LICENCE: &str = "MIT, Catalin Ilinca; original, no third-party models or brand marks";
 pub const GLTF_NAME: &str = "@gltf";
 pub const ENTRY: &str = "main.toml";
+pub const ASSET_RECORD: &str = "asset.pfx";
+const RECORD_DEPTH: usize = 4;
 
 const OWNED: [Tag; 10] = [
     pfx_file::GLTF,
@@ -420,6 +421,18 @@ fn text_of(bytes: &[u8], what: &str) -> Result<String, String> {
     String::from_utf8(bytes.to_vec()).map_err(|_| format!("{what} is not UTF-8"))
 }
 
+fn asset_records(seen: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
+    seen.iter()
+        .filter_map(|file| {
+            file.ancestors()
+                .skip(1)
+                .take(RECORD_DEPTH)
+                .map(|dir| dir.join(ASSET_RECORD))
+                .find(|record| record.is_file())
+        })
+        .collect()
+}
+
 fn real_folder(pfx: &Path) -> PathBuf {
     match pfx.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
@@ -441,14 +454,17 @@ impl Document {
         drop(recorder);
         if let Some(sky) = &loaded.recipe.sky
             && let Some(path) = &sky.path
+            && let Ok(found) = loaded.recipe.asset(&base, path)
         {
-            let file = files::clean(&base.join(path));
+            let file = files::clean(&found);
             if file.is_file() {
                 seen.insert(file);
             }
         }
         let main = files::clean(recipe);
         seen.remove(&main);
+        let records = asset_records(&seen);
+        seen.extend(records);
         let mut root = main.parent().map(Path::to_path_buf).unwrap_or_default();
         for file in &seen {
             while !file.starts_with(&root) {
@@ -533,7 +549,13 @@ impl Document {
 
     fn facts_text(&self, built: &Built) -> Result<String, String> {
         let mut table = toml::Table::new();
-        table.insert("licence".into(), toml::Value::String(LICENCE.into()));
+        if let Ok(before) = toml::from_str::<toml::Table>(&self.facts) {
+            for key in ["licence", "credit", "author", "source"] {
+                if let Some(value) = before.get(key).and_then(toml::Value::as_str) {
+                    table.insert(key.into(), toml::Value::String(value.into()));
+                }
+            }
+        }
         table.insert(
             "pfx".into(),
             toml::Value::String(env!("CARGO_PKG_VERSION").into()),
@@ -558,6 +580,14 @@ impl Document {
             .filter_map(|(k, v)| Some((k.clone(), toml_of(v)?)))
             .collect();
         table.insert("objects".into(), toml::Value::Table(objects));
+        let provenance: toml::Table = built
+            .object_provenance()
+            .iter()
+            .filter_map(|(k, v)| Some((k.clone(), toml_of(v)?)))
+            .collect();
+        if !provenance.is_empty() {
+            table.insert("provenance".into(), toml::Value::Table(provenance));
+        }
         toml::to_string(&table).map_err(|e| format!("the facts: {e}"))
     }
 

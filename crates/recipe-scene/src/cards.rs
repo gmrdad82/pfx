@@ -267,7 +267,11 @@ fn found(recipe: &Recipe, pieces: &[Piece], memory: &Memory) -> Result<Found, Er
         if shown.contains_key(&piece.object) {
             continue;
         }
-        let source = image.as_ref().map(|path| base.join(path));
+        let source = image
+            .as_ref()
+            .map(|path| recipe.asset(&base, path))
+            .transpose()
+            .map_err(|e| Error(format!("object[{}].image: {e}", object.name)))?;
         let at = match found.get(&source) {
             Some(&at) => at,
             None => {
@@ -364,24 +368,12 @@ pub fn decode(bytes: &[u8]) -> Result<Picture, String> {
         });
     }
     if bytes.starts_with(&[0xff, 0xd8]) {
-        let options = zune_jpeg::zune_core::options::DecoderOptions::default()
-            .jpeg_set_out_colorspace(zune_jpeg::zune_core::colorspace::ColorSpace::RGBA)
-            .set_use_unsafe(false);
-        let mut decoder = zune_jpeg::JpegDecoder::new_with_options(
-            zune_jpeg::zune_core::bytestream::ZCursor::new(bytes),
-            options,
-        );
-        decoder.decode_headers().map_err(|e| format!("jpeg: {e}"))?;
-        let info = decoder.info().ok_or("jpeg: no header")?;
-        fits(u32::from(info.width), u32::from(info.height))?;
-        let texels = decoder.decode().map_err(|e| format!("jpeg: {e}"))?;
-        let (width, height) = (u32::from(info.width), u32::from(info.height));
-        if width == 0 || height == 0 || texels.len() != width as usize * height as usize * 4 {
-            return Err(format!(
-                "jpeg: a {width}x{height} image decoded to {} bytes",
-                texels.len()
-            ));
-        }
+        let (width, height) = Image::jpeg_size(bytes)?;
+        fits(width, height)?;
+        let image = Image::jpeg(bytes)?;
+        let Pixels::Eight(texels) = image.pixels else {
+            return Err("jpeg: the decode is not 8-bit".into());
+        };
         return Ok(Picture {
             width,
             height,
@@ -965,7 +957,9 @@ mod tests {
         let (recipe, pieces) = built(&dir, &text);
         let error = dress(&recipe, pieces, &Memory::default()).err().unwrap();
         assert!(
-            error.0.starts_with("object[photo].image: cannot read"),
+            error
+                .0
+                .starts_with("object[photo].image: gone.png is not a file under "),
             "{error}"
         );
     }

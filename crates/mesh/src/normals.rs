@@ -84,11 +84,20 @@ pub(crate) fn split(m: &mut Mesh, degrees: f64) {
 }
 
 pub(crate) fn split_with(m: &mut Mesh, degrees: f64, flat_faces: bool) {
-    split_core(m, degrees, flat_faces, None);
+    split_core(m, degrees, flat_faces, None, false);
 }
 
 pub(crate) fn split_morphed(m: &mut Mesh, degrees: f64, flat_faces: bool, morph: &mut Morph) {
-    split_core(m, degrees, flat_faces, Some(morph));
+    split_core(m, degrees, flat_faces, Some(morph), false);
+}
+
+pub(crate) fn split_traced(
+    m: &mut Mesh,
+    degrees: f64,
+    flat_faces: bool,
+    morph: Option<&mut Morph>,
+) -> Vec<u32> {
+    split_core(m, degrees, flat_faces, morph, true)
 }
 
 fn moving(pos: &[DVec3], morph: &Morph) -> Vec<u32> {
@@ -186,7 +195,13 @@ fn morph_normals(
         .collect()
 }
 
-fn split_core(m: &mut Mesh, degrees: f64, flat_faces: bool, morph: Option<&mut Morph>) {
+fn split_core(
+    m: &mut Mesh,
+    degrees: f64,
+    flat_faces: bool,
+    morph: Option<&mut Morph>,
+    traced: bool,
+) -> Vec<u32> {
     let pos: Vec<DVec3> = m
         .positions
         .iter()
@@ -271,7 +286,7 @@ fn split_core(m: &mut Mesh, degrees: f64, flat_faces: bool, morph: Option<&mut M
     let mut uvs1 = Vec::new();
     let mut indices = Vec::with_capacity(m.indices.len());
     let mut corners = Vec::new();
-    let tracked = morph.is_some();
+    let tracked = traced || morph.is_some();
     for (ti, t) in tris.iter().enumerate() {
         for (c, &v) in t.iter().enumerate() {
             let v = v as usize;
@@ -329,6 +344,7 @@ fn split_core(m: &mut Mesh, degrees: f64, flat_faces: bool, morph: Option<&mut M
         m.uvs1 = Some(uvs1);
     }
     m.indices = indices;
+    corners.iter().map(|c| c.source).collect()
 }
 
 pub(crate) fn find(parent: &mut [usize], i: usize) -> usize {

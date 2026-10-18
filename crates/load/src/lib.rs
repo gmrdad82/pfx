@@ -3,11 +3,18 @@ mod cache;
 pub mod fixture;
 mod font;
 mod image;
+mod jpeg;
 #[cfg(test)]
 mod lod_tests;
 mod mesh;
 #[cfg(test)]
 mod morph_tests;
+pub mod obj;
+#[cfg(test)]
+mod obj_tests;
+pub mod pack;
+#[cfg(test)]
+mod pack_tests;
 mod pfx;
 #[cfg(test)]
 mod pfx_scene_tests;
@@ -21,6 +28,7 @@ pub mod scene;
 mod sky;
 mod source;
 pub mod surface;
+pub mod uri;
 mod vec3;
 
 pub use cache::{Asset, Cache, Handle, sha256};

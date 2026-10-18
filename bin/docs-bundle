@@ -110,6 +110,7 @@ GUIDES = [
     ("recipe-clips", 125, None),
     ("recipe-runtime", 126, None),
     ("recipe-noise", 127, None),
+    ("asset-sources", 128, None),
     ("play", 201, None),
     ("input", 202, "pfx-input: keyboard, mouse and controllers behind one action map, with controller glyphs, rumble and input recording."),
     ("sound", 203, None),
@@ -153,10 +154,17 @@ GUIDES = [
     ("editor", 401, None),
     ("editor-crates", 402, None),
     ("play-modules", 403, None),
+    ("editor-window", 404, "Arrange a recipe in pfx edit: open it, pick and move parts, change materials, set cameras and scrub the sun, every edit written back into the recipe."),
+    ("editor-recipes", 405, "How pfx edit writes a recipe: gestures, undo, outside changes, curves, the hour, the timeline, the picker, the start scene and the File menu."),
+    ("editor-cameras", 406, None),
+    ("editor-gizmos", 407, None),
+    ("editor-shots", 408, "pfx edit drawn offscreen: one frame with --shot after a script, or a clip of the window playing a tape."),
+    ("editor-rig", 409, "bin/rig: the live pfx edit window in a hidden compositor, for screenshots, keys and the pointer."),
     ("windows", 501, "Games on pfx build for Windows: the one build Steam ships, which Linux and the Steam Deck run through Proton."),
     ("steam", 502, None),
     ("wgpu30", 503, None),
     ("agnostic", 504, None),
+    ("measured", 505, "How the numbers on the front page were measured: the live renderer and the 2D pass at 4K, the game systems, and the size of an empty game."),
 ]
 
 FORMATS = [

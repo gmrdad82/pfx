@@ -521,6 +521,11 @@ impl Session {
         Ok(more || drew)
     }
 
+    pub fn begin(&mut self, ctx: &egui::Context) {
+        self.seconds = ctx.input(|input| input.unstable_dt).clamp(0.0, MAX_SECONDS);
+        self.feed(ctx);
+    }
+
     fn feed(&mut self, ctx: &egui::Context) {
         let was = self.modifiers;
         self.modifiers = ctx.input(|input| input.modifiers);
@@ -560,8 +565,7 @@ impl Session {
 impl App for Session {
     fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        self.seconds = ctx.input(|input| input.unstable_dt).clamp(0.0, MAX_SECONDS);
-        self.feed(&ctx);
+        self.begin(&ctx);
         self.editor.ui(ui);
     }
 

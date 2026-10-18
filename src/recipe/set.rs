@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use pfx_build::Registry;
 use pfx_recipe::toml_edit::Value as Toml;
-use pfx_recipe::{Change, Loaded, json_of, load, save, set_values, tidy, value_of};
+use pfx_recipe::{Change, Loaded, json_of, load, save, set_values_with, tidy, value_of};
 use serde_json::{Value, json};
 
 use super::{check, pair, read_failure, refuse};
@@ -20,6 +20,11 @@ pub(super) struct SetArgs {
         help = "A dotted key, as --set takes it, and its new value as TOML of the kind it replaces"
     )]
     sets: Vec<String>,
+    #[arg(
+        long,
+        help = "Write a key an included file defines into that file; by default the recipe given takes the override"
+    )]
+    through: bool,
     #[arg(long, help = "One JSON object on stdout")]
     json: bool,
 }
@@ -39,7 +44,7 @@ pub(super) struct GetArgs {
     json: bool,
 }
 
-fn file_of(recipe: &str, name: &str) -> String {
+pub(super) fn file_of(recipe: &str, name: &str) -> String {
     let main = Path::new(recipe);
     if main.file_name().is_some_and(|n| n == name) {
         return recipe.to_string();
@@ -50,9 +55,9 @@ fn file_of(recipe: &str, name: &str) -> String {
         .to_string()
 }
 
-type Saved = Vec<(PathBuf, Option<Vec<u8>>)>;
+pub(super) type Saved = Vec<(PathBuf, Option<Vec<u8>>)>;
 
-fn originals(recipe: &str, loaded: &Loaded) -> Saved {
+pub(super) fn originals(recipe: &str, loaded: &Loaded) -> Saved {
     let mut paths = vec![PathBuf::from(recipe)];
     paths.extend(loaded.recipe.files.paths().into_iter().skip(1));
     paths
@@ -64,7 +69,7 @@ fn originals(recipe: &str, loaded: &Loaded) -> Saved {
         .collect()
 }
 
-fn restore(saved: &Saved) -> Result<(), String> {
+pub(super) fn restore(saved: &Saved) -> Result<(), String> {
     for (path, bytes) in saved {
         if std::fs::read(path).ok() == *bytes {
             continue;
@@ -78,7 +83,7 @@ fn restore(saved: &Saved) -> Result<(), String> {
     Ok(())
 }
 
-fn rechecked(file: &str, registry: &Registry) -> Result<(), String> {
+pub(super) fn rechecked(file: &str, registry: &Registry) -> Result<(), String> {
     let loaded = load(Path::new(file)).map_err(|e| read_failure(file, &e))?;
     let problems = check::problems(&loaded.recipe, file, registry);
     if problems.is_empty() {
@@ -91,11 +96,11 @@ fn rechecked(file: &str, registry: &Registry) -> Result<(), String> {
     Err(lines.join("; "))
 }
 
-fn shown(value: Option<&Toml>) -> String {
+pub(super) fn shown(value: Option<&Toml>) -> String {
     value.map_or_else(|| "absent".to_string(), |v| tidy(v).to_string())
 }
 
-fn described(recipe: &str, change: &Change) -> Value {
+pub(super) fn described(recipe: &str, change: &Change) -> Value {
     json!({
         "key": change.key,
         "old": change.old.as_ref().map(json_of),
@@ -115,7 +120,8 @@ fn set(args: &SetArgs, registry: &Registry) -> Result<(), String> {
     let file = args.recipe.as_str();
     let mut loaded = load(Path::new(file)).map_err(|e| read_failure(file, &e))?;
     let saved = originals(file, &loaded);
-    let changes = set_values(&mut loaded, &args.sets).map_err(|e| read_failure(file, &e))?;
+    let changes = set_values_with(&mut loaded, &args.sets, args.through)
+        .map_err(|e| read_failure(file, &e))?;
     let written = save(&loaded)
         .map_err(|e| read_failure(file, &e))
         .and_then(|()| rechecked(file, registry));
@@ -196,6 +202,7 @@ mod tests {
         SetArgs {
             recipe: file.to_string(),
             sets: sets.iter().map(|s| s.to_string()).collect(),
+            through: false,
             json: true,
         }
     }

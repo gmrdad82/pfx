@@ -76,6 +76,7 @@ pub(super) fn swap(verb: &mut Verb) -> Result<Option<Opened>, (&'static str, Str
         Verb::Shot(a) => ("shot", swapped_path(&mut a.recipe)),
         Verb::Render(a) => ("render", swapped_path(&mut a.recipe)),
         Verb::Clip(a) => ("clip", swapped_path(&mut a.recipe)),
+        Verb::Align(a) => ("align", swapped(&mut a.recipe)),
         _ => ("", Ok(None)),
     };
     result.map_err(|e| (name, e))
@@ -356,6 +357,14 @@ roughness = 0.6
         ]));
         assert_eq!(code, ExitCode::SUCCESS);
         (dir, pfx)
+    }
+
+    #[test]
+    fn a_built_document_claims_no_licence_of_its_own() {
+        let (_, pfx) = saved("pfx-no-licence");
+        let doc = Document::open(&pfx).unwrap();
+        assert!(!doc.facts.contains("licence"), "{}", doc.facts);
+        assert!(!doc.facts.contains("MIT"));
     }
 
     #[test]

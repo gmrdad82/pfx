@@ -153,6 +153,8 @@ impl Instance {
     }
 }
 
+const FLAT_TRANSFORM: f64 = 1e-6;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Pose {
     m: Transform,
@@ -167,20 +169,28 @@ impl Pose {
         if m[0][3] != 0.0 || m[1][3] != 0.0 || m[2][3] != 0.0 || m[3][3] != 1.0 {
             return Err("instance transform is not affine".into());
         }
-        let a = |row: usize, column: usize| m[column][row];
+        let a = |row: usize, column: usize| f64::from(m[column][row]);
         let cofactor = |row: usize, column: usize| {
             let (r0, r1) = ((row + 1) % 3, (row + 2) % 3);
             let (c0, c1) = ((column + 1) % 3, (column + 2) % 3);
             a(r0, c0) * a(r1, c1) - a(r0, c1) * a(r1, c0)
         };
-        let determinant: f32 = (0..3)
+        let determinant: f64 = (0..3)
             .map(|column| a(0, column) * cofactor(0, column))
             .sum();
-        if determinant.abs() < 1e-12 {
+        let length = |values: [f64; 3]| values.iter().map(|v| v * v).sum::<f64>().sqrt();
+        let volume: f64 = (0..3)
+            .map(|column| length([0, 1, 2].map(|row| a(row, column))))
+            .product();
+        if determinant.abs() <= volume * FLAT_TRANSFORM {
             return Err("instance transform is singular".into());
         }
+        let largest = (0..3)
+            .map(|row| length([0, 1, 2].map(|column| cofactor(row, column))))
+            .fold(0.0, f64::max);
+        let scale = determinant.signum() / largest;
         let normal = std::array::from_fn(|row| {
-            std::array::from_fn(|column| cofactor(row, column) * determinant.signum())
+            std::array::from_fn(|column| (cofactor(row, column) * scale) as f32)
         });
         Ok(Self { m, normal })
     }
@@ -577,6 +587,45 @@ mod tests {
         let (normal, uv) = triangle.interpolate([0.5, 0.25, 0.25]);
         assert_eq!(uv, [0.25, 0.25]);
         assert!((normal[0] - 0.8164966).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_tiny_scaled_instance_keeps_its_normals_and_only_a_flat_one_is_refused() {
+        let triangle = TriangleDetail {
+            vertices: [[0.0; 3]; 3],
+            normals: [[0.0, 0.0, 1.0]; 3],
+            uvs: [[0.0; 2]; 3],
+            uvs1: [[0.0; 2]; 3],
+            material: 0,
+        };
+        for s in [1e-2, 1e-4, 1e-6] {
+            let m = [
+                [s, 0.0, 0.0, 0.0],
+                [0.0, 0.0, s, 0.0],
+                [0.0, -s, 0.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ];
+            let normal = Pose::new(m).unwrap().triangle(&triangle).normals[0];
+            assert!((normal[1] + 1.0).abs() < 1e-6, "{s}: {normal:?}");
+            assert!(
+                Pose::new(m)
+                    .unwrap()
+                    .normal
+                    .iter()
+                    .flatten()
+                    .all(|v| v.abs() <= 1.0)
+            );
+        }
+        let flat = [
+            [1.0, 0.0, 0.0, 0.0],
+            [1.0, 1e-9, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        assert!(Pose::new(flat).is_err());
+        let mut zero = flat;
+        zero[1] = [0.0; 4];
+        assert!(Pose::new(zero).is_err());
     }
 
     #[test]

@@ -16,7 +16,17 @@ pub struct Distribution {
 impl Sky {
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let (width, height, mut data) = header(bytes)?;
-        let mut texels = Vec::with_capacity(width as usize * height as usize);
+        let least = u64::from(height) * shortest_line(width);
+        if (data.len() as u64) < least {
+            return Err(format!(
+                "hdr: {width} by {height} needs at least {least} bytes of scanlines, the file has {}",
+                data.len()
+            ));
+        }
+        let mut texels = pfx_core::memory::vec(
+            width as usize * height as usize,
+            &format!("hdr: a {width} by {height} sky"),
+        )?;
         let mut scan = vec![[0u8; 4]; width as usize];
         for _ in 0..height {
             read_scanline(&mut data, &mut scan)?;
@@ -217,6 +227,14 @@ fn header(bytes: &[u8]) -> Result<(u32, u32, &[u8]), String> {
     Ok((width, height, &bytes[at..]))
 }
 
+fn shortest_line(width: u32) -> u64 {
+    if (8..32768).contains(&width) {
+        4 + 4 * 2 * u64::from(width.div_ceil(127))
+    } else {
+        4 * u64::from(width)
+    }
+}
+
 fn read_scanline(data: &mut &[u8], scan: &mut [[u8; 4]]) -> Result<(), String> {
     let width = scan.len() as u32;
     let rle = (8..32768).contains(&width)
@@ -347,6 +365,13 @@ mod tests {
         );
         sums_to_one(&flat);
         assert!(Sky::parse(b"not a sky").is_err());
+    }
+
+    #[test]
+    fn a_header_larger_than_its_scanlines_is_refused_before_allocating() {
+        let error = Sky::parse(b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 8192 +X 8192\n\x02\x02")
+            .unwrap_err();
+        assert!(error.contains("needs at least 4292608 bytes"), "{error}");
     }
 
     #[test]

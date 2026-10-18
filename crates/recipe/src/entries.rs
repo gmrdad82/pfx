@@ -9,7 +9,7 @@ use crate::stage::selects;
 use crate::validate::validate;
 use crate::{ConstraintKind, Error, Key, Kind, Loaded, Patch, Problem, Recipe};
 
-pub const TABLES: [(&str, &str); 10] = [
+pub const TABLES: [(&str, &str); 12] = [
     ("object", "name"),
     ("camera", "name"),
     ("light", "name"),
@@ -20,6 +20,8 @@ pub const TABLES: [(&str, &str); 10] = [
     ("use", "prefix"),
     ("mover", "group"),
     ("marker", "name"),
+    ("scatter", "name"),
+    ("collection", "name"),
 ];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -83,12 +85,7 @@ fn missing(table: &str, name: &str, names: &[String]) -> Error {
 }
 
 fn value_of(text: &str) -> Value {
-    let mut value = text
-        .trim()
-        .parse::<Value>()
-        .unwrap_or_else(|_| Value::from(text));
-    value.decor_mut().clear();
-    value
+    crate::set::parsed(text)
 }
 
 fn put(table: &mut Table, pair: &str) -> Result<(), Error> {
@@ -290,6 +287,14 @@ pub fn referrers(r: &Recipe, table: &str, name: &str) -> Vec<String> {
             for p in &r.effects.particles {
                 if p.parent.as_deref().is_some_and(|p| names_node(p, name)) {
                     by.push(format!("particles[{}].parent", p.name));
+                }
+            }
+            for s in &r.scatters {
+                if s.object == name {
+                    by.push(format!("scatter[{}].object", s.name));
+                }
+                if s.on == name {
+                    by.push(format!("scatter[{}].on", s.name));
                 }
             }
             for m in &r.movers {

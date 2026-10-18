@@ -40,6 +40,8 @@ scene_format = 1
 - `include`: other files whose cameras, lights, sky, look, materials, routes, markers, particles, flare, motion blur, haze and objects merge into this recipe, under "Includes and uses" below.
 - `sound`: an optional `*.sound.toml` file, relative to the recipe, which the scene names as its top-level `sound` (format 1 only; see "Shot effects").
 - `library`: the object library's folder, relative to the recipe, for `kind = "library"` objects; see "Library" below.
+- `project_root`: a folder above the written scene, relative to the recipe or absolute, that holds a `project.toml`. The scene's paths are written relative to it, so assets under it are referenced in place. Without the key the root is the nearest folder above the scene with a `project.toml`, else the scene's own folder. A folder that does not hold the scene, or has no `project.toml`, is refused.
+- `asset_roots`: read-only folders, relative to the recipe or absolute, searched in order after the recipe's own folder for every asset the recipe names (mesh files, card images, fonts, LUTs, the sky, textures, the sound file, the library). A file found in a root outside the project root is copied beside the written scene under `assets/<n>/`, `n` counting the roots from 0, and nothing is ever written into a root. A reference found in none is refused in one line naming it and the folders searched. An asset outside the project root and outside every root is still refused.
 - `params`: an optional JSON or TOML file whose values can be substituted into numeric fields as `"${params.camera.focal_mm}"`. An app's own solver writes the file; the recipe consumes it.
 - `[plate]`: declares plate pixels, and fixes the `plate` UV projection. `camera` names the camera that projection looks through; without it, the first `[[camera]]`.
   - **Twins:** with a plate, these keys have a `_px` twin read in pixels: `at_px`, `size_px`, `rect_px`, `radius_px`, `circle_px`, `points_px`, and a mover's `pivot_px`, `travel_px`, `clip_px` and `clip2_px`. A key and its twin together are an error, and a twin without a `[plate]` is a problem.
@@ -91,6 +93,8 @@ Common keys on every `[[object]]`:
 | `parent` | another object's name; transforms compose, the GLB stays flat unless `[output] hierarchy = true` |
 | `material` | a name resolved through the app's registered catalogue, then the recipe's own `[materials]`; or `materials = ["a", "b"]` for slots, assigned by face groups the kind defines. Only `cylinder` defines groups today: `[side, caps]`. Every other kind takes one name |
 | `smooth_angle` | split normals on edges sharper than this; absent means flat shading; `smooth = true` means smooth everywhere |
+| `pieces` | on a `mesh` or `library` object only: `{ <node> = { material, hidden }, … }` gives a node of the file its own material or hides it; see [Pieces](#pieces) |
+| `keep_normals` | on a `mesh` or `library` object only: `true` (the default when every vertex of the file has a normal) keeps the file's own normals; `false` makes it flat. Refused with `smooth` or `smooth_angle`, which make new normals |
 | `flat_faces` | `true` (default `false`) keeps a large flat face's own normal at all its vertices instead of smoothing it into its bevel; needs `smooth_angle`; see [Flat faces](#flat-faces) |
 | `bevel` | `{ width, segments, angle = 30, clamp = true }` for kinds that take an edge profile |
 | `uv` | `"local"` (the default: the builder's own UVs, or a box projection where the kind has none), `"plate"`, `"none"`, or an override table, `{ kind = "rect", … }` or `{ kind = "cylinder", … }`; see [UVs](#uvs) |
@@ -142,7 +146,7 @@ Every count that sizes a mesh (`segments`, `rings`, `ring`, `grid`, `bevel.segme
 - **`lathe`**: `profile = [[r, y], …]` revolved around Y, `segments = 128`, `weld = 1e-7`.
 - **`sweep`**: `path = [[x, y, z], …]`, `radius` or `radii = [r, …]`, `ring = 16`, `closed`, `caps`. Beads and tubes. Caps are n-gon fans, as Blender's.
   - `along = { outline = <outline>, offset, depth }` replaces `path`. The ring is swept along an outline in the plate frame, pushed out by `offset` along the outline's outward normal, at `depth`. It is closed and capless, with one `radius`. The ring starts on the outward normal and turns toward the camera: a lip round a pocket, a bezel round a slot. Its outline is one contour, with no hole.
-- **`mesh`**: `path = "file.glb"`, optional `node`. Imported geometry, glTF only. Without `node`, every node of the file's scene is read into the one object, with its transforms applied, so a GLB of many parts is one mesh. It keeps the file's material names, one slot per material, unless the object sets `material`; its normals come from the object's `smooth` or `smooth_angle`, and it is flat without either. It keeps the file's morph targets, and `morph` sets their weights; see [Morph targets](#morph-targets). It keeps the file's material texture maps, and the recipe's `[materials]` set or replace them; see [Texture maps](#texture-maps).
+- **`mesh`**: `path = "file.glb"`, optional `node`. Imported geometry, glTF only. Without `node`, every node of the file's scene is read into the one object, with its transforms applied, so a GLB of many parts is one mesh. It keeps the file's material names, one slot per material, unless the object sets `material`, and draws each of those materials as the file defines it, read as a library object's are (see [Library](#library), Materials), so it needs no `[materials]` of its own; a recipe `[materials.<name>]` replaces only the one of that name. An unnamed glTF material is called `material<index>`, its index in the file; it keeps the file's own normals when every vertex the object reads has one, turned by each node's transform (`keep_normals = false` makes it flat instead), `smooth` or `smooth_angle` make new ones, and a file without normals is flat. It keeps the file's morph targets, and `morph` sets their weights; see [Morph targets](#morph-targets). A skinned node of the file is posed by its skin, and `clip`, `loop`, `clip_start`, `clip_speed`, `next_clip`, `next_at` and `blend` play the file's animations on it as a library object's do (Library, Skins); a name the file's skin has no animation for is refused, listing the ones it has. It keeps the file's material texture maps, and the recipe's `[materials]` set or replace them; see [Texture maps](#texture-maps).
   - **`path = "@gltf"`** is reserved: in a `.pfx` document it names the document's own glTF (its GLTF and GBIN chunks) instead of a file, with `node = "<glTF node name>"` for one node of it. `pfx import` writes a document whose recipe is that one object. Read, built or unpacked, the document keeps that glTF as its own file `@gltf` beside the recipe, so a build reads the imported glTF rather than its last output, and `pfx scene unpack` writes it out with the recipe.
 - **`generator`**: `generator = "app/birds"`, `params = { … }`. Built by a function an app registers under that name, in the app's own build code, which builds through `pfx_build::build_with` and its `Registry`. pfx itself registers only its built-ins, named `pfx/…`: [`pfx/road`](#pfxroad), [`pfx/buildings`](#pfxbuildings), [`pfx/furniture`](#pfxfurniture), [`pfx/car`](#pfxcar), [`pfx/loft`](#pfxloft), [`pfx/sweep-profile`](#pfxsweep-profile) and the vehicle parts kit, [`pfx/wheel`](#pfxwheel) and [`pfx/vehicle-parts`](#pfxvehicle-parts). The window builds it through the same registry and lets you place it.
   - The generator gets the object, its `params`, the recipe's folder and a seed: the recipe's `seed` mixed with the object's index in the file (`pfx_build::seed`), so two objects never share one.
@@ -173,7 +177,7 @@ Every count that sizes a mesh (`segments`, `rings`, `ring`, `grid`, `bevel.segme
 
 A `mesh` object keeps the morph targets of the file's triangle primitives:
 
-- **What is kept:** each target's POSITION deltas, its name from the glTF mesh's `extras.targetNames` (a target without a name is called by its index, `"0"`, `"1"`, …), and the mesh's `weights` as the default weights. The file's NORMAL and TANGENT deltas are not read: pfx computes the normals from `smooth` or `smooth_angle` on the neutral positions, and each target's NORMAL deltas are the normals the same smoothing gives on the fully morphed positions, minus those. The deltas follow every vertex pfx splits for UVs and normals, and vertices that sit together but move apart under a target are never merged.
+- **What is kept:** each target's POSITION deltas, its name from the glTF mesh's `extras.targetNames` (a target without a name is called by its index, `"0"`, `"1"`, …), and the mesh's `weights` as the default weights. When the object keeps the file's normals, each target keeps the file's NORMAL deltas too (none reads as no change), turned by the node's transform with its scale taken out. With `smooth` or `smooth_angle` the file's NORMAL deltas are not read: pfx computes the normals on the neutral positions, and each target's NORMAL deltas are the normals the same smoothing gives on the fully morphed positions, minus those. TANGENT deltas are never read. The deltas follow every vertex pfx splits for UVs and normals, and vertices that sit together but move apart under a target are never merged.
 - **Many nodes:** without `node`, the deltas take each node's transform without its translation, and targets of the same name are one target; a primitive without it moves by nothing. A name first seen takes its default weight from the first mesh that has it.
 - **`morph = { smile = 0.6, angry = 0.2 }`** sets a target's weight by name; a target not named keeps the file's weight, and a target without one 0. A weight is any finite number: glTF allows below 0 and above 1.
 - **Variants and `--set`** reach it by its dotted path, and both may add a target the object's `morph` doesn't name yet, or `morph` itself: `set = { "object.face.morph.smile" = 0.0 }`, `--set object.face.morph.angry=0.5`.
@@ -422,6 +426,7 @@ params.hinged = [{ name = "hatch", gap = "hatch_gap", hinge = [[1.2, 0.3, 0.2], 
 - **`grooves`:** `name` (unique), `view`, `curve` (at least 2 points; open, or closed when its last point repeats its first), `width` (metres, above 0), `depth` (metres) and `profile`: `"v"` (the default, straight walls, flat-shaded) or `"u"` (a rounded channel, smooth-shaded). The surface within half the width of the curve sinks along the view's axis, by `depth` on the curve and by nothing at the edges; the mesh is cut along the curve and along lines either side of it first, so the groove keeps its shape on a coarse mesh. A seam, a shut line or a panel gap is a groove.
 - **`hinged`:** any hinged panel, such as a door, a hatch or a lid: `name` (unique), `gap` (a groove whose curve encloses the panel) and `hinge`, two distinct points `[[x, y, z], [x, y, z]]` on the hinge line. The surface inside the gap, on the hinge's side for a `side` gap, splits off into the node `<object>.<name>`, pivoting at the hinge's midpoint, so opening it is a rotation of that node about the hinge line. List one panel per side; the same groove serves both.
 - **Refused:** an unknown field, a missing `name`, `view`, `curve`, `width`, `depth`, `gap` or `hinge`, a name used twice in one list, a curve with too few points or a non-number in it, a negative `lip` or `depth`, a `gap` that names no groove (the error lists the grooves) or encloses none of the mesh, and a hinge of one point; each error names its path, as in ``params.hinged.0.gap: no groove `gap`, expected one of: waterline, hatch_gap``.
+- **Cost:** each curve point and segment visits only the triangles near it, through a grid over the view, so a cut grows with the curve's points times the triangles they touch, plus one pass over the mesh: a 366-point outline over a 2-million-triangle body cuts in about 1.7 s, the same as 46 points. A point within rounding of a triangle's corner is that corner and splits nothing. A region curve over 4096 points is refused before any cutting, as in ``params.regions.0.curve: region `badge` has 5000 points, at most 4096; thin the outline``.
 - **Deterministic:** the same mesh and params give the same bytes.
 
 ### pfx/sweep-profile
@@ -584,7 +589,7 @@ The rules follow the engine's `scene.toml` `include` where they fit (pfx's `docs
 - **Paths** are relative to the file that names them: an `include` or a use's `file`, and a sky's `path`, a card's `image`, a mesh's `path` and a span's font `family` inside an included or used file. An absolute path is refused. A `"${params.…}"` inside one reads the recipe's own params, and a `_px` key the recipe's own `[plate]`.
 - **`include = ["rig.toml", …]`** merges each file's tables into the recipe, in order and depth first: an included file's own includes come before it, and every included entry comes before the recipe's own. A file is included once per recipe; a second include of it is refused, and so is a cycle, naming the chain (`a.toml → b.toml → a.toml is a cycle`). A missing file is an error at the include that names it: `include: cannot read nope.toml: no such file`.
 - **What an included file holds:** `[[object]]`, `[[camera]]`, `[[light]]`, `[[particles]]`, `[[mover]]`, `[[route]]`, `[[use]]`, `[sun]`, `[sky]`, `[look]`, `[flare]`, `[motion_blur]`, `[haze]`, `[materials.<name>]`, its own `include`, and optionally `recipe`. `name`, `seed`, `params`, `sound`, `[plate]`, `[output]`, variants, `[sidecar]` and `[bake]` belong to the recipe and are refused in an included file.
-- **Names:** an object, camera, light, mover group, route, non-empty use prefix or material is defined once across a recipe and the files it includes and uses. A second definition in another file is an error naming both files: ``light[lamp]: `lamp` is defined in rig.toml and in panel.toml``. The recipe overrides an entry by changing it in the file that holds it, never by defining it again.
+- **Names:** an object, camera, light, mover group, route, non-empty use prefix or material is defined once among the files an including file brings in. A second definition in a sibling include is an error naming both files: ``light[lamp]: `lamp` is defined in rig.toml and in panel.toml``. The including file overrides an included entry by defining it again under the same name: the nearer file wins, and its entry replaces the included one whole, keeping the included entry's place in the order. This holds for objects, cameras, lights, routes and materials at every depth of an include chain.
 - **Tables:** `[sun]`, `[sky]` and `[look]` are set by one included file at most (two siblings setting one is refused, naming both), and the including file's own keys win over the included ones key by key, through nested tables such as `[sky.prepare]` and `[sky.room]`. Above, the panel keeps the rig's whole sky and changes only its intensity. An array or an inline table is one value and is replaced whole.
 - **A problem in another file** is reported at the recipe's line that brings the file in, with that file's own name and line before the key: `pfx check panel.toml` prints `panel.toml:3: rig.toml:24: light[lamp].colour: unknown key …`, and `Recipe::origin_of` gives the file and line of any key.
 
@@ -605,7 +610,7 @@ The rules follow the engine's `scene.toml` `include` where they fit (pfx's `docs
 
 **In the window**, a recipe with includes and uses opens, edits and saves as one recipe:
 
-- **Write-back:** each edit goes to the file that holds the key. A light from `rig.toml` moved in the window is written into `rig.toml`; `[sky] intensity`, which the panel overrides, goes into the panel; a key new to an included table goes to the file that holds the table. A new object, camera or light goes into the recipe itself. Undo puts an entry deleted from an included file back into that file at its place. A file the window did not change is never written, and an included file changed on disk since the window read it is re-read, and the outside change wins, as the recipe's own does.
+- **Write-back:** each edit goes to the file that holds the key. A light from `rig.toml` moved in the window is written into `rig.toml`; `[sky] intensity`, which the panel overrides, goes into the panel; a key new to an included table goes to the file that holds the table. A new object, camera or light goes into the recipe itself. Undo puts an entry deleted from an included file back into that file at its place. A file the window did not change is never written, and an included file changed on disk since the window read it is re-read, and the outside change wins, as the recipe's own does. `pfx set` writes into the document it was given instead: a key an included file defines is copied into the document as an override of that entry (the whole entry for an object, camera, light or material, the key alone for `[sky]` and the other single tables) and the included file is left as it was; `pfx set --through` writes into the included file, as the window does.
 - **Copies** show in the outliner as the objects they are, under their prefixed names (`left_base`, `left_cap`), and are picked, framed and shown like any other. They are read-only: an edit to one is refused with a sentence that names the use and its file (`` `left_cap` is a copy that use[left_] places from parts/knob.toml; change the part in parts/knob.toml, or move every copy of it by the use's at, rotate and scale ``). The `[[use]]` entry itself is editable by its prefix (`use.left_.at`), or by its place when it has none, and moving it moves the whole copy.
 - `Files::paths` lists every file a recipe read, the recipe first, for a caller that watches them.
 
@@ -744,6 +749,57 @@ focus = "follow"
 - `release = <seconds>`: from that time the camera eases to a stop over `release_ease` (1.5, seconds above 0), its velocity falling smoothly to 0, and holds there, still looking at the object as it drives away, so the focus distance grows and the bank fades to level.
 - The camera's `position` and `target` are optional with a rig (they default to `offset` and `look`) and serve only where there is no timeline. A rig is for a perspective camera, and a camera takes `path` or `rig`, not both.
 - `--set` and variants reach every key: `camera.chase.rig.lag=0.4`, `camera.chase.rig.shake.seed=3`, `camera.chase.rig.offset=[0, 1.4, -7]`, `camera.chase.rig.tracks.distance=[[0, 3.4], [0.6, 8], [5, 15]]`, `camera.chase.rig.release=7.8`. `--set` keeps a value's kind, so it changes a numeric `focus` but can't turn `"follow"` into a number; a variant or the file can.
+
+### Camera presets
+
+`[camera.preset]` under a `[[camera]]` names a ready-made move with a few parameters. The recipe reader expands it into the `rig`, `path`, tracks and start pose it stands for before anything else reads the file, so a preset renders exactly as the written-out form would and every key of the result stays a camera key (`keys`, `fstop`, `fov_y_deg`, constraints). The file keeps the preset; nothing is written back out.
+
+```toml
+[[camera]]
+name = "main"
+fov_y_deg = 38.0
+fstop = 2.8
+
+[camera.preset]
+kind = "chase"
+follow = "hero"
+distance = 7.0
+```
+
+- **Keys beside the preset win.** The preset fills only the camera keys the recipe does not set, key by key, inside `rig`, `rig.tracks` and `path` too: a `[camera.rig] lag = 0.0` beside a chase preset replaces the preset's lag and keeps the rest. A camera `kind` of `"orthographic"` is refused.
+- **`--set camera.main.preset.distance=9`** changes a parameter the file already names, as any `--set`; a variant's `set` the same.
+- **Focus.** The presets that follow an object (`chase`, `crane`, `drone`, `drive-by`) take `focus`: `true` or `"follow"` keeps the focus on the object, a number is a fixed distance in metres, `false` leaves it off. Without it the focus follows when the camera's own `fstop` is above 0.
+- **Unknown keys are refused** by name (`camera[main].preset.speed`), as is a `kind` outside the list below.
+
+| `kind` | expands into | parameters (default) |
+|---|---|---|
+| `chase` | `rig` behind and above `follow` | `follow` (required), `distance` (5.5), `height` (1.1), `lateral` (0, metres to the right of travel), `look_height` (0.6), `lag` (0.25), `look_ahead` (0.3), `yaw_lag` (0.4), `bank` (4) |
+| `orbit` | `path` of `kind = "orbit"`, and the camera's `position` and `target` | `target` ([0, 1, 0]), `radius` (3, from the vertical line through `target`), `height` (1.5, the camera's height in the world), `azimuth_deg` (0: along +Z, positive towards +X), `turns` (1), `rise_deg` (0), `radius_scale` (1), `ease` (`"linear"`) |
+| `dolly` | `path` of `kind = "keys"` with two keys, the camera's `position`, `target` and, with `focal_mm`, its lens and `sensor_mm = 36` | `from` ([0, 1.2, 4]), `to` ([0, 1.2, 2]), `target` ([0, 1, 0]), `target_to` (`target`), `focal_mm` (the camera's own; a number, or `[from, to]` for a zoom), `ease` (`"smooth"`) |
+| `crane` | `rig` whose `pitch` and `distance` tracks run from the first value to the second over `seconds` | `follow` (required), `seconds` (the `[timeline]`'s length), `from_pitch` (5), `to_pitch` (50), `from_distance` (5), `to_distance` (9), `azimuth_deg` (0: behind), `look_height` (0.6), `smooth` (0: seconds of the rig's `smooth` on both tracks) |
+| `drone` | `rig` with `frame = "world"`, an `orbit` track of `turns` turns, a `pitch` track for the rise, and a seeded `shake` as the drift | `follow` (required), `seconds` (the timeline's), `distance` (12), `from_pitch` (20), `to_pitch` (35), `turns` (0.5), `azimuth_deg` (0), `look_height` (0.6), `drift` (0.4 m), `drift_roll` (0.3 degrees), `drift_hz` (0.35), `seed` (the timeline's) |
+| `drive-by` | `rig` placed `ahead` of `follow` and `side` of its path, released at `release` so it stands still and keeps looking at the object | `follow` (required), `side` (4, metres to the right of travel), `ahead` (25), `height` (1.4), `look_height` (0.5), `release` (0, seconds) |
+
+- A rig preset's expansion is the `[camera.rig]` of "Camera rig" above, so every key and track there still applies; `crane` and `drone` run in spherical mode (`orbit`, `pitch`), whose offsets are described there.
+- `drive-by` releases the rig with `release_ease = 0.001`, which the baker lengthens to one frame: the camera settles over that frame, about half a frame's travel of the object's speed, and holds. The object keeps its `[[follow]]` or constraints; a followed object that does not move is looked at where it stands.
+- `crane` and `drone` need a length: `seconds`, or a `[timeline]` whose `seconds` or `frames` give one.
+
+### Lighting presets
+
+A top-level `[lighting]` table names a ready-made light and look. The reader expands it into a `[sun]`, a `[sky]`, a `[look]` and `[[light]]` tables before anything else reads the file, so it renders as the written-out form would.
+
+```toml
+[lighting]
+preset = "golden-hour"
+azimuth_deg = 120.0
+```
+
+- **`preset`** is `"three-point"` (key, fill and back point lights around the subject on a dim sky, no sun), `"golden-hour"` (a warm low sun, a warm bounce light opposite it), `"overcast"` (a wide, soft, dim sun under a hazy sky) or `"night"` (a cool faint moon, a warm lamp and a cool rim light).
+- **Shared keys:** `subject` ([0, 1, 0], the point the lights aim at and sit around), `distance` (3, metres from the subject to the lights; the lights' intensity grows with its square, so the lighting on the subject stays the same), `intensity` (1, a scale on every light, the sun and the sky), `azimuth_deg` and `elevation_deg` (the sun's, defaulting per preset; for `three-point` and `night` `azimuth_deg` turns the whole rig), `rotation_deg` (0, turns the sky), `hdri` and `hdri_dir`.
+- **The recipe's own tables win.** A `[sun]`, `[sky]` or `[look]` the recipe writes replaces the preset's whole table. A `[[light]]` with a name the preset uses replaces that light; the others are added. The preset's lights are named `rig_key`, `rig_fill`, `rig_back`, `golden_bounce`, `night_lamp` and `night_rim`.
+- **HDRIs are fetched, never bundled.** Each preset names a CC0 Poly Haven HDRI by its id (`studio_small_03`, `venice_sunset`, `kloofendal_overcast_puresky`, `moonlit_golf`; `hdri` names another, `"none"` turns it off). When `<hdri_dir>/<id>.hdr` exists next to the recipe (`hdri_dir` defaults to `assets/sky`), the sky is that file as an `hdr` sky with its `source` line (`polyhaven:<id>, CC0`) and the standard preparation, and the sun is written at irradiance 0 so the HDRI is the only sky light. Without the file, the sky is the engine's analytic sky with the preset's own sun, so the recipe reads the same on a machine that has not fetched it.
+- **Numbers** (at `intensity = 1`, `distance = 3`): the key light's intensity is 1.8 × distance², the fill's 0.56, the back's 1.2; the golden-hour sun is 3.5 irradiance at 8 degrees; the overcast sun 1.0 with a disc of 12 degrees; the night moon 0.1. Each preset's `[look]` sets an exposure and a grade (three-point 1.0, golden hour 1.0 warm and saturated, overcast 1.1 desaturated, night 1.5 dark vignette).
+- Unknown keys and presets are refused by name (`lighting.brightness`).
 
 ```toml
 [sun]
@@ -1001,9 +1057,10 @@ ride = 0.0
 - **`speed`** (required) is `[[t, m/s], …]`: seconds and metres a second, from 0 up, times rising, linear between keys and held past the ends. The distance at frame n is `start` plus the speed integrated at the timeline's fixed step (the trapezoid rule). A closed route wraps; an open one holds at its end.
 - **`drift`** (optional) is a seeded smooth sideways wander: `amount` metres (from 0 up) times a smooth noise in [-1, 1] at `t / period` (`period` seconds, above 0), added to the lane. The nose turns with the drift's sideways velocity, plus up to `slip_deg` degrees (0 by default) more as it slides, smoothed over 0.2 s. The noise's seed is the timeline's seed and the object's name, so each car wanders its own way.
 - **`ride`** is the height above the route in metres (0 by default).
+- **`root_motion`** is `"ignore"` (the default) or `"apply"`, for an object playing a clip (Library, Animations): `"ignore"` holds each root node of the clip at its rest place on the ground plane (its X and Z; its height still moves), so the follow alone carries the object along; `"apply"` keeps the clip's whole motion on top of the follow's pose.
 - **The object's frame:** its pieces are in the car's own frame, +Z forward, +Y up, the origin on the ground under its centre. The follow sets the whole pose: the object's `at` and `rotate` are not applied while it is followed, its `scale` is.
 - **Tracks:** every node of the object (`<object>` or `<object>.<piece>`) is keyed with the car's pose; a piece named `<object>.wheel_<corner>` (as `hero.wheel_fl`) is keyed with the pose times its centre, its steer, its spin and back. It spins about its axle by distance / radius, forward. The front wheels (a corner starting with `f`) steer about +Y by atan(wheelbase × the route's curvature at the car), clamped to ±35°. Centre, radius and axle come from the object's generator facts, `wheels = { fl = { centre, radius, axle }, … }` (`pfx/car` writes them); a wheel missing there takes its piece's bounds centre, half its height as radius, and the +X axle. The wheelbase is the distance between the mean front and mean rear wheel centres along Z, else the facts' `wheelbase`, else 2.7 m.
-- **Riding objects:** an object named `<object>.<name>` (as `hero.wheel_fl`, a `pfx/wheel`) rides the followed object: its nodes are keyed with the pose times its place in the object's frame (its `at`, `rotate` and `scale` under its `parent`, which is the followed object or one below it; without a parent its own placement is read in the object's frame). One named `<object>.wheel_<corner>` is a wheel: its centre is its origin, its radius and axle are its facts' `wheel = { radius, axle }` (else half its height and +X), its nodes spin and a front corner's steer about +Y through that centre, and a piece `<object>.wheel_<corner>.<piece>` whose facts say `<piece> = { spin = false }` (the wheel's `brake`) steers without spinning. These wheels count toward the wheelbase.
+- **Riding objects:** an object named `<object>.<name>` (as `hero.wheel_fl`, a `pfx/wheel`) rides the followed object: its nodes are keyed with the pose times its place in the object's frame (its `at`, `rotate` and `scale` under its `parent`, which is the followed object or one below it; without a parent its own placement is read in the object's frame). One named `<object>.wheel_<corner>` is a wheel: its centre is its origin, its radius and axle are its facts' `wheel = { radius, axle }` (else half its height and +X), its nodes spin and a front corner's steer about +Y through that centre, and a piece `<object>.wheel_<corner>.<piece>` whose facts say `<piece> = { spin = false }` (the wheel's `brake`) steers without spinning. These wheels count toward the wheelbase. Any object whose `parent` chain reaches the followed object rides it too, whatever its name (a mirror parented to `hero` is keyed with the pose times its place in the object's frame, and so are its own children), unless it has a `[[follow]]` or a constraint of its own. A child of a wheel rides the wheel: an object named `<object>.wheel_<corner>.<name>`, or one whose `parent` chain reaches a wheel, takes the wheel's steer about its centre and its spin about its axle, so a brake caliper parented to a front wheel steers with it. It does not spin when its facts say `spin = false`, as a wheel's `brake` piece does, and it does not count toward the wheelbase.
 - A `[[follow]]` needs a `[timeline]`, and its object and route must exist.
 
 ## Stages
@@ -1029,8 +1086,76 @@ A `[[stage]]` is one step of building the scene up, for a breakdown: `pfx build 
 - **`camera`** (optional) names a `[[camera]]` that frames the stage, for the window and the tools that look through it.
 - **`--stage`** takes a number from 1 or a stage's name: `--stage 3` and `--stage city` build the same. Anything else is refused with the stages listed.
 - **What is dropped** goes as a variant's `drop` takes it, and with it what can't stand without it: an object whose `parent`, `on` or `into` is dropped, the `[[follow]]` of a dropped object (and so its tracks), a camera whose `rig` (or `rig` constraint) follows one, an `output.scene_camera` that names such a camera, the `[[light]]` and `[[particles]]` parented to a dropped object or one of its pieces, and any constraint whose `target` or `follow` names one of them (the entry it sits under stays). The built recipe carries no `[[stage]]` or `[variant]` tables.
-- **`--only <glob>[,<glob>]`** builds only these objects or pieces, with the same rules, on `build`, `shot` and `render`; after `--stage` when both are given.
+- **`--only <glob>[,<glob>]`** builds only these objects or pieces, or a collection's or scatter's (see Collections), with the same rules, on `build`, `shot` and `render`; after `--stage` when both are given.
 - **Order:** the variant, then each `--set` (so `--set stage.<name>.objects=[...]` and a variant's `set` reach a stage), then `--stage`, then `--only`. In Rust: `pfx_recipe::apply_stage(&recipe, "3")`, `apply_only(&recipe, &globs)` and `Pick { stage, only }.apply(&recipe)`; `pfx_build::staged` and `pfx_build::only` are the same functions.
+
+## Scatter
+
+```toml
+[[object]]
+name = "pebble"
+kind = "library"
+object = "rocks/pebble"
+hidden = true
+
+[[scatter]]
+name = "pebbles"
+object = "pebble"
+on = "ground"
+spacing = 0.4
+density = 3.0
+map = "masks/pebbles.png"
+rotate_max = [0.0, 360.0, 0.0]
+scale_min = 0.7
+scale_max = 1.3
+align = true
+```
+
+A `[[scatter]]` places copies of one object over the surface of another when the recipe builds. The copies are pieces of the build like any other (`pebbles.0`, `pebbles.1`, … or `pebbles.<n>.<piece>` for an object of several pieces): they take the object's materials, shadow and sides, share its mesh with a transform each, and draw, trace, export and pack as the object would. The same recipe and seed give the same copies on every machine.
+- **`name`** (needed, unique, not an object's name) and **`object`** (needed): the object copied, usually `hidden = true` so it stays out of the scene at its own place. Its own `rotate` and `scale` stay on every copy; its position and parents do not.
+- **`on`** (needed): the object whose surface takes the copies, seen from above: the copies spread over its bounds in X and Z and each drops straight down onto the highest face below it; a point over no face places nothing. Hiding the surface keeps its copies.
+- **`spacing`**: a least distance between copies in metres, by Poisson-disk sampling (Bridson's algorithm, ported from fast_poisson and equal to it point for point). **`density`**: copies per square metre of those bounds; alone it places that many at random, with `spacing` it thins the Poisson set down to it. One of the two is needed.
+- **`map`** (optional): a PNG over the same bounds, +X to the right and +Z down the image; its grey (or luminance) from black to white is the chance each copy is kept.
+- **`rotate_min`**, **`rotate_max`** (degrees per axis, default `[0, 0, 0]`) and **`scale_min`**, **`scale_max`** (uniform, default 1): each copy draws its turn and scale evenly between them. **`align`** (default `false`) turns each copy's up axis to the face's normal first.
+- **`seed`** (optional): the scatter's own seed; by default it comes from the recipe's `seed` and the scatter's name, so renaming reshuffles it and adding another scatter does not.
+- A scatter of more than 100,000 copies is refused, naming it.
+
+## Collections
+
+```toml
+[[collection]]
+name = "fence"
+objects = ["post_*", "rail"]
+hidden = true
+
+[[collection]]
+name = "rocks"
+objects = ["pebbles", "boulder*"]
+solo = true
+```
+
+A `[[collection]]` names a set of objects and scatters, by name or glob, to show, hide or render alone together.
+- **`name`** (needed, unique) and **`objects`** (needed): names or globs of objects and scatters; one that matches neither is refused.
+- **`hidden`** (default `false`): its objects and scatters are hidden, as `hidden = true` on each.
+- **`solo`** (default `false`): while any collection is solo, everything in no solo collection is hidden.
+- **`--only <collection>`** builds a collection's objects alone, dropping the rest by the rules of `--stage`; `--only <scatter>` keeps a scatter with its object and its surface. A scatter whose object or surface is dropped goes with it, and a collection keeps only the names still in the build.
+
+## Pieces
+
+`pieces` on a `mesh` or `library` object reaches into the file's nodes, so an imported model can be restyled or trimmed from the recipe:
+
+```toml
+[[object]]
+name = "prop"
+kind = "mesh"
+path = "model.glb"
+pieces = { "Arm/Lid" = { material = "rubber" }, "#5" = { hidden = true }, Stand = { hidden = true } }
+```
+
+- **Keys** pick nodes: a node's name (every node of that name), a `parent/child` path of names ending at the node (`Arm/Lid` is a `Lid` whose parent is an `Arm`), or `#<index>`, the node's index in the file. A name also matches the unique name pfx gives a repeated one, `<name>.<index>` (as a library piece is named), and an unnamed node is `node<index>`.
+- **Values:** `material` draws every primitive of the node in that material instead of the file's, and `hidden = true` leaves the node out (a mesh object drops its triangles; a library piece is built but hidden, as a hidden object is). At least one of them; `hidden = false` shows a node a wider key hid.
+- **Reach:** a key applies to the node it picks and every node under it. Where two keys reach one node, the one picking the deeper node wins, then `#index` over a path over a name, for each value on its own. A piece without a `material` key keeps the object's `material` when it sets one, else the file's.
+- **Refused:** a key that is not a name, a path or `#` and digits, or a value with neither key, when the recipe is read; at build, a key that picks no node, naming the file and its nodes: `` object[prop].pieces.Wheel: model.glb has no node `Wheel`, expected a node name, a parent/child path or #<index> of: Root, Lid, Arm, Lid.3 ``; and `pfx check` reports a piece `material` that no `[materials]` entry, catalogue or file defines.
 
 ## Library
 
@@ -1047,14 +1172,16 @@ at = [0.0, 0.0, 4.0]
 ```
 
 - **Where the library is:** the recipe's top-level `library = "<path>"`, relative to the recipe; without it, the nearest folder named `library` holding an `index.json`, from the recipe's folder up (the folder itself when it is called `library`, else its `library/`).
+- **From a `.pfx` library:** `object = "lib:<file>.pfx/<kind>/<name>"` reads the object from a `.pfx` whose files are named `<kind>/<name>/model.glb` and `<kind>/<name>/object.toml`. The `.pfx` is found like any asset (the recipe's folder, then `asset_roots`) and is only read.
 - **The layout:** `library/<kind>/<name>/` holds `model.glb`, `object.toml` and an optional `thumb.png`, and `library/index.json` lists them. Kinds and names are lowercase letters, digits, `_` and `-`.
-- **`object`** (required) is `"<kind>/<name>"`. **`clip`** names the model's glTF animation the timeline plays, the first one when absent; **`loop`** (`true` by default) repeats it over the timeline, `false` holds its last pose. Every common key (`at`, `rotate`, `scale`, `material`, `hidden`, `shadow` and the rest) works as on any object; `material` replaces every slot.
+- **`object`** (required) is `"<kind>/<name>"`. **`clip`** names the model's glTF animation the timeline plays, the first one when absent; **`loop`** (`true` by default) repeats it over the timeline, `false` holds its last pose. **`clip_start`** (seconds, 0 by default) is the timeline time the clip's first key plays at, its first pose held before; **`clip_speed`** (0 or more, 1 by default) scales the clip's time. **`next_clip`** names a second animation of the model that starts at **`next_at`** seconds (`clip_start` by default) and blends in over **`blend`** seconds (0, a cut, by default): each node's translation and scale are mixed linearly and its rotation by normalised lerp on the shorter arc, the weight rising from 0 at `next_at` to 1 at `next_at + blend`. It plays from its own start at the same speed and `loop`. `next_at` and `blend` without `next_clip` are refused, and so is a name the model lacks, listing the ones it has. Every common key (`at`, `rotate`, `scale`, `material`, `hidden`, `shadow` and the rest) works as on any object; `material` replaces every slot. A piece keeps the model's own normals, as a `mesh` object does (`keep_normals`).
 - **Pieces:** every node of the model with a mesh is a piece named `<object>.<node>`, in the object's own frame with the node's whole transform applied (the hierarchy and each node's translation, rotation and scale). The model's first root, when it is the only root or has a mesh, is `<object>.body`, so a car from the library has the same pieces as `pfx/car` builds (`hero.body`, `hero.wheel_rl`, …), and `[[follow]]`, lights and particles name them alike. Two nodes of one name get the second's index after a dot.
-- **Materials:** each glTF material becomes a material of its own name, offered as a generator's are (a recipe's own `[materials.<name>]` replaces it): `base` from `baseColorFactor`, `roughness`, `metalness`, `emission` (the emissive factor times `KHR_materials_emissive_strength`), `transmission` (`KHR_materials_transmission`), `ior` (`KHR_materials_ior`) and `clearcoat` and `clearcoat_roughness` (`KHR_materials_clearcoat`), with the family `emissive`, `glass`, `lacquer` or `metal` that follows from them. Embedded maps (base colour, metal-roughness, normal, occlusion) are kept as under "Texture maps".
+- **Materials:** each glTF material becomes a material of its own name, offered as a generator's are (a recipe's own `[materials.<name>]` replaces it): `base` from `baseColorFactor`, `roughness`, `metalness`, `emission` (the emissive factor times `KHR_materials_emissive_strength`), `transmission` (`KHR_materials_transmission`), `ior` (`KHR_materials_ior`) and `clearcoat` and `clearcoat_roughness` (`KHR_materials_clearcoat`), with the family `emissive`, `glass`, `lacquer` or `metal` that follows from them. Embedded maps (base colour, metal-roughness, normal, occlusion) are kept as under "Texture maps". Two imported objects (`library` or `mesh`) whose files reuse a material name with other values or other maps both build: the later object's copy is named `<object>.<name>` (a note says so), and its slots follow. A recipe `[materials.<name>]` replaces both, and `[materials."<object>.<name>"]` replaces that object's alone.
 - **Morph targets** of a node's mesh are kept, with their names from the mesh's `extras.targetNames` and the file's default weights.
-- **Animations:** with a `[timeline]`, the chosen clip is sampled once a frame (LINEAR and STEP keys, a CUBICSPLINE key's value, rotations by slerp) through the hierarchy, and each piece it moves is keyed in the GLB's `timeline` animation like any animated node. A followed object is keyed by its `[[follow]]` alone. Morph weight channels are kept on export, not played.
+- **Animations:** with a `[timeline]`, the chosen clip is sampled once a frame (LINEAR and STEP keys, a CUBICSPLINE key's value, rotations by slerp) through the hierarchy, and each piece it moves is keyed in the GLB's `timeline` animation like any animated node. A followed object keeps its clip: each piece is keyed with the follow's pose times the clip's motion of that piece in the object's frame, and the follow's `root_motion` says whether the clip's own travel of its root node is kept (below, Follow). Morph weight channels are kept on export, not played.
+- **Skins:** a node with a glTF skin is a skinned piece. Its vertices keep their `JOINTS_0` and `WEIGHTS_0` (weights normalised to sum 1) and are posed by the skin's joints, the engine's own skeleton and clip runtime (`pfx_core::anim`, the same one a game's animator plays): the built mesh is the skin at its rest pose, and with a `[timeline]` the chosen clip (and `next_clip`, blended per joint) poses it at each time: `pfx shot --still` and `pfx render --recipe` at `--time`, and `pfx clip --timeline`, live or traced, draw the deformed mesh, every frame skinned on the CPU (linear blend skinning; normals turn with the joints). Under a `[[follow]]` the piece is placed by the follow and deformed by the clip, and `root_motion = "ignore"` holds the skeleton's root joints on the ground plane. One skin a model: a second is refused at `object[<name>].object`. A skinned piece's levels of detail, and the GLB and scene that `pfx build` writes, carry its rest pose.
 - **Facts:** the sidecar's `[facts]` are the object's facts, as a generator's are: `wheels = { fl = { centre, radius, axle }, … }` is what `[[follow]]` spins and steers each wheel about. A `wheel_<corner>` node missing from them takes its own node's origin as centre, half its height as radius and +X as axle. `lights = [{ name, node, position, direction, cone, range, color, intensity, shadow }]` become spot lights riding `<object>.<node>`, as a car's lights are.
-- **The sidecar,** `object.toml`:
+- **The sidecar,** `object.toml` (`licence` is an SPDX expression with a `credit` line, and optional `author` and `source`, for a model from someone else; empty when unknown; the line below is pfx's own library's):
 
 ```toml
 [object]
@@ -1170,7 +1297,7 @@ target = "hero"
 ```
 
 - **`type`** (required) is one of the four below. **`name`** (optional) names the constraint, for `--set` and for problems.
-- **`follow_path`** takes the keys of a `[[follow]]` (under Follow) without `object`: `route`, `lane`, `start`, `speed`, `drift` and `ride`. It sets the whole pose, so the constraints before it are overwritten. On an object, its `<object>.wheel_*` pieces spin and steer as a follow's do.
+- **`follow_path`** takes the keys of a `[[follow]]` (under Follow) without `object`: `route`, `lane`, `start`, `speed`, `drift`, `ride` and `root_motion`. It sets the whole pose, so the constraints before it are overwritten. On an object, its `<object>.wheel_*` pieces spin and steer as a follow's do.
 - **`look_at`** turns the owner, where it stands, so one of its axes points at a target: `target` (required), `offset` (`[0, 0, 0]`, a point in the target's frame, so `[0, 1, 0]` aims a metre above its origin), `up` (`[0, 1, 0]`, the world direction the owner's +Y leans toward) and `axis` (`"x"`, `"-x"`, `"y"`, `"-y"`, `"z"` or `"-z"`, the owner's axis that points; `"z"`, the forward of an object, by default on an object, and `"-z"`, the way glTF's cameras and spot lights look, on a camera or a light). An owner on its aim point, or looking straight along `up`, is refused at build.
 - **`copy`** puts the owner in the target's frame: `target` (required), `offset` (`[0, 0, 0]`, metres in the target's frame), `rotate` (`[0, 0, 0]`, degrees in the target's frame, the order an object's `rotate` turns) and `channels` (`["translation", "rotation"]`; any of `"translation"`, `"rotation"` and `"scale"`), the channels it takes from the target; the others keep the owner's own. With `translation` and an offset, the owner rides the target as if parented.
 - **`rig`** is a camera rig (under Camera rig) on any owner: `follow` (required, the target) and every other key of `[camera.rig]`, its `tracks` (the replay moves `orbit`, `pitch`, `roll` and `look_offset` included) as a `[<owner>.constraint.tracks]` table under the constraint, `smooth` and `frame`. The rig's pose looks down the owner's −Z at its aim. `focus` and the lens tracks `focal` and `fov` are a camera's only.
@@ -1219,7 +1346,7 @@ grade = { vignette = 0.2, saturation = 1.0, warmth = 0.1, bloom = 0.1, haze = 0.
 ## Editing from the command line
 
 Three commands write the recipe file itself, through the same edits the window makes, so its comments and layout stay as they were and a key that lives in an included file is written in that file.
-- `pfx set <recipe> <key>=<value>... [--json]` writes each value in order. The key and the value are `--set`'s (above): a dotted path, an array of tables entry by its `name`, a value of the kind it replaces. It may also add a key the recipe does not carry yet inside a table it has, and the tables on the way to it: `pfx set chase.toml look.grade.bloom=0.2` adds `[look.grade]` under an existing `[look]`; a new value is read as TOML, or as a string when it is not TOML. A top-level table or an array entry the recipe does not have is refused, by name. After writing, it reads the recipe back and checks it as `pfx check` does; when that fails, every file it wrote is put back byte for byte and it refuses, exit 1, in one line: `pfx set: chase.toml:12: look.exposure: expected a number above 0; the recipe is left as it was`. It prints each key with its new and old value and the file, then `check: ok`.
+- `pfx set <recipe> <key>=<value>... [--json]` writes each value in order. The key and the value are `--set`'s (above): a dotted path, an array of tables entry by its `name`, a value of the kind it replaces. A name with a dot in it is reached by quoting it or bracketing it, `object."car.shell".material=steel` or `object[car.shell].material=steel`, in `pfx set`, `pfx get`, `--set` and a variant's `set` and `remove`. A string is written bare or quoted, `sky.kind=analytic` or `sky.kind="analytic"`, for every key alike. It may also add a key the recipe does not carry yet inside a table it has, and the tables on the way to it: `pfx set chase.toml look.grade.bloom=0.2` adds `[look.grade]` under an existing `[look]`; a new value is read as TOML, or as a string when it is not TOML. A top-level table or an array entry the recipe does not have is refused, by name. After writing, it reads the recipe back and checks it as `pfx check` does; when that fails, every file it wrote is put back byte for byte and it refuses, exit 1, in one line: `pfx set: chase.toml:12: look.exposure: expected a number above 0; the recipe is left as it was`. It prints each key with its new and old value and the file, then `check: ok`. A key an included file defines is written as an override into the recipe given; `--through` writes it into the included file instead.
 - `pfx get <recipe> <key>... [--json]` prints the values as the file holds them, one `key = value` a line in TOML; a table prints as an inline table.
 - `pfx route <recipe> list|set|add|remove ...` lists and edits a route's points (see the route table).
 
@@ -1350,7 +1477,7 @@ The recipe is pfx's authoring layer; `scene.toml` is the engine's runtime data, 
 - **FILE**, one per file the load, the build and the scene read: includes, `params` files, LUTs, HDRs, PNG maps, mesh GLBs, card images, fonts. Each is named by its path from the root and holds the bytes alone. Files the build writes beside the scene (a copied font or LUT) are FILE chunks too, listed in FACT's `[build] outputs`.
 - **GLTF** and **GBIN**, the built GLB's JSON and BIN chunks as `pfx build` writes them, so joining them again gives the same GLB bytes.
 - **SCNE**, the pfx scene the build writes (see "The scene"), `main.toml` then its materials library, with each mesh's `file = "@gltf"`: the document's own GLTF and GBIN. **SMET** says `format = 1`, `entry = "main.toml"`, `recipe` (the sha256 of RCPE) and `scene` (the sha256 over the SCNE chunks).
-- **FACT**, TOML: the licence line, pfx's version, `[build] from` (the hash of the recipe and its input files the GLTF was built from) and `outputs`, and `[objects.<name>]`, every generator's facts.
+- **FACT**, TOML: a `licence` (with `credit`, `author` and `source`) only when the document already carries one (an import's, or one the user set in the facts), never one pfx writes for the document, pfx's version, `[provenance.<object>]` (the licence, credit, author and source of each library object it uses), `[build] from` (the hash of the recipe and its input files the GLTF was built from) and `outputs`, and `[objects.<name>]`, every generator's facts.
 - **NODE**, TOML: each glTF node's name and its index. **THMB**, a PNG from the recipe's first camera with `--thumb`. **OVRD**, the overrides `pfx scene fold --keep` keeps.
 
 Every command that takes a recipe also takes a `.pfx`: pfx reads RCPE and resolves the recipe's relative paths from the FILE chunks in memory, as if the document's files sat in the `.pfx`'s folder (so outputs land there, as they would beside an unpacked recipe). `pfx build <file.pfx>` reuses GLTF and GBIN while `[build] from` matches the recipe and its files, writing the GLB from them without a build; otherwise it builds and rewrites the document. With `--variant`, `--all-variants` or `--set` it builds the document's recipe like any other and leaves the document as it is. A command that edits the recipe (`route`) writes the new RCPE or FILE back into the `.pfx` with a fresh build, atomically (a temporary file, then a rename); the window writes its edits back when it closes. `pfx scene unpack <file.pfx> <dir>` writes the recipe and its input files under `<dir>` at their packed paths, so `pfx build` there gives the same GLB.

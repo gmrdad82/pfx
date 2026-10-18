@@ -62,7 +62,6 @@ fn normal_matrix(m: &Matrix) -> [[f32; 3]; 3] {
     let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
         - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
         + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
-    let inv_det = if det.abs() > 1e-20 { 1.0 / det } else { 0.0 };
     let cof = [
         [
             a[1][1] * a[2][2] - a[1][2] * a[2][1],
@@ -80,7 +79,16 @@ fn normal_matrix(m: &Matrix) -> [[f32; 3]; 3] {
             a[0][0] * a[1][1] - a[0][1] * a[1][0],
         ],
     ];
-    cof.map(|row| row.map(|v| v * inv_det))
+    let largest = cof
+        .iter()
+        .map(|row| (row[0] * row[0] + row[1] * row[1] + row[2] * row[2]).sqrt())
+        .fold(0.0, f32::max);
+    let scale = if det != 0.0 && largest > 0.0 {
+        det.signum() / largest
+    } else {
+        0.0
+    };
+    cof.map(|row| row.map(|v| v * scale))
 }
 
 fn apply3(m: &[[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {

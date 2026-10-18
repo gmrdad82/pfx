@@ -204,12 +204,18 @@ impl Pool {
         }
     }
 
-    fn file(&mut self, base: &Path, name: &str, key: &str, path: &str) -> Result<Image, Error> {
-        let file = base.join(path);
+    fn file(
+        &mut self,
+        recipe: &Recipe,
+        base: &Path,
+        (name, key): (&str, &str),
+        path: &str,
+    ) -> Result<Image, Error> {
+        let fail = |text: String| Error::new(format!("materials.{name}.{key}"), text);
+        let file = recipe.asset(base, path).map_err(&fail)?;
         if let Some(found) = self.files.get(&file) {
             return Ok(found.clone());
         }
-        let fail = |text: String| Error::new(format!("materials.{name}.{key}"), text);
         let bytes =
             pfx_recipe::files::read(&file).map_err(|e| fail(format!("cannot read {path}: {e}")))?;
         if Mime::of(&bytes) != Some(Mime::Png) {
@@ -270,7 +276,7 @@ pub(crate) fn resolve(
         let look = looks.entry(name.clone()).or_default();
         let mut read = |key: &str, path: &Option<String>| -> Result<Option<Map>, Error> {
             path.as_deref()
-                .map(|path| pool.file(base, name, key, path).map(Map::new))
+                .map(|path| pool.file(recipe, base, (name, key), path).map(Map::new))
                 .transpose()
         };
         if let Some(map) = read("base_map", &textures.base_map)? {

@@ -493,6 +493,17 @@ pub fn padded_bytes_per_row(width: u32, format: wgpu::TextureFormat) -> Option<u
         .map(|n| n / alignment * alignment)
 }
 
+fn reserve<T>(len: usize, what: &str) -> Result<Vec<T>, String> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(|error| {
+        format!(
+            "{what} needs {} bytes: {error}",
+            len as u128 * size_of::<T>() as u128
+        )
+    })?;
+    Ok(out)
+}
+
 fn image_bytes(width: u32, height: u32, format: wgpu::TextureFormat) -> Result<usize, String> {
     if width == 0 || height == 0 {
         return Err("image dimensions must be nonzero".into());
@@ -727,6 +738,10 @@ impl Gpu {
         let row = padded_bytes_per_row(target.width, target.format).ok_or("row size overflow")?;
         let raw_row = target.width * format_bytes_per_pixel(target.format).unwrap();
         let size = u64::from(row) * u64::from(target.height);
+        let mut bytes = reserve(
+            image_bytes(target.width, target.height, target.format)?,
+            &format!("a {}x{} readback", target.width, target.height),
+        )?;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pfx readback"),
             size,
@@ -766,8 +781,6 @@ impl Gpu {
         let mapped = slice
             .get_mapped_range()
             .map_err(|error| error.to_string())?;
-        let mut bytes =
-            Vec::with_capacity(image_bytes(target.width, target.height, target.format)?);
         for padded in mapped.chunks_exact(row as usize) {
             bytes.extend_from_slice(&padded[..raw_row as usize]);
         }
@@ -787,11 +800,17 @@ impl Gpu {
         if target.format != wgpu::TextureFormat::Rgba16Float {
             return Err("RGBA16 readback requires an RGBA16 target".into());
         }
-        Ok(self
-            .readback_bytes(target)?
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-            .collect())
+        let bytes = self.readback_bytes(target)?;
+        let mut out = reserve(
+            bytes.len() / 2,
+            &format!("a {}x{} RGBA16 frame", target.width, target.height),
+        )?;
+        out.extend(
+            bytes
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]])),
+        );
+        Ok(out)
     }
 }
 

@@ -1634,7 +1634,11 @@ fn build_content(
 }
 
 pub(super) fn content_from(path: PathBuf, bytes: &[u8]) -> Result<Content, String> {
-    let image = Image::png(bytes)?;
+    let image = if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Image::jpeg(bytes)?
+    } else {
+        Image::png(bytes)?
+    };
     let rgba = match image.pixels {
         Pixels::Eight(bytes) => bytes,
         Pixels::Sixteen(values) => values.into_iter().map(|value| (value >> 8) as u8).collect(),
