@@ -199,13 +199,12 @@ pub const GROUP_HEAD_RINGS: [u32; 3] = [32, 12, 4];
 pub const GROUP_BEARD_RINGS: [u32; 2] = [24, 6];
 pub const GROUP_BEARD_ERROR: f32 = 1.0;
 
-pub fn lod_group_glb(group: Option<&str>, morphed_beard: bool) -> Vec<u8> {
+pub fn lod_group_glb(group: Option<&str>) -> Vec<u8> {
     let mut writer = Writer {
         bin: Vec::new(),
         views: Vec::new(),
         accessors: Vec::new(),
     };
-    let beard_targets: Option<&[&str]> = morphed_beard.then_some(&LOD_TARGETS);
     let mut meshes = Vec::new();
     for (level, rings) in GROUP_HEAD_RINGS.iter().copied().enumerate() {
         meshes.push(sphere_mesh(
@@ -220,7 +219,7 @@ pub fn lod_group_glb(group: Option<&str>, morphed_beard: bool) -> Vec<u8> {
             &mut writer,
             format!("beard{level}"),
             rings,
-            beard_targets,
+            None,
         ));
     }
     meshes.push(sphere_mesh(&mut writer, "brow".into(), 8, None));

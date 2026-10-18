@@ -129,7 +129,7 @@ fn a_level_whose_targets_differ_from_its_node_is_refused() {
 
 #[test]
 fn a_beard_level_naming_its_head_carries_the_group_and_the_rest_carry_none() {
-    let scene = open("grouped", &lod_group_glb(Some("head"), false)).unwrap();
+    let scene = open("grouped", &lod_group_glb(Some("head"))).unwrap();
     let groups: Vec<(&str, Option<&str>, usize)> = scene.meshes["ball"]
         .parts
         .iter()
@@ -149,7 +149,7 @@ fn a_beard_level_naming_its_head_carries_the_group_and_the_rest_carry_none() {
             ("brow", None, 0)
         ]
     );
-    let plain = open("ungrouped", &lod_group_glb(None, false)).unwrap();
+    let plain = open("ungrouped", &lod_group_glb(None)).unwrap();
     assert!(
         plain.meshes["ball"]
             .parts
@@ -164,7 +164,7 @@ fn a_group_naming_a_missing_node_or_one_without_levels_is_refused_with_the_file(
         ("nose", "which is not in the file"),
         ("brow", "which has no MSFT_lod levels"),
     ] {
-        let error = open(group, &lod_group_glb(Some(group), false)).unwrap_err();
+        let error = open(group, &lod_group_glb(Some(group))).unwrap_err();
         assert!(error.contains(wanted), "{error}");
         assert!(error.contains("ball.glb"), "{error}");
         assert!(
