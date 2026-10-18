@@ -36,14 +36,14 @@ fn emitter_pdf(e: Emitter, x: vec3f, apex: vec3f, normal: vec3f) -> f32 {
     return e.emission.w/max(e.c.w,1e-30)*distance2/max(cosine,1e-7);
 }
 fn emitter_weight(hit: Hit, p: vec3f, previous_point: vec3f, previous_pdf: f32) -> f32 {
-    if (previous_pdf<=0.0 || all(materials[hit.material].emission_film.xyz<=vec3f(0.0))) { return 1.0; }
+    if (previous_pdf<=0.0 || all(material_row(hit.material,5u).xyz<=vec3f(0.0))) { return 1.0; }
     var index=0u;
     if (hit.shape>0u) { index=u32(shapes[hit.shape-1u].d.y); } else { index=u32(triangles[hit.surface].c.w); }
     if (index==0u) { return 1.0; }
     return mis_power(previous_pdf,emitter_pdf(emitters[index],p,previous_point,hit.geometric));
 }
 fn sampled_emitter(hit: Hit) -> bool {
-    if (all(materials[hit.material].emission_film.xyz<=vec3f(0.0))) { return false; }
+    if (all(material_row(hit.material,5u).xyz<=vec3f(0.0))) { return false; }
     if (hit.shape>0u) { return u32(shapes[hit.shape-1u].d.y)>0u; }
     return u32(triangles[hit.surface].c.w)>0u;
 }

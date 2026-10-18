@@ -497,7 +497,7 @@ impl SceneBuffers {
             .iter()
             .map(|&index| surfaces[index as usize])
             .collect();
-        let mut effects = PackedMaterial::zeroed();
+        let mut effects = crate::record::Hot::default();
         if let Some(leaf) = detail.leaf {
             effects.base_roughness = [leaf.time, leaf.strength, 0.0, 0.0];
             effects.metal_spec_coat = vec4(leaf.center, 0.0);
@@ -609,31 +609,19 @@ impl SceneBuffers {
         }
         let features = Features::of(&packed_materials);
         if packed_materials.iter().any(crate::textured::wants_uvs1) {
-            effects.texture_extra[1] = f32::from_bits(crate::textured::place_uvs1(
+            effects.set_uvs1(crate::textured::place_uvs1(
                 order.iter().map(|&index| detailed[index as usize].uvs1),
                 &mut content_texels,
             )?);
         }
-        let emitting: Vec<bool> = packed_materials
-            .iter()
+        let records = crate::record::Records::split(&packed_materials, effects);
+        let emitting: Vec<bool> = (0..records.len())
             .zip(&content_layers)
-            .map(|(packed, layer)| {
-                let emission = [
-                    packed.emission_film[0],
-                    packed.emission_film[1],
-                    packed.emission_film[2],
-                ];
-                emitter_sampling && layer.layer[0] < 0.0 && emits(emission)
+            .map(|(material, layer)| {
+                emitter_sampling && layer.layer[0] < 0.0 && emits(records.hot(material).emission())
             })
             .collect();
-        let emission = |material: u32| {
-            let packed = &packed_materials[material as usize];
-            [
-                packed.emission_film[0],
-                packed.emission_film[1],
-                packed.emission_film[2],
-            ]
-        };
+        let emission = |material: u32| records.hot(material as usize).emission();
         let mut candidates = Vec::new();
         for (slot, &index) in order.iter().enumerate() {
             let tri = detailed[index as usize];
@@ -722,12 +710,11 @@ impl SceneBuffers {
         }
         let list = build_emitters(&candidates, detail.lights.len());
         let lights: Vec<_> = detail.lights.iter().map(|light| light.pack()).collect();
-        packed_materials.push(effects);
         Ok(Self {
             triangles: bytemuck::cast_slice(&triangles).to_vec(),
             nodes: bytemuck::cast_slice(&laid.nodes).to_vec(),
             shapes: bytemuck::cast_slice(&packed_shapes).to_vec(),
-            materials: bytemuck::cast_slice(&packed_materials).to_vec(),
+            materials: records.bytes(),
             uv: bytemuck::cast_slice(&uv_v).to_vec(),
             content: bytemuck::cast_slice(&content_texels).to_vec(),
             surfaces: bytemuck::cast_slice(&ordered_surfaces).to_vec(),
