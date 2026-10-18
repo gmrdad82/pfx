@@ -572,7 +572,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
         shell = shell.bare().strip(args.strip);
     }
     shell.set_registry(registry.clone());
-    super::gui::shade(args, &mut shell);
+    super::gui::shade(args, &mut shell)?;
     if let Some(module) = &args.play {
         shell.choose_module(module.clone());
     }

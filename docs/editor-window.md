@@ -8,7 +8,10 @@
 pfx gui desk.toml          # that recipe
 pfx gui samples/          # the picker, on the recipes of that folder
 pfx gui                    # the start scene, the window's own mark on a floor grid
+pfx gui desk.toml --camera top    # that recipe, looking through its camera top
 ```
+
+The window opens on the first `[[camera]]`; `--camera <name>` opens on that one instead, in the window, a `--shot` or a `--clip`, and refuses a name the recipe or scene doesn't have in one line that lists the ones it has.
 
 Ctrl+O opens the picker over the viewport at any time; Esc closes it. The window watches the recipe and every file it includes: an edit made outside, by an editor or an agent, shows at once.
 

@@ -291,6 +291,25 @@ fn last_jitter_is_the_projections_shift_and_depth_view_holds_that_frames_depth()
     );
 }
 
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn frames_drawn_again_at_one_time_step_the_jitter_and_a_new_time_starts_from_it() {
+    let (mut renderer, target) = renderer();
+    let plane = grid(1, 12.0, |x| -PLANE - SLOPE * x);
+    let mesh = renderer.upload_mesh(data(&plane)).unwrap();
+    let instances = [Instance::new(mesh, IDENTITY, 0, 1)];
+    let materials = [Material::default()];
+    let mut seen = Vec::new();
+    for number in [5, 5, 5, 9] {
+        draw(&mut renderer, &target, &instances, &materials, number);
+        seen.push(renderer.last_jitter().map(f32::to_bits));
+    }
+    let expected: Vec<[u32; 2]> = [5, 6, 7, 9]
+        .map(|number| taa::jitter_clip(number, WIDTH, HEIGHT).map(f32::to_bits))
+        .to_vec();
+    assert_eq!(seen, expected);
+}
+
 fn morphed(renderer: &mut Renderer, head: &Grid) -> MeshHandle {
     let targets = [
         MorphTargetData {

@@ -717,6 +717,7 @@ pub struct Renderer {
     sky_hours: Vec<(u64, f32)>,
     tuned_sky: Option<u64>,
     history: History,
+    still: (Option<f32>, u32),
     history_valid: bool,
     hour: f32,
     probe_emission: f32,
@@ -1398,6 +1399,7 @@ impl Renderer {
             sky_hours: Vec::new(),
             tuned_sky: None,
             history: History::default(),
+            still: (None, 0),
             history_valid: false,
             hour: 12.0,
             probe_emission: 0.0,
@@ -2808,7 +2810,12 @@ impl Renderer {
         if let Some(shown) = self.frame.sky_mut().swap_settled() {
             self.sky_shown(shown)?;
         }
-        let frame_number = (scene.time * 60.0).round() as u32;
+        let still = match self.still {
+            (Some(last), count) if last == scene.time => count.wrapping_add(1),
+            _ => 0,
+        };
+        self.still = (Some(scene.time), still);
+        let frame_number = ((scene.time * 60.0).round() as u32).wrapping_add(still);
         let view_projection = frame::multiply(scene.camera.projection, scene.camera.view);
         let mut camera = scene.camera;
         if cached {
