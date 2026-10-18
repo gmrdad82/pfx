@@ -3590,8 +3590,8 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pito-codecs"
-version = "1.12.1"
-source = "git+https://github.com/gmrdad82/pito-codecs?tag=v1.12.1#2e6793c68b20f36aded0514ce4edca3999bab370"
+version = "1.14.3"
+source = "git+https://github.com/gmrdad82/pito-codecs?tag=v1.14.3#5f0680cc6a39f26243b5ffb70766f4ba2bf3524c"
 dependencies = [
  "libloading",
  "objc2-core-foundation",

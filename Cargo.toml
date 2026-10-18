@@ -53,7 +53,7 @@ pfx-film = { path = "crates/film", features = ["video"], optional = true }
 libc = "0.2"
 
 [dev-dependencies]
-pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.12.1", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"] }
+pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.14.3", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"] }
 
 [[bin]]
 name = "pfx"
