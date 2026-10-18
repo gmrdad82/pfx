@@ -6,7 +6,8 @@ pub mod sha256;
 mod write;
 
 use std::fmt;
-use std::io;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
 pub use read::{Entry, Named, Reader};
 pub use write::Writer;
@@ -14,6 +15,8 @@ pub use write::Writer;
 pub type Tag = [u8; 4];
 
 pub const MAGIC: [u8; 8] = *b"PFXFILE\0";
+pub const EXTENSION: &str = "pitofx";
+pub const LEGACY_EXTENSION: &str = "pfx";
 pub const VERSION: u32 = 1;
 pub const MAX_RAW: u64 = 4 << 30;
 pub const MAX_CHUNKS: u32 = 1 << 16;
@@ -75,12 +78,12 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::Io(error) => write!(f, "{error}"),
-            Error::NotPfx => write!(f, "not a .pfx file"),
+            Error::NotPfx => write!(f, "not a .pitofx file"),
             Error::Newer(version) => write!(
                 f,
                 "format version {version} is newer than this reader's {VERSION}"
             ),
-            Error::Corrupt(what) => write!(f, "corrupt .pfx: {what}"),
+            Error::Corrupt(what) => write!(f, "corrupt .pitofx: {what}"),
             Error::Invalid(what) => write!(f, "{what}"),
         }
     }
@@ -140,4 +143,62 @@ pub fn scene_hash(reader: &Reader) -> Result<[u8; 32]> {
         }
     }
     Ok(sha256::sha256(&message))
+}
+
+fn has_extension(path: &Path, extension: &str) -> bool {
+    path.extension()
+        .is_some_and(|found| found.eq_ignore_ascii_case(extension))
+}
+
+pub fn is_file_path(path: &Path) -> bool {
+    has_extension(path, EXTENSION)
+}
+
+pub fn is_legacy_path(path: &Path) -> bool {
+    has_extension(path, LEGACY_EXTENSION)
+}
+
+pub fn has_magic(path: &Path) -> bool {
+    let mut head = [0u8; MAGIC.len()];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut head))
+        .is_ok_and(|()| head == MAGIC)
+}
+
+pub fn renamed(path: &Path) -> PathBuf {
+    path.with_extension(EXTENSION)
+}
+
+pub fn legacy_refusal(path: &Path) -> Option<String> {
+    if !is_legacy_path(path) {
+        return None;
+    }
+    let shown = path.display();
+    if path.is_file() && !has_magic(path) {
+        return Some(format!(
+            "{shown}: not a pfx document (no PFXFILE magic; a .pfx is often a PKCS #12 certificate)"
+        ));
+    }
+    Some(format!(
+        "{shown} is a legacy .pfx; import it once with `pfx scene migrate {shown}`, which writes {} beside it",
+        renamed(path).display()
+    ))
+}
+
+pub fn import_legacy(path: &Path) -> std::result::Result<PathBuf, String> {
+    let shown = path.display();
+    if !has_magic(path) {
+        return Err(format!(
+            "{shown}: not a pfx document (no PFXFILE magic; a .pfx is often a PKCS #12 certificate)"
+        ));
+    }
+    let target = renamed(path);
+    if target.exists() {
+        return Err(format!(
+            "{} already exists; {shown} was imported before, and edits go to the .{EXTENSION}",
+            target.display()
+        ));
+    }
+    std::fs::copy(path, &target).map_err(|error| format!("{}: {error}", target.display()))?;
+    Ok(target)
 }

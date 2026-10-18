@@ -35,36 +35,37 @@ const USAGE: &str = "usage:
   pfx cache --json
   pfx cache prune --json [--dry-run]
   pfx font subset --font <ttf> --out <ttf> [--chars <file>]... [--base gb2312-1|none] [--no-closure]
-  pfx edit [<recipe|scene.toml|file.pfx|project folder|folder>] [--play <module.wasm>] [flags]
+  pfx
+  pfx <file.pitofx>
+  pfx gui [<recipe|scene.toml|file.pitofx|project folder|folder>] [--play <module.wasm>] [flags]
   pfx new <game> [--path <dir>] [--with-module]
-  pfx bench <scene.toml> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
-  pfx shot <scene.toml|scene.pfx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr] [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
-  pfx scene migrate <scene.toml> [--dry-run]
-  pfx scene migrate --pfx <scene.toml> <out.pfx>
-  pfx scene migrate --unpack <scene.pfx> <dir>
-  pfx scene fix <scene.toml> [--dry-run]
+  pfx bench <scene.pitofx> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
+  pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr] [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
+  pfx scene migrate <file.toml|file.pfx|folder|scene.pitofx> [--dry-run]
+  pfx scene fix <scene.pitofx> [--dry-run]
   pfx film <script.film.toml> --out <dir> [--json] [--plan]
   pfx sound clean <in.wav> <out.wav> [--keep harmonic [--f0 LOW,HIGH]] [--remove transients] [--gate [--noise START,END] [--reduce DB]] [--mask <png>] [--json]
-  pfx render --recipe <recipe> --camera <name> --out <png|exr|hdr> [flags]
-  pfx shot <recipe> --still --camera <name> --size WxH --out <png> [flags]
-  pfx new <out> --from street [--seed N] [--json]
-  pfx build|check|timeline <recipe> [flags]
-  pfx clip|shoot <recipe> [flags]
-  pfx route|set|get|curve|key|unkey|add|remove|duplicate <recipe> ...
-  pfx align <recipe|file.pfx> <object>... (--axis x|y|z [--edge min|center|max] [--to <object>] | --distribute --axis x|y|z | --ground [--on <object>] | --snap <object> --axis x|y|z [--edge min|center|max]) [--json]
+  pfx render --recipe <file.pitofx> --camera <name> --out <png|exr|hdr> [flags]
+  pfx shot <file.pitofx> --still --camera <name> --size WxH --out <png> [flags]
+  pfx new <out.pitofx> --from street [--seed N] [--json]
+  pfx build|check|timeline <file.pitofx> [flags]
+  pfx clip|shoot <file.pitofx> [flags]
+  pfx route|set|get|curve|key|unkey|add|remove|duplicate <file.pitofx> ...
+  pfx align <file.pitofx> <object>... (--axis x|y|z [--edge min|center|max] [--to <object>] | --distribute --axis x|y|z | --ground [--on <object>] | --snap <object> --axis x|y|z [--edge min|center|max]) [--json]
   pfx diff <a.glb> <b.glb> [flags]
   pfx library list|index|check|bake|add [flags]
-  pfx import <file.glb> (--as <kind/name> | --out <file.pfx>) [flags]
-  pfx export <file.pfx|recipe> --glb <out.glb> [flags]
-  pfx scene list <recipe> [table] [--json]
-  pfx scene save <recipe> --pfx <out.pfx> [--thumb] [--json]
-  pfx scene unpack <file.pfx> <dir> [--json]
-  pfx scene fold <file.pfx> [--apply | --keep] [--json]
+  pfx import <file.glb> (--as <kind/name> | --out <file.pitofx>) [flags]
+  pfx export <file.pitofx> --glb <out.glb> [flags]
+  pfx scene list <file.pitofx> [table] [--json]
+  pfx scene print <file.pitofx> [file] [--json]
+  pfx scene write <file.pitofx> [file] < new.toml
+  pfx scene save <file.pitofx> [--thumb] [--json]
+  pfx scene fold <file.pitofx> [--apply | --keep] [--json]
   pfx asset search [words...] [--source <name>] [--kind hdri|texture|model|pack] [--limit N] [--allow <kind>]... [--json]
   pfx asset get <source:id> [--out <dir>] [--res <r>] [--format <f>] [--from <file.zip>] [--allow nc|nd|editorial|custom]... [--json]
   pfx asset list|sources [--json]
   pfx asset settings [--stdin] [--json]
-  pfx credits <scene.pfx> [--json]
+  pfx credits <scene.pitofx> [--json]
   pfx --version
   pfx --help
 clip masters are H.264 (pito-codecs) at 60 fps; pcod (pito-codecs) makes video deliveries
@@ -76,10 +77,11 @@ an app renders only itself: run from its own git tree, whose render/engine.toml 
 steam stage writes Steam's build scripts and stages depots; it does not upload
 bench plays a scene headless for N seconds at 60 fps, from its own camera, an object's (--camera) or a recorded input stream (--replay), writes the engine's frame stats to --stats (default tmp/pfx/bench/<scene>-<time>.jsonl) and prints one JSON summary line (docs/frame-stats.md, Bench); it paces like pgpu's manners ask, so run it under pgpu
 shot renders a scene file offline on the live renderer at a fixed clock (frame n at t = n / fps), headless, into numbered PNG or EXR frames, a manifest.json and an optional WAV for pcod (docs/render-a-scene.md); --draft halves the shadow maps, --final keeps the scene's; the frames before --from render unwritten, so frame N matches a full run's
-scene migrate rewrites a scene's format 0 files as format 1, keeping comments; --pfx packs a scene and every file it reads into one .pfx, --unpack writes a .pfx scene's files back out; scene fix writes the ids its entries lack; both refuse to write when the check fails
+.pitofx is pfx's one user file: recipes, scenes and the files they read live in it, compressed; the verbs read and write it in memory and never unpack it; scene print shows a TOML file it holds (--json as JSON) and scene write replaces one from stdin
+scene migrate imports a plain TOML recipe or scene, or a legacy .pfx with the PFXFILE magic (or every one in a folder), once into a .pitofx beside it, its format 0 files rewritten as format 1; given a scene's .pitofx it migrates the files inside; scene fix writes the ids a .pitofx scene's entries lack; both refuse to write when the check fails; every other verb refuses a .toml or a .pfx and names the migrate command, and a .pfx without the magic is not a pfx document
 film assembles a script of clips, rendered frame folders and cards into PNG frames, a WAV and a manifest.json naming the pcod command that encodes them, under the caller's tmp/ (docs/film.md, Footage films); --plan prints the scenes without rendering
 sound clean cleans a field recording offline and keeps its length: --keep harmonic tracks a moving fundamental (default 40..400 Hz) and keeps only its harmonic series, --remove transients finds short events that stand out of the background (barks, slams, voices, clicks) and inpaints them from the frames around them, --gate gates the noise under a print taken from --noise or the quietest second (fully, or by --reduce dB); it reports what it removed and --mask writes a time by frequency PNG, kept grey and removed red (docs/sound.md, Cleaning recordings)
-a recipe is a TOML scene recipe (it starts `recipe = 1`) that pfx builds into a GLB and a scene headless, draws live (shot --still) or path-traces (render --recipe); each recipe verb prints its own flags with --help (docs/recipes.md)
+a recipe is a TOML scene recipe (it starts `recipe = 1`), kept inside a .pitofx, that pfx builds into a GLB and a scene headless, draws live (shot --still) or path-traces (render --recipe); each recipe verb prints its own flags with --help (docs/recipes.md)
 new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)";
 
 const SWITCHES: &[&str] = &[
@@ -344,7 +346,7 @@ const COMMANDS: &[&str] = &[
     "steam",
     "cache",
     "font",
-    "edit",
+    "gui",
     "new",
     "bench",
     "shot",
@@ -392,7 +394,7 @@ fn shape(command: &str) -> &'static str {
         "steam" => "pfx steam <COMMAND>",
         "cache" => "pfx cache [OPTIONS] [COMMAND]",
         "font" => "pfx font <COMMAND>",
-        "edit" => "pfx edit [OPTIONS] <PATH>",
+        "gui" => "pfx gui [OPTIONS] <PATH>",
         "new" => "pfx new [OPTIONS] <GAME>",
         "bench" => "pfx bench [OPTIONS] --seconds <SECONDS> <SCENE>",
         "shot" => "pfx shot [OPTIONS] <--seconds <SECONDS>|--frames <FRAMES>> <SCENE>",
@@ -1031,7 +1033,7 @@ fn plan(args: &[String]) -> Result<Plan, Refusal> {
         "steam" => plan_steam(rest),
         "font" => plan_font(rest),
         #[cfg(not(feature = "editor"))]
-        "edit" => Err(Refusal::new(
+        "gui" => Err(Refusal::new(
             "this pfx was built without the editor feature",
         )),
         "bench" => plan_bench(rest).map_err(Refusal::from),
@@ -1184,6 +1186,9 @@ fn perform(plan: Plan) -> Result<(), String> {
 #[cfg(feature = "bench")]
 fn bench(args: &[String]) -> Result<(), String> {
     let plan = pfx_bench::parse(args)?;
+    if let Some(refusal) = scene::legacy(&plan.scene) {
+        return Err(refusal);
+    }
     let mut shown = None;
     let report = pfx_bench::run_plan_with(&plan, tools::caller_tmp, |done, total| {
         shown
@@ -1202,7 +1207,11 @@ fn bench(_args: &[String]) -> Result<(), String> {
 
 #[cfg(feature = "bench")]
 fn render_shot(args: &[String]) -> Result<(), String> {
-    shot::run(&shot::parse(args, SHOT_FLAGS)?)
+    let plan = shot::parse(args, SHOT_FLAGS)?;
+    if let Some(refusal) = scene::legacy(&plan.scene) {
+        return Err(refusal);
+    }
+    shot::run(&plan)
 }
 
 #[cfg(not(feature = "bench"))]
@@ -1225,13 +1234,60 @@ fn quiet_mesa() {
     }
 }
 
+const DOCUMENT_EXTENSIONS: &[&str] = &["pitofx", "pfx"];
+
+#[cfg(any(feature = "editor", test))]
+fn is_document(word: &str) -> bool {
+    !word.starts_with('-')
+        && std::path::Path::new(word)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                DOCUMENT_EXTENSIONS
+                    .iter()
+                    .any(|known| extension.eq_ignore_ascii_case(known))
+            })
+}
+
+#[cfg(feature = "editor")]
+fn window_args(args: Vec<String>) -> Vec<String> {
+    match args.as_slice() {
+        [] => vec!["gui".to_string()],
+        [path] if is_document(path) => vec!["gui".to_string(), path.clone()],
+        _ => args,
+    }
+}
+
+#[cfg(not(feature = "editor"))]
+fn window_args(args: Vec<String>) -> Vec<String> {
+    args
+}
+
+#[cfg(target_os = "macos")]
+fn os_launch(_args: &[String]) -> Option<std::process::ExitCode> {
+    None
+}
+
+#[cfg(windows)]
+fn os_launch(_args: &[String]) -> Option<std::process::ExitCode> {
+    None
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn os_launch(_args: &[String]) -> Option<std::process::ExitCode> {
+    None
+}
+
 fn main() -> std::process::ExitCode {
     quiet_mesa();
     if let Err(error) = pfx_run::ending::install() {
         eprintln!("pfx: {error}");
         std::process::exit(1);
     }
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = window_args(std::env::args().skip(1).collect());
+    if let Some(code) = os_launch(&args) {
+        return code;
+    }
     if recipe::claims(&args) {
         return recipe::main(&args);
     }
@@ -1299,12 +1355,39 @@ mod tests {
 
     #[cfg(feature = "editor")]
     #[test]
-    fn edit_belongs_to_the_window_and_the_usage_names_its_forms() {
+    fn gui_belongs_to_the_window_and_the_usage_names_its_forms() {
         assert!(recipe::claims(&words(
-            "edit content/room.scene.toml --play game.wasm"
+            "gui content/room.scene.toml --play game.wasm"
         )));
-        assert!(recipe::claims(&words("edit")));
-        assert!(USAGE.contains("pfx edit [<recipe|scene.toml|file.pfx|project folder|folder>]"));
+        assert!(recipe::claims(&words("gui")));
+        assert!(USAGE.contains("pfx gui [<recipe|scene.toml|file.pitofx|project folder|folder>]"));
+    }
+
+    #[cfg(feature = "editor")]
+    #[test]
+    fn a_bare_call_or_one_document_opens_the_window_and_anything_else_is_the_cli() {
+        let routed = |line: &str| window_args(words(line));
+        assert_eq!(routed(""), words("gui"));
+        assert_eq!(routed("room.pitofx"), words("gui room.pitofx"));
+        assert_eq!(routed("room.PFX"), words("gui room.PFX"));
+        assert_eq!(routed("room.pitofx --x"), words("room.pitofx --x"));
+        assert_eq!(
+            routed("room.pitofx extra.pitofx"),
+            words("room.pitofx extra.pitofx")
+        );
+        assert_eq!(routed("shot a.toml --still"), words("shot a.toml --still"));
+        assert_eq!(routed("--x"), words("--x"));
+        assert_eq!(routed("room.toml"), words("room.toml"));
+        for line in ["--help", "-h", "help", "help shot"] {
+            assert_eq!(routed(line), words(line));
+        }
+        assert!(matches!(plan(&words("--help")), Ok(Plan::Help)));
+        assert!(matches!(plan(&words("help")), Ok(Plan::Help)));
+        assert!(recipe::claims(&routed("")));
+        assert!(recipe::claims(&routed("room.pitofx")));
+        assert!(!recipe::claims(&routed("room.pitofx --x")));
+        assert!(refused("tui").contains("unrecognized subcommand 'tui'"));
+        assert!(refused("room.pitofx --x").contains("unrecognized subcommand 'room.pitofx'"));
     }
 
     #[test]
@@ -1334,7 +1417,7 @@ mod tests {
             plan(&words("bench room.scene.toml --seconds 2 --seed 4")).unwrap(),
             Plan::Bench(args) if args == words("room.scene.toml --seconds 2 --seed 4")
         ));
-        assert!(USAGE.contains("pfx bench <scene.toml> --seconds N"));
+        assert!(USAGE.contains("pfx bench <scene.pitofx> --seconds N"));
     }
 
     #[test]
@@ -1626,10 +1709,11 @@ mod tests {
         for (line, message, usage) in [
             (
                 "",
-                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, shot, scene, film, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, align, asset, credits, help]",
+                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, gui, new, bench, shot, scene, film, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, align, asset, credits, help]",
                 TOP,
             ),
             ("tui", "unrecognized subcommand 'tui'", TOP),
+            ("edit", "unrecognized subcommand 'edit'", TOP),
             ("--x", "unexpected argument '--x' found", TOP),
             ("help tui", "unrecognized subcommand 'tui'", TOP),
             (

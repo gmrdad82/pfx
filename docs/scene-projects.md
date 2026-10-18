@@ -1,6 +1,6 @@
 # Lay out a project
 
-A project is a folder with a `project.toml`. Every file in it is plain TOML that starts with `format = 1`, and its kind comes from its name. This is the demo project in `crates/scene/examples/demo`:
+A project is a folder with a `project.toml`. Every scene file in it is TOML that starts with `format = 1`, and its kind comes from its name; in pfx a user's scenes ship packed with their prefabs and libraries in a `.pitofx` each ([Scenes in a .pitofx file](scene-format.md#scenes-in-a-pfx-file)), and the loose layout below is what is inside one, or the crate's own demo. This is the demo project in `crates/scene/examples/demo`:
 
 ```text
 crates/scene/examples/demo

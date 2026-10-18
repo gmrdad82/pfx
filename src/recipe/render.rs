@@ -578,6 +578,7 @@ mod tests {
 
     #[test]
     fn a_figurine_render_is_planned_at_the_default_samples_and_as_a_draft() {
+        let _sample = super::super::sample("figurine");
         let planned = |text: &str| {
             let words = strings(text);
             assert!(super::super::claims(

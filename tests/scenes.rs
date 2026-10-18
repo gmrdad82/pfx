@@ -20,6 +20,13 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+fn sample(name: &str) -> (PathBuf, pfx_recipe::files::Mount) {
+    let pfx = root().join("samples").join(format!("{name}.pitofx"));
+    pfx_build::Document::open(&pfx)
+        .and_then(|doc| doc.mount(&pfx))
+        .unwrap()
+}
+
 fn recipe(set: &str) -> Recipe {
     load(&golden(set).join(format!("{set}.toml")))
         .unwrap()
@@ -312,14 +319,16 @@ fn mean(rgba: &[u8]) -> f64 {
 #[ignore = "GPU: pgpu run --class interactive --as pfx -- cargo test -- --ignored"]
 fn the_neutral_scenes_draw_live_and_traced() {
     let out = scratch("drawn");
+    let (workshop, _workshop) = sample("workshop");
+    let (gallery, _gallery) = sample("gallery");
     for (path, camera) in [
         (golden("cards").join("cards.toml"), "main"),
         (golden("cards").join("cards.toml"), "flat"),
         (golden("toybox").join("toybox.toml"), "main"),
         (golden("toybox").join("toybox.toml"), "high"),
         (golden("table").join("table.toml"), "main"),
-        (root().join("samples/workshop.toml"), "hero"),
-        (root().join("samples/gallery.toml"), "flat"),
+        (workshop, "hero"),
+        (gallery, "flat"),
     ] {
         let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
         let size = [480, 300];

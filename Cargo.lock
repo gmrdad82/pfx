@@ -2204,14 +2204,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
-name = "manf"
-version = "0.1.0"
-source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.6.0#4b5e12dfc758bc90672a911050d596fb8432af1a"
-dependencies = [
- "miniz_oxide 0.9.1",
-]
-
-[[package]]
 name = "matrixmultiply"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3231,7 +3223,7 @@ dependencies = [
  "pfx-post",
  "pfx-recipe",
  "pfx-recipe-scene",
- "pfx-scene 3.0.0-alpha.1",
+ "pfx-scene",
  "pfx-still",
  "pfx-trace",
  "png 0.18.1",
@@ -3285,7 +3277,7 @@ dependencies = [
  "pfx-mod",
  "pfx-play",
  "pfx-project",
- "pfx-scene 3.0.0-alpha.1",
+ "pfx-scene",
  "pfx-sound",
  "pfx-text",
  "pfx-theme",
@@ -3512,7 +3504,7 @@ dependencies = [
  "pfx-file",
  "pfx-materials",
  "pfx-post",
- "pfx-scene 3.0.0-alpha.1",
+ "pfx-scene",
  "pfx-text",
  "png 0.18.1",
  "serde",
@@ -3624,8 +3616,9 @@ dependencies = [
 name = "pfx-project"
 version = "3.0.0-alpha.1"
 dependencies = [
+ "pfx-file",
  "pfx-mod",
- "pfx-scene 3.0.0-alpha.1",
+ "pfx-scene",
  "toml 0.9.12+spec-1.1.0",
 ]
 
@@ -3636,7 +3629,7 @@ dependencies = [
  "pfx-materials",
  "pfx-mesh",
  "pfx-motion",
- "pfx-scene 1.6.0",
+ "pfx-scene",
  "serde",
  "serde_json",
  "toml_edit",
@@ -3703,17 +3696,6 @@ dependencies = [
 
 [[package]]
 name = "pfx-scene"
-version = "1.6.0"
-source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.6.0#4b5e12dfc758bc90672a911050d596fb8432af1a"
-dependencies = [
- "manf",
- "serde",
- "toml 1.1.6+spec-1.1.0",
- "toml_edit",
-]
-
-[[package]]
-name = "pfx-scene"
 version = "3.0.0-alpha.1"
 dependencies = [
  "pfx-file",
@@ -3756,7 +3738,9 @@ version = "3.0.0-alpha.1"
 dependencies = [
  "pfx-core",
  "pfx-input",
+ "pfx-mod",
  "steamworks",
+ "wat",
 ]
 
 [[package]]
@@ -3848,7 +3832,7 @@ dependencies = [
  "pfx-project",
  "pfx-recipe",
  "pfx-recipe-scene",
- "pfx-scene 3.0.0-alpha.1",
+ "pfx-scene",
  "png 0.18.1",
  "serde_json",
  "toml_edit",

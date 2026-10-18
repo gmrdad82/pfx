@@ -69,26 +69,29 @@ fn a_scene_opens_a_pfx_mesh_like_its_glb_and_refuses_a_cut_or_damaged_one_by_nam
     let glb = head();
     let pfx = pfx_from_glb(&glb, &[], true);
     std::fs::write(folder.root.join("car.glb"), &glb).unwrap();
-    std::fs::write(folder.root.join("car.pfx"), &pfx).unwrap();
+    std::fs::write(folder.root.join("car.pitofx"), &pfx).unwrap();
     let from_glb = scene(&folder, "car.glb").unwrap();
-    let from_pfx = scene(&folder, "car.pfx").unwrap();
+    let from_pfx = scene(&folder, "car.pitofx").unwrap();
     assert_eq!(from_pfx.meshes["car"].parts, from_glb.meshes["car"].parts);
     assert_eq!(from_pfx.meshes["car"].rig, from_glb.meshes["car"].rig);
     assert_eq!(from_pfx.animations, from_glb.animations);
-    assert!(from_pfx.files.contains_key(&folder.root.join("car.pfx")));
+    assert!(from_pfx.files.contains_key(&folder.root.join("car.pitofx")));
 
-    std::fs::write(folder.root.join("cut.pfx"), &pfx[..pfx.len() - 9]).unwrap();
-    let cut = scene(&folder, "cut.pfx").unwrap_err();
-    assert!(cut.contains("cut.pfx") && cut.contains("corrupt"), "{cut}");
+    std::fs::write(folder.root.join("cut.pitofx"), &pfx[..pfx.len() - 9]).unwrap();
+    let cut = scene(&folder, "cut.pitofx").unwrap_err();
+    assert!(
+        cut.contains("cut.pitofx") && cut.contains("corrupt"),
+        "{cut}"
+    );
 
     let mut damaged = pfx_from_glb(&glb, &[], false);
     let bin = pfx_file::Reader::from_bytes(&damaged).unwrap().entries()[1].clone();
     assert_eq!(bin.tag, pfx_file::GBIN);
     damaged[(bin.offset + bin.stored / 2) as usize] ^= 0xff;
-    std::fs::write(folder.root.join("damaged.pfx"), &damaged).unwrap();
-    let damaged = scene(&folder, "damaged.pfx").unwrap_err();
+    std::fs::write(folder.root.join("damaged.pitofx"), &damaged).unwrap();
+    let damaged = scene(&folder, "damaged.pitofx").unwrap_err();
     assert!(
-        damaged.contains("damaged.pfx") && damaged.contains("checksum"),
+        damaged.contains("damaged.pitofx") && damaged.contains("checksum"),
         "{damaged}"
     );
 

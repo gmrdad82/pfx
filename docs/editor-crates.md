@@ -2,7 +2,7 @@
 
 ![The editor example: dragging a crate along x with the move gizmo in a 3D viewport, the scene's TOML beside it with the crate's table marked, its at value updating when the drag is released](images/editor-drag.gif)
 
-Five egui crates hold what every editor built on pfx shares, so `pfx edit` and other editors on the engine look and behave as one: a theme and its widgets, a window host with an offscreen shot harness, an embedded TOML source panel, document edits on one undo history, and a 3D viewport with a camera, picking and a gizmo. They hold no app logic. `pfx-editor-style` carries pfx's look as tokens (`tokens.rs`: colours, fonts, type, spacing, radii and strokes) and builds the default `Theme` from them; an editor can still bring a theme of its own (`docs/editor.md`, "The look").
+Five egui crates hold what every editor built on pfx shares, so `pfx gui` and other editors on the engine look and behave as one: a theme and its widgets, a window host with an offscreen shot harness, an embedded TOML source panel, document edits on one undo history, and a 3D viewport with a camera, picking and a gizmo. They hold no app logic. `pfx-editor-style` carries pfx's look as tokens (`tokens.rs`: colours, fonts, type, spacing, radii and strokes) and builds the default `Theme` from them; an editor can still bring a theme of its own (`docs/editor.md`, "The look").
 
 ## The crates
 

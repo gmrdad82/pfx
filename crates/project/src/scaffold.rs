@@ -4,6 +4,7 @@ use crate::project::FILE;
 
 pub const SOURCE: &str = "https://github.com/gmrdad82/pfx.git";
 pub const SCENE: &str = "content/first.scene.toml";
+pub const DOCUMENT: &str = "content/first.pitofx";
 
 const RESERVED: [&str; 12] = [
     "self",
@@ -202,6 +203,48 @@ pub(crate) fn fix_ids(folder: &Path) -> Result<(), String> {
     check(folder)
 }
 
+fn pack(folder: &Path, written: &mut Vec<PathBuf>) -> Result<(), String> {
+    use pfx_file::{Reader, SCNE, Writer};
+    let project = pfx_scene::Project::open(folder).map_err(|found| found.message)?;
+    let bytes = pfx_scene::pack(&project, &folder.join(SCENE)).map_err(|found| {
+        found
+            .iter()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
+    })?;
+    let reader = Reader::from_bytes(&bytes).map_err(|error| error.to_string())?;
+    let mut writer = Writer::new();
+    let mut held = Vec::new();
+    for (index, entry) in reader.entries().iter().enumerate() {
+        if entry.tag == pfx_file::FILE {
+            continue;
+        }
+        if entry.tag == SCNE {
+            held.push(folder.join(&entry.name));
+        }
+        writer = writer
+            .copy(&reader, index)
+            .map_err(|error| error.to_string())?;
+    }
+    let packed = writer.to_vec().map_err(|error| error.to_string())?;
+    written.push(write(folder, DOCUMENT, &packed)?);
+    for file in &held {
+        std::fs::remove_file(file).map_err(|error| format!("{}: {error}", file.display()))?;
+        if let Some(parent) = file.parent()
+            && parent != folder.join("content")
+        {
+            let _ = std::fs::remove_dir(parent);
+        }
+    }
+    written.retain(|path| !held.contains(path));
+    let manifest = folder.join(FILE);
+    let text = std::fs::read_to_string(&manifest)
+        .map_err(|error| format!("{}: {error}", manifest.display()))?;
+    std::fs::write(&manifest, text.replace(SCENE, DOCUMENT))
+        .map_err(|error| format!("{}: {error}", manifest.display()))
+}
+
 pub fn module_path(name: &str) -> String {
     format!(
         "target/wasm32-unknown-unknown/release/{}_module.wasm",
@@ -265,5 +308,7 @@ pub fn scaffold_with(
         written.push(write(&folder, relative, bytes)?);
     }
     fix_ids(&folder)?;
+    pack(&folder, &mut written)?;
+    check(&folder)?;
     Ok(written)
 }

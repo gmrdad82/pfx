@@ -1,6 +1,6 @@
 # Recipes
 
-A recipe is one TOML file that describes a scene to build: objects from generic kinds (boxes, lathes, sweeps, extrusions, text, cards, imported glTF) and from generators, materials, cameras, lights, the sun and the sky, routes, keys and a timeline. It starts with `recipe = 1`. pfx builds a recipe headless into a GLB, its sidecar and a `scene.toml`, the same bytes on Linux, Windows and macOS; draws it live with `pfx shot <recipe> --still`; and path-traces it with `pfx render --recipe <recipe>`.
+A recipe is TOML that describes a scene to build, kept inside a `.pitofx` document: objects from generic kinds (boxes, lathes, sweeps, extrusions, text, cards, imported glTF) and from generators, materials, cameras, lights, the sun and the sky, routes, keys and a timeline. It starts with `recipe = 1`. pfx builds a recipe headless into a GLB, its sidecar and a `scene.toml`, the same bytes on Linux, Windows and macOS; draws it live with `pfx shot <file.pitofx> --still`; and path-traces it with `pfx render --recipe <file.pitofx>`.
 
 The crates behind it are libraries an app or a game links on its own: `pfx-recipe` (parse, validate, patch), `pfx-mesh` (geometry), `pfx-generators` (a kit for an app's own generators), `pfx-build` (recipe to GLB, sidecar and bake recipe), `pfx-glb` (the deterministic GLB writer and reader), `pfx-motion` (routes, noise, the timeline), `pfx-recipe-scene` (recipe to engine scene and the headless still), `pfx-runtime` (a GLB and its sidecar into live instances) and `pfx-still` (path-traced stills).
 
@@ -9,79 +9,83 @@ The crates behind it are libraries an app or a game links on its own: `pfx-recip
 ## Commands
 
 ```
-pfx build <recipe> [--variant <name> | --all-variants] [--set key=value]... [--stage N|name] [--only <glob>[,<glob>]] [--out <dir>]
+pfx build <file.pitofx> [--variant <name> | --all-variants] [--set key=value]... [--stage N|name] [--only <glob>[,<glob>]] [--out <dir>]
                                                           recipe to GLB, sidecar and bake recipe; --stage builds stages 1 to N, --only those objects, pieces, collections or scatters
-pfx check <recipe>                                       validate and list problems
-pfx diff <a.glb> <b.glb> [--json] [--render --recipe <recipe> [--camera <name>] [--size WxH] [--floor <dB>]]
+pfx check <file.pitofx>                                       validate and list problems
+pfx diff <a.glb> <b.glb> [--json] [--render --recipe <file.pitofx> [--camera <name>] [--size WxH] [--floor <dB>]]
                                                           structure, side by side, or both drawn alike and compared by PSNR
-pfx shot <recipe> --still --camera <name> --size WxH --out <png> [--variant <name>] [--set key=value]... [--stage N|name] [--only <glob>,...] [--time S]
+pfx shot <file.pitofx> --still --camera <name> --size WxH --out <png> [--variant <name>] [--set key=value]... [--stage N|name] [--only <glob>,...] [--time S]
                                                           one still on the live renderer, headless; --set overrides a value the recipe has
-pfx render --recipe <recipe> --camera <name> [--spp N] [--threshold T] [--min-samples N] [--draft] [--seed S] [--size WxH] [--equirect|--ortho] [--crop x,y,w,h] [--variant V] [--set key=value]... [--stage N|name] [--only <glob>,...] [--time S] [--denoise off|on] [--master <file.png>] [--progress plain|json] --out <file.png|file.exr|file.hdr>
+pfx render --recipe <file.pitofx> --camera <name> [--spp N] [--threshold T] [--min-samples N] [--draft] [--seed S] [--size WxH] [--equirect|--ortho] [--crop x,y,w,h] [--variant V] [--set key=value]... [--stage N|name] [--only <glob>,...] [--time S] [--denoise off|on] [--master <file.png>] [--progress plain|json] --out <file.png|file.exr|file.hdr>
                                                           path-traced on the engine's tracer
-pfx clip <recipe> --camera <name> (--frames N --fps F [--spin <object> [--turns N]] | --timeline) --size WxH --out <dir> [--trace [--spp N]] [--variant V] [--set key=value]... [--video <file.mp4|file.webm>]
+pfx clip <file.pitofx> --camera <name> (--frames N --fps F [--spin <object> [--turns N]] | --timeline) --size WxH --out <dir> [--trace [--spp N]] [--variant V] [--set key=value]... [--video <file.mp4|file.webm>]
                                                           a camera moving along the recipe's path, as frames and a video
-pfx new <out> --from street [--seed N] [--json]
-                                                          writes a starter chase shot: a 9:16 timeline, a route, a low-rise street, a drifting hero car, traffic, a low chase camera, road spray behind each rear wheel, a golden-hour sun about 5 degrees up dead ahead down the route, a top camera over the route, five stages (street, car, city, camera, look) and lilac.cube beside the recipe
-pfx timeline <recipe> [--json]                           builds the recipe and reports its frames, keyed nodes, camera node, each followed object's distance and top speed, and the markers with their frames
-pfx shoot <recipe> --out <dir> [--draft|--final] [--range a..b] [--camera <name>] [--json]
+pfx new <out.pitofx> --from street [--seed N] [--json]
+                                                          writes a starter chase shot: a 9:16 timeline, a route, a low-rise street, a drifting hero car, traffic, a low chase camera, road spray behind each rear wheel, a golden-hour sun about 5 degrees up dead ahead down the route, a top camera over the route, five stages (street, car, city, camera, look) and lilac.cube, all inside the new .pitofx; it is built on first use
+pfx timeline <file.pitofx> [--json]                           builds the recipe and reports its frames, keyed nodes, camera node, each followed object's distance and top speed, and the markers with their frames
+pfx shoot <file.pitofx> --out <dir> [--draft|--final] [--range a..b] [--camera <name>] [--json]
                                                           builds the recipe and renders its timeline with `pfx shot` on the live renderer: frames, the scene's sound as a WAV and shoot.json; resumes where it stopped
 pfx library list|index|check [--kind <kind>] [--library <dir>] [--json]
                                                           the library's objects, its index rewritten from the folders, or every object checked against the index
-pfx library bake <recipe> <object> --as <kind>/<name> [--thumb] [--tags a,b] [--library <dir>] [--json]
-                                                          builds the recipe and writes the object to library/<kind>/<name>: model.glb, object.toml (its source, params and facts) and with --thumb a 512x512 still on a neutral ground; then the index
+pfx library bake <file.pitofx> <object> --as <kind>/<name> [--thumb] [--tags a,b] [--library <dir>] [--json]
+                                                          builds the recipe and writes the object to library/<kind>/<name>/object.pitofx: its model, its sidecar (source, params and facts) and with --thumb a 512x512 still on a neutral ground; then the index
 pfx library add <file.glb|file.gltf|file.obj> --as <kind>/<name> [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--thumb] [--tags a,b] [--library <dir>] [--json]
-                                                          brings a glTF 2.0 model (.glb, a split .gltf, or an .obj with its .mtl) into the library as one standalone model.glb, writes its object.toml (file name, sha256, size, wheels and light anchors found by node name), checked by gltf_validator when installed
-pfx route <recipe> list|set|add|remove [--route <name>] [--at <i>] [--point x,y,z] [--json]
+                                                          brings a glTF 2.0 model (.glb, a split .gltf, or an .obj with its .mtl) into the library as one standalone GLB inside its object.pitofx, with its sidecar (file name, sha256, size, wheels and light anchors found by node name), checked by gltf_validator when installed
+pfx route <file.pitofx> list|set|add|remove [--route <name>] [--at <i>] [--point x,y,z] [--json]
                                                           list the routes' points and lengths, or move, add or remove a point in the file
-pfx set <recipe> <key>=<value>... [--through] [--json]    writes values into the recipe file by dotted key, as --set takes them, keeping its comments; refused and left untouched when the result does not check
-pfx get <recipe> <key>... [--json]                       prints the recipe's values by dotted key, as TOML or JSON
-pfx curve <recipe> <object> <param> list|set|add|remove [--at <i>] [--point a,b] [--json]
+pfx set <file.pitofx> <key>=<value>... [--through] [--json]    writes values into the recipe file by dotted key, as --set takes them, keeping its comments; refused and left untouched when the result does not check
+pfx get <file.pitofx> <key>... [--json]                       prints the recipe's values by dotted key, as TOML or JSON
+pfx curve <file.pitofx> <object> <param> list|set|add|remove [--at <i>] [--point a,b] [--json]
                                                           list one curve param of a generator object, or move, add or remove a point in the file
-pfx add <recipe> <table> <name> [key=value]... [--json]
+pfx add <file.pitofx> <table> <name> [key=value]... [--json]
                                                           append an entry to object, camera, light, route, stage, particles, follow, use, mover, marker, scatter or collection, in the file
-pfx remove <recipe> <table> <name> [--json]
+pfx remove <file.pitofx> <table> <name> [--json]
                                                           remove an entry; refused, naming the referrer, while another entry refers to it
-pfx duplicate <recipe> <table> <name> <new-name> [key=value]... [--json]
+pfx duplicate <file.pitofx> <table> <name> <new-name> [key=value]... [--json]
                                                           copy an entry under a new name, with keys changed
-pfx key <recipe> <path> <t> <value> [--interp linear|smooth|step] [--json]
+pfx key <file.pitofx> <path> <t> <value> [--interp linear|smooth|step] [--json]
                                                           set or insert a key of a property over the timeline, as object.hero.at 2 0,0,12, in the file
-pfx unkey <recipe> <path> [<t>] [--json]                 remove the property's key at t, or every key of it, in the file
-pfx align <recipe> <object>... --axis x|y|z [--edge min|center|max] [--to <object>] [--json]
+pfx unkey <file.pitofx> <path> [<t>] [--json]                 remove the property's key at t, or every key of it, in the file
+pfx align <file.pitofx> <object>... --axis x|y|z [--edge min|center|max] [--to <object>] [--json]
                                                           moves the objects (names or globs) so one side of their bounds lines up: the lowest min, the highest max or the mean centre of the selection, or the `--to` object's; writes each new `at` into the file
-pfx align <recipe> <object>... --distribute --axis x|y|z [--json]
+pfx align <file.pitofx> <object>... --distribute --axis x|y|z [--json]
                                                           spaces the objects' centres evenly between the two outermost on the axis
-pfx align <recipe> <object>... --ground [--on <object>] [--json]
+pfx align <file.pitofx> <object>... --ground [--on <object>] [--json]
                                                           drops each object straight down until its bounds rest on the highest face below its footprint (of every other object, or the `--on` object's), or on y = 0 when none is below
-pfx align <recipe> <object>... --snap <object> --axis x|y|z [--edge min|center|max] [--json]
+pfx align <file.pitofx> <object>... --snap <object> --axis x|y|z [--edge min|center|max] [--json]
                                                           sets each object against the other's bounds: `max` (the default) puts its min side on the other's max side, as a cup on a table with `--axis y`, `min` its max on the other's min, `center` centre on centre
-pfx scene list <recipe> [<table>] [--json]               the recipe's entries and their names (an object's kind and parent)
-pfx scene save <recipe> --pfx <out.pfx> [--thumb] [--json]
-                                                          packs the recipe, its includes and every file it reads, its build and its scene into one .pfx
-pfx scene unpack <file.pfx> <dir> [--json]               writes a .pfx's recipe and files into a folder, so building it there gives the same GLB
-pfx scene fold <file.pfx> [--apply | --keep] [--json]    lists the scene edits made in a .pfx, folds them into the recipe or keeps them as overrides
-pfx import <file.glb|file.gltf|file.obj> (--as <kind>/<name> | --out <x.pfx>) [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--tags <a,b>] [--thumb] [--json]
-                                                          a glTF 2.0 model (.glb, a split .gltf, or an .obj with its .mtl) into a .pfx: its glTF packed into one GLB, a one-object recipe and detected facts (size, wheels, light anchors)
-pfx export <file.pfx|recipe> --glb <out.glb> [--only <object>] [--json]
+pfx scene list <file.pitofx> [<table>] [--json]               the recipe's entries and their names (an object's kind and parent)
+pfx scene print <file.pitofx> [<file>] [--json]            prints a TOML file the .pitofx holds (its recipe by default, an include by its name inside) to stdout, or its table as JSON
+pfx scene write <file.pitofx> [<file>] < new.toml          replaces that file with TOML from stdin; kept only when the recipe still checks, then rebuilt into the .pitofx
+pfx scene save <file.pitofx> [--thumb] [--json]             rebuilds the .pitofx from its recipe when it is stale and writes it, with a thumbnail drawn into it if asked
+pfx scene migrate <file.toml|folder> [--dry-run] [--bare]
+                                                          imports a plain TOML recipe or scene (or every one in a folder) once into <name>.pitofx beside it; the .toml is never written; --bare keeps only the recipe and the files it reads, built on first use
+pfx scene fold <file.pitofx> [--apply | --keep] [--json]    lists the scene edits made in a .pitofx, folds them into the recipe or keeps them as overrides
+pfx import <file.glb|file.gltf|file.obj> (--as <kind>/<name> | --out <x.pitofx>) [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--tags <a,b>] [--thumb] [--json]
+                                                          a glTF 2.0 model (.glb, a split .gltf, or an .obj with its .mtl) into a .pitofx: its glTF packed into one GLB, a one-object recipe and detected facts (size, wheels, light anchors)
+pfx export <file.pitofx> --glb <out.glb> [--only <object>] [--json]
                                                           a standalone GLB with its node hierarchy and no pfx extras
 pfx asset search [words...] [--source <name>] [--kind hdri|texture|model|pack] [--limit N] [--allow <kind>]... [--json]
                                                           searches the asset sources: Poly Haven, ambientCG, the Kenney and Quaternius catalogs and configured accounts
 pfx asset get <source:id> [--out <dir>] [--res <r>] [--format <f>] [--from <file.zip>] [--allow nc|nd|editorial|custom]... [--json]
-                                                          downloads an asset, checks it and its licence, unpacks it and records its licence facts in asset.pfx
+                                                          downloads an asset, checks it and its licence, unpacks it and records its licence facts in asset.pitofx
 pfx asset list|sources [--in <dir>] [--json]             the fetched assets with their licences, or the sources
-pfx asset settings [--stdin] [--json]                    pfx's settings.pfx as TOML, or TOML on stdin written to it
-pfx credits <scene.pfx> [--json]                         one credit line per asset a scene uses, ready for a credits card; unlicensed assets are refused by name
-pfx edit [<recipe|scene|file.pfx|project folder|folder>] [--play <module.wasm>] [--stage N|name] [--only <glob>,...] [--clay] [--wireframe [--blend <0..1>] [--xray]]
-                                                          the window on a recipe, a scene, a .pfx, a game's project or the start screen; Play runs the scene with a game's module (docs/editor.md)
-pfx edit [<file>] --shot <png> [--size WxH] [--input <script>] [--fake] [--fixture <name>] [--start] [--bare [--strip]]
+pfx asset settings [--stdin] [--json]                    pfx's settings.pitofx as TOML, or TOML on stdin written to it
+pfx credits <scene.pitofx> [--json]                         one credit line per asset a scene uses, ready for a credits card; unlicensed assets are refused by name
+pfx gui [<recipe|scene|file.pitofx|project folder|folder>] [--play <module.wasm>] [--stage N|name] [--only <glob>,...] [--clay] [--wireframe [--blend <0..1>] [--xray]]
+                                                          the window on a recipe, a scene, a .pitofx, a game's project or the start screen; Play runs the scene with a game's module (docs/editor.md)
+pfx gui [<file>] --shot <png> [--size WxH] [--input <script>] [--fake] [--fixture <name>] [--start] [--bare [--strip]]
                                                           one frame of the window, offscreen (docs/editor-shots.md)
-pfx edit [<file>] --clip <dir> --tape <file> [--fps 30|60|120] [--poster first|last|S | --frames] [--scale F] [--framed [--window WxH]] [--size WxH] [--start] [--bare [--strip]] [--json]
+pfx gui [<file>] --clip <dir> --tape <file> [--fps 30|60|120] [--poster first|last|S | --frames] [--scale F] [--framed [--window WxH]] [--size WxH] [--start] [--bare [--strip]] [--json]
                                                           the window playing a tape, filmed offscreen into an H.264 master, a poster and a manifest
 ```
 
-`add`, `remove`, `duplicate` and `align` write the recipe file through the same edits the editor makes, keeping its comments, check the recipe again after the write, and put the file back byte for byte when it no longer checks.
+`add`, `remove`, `duplicate` and `align` write the recipe through the same edits the editor makes, keeping its comments, check the recipe again after the write, and put it back byte for byte when it no longer checks.
 
-Every command that takes a recipe also takes a recipe `.pfx` document: it reads the recipe and its files from the document in memory, and `route` (and every other command that edits the recipe) writes the edit and a fresh build back into the `.pfx`.
+A recipe lives in a `.pitofx` document, pfx's one user file: the recipe, every file it includes or reads, its build and its scene in one compressed container (docs/pfx-file.md). Every command reads the recipe and its files from the document in memory, never unpacking them to disk, and `set`, `route` and every other command that edits the recipe write the edit and a fresh build back into the `.pitofx` through its atomic writer; a command that fails leaves the `.pitofx` as it was. To read what is inside, `pfx scene print` shows the recipe or any TOML file the document holds, and the editor opens it in its TOML panel with syntax highlighting.
 
-`pfx <command> --help` prints a command's whole help. A line pfx cannot parse gets clap's short error on stderr and exits 2; a recipe, camera or file it refuses after that is one line on stderr, `pfx <command>: …`, and exits 1. A file whose header claims more memory than the machine (or a `ulimit -v` / `prlimit --as` limit) can give is refused the same way before pfx fills it, never by an abort: `pfx scene unpack: big.pfx: chunk RCPE needs 3221225472 bytes: memory allocation failed because the memory allocator returned an error`. The buffers a file or a recipe sizes are reserved that way: `.pfx` chunks, PNG and JPEG textures, `.hdr` skies (which must also hold at least the shortest scanlines their size needs) and the traced and denoised frames read back from the GPU.
+A plain `.toml` recipe or scene from an older pfx is imported once: `pfx scene migrate old.toml` writes `old.pitofx` beside it (an old `manfred = 1` header becomes `recipe = 1`, a format 0 scene is migrated to format 1 inside the document), and the `.toml` is never written again. Every other command given a `.toml` refuses with one line naming that command: `pfx build: street.toml is a plain TOML file; import it once with `pfx scene migrate street.toml`, which writes street.pitofx beside it`.
 
-pfx tells a recipe from its other inputs by the command line: `pfx render --recipe` is a recipe's traced still while `pfx render --app|--asset|--icons|--scene` stay pfx's offline renders; `pfx shot` takes a recipe when `--still` is given or the file is a recipe (a TOML file whose top level has `recipe = N`), and a `scene.toml` or a scene `.pfx` otherwise; `pfx new <out> --from <template>` writes a starter recipe while `pfx new <game>` scaffolds a game; `pfx scene list|save|unpack|fold` work on recipes while `pfx scene migrate|fix` work on scene files.
+`pfx <command> --help` prints a command's whole help. A line pfx cannot parse gets clap's short error on stderr and exits 2; a recipe, camera or file it refuses after that is one line on stderr, `pfx <command>: …`, and exits 1. A file whose header claims more memory than the machine (or a `ulimit -v` / `prlimit --as` limit) can give is refused the same way before pfx fills it, never by an abort: `pfx scene print: big.pitofx: chunk RCPE needs 3221225472 bytes: memory allocation failed because the memory allocator returned an error`. The buffers a file or a recipe sizes are reserved that way: `.pitofx` chunks, PNG and JPEG textures, `.hdr` skies (which must also hold at least the shortest scanlines their size needs) and the traced and denoised frames read back from the GPU.
+
+pfx tells a recipe from its other inputs by the command line: `pfx render --recipe` is a recipe's traced still while `pfx render --app|--asset|--icons|--scene` stay pfx's offline renders; `pfx shot` takes a recipe's `.pitofx` when `--still` is given, and draws a `.pitofx`'s scene otherwise; `pfx new <out> --from <template>` writes a starter recipe while `pfx new <game>` scaffolds a game; `pfx scene list|save|print|write|fold` work on recipe documents (`print` and `write` on scene documents too) while `pfx scene migrate|fix` import and fix scenes.

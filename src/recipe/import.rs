@@ -22,10 +22,10 @@ pub(super) struct Args {
         long = "as",
         id = "as_name",
         value_name = "kind/name",
-        help = "Write library/<kind>/<name>.pfx under the current folder"
+        help = "Write library/<kind>/<name>.pitofx under the current folder"
     )]
     as_name: Option<String>,
-    #[arg(long, value_name = "x.pfx", help = "Write the .pfx here")]
+    #[arg(long, value_name = "x.pitofx", help = "Write the .pitofx here")]
     out: Option<PathBuf>,
     #[arg(
         long,
@@ -65,19 +65,31 @@ fn target(args: &Args) -> Result<(PathBuf, String), String> {
             .file_stem()
             .map_or_else(|| "model".to_string(), |s| s.to_string_lossy().to_string())
     };
+    if let Some(out) = args
+        .out
+        .as_deref()
+        .filter(|out| pfx_file::is_legacy_path(out))
+    {
+        return Err(format!(
+            "{}: .pfx is the legacy extension; write a .pitofx",
+            out.display()
+        ));
+    }
     match (&args.as_name, &args.out) {
         (Some(name), out) => {
             let (kind, base) = name
                 .split_once('/')
                 .filter(|(k, n)| !k.is_empty() && !n.is_empty() && !n.contains('/'))
                 .ok_or_else(|| format!("--as expects <kind>/<name>, found \"{name}\""))?;
-            let path = out
-                .clone()
-                .unwrap_or_else(|| Path::new("library").join(kind).join(format!("{base}.pfx")));
+            let path = out.clone().unwrap_or_else(|| {
+                Path::new("library")
+                    .join(kind)
+                    .join(format!("{base}.pitofx"))
+            });
             Ok((path, name.clone()))
         }
         (None, Some(out)) => Ok((out.clone(), stem())),
-        (None, None) => Err("give --as <kind>/<name> or --out <x.pfx>".into()),
+        (None, None) => Err("give --as <kind>/<name> or --out <x.pitofx>".into()),
     }
 }
 

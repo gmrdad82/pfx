@@ -28,7 +28,7 @@ pub(super) enum Side {
 #[derive(clap::Args)]
 #[command(group(clap::ArgGroup::new("mode").args(["distribute", "ground", "snap"])))]
 pub(super) struct Args {
-    #[arg(value_name = "recipe", help = "The recipe or .pfx to write")]
+    #[arg(value_name = "recipe", help = "The recipe or .pitofx to write")]
     pub(super) recipe: String,
     #[arg(
         value_name = "object",

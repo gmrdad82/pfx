@@ -145,7 +145,7 @@ impl Gather<'_> {
             let shown = format!("{at}{name}");
             let Ok(inner) = Reader::from_bytes(bytes) else {
                 self.problems
-                    .push(format!("{shown}: an embedded .pfx that cannot be read"));
+                    .push(format!("{shown}: an embedded .pitofx that cannot be read"));
                 continue;
             };
             if let Ok(record) = Record::from_reader(&inner) {
@@ -176,7 +176,7 @@ impl Gather<'_> {
                     .rsplit('/')
                     .next()
                     .unwrap_or(name)
-                    .trim_end_matches(".pfx")
+                    .trim_end_matches(".pitofx")
                     .to_string();
                 let label = field(&fields, "name").unwrap_or(stem);
                 self.add(
@@ -250,10 +250,10 @@ mod tests {
         );
         let bytes = scene(
             &[
-                ("assets/sky/asset.pfx", record_pfx(&sky)),
+                ("assets/sky/asset.pitofx", record_pfx(&sky)),
                 ("assets/sky/sky_01_1k.hdr", hdr),
                 (
-                    "library/prop/vase.pfx",
+                    "library/prop/vase.pitofx",
                     model_pfx("name = \"vase\"\nlicence = \"CC0-1.0\"\nauthor = \"V. Potter\"\n"),
                 ),
                 ("textures/own.png", b"png".to_vec()),
@@ -285,7 +285,7 @@ mod tests {
     fn unlicensed_assets_are_refused_by_name() {
         let bytes = scene(
             &[(
-                "library/prop/mystery.pfx",
+                "library/prop/mystery.pitofx",
                 model_pfx("name = \"mystery\"\n"),
             )],
             "[provenance.chair]\nlicence = \"\"\n[provenance.lamp]\nlicence = \"Free\"\n",
@@ -306,14 +306,14 @@ mod tests {
         assert!(
             problems
                 .iter()
-                .any(|p| p.contains("library/prop/mystery.pfx: unlicensed"))
+                .any(|p| p.contains("library/prop/mystery.pitofx: unlicensed"))
         );
     }
 
     #[test]
     fn the_same_credit_used_twice_is_listed_once() {
         let a = model_pfx("name = \"tile\"\nlicence = \"CC0-1.0\"\ncredit = \"Tile, CC0\"\n");
-        let bytes = scene(&[("a.pfx", a.clone()), ("b/a.pfx", a)], "");
+        let bytes = scene(&[("a.pitofx", a.clone()), ("b/a.pitofx", a)], "");
         let reader = Reader::from_bytes(&bytes).unwrap();
         let credits = gather(&reader, &[]).unwrap();
         assert_eq!(credits.len(), 1);

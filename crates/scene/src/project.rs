@@ -97,10 +97,19 @@ fn discover(
             discover(root, &relative, skip, out, pfx_files);
         } else if kind.is_file() && FileKind::of(&relative).is_some() {
             out.push(relative);
-        } else if kind.is_file() && relative.extension().is_some_and(|end| end == "pfx") {
+        } else if kind.is_file()
+            && pfx_file::is_file_path(&relative)
+            && !holds_a_recipe(&root.join(&relative))
+        {
             pfx_files.push(relative);
         }
     }
+}
+
+fn holds_a_recipe(file: &Path) -> bool {
+    pfx_file::Reader::open(file).is_ok_and(|reader| {
+        reader.find(pfx_file::RCPE).is_some() && reader.find(pfx_file::SMET).is_none()
+    })
 }
 
 impl Project {
@@ -1184,7 +1193,12 @@ impl<'p> Checker<'p> {
             FileKind::Project => {
                 if let Some(project) = &doc.project {
                     if let Some(scene) = &project.scene {
-                        self.asset(file, &key(&["project", "scene"]), scene, &[".scene.toml"]);
+                        self.asset(
+                            file,
+                            &key(&["project", "scene"]),
+                            scene,
+                            &[".scene.toml", ".pitofx"],
+                        );
                     }
                     for (place, raw) in project.ignore.iter().enumerate() {
                         let path = key(&["project", "ignore", &place.to_string()]);
@@ -1253,7 +1267,7 @@ impl<'p> Checker<'p> {
                         &under(&path, &["file".into()]),
                         code::MISSING_FILE,
                         format!(
-                            "{GLTF_PATH} names the glTF inside the scene's .pfx, and this scene is not in a .pfx that holds one"
+                            "{GLTF_PATH} names the glTF inside the scene's .pitofx, and this scene is not in a .pitofx that holds one"
                         ),
                     );
                 }

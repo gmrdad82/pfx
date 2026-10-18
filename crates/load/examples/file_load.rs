@@ -54,8 +54,8 @@ fn main() {
     for (name, rings) in [("car", 200u32), ("scene", 1000)] {
         let glb = plain_glb(name, rings);
         let glb_path = out.join(format!("{name}.glb"));
-        let lz4_path = out.join(format!("{name}.pfx"));
-        let store_path = out.join(format!("{name}.store.pfx"));
+        let lz4_path = out.join(format!("{name}.pitofx"));
+        let store_path = out.join(format!("{name}.store.pitofx"));
         std::fs::write(&glb_path, &glb).expect("write glb");
         std::fs::write(&lz4_path, pfx_from_glb(&glb, &[], true)).expect("write pfx");
         std::fs::write(&store_path, pfx_from_glb(&glb, &[], false)).expect("write pfx");

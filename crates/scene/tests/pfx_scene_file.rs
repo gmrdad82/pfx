@@ -60,7 +60,7 @@ fn a_pfx_scene_resolves_checks_and_edits_in_place_keeping_other_chunks() {
         writer = writer.copy(&original, index).unwrap();
     }
     let game = Folder::empty("pfx-edit");
-    let file = game.root.join("room.pfx");
+    let file = game.root.join("room.pitofx");
     writer.write(&file).unwrap();
     let before = std::fs::read(&file).unwrap();
 
@@ -132,7 +132,7 @@ fn broken_pfx_scenes_are_refused() {
     let game = Folder::empty("pfx-broken");
     let cases: [(&str, Vec<u8>); 4] = [
         (
-            "no-meta.pfx",
+            "no-meta.pitofx",
             Writer::new()
                 .named(
                     SCNE,
@@ -144,7 +144,7 @@ fn broken_pfx_scenes_are_refused() {
                 .unwrap(),
         ),
         (
-            "newer.pfx",
+            "newer.pitofx",
             Writer::new()
                 .chunk(
                     SMET,
@@ -161,7 +161,7 @@ fn broken_pfx_scenes_are_refused() {
                 .unwrap(),
         ),
         (
-            "no-entry.pfx",
+            "no-entry.pitofx",
             Writer::new()
                 .chunk(
                     SMET,
@@ -177,7 +177,7 @@ fn broken_pfx_scenes_are_refused() {
                 .to_vec()
                 .unwrap(),
         ),
-        ("cut.pfx", b"PFXFILE\0\x01\0\0\0".to_vec()),
+        ("cut.pitofx", b"PFXFILE\0\x01\0\0\0".to_vec()),
     ];
     for (name, bytes) in cases {
         let file = game.root.join(name);
@@ -198,17 +198,17 @@ fn broken_pfx_scenes_are_refused() {
             b"format = 1\n\n[mesh.car]\nfile = \"@gltf\"\nnode = \"Body\"\n".as_slice(),
             Codec::Store,
         );
-    let without = game.root.join("sub/no-gltf.pfx");
+    let without = game.root.join("sub/no-gltf.pitofx");
     std::fs::create_dir_all(without.parent().unwrap()).unwrap();
     gltf.write(&without).unwrap();
     let found = Project::open_pfx(&without).unwrap().check();
     assert!(
         found
             .iter()
-            .any(|d| d.code == "missing-file" && d.file == Path::new("no-gltf.pfx/a.scene.toml")),
+            .any(|d| d.code == "missing-file" && d.file == Path::new("no-gltf.pitofx/a.scene.toml")),
         "{found:?}"
     );
-    let with = game.root.join("sub/gltf.pfx");
+    let with = game.root.join("sub/gltf.pitofx");
     gltf.chunk(GLTF, b"{}".as_slice(), Codec::Store)
         .write(&with)
         .unwrap();
@@ -236,4 +236,25 @@ fn broken_pfx_scenes_are_refused() {
         assert!(unpack(&linked, &out.root).is_err());
         assert!(!out.root.join("real/x.png").exists());
     }
+}
+
+#[test]
+fn a_recipe_document_beside_a_scene_is_not_checked_as_one_of_its_scenes() {
+    let folder = Folder::room("pfx-recipe-beside");
+    Writer::new()
+        .chunk(
+            RCPE,
+            b"recipe = 1\nname = \"model\"\n".as_slice(),
+            Codec::Lz4,
+        )
+        .write(folder.root.join("model.pfx"))
+        .unwrap();
+    let project = Project::open(&folder.root).unwrap();
+    let named: Vec<_> = project
+        .check()
+        .into_iter()
+        .filter(|diagnostic| diagnostic.file.ends_with("model.pfx"))
+        .map(|diagnostic| diagnostic.message)
+        .collect();
+    assert!(named.is_empty(), "{named:?}");
 }

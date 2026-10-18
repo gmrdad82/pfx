@@ -1,21 +1,21 @@
-# pfx edit
+# pfx gui
 
-`pfx edit` opens pfx's one window: `.pfx` documents (a recipe or a scene), a game's project and the start screen, in one layout of coded panels, drawn by the engine's live renderer, and Play runs the open scene with a game's WebAssembly module while you edit. Its tests run headless, its shots and clips are drawn offscreen (`docs/editor-shots.md`), and `bin/rig` captures it in a nested compositor.
+`pfx gui` opens pfx's one window: `.pitofx` documents (a recipe or a scene), a game's project and the start screen, in one layout of coded panels, drawn by the engine's live renderer, and Play runs the open scene with a game's WebAssembly module while you edit. Its tests run headless, its shots and clips are drawn offscreen (`docs/editor-shots.md`), and `bin/rig` captures it in a nested compositor.
 
 ```sh
-pfx edit                                    # the start screen: pfx's mark, live, with the picker one key away
-pfx edit samples/workshop.toml              # a recipe
-pfx edit tmp/workshop.pfx                   # a .pfx: a recipe document, or a packed scene
-pfx edit content/room.scene.toml            # a scene
-pfx edit my-game/                           # a game's project folder (it holds a project.toml)
-pfx edit samples/                           # the picker, on that folder's recipes and scenes
-pfx edit content/room.scene.toml --play tmp/play/marker.wasm
+pfx gui                                    # the start screen: pfx's mark, live, with the picker one key away
+pfx gui samples/workshop.pitofx              # a recipe
+pfx gui tmp/workshop.pitofx                   # a .pitofx: a recipe document, or a packed scene
+pfx gui content/room.scene.toml            # a scene
+pfx gui my-game/                           # a game's project folder (it holds a project.toml)
+pfx gui samples/                           # the picker, on that folder's recipes and scenes
+pfx gui content/room.scene.toml --play tmp/play/marker.wasm
 my-game edit                                # a game made by pfx new: the same window, F5 plays the game
 ```
 
-**`.pfx` is the document.** What the window saves is a `.pfx` (pfx-file: the `PFXFILE` magic, a chunk table, each chunk checksummed and LZ4-compressed or stored; never a zip or any open archive), and its TOML is edited only in the window: in the inspector, the properties panel, or the built-in TOML panel with its highlighting. Opening a `.toml` (an old recipe or a `.scene.toml`) imports it once into a `.pfx` beside it (`desk.toml` becomes `desk.pfx`, `room.scene.toml` `room.pfx`), and the window edits the `.pfx` from then on, never the `.toml`; a `.pfx` already beside it is opened instead. A scene `.pfx` takes every edit in place; a recipe `.pfx` keeps its edits aside, ● after its name, until Ctrl+S writes them into it. Save and Save As write `.pfx` only (the start screen's Save asks for a name, as Save As does), the recent list keeps `.pfx` files, and import and export mean glTF (`.glb`). The offscreen `--shot` and `--clip` read a `.toml` where it is and write nothing beside it.
+**`.pitofx` is the document.** What the window saves is a `.pitofx` (pfx-file: the `PFXFILE` magic, a chunk table, each chunk checksummed and LZ4-compressed or stored; never a zip or any open archive), and its TOML is edited only in the window: in the inspector, the properties panel, or the built-in TOML panel with its highlighting. Opening a `.toml` (an old recipe or a `.scene.toml`) imports it once into a `.pitofx` beside it (`desk.toml` becomes `desk.pitofx`, `room.scene.toml` `room.pitofx`), and the window edits the `.pitofx` from then on, never the `.toml`; a `.pitofx` already beside it is opened instead. A scene `.pitofx` takes every edit in place; a recipe `.pitofx` keeps its edits aside, ● after its name, until Ctrl+S writes them into it. Save and Save As write `.pitofx` only (the start screen's Save asks for a name, as Save As does), the recent list keeps `.pitofx` files, and import and export mean glTF (`.glb`). The offscreen `--shot` and `--clip` read a `.toml` where it is and write nothing beside it.
 
-What it opens is told from the path: a folder with a `project.toml` is a project, any other folder the picker; a `*.scene.toml`, a TOML file that is not a recipe, or a `.pfx` with no recipe inside is a scene; anything else is a recipe (a path that is not there yet included, as before). Its flags:
+What it opens is told from the path: a folder with a `project.toml` is a project, any other folder the picker; a `*.scene.toml`, a TOML file that is not a recipe, or a `.pitofx` with no recipe inside is a scene; anything else is a recipe (a path that is not there yet included, as before). Its flags:
 
 | Flag | Does |
 |---|---|
@@ -25,7 +25,7 @@ What it opens is told from the path: a folder with a `project.toml` is a project
 | `--shot <png>`, `--size WxH`, `--input <script>`, `--fake`, `--fixture <name>`, `--start`, `--bare`, `--strip` | draw one frame offscreen, after a script of keys and clicks (`docs/editor-shots.md`) |
 | `--clip <dir>`, `--tape <file>`, `--fps <30\|60\|120>`, `--poster`, `--frames`, `--scale`, `--framed`, `--window WxH`, `--json` | film the window playing a tape (`docs/editor-shots.md`) |
 
-Input it cannot parse gets clap's short answer and exits 2; a refusal after a parse (`pfx edit: tmp/x.wasm: no such module file`) is one line and exits 1.
+Input it cannot parse gets clap's short answer and exits 2; a refusal after a parse (`pfx gui: tmp/x.wasm: no such module file`) is one line and exits 1.
 
 The window is the crate `pfx-workbench` (`crates/workbench`), behind the root package's `editor` feature, a default one, so the installed pfx has it. Under it, `pfx-editor` (`crates/editor`) is the scene editor's data layer: `SceneEdit`, the inspect patch, the undo history, the level tools and Play. The library crates apps link never pull egui or winit: apps build the engine with its default features off, and no engine library depends on either crate.
 
@@ -48,7 +48,7 @@ The window is a grid of coded panels; a key jumps focus to a code (`b` then `1` 
 
 | Code | Panel | Holds |
 |---|---|---|
-| A | the top bar | the File menu (open, save, save as `.pfx`, import and export glTF), the tabs that jump to B1, B2, B3 and C3, and the search field (`/`) |
+| A | the top bar | the File menu (open, save, save as `.pitofx`, import and export glTF), the tabs that jump to B1, B2, B3 and C3, and the search field (`/`) |
 | B1 | outliner | the recipe's objects and routes, or the scene's outliner |
 | B2 | cameras | the cameras; set one from the view, add one, delete one |
 | B3 | lights & sky | the lights, the sun and the sky, the hour slider |
@@ -61,7 +61,7 @@ Every control acts: a test clicks every control the shell draws, in every state 
 
 **Recipes** are edited as `docs/editor-recipes.md` says: every gesture is written back into the recipe at once, with its comments kept, on its own undo stack; cameras and renders in `docs/editor-cameras.md`, the gizmos and handles in `docs/editor-gizmos.md`, and the guide in `docs/editor-window.md`.
 
-**Scenes** (a scene file, a packed `.pfx` scene, a project, a game) are edited through pfx-editor, inside the same panels: "Scenes in the window" below.
+**Scenes** (a scene file, a packed `.pitofx` scene, a project, a game) are edited through pfx-editor, inside the same panels: "Scenes in the window" below.
 
 **The start screen** is a recipe of the window's own (`crates/workbench/start/start.toml`): pfx's mark and wordmark from `assets/marks/`, the version of the binary that drew it, on the theme's black, with the mark selected; `docs/editor-recipes.md`, "The start scene".
 
@@ -92,7 +92,7 @@ Play runs the open scene as a game, and with a module, as that game: the module'
 
 The editor runs on five crates of pfx's own, `crates/editor-*`, which the window and pfx-editor share, so they look and work alike; `docs/editor-crates.md` says what each holds and how an editor outside this repository takes them. pfx-editor takes all five by path, and pfx-theme takes `pfx-editor-style`, so the workspace holds one `Theme` type and every widget finds the theme pfx installs.
 
-| Crate | What pfx edit takes from it |
+| Crate | What pfx gui takes from it |
 |---|---|
 | `pfx-editor-style` | the `Theme` every widget paints from (pfx brings its own, below); the header, keycap, pill and number widgets |
 | `pfx-editor-shell` | the `App` trait, the window host, the file watch, the pgpu watch, the typed input script and the offscreen shot harness |
@@ -130,7 +130,7 @@ It follows one reference: a black ground (`#0D0E0E`) with no blue anywhere, thin
 The metrics are the editor crates' usual ones (code 11, small 12, body 13, heading 16, title 20; radius 2, markers fully round, hairline stroke 1, slider rail 4, row 19), so a theme change moves no widget.
 
 **Type.**
-- Titles (`pfx edit`, the panel headers) are Jost at weight 300, uppercase, tracked 0.3 em (`Caps` with egui's `extra_letter_spacing`).
+- Titles (`pfx gui`, the panel headers) are Jost at weight 300, uppercase, tracked 0.3 em (`Caps` with egui's `extra_letter_spacing`).
 - Data labels (the inspector's keys, the outliner's sections, the headers' notes) are Jost at weight 420, uppercase, tracked 0.12 em. egui 0.36 reads variable fonts, so one `Jost[wght].ttf` gives both weights: the display face's `FontTweak` sets 300 and the labels' `TextFormat::coords` set 420.
 - Everything else is JetBrains Mono: values and units, the log, a file's text, the keycaps and pills.
 - The icon face sits last in every family, so icon glyphs draw beside any text.
@@ -142,7 +142,7 @@ The metrics are the editor crates' usual ones (code 11, small 12, body 13, headi
 
 ## The host
 
-`Workbench` (`crates/workbench/src/app.rs`) is the shell's `App`, and `pfx edit` hands it to `pfx_editor_shell::window`; `<game> edit` hands it the same way through `pfx_workbench::run_project(folder, factory, config)`. The shell owns the window, winit, egui-wgpu, redraw on demand and the file watch. The workbench holds the window's `Shell` (the panels, `crates/workbench/src/shell.rs`), a `Viewer` for a recipe (its build and stage, off the UI thread), and for a scene, or a recipe while it plays, a pfx-editor `Session`, to which it hands its calls:
+`Workbench` (`crates/workbench/src/app.rs`) is the shell's `App`, and `pfx gui` hands it to `pfx_editor_shell::window`; `<game> edit` hands it the same way through `pfx_workbench::run_project(folder, factory, config)`. The shell owns the window, winit, egui-wgpu, redraw on demand and the file watch. The workbench holds the window's `Shell` (the panels, `crates/workbench/src/shell.rs`), a `Viewer` for a recipe (its build and stage, off the UI thread), and for a scene, or a recipe while it plays, a pfx-editor `Session`, to which it hands its calls:
 
 - `name` is `pfx` (the window title, the stderr tag and the pgpu job name), and `label` the open file, so the title reads `pfx · workshop.toml`, `pfx · room.scene.toml` or, in a project, `pfx · my-game · first.scene.toml`.
 - `frame` draws the recipe's stage, or runs the session's frame; `watched`, `changed`, `waker`, `opened`, `pgpu`, `timing` and `forget` go to whichever holds the open file.
@@ -165,7 +165,7 @@ The session keeps what is the scene editor's own:
 | `pgpu status --json` every second | the shell's pgpu watch | tells the session `Free`, `Play` or `Queued` |
 | `pgpu status --json` every 3 s | pfx's status line (`pgpu.rs`), read through the editor crates' `pgpu::fetch` | the log's `gpu 42% · 2 queued · …` line |
 
-The shell's watch says `Play` whenever any game is in front, the editor's own play included. The session decides what that means: a `Play` that arrives while the editor is not playing is another game, and the viewport waits (the session hands the editor crates' viewport `Pgpu::Play`, so it draws no live frames and shows its "paused while a game plays" notice; no trace samples; the log says `pgpu: a game is playing; the viewport waits`) until the watch says otherwise. While the editor plays, `Play` is its own and nothing waits, and pressing play takes the viewport out of a wait. `PFX_EDIT_PGPU=off` turns off the status line and the wait; the shell's read-only watch still runs. They are also off when no `pgpu` is on `PATH`, so a stranger's `pfx edit` or `<game> edit` never tries to spawn a tool they don't have.
+The shell's watch says `Play` whenever any game is in front, the editor's own play included. The session decides what that means: a `Play` that arrives while the editor is not playing is another game, and the viewport waits (the session hands the editor crates' viewport `Pgpu::Play`, so it draws no live frames and shows its "paused while a game plays" notice; no trace samples; the log says `pgpu: a game is playing; the viewport waits`) until the watch says otherwise. While the editor plays, `Play` is its own and nothing waits, and pressing play takes the viewport out of a wait. `PFX_EDIT_PGPU=off` turns off the status line and the wait; the shell's read-only watch still runs. They are also off when no `pgpu` is on `PATH`, so a stranger's `pfx gui` or `<game> edit` never tries to spawn a tool they don't have.
 
 ## Scenes in the window
 
@@ -193,9 +193,9 @@ Ctrl+Z and Ctrl+Shift+Z (or Ctrl+Y) undo and redo on the scene's one history fro
 
   Each row shows the file that defines its item. A number is dragged or typed (click, type, Enter). A drag is one undo step. A value that is already equal writes nothing, and a ranged key is clamped (`roughness` 0 to 1). Choosing `(none)` removes the key.
 - **TOML panel** (`3 source`, in the inspector's place when a file is selected in the outliner): the editor crates' `Source` on that file's text in `Files`. Typing lands after a short pause as a text splice on the shared `History` (a run of typing is one undo step), saved as below, but only when the text parses and pfx-scene's `check` (`check.rs`, `SceneCheck`, which runs `pfx_scene::check` on the buffer with the project's other files) finds no error; until then the problems are underlined and listed under the text at line and column, and nothing is written. Problems of the scene's other files are listed above the text as `file:line:column: error: message`, and logged when the editor opens. A file that changed underneath an unapplied edit offers "take theirs" or "keep mine". The panel's toolbar (diff, open in `$EDITOR`) is off. Play makes it read-only.
-- **The scene camera's frame**: in a project with a screen policy (`[authoring.pfx.screen]`, `docs/projects.md`), looking through the scene's `[camera]` shows the frame the game renders, Blender-style: the policy's first aspect for the device (`screens::detect`, desktop unless a Deck or `PFX_DEVICE` says otherwise) goes to the editor crates' `Viewport::set_frame_aspect`, the view widens to fit that frame inside the panel, and the bands outside it are dimmed. The editor's own camera (C) fills the panel with no frame, and a project with no policy, or a plain `pfx edit <scene.toml>`, shows none. An invalid policy is logged and shows none. Points are projected with the editor crates' `viewport.lens()`, which follows the framed view.
+- **The scene camera's frame**: in a project with a screen policy (`[authoring.pfx.screen]`, `docs/projects.md`), looking through the scene's `[camera]` shows the frame the game renders, Blender-style: the policy's first aspect for the device (`screens::detect`, desktop unless a Deck or `PFX_DEVICE` says otherwise) goes to the editor crates' `Viewport::set_frame_aspect`, the view widens to fit that frame inside the panel, and the bands outside it are dimmed. The editor's own camera (C) fills the panel with no frame, and a project with no policy, or a plain `pfx gui <scene.toml>`, shows none. An invalid policy is logged and shows none. Points are projected with the editor crates' `viewport.lens()`, which follows the framed view.
 - **Viewport**: the editor crates' `Viewport`, drawn by pfx-live only when something changed (an edit, a reload, the camera, a resize, the selection or hover). The selection and the hovered object are highlighted through `Staged::set_override` (the theme's accent) and outlined, and no file changes for it. The gizmo's badge is top right, the axes bottom left, a notice (a broken scene, a refusal, a wait for pgpu) top left, and pfx's badges (the camera, trace, playing or paused) bottom right.
-- **Log**: edits and undo steps by their labels, refusals as `file:line: key: reason`, `SceneWatch` errors as `file:line: message` while the last good scene keeps drawing, pfx-scene's problems at open, play and stop, and the pgpu status line (load, queue, the game playing), read every 3 s. Its header row ends with the version, dim at its right end (`Editor::app`): `pfx v<version>` in `pfx edit`, and the game's name and version from its `Config` in `<game> edit`.
+- **Log**: edits and undo steps by their labels, refusals as `file:line: key: reason`, `SceneWatch` errors as `file:line: message` while the last good scene keeps drawing, pfx-scene's problems at open, play and stop, and the pgpu status line (load, queue, the game playing), read every 3 s. Its header row ends with the version, dim at its right end (`Editor::app`): `pfx v<version>` in `pfx gui`, and the game's name and version from its `Config` in `<game> edit`.
 
 ## Controls
 
@@ -309,10 +309,10 @@ T traces the scene the viewport shows from its current camera with `pfx_trace`: 
 
 ## Play mode
 
-Play runs the game exactly as its runtime does: the editor's play is pfx-game's own `Driver` and `Painter` (`docs/game.md`), the same two a game's window and `Headless` run, drawing into the play view's surface. Without a game factory (`pfx edit <scene.toml>`, `pfx edit <folder>`) the game is `SceneGame`, the default game of `pfx-play` (`docs/play.md`): movers, bodies and sounds as the scene defines them; or, when a module is chosen (the scene's `[play] module`, `--play`, the `module` button or F4, or a dropped `.wasm` file), that WebAssembly module's game on top of them ([play-modules.md](play-modules.md)). With one (`run_project`, `<game> edit`, `docs/projects.md`) it is the game's own logic, a fresh game from the factory at each F5.
+Play runs the game exactly as its runtime does: the editor's play is pfx-game's own `Driver` and `Painter` (`docs/game.md`), the same two a game's window and `Headless` run, drawing into the play view's surface. Without a game factory (`pfx gui <scene.toml>`, `pfx gui <folder>`) the game is `SceneGame`, the default game of `pfx-play` (`docs/play.md`): movers, bodies and sounds as the scene defines them; or, when a module is chosen (the scene's `[play] module`, `--play`, the `module` button or F4, or a dropped `.wasm` file), that WebAssembly module's game on top of them ([play-modules.md](play-modules.md)). With one (`run_project`, `<game> edit`, `docs/projects.md`) it is the game's own logic, a fresh game from the factory at each F5.
 
 - **Play** (F5) builds a `Painter` on the play view's `Gpu` and size from the game's `Config` (its fonts, icons, sprites, environment, exposure, filter, render scale and budget; without a game, a config named after the project with its screen policy), stages the edited scene on the painter's own renderer beside the editor crates', and starts `PlaySession::play_hooked` with `NoHooks` inside a `Driver` (pgpu has no play mode since 0.29.0, so nothing is told). The viewport shows the game's frame (its badge says game camera) with no gizmo or highlight, and the window's keys, buttons and wheel go to the game as `InputEvent`s.
-- **The frame** is `Painter::draw`, the one function pfx-game's window and `Headless` call too, so the editor and the runtime cannot draw differently: the bars or the backdrop, the framed view (the 3D frame, or a flat game's clear colour), `Game::paint`, then `Game::ui` (draws, labels, prompts, groups, icons, sprites, the look and the backdrop) laid out for the play view, then the HUD. The play view fits the game's screen policy (`Config::screen`; without a game, the project's `[authoring.pfx.screen]`), so a 16:9 game in a wider panel plays pillarboxed in its own frame, at the layout its window would have; a plain `pfx edit <scene.toml>`, or a project with no policy, fills the panel. The settings the game keeps (`Game::settings`, or the config's) apply as in its window: volumes to the mixer, binds to the action map.
+- **The frame** is `Painter::draw`, the one function pfx-game's window and `Headless` call too, so the editor and the runtime cannot draw differently: the bars or the backdrop, the framed view (the 3D frame, or a flat game's clear colour), `Game::paint`, then `Game::ui` (draws, labels, prompts, groups, icons, sprites, the look and the backdrop) laid out for the play view, then the HUD. The play view fits the game's screen policy (`Config::screen`; without a game, the project's `[authoring.pfx.screen]`), so a 16:9 game in a wider panel plays pillarboxed in its own frame, at the layout its window would have; a plain `pfx gui <scene.toml>`, or a project with no policy, fills the panel. The settings the game keeps (`Game::settings`, or the config's) apply as in its window: volumes to the mixer, binds to the action map.
 - **Keycap labels** follow the player's layout as a game's window does (`docs/game.md`, `docs/input.md`). The play's `Driver` gets a `LayoutSource`: the game's `Config::layout` when it sets one (taken once when the session opens a game and shared by every play), else `WindowsLayout` on Windows, and none elsewhere. Where there is none, the editor learns each label from egui's key events: a key press that carries a physical key, followed by the text it typed, goes to `KeyLabels::learn`, the same call `pfx_input::winit::learn` makes for winit's events, so the caps follow the layout in the same way (Q reads A under AZERTY). A chord (Ctrl or Alt held), a repeat, an event with no physical key, and a shifted key that is not a letter teach nothing. The learned labels are kept for the session, so the next F5 starts with them.
 - **Warm-up:** before the first frame each play runs `Game::warm` through pfx-game's `Warmup`, one call a pass until `Done` or the config's `warm_budget` (measured on play's clock), and nothing new shows until it is done; the viewport keeps its last frame meanwhile. Play's clock starts at the pass the warm-up finishes, so the first frame advances by that pass's time step and the warm-up makes no catch-up ticks. The painter waits for each frame (`Painter::wait_for_frames`), so auto exposure meters every frame and a script plays the same pixels every run; a game's window pipelines its frames instead.
 - **A flat game** (`Config::flat()`, or a project with `[authoring.pfx] flat = true`) plays on an empty world (`Scene::empty()`, no tunables or rigs read), with no 3D pass and nothing staged, whatever scene the editor shows, as its window would.
@@ -368,4 +368,4 @@ Points are `x y` in points. pfx adds named points: `script::place` replaces each
 
 ## bin/rig
 
-`bin/rig` runs `pfx edit` on the rig contract, a headless cage, a private `/tmp` under `tmp/rig-<name>/`, muted, on a copy of the file's folder: `docs/editor-rig.md`.
+`bin/rig` runs `pfx gui` on the rig contract, a headless cage, a private `/tmp` under `tmp/rig-<name>/`, muted, on a copy of the file's folder: `docs/editor-rig.md`.

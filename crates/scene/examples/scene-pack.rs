@@ -3,8 +3,8 @@ use std::process::ExitCode;
 
 use pfx_scene::{Project, pack, unpack};
 
-const USAGE: &str = "usage: scene-pack <scene.toml> <out.pfx>
-       scene-pack --unpack <file.pfx> <folder>";
+const USAGE: &str = "usage: scene-pack <scene.toml> <out.pitofx>
+       scene-pack --unpack <file.pitofx> <folder>";
 
 fn run(args: &[String]) -> Result<String, String> {
     match args {

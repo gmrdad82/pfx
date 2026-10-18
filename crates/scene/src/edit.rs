@@ -1416,7 +1416,7 @@ impl SceneEdit {
         let path = path.as_ref();
         let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
         let root = Project::root_of(&absolute);
-        let pfx = if absolute.extension().is_some_and(|end| end == "pfx") && absolute.is_file() {
+        let pfx = if pfx_file::is_file_path(&absolute) && absolute.is_file() {
             Some(absolute.clone())
         } else {
             crate::mount::pfx_of(&absolute).map(|(pfx, _)| pfx)

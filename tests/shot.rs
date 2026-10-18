@@ -181,6 +181,16 @@ fn folder(name: &str) -> PathBuf {
     }
     std::fs::write(folder.join("rig.glb"), rig_glb()).unwrap();
     std::fs::write(folder.join("shot.scene.toml"), SCENE).unwrap();
+    let imported = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .args(["scene", "migrate"])
+        .arg(folder.join("shot.scene.toml"))
+        .output()
+        .unwrap();
+    assert!(
+        imported.status.success(),
+        "{}",
+        String::from_utf8_lossy(&imported.stderr)
+    );
     folder
 }
 
@@ -192,7 +202,7 @@ fn shot_of(folder: &Path, out: &str, range: &[&str], extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pfx"))
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .arg("shot")
-        .arg(folder.join("shot.scene.toml"))
+        .arg(folder.join("shot.pitofx"))
         .args(range)
         .args(["--size", "64x64", "--fps"])
         .arg(FPS.to_string())
@@ -220,6 +230,27 @@ fn frames(dir: &Path) -> Vec<Vec<u8>> {
     (0..4)
         .map(|index| std::fs::read(dir.join(format!("{index:06}.png"))).unwrap())
         .collect()
+}
+
+#[test]
+fn a_plain_scene_toml_is_refused_with_the_import_it_needs() {
+    let folder = folder("plain");
+    let output = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .arg("shot")
+        .arg(folder.join("shot.scene.toml"))
+        .args(["--frames", "1", "--size", "64x64", "--out"])
+        .arg(folder.join("out"))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(
+        stderr.contains("is a plain TOML file; import it once with `pfx scene migrate"),
+        "{stderr}"
+    );
+    assert!(folder.join("shot.pitofx").is_file());
+    assert!(!folder.join("out").exists());
 }
 
 #[test]

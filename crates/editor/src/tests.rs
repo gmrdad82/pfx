@@ -696,6 +696,23 @@ fn the_mute_button_and_key_toggle_mute_for_the_session() {
     assert!(editor.muted);
 }
 
+fn laid_out(root: &Path) {
+    let pfx = root.join(pfx_project::scaffold::DOCUMENT);
+    let bytes = fs::read(&pfx).unwrap();
+    pfx_scene::unpack(&bytes, root).unwrap();
+    fs::remove_file(&pfx).unwrap();
+    let manifest = root.join("project.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        text.replace(
+            pfx_project::scaffold::DOCUMENT,
+            pfx_project::scaffold::SCENE,
+        ),
+    )
+    .unwrap();
+}
+
 pub fn project_copy(name: &str) -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let root = manifest.join("../../tmp/editor-tests").join(name);
@@ -703,6 +720,7 @@ pub fn project_copy(name: &str) -> PathBuf {
     fs::create_dir_all(&root).unwrap();
     let root = std::path::absolute(root).unwrap();
     pfx_project::scaffold("sample-game", &root, "0.0.0").unwrap();
+    laid_out(&root);
     let first = fs::read_to_string(root.join("content/first.scene.toml")).unwrap();
     let second: String = first
         .lines()

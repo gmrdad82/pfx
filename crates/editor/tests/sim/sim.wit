@@ -1,0 +1,13 @@
+package test:sim@1.0.0;
+
+interface sim {
+  new: func(seed: u64);
+  step: func(order: u32) -> list<u32>;
+  snapshot: func() -> list<u8>;
+}
+
+world game {
+  export sim;
+  export save: func() -> list<u8>;
+  export restore: func(state: list<u8>);
+}

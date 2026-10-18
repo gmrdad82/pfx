@@ -11,6 +11,7 @@ mod lobes;
 mod material;
 mod math;
 mod noise;
+mod pavement;
 mod wet;
 mod wgsl;
 
@@ -31,7 +32,7 @@ pub use film::{
     FILM_EDGE, FILM_NU, FILM_SAMPLES, FILM_STEP, FILM_WEIGHTS, conductor_ior, film_conductor,
     film_dielectric, film_wavelengths,
 };
-pub use kinds::{CoatWobble, Crinkle, Fibre, Grime, PlankWood, Scratch, WallMottle};
+pub use kinds::{CoatWobble, Crack, Crinkle, Fibre, Grime, PlankWood, Scratch, Track, WallMottle};
 pub use library::{FIXTURE, Library};
 pub use lobes::{
     Anisotropy, Fabric, SHEEN_ROUGHNESS_FLOOR, SHEEN_TABLE, SHEEN_TABLE_SIDE, Scatter, Textures,
@@ -46,6 +47,7 @@ pub use noise::{
     Hash, fbm3, fbm3_filtered, flow, hash2, hash3, hash21, noise2, octave_weight, pcg,
     value_noise2_signed, value_noise3, value_noise3_gradient,
 };
+pub use pavement::{crack, plane, track, voronoi_edge2};
 pub use wet::{
     PORE_SPAN, PORE_START, PUDDLE_EDGE, PUDDLE_FLAT, PUDDLE_MEDIAN, PUDDLE_OCTAVES,
     PUDDLE_SCALE_MIN, PUDDLE_SPREAD, Soaked, WATER_ROUGHNESS, WET_DARKEST, Wet, puddle, soak,

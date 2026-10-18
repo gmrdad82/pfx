@@ -317,6 +317,125 @@ impl CoatWobble {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Crack {
+    pub cell: f32,
+    pub width: f32,
+    pub warp: f32,
+    pub warp_frequency: f32,
+    pub density: f32,
+    pub spread: f32,
+    pub darkness: f32,
+    pub roughness: f32,
+    pub randomness: f32,
+}
+
+impl Crack {
+    pub const SAMPLE: Self = Self {
+        cell: 1.6,
+        width: 0.006,
+        warp: 0.18,
+        warp_frequency: 1.5,
+        density: 0.45,
+        spread: 0.15,
+        darkness: 0.6,
+        roughness: 0.95,
+        randomness: 1.0,
+    };
+
+    pub fn layer(self, amplitude: f32, seed: u32) -> NoiseLayer {
+        layer(NoiseKind::Crack, self.params(), amplitude, seed)
+    }
+
+    pub fn params(self) -> [f32; PARAMS] {
+        fill(&[
+            self.cell,
+            self.width,
+            self.warp,
+            self.warp_frequency,
+            self.density,
+            self.spread,
+            self.darkness,
+            self.roughness,
+            self.randomness,
+        ])
+    }
+
+    pub fn from_params(p: &[f32; PARAMS]) -> Self {
+        Self {
+            cell: p[0],
+            width: p[1],
+            warp: p[2],
+            warp_frequency: p[3],
+            density: p[4],
+            spread: p[5],
+            darkness: p[6],
+            roughness: p[7],
+            randomness: p[8],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Track {
+    pub period: f32,
+    pub offset: f32,
+    pub gauge: f32,
+    pub band: f32,
+    pub wander: f32,
+    pub wander_frequency: f32,
+    pub streak: [f32; 2],
+    pub tint: f32,
+    pub polish: f32,
+}
+
+impl Track {
+    pub const SAMPLE: Self = Self {
+        period: 3.2,
+        offset: 1.6,
+        gauge: 0.8,
+        band: 0.3,
+        wander: 0.12,
+        wander_frequency: 0.04,
+        streak: [6.0, 0.35],
+        tint: 0.8,
+        polish: 0.75,
+    };
+
+    pub fn layer(self, amplitude: f32, seed: u32) -> NoiseLayer {
+        layer(NoiseKind::Track, self.params(), amplitude, seed)
+    }
+
+    pub fn params(self) -> [f32; PARAMS] {
+        fill(&[
+            self.period,
+            self.offset,
+            self.gauge,
+            self.band,
+            self.wander,
+            self.wander_frequency,
+            self.streak[0],
+            self.streak[1],
+            self.tint,
+            self.polish,
+        ])
+    }
+
+    pub fn from_params(p: &[f32; PARAMS]) -> Self {
+        Self {
+            period: p[0],
+            offset: p[1],
+            gauge: p[2],
+            band: p[3],
+            wander: p[4],
+            wander_frequency: p[5],
+            streak: [p[6], p[7]],
+            tint: p[8],
+            polish: p[9],
+        }
+    }
+}
+
 fn layer(kind: NoiseKind, params: [f32; PARAMS], amplitude: f32, seed: u32) -> NoiseLayer {
     NoiseLayer::new(kind, 1.0, amplitude, seed).with_params(params)
 }
@@ -344,6 +463,8 @@ mod tests {
         assert_eq!(Grime::from_params(&counted(10)).params(), counted(10));
         assert_eq!(Scratch::from_params(&counted(4)).params(), counted(4));
         assert_eq!(CoatWobble::from_params(&counted(5)).params(), counted(5));
+        assert_eq!(Crack::from_params(&counted(9)).params(), counted(9));
+        assert_eq!(Track::from_params(&counted(10)).params(), counted(10));
     }
 
     #[test]

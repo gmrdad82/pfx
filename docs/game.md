@@ -12,7 +12,7 @@ The crate carries nothing of any game: no names, values, assets or fonts. Its te
 use pfx_game::{Config, Game, Input, Tick, World};
 
 fn main() -> std::process::ExitCode {
-    let config = Config::new("my-game", env!("CARGO_PKG_VERSION"), "content/first.scene.toml")
+    let config = Config::new("my-game", env!("CARGO_PKG_VERSION"), "content/first.pitofx")
         .font(include_bytes!("../content/fonts/ui.ttf"));
     pfx_game::launch(MyGame::new, config, |commands| {
         commands.add("run", "plays a seed headless and prints the result", run);
@@ -34,7 +34,7 @@ fn main() -> std::process::ExitCode {
 | `render_scale(f32)` | the 3D render size as a factor of the content rect | 1.0 |
 | `budget(Budget)` | dynamic resolution against a GPU budget, through the renderer's own controller | off |
 | `filter(Filter)` | the upscale filter, `Sharp` or `Nearest` (pixel art) | `Sharp` |
-| `exposure(Exposure)` | the 3D frame's exposure: `Exposure::Auto { bias }` meters every frame, `Exposure::Fixed(f)` holds it; `Fixed(1.0)` is the exposure pfx edit's viewport draws with | `Auto { bias: 0.0 }` |
+| `exposure(Exposure)` | the 3D frame's exposure: `Exposure::Auto { bias }` meters every frame, `Exposure::Fixed(f)` holds it; `Fixed(1.0)` is the exposure pfx gui's viewport draws with | `Auto { bias: 0.0 }` |
 | `font(bytes)` | a font the UI's labels use; the first is the default, more can follow | none |
 | `pads(Pads)` | `Pads::Gilrs`, `Pads::None` or `Pads::Backend(backend)`, Steam Input's included | `Gilrs` |
 | `seed(u64)` | the session's seed and the frame seed | 0 |
@@ -99,7 +99,7 @@ fn tick(&mut self, world: &mut World, _tick: &Tick, _input: &Input) {
 
 **The frame.** In order: the bars or the backdrop, the framed view (the 3D frame, or a flat game's clear colour), the game's own paint (`Game::paint`, below), the game's UI and the dev HUD. The scene is drawn by the live renderer at the render size into a reused texture as large as the renderer's targets; `pfx_live::upscale` draws that rect into the window inside the content rect with the policy's bars, and the game's UI is drawn by the upscale's flat pass at the window's native size over it, so text and UI stay crisp at any 3D scale. The render size is the content rect times the render scale, or, with a budget, what dynamic resolution chose: the renderer's viewport inside targets allocated at the content size, so a scale step reallocates nothing and keeps the TAA history (`docs/screens.md`, "Viewport dynamic resolution").
 
-**The colour path.** The renderer's `Rgba16Float` frame holds sRGB-encoded values (its finish chain ends with `Encode`), and the window's surface is sRGB, which encodes in hardware. The upscale decodes the frame once before writing it (`Compose::source_format`, `docs/screens.md`, "The colour path"), the bars are decoded the same way, and the UI's flat pass writes linear values, so everything reaches the window encoded once. At render scale 1 and a fixed exposure a game's window, the renderer's own `Rgba8UnormSrgb` output and pfx edit's viewport agree within 1/255 (`crates/editor/tests/colour.rs`, which renders one flat-backed neutral scene all three ways and also reads the editor's offscreen shot).
+**The colour path.** The renderer's `Rgba16Float` frame holds sRGB-encoded values (its finish chain ends with `Encode`), and the window's surface is sRGB, which encodes in hardware. The upscale decodes the frame once before writing it (`Compose::source_format`, `docs/screens.md`, "The colour path"), the bars are decoded the same way, and the UI's flat pass writes linear values, so everything reaches the window encoded once. At render scale 1 and a fixed exposure a game's window, the renderer's own `Rgba8UnormSrgb` output and pfx gui's viewport agree within 1/255 (`crates/editor/tests/colour.rs`, which renders one flat-backed neutral scene all three ways and also reads the editor's offscreen shot).
 
 ## Clipboard
 
@@ -123,7 +123,7 @@ if input.action("paste").pressed && let Some(text) = world.clipboard_text() {
 
 ## The trait
 
-`pfx_play::Game` grew hooks with defaults (`ui`, `warm`, `paint`, `settings` and `modules`), so `PlaySession`, `SceneGame` and `pfx edit` are unchanged:
+`pfx_play::Game` grew hooks with defaults (`ui`, `warm`, `paint`, `settings` and `modules`), so `PlaySession`, `SceneGame` and `pfx gui` are unchanged:
 
 ```rust
 pub trait Game {
@@ -196,7 +196,7 @@ The renderer is the runtime's own: `renderer.gpu()` gives the device and queue f
 
 ### Warm-up
 
-`Game::warm(warm)` runs before the first visible frame (pfx-game's `Warmup`, one `pass` a turn of the loop, which the window and pfx edit's play share), with nothing presented until it is done. It returns `Warming::Done`, or `Warming::More` to be called again on the next turn of the loop (the window keeps answering its events between calls). The runtime stops calling it at `Done` or once `Config::warm_budget` has passed since the first call, and only then draws the first frame. The `Warm` handle:
+`Game::warm(warm)` runs before the first visible frame (pfx-game's `Warmup`, one `pass` a turn of the loop, which the window and pfx gui's play share), with nothing presented until it is done. It returns `Warming::Done`, or `Warming::More` to be called again on the next turn of the loop (the window keeps answering its events between calls). The runtime stops calling it at `Done` or once `Config::warm_budget` has passed since the first call, and only then draws the first frame. The `Warm` handle:
 
 - `glyphs(family, weight, sizes, chars)` prefills the UI's glyph atlas for those characters at each size and the screen's pixels per unit (`TextEngine::prefill`, `docs/text.md`) and uploads the pages, returning the cells it made, so labels in those faces draw on their first frame without rasterizing;
 - `looks(&[look, …])` builds the UI's flat pass and every given look's pipelines at the window's format and size (`Upscale::warm_overlay`); pass every look the UI switches between;
@@ -207,7 +207,7 @@ Pacing ignores the warm-up: the game clock starts at the first frame, so the fir
 
 ### One frame for the window and the editor
 
-`Painter::draw(driver, output, format)` is the whole frame, and the window, `Headless` and pfx edit's play (`docs/editor.md`, "Play mode") all call it, so a game draws the same wherever it runs. The editor plays through the same `Driver` too, built with `Driver::new` around its own `PlaySession` (hooked for pgpu and recording its input), and two calls exist for it: `Driver::step()` runs one tick of a paused session (`PlaySession::step`) and lays out the UI again, as `update` does after its ticks; and `Driver::start_clock(now_ns)` sets the time the next `update` measures from, so the editor's first frame after the warm-up advances by its own pass instead of nothing. `Painter::wait_for_frames(true)` makes the painter wait for each 3D frame (`Renderer::render`) instead of pipelining it (`Renderer::submit`), so auto exposure's meter is read every frame; the editor turns it on, a game's window leaves it off.
+`Painter::draw(driver, output, format)` is the whole frame, and the window, `Headless` and pfx gui's play (`docs/editor.md`, "Play mode") all call it, so a game draws the same wherever it runs. The editor plays through the same `Driver` too, built with `Driver::new` around its own `PlaySession` (hooked for pgpu and recording its input), and two calls exist for it: `Driver::step()` runs one tick of a paused session (`PlaySession::step`) and lays out the UI again, as `update` does after its ticks; and `Driver::start_clock(now_ns)` sets the time the next `update` measures from, so the editor's first frame after the warm-up advances by its own pass instead of nothing. `Painter::wait_for_frames(true)` makes the painter wait for each 3D frame (`Renderer::render`) instead of pipelining it (`Renderer::submit`), so auto exposure's meter is read every frame; the editor turns it on, a game's window leaves it off.
 
 ### Prompts for a game's own painter
 
@@ -378,7 +378,7 @@ fn main() { pfx::adapter::serve(&mut MyAdapter::default()).unwrap() }
 - `crates/game/src/gpu_paint_tests.rs` (GPU, ignored): a flat game with no scene painting a card through `Game::paint` with its own `Upscale`, the UI's card drawn over it and the clear colour around, with the paint frame's sizes, in a 16:9 and a pillarboxed window; a wrapped, centred, two-face label in a box pixel-identical to the same label placed by hand at the measured offset, with its ink centred, on two lines, the fallback face drawn and a turned label turning about its corner; a warm-up of two passes filling the glyphs and a look's pipelines, after which the first frame uploads no glyph and makes no pipeline; and the prompt quads a game lays out equal to the runtime's, with a floored keycap widened past 160 and drawn to its right edge; and a glow, a radial additive spark over its tail and an additive disc in the UI over a dark `Ui::clear`, within 1/255 of the same draws through a flat pass cleared to that ground.
 - `crates/game/src/gpu_tests.rs` (GPU, ignored): the loop drawing the neutral world and a UI card and label into an offscreen target at 30, 60 and 120 fps, with the frames and ticks counted and the background cap on focus loss; the card at native size over the 3D world and the label's ink; a wide window's bars with the 3D at half scale and the UI still native; a 32:9 window with a striped backdrop showing it in both side regions, the frame pixel-identical to a 16:9 window's, a UI bar laid out past both sides of the layout clipped to the frame, the pointer over the sides outside, a click there firing no mouse-bound action while a click inside does, and black bars with the frame unchanged when the backdrop is empty or the policy does not ask for it; dynamic resolution dropping the render size under a tight budget; a keycap labelled in the player's layout, a PlayStation glyph, an icon, a half-opacity group with no darker overlap and the environment's colour on a bevel; with `dev-hud`, F3 showing the HUD top right of the window and hiding it again.
 
-pfx edit's play runs the same painter and driver; its tests are `crates/editor/tests/play.rs` (`docs/editor.md`, "Tests").
+pfx gui's play runs the same painter and driver; its tests are `crates/editor/tests/play.rs` (`docs/editor.md`, "Tests").
 
 ```
 cargo test -q -p pfx-game --lib

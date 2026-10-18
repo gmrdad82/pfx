@@ -105,13 +105,13 @@ loop {
 
 ## Dev HUD
 
-The same numbers on screen, for a developer playing a dev build. It is an egui panel in pfx's theme (`pfx-theme`, the colours and fonts `pfx edit` uses), drawn over the presented frame, top right, hidden at start and toggled by F3.
+The same numbers on screen, for a developer playing a dev build. It is an egui panel in pfx's theme (`pfx-theme`, the colours and fonts `pfx gui` uses), drawn over the presented frame, top right, hidden at start and toggled by F3.
 
 It shows the newest frame's `sim_ms`, `submit_ms` and `kind`, the newest resolved `gpu_ms`, its own draw cost (`hud_ms` of the last frame it drew over), a frame-time graph of the last four seconds against the 16.67 ms line, and how many frames in the graph went over it. The graph's bars are `present_interval_ms`, each as wide as its frame lasted: violet within the budget, orange over it, red over twice it.
 
 It reads the stats, never a clock of its own: the renderer keeps the last 512 frames' values in memory for it (`FrameStats::keep_recent`, `recent`), exactly the values the file's lines get, with each GPU time joined to its tick when it resolves. When `PFX_FRAME_STATS` is unset, the HUD gives the renderer a measuring handle (`FrameStats::measure()`) that keeps those values and writes no file, so a dev build pays the clock reads the stats file would.
 
-**The feature.** `pfx-live`'s `dev-hud` feature, off by default, adds `pfx_live::hud` and with it egui, egui-wgpu, `pfx-theme` and `pfx-input`. Without it, nothing of egui links into `pfx-live` (`cargo tree -p pfx-live -e features` shows none, a test checks it). A product turns it on only in its dev builds, never in a release or player build, for example with a feature of its own that enables `pfx-live/dev-hud`. `pfx-play` has the same feature and forwards it; `pfx edit` turns it on.
+**The feature.** `pfx-live`'s `dev-hud` feature, off by default, adds `pfx_live::hud` and with it egui, egui-wgpu, `pfx-theme` and `pfx-input`. Without it, nothing of egui links into `pfx-live` (`cargo tree -p pfx-live -e features` shows none, a test checks it). A product turns it on only in its dev builds, never in a release or player build, for example with a feature of its own that enables `pfx-live/dev-hud`. `pfx-play` has the same feature and forwards it; `pfx gui` turns it on.
 
 **For a game with its own loop,** the HUD is one value and two calls, the input event and the draw after the frame:
 
@@ -131,24 +131,24 @@ loop {
 
 `input` takes F3's press (once per press, however long it is held) and release and returns `true` for them; every other event returns `false`. `draw` attaches to the renderer's stats every frame, so the history is there the first time F3 shows it; while hidden it draws nothing. It lays out on the CPU, renders egui into a small sRGB canvas the size of the panel, and composites it over the output in one submission: linear into a float or sRGB output (the renderer's `Rgba16Float` included), encoded into a plain 8-bit one. The panel's scale follows the output's height (one point per pixel up to 1080 lines, two at 2160). `Hud::rect` is where it drew, in output pixels. `draw` takes the output's format and size from the renderer; `draw_on(renderer, output, format, size)` draws into any other output, such as a window's surface at the window's size after an upscale (`PlaySession::draw_hud_on`, which `pfx-game` uses).
 
-**With `pfx-play`,** `PlaySession::feed` hands F3 to the session's HUD instead of the game, and `PlaySession::draw_hud_on(&mut renderer, &output, format, size)` after the frame draws it and points the session's `sim_ms` at the stats the HUD reads. Without the feature `draw_hud_on` is an empty call, so a loop needs no `cfg`. pfx-game's `Painter::draw` calls it after each frame, in a game's window and in `pfx edit`'s play view alike, so F3 in a playing scene shows the HUD. `pfx bench` is headless and never shows it, so it leaves the HUD unwired.
+**With `pfx-play`,** `PlaySession::feed` hands F3 to the session's HUD instead of the game, and `PlaySession::draw_hud_on(&mut renderer, &output, format, size)` after the frame draws it and points the session's `sim_ms` at the stats the HUD reads. Without the feature `draw_hud_on` is an empty call, so a loop needs no `cfg`. pfx-game's `Painter::draw` calls it after each frame, in a game's window and in `pfx gui`'s play view alike, so F3 in a playing scene shows the HUD. `pfx bench` is headless and never shows it, so it leaves the HUD unwired.
 
 ## Bench
 
 `pfx bench` plays a scene headless through `pfx-play` with the stats on, so a tool that runs a target gets the same load every time and reads the engine's frame stats beside MangoHud's.
 
 ```
-pfx bench <scene.toml> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
+pfx bench <scene.pitofx> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
 ```
 
 | Flag | Meaning |
 |---|---|
-| `<scene.toml>` | the scene to play, played by `SceneGame` (movers, bodies, sound) plus the camera rig below. Required |
+| `<scene.pitofx>` | the scene to play (a `.toml` is refused, naming `pfx scene migrate`), played by `SceneGame` (movers, bodies, sound) plus the camera rig below. Required |
 | `--seconds N` | game seconds to run, above 0. The run is `ceil(N × 60)` frames, each advancing the session by exactly 1/60 s, whatever the wall clock does: a slow GPU takes longer, never plays more or fewer ticks. Required |
 | `--camera <object>` | stand the camera at the scene's object of that name, looking along its local −Z with its +Y up; the scene's `[camera]` supplies the projection, near, far and shift. Without it the scene's own `[camera]` (or the default camera) is used. The scene format has one `[camera]`, so a named camera is an object |
-| `--replay <recording.json>` | drive the camera from a recorded input stream: a `pfx_input::Recording` as JSON, fed one step per sim tick, live events ignored; `pfx edit` saves one with F9 while a scene plays, to `tmp/pfx/recordings/<scene>-<time>.json`. Without it no input arrives and the camera stays fixed |
+| `--replay <recording.json>` | drive the camera from a recorded input stream: a `pfx_input::Recording` as JSON, fed one step per sim tick, live events ignored; `pfx gui` saves one with F9 while a scene plays, to `tmp/pfx/recordings/<scene>-<time>.json`. Without it no input arrives and the camera stays fixed |
 | `--size WxH` | the offscreen target, 1 to 16384 each. Default 1920×1080 (a scene carries no size of its own) |
-| `--stats <path>` | the frame stats file, created or truncated. Default `tmp/pfx/bench/<scene>-<unix seconds>.jsonl` under the caller's git tree, `<scene>` being the file name without `.scene.toml` |
+| `--stats <path>` | the frame stats file, created or truncated. Default `tmp/pfx/bench/<scene>-<unix seconds>.jsonl` under the caller's git tree, `<scene>` being the file name without `.pitofx` or `.scene.toml` |
 | `--seed S` | a whole number, default 0: the session's seed, and the frame seed (its low 32 bits) |
 
 It opens no window: the frames present to an offscreen `Rgba16Float` target, and gamescope provides the real present when it wraps the command. It keeps pgpu's manners through `pfx_gpu::pace::Pace` (60 fps cap unless `PFX_UNCAPPED=1`, a `pgpu turn` between frames), so run it under `pgpu run --class clip --as pfx` when pgpu is installed. The frame stats file is the one in this document, written for this run's renderer and session (a `PFX_FRAME_STATS` in the environment is replaced).

@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "pfx's asset sources: search and fetch CC0 and account assets over HTTPS, check their licences, unpack them and record their licence facts in a .pfx, and build a scene's credits"
+description = "pfx's asset sources: search and fetch CC0 and account assets over HTTPS, check their licences, unpack them and record their licence facts in a .pitofx, and build a scene's credits"
 
 [dependencies]
 pfx-core = { path = "../core" }

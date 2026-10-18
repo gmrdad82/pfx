@@ -11,7 +11,7 @@ fn the_editor_edits_a_pfx_scene_in_place_and_undoes_to_the_byte() {
     let toml = scene_copy("pfx-source");
     let folder = toml.with_file_name("packed");
     fs::create_dir_all(&folder).unwrap();
-    let file = folder.join("room.pfx");
+    let file = folder.join("room.pitofx");
     pack(&toml, &file).unwrap();
     let materials = file.join("materials.toml");
     let before = held_text(&materials).unwrap().unwrap();

@@ -179,7 +179,7 @@ pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let name = path
         .file_name()
         .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
-    let temp = path.with_file_name(format!(".{name}.pfx-tmp"));
+    let temp = path.with_file_name(format!(".{name}.pitofx-tmp"));
     std::fs::write(&temp, bytes)?;
     std::fs::rename(&temp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&temp);

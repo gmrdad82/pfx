@@ -5,8 +5,8 @@ The window can be drawn offscreen, with no compositor and nothing on your deskto
 ## One frame
 
 ```sh
-pfx edit samples/workshop.toml --shot workshop.png
-pfx edit --start --shot start.png --size 1280x800
+pfx gui samples/workshop.pitofx --shot workshop.png
+pfx gui --start --shot start.png --size 1280x800
 ```
 
 `--size` sets the window (1586x992 by default). The frame shows the settled window: the scene built, the stage drawn, every panel laid out. `--bare` draws the viewport alone instead, filling the whole frame (see below).
@@ -14,15 +14,15 @@ pfx edit --start --shot start.png --size 1280x800
 `--wireframe` draws the viewport as a wireframe, `--blend <0..1>` stops part way between shaded and wireframe, and `--xray` shows the hidden edges brighter. `--clay` draws it in clay: every surface a matte grey under a soft key light and sky, no textures, emission or effects, the selection outlined in the accent colour. In the window `z` cycles shaded, clay and wireframe. They work for a recipe, with `--shot` and with `--clip`:
 
 ```sh
-pfx edit samples/chase.toml --shot clay.png --clay
-pfx edit samples/chase.toml --shot wire.png --wireframe
-pfx edit samples/chase.toml --shot half.png --wireframe --blend 0.5
+pfx gui samples/chase.pitofx --shot clay.png --clay
+pfx gui samples/chase.pitofx --shot wire.png --wireframe
+pfx gui samples/chase.pitofx --shot half.png --wireframe --blend 0.5
 ```
 
-A scene, a `.pfx` scene or a project folder shoots the same way, in the window's scene panels (`docs/editor.md`, "Scenes in the window"):
+A scene, a `.pitofx` scene or a project folder shoots the same way, in the window's scene panels (`docs/editor.md`, "Scenes in the window"):
 
 ```sh
-pfx edit crates/editor/tests/scenes/room.scene.toml --shot room.png
+pfx gui crates/editor/tests/scenes/room.scene.toml --shot room.png
 ```
 
 **Play in a shot.** `--play <module.wasm>` chooses the module, and a script presses F5 and lets frames pass; the viewport then shows the game's frame:
@@ -30,7 +30,7 @@ pfx edit crates/editor/tests/scenes/room.scene.toml --shot room.png
 ```sh
 cargo run -p pfx-game --features modules --example marker -- tmp/play/marker.wasm
 printf 'key F5\nframe\nframe\nframe\nframe\n' > tmp/play.txt
-pfx edit crates/editor/tests/scenes/room.scene.toml --play tmp/play/marker.wasm --input tmp/play.txt --shot play.png
+pfx gui crates/editor/tests/scenes/room.scene.toml --play tmp/play/marker.wasm --input tmp/play.txt --shot play.png
 ```
 
 ## Play a script first
@@ -76,12 +76,12 @@ A tape also directs the view. These steps work in `--tape` (not in `--input`). E
 | `region <x0> <y0> <x1> <y1>` / `region off` | while the view looks through a camera, shows the shaded render inside that box and the wireframe outside it; the corners are fractions of the viewport from its top left |
 | `strip off` / `strip on` | hides or shows the timeline strip under the viewport |
 
-`orbit`, `dolly`, `view` and `frame` leave a camera you are looking through and start from where it looked. A name the window can't find stops the clip with the tape's line: `pfx edit --clip: line 4: no camera chase`.
+`orbit`, `dolly`, `view` and `frame` leave a camera you are looking through and start from where it looked. A name the window can't find stops the clip with the tape's line: `pfx gui --clip: line 4: no camera chase`.
 
 In wireframe the viewport also draws, in the accent colour: every camera's frustum (its lens at the timeline's aspect, 2.5 m deep) except the one you look through, the chase camera's baked path as a line, each spot light's cone (its apex and its inner and outer rings at its range) and each point light as a small cross (accent when picked in B3), each particle emitter as 36 seeded dots along its direction and cone at its parent's pose at the clock's time, and the camera's frame as a rectangle when the view looks through a camera. With `--bare`, a camera's frame fills the whole viewport at the camera's aspect, with no margin.
 
 ```sh
-pfx edit samples/workshop.toml --input pick.txt --shot picked.png
+pfx gui samples/workshop.pitofx --input pick.txt --shot picked.png
 ```
 
 ## Film a tape
@@ -102,7 +102,7 @@ wait 1.5
 ```
 
 ```sh
-pfx edit samples/workshop.toml --clip clips --tape move.tape --poster last
+pfx gui samples/workshop.pitofx --clip clips --tape move.tape --poster last
 ```
 
 It writes three files into `clips/`, each named `<tape>-<W>x<H>-<fps>fps`: an H.264 `.master.mp4`, a `.poster.png` and a `.json` manifest (`docs/recipe-files.md`). `--fps` is 30, 60 or 120. The frames are drawn as PNGs into a staging folder, `clips/<stem>.partial/`, encoded by pito-codecs' `pcod frames` on the CPU at CRF 14, and removed; the manifest names pcod and its version. It needs `pcod` on the `PATH` and an even `--size`, and refuses in one line without them.
@@ -117,11 +117,11 @@ It writes three files into `clips/`, each named `<tape>-<W>x<H>-<fps>fps`: an H.
 - `--bare --strip` keeps the timeline bar under the viewport when the scene has a `[timeline]`, so a portrait clip shows the editor's strip: play, step, loop, chase cam and the scrubber. The viewport still starts at the frame's top left, so the tape's coordinates stay the viewport's points, with the bar below them.
 - `--scale <factor>` lays the window out at that many pixels a point, from 1 to 4: `--size 2160x3840 --scale 2` reads like the window at 1080x1920, text, panels and the pointer twice as large. The tape's coordinates stay in points.
 - `--framed` lays the window out at `--window` (1586x992 points by default) and centres it in the `--size` frame on the editor's ground, so a 9:16 film shows the real landscape window. The window is drawn at `--scale`, or at the largest scale that fits the frame when that one doesn't: with `--size 2160x3840 --scale 2` it is drawn 2160x1351, at 1.36 pixels a point, sharp, never scaled down after drawing.
-- `--json` writes one JSON line a frame on stderr, `{"stage":"frame","frame":n,"done":n+1,"total":N}`, and one line on stdout at the end, `{"stage":"done","kind":…,"frames":N,"seconds":…,"manifest":…,"files":[…]}`, with the folder (or the master and poster) and the manifest. A refusal stays one line on stderr, `pfx edit --clip: …`, exit 1.
+- `--json` writes one JSON line a frame on stderr, `{"stage":"frame","frame":n,"done":n+1,"total":N}`, and one line on stdout at the end, `{"stage":"done","kind":…,"frames":N,"seconds":…,"manifest":…,"files":[…]}`, with the folder (or the master and poster) and the manifest. A refusal stays one line on stderr, `pfx gui --clip: …`, exit 1.
 
 ```sh
-pfx edit samples/workshop.toml --clip film --tape tweak.tape --frames --size 2160x3840 --scale 2 --framed --fps 60 --json
-pfx edit samples/chase.toml --clip film --tape chase.tape --bare --size 2160x3840 --scale 2 --fps 60
+pfx gui samples/workshop.pitofx --clip film --tape tweak.tape --frames --size 2160x3840 --scale 2 --framed --fps 60 --json
+pfx gui samples/chase.pitofx --clip film --tape chase.tape --bare --size 2160x3840 --scale 2 --fps 60
 ```
 
 To make a GIF of it, [pcod](https://github.com/gmrdad82/pito-codecs) converts the master:

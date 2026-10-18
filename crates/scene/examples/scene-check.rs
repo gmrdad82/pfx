@@ -104,7 +104,7 @@ fn summary(scene: &Scene) -> String {
 fn main() -> ExitCode {
     let paint = Paint::new();
     let mut root = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| ".".into()));
-    let opened = if root.extension().is_some_and(|end| end == "pfx") {
+    let opened = if pfx_file::is_file_path(&root) {
         Project::open_pfx(&root)
     } else {
         Project::open(&root)

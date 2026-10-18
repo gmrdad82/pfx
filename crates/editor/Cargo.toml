@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "pfx edit: the engine's scene editor, on the pfx-editor-* crates"
+description = "pfx gui: the engine's scene editor, on the pfx-editor-* crates"
 
 [dependencies]
 egui = { version = "=0.36.2", default-features = false }

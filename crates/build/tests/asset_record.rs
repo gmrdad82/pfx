@@ -54,7 +54,7 @@ fn a_packed_scene_carries_the_record_of_each_fetched_asset_it_reads() {
         .map(|p| p.to_string_lossy().replace('\\', "/"))
         .collect();
     assert!(
-        names.contains(&"assets/crate/asset.pfx".to_string()),
+        names.contains(&"assets/crate/asset.pitofx".to_string()),
         "{names:?}"
     );
     assert!(

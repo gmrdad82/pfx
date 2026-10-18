@@ -72,6 +72,8 @@ pub enum NoiseKind {
     Fbm,
     Scratch,
     CoatWobble,
+    Crack,
+    Track,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

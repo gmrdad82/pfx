@@ -7,6 +7,7 @@ use egui::{Color32, Pos2, Shape, Ui};
 use pfx_editor_shell::{App, Script, context, drive, gpu_turn, shot};
 use pfx_editor_style::fixture::{self, colours};
 use pfx_editor_style::theme::{Caps, Diff, Syntax, Theme};
+use pfx_editor_style::tokens;
 use pfx_editor_style::widgets::{
     Dotted, Header, KeyCap, Number, Pill, ScaleBar, Slider, Tabs, Tone, fraction,
 };
@@ -285,36 +286,52 @@ fn shapes(theme: &Theme, board: Board, script: &Script) -> Vec<Shape> {
         .collect()
 }
 
-#[test]
-fn a_second_theme_reaches_every_widget_in_every_state() {
-    let theme = loud();
-    let ours: BTreeSet<[u8; 4]> = colours(&theme).iter().map(|c| c.to_array()).collect();
-    let fixture: BTreeSet<[u8; 4]> = colours(&fixture::theme())
-        .iter()
-        .map(|c| c.to_array())
-        .collect();
-    assert_eq!(ours.len(), colours(&theme).len());
-    assert!(ours.is_disjoint(&fixture));
+fn set(theme: &Theme) -> BTreeSet<[u8; 4]> {
+    colours(theme).iter().map(|c| c.to_array()).collect()
+}
+
+fn reaches_every_widget(theme: &Theme, foreign: &BTreeSet<[u8; 4]>) {
+    let ours = set(theme);
+    assert!(ours.is_disjoint(foreign), "{}", theme.name);
     for board in BOARDS {
         for (state, script) in states(board) {
             let mut seen = BTreeSet::new();
-            for shape in shapes(&theme, board, &script) {
+            for shape in shapes(theme, board, &script) {
                 painted(&shape, &mut seen);
             }
             let opaque: BTreeSet<[u8; 4]> = seen.iter().copied().filter(|c| c[3] == 255).collect();
             assert!(
-                seen.is_disjoint(&fixture),
-                "{board:?} {state}: {:?}",
-                seen.intersection(&fixture).collect::<Vec<_>>()
+                seen.is_disjoint(foreign),
+                "{} {board:?} {state}: {:?}",
+                theme.name,
+                seen.intersection(foreign).collect::<Vec<_>>()
             );
             assert!(
                 opaque.is_subset(&ours),
-                "{board:?} {state}: {:?}",
+                "{} {board:?} {state}: {:?}",
+                theme.name,
                 opaque.difference(&ours).collect::<Vec<_>>()
             );
-            assert!(opaque.len() >= 3, "{board:?} {state}: {opaque:?}");
+            assert!(
+                opaque.len() >= 3,
+                "{} {board:?} {state}: {opaque:?}",
+                theme.name
+            );
         }
     }
+}
+
+#[test]
+fn a_second_theme_reaches_every_widget_in_every_state() {
+    let theme = loud();
+    assert_eq!(set(&theme).len(), colours(&theme).len());
+    reaches_every_widget(&theme, &set(&fixture::theme()));
+    let game = tokens::game();
+    let foreign: BTreeSet<[u8; 4]> = set(&fixture::theme())
+        .union(&set(&tokens::theme()))
+        .copied()
+        .collect();
+    reaches_every_widget(&game, &foreign);
 }
 
 #[test]

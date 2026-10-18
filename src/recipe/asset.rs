@@ -23,7 +23,7 @@ enum AssetCommand {
     )]
     Search(SearchArgs),
     #[command(
-        about = "Download an asset, check its sha256 and licence, unpack it and record its licence facts in asset.pfx"
+        about = "Download an asset, check its sha256 and licence, unpack it and record its licence facts in asset.pitofx"
     )]
     Get(GetArgs),
     #[command(about = "List the fetched assets in pfx's cache or a folder, with their licences")]
@@ -33,7 +33,7 @@ enum AssetCommand {
     )]
     Sources(JsonArgs),
     #[command(
-        about = "Print pfx's settings as TOML, or read TOML on stdin and write them to settings.pfx"
+        about = "Print pfx's settings as TOML, or read TOML on stdin and write them to settings.pitofx"
     )]
     Settings(SettingsArgs),
 }
@@ -118,7 +118,7 @@ struct ListArgs {
 struct SettingsArgs {
     #[arg(
         long,
-        help = "Read the settings as TOML on stdin, check them and write settings.pfx"
+        help = "Read the settings as TOML on stdin, check them and write settings.pitofx"
     )]
     stdin: bool,
     #[arg(long, help = "One JSON object on stdout")]
@@ -420,7 +420,7 @@ mod tests {
             "asset list --in tmp/assets --json",
             "asset sources",
             "asset settings --stdin",
-            "credits scene.pfx --json",
+            "credits scene.pitofx --json",
         ] {
             let words: Vec<&str> = line.split_whitespace().collect();
             assert!(parsed(&words).is_ok(), "{line}");

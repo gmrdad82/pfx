@@ -11,7 +11,7 @@ use super::{check, pair, read_failure, refuse};
 #[derive(clap::Args)]
 pub(super) struct SetArgs {
     #[arg(value_name = "recipe", help = "The recipe to write")]
-    recipe: String,
+    pub(super) recipe: String,
     #[arg(
         value_name = "key=value",
         required = true,
@@ -32,7 +32,7 @@ pub(super) struct SetArgs {
 #[derive(clap::Args)]
 pub(super) struct GetArgs {
     #[arg(value_name = "recipe", help = "The recipe to read")]
-    recipe: String,
+    pub(super) recipe: String,
     #[arg(
         value_name = "key",
         required = true,

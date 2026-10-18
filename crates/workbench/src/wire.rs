@@ -982,12 +982,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "GPU: pfx build samples/chase.toml --out tmp/wire/chase, then pgpu run --class bench --as pfx -- cargo test -p pfx-workbench wire -- --ignored --nocapture"]
+    #[ignore = "GPU: pfx build samples/chase.pitofx --out tmp/wire/chase, then pgpu run --class bench --as pfx -- cargo test -p pfx-workbench wire -- --ignored --nocapture"]
     fn the_chase_street_draws_its_wireframe_in_about_two_milliseconds() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tmp/wire/chase/street.scene.toml");
         let scene = pfx_load::scene::Scene::open(&path).unwrap_or_else(|error| {
-            panic!("build samples/chase.toml into tmp/wire/chase first: {error}")
+            panic!("build samples/chase.pitofx into tmp/wire/chase first: {error}")
         });
         let draws = scene.draws();
         let outlines: Vec<Outline<'_>> = draws

@@ -214,3 +214,77 @@ fn value_noise3_gradient(p: vec3f, scale: f32) -> vec3f {
     let zplus = mix(bilerp4(select(z0, z1, right.z), u, v), bilerp4(zhi, u, v), fade_cubic(fract(q.z + 0.35)));
     return vec3f(xplus - xminus, yplus - yminus, zplus - zminus) * (weight / 0.7);
 }
+
+fn voronoi_point2(cell: vec2i, seed: u32, randomness: f32) -> vec2f {
+    return vec2f(hash2(cell, seed), hash2(cell, seed ^ 0x9e3779b9u)) * randomness;
+}
+
+fn voronoi_edge2(p: vec2f, randomness: f32, seed: u32) -> f32 {
+    let cell = floor(p);
+    let local = p - cell;
+    let at = vec2i(cell);
+    var closest = vec2f(0.0);
+    var nearest = 3.4e38;
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            let v = vec2f(f32(i), f32(j)) + voronoi_point2(at + vec2i(i, j), seed, randomness) - local;
+            let d = dot(v, v);
+            if (d < nearest) {
+                nearest = d;
+                closest = v;
+            }
+        }
+    }
+    var edge = 3.4e38;
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            let v = vec2f(f32(i), f32(j)) + voronoi_point2(at + vec2i(i, j), seed, randomness) - local;
+            let across = v - closest;
+            let length2 = dot(across, across);
+            if (length2 > 0.0001) {
+                edge = min(edge, dot((closest + v) * 0.5, across) / sqrt(length2));
+            }
+        }
+    }
+    return edge;
+}
+
+fn pavement_plane(p: vec3f, n: vec3f) -> vec2f {
+    let a = abs(n);
+    if (a.y >= a.x && a.y >= a.z) {
+        return p.xz;
+    }
+    if (a.x >= a.z) {
+        return p.zy;
+    }
+    return p.xy;
+}
+
+fn pavement_crack(p: vec3f, n: vec3f, a: vec4f, b: vec4f, c: vec4f, seed: u32, pixel: f32) -> f32 {
+    if (a.x <= 0.0 || a.y <= 0.0) {
+        return 0.0;
+    }
+    let w = p * a.w;
+    let warp = vec2f(value_noise3(w, false), value_noise3(w + vec3f(17.3, 5.1, 11.7), false)) - vec2f(0.5);
+    let q = (pavement_plane(p, n) + warp * 2.0 * a.z) / a.x;
+    let edge = voronoi_edge2(q, c.x, seed) * a.x;
+    let wide = max(a.y, pixel);
+    let line = (1.0 - smoothstep(0.0, wide, edge)) * (a.y / wide);
+    let open = value_noise3(p * b.y + vec3f(3.7, 1.3, 8.9), false);
+    let threshold = 1.0 - b.x;
+    return line * smoothstep(threshold - 0.12, threshold + 0.12, open);
+}
+
+fn pavement_track(uv: vec2f, a: vec4f, b: vec4f, seed: u32, pixel: f32) -> f32 {
+    if (a.x <= 0.0 || a.w <= 0.0) {
+        return 0.0;
+    }
+    let slice = f32(seed % 4096u) * 0.37;
+    let wander = (value_noise3(vec3f(uv.y * b.y, slice, 0.0), false) - 0.5) * 2.0 * b.x;
+    let across = (fract((uv.x - a.y + wander) / a.x + 0.5) - 0.5) * a.x;
+    let off = abs(abs(across) - a.z);
+    let band = 1.0 - smoothstep(0.0, a.w, off);
+    let streak = 0.6 + 0.8 * value_noise3(vec3f(uv.x * b.z, uv.y * b.w, slice + 5.0), false);
+    let weight = octave_weight(pixel * max(b.z, b.w));
+    return clamp(band * (1.0 + (streak - 1.0) * weight), 0.0, 1.0);
+}

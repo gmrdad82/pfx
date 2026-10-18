@@ -3,11 +3,15 @@ use std::path::{Path, PathBuf};
 use pfx_scene::{Patch, PatchGroup, Project};
 
 use super::edit::scene_error as refusal;
-use super::{SceneError, build};
+use super::{SceneError, build, mounted};
 
 fn scene_files(path: &Path) -> Result<(PathBuf, Project, PathBuf), SceneError> {
     let root = build::project_root(path);
-    let project = build::project(&root)?;
+    let project = if mounted::is_pfx_path(path) {
+        Project::open_pfx(path).map_err(|found| build::diagnostic(&root, &found))?
+    } else {
+        build::project(&root)?
+    };
     let absolute = build::absolute(path);
     Ok((root, project, absolute))
 }
@@ -22,9 +26,10 @@ pub fn migrate(path: impl AsRef<Path>, dry_run: bool) -> Result<PatchGroup, Scen
     }
     let mut patches = Vec::new();
     for file in &scene.files {
-        let full = project.root().join(file);
-        let before = std::fs::read_to_string(&full)
-            .map_err(|error| SceneError::new(&root.join(file), None, error.to_string()))?;
+        let full = project.path_of(file);
+        let before = mounted::held_text(&full)
+            .unwrap_or_else(|| std::fs::read_to_string(&full))
+            .map_err(|error| SceneError::new(&full, None, error.to_string()))?;
         let after = project
             .migrate(&full)
             .map_err(|found| build::refused(&root, &found))?;

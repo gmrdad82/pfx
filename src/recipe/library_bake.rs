@@ -14,8 +14,11 @@ const FOV_DEG: f64 = 30.0;
 
 #[derive(clap::Args, Debug, PartialEq)]
 pub(super) struct Args {
-    #[arg(value_name = "recipe", help = "The recipe that builds the object")]
-    recipe: PathBuf,
+    #[arg(
+        value_name = "recipe",
+        help = "The recipe's .pitofx that builds the object"
+    )]
+    pub(super) recipe: PathBuf,
     #[arg(value_name = "object", help = "The recipe's object to bake")]
     object: String,
     #[arg(
@@ -27,14 +30,14 @@ pub(super) struct Args {
     entry: String,
     #[arg(
         long,
-        help = "Also render a 512x512 thumbnail, thumb.png, on the live renderer"
+        help = "Also render a 512x512 thumbnail into its object.pitofx on the live renderer"
     )]
     thumb: bool,
     #[arg(
         long,
         value_name = "a,b",
         value_delimiter = ',',
-        help = "Tags for its object.toml and the index"
+        help = "Tags for its sidecar and the index"
     )]
     tags: Vec<String>,
     #[arg(
@@ -78,8 +81,7 @@ pub struct Subject {
 
 pub struct Baked {
     pub dir: PathBuf,
-    pub model: PathBuf,
-    pub sidecar: PathBuf,
+    pub object: PathBuf,
     pub model_bytes: usize,
     pub subject: Subject,
 }
@@ -108,16 +110,15 @@ pub fn bake(
     let mut exported = library::export(&merged, &built, object, entry).map_err(failed)?;
     exported.sidecar.tags = tags.to_vec();
     let dir = root.join(entry);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let model = dir.join("model.glb");
-    let sidecar = dir.join("object.toml");
-    std::fs::write(&model, &exported.glb).map_err(|e| format!("{}: {e}", model.display()))?;
-    std::fs::write(&sidecar, exported.sidecar.text())
-        .map_err(|e| format!("{}: {e}", sidecar.display()))?;
+    let object = library::Stored {
+        model: exported.glb.clone(),
+        sidecar: exported.sidecar.text(),
+        thumb: None,
+    }
+    .write(&dir)?;
     Ok(Baked {
         dir,
-        model,
-        sidecar,
+        object,
         model_bytes: exported.glb.len(),
         subject: Subject {
             recipe,
@@ -230,7 +231,7 @@ fn thumb_recipe(subject: &Subject) -> Result<Recipe, String> {
     Ok(recipe)
 }
 
-pub fn thumbnail(subject: &Subject, dir: &Path, registry: &Registry) -> Result<PathBuf, String> {
+pub fn thumbnail(subject: &Subject, dir: &Path, registry: &Registry) -> Result<Vec<u8>, String> {
     let recipe = thumb_recipe(subject)?;
     let ground = recipe.objects.len() - 1;
     let built = build_with(&recipe, &subject.base, registry).map_err(failed)?;
@@ -254,9 +255,17 @@ pub fn thumbnail(subject: &Subject, dir: &Path, registry: &Registry) -> Result<P
     let gpu = pfx_recipe_scene::headless().map_err(failed)?;
     let rgba =
         pfx_recipe_scene::shoot(&gpu, &merged, &parts, THUMB_CAMERA, THUMB).map_err(failed)?;
-    let out = dir.join("thumb.png");
-    pfx_recipe_scene::write_png(&out, THUMB, &rgba).map_err(failed)?;
-    Ok(out)
+    let out = dir.join(".thumb.png");
+    let drawn = pfx_recipe_scene::write_png(&out, THUMB, &rgba).map_err(failed);
+    let bytes = std::fs::read(&out).map_err(|e| format!("{}: {e}", out.display()));
+    let _ = std::fs::remove_file(&out);
+    drawn.and(bytes)
+}
+
+pub fn thumbed(dir: &Path, png: Vec<u8>) -> Result<(), String> {
+    let mut stored = library::Stored::read(dir)?;
+    stored.thumb = Some(png);
+    stored.write(dir).map(|_| ())
 }
 
 pub fn quoted(path: &Path) -> serde_json::Value {
@@ -279,14 +288,13 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
         Ok(baked) => baked,
         Err(e) => return refuse("library bake", &e),
     };
-    let thumb = if args.thumb {
-        match thumbnail(&baked.subject, &baked.dir, registry) {
-            Ok(path) => Some(path),
-            Err(e) => return refuse("library bake", &e),
+    if args.thumb {
+        let drawn = thumbnail(&baked.subject, &baked.dir, registry)
+            .and_then(|png| thumbed(&baked.dir, png));
+        if let Err(e) = drawn {
+            return refuse("library bake", &e);
         }
-    } else {
-        None
-    };
+    }
     let index = match library::write_index(&root) {
         Ok(path) => path,
         Err(e) => return refuse("library bake", &e.to_string()),
@@ -299,10 +307,9 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
                 "kind": kind,
                 "name": name,
                 "dir": quoted(&baked.dir),
-                "model": quoted(&baked.model),
+                "object": quoted(&baked.object),
                 "model_bytes": baked.model_bytes,
-                "sidecar": quoted(&baked.sidecar),
-                "thumb": thumb.as_deref().map(quoted),
+                "thumb": args.thumb,
                 "index": quoted(&index),
             })
         );
@@ -329,7 +336,8 @@ mod tests {
 
     #[test]
     fn a_bake_writes_the_same_bytes_twice() {
-        let sources = root().join("library/sources.toml");
+        let opened = super::super::document::open(&root().join("library/sources.pitofx")).unwrap();
+        let sources = opened.recipe.clone();
         let registry = Registry::new();
         let tags = vec!["car".to_string()];
         let mut seen = Vec::new();
@@ -337,18 +345,21 @@ mod tests {
             let dir = scratch(&format!("library-bake-{run}"));
             let baked = bake(&sources, "coupe", "cars/coupe", &tags, &dir, &registry).unwrap();
             assert_eq!(baked.dir, dir.join("cars/coupe"));
-            seen.push((
-                std::fs::read(&baked.model).unwrap(),
-                std::fs::read(&baked.sidecar).unwrap(),
-            ));
+            assert_eq!(baked.object, baked.dir.join(library::OBJECT));
+            let stored = library::Stored::read(&baked.dir).unwrap();
+            assert_eq!(stored.thumb, None);
+            seen.push(std::fs::read(&baked.object).unwrap());
+            library::Sidecar::parse(&stored.sidecar).unwrap();
+            assert!(stored.model.starts_with(b"glTF"));
         }
-        assert!(!seen[0].0.is_empty());
+        assert!(!seen[0].is_empty());
         assert_eq!(seen[0], seen[1]);
     }
 
     #[test]
     fn the_sources_recipe_checks_and_builds_every_object() {
-        let sources = root().join("library/sources.toml");
+        let opened = super::super::document::open(&root().join("library/sources.pitofx")).unwrap();
+        let sources = opened.recipe.clone();
         let recipe = load(&sources).unwrap().recipe;
         assert_eq!(pfx_recipe::validate(&recipe), Vec::new());
         let built = build_with(&recipe, &root().join("library"), &Registry::new()).unwrap();

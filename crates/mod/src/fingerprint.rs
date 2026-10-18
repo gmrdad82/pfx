@@ -7,12 +7,26 @@ pub struct Fingerprint(pub [u8; 32]);
 
 impl Fingerprint {
     pub fn of_mod(manifest: &[u8], component: &[u8]) -> Self {
+        Self::of_package(manifest, component, [])
+    }
+
+    pub fn of_package<'a>(
+        manifest: &[u8],
+        component: &[u8],
+        data: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+    ) -> Self {
         let mut hash = Sha256::new();
         hash.update(b"pfx-mod 1\0");
         hash.update((manifest.len() as u64).to_le_bytes());
         hash.update(manifest);
         hash.update((component.len() as u64).to_le_bytes());
         hash.update(component);
+        for (name, bytes) in data {
+            hash.update((name.len() as u64).to_le_bytes());
+            hash.update(name.as_bytes());
+            hash.update((bytes.len() as u64).to_le_bytes());
+            hash.update(bytes);
+        }
         Self(hash.finalize().into())
     }
 

@@ -2,34 +2,34 @@
 
 **The scaffold builds once a pfx tag carries `pfx-game` and `pfx-project`, from v0.23.0.** It pins the tag pfx was built from; v0.22.0 and earlier have neither crate, so a game scaffolded by a pfx before v0.23.0 does not build until its pins move to v0.23.0 or later.
 
-A game on pfx is its own repo and one binary, `<game>`. With no arguments it plays the game; `<game> edit` opens the same game in pfx's editor; `<game> help` lists its commands. The Steam build is the same binary built without the `tools` feature: the game alone. `pfx new` scaffolds such a repo, and `pfx edit <project folder>` opens any project in the editor.
+A game on pfx is its own repo and one binary, `<game>`. With no arguments it plays the game; `<game> edit` opens the same game in pfx's editor; `<game> help` lists its commands. The Steam build is the same binary built without the `tools` feature: the game alone. `pfx new` scaffolds such a repo, and `pfx gui <project folder>` opens any project in the editor.
 
 The crate `pfx-project` (`crates/project`) reads a project and, with its `scaffold` feature, writes a new one. It carries nothing of any game: the scaffold is pfx's own empty world.
 
 ## A project
 
-A project is a folder with pfx-scene's `project.toml` at its root ([the format](scene-format.md#projecttoml), `project.toml`). Its scenes, libraries, meshes and images are found under that root.
+A project is a folder with pfx-scene's `project.toml` at its root ([the format](scene-format.md#projecttoml), `project.toml`). Its scenes, libraries, meshes and images are found under that root. `project.toml` is the game repo's manifest, beside its `Cargo.toml`; its scenes are `.pitofx` documents, each holding a scene with its prefabs and material libraries ([.pitofx files](pfx-file.md#the-user-file)), and the meshes, images and fonts they use stay files.
 
 ```toml
 format = 1
 
 [project]
 name = "my-game"
-scene = "content/first.scene.toml"
+scene = "content/first.pitofx"
 
 [authoring.pfx]
-play = "content/first.scene.toml"
+play = "content/first.pitofx"
 select = "incoming"
 ```
 
 | Key | What it says | Read by |
 |---|---|---|
 | `[project] name` | the project's name | the editor's title and log |
-| `[project] scene` | the scene the editor opens first | `pfx edit <folder>`, `<game> edit` |
+| `[project] scene` | the scene the editor opens first | `pfx gui <folder>`, `<game> edit` |
 | `[authoring.pfx] play` | the scene the game plays; without it, `scene` | the game's `main` (`Project::play`) |
 | `[authoring.pfx] select` | the object the editor selects when it opens, if that scene has it | the editor |
 | `[authoring.pfx.screen]` | the game's `[screen]` policy (`docs/screens.md`): its aspects per device, the bars, the safe area and the UI scale | the game's `config()` (`Config::screen`) and the editor, which frames the scene camera with the policy's first aspect for the device |
-| `[authoring.pfx] flat` | `true` for a game with no 3D scene (`Config::flat`): the editor opens such a project without any `*.scene.toml` on an empty world, and play draws no 3D pass; a value that is not a boolean is refused | the editor |
+| `[authoring.pfx] flat` | `true` for a game with no 3D scene (`Config::flat`): the editor opens such a project without any scene on an empty world, and play draws no 3D pass; a value that is not a boolean is refused | the editor |
 | `[authoring.pfx] modules` | the game's gameplay modules: the built `.wasm` of each, relative to the root; a module's id is its file's stem | the game (`Project::modules`, `pfx_mod::Modules`), and the editor's live reload |
 | `[project] ignore` | folders (or files) not to look in, relative to the root, besides `target/` and `tmp/` | pfx-scene's `Project::open`, and `Project::scenes` and `folders` here |
 | `[tunables.<name>]` | the game's tunables (`docs/play.md`, "Tunables") | pfx-play, through pfx-scene's `ProjectFile` |
@@ -40,7 +40,7 @@ select = "incoming"
 
 - `Project::open(folder)` reads the folder's `project.toml` and refuses a missing file, a missing `[project]` or `name`, and a `scene`, `play` or `select` that is not a string, naming the file. `Project::folder(folder)` is the same, and for a folder without `project.toml` (the engine's fixture folders) it is a bare project named after the folder.
 - `Project::find(path)` walks up from a file or folder to the nearest `project.toml`. `Project::locate(manifest_dir)` is what a game's `main` calls: the folder beside the running exe when it holds a `project.toml` (a shipped build packs `project.toml` and `content/` beside the exe), else the crate's own folder (`cargo run`).
-- `scenes()` lists every `*.scene.toml`, and `folders()` every content folder (one that directly holds a scene, prefab, material library, proxies file, glTF, glb, buffer, PNG, HDR, WAV, Ogg, font, SVG, KTX2 or EXR), each with its files. Both are sorted by name and skip dot folders, folders with their own `project.toml`, the root's `target/` and `tmp/` (cargo's output and scratch) and the paths `[project] ignore` lists, as pfx-scene's own walk does. The scaffold's `project.toml` lists nothing in `ignore`: `target/` and `tmp/` are skipped by default.
+- `scenes()` lists every scene `.pitofx` (one holding a scene's `SMET` chunk) and every `*.scene.toml`, and `folders()` every content folder (one that directly holds a scene, prefab, material library, proxies file, glTF, glb, buffer, PNG, HDR, WAV, Ogg, font, SVG, KTX2 or EXR), each with its files. Both are sorted by name and skip dot folders, folders with their own `project.toml`, the root's `target/` and `tmp/` (cargo's output and scratch) and the paths `[project] ignore` lists, as pfx-scene's own walk does. The scaffold's `project.toml` lists nothing in `ignore`: `target/` and `tmp/` are skipped by default.
 - `flat()` is `[authoring.pfx] flat`, false without it.
 - `modules()` lists the gameplay modules as `Module { id, path }`, in the order `modules` names them; a `modules` that is not a list of `.wasm` paths is refused, naming the file.
 - `first()` is the scene the editor opens: `scene`, else `play`, else the first scene listed. `play()` is `play`, else `scene`, else the first scene listed.
@@ -64,10 +64,8 @@ It writes:
 | `src/lib.rs` | the game: a unit struct named after the game (`my-game` gives `my_game::MyGame`) implementing `pfx_game::Game`, doing nothing yet; `project()` (`Project::locate`); and `config(&project)`, the game's `pfx_game::Config` on `project.play()` with the project's screen policy and `Exposure::Fixed(1.0)`, the exposure the editor's viewport draws with, instead of auto exposure (delete the line for auto) |
 | `src/main.rs` | `#![cfg_attr(not(feature = "tools"), windows_subsystem = "windows")]`, then `pfx_game::launch(<Game>::new, config(&project), …)`; with `tools` it sets the launcher's edit hook to `pfx_workbench::run_project(project.root(), factory, config(&project)?)`, the hook's factory and the game's own config |
 | `tests/first.rs` | a GPU test, ignored by default: the first scene runs headless (`pfx_game::Headless::with_gpu`) for half a second at 960 × 540, writes `tmp/first-frame.png` and checks the wordmark's light, the mark's violet and the X axis's red |
-| `project.toml` | the project, as above: `scene` and `play` name `content/first.scene.toml`, `select` names `incoming`, and `[authoring.pfx.screen]` holds 16:9 on a desktop and 16:10 on a Deck |
-| `content/first.scene.toml` | the empty world, below |
-| `content/prefabs/incoming.prefab.toml` | pfx's mark as a group: the badge, the wordmark and the game's version, placed by the scene's `incoming` |
-| `content/materials/base.materials.toml`, `incoming.materials.toml` | the grid's and the axes' materials; the badge's and the wordmark's |
+| `project.toml` | the project, as above: `scene` and `play` name `content/first.pitofx`, `select` names `incoming`, and `[authoring.pfx.screen]` holds 16:9 on a desktop and 16:10 on a Deck |
+| `content/first.pitofx` | the empty world, below, with inside it `content/first.scene.toml`, `content/prefabs/incoming.prefab.toml` (pfx's mark as a group: the badge, the wordmark and the game's version, placed by the scene's `incoming`) and `content/materials/base.materials.toml` and `incoming.materials.toml` (the grid's and the axes' materials; the badge's and the wordmark's); `pfx scene print content/first.pitofx <file>` shows each |
 | `content/meshes/badge.glb`, `wordmark.glb`, `grid.glb` | the meshes, below |
 | `content/fonts/IBMPlexMono-Regular.ttf`, `IBMPlexMono-OFL.txt` | the version's face, IBM Plex Mono as IBM ships it, and its SIL Open Font License (Reserved Font Name "Plex", so it is never subset or renamed here) |
 | `AGENTS.md`, `CLAUDE.md`, `prompts/RESUME.md` | the repo's own session starts there |
@@ -101,9 +99,9 @@ After writing, it fills the scene's ids through pfx-scene (`Project::fix`, as `p
 
 ### The empty world
 
-`content/first.scene.toml` opens like a 3D tool's default scene and reads like Blender's cube:
+`content/first.pitofx` opens like a 3D tool's default scene and reads like Blender's cube:
 
-- **pfx's mark is one group, `incoming`,** at the origin, standing on the floor (`at = [0, 0.495, 0]`, half the group's height). It is a prefab placement (`content/prefabs/incoming.prefab.toml`), pfx-scene's group: it draws nothing itself and is the parent of the prefab's two objects, so the outliner shows `incoming` with `incoming/badge` and `incoming/wordmark` under it. Its origin is the centre of the group's bounds, so the move gizmo sits in the middle of the group, and `select = "incoming"` opens the editor on it.
+- **pfx's mark is one group, `incoming`,** at the origin, standing on the floor (`at = [0, 0.495, 0]`, half the group's height). It is a prefab placement (`content/prefabs/incoming.prefab.toml`, inside the `.pitofx`), pfx-scene's group: it draws nothing itself and is the parent of the prefab's two objects, so the outliner shows `incoming` with `incoming/badge` and `incoming/wordmark` under it. Its origin is the centre of the group's bounds, so the move gizmo sits in the middle of the group, and `select = "incoming"` opens the editor on it.
 - **The badge** (`badge.glb`) is one mesh, one primitive per material: manfred's build of `brand/recipes/incoming-full.toml` (`manfred build`), merged by `crates/project/src/templates/recipes/merge.py` into one node and stood upright, with the recipe's `ground` left out. The recipe's 86 materials collapse into six by look, each the average of its members: `tile`, `dome` (the ball), `lines` (its lattice), `white` (the rim and the bright streaks), `violet` (the darker streaks, rim bands and dust) and `lime`.
 - **The wordmark** (`wordmark.glb`) is one mesh with one material, `wordmark`: `assets/marks/wordmark.svg` extruded 7 cm with a rounded edge by manfred (0.16, which extrudes an outline with holes as one closed solid) from `recipes/wordmark.toml`, merged the same way. `recipes/make.py` writes that recipe: one object per glyph, its outline's quadratic curves in eight steps, 0.65 mm per SVG unit, and a glyph with a counter (the `p`'s bowl) as `difference = [outer, counter]`, so the `p` is one seamless solid.
 - **One plane.** The badge's front face and the wordmark's stand on one plane: `merge.py` places the wordmark so its front meets the badge tile's front, its x-height centred on the badge, 12 cm to its right. The seven materials are in `content/materials/incoming.materials.toml`, the prefab's own library.
@@ -126,7 +124,7 @@ python3 crates/project/src/templates/recipes/merge.py tmp/marks3d/pfx-incoming-f
 
 `merge.py` prints the children's places in the group (`badge_at`, `wordmark_at`) and its half height, which the prefab's and the scene's `at` hold; copy `merged/` and `pfx-grid.glb` over the templates. With manfred 0.16 the chain gives the checked-in files byte for byte.
 
-**Stack.** pfx-scene resolves without recursion, in about 250 KB of stack at any depth, and refuses a chain deeper than `pfx_scene::MAX_DEPTH` (64) with `include-depth` or `prefab-depth`. pfx edit boxes the editor crates' viewport and the play view, so `Session::open_project` opens the scaffold in under 512 KB in a debug build; tests run it on an ordinary 2 MB test thread.
+**Stack.** pfx-scene resolves without recursion, in about 250 KB of stack at any depth, and refuses a chain deeper than `pfx_scene::MAX_DEPTH` (64) with `include-depth` or `prefab-depth`. pfx gui boxes the editor crates' viewport and the play view, so `Session::open_project` opens the scaffold in under 512 KB in a debug build; tests run it on an ordinary 2 MB test thread.
 
 ## <game> edit
 
@@ -141,7 +139,7 @@ commands
     .usage("edit", "");
 ```
 
-`usage("edit", "")` says `edit` takes no arguments, so `my-game edit extra` is refused before the hook runs, the way every PITO MD command line refuses input it cannot parse (`docs/game.md`, "Refusals"). The hook gets a factory, `pfx_game::Factory` (`Rc<dyn Fn() -> Box<dyn Game>>`, the constructor `launch` was given), and the arguments after `edit`; no game is built until a play needs one. `run_project(folder, factory, config)` opens the project in pfx's window as `pfx edit <folder>` does (a pfx-editor `Session::open_game` under the window's panels), and **F5 plays the game's own logic**: `factory()` at each F5, a fresh game every play, drawn by pfx-game's own painter from `config` (its fonts, icons, sprites, screen policy, exposure and settings), so it looks and sounds as its window does (`docs/editor.md`, "Play mode"). A `Config::flat()` game plays on an empty world, and its project opens even with no `*.scene.toml` (below). Pause, step, stop and its exact restore, F9's input recording, sound (the game's own PCM streams included), the HUD and the pgpu hooks work as `docs/editor.md` says; a failing game stops play with its error in the log. `pfx_editor::factory(make)` (the same as `pfx_game::factory`) builds a factory from a constructor, for a `Session::open_project` or `open_game` of one's own.
+`usage("edit", "")` says `edit` takes no arguments, so `my-game edit extra` is refused before the hook runs, the way every PITO MD command line refuses input it cannot parse (`docs/game.md`, "Refusals"). The hook gets a factory, `pfx_game::Factory` (`Rc<dyn Fn() -> Box<dyn Game>>`, the constructor `launch` was given), and the arguments after `edit`; no game is built until a play needs one. `run_project(folder, factory, config)` opens the project in pfx's window as `pfx gui <folder>` does (a pfx-editor `Session::open_game` under the window's panels), and **F5 plays the game's own logic**: `factory()` at each F5, a fresh game every play, drawn by pfx-game's own painter from `config` (its fonts, icons, sprites, screen policy, exposure and settings), so it looks and sounds as its window does (`docs/editor.md`, "Play mode"). A `Config::flat()` game plays on an empty world, and its project opens even with no `*.scene.toml` (below). Pause, step, stop and its exact restore, F9's input recording, sound (the game's own PCM streams included), the HUD and the pgpu hooks work as `docs/editor.md` says; a failing game stops play with its error in the log. `pfx_editor::factory(make)` (the same as `pfx_game::factory`) builds a factory from a constructor, for a `Session::open_project` or `open_game` of one's own.
 
 ## Live reload
 
@@ -154,16 +152,16 @@ modules: modules/turns.wasm was rebuilt; it swaps in at the next tick
 modules: module `turns` swapped at tick 12 and kept its state (4 bytes through save and restore)
 ```
 
-A build that does not load (cut short mid-write, or wrong) leaves the running module and logs a warning; a module that fails is stopped with its error in the log, and the game plays on. While play is paused, a rebuilt module swaps in at the next step or once play resumes. The window's file watcher also wakes the editor when a module changes. `pfx edit <folder>` plays the scene without the game's logic, so it has no modules to reload, unless it plays a module of its own ([play-modules.md](play-modules.md)), which reloads the same way. No Rust is hot-patched: rebuilding the game itself still means stopping and running it again.
+A build that does not load (cut short mid-write, or wrong) leaves the running module and logs a warning; a module that fails is stopped with its error in the log, and the game plays on. While play is paused, a rebuilt module swaps in at the next step or once play resumes. The window's file watcher also wakes the editor when a module changes. `pfx gui <folder>` plays the scene without the game's logic, so it has no modules to reload, unless it plays a module of its own ([play-modules.md](play-modules.md)), which reloads the same way. No Rust is hot-patched: rebuilding the game itself still means stopping and running it again.
 
-## pfx edit <project folder>
+## pfx gui <project folder>
 
-`pfx edit <folder>` opens a project on its first scene; `pfx edit <scene.toml>` is unchanged. In project mode:
+`pfx gui <folder>` opens a project on its first scene; `pfx gui <scene.pitofx>` opens one scene. In project mode:
 
 - the outliner starts with two sections: **scenes**, every scene of the project by its path from the root (the open one marked `· open`), and **content**, every content folder with its files;
 - selecting a scene shows its path and an `open` button; **Enter**, the button or a double-click opens it. The editor stops play, ends any edit group, and opens that scene in a fresh editor, keeping the project, the log, mute and the pgpu state;
 - selecting a folder shows how many content files it holds, and a file its size;
-- the window's title is `pfx edit · <project> · <scene file>`;
+- the window's title is `pfx gui · <project> · <scene file>`;
 - the object `select` names is selected when the project opens.
 
 A folder without `project.toml`, like the engine's fixture folders, opens as a bare project: its scenes and folders, no `select`. A folder with no scene is refused, unless the project is flat (`[authoring.pfx] flat = true`, or the game's config is `Config::flat()` in `run_project`): then the editor opens an empty world, `tmp/pfx/flat.scene.toml` under the project's root (`format = 1` and nothing else, written once in the project's scratch folder, which `scenes()` skips), the log says `project <name> is flat and has no scene`, and F5 plays the game on `Scene::empty()`. A flat project with scenes opens its first scene as any other, and still plays flat.

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 pub const FILE: &str = "project.toml";
 pub const SKIPPED: [&str; 2] = ["target", "tmp"];
 pub const CONTENT: [&str; 13] = [
-    "gltf", "glb", "pfx", "bin", "png", "hdr", "wav", "ogg", "ttf", "otf", "svg", "ktx2", "exr",
+    "gltf", "glb", "pitofx", "bin", "png", "hdr", "wav", "ogg", "ttf", "otf", "svg", "ktx2", "exr",
 ];
 pub const KINDS: [&str; 5] = [
     ".scene.toml",
@@ -80,9 +80,16 @@ fn modules(table: Option<&toml::Table>, file: &Path) -> Result<Vec<PathBuf>, Str
 }
 
 fn scene_file(path: &Path) -> bool {
-    path.file_name()
+    let name = path
+        .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.ends_with(".scene.toml"))
+        .unwrap_or_default();
+    if name.ends_with(".scene.toml") {
+        return true;
+    }
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(pfx_file::EXTENSION))
+        && pfx_file::Reader::open(path).is_ok_and(|reader| reader.find(pfx_file::SMET).is_some())
 }
 
 fn content_file(path: &Path) -> bool {

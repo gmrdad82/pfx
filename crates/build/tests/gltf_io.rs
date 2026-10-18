@@ -247,7 +247,7 @@ fn a_blender_style_glb_round_trips_through_a_pfx_file_without_extras() {
     let (json_bytes, bin) = blender_style();
     let sample = gltf_io::join(&json_bytes, &bin);
     std::fs::write(scratch("sample.glb"), &sample).unwrap();
-    let out = scratch("coupe.pfx");
+    let out = scratch("coupe.pitofx");
     let provenance = Provenance {
         licence: "CC-BY-4.0".into(),
         credit: Some("Coupe by An Author, https://example.org/coupe".into()),

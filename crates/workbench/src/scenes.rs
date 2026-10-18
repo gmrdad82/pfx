@@ -15,7 +15,7 @@ pub fn is_scene(path: &Path) -> bool {
     if name.ends_with(".scene.toml") {
         return true;
     }
-    if name.ends_with(".pfx") {
+    if name.ends_with(".pitofx") {
         return pfx_file::Reader::open(path)
             .is_ok_and(|reader| reader.find(pfx_file::RCPE).is_none());
     }

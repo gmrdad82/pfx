@@ -709,7 +709,7 @@ pub fn file_glb(reader: &Reader) -> Result<Vec<u8>, String> {
     let json = reader
         .chunk(pfx_file::GLTF)
         .map_err(|e| e.to_string())?
-        .ok_or("the .pfx holds no GLTF chunk")?;
+        .ok_or("the .pitofx holds no GLTF chunk")?;
     let bin = reader
         .chunk(pfx_file::GBIN)
         .map_err(|e| e.to_string())?
@@ -723,9 +723,9 @@ pub fn export_glb(
     only: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let file = source.display().to_string();
-    if source.extension().is_some_and(|e| e == "pfx") {
+    if pfx_file::is_file_path(source) {
         if only.is_some() {
-            return Err("--only takes a recipe, not a .pfx".into());
+            return Err("--only takes a recipe, not a .pitofx".into());
         }
         let reader = Reader::open(source).map_err(|e| e.to_string())?;
         return clean(&file_glb(&reader).map_err(|t| format!("{file}: {t}"))?);

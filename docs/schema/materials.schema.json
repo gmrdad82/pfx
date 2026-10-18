@@ -398,7 +398,9 @@
         "value",
         "fbm",
         "scratch",
-        "coat_wobble"
+        "coat_wobble",
+        "crack",
+        "track"
       ],
       "type": "string"
     },

@@ -2,19 +2,28 @@
 
 Every file names its format version on its first line. A file without `format` is format 0. Reading it migrates it in memory and warns once (`old-format`), with every finding pointing into the file as written, so an older project keeps loading. A newer format than the crate knows is refused, naming the version it knows (`newer-format`).
 
-## Rewrite a file on disk
+## Import an older file
 
-The `scene-write` example's `migrate` rewrites a file as format 1:
+A scene is a `.pitofx` ([pfx-file.md](pfx-file.md#the-user-file)). `pfx scene migrate` imports a plain `.scene.toml` once into a `.pitofx` beside it, with every file it reads, and migrates its format 0 files to format 1 inside it; the `.toml` is left as it was and never written again:
 
 ```sh
-scene-write migrate scenes/room.scene.toml
+pfx scene migrate scenes/room.scene.toml
 ```
 
 ```text
-ok scenes/room.scene.toml is format 1 now
+imported scenes/room.scene.toml into scenes/room.pitofx
 ```
 
-On a format 0 copy of the demo's scene, the diff starts:
+- `pfx scene migrate <folder>` imports every `*.scene.toml` and recipe in the folder and below it (skipping `target/`, `tmp/` and hidden folders), each into its own `.pitofx`; one imported before is kept and said so.
+- `pfx scene migrate <scene.pitofx>` migrates the format 0 files already inside a `.pitofx`, writing the `.pitofx` once.
+- `pfx scene migrate <x.pfx>` imports a document an older pfx saved as `.pfx`: it checks the `PFXFILE` magic and writes the same bytes to `x.pitofx` beside it (a folder's legacy `.pfx` documents are imported with it). A `.pfx` without the magic, such as a PKCS #12 certificate, is refused as not a pfx document.
+- `--dry-run` says what it would import or migrate and writes nothing.
+- A `.pitofx` that already exists beside the file is refused: the import happens once, and edits go to the `.pitofx`.
+- A recipe (`recipe = 1`, or the old `manfred = 1`, rewritten as `recipe = 1`) is imported the same way, with its includes and files; `--bare` keeps only the recipe and the files it reads, and the build comes the first time a command needs it.
+
+Every other command given a `.toml` or a legacy `.pfx` refuses with one line naming the import: `pfx: room.scene.toml is a plain TOML file; import it once with `pfx scene migrate room.scene.toml`, which writes room.pitofx beside it`.
+
+In this crate's own tree, the `scene-write` example's `migrate` rewrites a loose file as format 1 in place (`scene-write migrate scenes/room.scene.toml`). On a format 0 copy of the demo's scene, the diff starts:
 
 ```diff
 @@ -1,5 +1,8 @@

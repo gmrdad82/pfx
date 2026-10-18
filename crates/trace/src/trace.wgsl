@@ -174,6 +174,93 @@ fn value_noise3(p: vec3f, nested: bool) -> f32 {
     let b=mix(mix(b0,b1,u.x),mix(b2,b3,u.x),u.y);
     return mix(a,b,u.z);
 }
+fn hash2(p: vec2i, seed: u32) -> f32 {
+    var h = u32(p.x) * 0x8da6b343u ^ u32(p.y) * 0xd8163841u;
+    h ^= seed;
+    h ^= h >> 15u;
+    h *= 0x2c1b3c6du;
+    h ^= h >> 12u;
+    h *= 0x297a2d39u;
+    h ^= h >> 15u;
+    return f32(h >> 8u) / 16777216.0;
+}
+fn octave_weight(footprint: f32) -> f32 {
+    let t = clamp((footprint - 0.5) * 2.0, 0.0, 1.0);
+    return 1.0 - t * t * (3.0 - 2.0 * t);
+}
+fn voronoi_point2(cell: vec2i, seed: u32, randomness: f32) -> vec2f {
+    return vec2f(hash2(cell, seed), hash2(cell, seed ^ 0x9e3779b9u)) * randomness;
+}
+
+fn voronoi_edge2(p: vec2f, randomness: f32, seed: u32) -> f32 {
+    let cell = floor(p);
+    let local = p - cell;
+    let at = vec2i(cell);
+    var closest = vec2f(0.0);
+    var nearest = 3.4e38;
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            let v = vec2f(f32(i), f32(j)) + voronoi_point2(at + vec2i(i, j), seed, randomness) - local;
+            let d = dot(v, v);
+            if (d < nearest) {
+                nearest = d;
+                closest = v;
+            }
+        }
+    }
+    var edge = 3.4e38;
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            let v = vec2f(f32(i), f32(j)) + voronoi_point2(at + vec2i(i, j), seed, randomness) - local;
+            let across = v - closest;
+            let length2 = dot(across, across);
+            if (length2 > 0.0001) {
+                edge = min(edge, dot((closest + v) * 0.5, across) / sqrt(length2));
+            }
+        }
+    }
+    return edge;
+}
+
+fn pavement_plane(p: vec3f, n: vec3f) -> vec2f {
+    let a = abs(n);
+    if (a.y >= a.x && a.y >= a.z) {
+        return p.xz;
+    }
+    if (a.x >= a.z) {
+        return p.zy;
+    }
+    return p.xy;
+}
+
+fn pavement_crack(p: vec3f, n: vec3f, a: vec4f, b: vec4f, c: vec4f, seed: u32, pixel: f32) -> f32 {
+    if (a.x <= 0.0 || a.y <= 0.0) {
+        return 0.0;
+    }
+    let w = p * a.w;
+    let warp = vec2f(value_noise3(w, false), value_noise3(w + vec3f(17.3, 5.1, 11.7), false)) - vec2f(0.5);
+    let q = (pavement_plane(p, n) + warp * 2.0 * a.z) / a.x;
+    let edge = voronoi_edge2(q, c.x, seed) * a.x;
+    let wide = max(a.y, pixel);
+    let line = (1.0 - smoothstep(0.0, wide, edge)) * (a.y / wide);
+    let open = value_noise3(p * b.y + vec3f(3.7, 1.3, 8.9), false);
+    let threshold = 1.0 - b.x;
+    return line * smoothstep(threshold - 0.12, threshold + 0.12, open);
+}
+
+fn pavement_track(uv: vec2f, a: vec4f, b: vec4f, seed: u32, pixel: f32) -> f32 {
+    if (a.x <= 0.0 || a.w <= 0.0) {
+        return 0.0;
+    }
+    let slice = f32(seed % 4096u) * 0.37;
+    let wander = (value_noise3(vec3f(uv.y * b.y, slice, 0.0), false) - 0.5) * 2.0 * b.x;
+    let across = (fract((uv.x - a.y + wander) / a.x + 0.5) - 0.5) * a.x;
+    let off = abs(abs(across) - a.z);
+    let band = 1.0 - smoothstep(0.0, a.w, off);
+    let streak = 0.6 + 0.8 * value_noise3(vec3f(uv.x * b.z, uv.y * b.w, slice + 5.0), false);
+    let weight = octave_weight(pixel * max(b.z, b.w));
+    return clamp(band * (1.0 + (streak - 1.0) * weight), 0.0, 1.0);
+}
 fn trace_noise_end() {}
 
 fn random(state: ptr<function,u32>) -> f32 {
@@ -720,7 +807,7 @@ fn detail_wobble(p: vec3f, scale: f32) -> vec3f {
 fn detail_perturb(n: vec3f, g: vec3f) -> vec3f {
     return normalize(n-(g-n*dot(g,n)));
 }
-fn detail_layer(value: Shaded, normal_in: vec3f, layer: vec4f, pa: vec4f, pb: vec4f, pc: vec4f, pd: vec4f, position: vec3f) -> DetailResult {
+fn detail_layer(value: Shaded, normal_in: vec3f, layer: vec4f, pa: vec4f, pb: vec4f, pc: vec4f, pd: vec4f, position: vec3f, uv: vec2f) -> DetailResult {
     var shade=value;
     var base=value.base;
     var roughness=value.roughness;
@@ -772,6 +859,14 @@ fn detail_layer(value: Shaded, normal_in: vec3f, layer: vec4f, pa: vec4f, pb: ve
             roughness=sqrt(mix(roughness*roughness,min(roughness*roughness*4.0+0.02,0.35),breakup));
         }
         base=mix(base,base*0.9+vec3f(0.06),speck*min(amp,1.0));
+    } else if (kind==19u) {
+        let crack=pavement_crack(p,n,pa,pb,pc,seed,0.0)*clamp(amp,0.0,1.0);
+        base*=1.0-pb.z*crack;
+        roughness=mix(roughness,pb.w,crack);
+    } else if (kind==20u) {
+        let worn=pavement_track(uv,pa,pb,seed,0.0)*clamp(amp,0.0,1.0);
+        base*=mix(1.0,pc.x,worn);
+        roughness=mix(roughness,roughness*pc.y,worn);
     } else if (kind==18u) {
         n=detail_perturb(n,detail_wobble(p,pa.x)*amp+detail_wobble(p,pa.y)*(amp*pa.w)+detail_wobble(p,pa.z)*(amp*pb.x));
     }
@@ -1258,7 +1353,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             let first=extension_layers(m);
             for (var i=0u;i<layered;i++) {
                 let at=first+i*5u;
-                let detailed=detail_layer(s,n,materials[at],materials[at+1u],materials[at+2u],materials[at+3u],materials[at+4u],p);
+                let detailed=detail_layer(s,n,materials[at],materials[at+1u],materials[at+2u],materials[at+3u],materials[at+4u],p,hit.uv);
                 s=detailed.shade;
                 n=detailed.normal;
             }

@@ -37,16 +37,15 @@ fn a_file_claiming_more_memory_than_the_limit_is_refused_with_exit_1_not_a_signa
         .join("tmp")
         .join(format!("memory-{}", std::process::id()));
     std::fs::create_dir_all(&base).unwrap();
-    let file = base.join("oversized.pfx");
+    let file = base.join("oversized.pitofx");
     std::fs::write(&file, oversized()).unwrap();
     let output = Command::new("prlimit")
         .arg("--core=1:1")
         .arg(format!("--as={LIMIT}:{LIMIT}"))
         .arg("--")
         .arg(env!("CARGO_BIN_EXE_pfx"))
-        .args(["scene", "unpack"])
+        .args(["scene", "print"])
         .arg(&file)
-        .arg(base.join("out"))
         .output()
         .unwrap();
     std::fs::remove_dir_all(&base).ok();

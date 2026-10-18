@@ -676,6 +676,7 @@ mod tests {
 
     #[test]
     fn a_figurine_orbit_is_planned_live_and_traced() {
+        let _sample = super::super::sample("figurine");
         let dir = scratch("figurine");
         let planned = |text: &str| {
             let words = strings(text);

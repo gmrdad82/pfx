@@ -31,7 +31,7 @@ fn ab(text: &str) -> Result<[f64; 2], String> {
 #[derive(clap::Args)]
 pub(super) struct Args {
     #[arg(value_name = "recipe", help = "The recipe whose curve to list or edit")]
-    recipe: String,
+    pub(super) recipe: String,
     #[arg(value_name = "object", help = "The generator object, by name")]
     object: String,
     #[arg(

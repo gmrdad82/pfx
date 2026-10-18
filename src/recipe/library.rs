@@ -53,6 +53,15 @@ enum LibraryCommand {
 
 const COMMAND: &str = "library";
 
+impl Args {
+    pub(super) fn recipe(&mut self) -> Option<&mut PathBuf> {
+        match &mut self.command {
+            LibraryCommand::Bake(bake) => Some(&mut bake.recipe),
+            _ => None,
+        }
+    }
+}
+
 fn root(given: Option<&Path>, needs_index: bool) -> Result<PathBuf, String> {
     if let Some(dir) = given {
         return if dir.is_dir() {
@@ -149,18 +158,32 @@ fn index(args: &Common) -> ExitCode {
 fn validator(dir: &Path, problems: &mut Vec<Problem>) -> Option<usize> {
     let mut checked = 0;
     let entries = library::index(dir).ok()?;
+    let scratch = PathBuf::from("tmp/pfx/library-check");
     for entry in entries {
-        let model = dir.join(&entry.model);
+        let Ok(stored) = library::Stored::read(&dir.join(&entry.kind).join(&entry.name)) else {
+            continue;
+        };
+        let model = scratch.join(format!("{}-{}.glb", entry.kind, entry.name));
+        let written =
+            std::fs::create_dir_all(&scratch).and_then(|()| std::fs::write(&model, &stored.model));
+        if let Err(e) = written {
+            problems.push(Problem {
+                path: entry.object.clone(),
+                text: format!("{}: {e}", model.display()),
+            });
+            continue;
+        }
         let run = std::process::Command::new("gltf_validator")
             .arg("-o")
             .arg(&model)
             .output();
+        let _ = std::fs::remove_file(&model);
         let output = match run {
             Ok(output) => output,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
             Err(e) => {
                 problems.push(Problem {
-                    path: entry.model.clone(),
+                    path: entry.object.clone(),
                     text: format!("gltf_validator did not run: {e}"),
                 });
                 continue;
@@ -176,12 +199,12 @@ fn validator(dir: &Path, problems: &mut Vec<Problem>) -> Option<usize> {
         match errors {
             Some(0) => {}
             Some(n) => problems.push(Problem {
-                path: entry.model.clone(),
+                path: entry.object.clone(),
                 text: format!("gltf_validator reports {n} errors"),
             }),
             None if output.status.success() => {}
             None => problems.push(Problem {
-                path: entry.model.clone(),
+                path: entry.object.clone(),
                 text: format!(
                     "gltf_validator failed: {}",
                     String::from_utf8_lossy(&output.stderr).trim()

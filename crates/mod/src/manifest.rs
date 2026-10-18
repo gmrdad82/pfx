@@ -4,6 +4,8 @@ use crate::error::Refusal;
 
 pub const MANIFEST: &str = "mod.toml";
 pub const ID_CHARS: usize = 64;
+pub const DATA_CHARS: usize = 255;
+pub const DATA_DEPTH: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Api {
@@ -50,6 +52,8 @@ pub struct Manifest {
     pub version: String,
     pub api: String,
     pub entry: String,
+    #[serde(default)]
+    pub data: Vec<String>,
 }
 
 impl Manifest {
@@ -76,6 +80,28 @@ impl Manifest {
                 found: manifest.entry,
             });
         }
+        for (at, name) in manifest.data.iter().enumerate() {
+            if !valid_data(name) {
+                return Err(Refusal::Data {
+                    name: name.clone(),
+                    problem: format!(
+                        "a data file is a relative path of up to {DATA_DEPTH} folders and file names, each of a-z, A-Z, 0-9, `-`, `_` and `.` and none starting with `.`, at most {DATA_CHARS} bytes"
+                    ),
+                });
+            }
+            if *name == manifest.entry || name == MANIFEST {
+                return Err(Refusal::Data {
+                    name: name.clone(),
+                    problem: format!("{MANIFEST} and the entry are not data files"),
+                });
+            }
+            if manifest.data[..at].contains(name) {
+                return Err(Refusal::Data {
+                    name: name.clone(),
+                    problem: "it is named twice".to_string(),
+                });
+            }
+        }
         Ok(manifest)
     }
 }
@@ -100,4 +126,17 @@ pub fn valid_entry(entry: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
         && !stem.starts_with('.')
+}
+
+pub fn valid_data(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= DATA_CHARS
+        && name.split('/').count() <= DATA_DEPTH
+        && name.split('/').all(|part| {
+            !part.is_empty()
+                && !part.starts_with('.')
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+        })
 }

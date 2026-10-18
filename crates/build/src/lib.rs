@@ -106,6 +106,7 @@ pub struct Generated {
     pub pieces: Vec<Piece>,
     pub facts: serde_json::Map<String, serde_json::Value>,
     pub materials: BTreeMap<String, serde_json::Value>,
+    pub textures: BTreeMap<String, pfx_recipe::Textures>,
     pub lights: Vec<GeneratedLight>,
     pub pivots: BTreeMap<String, [f64; 3]>,
     pub notes: Vec<String>,
@@ -758,6 +759,26 @@ pub fn missing_materials(
     out
 }
 
+pub fn missing_files(recipe: &Recipe, base: &Path) -> Vec<recipe::Problem> {
+    recipe
+        .objects
+        .iter()
+        .enumerate()
+        .filter_map(|(i, object)| match &object.kind {
+            Kind::Mesh { path, .. } if recipe::library_reference(path).is_none() => {
+                recipe.asset(base, path).err().map(|text| {
+                    recipe.problem(
+                        format!("object[{}].path", object.name),
+                        &format!("object#{i}.path"),
+                        text,
+                    )
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn problem(recipe: &Recipe, e: Error) -> recipe::Problem {
     let ipath = recipe
         .objects
@@ -939,6 +960,7 @@ struct Made {
     lods: Vec<Lod>,
     facts: serde_json::Map<String, serde_json::Value>,
     materials: BTreeMap<String, serde_json::Value>,
+    textures: BTreeMap<String, pfx_recipe::Textures>,
     lights: Vec<GeneratedLight>,
     looks: Looks,
     tree: Option<library::Tree>,
@@ -1096,6 +1118,7 @@ fn make(
         pieces,
         facts,
         materials,
+        textures,
         lights,
         pivots,
         notes,
@@ -1105,6 +1128,7 @@ fn make(
         lods: Vec::new(),
         facts,
         materials,
+        textures,
         lights: Vec::new(),
         looks,
         tree,
@@ -1286,6 +1310,7 @@ fn assemble(
     let mut offered: BTreeMap<String, (&str, serde_json::Value)> = BTreeMap::new();
     let mut quiet = std::collections::BTreeSet::new();
     let mut renamed = Vec::new();
+    let mut textures = recipe.textures.clone();
     let mut lights = Vec::new();
     let mut imported = Looks::new();
     let mut lods = Vec::new();
@@ -1310,6 +1335,9 @@ fn assemble(
                 }
                 if matches!(object.kind, Kind::Generator { .. }) {
                     offer(&mut offered, object, made.materials.clone())?;
+                }
+                for (name, maps) in &made.textures {
+                    textures.entry(name.clone()).or_insert_with(|| maps.clone());
                 }
                 pfx_glb::merge(&mut generated, &made.facts);
                 if let Some(found) = library::provenance(recipe, object, base) {
@@ -1453,7 +1481,7 @@ fn assemble(
         merged.entry(name.clone()).or_insert_with(|| value.clone());
     }
     merged.extend(catalogue.iter().map(|(k, v)| (k.clone(), v.clone())));
-    let looks = Arc::new(maps::resolve(recipe, base, imported, &merged)?);
+    let looks = Arc::new(maps::resolve(recipe, &textures, base, imported, &merged)?);
     for part in &mut parts {
         part.looks = looks.clone();
     }

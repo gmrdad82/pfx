@@ -39,6 +39,8 @@ pub struct Limits {
     pub depth: u32,
     pub component_bytes: usize,
     pub manifest_bytes: usize,
+    pub data_files: usize,
+    pub data_bytes: usize,
     pub log: Option<LogLimits>,
 }
 
@@ -55,6 +57,8 @@ impl Default for Limits {
             depth: 1_000,
             component_bytes: 16 << 20,
             manifest_bytes: 16 << 10,
+            data_files: 256,
+            data_bytes: 64 << 20,
             log: None,
         }
     }

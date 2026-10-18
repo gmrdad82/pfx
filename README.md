@@ -12,7 +12,7 @@ pfx is a game and render engine in Rust, part of [PITO MD](https://pitomd.com). 
 | 2D pass, 4K, 2,000 shots + 20,301 particles | **0.36 ms** GPU a frame | [measured.md](docs/measured.md#2d-pass) |
 | Path tracer, 4K final, adaptive to 64 samples a pixel | **5,969 ms** | [trace.md](docs/trace.md#the-material-record) |
 | Denoiser, 4K, texture to texture | **274 ms** on the GPU | [denoise.md](docs/denoise.md#speed) |
-| `.pfx` file, car-sized model (159,200 triangles) | **3.4 ms** warm, 7.9 ms cold, at half the GLB's size | [pfx-file.md](docs/pfx-file.md#load-time) |
+| `.pitofx` file, car-sized model (159,200 triangles) | **3.4 ms** warm, 7.9 ms cold, at half the GLB's size | [pfx-file.md](docs/pfx-file.md#load-time) |
 | Empty game, stripped release binary (v0.32.0) | **34.7 MB** against Bevy's 106.6 MB | [measured.md](docs/measured.md#size) |
 
 How and when each was measured is on its page.
@@ -47,11 +47,13 @@ pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v2.6.0" }
 
 Its crates build and pass their tests on Linux and Windows in CI, build for macOS on Apple Silicon in CI, and a Windows build runs on Linux and the Steam Deck through Proton ([docs/windows.md](docs/windows.md)). [Your first game](docs/first-game.md) walks through it, and [your first recipe](docs/recipe-first-scene.md) builds a scene.
 
-## The .pfx file
+## The .pitofx file
 
-A `.pfx` is pfx's own file for scenes, recipes and models: TOML inside, in pfx's own container, a chunk table and then each chunk checksummed and compressed on its own with LZ4 (data that is already compressed, such as PNG, is kept as it is), so a reader decodes only the chunks it needs ([docs/pfx-file.md](docs/pfx-file.md)). It is not an archive: no zip tool opens it. A recipe document holds the recipe, every file it reads, its built glTF and the scene built from it, so an unchanged document opens without a rebuild ([docs/recipe-documents.md](docs/recipe-documents.md)).
+A `.pitofx` is pfx's own file for scenes, recipes and models: TOML inside, in pfx's own container, a chunk table and then each chunk checksummed and compressed on its own with LZ4 (data that is already compressed, such as PNG, is kept as it is), so a reader decodes only the chunks it needs ([docs/pfx-file.md](docs/pfx-file.md)). It is not an archive: no zip tool opens it. A recipe document holds the recipe, every file it reads, its built glTF and the scene built from it, so an unchanged document opens without a rebuild ([docs/recipe-documents.md](docs/recipe-documents.md)).
 
-People edit a `.pfx` in the editor's inspector or its built-in TOML editor, with syntax highlighting; scripts and agents edit it through the CLI verbs (`set` and `get` by dotted key, `key`, `add`, `remove` and the rest), which write the edit and a fresh build back into the `.pfx` in one atomic replace. Other tools exchange glTF with pfx (`pfx import`, `pfx export`), never `.pfx`.
+People edit a `.pitofx` in the editor's inspector or its built-in TOML editor, with syntax highlighting; scripts and agents edit it through the CLI verbs (`set` and `get` by dotted key, `key`, `add`, `remove` and the rest), which write the edit and a fresh build back into the `.pitofx` in one atomic replace. Other tools exchange glTF with pfx (`pfx import`, `pfx export`), never `.pitofx`.
+
+Older releases named the file `.pfx`; `pfx scene migrate <x.pfx>`, or opening it in the editor, checks its `PFXFILE` magic and writes `<x>.pitofx` beside it once.
 
 ## The renderers
 
@@ -65,9 +67,9 @@ People edit a `.pfx` in the editor's inspector or its built-in TOML editor, with
 
 ## The editor
 
-<p align="center"><img src="docs/images/editor.png" width="800" alt="pfx edit on a new game made by pfx new: the outliner on the left lists the scene's objects, lights and materials; the viewport in the middle shows the pfx mark and wordmark standing on a grid with the move gizmo on them; the inspector on the right shows the selected group's position, rotation and scale; the log at the bottom says the scene opened with 4 objects, 10 materials and 1 light."></p>
+<p align="center"><img src="docs/images/editor.png" width="800" alt="pfx gui on a new game made by pfx new: the outliner on the left lists the scene's objects, lights and materials; the viewport in the middle shows the pfx mark and wordmark standing on a grid with the move gizmo on them; the inspector on the right shows the selected group's position, rotation and scale; the log at the bottom says the scene opened with 4 objects, 10 materials and 1 light."></p>
 
-`pfx edit` opens a scene, a scene `.pfx` or a project folder in pfx's editor: an outliner, the live viewport with gizmos and picking, an inspector, a TOML panel with highlighting and checks at line and column, a log and a traced preview, on one undo history ([docs/editor.md](docs/editor.md)). Its theme is black with thin, wide-tracked uppercase titles, a lime accent for what is live, violet for hover and highlights, inset cards and numbered panel markers.
+`pfx gui` opens a scene, a scene `.pitofx` or a project folder in pfx's editor: an outliner, the live viewport with gizmos and picking, an inspector, a TOML panel with highlighting and checks at line and column, a log and a traced preview, on one undo history ([docs/editor.md](docs/editor.md)). Its theme is black with thin, wide-tracked uppercase titles, a lime accent for what is live, violet for hover and highlights, inset cards and numbered panel markers.
 
 **Play** (F5) runs the open scene as a game in the viewport, and Stop (F8) puts the editor back exactly where it was. With a game's WebAssembly module (`--play <module.wasm>`, the scene's `[play] module`, or a `.wasm` dropped on the window) the game's logic runs in pfx-mod's sandbox, metered and deterministic; the logic stays in the game's own repository ([docs/play-modules.md](docs/play-modules.md)).
 
@@ -76,9 +78,9 @@ People edit a `.pfx` in the editor's inspector or its built-in TOML editor, with
 | | |
 |---|---|
 | `pfx new <game>` | scaffold a game; `pfx new <out> --from <template>` writes a starter recipe |
-| `pfx edit <scene \| .pfx \| folder>` | the editor, with `--play <module.wasm>` |
+| `pfx gui <scene \| .pitofx \| folder>` | the editor, with `--play <module.wasm>` |
 | `pfx build`, `check`, `timeline` | build a recipe headless into a GLB and a scene, the same bytes on every OS ([docs/recipes.md](docs/recipes.md)) |
-| `pfx set`, `get`, `key`, `unkey`, `curve`, `route`, `add`, `remove`, `duplicate` | edit a recipe or a `.pfx`: values by dotted key, keys, curves, routes and objects |
+| `pfx set`, `get`, `key`, `unkey`, `curve`, `route`, `add`, `remove`, `duplicate` | edit a recipe or a `.pitofx`: values by dotted key, keys, curves, routes and objects |
 | `pfx scene list`, `save`, `unpack`, `fold`, `migrate`, `fix` | inspect, pack and unpack documents and scenes |
 | `pfx import`, `export`, `diff`, `library` | glTF in and out, GLB diffs, the object library |
 | `pfx render --recipe <recipe>`, `pfx shot <recipe> --still` | a path-traced still; a live still |
@@ -107,8 +109,8 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-materials` | one physically based material for both renderers, with a WGSL BSDF library |
 | `pfx-text` | glyphs from vector outlines, laid along any baseline |
 | `pfx-post` | the finish chain (tone map, bloom, grade, vignette, grain, dither) and image styles |
-| `pfx-scene` | the scene format: typed tables, errors at file:line:column, stable ids, migrations, a writer that keeps comments, scenes packed into one `.pfx` |
-| `pfx-file` | the `.pfx` container: a chunk table, then checksummed chunks, stored or compressed |
+| `pfx-scene` | the scene format: typed tables, errors at file:line:column, stable ids, migrations, a writer that keeps comments, scenes packed into one `.pitofx` |
+| `pfx-file` | the `.pitofx` container: a chunk table, then checksummed chunks, stored or compressed |
 | `pfx-load` | meshes, images, HDR skies and fonts, scenes with in-place edits, and a content-addressed cache |
 | `pfx-recipe`, `pfx-build`, `pfx-recipe-scene` | recipes: parse, validate and patch them, build them into a GLB and a scene, and turn them into an engine scene |
 | `pfx-mesh`, `pfx-generators`, `pfx-motion`, `pfx-glb` | recipe geometry, a kit for an app's generators, routes and the timeline, and the deterministic GLB writer and diff |
@@ -126,7 +128,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-game` | the game runtime and its launcher |
 | `pfx-project` | a game's project, scenes and content folders, and `pfx new`'s scaffold |
 | `pfx-mod` | the mod host: sandboxed, deterministic WASM components, metered by fuel and capped in memory |
-| `pfx-editor` | `pfx edit` and `<game> edit` |
+| `pfx-editor` | `pfx gui` and `<game> edit` |
 | `pfx-editor-style`, `-shell`, `-doc`, `-toml`, `-viewport` | the editor's egui crates: the theme and widgets, the window host with an offscreen shot harness, one undo history, the TOML panel and the 3D viewport ([docs/editor-crates.md](docs/editor-crates.md)) |
 | `pfx-theme` | the editor's tokens as the theme the editor and the dev HUD paint with |
 | `pfx-bench`, `pfx-assets`, `pfx-run` | `pfx bench`, path-traced logos and icons, and the `pfx` tool's process plumbing |

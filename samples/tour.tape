@@ -1,4 +1,4 @@
-# The README's clip: pfx edit samples --clip <dir> --tape samples/tour.tape --poster last
+# The README's clip: pfx gui samples --clip <dir> --tape samples/tour.tape --poster last
 # Points are for the default 1586x992 window, opened on the picker of this folder.
 wait 1.2
 # open the workshop from the picker

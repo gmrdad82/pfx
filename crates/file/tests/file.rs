@@ -68,7 +68,7 @@ fn every_flag_and_codec_round_trips() {
     }
     let bytes = writer.to_vec().unwrap();
     assert_eq!(bytes, writer.to_vec().unwrap());
-    let path = temp("round.pfx");
+    let path = temp("round.pitofx");
     writer.write(&path).unwrap();
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
     let opened = Reader::open(&path).unwrap();
@@ -225,7 +225,7 @@ fn reading_the_thumbnail_leaves_the_gltf_alone() {
     let mut bad = bytes.clone();
     let middle = (gltf.offset + gltf.stored / 2) as usize;
     bad[middle..middle + 64].fill(0xA5);
-    let path = temp("thumb.pfx");
+    let path = temp("thumb.pitofx");
     std::fs::write(&path, &bad).unwrap();
     let reader = Reader::open(&path).unwrap();
     assert_eq!(&*reader.chunk(THMB).unwrap().unwrap(), PNG);
@@ -277,4 +277,40 @@ fn the_crc_port_matches_crc32fast() {
             .crc;
         assert_eq!(reader, crc32fast::hash(&input), "{} bytes", input.len());
     }
+}
+
+#[test]
+fn a_legacy_pfx_is_imported_once_and_a_certificate_is_refused() {
+    let dir = temp("legacy");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("room.pfx");
+    std::fs::write(&old, sample()).unwrap();
+    assert!(pfx_file::is_legacy_path(&old) && !pfx_file::is_file_path(&old));
+    assert!(
+        pfx_file::legacy_refusal(&old)
+            .unwrap()
+            .contains("pfx scene migrate")
+    );
+    let new = pfx_file::import_legacy(&old).unwrap();
+    assert_eq!(new, dir.join("room.pitofx"));
+    assert_eq!(std::fs::read(&new).unwrap(), sample());
+    assert!(
+        pfx_file::import_legacy(&old)
+            .unwrap_err()
+            .contains("already exists")
+    );
+    let certificate = dir.join("server.pfx");
+    std::fs::write(
+        &certificate,
+        [0x30, 0x82, 0x0a, 0x1f, 0x02, 0x01, 0x03, 0x30],
+    )
+    .unwrap();
+    assert!(
+        pfx_file::legacy_refusal(&certificate)
+            .unwrap()
+            .contains("not a pfx document")
+    );
+    assert!(pfx_file::import_legacy(&certificate).is_err());
+    assert!(!dir.join("server.pitofx").exists());
 }

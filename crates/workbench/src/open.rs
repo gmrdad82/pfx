@@ -58,7 +58,7 @@ impl Purpose {
 
     fn hint(self) -> &'static str {
         match self {
-            Purpose::Open => "path of a recipe, a scene, a .pfx or a .glb",
+            Purpose::Open => "path of a recipe, a scene, a .pitofx or a .glb",
             Purpose::Import => "path of a .glb",
             Purpose::SaveAs | Purpose::Export => "folder",
         }
@@ -69,7 +69,7 @@ impl Purpose {
         path.is_file()
             && visible_name(path).is_some()
             && match self {
-                Purpose::Open => kind.is_some(),
+                Purpose::Open => kind.is_some() || pfx_file::is_legacy_path(path),
                 Purpose::Import | Purpose::Export => kind == Some(crate::file::Kind::Glb),
                 Purpose::SaveAs => kind == Some(crate::file::Kind::Pfx),
             }
@@ -407,6 +407,9 @@ fn choose_with(query: &str, selected: Option<&Row>, home: Option<&OsStr>) -> Opt
     }
 }
 
+pub const SETTINGS: &str = "settings.pitofx";
+pub const SETTINGS_TOML: &str = "settings.toml";
+
 #[derive(Clone, Debug)]
 pub struct Book {
     path: Option<PathBuf>,
@@ -415,7 +418,7 @@ pub struct Book {
 impl Book {
     pub fn machine() -> Book {
         Book {
-            path: Some(state_dir().join("recent")),
+            path: Some(state_dir().join(SETTINGS)),
         }
     }
 
@@ -426,83 +429,109 @@ impl Book {
     #[cfg(test)]
     pub fn at(dir: &Path) -> Book {
         Book {
-            path: Some(dir.join("recent")),
+            path: Some(dir.join(SETTINGS)),
         }
     }
 
-    pub fn list(&self) -> Vec<PathBuf> {
+    fn settings(&self) -> toml_edit::DocumentMut {
+        self.path
+            .as_ref()
+            .and_then(|path| {
+                pfx_file::Reader::open(path).ok().or_else(|| {
+                    pfx_file::Reader::open(path.with_extension(pfx_file::LEGACY_EXTENSION)).ok()
+                })
+            })
+            .and_then(|reader| {
+                reader
+                    .named(pfx_file::FILE, SETTINGS_TOML)
+                    .ok()
+                    .flatten()
+                    .map(|bytes| bytes.into_owned())
+            })
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .and_then(|text| text.parse().ok())
+            .unwrap_or_default()
+    }
+
+    fn keep(&self, settings: &toml_edit::DocumentMut) -> std::io::Result<()> {
         let Some(path) = &self.path else {
-            return Vec::new();
+            return Ok(());
         };
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Vec::new();
-        };
-        text.lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        pfx_file::Writer::new()
+            .named(
+                pfx_file::FILE,
+                SETTINGS_TOML,
+                settings.to_string().into_bytes(),
+                pfx_file::Codec::Auto,
+            )
+            .write(path)
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+
+    pub fn list(&self) -> Vec<PathBuf> {
+        self.settings()
+            .get("recent")
+            .and_then(toml_edit::Item::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(toml_edit::Value::as_str)
+            .filter(|line| !line.trim().is_empty())
             .map(PathBuf::from)
             .collect()
     }
 
     pub fn remember(&self, recipe: &Path) -> std::io::Result<()> {
-        let Some(book) = &self.path else {
+        if self.path.is_none() {
             return Ok(());
-        };
+        }
         let recipe = std::path::absolute(recipe).unwrap_or_else(|_| recipe.to_path_buf());
         let mut paths = self.list();
         paths.retain(|path| !same_path(path, &recipe));
         paths.insert(0, recipe);
         paths.truncate(LIMIT);
-        let mut text = String::new();
-        for path in &paths {
-            text.push_str(&path.display().to_string());
-            text.push('\n');
-        }
-        write_atomic(book, text.as_bytes())
-    }
-
-    fn view_path(&self) -> Option<PathBuf> {
-        self.path.as_ref().map(|path| path.with_file_name("view"))
+        let mut settings = self.settings();
+        let recent: toml_edit::Array = paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect();
+        settings["recent"] = toml_edit::value(recent);
+        self.keep(&settings)
     }
 
     pub fn view(&self) -> crate::wire::Look {
         let mut look = crate::wire::Look::default();
-        let Some(text) = self
-            .view_path()
-            .and_then(|path| std::fs::read_to_string(path).ok())
+        let settings = self.settings();
+        let Some(view) = settings
+            .get("view")
+            .and_then(toml_edit::Item::as_table_like)
         else {
             return look;
         };
-        for line in text.lines() {
-            match line
-                .split_once('=')
-                .map(|(key, value)| (key.trim(), value.trim()))
-            {
-                Some(("wireframe", value)) => {
-                    look.amount = crate::wire::amount(value).unwrap_or(0.0);
-                }
-                Some(("xray", value)) => look.xray = value == "on",
-                Some(("clay", value)) => {
-                    look.clay = crate::wire::amount(value).unwrap_or(0.0);
-                }
-                _ => {}
-            }
-        }
+        let on = |key: &str| {
+            view.get(key)
+                .and_then(toml_edit::Item::as_bool)
+                .is_some_and(|on| on)
+        };
+        look.amount = if on("wireframe") { 1.0 } else { 0.0 };
+        look.xray = on("xray");
+        look.clay = if on("clay") { 1.0 } else { 0.0 };
         look
     }
 
     pub fn keep_view(&self, look: crate::wire::Look) -> std::io::Result<()> {
-        let Some(path) = self.view_path() else {
+        if self.path.is_none() {
             return Ok(());
-        };
-        let switch = |on: bool| if on { "on" } else { "off" };
-        let text = format!(
-            "wireframe = {}\nxray = {}\nclay = {}\n",
-            switch(look.on()),
-            switch(look.xray),
-            switch(look.clay > 0.0)
-        );
-        write_atomic(&path, text.as_bytes())
+        }
+        let mut settings = self.settings();
+        let mut view = toml_edit::Table::new();
+        view["wireframe"] = toml_edit::value(look.on());
+        view["xray"] = toml_edit::value(look.xray);
+        view["clay"] = toml_edit::value(look.clay > 0.0);
+        settings["view"] = toml_edit::Item::Table(view);
+        self.keep(&settings)
     }
 }
 
@@ -685,7 +714,7 @@ impl Picker {
         );
         if purpose.saves() {
             let hint = if purpose == Purpose::SaveAs {
-                "name.pfx"
+                "name.pitofx"
             } else {
                 "name.glb"
             };
@@ -732,7 +761,7 @@ impl Picker {
             self.cursor = (self.cursor + 1).min(len - 1);
         }
         if let Some(error) = &self.error {
-            ui.label(code(ui, error, DANGER));
+            ui.label(code(ui, crate::shown::text(error), DANGER));
         }
         let cursor = self.cursor;
         let empty = self.query.trim().is_empty();
@@ -937,7 +966,8 @@ fn recipe_row(ui: &mut Ui, selected: bool, path: &Path, thumbs: &mut Thumbs) -> 
     let name = file_name(path);
     let parent = path
         .parent()
-        .map(|parent| parent.display().to_string())
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map(crate::shown::path)
         .unwrap_or_default();
     let thumb = thumbs.get(ui.ctx(), path);
     let icon = if thumb.is_some() { "" } else { FILE };
@@ -1071,7 +1101,7 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "recent".to_string());
-    let temp = path.with_file_name(format!(".{name}.pfx-tmp"));
+    let temp = path.with_file_name(format!(".{name}.pitofx-tmp"));
     std::fs::write(&temp, bytes)?;
     if let Err(error) = std::fs::rename(&temp, path) {
         let _ = std::fs::remove_file(&temp);
@@ -1154,10 +1184,25 @@ mod tests {
         assert_eq!(list[0], made[5]);
         assert_eq!(list.iter().filter(|path| *path == &made[5]).count(), 1);
         assert_eq!(list[1], made[11]);
-        assert!(!folder.join("state").join(".recent.pfx-tmp").exists());
-        let text = std::fs::read_to_string(book.path.unwrap()).unwrap();
-        assert!(text.ends_with('\n'));
-        assert_eq!(text.lines().count(), LIMIT);
+        let held = std::fs::read_dir(folder.join("state"))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(held, [SETTINGS]);
+        let reader = pfx_file::Reader::open(book.path.as_ref().unwrap()).unwrap();
+        let text = reader
+            .named(pfx_file::FILE, SETTINGS_TOML)
+            .unwrap()
+            .unwrap();
+        let table: toml_edit::DocumentMut = std::str::from_utf8(&text).unwrap().parse().unwrap();
+        assert_eq!(table["recent"].as_array().unwrap().len(), LIMIT);
+        book.keep_view(crate::wire::Look {
+            xray: true,
+            ..crate::wire::Look::default()
+        })
+        .unwrap();
+        assert!(book.view().xray);
+        assert_eq!(book.list().len(), LIMIT);
     }
 
     #[test]

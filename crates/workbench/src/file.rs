@@ -16,8 +16,8 @@ pub enum Kind {
 
 pub fn kind(path: &Path) -> Option<Kind> {
     match path.extension().and_then(|ext| ext.to_str()) {
-        Some("pfx") if crate::scenes::is_scene(path) => Some(Kind::Scene),
-        Some("pfx") => Some(Kind::Pfx),
+        Some(pfx_file::EXTENSION) if crate::scenes::is_scene(path) => Some(Kind::Scene),
+        Some(pfx_file::EXTENSION) => Some(Kind::Pfx),
         Some("glb") => Some(Kind::Glb),
         Some("toml") if crate::scenes::is_scene(path) => Some(Kind::Scene),
         Some("toml") => Some(Kind::Recipe),
@@ -165,7 +165,7 @@ pub fn hold(path: &Path) -> Result<(Held, PathBuf), String> {
                 recipe,
             ))
         }
-        _ => Err(format!("{}: not a .pfx or a .glb", path.display())),
+        _ => Err(format!("{}: not a .pitofx or a .glb", path.display())),
     }
 }
 
@@ -186,18 +186,26 @@ pub fn imported(path: &Path) -> Option<PathBuf> {
         &name[..name.len() - ".scene.toml".len()]
     } else if lower.ends_with(".toml") {
         &name[..name.len() - ".toml".len()]
+    } else if pfx_file::is_legacy_path(path) {
+        return Some(pfx_file::renamed(path));
     } else {
         return None;
     };
-    Some(path.with_file_name(format!("{stem}.pfx")))
+    Some(path.with_file_name(format!("{stem}.pitofx")))
 }
 
 pub fn import_beside(path: &Path, registry: &Registry) -> Result<Option<PathBuf>, String> {
     let Some(target) = imported(path).filter(|_| path.is_file()) else {
         return Ok(None);
     };
+    if pfx_file::is_legacy_path(path) && !pfx_file::has_magic(path) {
+        return Err(pfx_file::legacy_refusal(path).unwrap_or_default());
+    }
     if target.is_file() {
         return Ok(Some(target));
+    }
+    if pfx_file::is_legacy_path(path) {
+        return pfx_file::import_legacy(path).map(Some);
     }
     match kind(path) {
         Some(Kind::Scene) => {
@@ -212,7 +220,7 @@ pub fn import_beside(path: &Path, registry: &Registry) -> Result<Option<PathBuf>
 }
 
 pub fn pack(recipe: &Path, registry: &Registry, out: &Path) -> Result<PathBuf, String> {
-    let out = with_extension(out, "pfx");
+    let out = with_extension(out, pfx_file::EXTENSION);
     let mut document = Document::pack(recipe, registry)?;
     if let Ok(old) = Document::open(&out) {
         document.overrides = old.overrides;
@@ -371,11 +379,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_stock_glb_and_its_packed_document_draw_their_own_materials() {
+        let glb = crate::scratch("stock-glb").with_file_name("model.glb");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../load/tests/data/head.glb"),
+            &glb,
+        )
+        .unwrap();
+        let registry = Registry::new();
+        let drawn = |recipe: &Path| {
+            let loaded = pfx_recipe::load(recipe).unwrap();
+            let base = recipe.parent().unwrap();
+            let built = pfx_build::build_with(&loaded.recipe, base, &registry).unwrap();
+            pfx_recipe_scene::Stage::prepare(&loaded.recipe, &built)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        };
+        let (_, recipe) = hold(&glb).unwrap();
+        assert_eq!(drawn(&recipe), Ok(()));
+        let packed = pack(&recipe, &registry, &glb.with_file_name("model")).unwrap();
+        let (_, recipe) = hold(&packed).unwrap();
+        assert_eq!(drawn(&recipe), Ok(()));
+    }
+
+    #[test]
     fn a_toml_is_imported_into_a_pfx_beside_it_once_and_never_written() {
         let recipe = crate::scratch("import-once").with_file_name("desk.toml");
         let text = "recipe = 1\nname = \"desk\"\n\n[[object]]\nname = \"top\"\nkind = \"box\"\nsize = [1.0, 0.1, 0.5]\n";
         std::fs::write(&recipe, text).unwrap();
-        let target = recipe.with_file_name("desk.pfx");
+        let target = recipe.with_file_name("desk.pitofx");
         let _ = std::fs::remove_file(&target);
         let registry = Registry::new();
         assert_eq!(
@@ -393,7 +425,7 @@ mod tests {
         assert_eq!(import_beside(&target, &registry).unwrap(), None);
         let scene = crate::scenes::fixture("import-scene");
         let packed_scene = import_beside(&scene, &registry).unwrap().unwrap();
-        assert_eq!(packed_scene, scene.with_file_name("stand.pfx"));
+        assert_eq!(packed_scene, scene.with_file_name("stand.pitofx"));
         assert!(crate::scenes::is_scene(&packed_scene));
         assert_eq!(kind(&packed_scene), Some(Kind::Scene));
         assert_eq!(kind(&target), Some(Kind::Pfx));

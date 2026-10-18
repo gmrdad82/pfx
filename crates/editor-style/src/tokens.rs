@@ -213,6 +213,98 @@ pub fn theme() -> Theme {
     }
 }
 
+pub mod game {
+    use egui::Color32;
+
+    use super::rgb;
+
+    pub const BG: Color32 = rgb(0x02264A);
+    pub const WELL: Color32 = rgb(0x021A39);
+    pub const SURFACE: Color32 = rgb(0x0B3159);
+    pub const SELECTED: Color32 = rgb(0x123756);
+    pub const LINE: Color32 = rgb(0x244D6A);
+    pub const SUBTLE: Color32 = rgb(0x1F3F5E);
+    pub const STRONG: Color32 = rgb(0x366288);
+
+    pub const TEXT: Color32 = rgb(0xDAE5F0);
+    pub const CODE: Color32 = rgb(0xA9D0E4);
+    pub const TEXT2: Color32 = rgb(0x93B3D0);
+    pub const MUTED: Color32 = rgb(0x6591AD);
+    pub const DIM: Color32 = rgb(0x4F7293);
+
+    pub const HOT: Color32 = rgb(0xF2BF58);
+    pub const ON_HOT: Color32 = WELL;
+    pub const INFO: Color32 = rgb(0x74A6C4);
+    pub const RAMP: [Color32; 5] = [INFO, STRONG, LINE, SELECTED, WELL];
+
+    pub const OK: Color32 = rgb(0x5EB586);
+    pub const OK_TINT: Color32 = rgb(0x0F4247);
+    pub const ERROR: Color32 = rgb(0xE5667A);
+    pub const ERROR_TINT: Color32 = rgb(0x3B233A);
+}
+
+pub fn game() -> Theme {
+    Theme {
+        name: Cow::Borrowed("game"),
+        bg: game::BG,
+        surface: game::SURFACE,
+        card: game::BG,
+        card_line: game::LINE,
+        stripe: game::SELECTED,
+        well: game::WELL,
+        line: game::LINE,
+        track: game::SUBTLE,
+        grid: game::SUBTLE,
+        rule: game::STRONG,
+        title: game::TEXT,
+        text: game::TEXT,
+        text2: game::TEXT2,
+        muted: game::MUTED,
+        dim: game::DIM,
+        code: game::CODE,
+        on_accent: game::ON_HOT,
+        on_hot: game::ON_HOT,
+        accent: game::STRONG,
+        accent_bright: game::HOT,
+        accent_deep: game::SELECTED,
+        secondary: game::INFO,
+        secondary_soft: game::CODE,
+        hot: game::HOT,
+        hot_dim: game::SURFACE,
+        value: game::HOT,
+        ramp: game::RAMP,
+        ok: game::OK,
+        ok_tint: game::OK_TINT,
+        error: game::ERROR,
+        error_tint: game::ERROR_TINT,
+        warning: game::HOT,
+        syntax: Syntax {
+            key: game::INFO,
+            table: game::HOT,
+            string: game::OK,
+            number: game::TEXT,
+            boolean: game::TEXT,
+            date: game::TEXT2,
+            comment: game::DIM,
+            punctuation: game::MUTED,
+            plain: game::CODE,
+        },
+        diff: Diff {
+            add: game::OK_TINT,
+            del: game::ERROR_TINT,
+            change: game::SURFACE,
+        },
+        display: None,
+        titles: Caps {
+            upper: true,
+            tracking: 0.0,
+            weight: None,
+        },
+        labels: Caps::PLAIN,
+        ..theme()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

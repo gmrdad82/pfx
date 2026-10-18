@@ -12,8 +12,8 @@ use super::refuse;
 #[derive(clap::Args)]
 pub(super) struct Args {
     #[arg(
-        value_name = "out",
-        help = "The recipe to write; an existing file is refused"
+        value_name = "out.pitofx",
+        help = "The .pitofx to write; an existing file is refused"
     )]
     out: PathBuf,
     #[arg(
@@ -702,32 +702,32 @@ fn length(route: &[[f64; 3]]) -> f64 {
 
 fn run_street(args: &Args, out: &mut dyn Write) -> Result<(), String> {
     let path: &Path = &args.out;
+    if !pfx_build::document::is_pfx(path) {
+        return Err(format!(
+            "{} is not a .pitofx; the starter is written into a .pitofx document, as street.pitofx",
+            path.display()
+        ));
+    }
     if path.exists() {
         return Err(format!(
             "{} already exists; pick another <out>",
             path.display()
         ));
     }
-    let lut = path.parent().unwrap_or(Path::new("")).join(LUT);
-    let cube = lilac();
-    if lut.exists() && std::fs::read_to_string(&lut).ok().as_deref() != Some(cube.as_str()) {
-        return Err(format!(
-            "{} already exists and is not the starter's LUT; pick another <out> folder",
-            lut.display()
-        ));
-    }
     let starter = street(args.seed);
-    for dir in [path.parent(), lut.parent()]
-        .into_iter()
-        .flatten()
-        .filter(|dir| !dir.as_os_str().is_empty())
-    {
+    if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
-    std::fs::write(&lut, &cube).map_err(|e| format!("cannot write {}: {e}", lut.display()))?;
-    std::fs::write(path, &starter.text)
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    let stem = path.file_stem().map_or_else(
+        || "street".to_string(),
+        |s| s.to_string_lossy().into_owned(),
+    );
+    let mut doc = pfx_build::Document::default();
+    doc.recipe_name = format!("{stem}.toml");
+    doc.recipe_text.clone_from(&starter.text);
+    doc.files.insert(PathBuf::from(LUT), lilac().into_bytes());
+    doc.write(path)?;
     let low = sun(&starter.route);
     if args.json {
         let line = json!({
@@ -747,7 +747,7 @@ fn run_street(args: &Args, out: &mut dyn Write) -> Result<(), String> {
                 "elevation_deg": round(low.elevation, 2),
                 "azimuth_deg": round(low.azimuth, 2),
             },
-            "lut": lut.display().to_string(),
+            "lut": LUT,
         });
         let _ = writeln!(out, "{line}");
     } else {
@@ -994,7 +994,7 @@ mod tests {
     fn an_existing_file_is_refused() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp/new-street");
         let _ = std::fs::remove_dir_all(&dir);
-        let file = dir.join("street.toml");
+        let file = dir.join("street.pitofx");
         let args = Args {
             out: file.clone(),
             from: Template::Street,
@@ -1005,7 +1005,19 @@ mod tests {
         run_street(&args, &mut out).unwrap();
         let line: serde_json::Value = serde_json::from_slice(&out).unwrap();
         assert_eq!(line["seed"], 3);
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), street(3).text);
+        let doc = pfx_build::Document::open(&file).unwrap();
+        assert_eq!(doc.recipe_name, "street.toml");
+        assert_eq!(doc.recipe_text, street(3).text);
+        assert_eq!(doc.files[Path::new(LUT)], lilac().into_bytes());
+        assert!(!doc.fresh());
+        let plain = Args {
+            out: dir.join("street.toml"),
+            ..args
+        };
+        let refused = run_street(&plain, &mut Vec::new()).unwrap_err();
+        assert!(refused.contains("not a .pitofx"), "{refused}");
+        assert!(!dir.join("street.toml").exists());
+        let args = Args { out: file, ..plain };
         let again = run_street(&args, &mut Vec::new()).unwrap_err();
         assert!(
             again.ends_with("already exists; pick another <out>"),

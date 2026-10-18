@@ -326,7 +326,15 @@ mod scaffold {
         }
     }
 
-    use crate::scaffold::{SCENE, check_name, fill, module_path, scaffold, scaffold_with};
+    use crate::scaffold::{
+        DOCUMENT, SCENE, check_name, fill, module_path, scaffold, scaffold_with,
+    };
+
+    fn held(root: &std::path::Path, name: &str) -> String {
+        let reader = pfx_file::Reader::open(root.join(DOCUMENT)).unwrap();
+        let bytes = reader.named(pfx_file::SCNE, name).unwrap().unwrap();
+        String::from_utf8(bytes.into_owned()).unwrap()
+    }
 
     #[test]
     fn a_name_must_be_a_lowercase_slug_that_is_not_taken() {
@@ -365,10 +373,7 @@ mod scaffold {
             "src/main.rs",
             "tests/first.rs",
             "project.toml",
-            SCENE,
-            "content/materials/base.materials.toml",
-            "content/materials/incoming.materials.toml",
-            "content/prefabs/incoming.prefab.toml",
+            DOCUMENT,
             "content/meshes/badge.glb",
             "content/meshes/wordmark.glb",
             "content/meshes/grid.glb",
@@ -399,14 +404,25 @@ mod scaffold {
         assert!(main.contains("pfx_workbench::run_project(project.root(), factory, config)"));
         let project = Project::open(&root).unwrap();
         assert_eq!(project.name(), "my-game");
-        assert_eq!(project.play(), root.join(SCENE));
-        assert_eq!(project.scenes(), vec![root.join(SCENE)]);
-        let scene = read(SCENE);
+        assert_eq!(project.play(), root.join(DOCUMENT));
+        assert_eq!(project.scenes(), vec![root.join(DOCUMENT)]);
+        for gone in [
+            SCENE,
+            "content/materials/base.materials.toml",
+            "content/materials/incoming.materials.toml",
+            "content/prefabs/incoming.prefab.toml",
+        ] {
+            assert!(!root.join(gone).exists(), "{gone} is inside the .pitofx");
+            assert!(!written.contains(&root.join(gone)), "{gone}");
+        }
+        assert!(!root.join("content/materials").exists() && !root.join("content/prefabs").exists());
+        let scene = held(&root, SCENE);
         assert!(
             scene.contains("\nid = "),
             "the scaffold writes ids:\n{scene}"
         );
-        let prefab = read("content/prefabs/incoming.prefab.toml");
+        let prefab = held(&root, "content/prefabs/incoming.prefab.toml");
+        assert!(held(&root, "content/materials/incoming.materials.toml").contains("format = 1"));
         assert!(scene.contains("prefab = \"content/prefabs/incoming.prefab.toml\""));
         assert!(scene.contains("file = \"content/meshes/grid.glb\""));
         assert!(
@@ -439,7 +455,7 @@ mod scaffold {
         assert!(written.iter().all(|path| path.starts_with(&root)));
         let again = folder("scaffold-again");
         scaffold("my-game", &again, "9.8.7").unwrap();
-        for relative in [SCENE, "content/prefabs/incoming.prefab.toml", "Cargo.toml"] {
+        for relative in [DOCUMENT, "Cargo.toml"] {
             assert_eq!(
                 std::fs::read(root.join(relative)).unwrap(),
                 std::fs::read(again.join(relative)).unwrap(),

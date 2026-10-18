@@ -27,7 +27,7 @@ const TABLES: [&str; 12] = [
 #[derive(clap::Args)]
 pub(super) struct Add {
     #[arg(value_name = "recipe", help = "The recipe to write")]
-    recipe: String,
+    pub(super) recipe: String,
     #[arg(value_name = "table", value_parser = PossibleValuesParser::new(TABLES), help = "The array of tables to append to")]
     table: String,
     #[arg(
@@ -44,7 +44,7 @@ pub(super) struct Add {
 #[derive(clap::Args)]
 pub(super) struct Remove {
     #[arg(value_name = "recipe", help = "The recipe to write")]
-    recipe: String,
+    pub(super) recipe: String,
     #[arg(value_name = "table", value_parser = PossibleValuesParser::new(TABLES), help = "The array of tables to remove from")]
     table: String,
     #[arg(value_name = "name", help = "The entry to remove")]
@@ -56,7 +56,7 @@ pub(super) struct Remove {
 #[derive(clap::Args)]
 pub(super) struct Duplicate {
     #[arg(value_name = "recipe", help = "The recipe to write")]
-    recipe: String,
+    pub(super) recipe: String,
     #[arg(value_name = "table", value_parser = PossibleValuesParser::new(TABLES), help = "The array of tables the entry is in")]
     table: String,
     #[arg(value_name = "name", help = "The entry to copy")]
@@ -72,7 +72,7 @@ pub(super) struct Duplicate {
 #[derive(clap::Args)]
 pub(super) struct List {
     #[arg(value_name = "recipe", help = "The recipe to read")]
-    recipe: String,
+    pub(super) recipe: String,
     #[arg(value_name = "table", value_parser = PossibleValuesParser::new(TABLES), help = "Only this array of tables")]
     table: Option<String>,
     #[arg(long, help = "One JSON object on stdout")]

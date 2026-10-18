@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::path::{Path, PathBuf};
 
 use crate::{
-    Board, Call, Delivery, Display, Error, Event, Hub, Lobby, LobbyFilter, LobbyKind, MAX_SAVE,
-    Message, Overlay, PRESENCE_COUNT_MAX, Quota, Range, Sort, SteamApi, Upload, User, api_name,
-    cloud_error, details_len, file_name, fits, lobby_key, lobby_size, lobby_value, message_len,
-    presence_key, presence_value, save_len,
+    Board, Call, Created, Delivery, Display, Error, Event, Hub, Installed, Item, ItemState,
+    ItemUpdate, Lobby, LobbyFilter, LobbyKind, MAX_SAVE, Message, Overlay, PRESENCE_COUNT_MAX,
+    Progress, Quota, Range, Sort, Stage, SteamApi, Upload, User, api_name, cloud_error,
+    details_len, file_name, fits, lobby_key, lobby_size, lobby_value, message_len, presence_key,
+    presence_value, save_len,
 };
 
 #[cfg(any(feature = "input", test))]
@@ -21,6 +23,16 @@ struct FakePad {
 const ORIGIN_COUNT: i32 = 495;
 
 pub const FAKE_USER: User = User(76_561_197_960_265_729);
+pub const FAKE_ITEM: u64 = 3_000_000_000;
+
+#[derive(Clone, Debug, Default)]
+struct FakeItem {
+    state: ItemState,
+    folder: Option<PathBuf>,
+    progress: Option<Progress>,
+    reported: Option<Progress>,
+    owned: bool,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Stat {
@@ -44,6 +56,9 @@ pub struct Fake {
     user: User,
     calls: u64,
     invites: Vec<Lobby>,
+    items: BTreeMap<Item, FakeItem>,
+    created: u64,
+    submitted: Vec<(Item, ItemUpdate)>,
     #[cfg(any(feature = "input", test))]
     pads: BTreeMap<u64, FakePad>,
     #[cfg(any(feature = "input", test))]
@@ -80,6 +95,9 @@ impl Fake {
             user,
             calls: 0,
             invites: Vec::new(),
+            items: BTreeMap::new(),
+            created: 0,
+            submitted: Vec::new(),
             #[cfg(any(feature = "input", test))]
             pads: BTreeMap::new(),
             #[cfg(any(feature = "input", test))]
@@ -148,6 +166,55 @@ impl Fake {
         &self.invites
     }
 
+    pub fn subscribe(&mut self, item: Item) {
+        let entry = self.items.entry(item).or_default();
+        entry.state.subscribed = true;
+        if !entry.state.installed {
+            entry.state.pending = true;
+        }
+    }
+
+    pub fn unsubscribe(&mut self, item: Item) {
+        if let Some(entry) = self.items.get_mut(&item) {
+            entry.state.subscribed = false;
+        }
+    }
+
+    pub fn download(&mut self, item: Item, done: u64, total: u64) {
+        let entry = self.items.entry(item).or_default();
+        entry.state.pending = false;
+        entry.state.downloading = true;
+        entry.progress = Some(Progress { done, total });
+    }
+
+    pub fn install(&mut self, item: Item, folder: impl Into<PathBuf>) {
+        let entry = self.items.entry(item).or_default();
+        entry.state.installed = true;
+        entry.state.pending = false;
+        entry.state.downloading = false;
+        entry.state.needs_update = false;
+        entry.progress = None;
+        entry.reported = None;
+        entry.folder = Some(folder.into());
+        self.post(Event::ItemDownloaded {
+            item,
+            result: Ok(()),
+        });
+        self.post(Event::ItemInstalled { item });
+    }
+
+    pub fn outdate(&mut self, item: Item) {
+        if let Some(entry) = self.items.get_mut(&item)
+            && entry.state.installed
+        {
+            entry.state.needs_update = true;
+        }
+    }
+
+    pub fn submitted(&self) -> &[(Item, ItemUpdate)] {
+        &self.submitted
+    }
+
     fn call(&mut self) -> Call {
         self.calls += 1;
         Call(self.calls)
@@ -214,6 +281,17 @@ impl SteamApi for Fake {
         }
         let mut events: Vec<Event> = self.overlays.drain(..).map(Event::Overlay).collect();
         events.extend(self.hub.world().take(self.user));
+        for (item, entry) in &mut self.items {
+            if entry.state.downloading && entry.progress != entry.reported {
+                entry.reported = entry.progress;
+                if let Some(progress) = entry.progress {
+                    events.push(Event::ItemProgress {
+                        item: *item,
+                        progress,
+                    });
+                }
+            }
+        }
         events
     }
 
@@ -460,6 +538,100 @@ impl SteamApi for Fake {
         Ok(call)
     }
 
+    fn subscribed_items(&self) -> Result<Vec<Item>, Error> {
+        self.open()?;
+        Ok(self
+            .items
+            .iter()
+            .filter(|(_, entry)| entry.state.subscribed)
+            .map(|(item, _)| *item)
+            .collect())
+    }
+
+    fn item_state(&self, item: Item) -> Result<ItemState, Error> {
+        self.open()?;
+        Ok(self
+            .items
+            .get(&item)
+            .map(|entry| entry.state)
+            .unwrap_or_default())
+    }
+
+    fn item_progress(&self, item: Item) -> Result<Option<Progress>, Error> {
+        self.open()?;
+        Ok(self.items.get(&item).and_then(|entry| entry.progress))
+    }
+
+    fn item_installed(&self, item: Item) -> Result<Option<Installed>, Error> {
+        self.open()?;
+        Ok(self
+            .items
+            .get(&item)
+            .filter(|entry| entry.state.installed)
+            .and_then(|entry| entry.folder.as_ref())
+            .map(|folder| Installed {
+                folder: folder.clone(),
+                bytes: size_of(folder),
+                updated: 0,
+            }))
+    }
+
+    fn download_item(&mut self, item: Item, _now: bool) -> Result<(), Error> {
+        self.open()?;
+        let entry = self.items.get_mut(&item).ok_or(Error::Unknown)?;
+        if !entry.state.installed || entry.state.needs_update {
+            entry.state.pending = false;
+            entry.state.downloading = true;
+            entry.progress.get_or_insert_default();
+        }
+        Ok(())
+    }
+
+    fn create_item(&mut self) -> Result<Call, Error> {
+        self.open()?;
+        let call = self.call();
+        self.created += 1;
+        let item = Item(FAKE_ITEM + self.created);
+        self.items.insert(
+            item,
+            FakeItem {
+                owned: true,
+                ..FakeItem::default()
+            },
+        );
+        self.post(Event::ItemCreated {
+            call,
+            result: Ok(Created {
+                item,
+                agreement: false,
+            }),
+        });
+        Ok(call)
+    }
+
+    fn submit_item(&mut self, item: Item, update: &ItemUpdate) -> Result<Call, Error> {
+        self.open()?;
+        update.check()?;
+        let call = self.call();
+        let owned = self.items.get(&item).is_some_and(|entry| entry.owned);
+        let result = if owned {
+            self.submitted.push((item, update.clone()));
+            Ok(Created {
+                item,
+                agreement: false,
+            })
+        } else {
+            Err(Error::Rejected)
+        };
+        self.post(Event::ItemSubmitted { call, result });
+        Ok(call)
+    }
+
+    fn submit_progress(&self, _call: Call) -> Result<Option<(Stage, Progress)>, Error> {
+        self.open()?;
+        Ok(None)
+    }
+
     fn create_lobby(&mut self, kind: LobbyKind, max_members: u32) -> Result<Call, Error> {
         self.open()?;
         lobby_size(max_members)?;
@@ -651,4 +823,24 @@ impl SteamApi for Fake {
             crate::GlyphFormat::Svg => format!("steam/glyphs/{origin}-{style}.svg"),
         }))
     }
+}
+
+fn size_of(folder: &Path) -> u64 {
+    let mut total = 0;
+    let mut folders = vec![folder.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        let Ok(entries) = std::fs::read_dir(&folder) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => folders.push(entry.path()),
+                Ok(kind) if kind.is_file() => {
+                    total += entry.metadata().map_or(0, |meta| meta.len());
+                }
+                _ => {}
+            }
+        }
+    }
+    total
 }

@@ -10,28 +10,28 @@ FILM="${XDG_VIDEOS_DIR:-$HOME/Videos}/chase-film"
 
 ## 1. Write the recipe
 
-`pfx new <out> --from street` writes a starter chase recipe: a 9:16 timeline, a route, the street along it, a hero car, traffic and a chase camera. The sample's own recipe is `samples/chase.toml`; to start a fresh one:
+`pfx new <out.pitofx> --from street` writes a starter chase recipe into a `.pitofx`: a 9:16 timeline, a route, the street along it, a hero car, traffic and a chase camera. The sample's own recipe is `samples/chase.pitofx`; to start a fresh one:
 
 ```
-pfx new tmp/street.toml --from street --seed 1
+pfx new tmp/street.pitofx --from street --seed 1
 ```
 
-Shape the route by hand in the window (`pfx edit samples/chase.toml`) or with `pfx route samples/chase.toml list|set|add|remove ...`, and check the timing with `pfx timeline samples/chase.toml`.
+Shape the route by hand in the window (`pfx gui samples/chase.pitofx`) or with `pfx route samples/chase.pitofx list|set|add|remove ...`, and check the timing with `pfx timeline samples/chase.pitofx`.
 
 ## 2. The five build beats
 
 The recipe's `[[stage]]` tables split the street into the order it is built in: `street`, `car`, `city`, `camera` and `look`. `pfx build --stage <name>` builds every stage up to that one. Each beat runs its CLI step, then cuts to its window clip, a tape of quick shots (0.3 to 0.7 s each, 2 to 4 s a beat, at 60 fps) in `breakdown/`, mostly in clay with the selection outlined in the accent:
 
-1. **Street**: `pfx build samples/chase.toml --stage street`. The S route over the grid in wireframe, then the road laid down and seen from the top (`breakdown/1-street.tape`).
-2. **Car**: `pfx build samples/chase.toml --stage car`. The coupe with its lights' gizmos and its tail lights selected, then the rear left wheel with the spray emitter's dots (`breakdown/2-car.tape`).
-3. **City**: `pfx build samples/chase.toml --stage city`. The road strip, the buildings arraying along it, the plan with the crosswalk stripes selected, the props, then the power poles and their wires (`breakdown/3-city.tape`).
-4. **Look**: `pfx build samples/chase.toml --stage look`, then `pfx set` tuning of the grade and the lights. A street lamp's spot cone, then a render region on the tail lights through the chase camera, rendered inside and clay outside (`breakdown/4-look.tape`).
-5. **Camera**: `pfx shoot samples/chase.toml --final --out "$FILM/chase"`. The chase camera's frustum and baked path, then through the camera at t = 0 in clay: the match cut into the chase (`breakdown/5-camera.tape`).
+1. **Street**: `pfx build samples/chase.pitofx --stage street`. The S route over the grid in wireframe, then the road laid down and seen from the top (`breakdown/1-street.tape`).
+2. **Car**: `pfx build samples/chase.pitofx --stage car`. The coupe with its lights' gizmos and its tail lights selected, then the rear left wheel with the spray emitter's dots (`breakdown/2-car.tape`).
+3. **City**: `pfx build samples/chase.pitofx --stage city`. The road strip, the buildings arraying along it, the plan with the crosswalk stripes selected, the props, then the power poles and their wires (`breakdown/3-city.tape`).
+4. **Look**: `pfx build samples/chase.pitofx --stage look`, then `pfx set` tuning of the grade and the lights. A street lamp's spot cone, then a render region on the tail lights through the chase camera, rendered inside and clay outside (`breakdown/4-look.tape`).
+5. **Camera**: `pfx shoot samples/chase.pitofx --final --out "$FILM/chase"`. The chase camera's frustum and baked path, then through the camera at t = 0 in clay: the match cut into the chase (`breakdown/5-camera.tape`).
 
 One beat's clip, as PNG frames in its own folder under `$FILM/breakdown`, with the viewport over the whole frame and the timeline strip under it:
 
 ```
-pfx edit samples/chase.toml --clip "$FILM/breakdown" --tape samples/chase-film/breakdown/1-street.tape --fps 60 --size 2160x3840 --scale 2 --bare --strip --frames --json
+pfx gui samples/chase.pitofx --clip "$FILM/breakdown" --tape samples/chase-film/breakdown/1-street.tape --fps 60 --size 2160x3840 --scale 2 --bare --strip --frames --json
 ```
 
 All five in order, each its own GPU job:
@@ -42,10 +42,11 @@ bin/breakdown "$FILM/breakdown"
 
 ## 3. Render the chase
 
-`pfx shoot` (beat 5) builds the scene, then has pfx render it through the chase camera, frame n at t = n / 60, into numbered PNG frames, the scene's sound as a WAV and a manifest. The same render by hand, from the built scene file in `samples/out/`:
+`pfx shoot` (beat 5) builds the scene, then has pfx render it through the chase camera, frame n at t = n / 60, into numbered PNG frames, the scene's sound as a WAV and a manifest. The same render by hand, from the scene `pfx build` writes into the `.pitofx`:
 
 ```
-pgpu run --class clip --as pfx -- pfx shot samples/out/street.scene.toml --seconds 10 --fps 60 --size 2160x3840 --camera chase --final --out "$FILM/chase" --audio "$FILM/chase.wav" --json
+pfx build samples/chase.pitofx
+pgpu run --class clip --as pfx -- pfx shot samples/chase.pitofx --seconds 10 --fps 60 --size 2160x3840 --camera chase --final --out "$FILM/chase" --audio "$FILM/chase.wav" --json
 ```
 
 ## 4. Record the Claude Code part
