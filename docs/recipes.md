@@ -72,7 +72,7 @@ pfx asset get <source:id> [--out <dir>] [--res <r>] [--format <f>] [--from <file
 pfx asset list|sources [--in <dir>] [--json]             the fetched assets with their licences, or the sources
 pfx asset settings [--stdin] [--json]                    pfx's settings.pitofx as TOML, or TOML on stdin written to it
 pfx credits <scene.pitofx> [--json]                         one credit line per asset a scene uses, ready for a credits card; unlicensed assets are refused by name
-pfx gui [<recipe|scene|file.pitofx|project folder|folder>] [--play <module.wasm>] [--stage N|name] [--only <glob>,...] [--clay] [--wireframe [--blend <0..1>] [--xray]]
+pfx gui [<recipe|scene|file.pitofx|project folder|folder>] [--play <module.wasm>] [--camera <name>] [--stage N|name] [--only <glob>,...] [--clay] [--wireframe [--blend <0..1>] [--xray]]
                                                           the window on a recipe, a scene, a .pitofx, a game's project or the start screen; Play runs the scene with a game's module (docs/editor.md)
 pfx gui [<file>] --shot <png> [--size WxH] [--input <script>] [--fake] [--fixture <name>] [--start] [--bare [--strip]]
                                                           one frame of the window, offscreen (docs/editor-shots.md)
