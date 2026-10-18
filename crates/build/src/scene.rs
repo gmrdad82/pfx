@@ -414,7 +414,10 @@ fn card(
     png_header(&bytes).map_err(|e| {
         Error::new(
             format!("{at}.image"),
-            format!("{}: the scene's content is a PNG: {e}", file.display()),
+            format!(
+                "{}: the scene's content is a PNG or a JPEG: {e}",
+                file.display()
+            ),
         )
     })?;
     let slot = match cards.slots.iter().position(|(_, path)| path == image) {
@@ -1945,6 +1948,9 @@ fn relative(folder: &Path, file: &Path, key: &str) -> Result<String, Error> {
 }
 
 fn png_header(bytes: &[u8]) -> Result<(), String> {
+    if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        return pfx_load::Image::jpeg_size(bytes).map(|_| ());
+    }
     let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     decoder.set_transformations(png::Transformations::EXPAND);
     let reader = decoder.read_info().map_err(|e| format!("png: {e}"))?;

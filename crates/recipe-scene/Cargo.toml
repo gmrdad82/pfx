@@ -23,7 +23,6 @@ png = "0.18"
 pfx-glb = { path = "../glb" }
 pfx-mesh = { path = "../mesh" }
 serde_json = "1"
-zune-jpeg = "0.5"
 ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 
 [dev-dependencies]

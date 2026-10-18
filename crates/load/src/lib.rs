@@ -3,6 +3,7 @@ mod cache;
 pub mod fixture;
 mod font;
 mod image;
+mod jpeg;
 #[cfg(test)]
 mod lod_tests;
 mod mesh;
