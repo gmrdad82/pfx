@@ -94,7 +94,7 @@ impl PropSpec {
             .as_ref()
             .is_some_and(|v| !pfx_load::is_mesh_file(v))
         {
-            return Err("prop file must be glTF, GLB or .manf".into());
+            return Err("prop file must be glTF, GLB or .pfx".into());
         }
         if self.frames_per_side < 2
             || self.frames_per_side > 32

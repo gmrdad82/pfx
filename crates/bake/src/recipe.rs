@@ -827,7 +827,7 @@ impl Recipe {
 
     fn validate(&self) -> Result<(), String> {
         if !pfx_load::is_mesh_file(&self.scene) {
-            return Err("scene must name a .gltf, .glb or .manf file".into());
+            return Err("scene must name a .gltf, .glb or .pfx file".into());
         }
         if self.samples == 0 {
             return Err("samples must be positive".into());
@@ -901,7 +901,7 @@ impl Recipe {
         let gltf = pfx_load::is_mesh_file;
         for file in &self.files {
             if !gltf(&file.path) {
-                return Err("file must name a .gltf, .glb or .manf file".into());
+                return Err("file must name a .gltf, .glb or .pfx file".into());
             }
             if file
                 .translation
@@ -924,7 +924,7 @@ impl Recipe {
         }
         for pose in &self.poses {
             if pose.node.is_empty() || pose.file.as_deref().is_some_and(|name| !gltf(name)) {
-                return Err("pose needs a node and a .gltf, .glb or .manf file".into());
+                return Err("pose needs a node and a .gltf, .glb or .pfx file".into());
             }
             if pose
                 .translation

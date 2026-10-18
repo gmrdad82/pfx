@@ -1,0 +1,53 @@
+format = 1
+materials = ["materials/room.materials.toml"]
+
+[mesh.block]
+id = "5jxzbjja9m"
+file = "assets/block.gltf"
+
+[mesh.ball]
+id = "ttfwjw4wnm"
+file = "assets/ball.gltf"
+
+# The floor is a flattened block.
+[[object]]
+id = "h3gw9t9qzy"
+name = "floor"
+mesh = "block"
+material = "oak"
+at = [0.0, -0.05, 0.0]
+scale = [8.0, 0.1, 8.0]
+
+[object.body]
+kind = "fixed"
+
+[[object]]
+id = "j66hkn5wx4"
+name = "lamp"
+mesh = "ball"
+material = "brass"
+at = [0.0, 2.4, 0.0]
+scale = 0.3
+
+# Two crates from one prefab; the second is turned and lighter.
+[[object]]
+id = "effsbdb6jg"
+name = "left crate"
+prefab = "prefabs/crate.prefab.toml"
+at = [-1.0, 0.5, 0.0]
+
+[[object]]
+id = "axxz3n1hcj"
+name = "right crate"
+prefab = "prefabs/crate.prefab.toml"
+at = [1.2, 0.5, 0.3]
+rotate = [0.0, 30.0, 0.0]
+
+[object.set]
+"box.body.density" = 0.5
+
+[[light]]
+id = "hpa91rwkg7"
+name = "bulb"
+position = [0.0, 2.2, 0.0]
+intensity = 40.0

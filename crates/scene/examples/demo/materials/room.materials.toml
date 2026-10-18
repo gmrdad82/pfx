@@ -1,0 +1,14 @@
+format = 1
+
+[materials.oak]
+id = "460rw6rghh"
+family = "wood"
+base = [0.42, 0.27, 0.15]
+roughness = 0.6
+
+[materials.brass]
+id = "7s0xdgnwtg"
+family = "metal"
+base = [0.91, 0.78, 0.42]
+metalness = 1.0
+roughness = 0.3

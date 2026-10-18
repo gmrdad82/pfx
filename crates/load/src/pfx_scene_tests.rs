@@ -1,7 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use pfx_scene::manf;
-
 use crate::fixture::head;
 use crate::scene::{Scene, SceneEdit, SceneWatch, pack, unpack};
 
@@ -19,7 +17,7 @@ impl Drop for Folder {
 
 fn folder(name: &str) -> Folder {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tmp/manf-scene-tests")
+        .join("../../tmp/pfx-scene-tests")
         .join(name);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(root.join("meshes")).unwrap();
@@ -34,12 +32,12 @@ fn room(folder: &Folder) -> PathBuf {
 }
 
 #[test]
-fn a_packed_scene_opens_from_its_manf_alone_like_its_toml() {
+fn a_packed_scene_opens_from_its_pfx_alone_like_its_toml() {
     let source = folder("pack-source");
     let toml = room(&source);
     let expected = Scene::open(&toml).unwrap();
     let alone = folder("pack-alone");
-    let file = alone.root.join("room.manf");
+    let file = alone.root.join("room.pfx");
     pack(&toml, &file).unwrap();
     let opened = Scene::open(&file).unwrap();
     assert_eq!(opened.meshes["car"].parts, expected.meshes["car"].parts);
@@ -55,52 +53,56 @@ fn a_packed_scene_opens_from_its_manf_alone_like_its_toml() {
 
     let mut cut = std::fs::read(&file).unwrap();
     cut.truncate(cut.len() - 9);
-    std::fs::write(alone.root.join("cut.manf"), cut).unwrap();
-    let refused = String::from(Scene::open(alone.root.join("cut.manf")).unwrap_err());
-    assert!(refused.contains("cut.manf"), "{refused}");
+    std::fs::write(alone.root.join("cut.pfx"), cut).unwrap();
+    let refused = String::from(Scene::open(alone.root.join("cut.pfx")).unwrap_err());
+    assert!(refused.contains("cut.pfx"), "{refused}");
 }
 
 #[test]
-fn a_gltf_mesh_reads_the_manfs_own_gltf_and_bin() {
+fn a_gltf_mesh_reads_the_pfx_files_own_gltf_and_bin() {
     let source = folder("own-source");
     let toml = room(&source);
     let expected = Scene::open(&toml).unwrap();
     let glb = head();
     let split = gltf::Glb::from_slice(&glb).unwrap();
     let scene = ROOM.replace("meshes/car.glb", pfx_scene::GLTF_PATH);
-    let bytes = manf::Writer::new()
+    let bytes = pfx_file::Writer::new()
         .chunk(
-            manf::SMET,
+            pfx_file::SMET,
             &b"format = 1\nentry = \"room.scene.toml\"\n"[..],
-            manf::Codec::Store,
+            pfx_file::Codec::Store,
         )
         .named(
-            manf::SCNE,
+            pfx_file::SCNE,
             "room.scene.toml",
             scene.into_bytes(),
-            manf::Codec::Auto,
+            pfx_file::Codec::Auto,
         )
-        .chunk(manf::GLTF, split.json.into_owned(), manf::Codec::Auto)
         .chunk(
-            manf::GBIN,
+            pfx_file::GLTF,
+            split.json.into_owned(),
+            pfx_file::Codec::Auto,
+        )
+        .chunk(
+            pfx_file::GBIN,
             split.bin.unwrap().into_owned(),
-            manf::Codec::Auto,
+            pfx_file::Codec::Auto,
         )
         .to_vec()
         .unwrap();
     let alone = folder("own-alone");
-    let file = alone.root.join("room.manf");
+    let file = alone.root.join("room.pfx");
     std::fs::write(&file, bytes).unwrap();
     let opened = Scene::open(&file).unwrap();
     assert_eq!(opened.meshes["car"].parts, expected.meshes["car"].parts);
 }
 
 #[test]
-fn an_edit_in_place_rewrites_the_manf_and_the_watch_reloads_it() {
+fn an_edit_in_place_rewrites_the_pfx_and_the_watch_reloads_it() {
     let source = folder("watch-source");
     let toml = room(&source);
     let alone = folder("watch-alone");
-    let file = alone.root.join("room.manf");
+    let file = alone.root.join("room.pfx");
     pack(&toml, &file).unwrap();
     let mut watch = SceneWatch::open(&file).unwrap();
     assert!(watch.check().is_none());

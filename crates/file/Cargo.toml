@@ -1,0 +1,19 @@
+[package]
+name = "pfx-file"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The .pfx file, pfx's native container: a magic, a version and an uncompressed chunk table with names, then 8-byte aligned chunks, each checksummed and stored or compressed (LZ4 block or raw deflate), read one chunk at a time and written atomically"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "pfx_file"
+
+[dependencies]
+miniz_oxide = "0.9"
+
+[dev-dependencies]
+crc32fast = "1.5"
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }

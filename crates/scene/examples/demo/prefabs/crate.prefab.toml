@@ -1,0 +1,15 @@
+format = 1
+materials = ["materials/room.materials.toml"]
+
+[mesh.block]
+id = "7kgmxg34pq"
+file = "assets/block.gltf"
+
+[[object]]
+id = "6dek3mm9mh"
+name = "box"
+mesh = "block"
+material = "oak"
+
+[object.body]
+kind = "dynamic"

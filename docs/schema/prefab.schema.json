@@ -1,0 +1,1383 @@
+{
+  "$defs": {
+    "Animation": {
+      "additionalProperties": false,
+      "properties": {
+        "atlas": {
+          "type": "string"
+        },
+        "blend": {
+          "items": {
+            "$ref": "#/$defs/BlendClip"
+          },
+          "type": "array"
+        },
+        "clip": {
+          "type": "string"
+        },
+        "clips": {
+          "additionalProperties": {
+            "$ref": "#/$defs/SpriteClip"
+          },
+          "type": "object"
+        },
+        "events": {
+          "items": {
+            "$ref": "#/$defs/ClipEvent"
+          },
+          "type": "array"
+        },
+        "fps": {
+          "format": "float",
+          "type": "number"
+        },
+        "frames": {
+          "items": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "grid": {
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "loop": {
+          "$ref": "#/$defs/Repeat"
+        },
+        "speed": {
+          "format": "float",
+          "type": "number"
+        },
+        "start": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "BlendClip": {
+      "additionalProperties": false,
+      "properties": {
+        "clip": {
+          "type": "string"
+        },
+        "weight": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "clip"
+      ],
+      "type": "object"
+    },
+    "Body": {
+      "additionalProperties": false,
+      "properties": {
+        "ccd": {
+          "type": "boolean"
+        },
+        "damping": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "density": {
+          "format": "float",
+          "type": "number"
+        },
+        "friction": {
+          "format": "float",
+          "type": "number"
+        },
+        "gravity_scale": {
+          "format": "float",
+          "type": "number"
+        },
+        "half": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "half_height": {
+          "format": "float",
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/BodyKind"
+        },
+        "layer": {
+          "type": "string"
+        },
+        "offset": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "radius": {
+          "format": "float",
+          "type": "number"
+        },
+        "restitution": {
+          "format": "float",
+          "type": "number"
+        },
+        "shape": {
+          "$ref": "#/$defs/BodyShape"
+        },
+        "spin": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "velocity": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "BodyKind": {
+      "enum": [
+        "dynamic",
+        "kinematic",
+        "fixed"
+      ],
+      "type": "string"
+    },
+    "BodyShape": {
+      "enum": [
+        "box",
+        "sphere",
+        "capsule",
+        "cylinder"
+      ],
+      "type": "string"
+    },
+    "Bounds": {
+      "additionalProperties": false,
+      "properties": {
+        "max": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "min": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "Character": {
+      "additionalProperties": false,
+      "properties": {
+        "coyote": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "height": {
+          "format": "float",
+          "type": "number"
+        },
+        "jump_buffer": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "jump_speed": {
+          "format": "float",
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/CharacterKind"
+        },
+        "layer": {
+          "type": "string"
+        },
+        "max_climb": {
+          "format": "float",
+          "type": "number"
+        },
+        "max_step": {
+          "format": "float",
+          "type": "number"
+        },
+        "plane": {
+          "$ref": "#/$defs/Plane"
+        },
+        "radius": {
+          "format": "float",
+          "type": "number"
+        },
+        "snap": {
+          "format": "float",
+          "type": "number"
+        },
+        "variable_jump": {
+          "format": "float",
+          "type": "number"
+        },
+        "wall_jump": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "wall_slide": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "CharacterKind": {
+      "enum": [
+        "3d",
+        "2d"
+      ],
+      "type": "string"
+    },
+    "ClipEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "clip": {
+          "type": "string"
+        },
+        "frame": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "time": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Color": {
+      "anyOf": [
+        {
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      ]
+    },
+    "Content": {
+      "additionalProperties": false,
+      "properties": {
+        "authoring": true,
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "image": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "type": "object"
+    },
+    "Cue": {
+      "enum": [
+        "start",
+        "hit",
+        "game"
+      ],
+      "type": "string"
+    },
+    "Emitter": {
+      "additionalProperties": false,
+      "properties": {
+        "authoring": true,
+        "color": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "intensity": {
+          "format": "float",
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        },
+        "position": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "radius": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name",
+        "position",
+        "radius",
+        "intensity"
+      ],
+      "type": "object"
+    },
+    "Id": {
+      "pattern": "^[0-9a-hjkmnp-tv-z]{10}$",
+      "type": "string"
+    },
+    "KeyValue": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      ]
+    },
+    "Light": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "authoring": true,
+        "color": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "cone": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "direction": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "intensity": {
+          "format": "float",
+          "type": "number"
+        },
+        "keys": {
+          "additionalProperties": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "float",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/KeyValue"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        "kind": {
+          "$ref": "#/$defs/LightKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        },
+        "parent": {
+          "type": "string"
+        },
+        "position": {
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "radius": {
+          "format": "float",
+          "type": "number"
+        },
+        "range": {
+          "format": "float",
+          "type": "number"
+        },
+        "shadow": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "intensity"
+      ],
+      "type": "object"
+    },
+    "LightKind": {
+      "enum": [
+        "point",
+        "spot"
+      ],
+      "type": "string"
+    },
+    "Mesh": {
+      "additionalProperties": false,
+      "properties": {
+        "authoring": true,
+        "file": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "node": {
+          "type": "string"
+        },
+        "nodes": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Node"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "type": "object"
+    },
+    "Motion": {
+      "enum": [
+        "swing",
+        "loop",
+        "once"
+      ],
+      "type": "string"
+    },
+    "Mover": {
+      "additionalProperties": false,
+      "properties": {
+        "authoring": true,
+        "axis": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "clip": {
+          "items": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/MoverKind"
+        },
+        "motion": {
+          "$ref": "#/$defs/Motion"
+        },
+        "name": {
+          "type": "string"
+        },
+        "objects": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "offset": {
+          "format": "float",
+          "type": "number"
+        },
+        "period": {
+          "format": "float",
+          "type": "number"
+        },
+        "pivot": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "travel": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "objects",
+        "kind",
+        "axis",
+        "travel"
+      ],
+      "type": "object"
+    },
+    "MoverKind": {
+      "enum": [
+        "turn",
+        "slide"
+      ],
+      "type": "string"
+    },
+    "Node": {
+      "additionalProperties": false,
+      "properties": {
+        "hidden": {
+          "type": "boolean"
+        },
+        "material": {
+          "type": "string"
+        },
+        "shadow": {
+          "$ref": "#/$defs/Shadow"
+        },
+        "two_sided": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Object": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha_cutoff": {
+          "format": "float",
+          "type": "number"
+        },
+        "animation": {
+          "$ref": "#/$defs/Animation"
+        },
+        "at": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "authoring": true,
+        "body": {
+          "$ref": "#/$defs/Body"
+        },
+        "character": {
+          "$ref": "#/$defs/Character"
+        },
+        "clip": {
+          "items": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "content": {
+          "type": "string"
+        },
+        "dynamic": {
+          "type": "boolean"
+        },
+        "face_camera": {
+          "type": "boolean"
+        },
+        "hidden": {
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "material": {
+          "type": "string"
+        },
+        "materials": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "mesh": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parent": {
+          "type": "string"
+        },
+        "pick": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "prefab": {
+          "type": "string"
+        },
+        "rotate": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "scale": {
+          "$ref": "#/$defs/Scale"
+        },
+        "set": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "shadow": {
+          "$ref": "#/$defs/Shadow"
+        },
+        "trigger": {
+          "$ref": "#/$defs/Trigger"
+        },
+        "two_sided": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "ParticleBlend": {
+      "enum": [
+        "alpha",
+        "add"
+      ],
+      "type": "string"
+    },
+    "Particles": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": {
+          "items": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "at": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "authoring": true,
+        "blend": {
+          "$ref": "#/$defs/ParticleBlend"
+        },
+        "burst": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "color": {
+          "$ref": "#/$defs/Color"
+        },
+        "colors": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "format": "float",
+                "type": "number"
+              },
+              {
+                "$ref": "#/$defs/Color"
+              }
+            ],
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "cone": {
+          "format": "float",
+          "type": "number"
+        },
+        "direction": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "drag": {
+          "format": "float",
+          "type": "number"
+        },
+        "gravity": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "inherit": {
+          "format": "float",
+          "type": "number"
+        },
+        "keys": {
+          "additionalProperties": {
+            "items": {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "format": "float",
+                  "type": "number"
+                },
+                {
+                  "$ref": "#/$defs/KeyValue"
+                }
+              ],
+              "type": "array"
+            },
+            "type": "array"
+          },
+          "type": "object"
+        },
+        "lifetime": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "lit": {
+          "type": "boolean"
+        },
+        "max": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "node": {
+          "type": "string"
+        },
+        "parent": {
+          "type": "string"
+        },
+        "rate": {
+          "format": "float",
+          "type": "number"
+        },
+        "rate_keys": {
+          "items": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "seed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "size": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "speed": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "spin": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "stretch": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Plane": {
+      "enum": [
+        "xy",
+        "yz"
+      ],
+      "type": "string"
+    },
+    "Repeat": {
+      "enum": [
+        "loop",
+        "once",
+        "ping-pong"
+      ],
+      "type": "string"
+    },
+    "Rig": {
+      "additionalProperties": false,
+      "properties": {
+        "authoring": true,
+        "bounds": {
+          "$ref": "#/$defs/Bounds"
+        },
+        "collide": {
+          "type": "boolean"
+        },
+        "damping": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "dead_zone": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "distance": {
+          "format": "float",
+          "type": "number"
+        },
+        "head_bob": {
+          "format": "float",
+          "type": "number"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "invert": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/RigKind"
+        },
+        "look_ahead": {
+          "format": "float",
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        },
+        "offset": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "orthographic": {
+          "format": "float",
+          "type": "number"
+        },
+        "pitch": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "sensitivity": {
+          "format": "float",
+          "type": "number"
+        },
+        "smoothing": {
+          "format": "float",
+          "type": "number"
+        },
+        "snap": {
+          "format": "float",
+          "type": "number"
+        },
+        "target": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "RigKind": {
+      "enum": [
+        "follow",
+        "first-person",
+        "third-person"
+      ],
+      "type": "string"
+    },
+    "Scale": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      ]
+    },
+    "Shadow": {
+      "enum": [
+        "cast",
+        "only",
+        "none"
+      ],
+      "type": "string"
+    },
+    "Sound": {
+      "additionalProperties": false,
+      "properties": {
+        "authoring": true,
+        "file": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "loop": {
+          "type": "boolean"
+        },
+        "object": {
+          "type": "string"
+        },
+        "pan": {
+          "format": "float",
+          "type": "number"
+        },
+        "play": {
+          "$ref": "#/$defs/Cue"
+        },
+        "volume": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "file"
+      ],
+      "type": "object"
+    },
+    "SpriteClip": {
+      "additionalProperties": false,
+      "properties": {
+        "fps": {
+          "format": "float",
+          "type": "number"
+        },
+        "from": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "loop": {
+          "$ref": "#/$defs/Repeat"
+        },
+        "to": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "Text": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "authoring": true,
+        "color": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "dynamic": {
+          "type": "boolean"
+        },
+        "font": {
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "lit": {
+          "type": "boolean"
+        },
+        "rotate": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "size": {
+          "format": "float",
+          "type": "number"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "font",
+        "size"
+      ],
+      "type": "object"
+    },
+    "Trigger": {
+      "additionalProperties": false,
+      "properties": {
+        "half": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "half_height": {
+          "format": "float",
+          "type": "number"
+        },
+        "layer": {
+          "type": "string"
+        },
+        "mask": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "offset": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "radius": {
+          "format": "float",
+          "type": "number"
+        },
+        "shape": {
+          "$ref": "#/$defs/BodyShape"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authoring": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "content": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Content"
+      },
+      "type": "object"
+    },
+    "emitter": {
+      "items": {
+        "$ref": "#/$defs/Emitter"
+      },
+      "type": "array"
+    },
+    "format": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "include": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "light": {
+      "items": {
+        "$ref": "#/$defs/Light"
+      },
+      "type": "array"
+    },
+    "materials": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "mesh": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Mesh"
+      },
+      "type": "object"
+    },
+    "mover": {
+      "items": {
+        "$ref": "#/$defs/Mover"
+      },
+      "type": "array"
+    },
+    "object": {
+      "items": {
+        "$ref": "#/$defs/Object"
+      },
+      "type": "array"
+    },
+    "particles": {
+      "items": {
+        "$ref": "#/$defs/Particles"
+      },
+      "type": "array"
+    },
+    "rig": {
+      "items": {
+        "$ref": "#/$defs/Rig"
+      },
+      "type": "array"
+    },
+    "sound": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Sound"
+      },
+      "type": "object"
+    },
+    "text": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Text"
+      },
+      "type": "object"
+    }
+  },
+  "title": "pfx-scene prefab, format 1",
+  "type": "object"
+}

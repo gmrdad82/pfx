@@ -1,8 +1,7 @@
-use pfx_scene::manf;
 use std::path::{Path, PathBuf};
 
 use crate::Mesh;
-use crate::fixture::{head, lod_glb, manf_from_glb, manf_from_gltf, skinned_column, timeline_glb};
+use crate::fixture::{head, lod_glb, pfx_from_glb, pfx_from_gltf, skinned_column, timeline_glb};
 use crate::scene::Scene;
 
 const TRIANGLE: &str = include_str!("../tests/data/triangle.gltf");
@@ -21,7 +20,7 @@ impl Drop for Folder {
 
 fn folder(name: &str) -> Folder {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tmp/manf-tests")
+        .join("../../tmp/pfx-tests")
         .join(name);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
@@ -48,7 +47,7 @@ fn textured() -> String {
 }
 
 #[test]
-fn a_manf_written_from_a_glb_parses_equal_to_it() {
+fn a_pfx_written_from_a_glb_parses_equal_to_it() {
     for glb in [
         head(),
         timeline_glb(),
@@ -57,43 +56,43 @@ fn a_manf_written_from_a_glb_parses_equal_to_it() {
     ] {
         let expected = Mesh::parse(&glb).unwrap();
         for compress in [true, false] {
-            let manf = manf_from_glb(&glb, &[], compress);
-            assert!(crate::is_manf(&manf));
-            assert_eq!(Mesh::parse(&manf).unwrap(), expected);
+            let pfx = pfx_from_glb(&glb, &[], compress);
+            assert!(crate::is_pfx(&pfx));
+            assert_eq!(Mesh::parse(&pfx).unwrap(), expected);
         }
     }
 }
 
 #[test]
-fn a_scene_opens_a_manf_mesh_like_its_glb_and_refuses_a_cut_or_damaged_one_by_name() {
+fn a_scene_opens_a_pfx_mesh_like_its_glb_and_refuses_a_cut_or_damaged_one_by_name() {
     let folder = folder("scene");
     let glb = head();
-    let manf = manf_from_glb(&glb, &[], true);
+    let pfx = pfx_from_glb(&glb, &[], true);
     std::fs::write(folder.root.join("car.glb"), &glb).unwrap();
-    std::fs::write(folder.root.join("car.manf"), &manf).unwrap();
+    std::fs::write(folder.root.join("car.pfx"), &pfx).unwrap();
     let from_glb = scene(&folder, "car.glb").unwrap();
-    let from_manf = scene(&folder, "car.manf").unwrap();
-    assert_eq!(from_manf.meshes["car"].parts, from_glb.meshes["car"].parts);
-    assert_eq!(from_manf.meshes["car"].rig, from_glb.meshes["car"].rig);
-    assert_eq!(from_manf.animations, from_glb.animations);
-    assert!(from_manf.files.contains_key(&folder.root.join("car.manf")));
+    let from_pfx = scene(&folder, "car.pfx").unwrap();
+    assert_eq!(from_pfx.meshes["car"].parts, from_glb.meshes["car"].parts);
+    assert_eq!(from_pfx.meshes["car"].rig, from_glb.meshes["car"].rig);
+    assert_eq!(from_pfx.animations, from_glb.animations);
+    assert!(from_pfx.files.contains_key(&folder.root.join("car.pfx")));
 
-    std::fs::write(folder.root.join("cut.manf"), &manf[..manf.len() - 9]).unwrap();
-    let cut = scene(&folder, "cut.manf").unwrap_err();
-    assert!(cut.contains("cut.manf") && cut.contains("corrupt"), "{cut}");
+    std::fs::write(folder.root.join("cut.pfx"), &pfx[..pfx.len() - 9]).unwrap();
+    let cut = scene(&folder, "cut.pfx").unwrap_err();
+    assert!(cut.contains("cut.pfx") && cut.contains("corrupt"), "{cut}");
 
-    let mut damaged = manf_from_glb(&glb, &[], false);
-    let bin = manf::Reader::from_bytes(&damaged).unwrap().entries()[1].clone();
-    assert_eq!(bin.tag, manf::GBIN);
+    let mut damaged = pfx_from_glb(&glb, &[], false);
+    let bin = pfx_file::Reader::from_bytes(&damaged).unwrap().entries()[1].clone();
+    assert_eq!(bin.tag, pfx_file::GBIN);
     damaged[(bin.offset + bin.stored / 2) as usize] ^= 0xff;
-    std::fs::write(folder.root.join("damaged.manf"), &damaged).unwrap();
-    let damaged = scene(&folder, "damaged.manf").unwrap_err();
+    std::fs::write(folder.root.join("damaged.pfx"), &damaged).unwrap();
+    let damaged = scene(&folder, "damaged.pfx").unwrap_err();
     assert!(
-        damaged.contains("damaged.manf") && damaged.contains("checksum"),
+        damaged.contains("damaged.pfx") && damaged.contains("checksum"),
         "{damaged}"
     );
 
-    assert!(Mesh::parse(&manf[..20]).unwrap_err().contains("corrupt"));
+    assert!(Mesh::parse(&pfx[..20]).unwrap_err().contains("corrupt"));
 }
 
 #[test]
@@ -107,13 +106,13 @@ fn named_file_chunks_resolve_buffers_and_textures_before_the_disk() {
     let expected = Mesh::parse_with(json.as_bytes(), disk).unwrap();
     assert!(expected.surfaces[0].maps.base.is_some());
 
-    let packed = manf_from_gltf(
+    let packed = pfx_from_gltf(
         json.as_bytes(),
         &[("triangle.bin", TRIANGLE_BIN), ("maps/swatch8.png", SWATCH)],
     );
     assert_eq!(Mesh::parse(&packed).unwrap(), expected);
 
-    let beside = manf_from_gltf(json.as_bytes(), &[("triangle.bin", TRIANGLE_BIN)]);
+    let beside = pfx_from_gltf(json.as_bytes(), &[("triangle.bin", TRIANGLE_BIN)]);
     assert_eq!(Mesh::parse_with(&beside, disk).unwrap(), expected);
     assert!(
         Mesh::parse(&beside).unwrap().surfaces[0]

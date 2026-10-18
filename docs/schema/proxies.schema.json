@@ -1,0 +1,108 @@
+{
+  "$defs": {
+    "Id": {
+      "pattern": "^[0-9a-hjkmnp-tv-z]{10}$",
+      "type": "string"
+    },
+    "Proxy": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "authoring": true,
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "kind": {
+          "$ref": "#/$defs/ProxyKind"
+        },
+        "object": {
+          "type": "string"
+        },
+        "points": {
+          "items": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": "array"
+        },
+        "rotate": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "size": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "triangles": {
+          "items": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "object",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ProxyKind": {
+      "enum": [
+        "box",
+        "hull"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authoring": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "format": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "proxy": {
+      "items": {
+        "$ref": "#/$defs/Proxy"
+      },
+      "type": "array"
+    }
+  },
+  "title": "pfx-scene proxies file, format 1",
+  "type": "object"
+}

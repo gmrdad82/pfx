@@ -20,7 +20,7 @@ The editor runs on five crates of pfx's own, `crates/editor-*`, which other edit
 
 pfx keeps only what is its own: the outliner, the inspector, the log, the toolbar, play, the trace preview, the pgpu status line and the theme. Nothing of the old viewport, camera or gizmo is left in pfx.
 
-**One engine in the build.** The editor crates are workspace members and take `pfx-gpu`, `pfx-live` and `pfx-load` by path, so every build holds one copy of each engine crate and the viewport draws on this tree's `Gpu`; `cargo tree -d --workspace` names no pfx crate and one wgpu. The editor takes `pfx-scene` directly, at the rev pfx-load pins, for its `check`.
+**One engine in the build.** The editor crates are workspace members and take `pfx-gpu`, `pfx-live` and `pfx-load` by path, so every build holds one copy of each engine crate and the viewport draws on this tree's `Gpu`; `cargo tree -d --workspace` names no pfx crate and one wgpu. The editor takes `pfx-scene` by path too, for its `check`.
 
 ## The look: pfx's theme
 

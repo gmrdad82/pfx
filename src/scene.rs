@@ -36,7 +36,7 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
                 return Err(Refusal::new(cli::repeated(arg)).under(usage));
             }
             "--dry-run" => dry_run = true,
-            flag @ ("--manf" | "--unpack") if action == Action::Migrate => match mode {
+            flag @ ("--pfx" | "--unpack") if action == Action::Migrate => match mode {
                 Some(first) if first == flag => {
                     return Err(Refusal::new(cli::repeated(flag)).under(usage));
                 }
@@ -55,8 +55,8 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
         return Err(Refusal::new(cli::conflict("--dry-run", flag)).under(usage));
     }
     let names: &[&str] = match mode {
-        Some("--manf") => &["<SCENE>", "<OUT>"],
-        Some(_) => &["<MANF>", "<DIR>"],
+        Some("--pfx") => &["<SCENE>", "<OUT>"],
+        Some(_) => &["<PFX>", "<DIR>"],
         None => &["<SCENE>"],
     };
     if paths.len() < names.len() {
@@ -64,7 +64,7 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
     }
     let second = paths.get(1).cloned();
     let action = match (mode, second) {
-        (Some("--manf"), Some(out)) => Action::Pack(out),
+        (Some("--pfx"), Some(out)) => Action::Pack(out),
         (Some(_), Some(dir)) => Action::Unpack(dir),
         _ => action,
     };
@@ -154,18 +154,18 @@ mod tests {
         assert!(plan(&words("fix a.scene.toml b.scene.toml")).is_err());
         assert!(plan(&words("migrate a.scene.toml --force")).is_err());
         assert_eq!(
-            plan(&words("migrate --manf a.scene.toml a.manf"))
+            plan(&words("migrate --pfx a.scene.toml a.pfx"))
                 .unwrap()
                 .action,
-            Action::Pack(PathBuf::from("a.manf"))
+            Action::Pack(PathBuf::from("a.pfx"))
         );
         assert_eq!(
-            plan(&words("migrate --unpack a.manf out")).unwrap().action,
+            plan(&words("migrate --unpack a.pfx out")).unwrap().action,
             Action::Unpack(PathBuf::from("out"))
         );
-        assert!(plan(&words("migrate --manf a.scene.toml")).is_err());
-        assert!(plan(&words("migrate --manf --unpack a b")).is_err());
-        assert!(plan(&words("migrate --manf a b --dry-run")).is_err());
-        assert!(plan(&words("fix --manf a b")).is_err());
+        assert!(plan(&words("migrate --pfx a.scene.toml")).is_err());
+        assert!(plan(&words("migrate --pfx --unpack a b")).is_err());
+        assert!(plan(&words("migrate --pfx a b --dry-run")).is_err());
+        assert!(plan(&words("fix --pfx a b")).is_err());
     }
 }

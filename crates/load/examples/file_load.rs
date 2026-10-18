@@ -3,7 +3,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use pfx_load::Mesh;
-use pfx_load::fixture::{manf_from_glb, plain_glb};
+use pfx_load::fixture::{pfx_from_glb, plain_glb};
 
 const WARM_RUNS: usize = 7;
 
@@ -34,7 +34,7 @@ fn measure(path: &Path) -> (f64, f64) {
     for _ in 0..3 {
         if !evict(path) {
             eprintln!(
-                "manf_load: cannot drop {} from the page cache",
+                "file_load: cannot drop {} from the page cache",
                 path.display()
             );
         }
@@ -47,18 +47,18 @@ fn measure(path: &Path) -> (f64, f64) {
 
 fn main() {
     let out = std::env::args().nth(1).map_or_else(
-        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp/manf-bench"),
+        || PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp/pfx-bench"),
         PathBuf::from,
     );
     std::fs::create_dir_all(&out).expect("output folder");
     for (name, rings) in [("car", 200u32), ("scene", 1000)] {
         let glb = plain_glb(name, rings);
         let glb_path = out.join(format!("{name}.glb"));
-        let lz4_path = out.join(format!("{name}.manf"));
-        let store_path = out.join(format!("{name}.store.manf"));
+        let lz4_path = out.join(format!("{name}.pfx"));
+        let store_path = out.join(format!("{name}.store.pfx"));
         std::fs::write(&glb_path, &glb).expect("write glb");
-        std::fs::write(&lz4_path, manf_from_glb(&glb, &[], true)).expect("write manf");
-        std::fs::write(&store_path, manf_from_glb(&glb, &[], false)).expect("write manf");
+        std::fs::write(&lz4_path, pfx_from_glb(&glb, &[], true)).expect("write pfx");
+        std::fs::write(&store_path, pfx_from_glb(&glb, &[], false)).expect("write pfx");
         let triangles: usize = Mesh::parse(&glb)
             .expect("parse")
             .groups
@@ -68,8 +68,8 @@ fn main() {
             .sum();
         for (kind, path) in [
             ("glb", &glb_path),
-            ("manf-lz4", &lz4_path),
-            ("manf-store", &store_path),
+            ("pfx-lz4", &lz4_path),
+            ("pfx-store", &store_path),
         ] {
             let size = std::fs::metadata(path).expect("size").len();
             let (cold, warm) = measure(path);
