@@ -24,7 +24,7 @@ fn tools(commands: &mut pfx_game::Commands, project: pfx_project::Project) {
             "opens the game in pfx's editor; F5 plays it",
             move |factory, _args| {
                 let config = {{crate}}::config(&project)?;
-                pfx_editor::run_project(project.root(), factory, config)
+                pfx_workbench::run_project(project.root(), factory, config)
             },
         )
         .usage("edit", "");

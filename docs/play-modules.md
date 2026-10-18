@@ -10,7 +10,7 @@ Without a module, Play runs the scene with the default game, as [editor.md](edit
 |---|---|
 | the scene | `[play] module = "<path>.wasm"` in the scene file, a path from the project's root |
 | the command line | `pfx edit <scene.toml or folder> --play <module.wasm>`, which wins over the scene's key for the session |
-| the toolbar | the `module` button, or F4 while stopped: none, then each `.wasm` file the project holds, then none again |
+| the transport bar | the module chip under the viewport, or F4 while stopped: none, then each `.wasm` file the project (or the recipe's folder) holds, then none again |
 | the window | drop a `.wasm` file on it while stopped |
 
 ```toml
@@ -23,7 +23,7 @@ module = "modules/marker.wasm"
 - The key takes one field, `module`; it is in the scene's [JSON Schema](scene-schema.md) (`docs/schema/scene.schema.json`), and the checker refuses a path that leaves the project or does not end in `.wasm`. A module that is not built yet is not a finding: it is a build output, read when Play starts.
 - Only a scene file sets it, once per scene: a second `[play]` in an included scene is refused as held twice, like `[physics]`.
 - The scene's key is read again at each Play, so a changed key plays from the next press. A module from `--play`, the button or a drop stays for the session, and across scene switches in a project.
-- The button shows the chosen module's name (`module marker`, lit) or `module none`. It is drawn only when a module is chosen or the project holds a `.wasm` file, found once when a scene opens (up to 32 files, 6 folders deep, in name order, skipping hidden folders and cargo's `deps`, `build` and `incremental`), so the editor of a project without one keeps its toolbar.
+- The chip names the chosen module (`marker`) or says `no module`, and its hover gives the path. It picks only while stopped and when a module is chosen or a `.wasm` file was found, once when a scene or recipe opens (up to 32 files, 6 folders deep, in name order, skipping hidden folders and cargo's `deps`, `build` and `incremental`); otherwise it is drawn dimmed. Play and Stop sit beside it (`docs/editor.md`, "Play while editing").
 
 The log says what F5 will play (`play: F5 plays the scene with module modules/marker.wasm`) and, on Play, ``play: module `marker` runs the game, under pfx-mod's limits``.
 
@@ -108,14 +108,14 @@ Play never touches the edited scene. The world the module moves is a runtime cop
 
 ## The API
 
-`pfx_editor::play::Play` is the hook a toolbar calls. It holds the chosen module and runs a play session headless; the editor's window hands the same game to pfx-game's `Driver` and `Painter` to draw it.
+`pfx_editor::play::Play` is the hook the window's transport bar calls. It holds the chosen module and runs a play session headless; the editor's window hands the same game to pfx-game's `Driver` and `Painter` to draw it.
 
 | Call | What it does |
 |---|---|
 | `Play::of(scene)` | the module the scene's `[play]` key names, or none |
 | `module()`, `from()`, `set_module(module, from)` | the chosen module and where it came from (`From::Scene`, `Flag` or `Picked`) |
 | `follow(scene)` | takes the scene's key again, unless the module came from the flag or a pick |
-| `look(root)`, `found()`, `offered()`, `next()`, `name()` | the project's `.wasm` files, whether the toolbar offers a module, the next choice in the cycle, and the chosen module's id |
+| `look(root)`, `found()`, `offered()`, `next()`, `name()` | the project's `.wasm` files, whether the module chip can pick, the next choice in the cycle, and the chosen module's id |
 | `game(family)` | the module's game (`pfx_game::wasm::ModuleGame`) with its HUD in that font family, `None` without a module, or the one message why it does not load |
 | `start(scene, staged, options)` | builds the game and a `PlaySession` (`docs/play.md`) on the scene; `staged` may be `None` |
 | `feed(event)` | a viewport input event for the next tick |

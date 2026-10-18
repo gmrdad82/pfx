@@ -55,6 +55,12 @@ pfx import <file.glb> (--as <kind>/<name> | --out <x.pfx>) [--licence <SPDX id>]
                                                           a glTF 2.0 binary (a Blender export too) into a .pfx: its glTF as-is, a one-object recipe and detected facts (size, wheels, light anchors)
 pfx export <file.pfx|recipe> --glb <out.glb> [--only <object>] [--json]
                                                           a standalone GLB with its node hierarchy and no pfx extras
+pfx edit [<recipe|scene|file.pfx|project folder|folder>] [--play <module.wasm>] [--stage N|name] [--only <glob>,...] [--clay] [--wireframe [--blend <0..1>] [--xray]]
+                                                          the window on a recipe, a scene, a .pfx, a game's project or the start screen; Play runs the scene with a game's module (docs/editor.md)
+pfx edit [<file>] --shot <png> [--size WxH] [--input <script>] [--fake] [--fixture <name>] [--start] [--bare [--strip]]
+                                                          one frame of the window, offscreen (docs/editor-shots.md)
+pfx edit [<file>] --clip <dir> --tape <file> [--fps 30|60|120] [--poster first|last|S | --frames] [--scale F] [--framed [--window WxH]] [--size WxH] [--start] [--bare [--strip]] [--json]
+                                                          the window playing a tape, filmed offscreen into an H.264 master, a poster and a manifest
 ```
 
 `add`, `remove` and `duplicate` write the recipe file through the same edits the editor makes, keeping its comments, check the recipe again after the write, and put the file back byte for byte when it no longer checks.

@@ -4,6 +4,12 @@ mod clip;
 mod curve;
 mod diff;
 mod document;
+#[cfg(feature = "editor")]
+mod edit;
+#[cfg(feature = "editor")]
+mod edit_shot;
+#[cfg(feature = "editor")]
+mod edit_tape;
 mod entries;
 mod export;
 mod import;
@@ -49,6 +55,8 @@ pub const MOVED: &[&str] = &[
     "duplicate",
     "import",
     "export",
+    #[cfg(feature = "editor")]
+    "edit",
 ];
 
 pub const SCENE: &[&str] = &["list", "save", "unpack", "fold"];
@@ -127,6 +135,11 @@ enum Verb {
         about = "Write a .pfx or a recipe as a standalone glTF 2.0 binary with no pfx extras"
     )]
     Export(export::Args),
+    #[cfg(feature = "editor")]
+    #[command(
+        about = "Open the window on a recipe, a scene, a .pfx, a game's project folder or the start screen; Play runs the scene with a game's module"
+    )]
+    Edit(Box<edit::Args>),
     #[command(
         about = "A recipe's entries and its .pfx documents",
         subcommand_required = true,
@@ -359,6 +372,8 @@ fn run_verb(verb: Verb, rest: &[String], registry: &Registry) -> ExitCode {
         Verb::Duplicate(parsed) => entries::duplicate(&parsed),
         Verb::Import(parsed) => import::run(&parsed, registry),
         Verb::Export(parsed) => export::run(&parsed, registry),
+        #[cfg(feature = "editor")]
+        Verb::Edit(parsed) => edit::run(&parsed, rest, registry),
         Verb::Scene(SceneArgs { verb }) => match verb {
             SceneVerb::List(parsed) => entries::list(&parsed),
             SceneVerb::Save(parsed) => document::save(&parsed, registry),
@@ -406,6 +421,9 @@ mod tests {
             "new street.toml --from street",
             "scene list a.toml",
             "scene fold a.pfx",
+            "edit a.toml",
+            "edit",
+            "edit content/room.scene.toml --play game.wasm",
         ] {
             assert!(
                 claims(&strings(&line.split(' ').collect::<Vec<_>>())),
@@ -419,7 +437,6 @@ mod tests {
             "scene migrate a.toml",
             "scene",
             "list --shots",
-            "edit a.toml",
         ] {
             assert!(
                 !claims(&strings(&line.split(' ').collect::<Vec<_>>())),

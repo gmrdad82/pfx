@@ -385,7 +385,7 @@ mod scaffold {
         let cargo = read("Cargo.toml");
         assert!(cargo.contains("name = \"my-game\""));
         assert!(cargo.contains("default = [\"tools\"]"));
-        assert!(cargo.contains("tools = [\"pfx-game/tools\", \"dep:pfx-editor\"]"));
+        assert!(cargo.contains("tools = [\"pfx-game/tools\", \"dep:pfx-workbench\"]"));
         assert!(cargo.contains(
             "pfx-game = { git = \"https://github.com/gmrdad82/pfx.git\", tag = \"v9.8.7\" }"
         ));
@@ -396,7 +396,7 @@ mod scaffold {
         ));
         assert!(main.contains("pfx_game::launch(my_game::MyGame::new"));
         assert!(main.contains(".usage(\"edit\", \"\")"));
-        assert!(main.contains("pfx_editor::run_project(project.root(), factory, config)"));
+        assert!(main.contains("pfx_workbench::run_project(project.root(), factory, config)"));
         let project = Project::open(&root).unwrap();
         assert_eq!(project.name(), "my-game");
         assert_eq!(project.play(), root.join(SCENE));

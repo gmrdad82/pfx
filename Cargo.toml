@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/assets", "crates/bake", "crates/bench", "crates/build", "crates/core", "crates/denoise", "crates/editor", "crates/editor-doc", "crates/editor-shell", "crates/editor-style", "crates/editor-toml", "crates/editor-viewport", "crates/file", "crates/film", "crates/game", "crates/generators", "crates/geom", "crates/glb", "crates/gpu", "crates/input", "crates/live", "crates/load", "crates/materials", "crates/mesh", "crates/mod", "crates/motion", "crates/physics", "crates/play", "crates/post", "crates/project", "crates/recipe", "crates/recipe-scene", "crates/run", "crates/runtime", "crates/scene", "crates/sound", "crates/steam", "crates/still", "crates/text", "crates/theme", "crates/trace"]
+members = ["crates/assets", "crates/bake", "crates/bench", "crates/build", "crates/core", "crates/denoise", "crates/editor", "crates/editor-doc", "crates/editor-shell", "crates/editor-style", "crates/editor-toml", "crates/editor-viewport", "crates/file", "crates/film", "crates/game", "crates/generators", "crates/geom", "crates/glb", "crates/gpu", "crates/input", "crates/live", "crates/load", "crates/materials", "crates/mesh", "crates/mod", "crates/motion", "crates/physics", "crates/play", "crates/post", "crates/project", "crates/recipe", "crates/recipe-scene", "crates/run", "crates/runtime", "crates/scene", "crates/sound", "crates/steam", "crates/still", "crates/text", "crates/theme", "crates/trace", "crates/workbench"]
 
 [workspace.package]
 version = "2.6.0"
@@ -21,7 +21,7 @@ authors.workspace = true
 
 [features]
 default = ["harness", "editor", "bench", "shot-sound", "sound-clean"]
-editor = ["harness", "dep:pfx-editor"]
+editor = ["harness", "dep:pfx-workbench"]
 bench = ["harness", "dep:pfx-bench"]
 harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "pfx-run/encode", "dep:pfx-sound", "pfx-sound/media", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film", "dep:pfx-recipe", "dep:pfx-build", "dep:pfx-glb", "dep:pfx-mesh", "dep:pfx-motion", "dep:pfx-generators", "dep:pfx-recipe-scene", "dep:pfx-still", "dep:pfx-file", "dep:clap", "dep:gltf", "dep:glam"]
 shot-sound = ["bench", "pfx-sound/shot"]
@@ -43,7 +43,7 @@ pfx-load = { path = "crates/load", optional = true }
 pfx-text = { path = "crates/text", features = ["subset"], optional = true }
 pollster = { version = "0.4", optional = true }
 exr = { version = "1.74", optional = true }
-pfx-editor = { path = "crates/editor", optional = true }
+pfx-workbench = { path = "crates/workbench", optional = true }
 pfx-bench = { path = "crates/bench", optional = true }
 pfx-sound = { path = "crates/sound", optional = true }
 pfx-project = { path = "crates/project", features = ["scaffold"], optional = true }

@@ -33,7 +33,7 @@ const TEMPLATES: [(&str, &str); 13] = [
     ),
     (
         "content/materials/incoming.materials.toml",
-        include_str!("templates/incoming.materials.toml"),
+        crate::marks::MATERIALS,
     ),
     (
         "content/prefabs/incoming.prefab.toml",
@@ -64,14 +64,8 @@ const MODULE_LIB: &str = include_str!("templates/lib.module.rs.in");
 const MODULE_AGENTS: &str = include_str!("templates/AGENTS.module.md.in");
 
 const FILES: [(&str, &[u8]); 5] = [
-    (
-        "content/meshes/badge.glb",
-        include_bytes!("templates/badge.glb"),
-    ),
-    (
-        "content/meshes/wordmark.glb",
-        include_bytes!("templates/wordmark.glb"),
-    ),
+    ("content/meshes/badge.glb", crate::marks::BADGE),
+    ("content/meshes/wordmark.glb", crate::marks::WORDMARK),
     (
         "content/meshes/grid.glb",
         include_bytes!("templates/grid.glb"),

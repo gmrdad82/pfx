@@ -785,6 +785,10 @@ impl Editor {
         self.requests.push(request);
     }
 
+    pub fn requests(&self) -> &[Request] {
+        &self.requests
+    }
+
     pub fn take_requests(&mut self) -> Vec<Request> {
         std::mem::take(&mut self.requests)
     }

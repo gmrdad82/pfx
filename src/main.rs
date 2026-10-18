@@ -35,8 +35,7 @@ const USAGE: &str = "usage:
   pfx cache --json
   pfx cache prune --json [--dry-run]
   pfx font subset --font <ttf> --out <ttf> [--chars <file>]... [--base gb2312-1|none] [--no-closure]
-  pfx edit <scene.toml> [--play <module.wasm>]
-  pfx edit <project folder> [--play <module.wasm>]
+  pfx edit [<recipe|scene.toml|file.pfx|project folder|folder>] [--play <module.wasm>] [flags]
   pfx new <game> [--path <dir>] [--with-module]
   pfx bench <scene.toml> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
   pfx shot <scene.toml|scene.pfx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr] [--audio <out.wav>] [--sound <script>] [--shutter S] [--seed S] [--json]
@@ -457,7 +456,6 @@ enum Plan {
     Bake(Vec<String>),
     Steam(Vec<String>),
     FontSubset(Vec<String>),
-    Edit(Vec<String>),
     Bench(Vec<String>),
     Shot(Vec<String>),
     Scene(scene::Command),
@@ -967,28 +965,6 @@ fn plan_archive(args: &[String]) -> Result<Plan, String> {
     }
 }
 
-fn plan_edit(args: &[String]) -> Result<Plan, String> {
-    let mut path = None;
-    let mut module = None;
-    let mut rest = args.iter();
-    while let Some(arg) = rest.next() {
-        match arg.as_str() {
-            "--play" if module.is_some() => return Err(cli::repeated(&cli::with_value("--play"))),
-            "--play" => match rest.next() {
-                Some(value) if !value.starts_with('-') => module = Some(value),
-                _ => return Err(cli::missing_value("--play")),
-            },
-            flag if flag.starts_with('-') => return Err(cli::unexpected(flag)),
-            _ if path.is_none() => path = Some(arg),
-            extra => return Err(cli::unexpected(extra)),
-        }
-    }
-    match path {
-        Some(_) => Ok(Plan::Edit(args.to_vec())),
-        None => Err(cli::required(&["<PATH>"])),
-    }
-}
-
 #[cfg(feature = "bench")]
 fn plan_bench(args: &[String]) -> Result<Plan, String> {
     pfx_bench::parse(args)?;
@@ -1044,7 +1020,10 @@ fn plan(args: &[String]) -> Result<Plan, Refusal> {
         "bake" => plan_bake(rest).map_err(Refusal::from),
         "steam" => plan_steam(rest),
         "font" => plan_font(rest),
-        "edit" => plan_edit(rest).map_err(Refusal::from),
+        #[cfg(not(feature = "editor"))]
+        "edit" => Err(Refusal::new(
+            "this pfx was built without the editor feature",
+        )),
         "bench" => plan_bench(rest).map_err(Refusal::from),
         "shot" => plan_shot(rest).map_err(Refusal::from),
         "scene" => scene::plan(rest).map(Plan::Scene),
@@ -1182,7 +1161,6 @@ fn perform(plan: Plan) -> Result<(), String> {
         Plan::Cache(CachePlan::Json(request)) => cache_report::run(&request),
         Plan::Bake(args) => bake::run(&args),
         Plan::Steam(args) => steam::run(&args),
-        Plan::Edit(args) => edit(&args),
         Plan::Bench(args) => bench(&args),
         Plan::Shot(args) => render_shot(&args),
         Plan::Scene(command) => scene::run(&command),
@@ -1191,16 +1169,6 @@ fn perform(plan: Plan) -> Result<(), String> {
         Plan::Sound(command) => sound::run(&command),
         Plan::Project(command) => project::run(&command),
     }
-}
-
-#[cfg(feature = "editor")]
-fn edit(args: &[String]) -> Result<(), String> {
-    pfx_editor::run(args)
-}
-
-#[cfg(not(feature = "editor"))]
-fn edit(_args: &[String]) -> Result<(), String> {
-    Err("this pfx was built without the editor feature".into())
 }
 
 #[cfg(feature = "bench")]
@@ -1319,23 +1287,14 @@ mod tests {
         assert!(refused("font").contains("'pfx font' requires a subcommand"));
     }
 
+    #[cfg(feature = "editor")]
     #[test]
-    fn edit_takes_the_scene_and_the_editor_checks_it() {
-        assert!(matches!(
-            plan(&words("edit content/room.scene.toml")).unwrap(),
-            Plan::Edit(args) if args == words("content/room.scene.toml")
-        ));
-        assert!(matches!(
-            plan(&words("edit --play game.wasm content/room.scene.toml")).unwrap(),
-            Plan::Edit(args) if args == words("--play game.wasm content/room.scene.toml")
-        ));
-        assert!(refused("edit").contains("<PATH>"));
-        assert!(
-            refused("edit room.scene.toml --play")
-                .contains("a value is required for '--play <PLAY>'")
-        );
-        assert!(refused("edit a b").contains("unexpected argument 'b' found"));
-        assert!(USAGE.contains("pfx edit <scene.toml>"));
+    fn edit_belongs_to_the_window_and_the_usage_names_its_forms() {
+        assert!(recipe::claims(&words(
+            "edit content/room.scene.toml --play game.wasm"
+        )));
+        assert!(recipe::claims(&words("edit")));
+        assert!(USAGE.contains("pfx edit [<recipe|scene.toml|file.pfx|project folder|folder>]"));
     }
 
     #[test]
@@ -1357,7 +1316,6 @@ mod tests {
             assert!(plan(&words(bad)).is_err(), "{bad}");
         }
         assert!(USAGE.contains("pfx new <game> [--path <dir>] [--with-module]"));
-        assert!(USAGE.contains("pfx edit <project folder>"));
     }
 
     #[test]

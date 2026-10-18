@@ -59,6 +59,11 @@ impl Editor {
     }
 
     fn keys(&mut self, ctx: &egui::Context) {
+        self.play_keys(ctx);
+        self.edit_keys(ctx);
+    }
+
+    pub fn play_keys(&mut self, ctx: &egui::Context) {
         let dropped = ctx.input(|input| {
             input
                 .raw
@@ -70,6 +75,56 @@ impl Editor {
         if let Some(module) = dropped {
             self.use_module(module);
         }
+        if ctx.memory(|memory| memory.focused().is_some_and(|id| id != self.viewport.id()))
+            || ctx.input(|input| {
+                input.modifiers.command || input.modifiers.alt || input.modifiers.shift
+            })
+        {
+            return;
+        }
+        let pressed = |key: Key| ctx.input(|input| input.key_pressed(key));
+        if pressed(Key::F4) {
+            self.pick_module();
+        }
+        if pressed(Key::F5) {
+            self.play_pressed();
+        }
+        if pressed(Key::F7) && self.play == Play::Playing {
+            self.request(Request::Pause);
+        }
+        if pressed(Key::F6) && self.play == Play::Paused {
+            self.request(Request::Step);
+        }
+        if pressed(Key::F8) && self.play != Play::Stopped {
+            self.request(Request::Stop);
+        }
+        if pressed(Key::F9) && self.play != Play::Stopped {
+            self.request(Request::Record);
+        }
+        if pressed(Key::F10) && self.play != Play::Stopped {
+            self.request(Request::Keep);
+        }
+    }
+
+    pub fn level_tool_keys(&mut self, ctx: &egui::Context) {
+        let viewport = self.viewport.id();
+        if ctx.memory(|memory| memory.focused().is_some_and(|id| id != viewport))
+            || ctx.input(|input| input.modifiers.command || input.modifiers.alt)
+        {
+            return;
+        }
+        let inside = ctx.memory(|memory| memory.has_focus(viewport))
+            || ctx.input(|input| {
+                input
+                    .pointer
+                    .hover_pos()
+                    .zip(self.viewport.image())
+                    .is_some_and(|(at, image)| image.contains(at))
+            });
+        self.level_keys(ctx, inside);
+    }
+
+    pub fn edit_keys(&mut self, ctx: &egui::Context) {
         let viewport = self.viewport.id();
         let typing = ctx.memory(|memory| memory.focused().is_some_and(|id| id != viewport));
         if typing {
@@ -142,27 +197,6 @@ impl Editor {
         {
             self.open_scene(scene);
         }
-        if pressed(Key::F4) {
-            self.pick_module();
-        }
-        if pressed(Key::F5) {
-            self.play_pressed();
-        }
-        if pressed(Key::F7) && self.play == Play::Playing {
-            self.request(Request::Pause);
-        }
-        if pressed(Key::F6) && self.play == Play::Paused {
-            self.request(Request::Step);
-        }
-        if pressed(Key::F8) && self.play != Play::Stopped {
-            self.request(Request::Stop);
-        }
-        if pressed(Key::F9) && self.play != Play::Stopped {
-            self.request(Request::Record);
-        }
-        if pressed(Key::F10) && self.play != Play::Stopped {
-            self.request(Request::Keep);
-        }
     }
 
     pub(crate) fn button(
@@ -193,7 +227,7 @@ impl Editor {
         response.clicked()
     }
 
-    fn toolbar(&mut self, ui: &mut Ui) {
+    pub fn toolbar(&mut self, ui: &mut Ui) {
         let theme = Theme::of(ui.ctx());
         ui.horizontal_centered(|ui| {
             ui.label(title(&theme, "pfx edit", theme.size_body, theme.text));
@@ -316,9 +350,13 @@ impl Editor {
         }
     }
 
-    fn outliner(&mut self, ui: &mut Ui) {
-        let theme = Theme::of(ui.ctx());
+    pub fn outliner(&mut self, ui: &mut Ui) {
         ui.add(Header::new("1", "outliner").focused(self.selection.is_some()));
+        self.outline_rows(ui);
+    }
+
+    pub fn outline_rows(&mut self, ui: &mut Ui) {
+        let theme = Theme::of(ui.ctx());
         let outline = self.outline.clone();
         egui::ScrollArea::vertical()
             .id_salt("outliner scroll")
@@ -342,13 +380,20 @@ impl Editor {
             });
     }
 
-    fn inspector(&mut self, ui: &mut Ui) {
-        let heading = match &self.selection {
+    pub fn heading(&self) -> String {
+        match &self.selection {
             Some(item) => format!("{} {}", item.kind(), item.name()),
             None => "inspector".to_string(),
-        };
+        }
+    }
+
+    pub fn inspector(&mut self, ui: &mut Ui) {
+        ui.add(Header::new("2", &self.heading()).focused(self.selection.is_some()));
+        self.inspector_rows(ui);
+    }
+
+    pub fn inspector_rows(&mut self, ui: &mut Ui) {
         let theme = Theme::of(ui.ctx());
-        ui.add(Header::new("2", &heading).focused(self.selection.is_some()));
         if self.level_panel(ui) {
             return;
         }
@@ -636,7 +681,7 @@ impl Editor {
         }
     }
 
-    fn log_panel(&mut self, ui: &mut Ui) {
+    pub fn log_panel(&mut self, ui: &mut Ui) {
         let theme = Theme::of(ui.ctx());
         ui.horizontal(|ui| {
             ui.add(Header::new("4", "log").width(120.0));
@@ -707,7 +752,7 @@ impl Editor {
         self.typed(changed);
     }
 
-    fn viewport(&mut self, ui: &mut Ui) {
+    pub fn viewport(&mut self, ui: &mut Ui) {
         let theme = Theme::of(ui.ctx());
         let rect = if self.play == Play::Stopped {
             if std::mem::take(&mut self.outside) {

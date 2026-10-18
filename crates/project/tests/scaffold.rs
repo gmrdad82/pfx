@@ -108,6 +108,7 @@ fn the_test_patch_points_every_pfx_crate_at_this_workspace() {
     for name in [
         "pfx-game",
         "pfx-editor",
+        "pfx-workbench",
         "pfx-project",
         "pfx-gpu",
         "pfx-live",
@@ -130,7 +131,13 @@ fn the_scaffold_builds_with_and_without_tools_and_only_tools_links_the_editor() 
     let game = game("build");
     cargo(&root, &["build", "-q", "--no-default-features"]);
     let built = std::fs::read(binary("build")).unwrap();
-    for needle in ["pfx_editor", "egui::", "pfx_editor_shell", TOOLS_MARKER] {
+    for needle in [
+        "pfx_editor",
+        "pfx_workbench",
+        "egui::",
+        "pfx_editor_shell",
+        TOOLS_MARKER,
+    ] {
         assert!(
             !carries(&built, needle),
             "the build without tools links {needle}"
@@ -139,7 +146,13 @@ fn the_scaffold_builds_with_and_without_tools_and_only_tools_links_the_editor() 
     cargo(&root, &["build", "-q"]);
     let tools = std::fs::read(binary("build")).unwrap();
     if !cfg!(windows) {
-        for needle in ["pfx_editor", "egui::", "pfx_editor_shell", TOOLS_MARKER] {
+        for needle in [
+            "pfx_editor",
+            "pfx_workbench",
+            "egui::",
+            "pfx_editor_shell",
+            TOOLS_MARKER,
+        ] {
             assert!(carries(&tools, needle), "the tools build carries {needle}");
         }
     }

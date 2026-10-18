@@ -680,17 +680,6 @@ fn one_frame_asks_for_one_recording_however_often_its_pass_runs() {
 }
 
 #[test]
-fn run_wants_one_scene_file() {
-    assert_eq!(crate::run(&[]).unwrap_err(), crate::USAGE);
-    assert_eq!(crate::run(&["--x".to_string()]).unwrap_err(), crate::USAGE);
-    assert!(
-        crate::run(&["tmp/no-such.scene.toml".to_string()])
-            .unwrap_err()
-            .contains("no such scene file")
-    );
-}
-
-#[test]
 fn the_mute_button_and_key_toggle_mute_for_the_session() {
     let path = scene_copy("mute");
     let mut editor = Editor::open(&path).unwrap();
@@ -918,11 +907,6 @@ fn a_folder_without_scenes_is_refused_and_a_bare_fixture_folder_opens() {
         2,
         "{:?}",
         labels(&session.editor, "scenes")
-    );
-    assert!(
-        crate::run(&[empty.join("missing").to_string_lossy().into_owned()])
-            .unwrap_err()
-            .contains("no such scene file or project folder")
     );
 }
 
