@@ -774,13 +774,13 @@ fn developed(
     let failed = |e: String| Fault::Failed(format!("the tracer's readback: {e}"));
     let (color, albedo, normal) = if denoised.is_some() {
         let color = trace.readback_color(gpu).map_err(failed)?;
-        (floats(&color), Vec::new(), Vec::new())
+        (floats(&color).map_err(failed)?, Vec::new(), Vec::new())
     } else {
         let output = trace.readback(gpu).map_err(failed)?;
         (
-            floats(&output.color),
-            floats(&output.albedo),
-            floats(&output.normal),
+            floats(&output.color).map_err(failed)?,
+            floats(&output.albedo).map_err(failed)?,
+            floats(&output.normal).map_err(failed)?,
         )
     };
     Ok(Film {
@@ -830,20 +830,26 @@ fn refused(error: TraceError) -> Fault {
     }
 }
 
-fn floats(bytes: &[u8]) -> Vec<[f32; 4]> {
-    bytes
-        .chunks_exact(16)
-        .map(|pixel| {
-            std::array::from_fn(|k| {
-                f32::from_le_bytes([
-                    pixel[k * 4],
-                    pixel[k * 4 + 1],
-                    pixel[k * 4 + 2],
-                    pixel[k * 4 + 3],
-                ])
-            })
+fn floats(bytes: &[u8]) -> Result<Vec<[f32; 4]>, String> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(bytes.len() / 16).map_err(|error| {
+        format!(
+            "a film of {} pixels needs {} bytes: {error}",
+            bytes.len() / 16,
+            bytes.len()
+        )
+    })?;
+    out.extend(bytes.chunks_exact(16).map(|pixel| {
+        std::array::from_fn(|k| {
+            f32::from_le_bytes([
+                pixel[k * 4],
+                pixel[k * 4 + 1],
+                pixel[k * 4 + 2],
+                pixel[k * 4 + 3],
+            ])
         })
-        .collect()
+    }));
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1063,7 +1069,7 @@ mod tests {
             .flat_map(|v| v.to_le_bytes())
             .collect();
         assert_eq!(
-            floats(&bytes),
+            floats(&bytes).unwrap(),
             [[1.0, 0.5, -2.0, 1.0], [0.0, 3.25, 7.0, 1.0]]
         );
     }

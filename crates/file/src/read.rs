@@ -184,6 +184,14 @@ fn entries(rows: Vec<Row>, names: &[u8], data_start: u64, len: u64) -> Result<Ve
     Ok(entries)
 }
 
+fn zeroed(len: usize, what: &str) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    out.try_reserve_exact(len)
+        .map_err(|error| Error::Invalid(format!("{what} needs {len} bytes: {error}")))?;
+    out.resize(len, 0);
+    Ok(out)
+}
+
 fn align(at: u64) -> u64 {
     at.div_ceil(ALIGN) * ALIGN
 }
@@ -283,7 +291,10 @@ impl<'a> Reader<'a> {
                     .lock()
                     .map_err(|_| Error::Invalid("the file lock is poisoned".into()))?;
                 file.seek(SeekFrom::Start(entry.offset))?;
-                let mut out = vec![0u8; entry.stored as usize];
+                let mut out = zeroed(
+                    entry.stored as usize,
+                    &format!("chunk {}", tag_text(entry.tag)),
+                )?;
                 file.read_exact(&mut out)?;
                 Ok(Cow::Owned(out))
             }
@@ -297,7 +308,12 @@ impl<'a> Reader<'a> {
         let raw = match entry.codec {
             Codec::Store | Codec::Auto => stored,
             codec => Cow::Owned(
-                codec::decode(codec, &stored, entry.raw as usize).ok_or_else(|| {
+                codec::decode(
+                    codec,
+                    &stored,
+                    zeroed(entry.raw as usize, &format!("chunk {label}"))?,
+                )
+                .ok_or_else(|| {
                     corrupt(format!(
                         "chunk {label}: does not decode to {} bytes",
                         entry.raw

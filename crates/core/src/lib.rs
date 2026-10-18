@@ -5,6 +5,7 @@ pub mod clock;
 pub mod daylight;
 pub mod ease;
 pub mod fx;
+pub mod memory;
 pub mod modules;
 pub mod motion;
 pub mod numbers;

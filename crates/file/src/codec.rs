@@ -11,11 +11,14 @@ pub(crate) fn encode(codec: Codec, raw: &[u8]) -> Vec<u8> {
     }
 }
 
-pub(crate) fn decode(codec: Codec, stored: &[u8], raw: usize) -> Option<Vec<u8>> {
+pub(crate) fn decode(codec: Codec, stored: &[u8], mut out: Vec<u8>) -> Option<Vec<u8>> {
     match codec {
-        Codec::Auto | Codec::Store => (stored.len() == raw).then(|| stored.to_vec()),
+        Codec::Auto | Codec::Store => (stored.len() == out.len()).then(|| {
+            out.copy_from_slice(stored);
+            out
+        }),
         Codec::Deflate => {
-            let mut out = vec![0u8; raw];
+            let raw = out.len();
             let written = miniz_oxide::inflate::decompress_slice_iter_to_slice(
                 &mut out,
                 std::iter::once(stored),
@@ -25,7 +28,7 @@ pub(crate) fn decode(codec: Codec, stored: &[u8], raw: usize) -> Option<Vec<u8>>
             .ok()?;
             (written == raw).then_some(out)
         }
-        Codec::Lz4 => lz4::decompress(stored, raw),
+        Codec::Lz4 => lz4::decompress_into(stored, out),
     }
 }
 
