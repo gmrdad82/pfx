@@ -52,36 +52,66 @@ impl<F> Images<'_, F>
 where
     F: Fn(&str) -> Result<Vec<u8>, String>,
 {
-    fn image(&mut self, texture: usize) -> Option<Image> {
-        let source = self.gltf.textures().nth(texture)?.source().index();
+    fn image(&mut self, texture: usize) -> Result<Option<Image>, String> {
+        let Some(source) = self
+            .gltf
+            .textures()
+            .nth(texture)
+            .map(|texture| texture.source().index())
+        else {
+            return Ok(None);
+        };
         if let Some(Some(found)) = self.decoded.get(source) {
-            return found.clone();
+            return Ok(found.clone());
         }
-        let image = self.gltf.images().nth(source)?;
-        let bytes = match image.source() {
-            gltf::image::Source::View { view, .. } => {
-                let buffer = self.buffers.get(view.buffer().index())?;
-                buffer
-                    .get(view.offset()..view.offset() + view.length())?
-                    .to_vec()
+        let Some(image) = self.gltf.images().nth(source) else {
+            return Ok(None);
+        };
+        let (bytes, mime, label) = match image.source() {
+            gltf::image::Source::View { view, mime_type } => {
+                let bytes = self
+                    .buffers
+                    .get(view.buffer().index())
+                    .and_then(|buffer| buffer.get(view.offset()..view.offset() + view.length()))
+                    .map(<[u8]>::to_vec);
+                let label = match image.name() {
+                    Some(name) if !name.is_empty() => format!("image {source} ({name})"),
+                    _ => format!("image {source}"),
+                };
+                (bytes, Some(mime_type), label)
             }
-            gltf::image::Source::Uri { uri, .. } => (self.read)(uri).ok()?,
+            gltf::image::Source::Uri { uri, mime_type } => {
+                ((self.read)(uri).ok(), mime_type, uri.to_string())
+            }
+        };
+        let Some(bytes) = bytes else {
+            return Ok(None);
         };
         let decoded = if bytes.starts_with(b"\x89PNG") {
             Image::png(&bytes).ok()
+        } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) || mime == Some("image/jpeg") {
+            Some(Image::jpeg(&bytes).map_err(|e| format!("{label}: {e}"))?)
         } else {
             None
         };
         if let Some(slot) = self.decoded.get_mut(source) {
             *slot = Some(decoded.clone());
         }
-        decoded
+        Ok(decoded)
     }
 
-    fn map(&mut self, texture: Option<usize>, space: ColorSpace) -> Option<Image> {
-        let mut image = self.image(texture?)?;
-        image.space = space;
-        Some(image)
+    fn map(
+        &mut self,
+        texture: Option<usize>,
+        space: ColorSpace,
+    ) -> Result<Option<Arc<Image>>, String> {
+        let Some(texture) = texture else {
+            return Ok(None);
+        };
+        Ok(self.image(texture)?.map(|mut image| {
+            image.space = space;
+            Arc::new(image)
+        }))
     }
 }
 
@@ -143,7 +173,11 @@ fn colour(value: Option<&Value>) -> Option<[f32; 3]> {
     Some(out)
 }
 
-pub(crate) fn surfaces<F>(gltf: &gltf::Gltf, buffers: &[Vec<u8>], read: &F) -> Vec<Surface>
+pub(crate) fn surfaces<F>(
+    gltf: &gltf::Gltf,
+    buffers: &[Vec<u8>],
+    read: &F,
+) -> Result<Vec<Surface>, String>
 where
     F: Fn(&str) -> Result<Vec<u8>, String>,
 {
@@ -156,17 +190,17 @@ where
     gltf.materials()
         .enumerate()
         .map(|(index, material)| {
-            let mut found = surface(&material, &mut images);
+            let mut found = surface(&material, &mut images)?;
             found.name = match material.name() {
                 Some(name) if !name.is_empty() => name.to_string(),
                 _ => format!("material{index}"),
             };
-            found
+            Ok(found)
         })
         .collect()
 }
 
-fn surface<F>(material: &gltf::Material<'_>, images: &mut Images<'_, F>) -> Surface
+fn surface<F>(material: &gltf::Material<'_>, images: &mut Images<'_, F>) -> Result<Surface, String>
 where
     F: Fn(&str) -> Result<Vec<u8>, String>,
 {
@@ -190,24 +224,20 @@ where
     let base_texture = pbr
         .base_color_texture()
         .filter(|info| place(info.tex_coord(), info.extensions()));
-    maps.base = images
-        .map(
-            base_texture.map(|info| info.texture().index()),
-            ColorSpace::Srgb,
-        )
-        .map(Arc::new);
+    maps.base = images.map(
+        base_texture.map(|info| info.texture().index()),
+        ColorSpace::Srgb,
+    )?;
     let normal = material
         .normal_texture()
         .filter(|info| place(info.tex_coord(), info.extensions()));
     if let Some(info) = &normal {
         out.textures.normal_scale = info.scale();
     }
-    maps.normal = images
-        .map(
-            normal.map(|info| info.texture().index()),
-            ColorSpace::Linear,
-        )
-        .map(Arc::new);
+    maps.normal = images.map(
+        normal.map(|info| info.texture().index()),
+        ColorSpace::Linear,
+    )?;
     let rough = pbr
         .metallic_roughness_texture()
         .filter(|info| place(info.tex_coord(), info.extensions()))
@@ -216,19 +246,19 @@ where
         .occlusion_texture()
         .filter(|info| place(info.tex_coord(), info.extensions()));
     let occlusion_index = occlusion.as_ref().map(|info| info.texture().index());
-    let rough_image = images.map(rough, ColorSpace::Linear);
+    let rough_image = images.map(rough, ColorSpace::Linear)?;
     let packed = occlusion_index.is_some() && occlusion_index == rough;
     let occlusion_image = if packed {
         None
     } else {
-        images.map(occlusion_index, ColorSpace::Linear)
+        images.map(occlusion_index, ColorSpace::Linear)?
     };
     let shaded = (packed && rough_image.is_some()) || occlusion_image.is_some();
     out.textures.occlusion = match (&occlusion, shaded) {
         (Some(info), true) => info.strength(),
         _ => 0.0,
     };
-    maps.orm = orm(rough_image.as_ref(), occlusion_image.as_ref()).map(Arc::new);
+    maps.orm = orm(rough_image.as_deref(), occlusion_image.as_deref()).map(Arc::new);
     let mut extended = false;
     if let Some(sheen) = material.extension_value(SHEEN) {
         extended = true;
@@ -239,12 +269,10 @@ where
         extended = true;
         out.anisotropy.strength = number(anisotropy.get("anisotropyStrength"), 0.0);
         out.anisotropy.rotation = number(anisotropy.get("anisotropyRotation"), 0.0);
-        maps.anisotropy = images
-            .map(
-                texture_index(anisotropy.get("anisotropyTexture")),
-                ColorSpace::Linear,
-            )
-            .map(Arc::new);
+        maps.anisotropy = images.map(
+            texture_index(anisotropy.get("anisotropyTexture")),
+            ColorSpace::Linear,
+        )?;
     }
     if let Some(detail) = material
         .extras()
@@ -252,9 +280,7 @@ where
         .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok())
         .and_then(|extras| extras.get(DETAIL_NORMAL).cloned())
     {
-        maps.detail = images
-            .map(texture_index(Some(&detail)), ColorSpace::Linear)
-            .map(Arc::new);
+        maps.detail = images.map(texture_index(Some(&detail)), ColorSpace::Linear)?;
         out.textures.detail_scale = number(detail.get("scale"), 1.0);
         let set = detail
             .get("texCoord")
@@ -274,12 +300,12 @@ where
         || pbr.metallic_factor() != 1.0
         || pbr.roughness_factor() != 1.0
         || material.emissive_factor() != [0.0; 3];
-    Surface {
+    Ok(Surface {
         name: String::new(),
         material: out,
         maps,
         declared,
-    }
+    })
 }
 
 pub fn rgba8(image: &Image) -> Vec<[u8; 4]> {

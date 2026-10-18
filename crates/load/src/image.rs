@@ -38,16 +38,45 @@ impl Image {
         let size = reader
             .output_buffer_size()
             .ok_or("png: the image is too large")?;
-        let mut buf = vec![0u8; size];
+        let what = format!("png: {width}x{height}");
+        let mut buf = pfx_core::memory::filled(size, 0u8, &what)?;
         let frame = reader
             .next_frame(&mut buf)
             .map_err(|e| format!("png: {e}"))?;
-        let pixels = expand(&frame, &buf)?;
+        let pixels = expand(&frame, &buf, &what)?;
         Ok(Image {
             width: frame.width,
             height: frame.height,
             space,
             pixels,
+        })
+    }
+
+    pub fn jpeg_size(bytes: &[u8]) -> Result<(u32, u32), String> {
+        let mut decoder = crate::jpeg::Decoder::new(bytes);
+        decoder.read_headers().map_err(|e| format!("jpeg: {e}"))?;
+        Ok(decoder.dimensions())
+    }
+
+    pub fn jpeg(bytes: &[u8]) -> Result<Self, String> {
+        let mut decoder = crate::jpeg::Decoder::new(bytes);
+        decoder.read_headers().map_err(|e| format!("jpeg: {e}"))?;
+        let (width, height) = decoder.dimensions();
+        if width > MAX_EDGE || height > MAX_EDGE {
+            return Err(format!(
+                "jpeg: the image is {width} by {height}, the limit is {MAX_EDGE} a side"
+            ));
+        }
+        let size = width as usize * height as usize * 4;
+        let mut pixels = pfx_core::memory::filled(size, 0u8, &format!("jpeg: {width}x{height}"))?;
+        decoder
+            .decode_into(&mut pixels)
+            .map_err(|e| format!("jpeg: {e}"))?;
+        Ok(Image {
+            width,
+            height,
+            space: ColorSpace::Srgb,
+            pixels: Pixels::Eight(pixels),
         })
     }
 
@@ -106,7 +135,7 @@ fn colour(info: &png::Info) -> ColorSpace {
     }
 }
 
-fn expand(frame: &png::OutputInfo, buf: &[u8]) -> Result<Pixels, String> {
+fn expand(frame: &png::OutputInfo, buf: &[u8], what: &str) -> Result<Pixels, String> {
     if frame.color_type == png::ColorType::Indexed {
         return Err("png: the palette was not expanded".into());
     }
@@ -124,7 +153,7 @@ fn expand(frame: &png::OutputInfo, buf: &[u8]) -> Result<Pixels, String> {
     let height = frame.height as usize;
     let width = frame.width as usize;
     if wide {
-        let mut out = Vec::with_capacity(width * height * 4);
+        let mut out = pfx_core::memory::vec(width * height * 4, what)?;
         for y in 0..height {
             let row = buf
                 .get(y * frame.line_size..)
@@ -151,7 +180,7 @@ fn expand(frame: &png::OutputInfo, buf: &[u8]) -> Result<Pixels, String> {
         }
         Ok(Pixels::Sixteen(out))
     } else {
-        let mut out = Vec::with_capacity(width * height * 4);
+        let mut out = pfx_core::memory::vec(width * height * 4, what)?;
         for y in 0..height {
             let row = buf
                 .get(y * frame.line_size..)

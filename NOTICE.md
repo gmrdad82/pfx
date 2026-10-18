@@ -293,6 +293,32 @@ The outdoor height fog's density and its closed-form optical path in `crates/liv
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
+## zune-jpeg, under the MIT licence
+
+The JPEG decoder in `crates/load/src/jpeg/` (in the package `pfx-load`: `mod.rs`, `headers.rs`, `components.rs`, `huffman.rs`, `bitstream.rs`, `mcu.rs`, `progressive.rs`, `idct.rs`, `upsample.rs` and `color.rs`) is a port of zune-jpeg 0.5.15 (https://github.com/etemesi254/zune-image, `crates/zune-jpeg`, commit `31d81fed7551c8ccea456d9d8e2b1fd8bebb6995`): its marker and header parsing, Huffman tables with their lookahead and fast AC tables, bit reader, baseline and progressive MCU decoding, restart handling, scalar integer IDCTs, upsamplers and YCbCr conversion with their constants, altered, licensed MIT OR Apache-2.0 OR Zlib and used here under the MIT licence, as its `LICENSE-MIT` file at that version reads:
+
+> MIT License
+>
+> Copyright (c) zune-image developers
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
+
 ## Godot Engine, under the MIT licence
 
 The route spline's arc-length table in `crates/motion/src/route.rs` (in the package `pfx-motion`) ports the arc-length baking of Godot Engine's Curve3D (https://github.com/godotengine/godot, `scene/resources/curve.cpp`, tag `4.5-stable`, commit `876b290332ec6f2e6d173d08162a02aa7e6ca46d`): the even-length subdivision of each segment, the distance table searched by bisection, and the nearest distance by projection onto the baked polyline, altered, under the MIT licence, as its `LICENSE.txt` at that commit reads:

@@ -204,7 +204,10 @@ fn overlapping(out: &mut [u8], pos: usize, offset: usize, len: usize) {
 }
 
 pub fn decompress(input: &[u8], raw: usize) -> Option<Vec<u8>> {
-    let mut out = vec![0u8; raw];
+    decompress_into(input, vec![0u8; raw])
+}
+
+pub fn decompress_into(input: &[u8], mut out: Vec<u8>) -> Option<Vec<u8>> {
     let cap = out.len();
     let mut at = 0;
     let mut pos = 0;
@@ -260,5 +263,5 @@ pub fn decompress(input: &[u8], raw: usize) -> Option<Vec<u8>> {
         }
         pos += matched;
     }
-    (pos == raw).then_some(out)
+    (pos == cap).then_some(out)
 }

@@ -7,6 +7,9 @@ pub const VIEWS: [&str; 4] = ["side", "top", "front", "rear"];
 
 const FACE: f64 = 1e-6;
 const EPS: f64 = 1e-9;
+const PAD: f64 = 1e-6;
+const GRAIN: f64 = 1e-12;
+const SIDE: usize = 2048;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -235,9 +238,10 @@ impl Work {
     }
 
     pub fn select(&self, facing: Facing, polygon: &[DVec2]) -> Vec<bool> {
+        let outline = Outline::new(polygon);
         (0..self.tris.len())
             .map(|t| {
-                facing.faces(self.face(t)) && inside(polygon, facing.project(self.centroid(t)))
+                facing.faces(self.face(t)) && outline.contains(facing.project(self.centroid(t)))
             })
             .collect()
     }
@@ -366,14 +370,141 @@ impl Work {
     }
 }
 
+struct Grid {
+    facing: Facing,
+    lo: DVec2,
+    cell: DVec2,
+    dims: [usize; 2],
+    pad: f64,
+    grain: f64,
+    cells: Vec<Vec<u32>>,
+}
+
+impl Grid {
+    fn new(w: &Work, facing: Facing) -> Grid {
+        let mut lo = DVec2::splat(f64::INFINITY);
+        let mut hi = DVec2::splat(f64::NEG_INFINITY);
+        for p in w
+            .tris
+            .iter()
+            .flatten()
+            .map(|&i| facing.project(w.pos[i as usize]))
+        {
+            lo = lo.min(p);
+            hi = hi.max(p);
+        }
+        if lo.x > hi.x || lo.y > hi.y {
+            (lo, hi) = (DVec2::ZERO, DVec2::ZERO);
+        }
+        let extent = hi - lo;
+        let n = w.tris.len().max(1) as f64;
+        let area = extent.x * extent.y;
+        let side = if area > 0.0 {
+            (area / n).sqrt()
+        } else {
+            extent.max_element() / n
+        };
+        let count = |e: f64| {
+            if side > 0.0 && e > 0.0 {
+                ((e / side).ceil() as usize).clamp(1, SIDE)
+            } else {
+                1
+            }
+        };
+        let dims = [count(extent.x), count(extent.y)];
+        let size = |e: f64, d: usize| if e > 0.0 { e / d as f64 } else { 1.0 };
+        Grid {
+            facing,
+            lo,
+            cell: DVec2::new(size(extent.x, dims[0]), size(extent.y, dims[1])),
+            dims,
+            pad: PAD * (extent.length() + lo.abs().max(hi.abs()).max_element()),
+            grain: GRAIN * (extent.length() + lo.abs().max(hi.abs()).max_element()),
+            cells: vec![Vec::new(); dims[0] * dims[1]],
+        }
+    }
+
+    fn at(&self, p: DVec2) -> [usize; 2] {
+        let f = ((p - self.lo) / self.cell).floor();
+        [
+            (f.x as usize).min(self.dims[0] - 1),
+            (f.y as usize).min(self.dims[1] - 1),
+        ]
+    }
+
+    fn add(&mut self, w: &Work, t: u32) {
+        let q = w.tris[t as usize].map(|i| self.facing.project(w.pos[i as usize]));
+        let pad = DVec2::splat(self.pad);
+        let [x0, y0] = self.at(q[0].min(q[1]).min(q[2]) - pad);
+        let [x1, y1] = self.at(q[0].max(q[1]).max(q[2]) + pad);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                self.cells[y * self.dims[0] + x].push(t);
+            }
+        }
+    }
+
+    fn near(&self, p: DVec2, from: u32) -> Vec<u32> {
+        let [x, y] = self.at(p);
+        let mut found: Vec<u32> = self.cells[y * self.dims[0] + x]
+            .iter()
+            .copied()
+            .filter(|&t| t >= from)
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+
+    fn along(&self, a: DVec2, b: DVec2) -> Vec<u32> {
+        let m = self.pad + PAD * a.distance(b);
+        let d = b - a;
+        let [_, y0] = self.at(DVec2::splat(a.y.min(b.y) - m));
+        let [_, y1] = self.at(DVec2::splat(a.y.max(b.y) + m));
+        let mut found = Vec::new();
+        for y in y0..=y1 {
+            let low = if y == 0 {
+                f64::NEG_INFINITY
+            } else {
+                self.lo.y + y as f64 * self.cell.y - m
+            };
+            let high = if y + 1 == self.dims[1] {
+                f64::INFINITY
+            } else {
+                self.lo.y + (y + 1) as f64 * self.cell.y + m
+            };
+            let (s0, s1) = if d.y == 0.0 {
+                (0.0, 1.0)
+            } else {
+                let (u, v) = ((low - a.y) / d.y, (high - a.y) / d.y);
+                (u.min(v).max(0.0), u.max(v).min(1.0))
+            };
+            if s0 > s1 {
+                continue;
+            }
+            let (u, v) = (a.x + d.x * s0, a.x + d.x * s1);
+            let [x0, _] = self.at(DVec2::splat(u.min(v) - m));
+            let [x1, _] = self.at(DVec2::splat(u.max(v) + m));
+            for x in x0..=x1 {
+                found.extend_from_slice(&self.cells[y * self.dims[0] + x]);
+            }
+        }
+        found.sort_unstable();
+        found.dedup();
+        found
+    }
+}
+
 struct Index {
     edges: BTreeMap<Edge, Vec<u32>>,
+    grid: Grid,
 }
 
 impl Index {
-    fn new(w: &Work) -> Index {
+    fn new(w: &Work, facing: Facing) -> Index {
         let mut index = Index {
             edges: BTreeMap::new(),
+            grid: Grid::new(w, facing),
         };
         for t in 0..w.tris.len() {
             index.add(w, t as u32);
@@ -390,6 +521,7 @@ impl Index {
         for e in Index::keys(w, t) {
             self.edges.entry(e).or_default().push(t);
         }
+        self.grid.add(w, t);
     }
 
     fn remove(&mut self, w: &Work, t: u32) {
@@ -475,31 +607,49 @@ fn barycentric(q: [DVec2; 3], p: DVec2) -> Option<[f64; 3]> {
 }
 
 fn insert(w: &mut Work, index: &mut Index, facing: Facing, p: DVec2) {
-    let mut t = 0;
-    while t < w.tris.len() {
-        if facing.faces(w.face(t)) {
-            let tri = w.tris[t];
-            let q = tri.map(|i| facing.project(w.pos[i as usize]));
-            if let Some(b) = barycentric(q, p)
-                && b.iter().all(|&x| x <= 1.0 - EPS)
-            {
-                match (0..3).find(|&k| b[k] < EPS) {
-                    Some(k) => {
-                        let (u, v) = (tri[(k + 1) % 3], tri[(k + 2) % 3]);
-                        let (ku, kv) = (key(w.pos[u as usize]), key(w.pos[v as usize]));
-                        let e = edge(ku, kv);
-                        let s = if ku == e.0 {
-                            b[(k + 2) % 3]
-                        } else {
-                            b[(k + 1) % 3]
-                        };
-                        split_edge(w, index, e, s);
-                    }
-                    None => split_triangle(w, index, t as u32, b),
-                }
-            }
+    let mut from = 0;
+    loop {
+        let near = index.grid.near(p, from);
+        if near.is_empty() {
+            return;
         }
-        t += 1;
+        for t in near {
+            visit(w, index, facing, p, t as usize);
+            from = t + 1;
+        }
+    }
+}
+
+fn visit(w: &mut Work, index: &mut Index, facing: Facing, p: DVec2, t: usize) {
+    if !facing.faces(w.face(t)) {
+        return;
+    }
+    let tri = w.tris[t];
+    let q = tri.map(|i| facing.project(w.pos[i as usize]));
+    let long = (0..3)
+        .map(|k| q[k].distance(q[(k + 1) % 3]))
+        .fold(0.0, f64::max);
+    if q.iter()
+        .any(|c| c.distance(p) <= 2.0 * EPS * long + index.grid.grain)
+    {
+        return;
+    }
+    let Some(b) = barycentric(q, p).filter(|b| b.iter().all(|&x| x <= 1.0 - EPS)) else {
+        return;
+    };
+    match (0..3).find(|&k| b[k] < EPS) {
+        Some(k) => {
+            let (u, v) = (tri[(k + 1) % 3], tri[(k + 2) % 3]);
+            let (ku, kv) = (key(w.pos[u as usize]), key(w.pos[v as usize]));
+            let e = edge(ku, kv);
+            let s = if ku == e.0 {
+                b[(k + 2) % 3]
+            } else {
+                b[(k + 1) % 3]
+            };
+            split_edge(w, index, e, s);
+        }
+        None => split_triangle(w, index, t as u32, b),
     }
 }
 
@@ -517,7 +667,8 @@ fn crossing(p: DVec2, q: DVec2, a: DVec2, b: DVec2) -> Option<f64> {
 fn cross(w: &mut Work, index: &mut Index, facing: Facing, a: DVec2, b: DVec2) {
     let (lo, hi) = (a.min(b), a.max(b));
     let mut found: BTreeMap<Edge, f64> = BTreeMap::new();
-    for t in 0..w.tris.len() {
+    for t in index.grid.along(a, b) {
+        let t = t as usize;
         let q = w.tris[t].map(|i| facing.project(w.pos[i as usize]));
         let (qlo, qhi) = (q[0].min(q[1]).min(q[2]), q[0].max(q[1]).max(q[2]));
         if qhi.x < lo.x || qhi.y < lo.y || qlo.x > hi.x || qlo.y > hi.y || !facing.faces(w.face(t))
@@ -543,7 +694,7 @@ fn cross(w: &mut Work, index: &mut Index, facing: Facing, a: DVec2, b: DVec2) {
 }
 
 pub(crate) fn imprint(w: &mut Work, facing: Facing, lines: &[(&[DVec2], bool)]) {
-    let mut index = Index::new(w);
+    let mut index = Index::new(w, facing);
     for &(line, closed) in lines {
         for &p in line {
             insert(w, &mut index, facing, p);
@@ -556,16 +707,58 @@ pub(crate) fn imprint(w: &mut Work, facing: Facing, lines: &[(&[DVec2], bool)]) 
     }
 }
 
-pub(crate) fn inside(polygon: &[DVec2], p: DVec2) -> bool {
-    let n = polygon.len();
-    let mut odd = false;
-    for i in 0..n {
-        let (a, b) = (polygon[i], polygon[(i + n - 1) % n]);
-        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
-            odd = !odd;
+pub(crate) struct Outline<'a> {
+    polygon: &'a [DVec2],
+    lo: f64,
+    step: f64,
+    bands: Vec<Vec<u32>>,
+}
+
+impl<'a> Outline<'a> {
+    pub fn new(polygon: &'a [DVec2]) -> Outline<'a> {
+        let n = polygon.len();
+        let lo = polygon.iter().map(|p| p.y).fold(f64::INFINITY, f64::min);
+        let hi = polygon
+            .iter()
+            .map(|p| p.y)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let step = if hi > lo { (hi - lo) / n as f64 } else { 1.0 };
+        let mut outline = Outline {
+            polygon,
+            lo,
+            step,
+            bands: vec![Vec::new(); n.max(1)],
+        };
+        for i in 0..n {
+            let (a, b) = (polygon[i], polygon[(i + n - 1) % n]);
+            for band in outline.band(a.y.min(b.y))..=outline.band(a.y.max(b.y)) {
+                outline.bands[band].push(i as u32);
+            }
         }
+        outline
     }
-    odd
+
+    fn band(&self, y: f64) -> usize {
+        (((y - self.lo) / self.step).floor() as usize).min(self.bands.len() - 1)
+    }
+
+    pub fn contains(&self, p: DVec2) -> bool {
+        let n = self.polygon.len();
+        if n == 0 {
+            return false;
+        }
+        let mut odd = false;
+        for &i in &self.bands[self.band(p.y)] {
+            let (a, b) = (
+                self.polygon[i as usize],
+                self.polygon[(i as usize + n - 1) % n],
+            );
+            if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+                odd = !odd;
+            }
+        }
+        odd
+    }
 }
 
 pub(crate) fn distance(line: &[DVec2], closed: bool, p: DVec2) -> f64 {

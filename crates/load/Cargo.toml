@@ -29,6 +29,7 @@ fixture = ["pfx-core/fixture"]
 
 [dev-dependencies]
 pfx-core = { path = "../core", features = ["fixture"] }
+zune-jpeg = "=0.5.15"
 
 [[example]]
 name = "head_glb"

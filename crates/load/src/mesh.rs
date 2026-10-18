@@ -218,7 +218,7 @@ impl Mesh {
         let nodes = nodes(&gltf)?;
         let mut groups = groups(&gltf, &buffers)?;
         let materials = materials(&gltf)?;
-        let surfaces = crate::surface::surfaces(&gltf, &buffers, &read);
+        let surfaces = crate::surface::surfaces(&gltf, &buffers, &read)?;
         fill_tangents(&mut groups, &surfaces);
         let skins = skins(&gltf, &buffers)?;
         let animations = animations(&gltf, &buffers, &nodes, &groups)?;
