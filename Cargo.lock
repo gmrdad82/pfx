@@ -2148,6 +2148,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dae608c151f68243f2b000364e1f7b186d9c29845f7d2d85bd31b9ad77ad552b"
 
 [[package]]
+name = "manf"
+version = "0.1.0"
+source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.5.0#76eabe11aa659056c36fc03d9573617d3e7488c4"
+dependencies = [
+ "miniz_oxide 0.9.1",
+]
+
+[[package]]
 name = "matrixmultiply"
 version = "0.3.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3039,7 +3047,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pfx"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "exr",
  "hex",
@@ -3067,7 +3075,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-assets"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "clap",
  "image",
@@ -3089,7 +3097,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-bake"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "block_compression",
  "bytemuck",
@@ -3113,7 +3121,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-bench"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "pfx-core",
  "pfx-gpu",
@@ -3127,7 +3135,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-core"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3135,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-denoise"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "bytemuck",
  "naga",
@@ -3149,7 +3157,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-editor"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -3183,14 +3191,14 @@ dependencies = [
 
 [[package]]
 name = "pfx-editor-doc"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "toml_edit",
 ]
 
 [[package]]
 name = "pfx-editor-shell"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -3203,7 +3211,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-editor-style"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "egui",
  "pfx-editor-shell",
@@ -3212,7 +3220,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-editor-toml"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "egui",
  "pfx-editor-doc",
@@ -3224,7 +3232,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-editor-viewport"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "clap",
  "egui",
@@ -3242,7 +3250,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-film"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "pfx-core",
  "pfx-gpu",
@@ -3261,7 +3269,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-game"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "arboard",
  "pfx-core",
@@ -3284,7 +3292,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-geom"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "i_overlay",
  "lyon_tessellation",
@@ -3296,7 +3304,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-gpu"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "pfx-gpu",
  "pollster",
@@ -3308,7 +3316,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-input"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "gilrs",
  "pfx-gpu",
@@ -3322,7 +3330,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-live"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "bytemuck",
  "egui",
@@ -3352,7 +3360,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-load"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "gltf",
  "notify",
@@ -3371,7 +3379,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-materials"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -3382,7 +3390,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-mod"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "pfx-core",
  "semver",
@@ -3399,7 +3407,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-physics"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "bytemuck",
  "half",
@@ -3414,7 +3422,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-play"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "half",
  "pfx-core",
@@ -3435,7 +3443,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-post"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "bytemuck",
  "half",
@@ -3450,7 +3458,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-project"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "pfx-mod",
  "pfx-scene",
@@ -3459,7 +3467,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-run"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "chrono",
  "fs2",
@@ -3477,9 +3485,10 @@ dependencies = [
 
 [[package]]
 name = "pfx-scene"
-version = "1.4.0"
-source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.4.0#53239774a48df28890bb4dc58cc273b63cbd6ab2"
+version = "1.5.0"
+source = "git+https://github.com/gmrdad82/pfx-scene?tag=v1.5.0#76eabe11aa659056c36fc03d9573617d3e7488c4"
 dependencies = [
+ "manf",
  "serde",
  "toml 1.1.6+spec-1.1.0",
  "toml_edit",
@@ -3487,7 +3496,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-sound"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "cpal",
  "lewton",
@@ -3499,7 +3508,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-steam"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "pfx-core",
  "pfx-input",
@@ -3508,7 +3517,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-text"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "cosmic-text",
  "encoding_rs",
@@ -3525,7 +3534,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-theme"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "egui",
  "pfx-editor-style",
@@ -3533,7 +3542,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-trace"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "bytemuck",
  "half",
@@ -3581,8 +3590,8 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pito-codecs"
-version = "1.12.1"
-source = "git+https://github.com/gmrdad82/pito-codecs?tag=v1.12.1#2e6793c68b20f36aded0514ce4edca3999bab370"
+version = "1.14.3"
+source = "git+https://github.com/gmrdad82/pito-codecs?tag=v1.14.3#5f0680cc6a39f26243b5ffb70766f4ba2bf3524c"
 dependencies = [
  "libloading",
  "objc2-core-foundation",

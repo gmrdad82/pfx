@@ -38,8 +38,10 @@ const USAGE: &str = "usage:
   pfx edit <project folder>
   pfx new <game> [--path <dir>] [--with-module]
   pfx bench <scene.toml> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
-  pfx shot <scene.toml> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr] [--audio <out.wav>] [--sound <script>] [--shutter S] [--seed S] [--json]
+  pfx shot <scene.toml|scene.manf> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr] [--audio <out.wav>] [--sound <script>] [--shutter S] [--seed S] [--json]
   pfx scene migrate <scene.toml> [--dry-run]
+  pfx scene migrate --manf <scene.toml> <out.manf>
+  pfx scene migrate --unpack <scene.manf> <dir>
   pfx scene fix <scene.toml> [--dry-run]
   pfx film <script.film.toml> --out <dir> [--json] [--plan]
   pfx sound clean <in.wav> <out.wav> [--keep harmonic [--f0 LOW,HIGH]] [--remove transients] [--gate [--noise START,END] [--reduce DB]] [--mask <png>] [--json]
@@ -54,7 +56,7 @@ an app renders only itself: run from its own git tree, whose render/engine.toml 
 steam stage writes Steam's build scripts and stages depots; it does not upload
 bench plays a scene headless for N seconds at 60 fps, from its own camera, an object's (--camera) or a recorded input stream (--replay), writes the engine's frame stats to --stats (default tmp/pfx/bench/<scene>-<time>.jsonl) and prints one JSON summary line (docs/frame-stats.md, Bench); it paces like pgpu's manners ask, so run it under pgpu
 shot renders a scene file offline on the live renderer at a fixed clock (frame n at t = n / fps), headless, into numbered PNG or EXR frames, a manifest.json and an optional WAV for pcod (docs/render-a-scene.md); --draft halves the shadow maps, --final keeps the scene's; the frames before --from render unwritten, so frame N matches a full run's
-scene migrate rewrites a scene's format 0 files as format 1, keeping comments; scene fix writes the ids its entries lack; both refuse to write when the check fails
+scene migrate rewrites a scene's format 0 files as format 1, keeping comments; --manf packs a scene and every file it reads into one .manf, --unpack writes a .manf scene's files back out; scene fix writes the ids its entries lack; both refuse to write when the check fails
 film assembles a script of clips, rendered frame folders and cards into PNG frames, a WAV and a manifest.json naming the pcod command that encodes them, under the caller's tmp/ (docs/film.md, Footage films); --plan prints the scenes without rendering
 sound clean cleans a field recording offline and keeps its length: --keep harmonic tracks a moving fundamental (default 40..400 Hz) and keeps only its harmonic series, --remove transients finds short events that stand out of the background (barks, slams, voices, clicks) and inpaints them from the frames around them, --gate gates the noise under a print taken from --noise or the quietest second (fully, or by --reduce dB); it reports what it removed and --mask writes a time by frequency PNG, kept grey and removed red (docs/sound.md, Cleaning recordings)
 new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)";

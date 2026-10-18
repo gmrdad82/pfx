@@ -197,8 +197,24 @@ impl Mesh {
     where
         F: Fn(&str) -> Result<Vec<u8>, String>,
     {
+        if crate::manf::is_manf(bytes) {
+            let container = crate::manf::reader(bytes)?;
+            let gltf = crate::manf::document(&container)?;
+            return Self::from_gltf(gltf, |uri| match crate::manf::file(&container, uri)? {
+                Some(data) => Ok(data),
+                None => read(uri),
+            });
+        }
         let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| format!("mesh: {e}"))?;
-        let buffers = buffers(&gltf, &read)?;
+        Self::from_gltf(gltf, read)
+    }
+
+    fn from_gltf<F>(mut gltf: gltf::Gltf, read: F) -> Result<Self, String>
+    where
+        F: Fn(&str) -> Result<Vec<u8>, String>,
+    {
+        let blob = gltf.blob.take();
+        let buffers = buffers(&gltf, blob, &read)?;
         let nodes = nodes(&gltf)?;
         let mut groups = groups(&gltf, &buffers)?;
         let materials = materials(&gltf)?;
@@ -275,11 +291,14 @@ impl Mesh {
     }
 }
 
-fn buffers<F>(gltf: &gltf::Gltf, read: &F) -> Result<Vec<Vec<u8>>, String>
+fn buffers<F>(
+    gltf: &gltf::Gltf,
+    mut blob: Option<Vec<u8>>,
+    read: &F,
+) -> Result<Vec<Vec<u8>>, String>
 where
     F: Fn(&str) -> Result<Vec<u8>, String>,
 {
-    let mut blob = gltf.blob.clone();
     let mut out = Vec::new();
     for buffer in gltf.buffers() {
         let mut data = match buffer.source() {

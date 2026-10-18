@@ -94,7 +94,14 @@ impl SceneEdit {
         let path = path.as_ref().to_path_buf();
         let root = build::project_root(&path);
         let writer = Writer::open(&path).map_err(|error| scene_error(&root, error))?;
-        let scene = build::build(&path, &root, writer.scene(), None, &BTreeMap::new())?;
+        let scene = build::build_with(
+            &path,
+            &root,
+            writer.scene(),
+            None,
+            &BTreeMap::new(),
+            super::mounted::mounted(writer.project()),
+        )?;
         let mut edit = Self {
             path,
             root,
@@ -294,20 +301,21 @@ impl SceneEdit {
             .project()
             .scene_with(&self.writer.path(), group.after())
             .map_err(|found| edit_error(build::refused(&self.root, &found), key))?;
-        let root = self.writer.root();
+        let project = self.writer.project();
         let overlay = group
             .after()
             .into_iter()
-            .map(|(file, text)| {
-                let relative = file
-                    .strip_prefix(root)
-                    .map(Path::to_path_buf)
-                    .unwrap_or(file);
-                (relative, text)
-            })
+            .map(|(file, text)| (project.relative(&file), text))
             .collect();
-        build::build(&self.path, &self.root, &resolved, None, &overlay)
-            .map_err(|error| edit_error(error, key))
+        build::build_with(
+            &self.path,
+            &self.root,
+            &resolved,
+            None,
+            &overlay,
+            super::mounted::mounted(project),
+        )
+        .map_err(|error| edit_error(error, key))
     }
 
     fn land(&mut self, group: &PatchGroup, key: &str) -> Result<(), EditError> {

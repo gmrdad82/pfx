@@ -12,7 +12,7 @@ authors.workspace = true
 pfx-core = { path = "../core" }
 cpal = "=0.18.1"
 lewton = { version = "=0.10.2", optional = true }
-pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.12.1", default-features = false, features = ["h264", "hevc", "vp9", "aac", "ac3", "mp3", "opus", "mp4", "mkv", "gpu", "filter"], optional = true }
+pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.14.3", default-features = false, features = ["audio", "aac", "ac3", "mp3", "opus", "mp4", "mkv"], optional = true }
 toml = { version = "0.9", optional = true }
 
 [features]

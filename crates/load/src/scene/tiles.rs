@@ -297,10 +297,18 @@ fn template(
     root: &Path,
     prefab: &str,
     overlay: &BTreeMap<PathBuf, String>,
+    mount: Option<&pfx_scene::Project>,
     refuse: &dyn Fn(String) -> SceneError,
 ) -> Result<Template, SceneError> {
     let named = |message: String| refuse(format!("tile prefab {prefab}: {message}"));
-    let project = build::project(root)?;
+    let opened;
+    let project = match mount {
+        Some(project) => project,
+        None => {
+            opened = build::project(root)?;
+            &opened
+        }
+    };
     let absolute: BTreeMap<PathBuf, String> = overlay
         .iter()
         .map(|(file, text)| (root.join(file), text.clone()))
@@ -308,7 +316,7 @@ fn template(
     let resolved = project
         .scene_with(&root.join(prefab), absolute)
         .map_err(|found| named(build::refused(root, &found).message))?;
-    let built = build::build(&root.join(prefab), root, &resolved, None, overlay)?;
+    let built = build::build_with(&root.join(prefab), root, &resolved, None, overlay, mount)?;
     if let Some((name, _)) = built
         .animations
         .iter()
@@ -394,7 +402,7 @@ pub(super) fn expand(
                 Step::Key(key),
             ];
             let refuse = |message: String| places.refusal(&entry.file, &steps, message);
-            let made = template(scene, root, prefab, overlay, &refuse)?;
+            let made = template(scene, root, prefab, overlay, places.mount, &refuse)?;
             templates.insert(prefab.clone(), made);
         }
     }

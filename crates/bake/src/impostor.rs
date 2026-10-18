@@ -92,9 +92,9 @@ impl PropSpec {
         if self
             .file
             .as_ref()
-            .is_some_and(|v| !(v.ends_with(".gltf") || v.ends_with(".glb")))
+            .is_some_and(|v| !pfx_load::is_mesh_file(v))
         {
-            return Err("prop file must be glTF or GLB".into());
+            return Err("prop file must be glTF, GLB or .manf".into());
         }
         if self.frames_per_side < 2
             || self.frames_per_side > 32
@@ -215,7 +215,7 @@ fn mesh_triangles(mesh: &Mesh, node: Option<&str>) -> Result<Vec<Triangle>, Stri
 }
 
 fn gltf_materials(bytes: &[u8]) -> Result<Vec<Material>, String> {
-    let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| e.to_string())?;
+    let gltf = pfx_load::open_gltf(bytes)?;
     let mut result = Vec::new();
     for item in gltf.materials() {
         let pbr = item.pbr_metallic_roughness();

@@ -16,7 +16,7 @@ serde_json = "1"
 chrono = "0.4"
 fs2 = "0.4"
 png = "0.18"
-pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.12.1", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"], optional = true }
+pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.14.3", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"], optional = true }
 
 [features]
 encode = ["dep:pito-codecs"]
