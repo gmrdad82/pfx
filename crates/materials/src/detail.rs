@@ -1,10 +1,13 @@
 use crate::ageing::{apply, scratch_marked, scratch_marked_coat};
-use crate::kinds::{CoatWobble, Crinkle, Fibre, Grime, PlankWood, Scratch, WallMottle};
+use crate::kinds::{
+    CoatWobble, Crack, Crinkle, Fibre, Grime, PlankWood, Scratch, Track, WallMottle,
+};
 use crate::material::{At, Material, NoiseKind, NoiseLayer};
 use crate::math::{
     add3, clamp01, dot, fract, lerp, lerp3, mul3, normalize, scale3, smoothstep, sub3,
 };
 use crate::noise::{Hash, fbm3, flow, hash3, value_noise3, value_noise3_gradient};
+use crate::pavement::{crack, track};
 
 fn noise(p: [f32; 3]) -> f32 {
     value_noise3(p, Hash::Xor)
@@ -118,6 +121,18 @@ fn sample_layer(material: &mut Material, normal: &mut [f32; 3], layer: NoiseLaye
         NoiseKind::Fbm => {
             let n = fbm(scale3(p, layer.frequency), 4);
             tint_factor(material, 1.0 + (n - 0.5) * 2.0, amp);
+        }
+        NoiseKind::Crack => {
+            let c = Crack::from_params(&layer.params);
+            let m = crack(p, *normal, c, layer.seed, 0.0) * clamp01(amp);
+            material.base = scale3(material.base, 1.0 - c.darkness * m);
+            material.roughness = lerp(material.roughness, c.roughness, m);
+        }
+        NoiseKind::Track => {
+            let t = Track::from_params(&layer.params);
+            let m = track(uv, t, layer.seed, 0.0) * clamp01(amp);
+            material.base = scale3(material.base, lerp(1.0, t.tint, m));
+            material.roughness = lerp(material.roughness, material.roughness * t.polish, m);
         }
     }
 }

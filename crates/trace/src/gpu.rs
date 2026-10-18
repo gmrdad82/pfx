@@ -2562,6 +2562,9 @@ mod tests {
             include_str!("trace.wgsl"),
             crate::TEXTURED_WGSL
         );
+        let noise = pfx_materials::NOISE;
+        let pavement = noise[noise.find("fn voronoi_point2(").unwrap()..].trim_end();
+        assert!(include_str!("trace.wgsl").contains(pavement));
         for source in [lit, dark, baked] {
             let module = naga::front::wgsl::parse_str(&source).unwrap();
             naga::valid::Validator::new(

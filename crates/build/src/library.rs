@@ -14,9 +14,9 @@ use std::sync::Arc;
 pub const LICENCE: &str = "MIT, Catalin Ilinca; original, no third-party models or brand marks";
 pub const FOLDER: &str = "library";
 pub const INDEX: &str = "index.json";
+pub const OBJECT: &str = "object.pitofx";
 pub const MODEL: &str = "model.glb";
 pub const SIDECAR: &str = "object.toml";
-pub const THUMB: &str = "thumb.png";
 pub const ROOT: &str = "body";
 
 const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
@@ -52,10 +52,79 @@ pub struct Entry {
     pub tags: Vec<String>,
     pub size_m: [f64; 3],
     pub triangles: usize,
-    pub model: String,
-    pub sidecar: String,
-    pub thumb: Option<String>,
+    pub object: String,
     pub sha256: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stored {
+    pub model: Vec<u8>,
+    pub sidecar: String,
+    pub thumb: Option<Vec<u8>>,
+}
+
+impl Stored {
+    pub fn read(dir: &Path) -> Result<Stored, String> {
+        let bundled = dir.join(MODEL);
+        if pfx_recipe::files::mounted(&bundled) {
+            let read = |path: &Path| {
+                pfx_recipe::files::read(path)
+                    .map_err(|e| format!("cannot read {}: {e}", path.display()))
+            };
+            let sidecar = String::from_utf8(read(&dir.join(SIDECAR))?)
+                .map_err(|_| format!("{}: not UTF-8", dir.join(SIDECAR).display()))?;
+            return Ok(Stored {
+                model: read(&bundled)?,
+                sidecar,
+                thumb: None,
+            });
+        }
+        let path = dir.join(OBJECT);
+        let shown = path.display();
+        let bytes =
+            pfx_recipe::files::read(&path).map_err(|e| format!("cannot read {shown}: {e}"))?;
+        let reader = pfx_file::Reader::from_bytes(&bytes).map_err(|e| format!("{shown}: {e}"))?;
+        let chunk = |tag| reader.chunk(tag).map_err(|e| format!("{shown}: {e}"));
+        let json = chunk(pfx_file::GLTF)?.ok_or_else(|| format!("{shown}: holds no model"))?;
+        let bin = chunk(pfx_file::GBIN)?.unwrap_or_default();
+        let sidecar = chunk(pfx_file::FACT)?.ok_or_else(|| format!("{shown}: holds no sidecar"))?;
+        let sidecar = String::from_utf8(sidecar.into_owned())
+            .map_err(|_| format!("{shown}: its sidecar is not UTF-8"))?;
+        let thumb = chunk(pfx_file::THMB)?.map(std::borrow::Cow::into_owned);
+        Ok(Stored {
+            model: crate::document::join_glb(&json, &bin),
+            sidecar,
+            thumb,
+        })
+    }
+
+    pub fn write(&self, dir: &Path) -> Result<PathBuf, String> {
+        let (json, bin) = crate::document::split_glb(&self.model)?;
+        if crate::document::join_glb(&json, &bin) != self.model {
+            return Err(
+                "the model is a GLB with chunks beyond its JSON and binary ones, which the library does not keep"
+                    .into(),
+            );
+        }
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        let mut writer = pfx_file::Writer::new().chunk(pfx_file::GLTF, json, pfx_file::Codec::Auto);
+        if !bin.is_empty() {
+            writer = writer.chunk(pfx_file::GBIN, bin, pfx_file::Codec::Auto);
+        }
+        writer = writer.chunk(
+            pfx_file::FACT,
+            self.sidecar.as_bytes(),
+            pfx_file::Codec::Auto,
+        );
+        if let Some(thumb) = &self.thumb {
+            writer = writer.chunk(pfx_file::THMB, &thumb[..], pfx_file::Codec::Store);
+        }
+        let path = dir.join(OBJECT);
+        writer
+            .write(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(path)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,10 +244,9 @@ impl Sidecar {
         })
     }
 
-    pub fn read(path: &Path) -> Result<Sidecar, String> {
-        let text = pfx_recipe::files::read_to_string(path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        Sidecar::parse(&text).map_err(|e| format!("{}: {e}", path.display()))
+    pub fn read(dir: &Path) -> Result<Sidecar, String> {
+        let stored = Stored::read(dir)?;
+        Sidecar::parse(&stored.sidecar).map_err(|e| format!("{}: {e}", dir.join(OBJECT).display()))
     }
 }
 
@@ -1285,7 +1353,7 @@ pub(crate) fn provenance(recipe: &Recipe, object: &Object, base: &Path) -> Optio
         return None;
     };
     let shelf = shelf(recipe, base, reference, split_name(reference)).ok()?;
-    let sidecar = Sidecar::read(&shelf.dir.join(SIDECAR)).ok()?;
+    let sidecar = Sidecar::read(&shelf.dir).ok()?;
     Some(Provenance {
         licence: sidecar.licence,
         credit: sidecar.credit,
@@ -1304,21 +1372,16 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
     let shelf = shelf(recipe, base, reference, split_name(reference))
         .map_err(|t| fail(object, "object", t))?;
     let dir = shelf.dir.clone();
-    let sidecar = Sidecar::read(&dir.join(SIDECAR))
-        .map_err(|t| fail(object, "object", format!("{reference}: {t}")))?;
-    let model = dir.join(MODEL);
-    let bytes = pfx_recipe::files::read(&model).map_err(|e| {
-        fail(
-            object,
-            "object",
-            format!("{reference}: cannot read {}: {e}", model.display()),
-        )
-    })?;
+    let stored =
+        Stored::read(&dir).map_err(|t| fail(object, "object", format!("{reference}: {t}")))?;
+    let sidecar = Sidecar::parse(&stored.sidecar)
+        .map_err(|t| fail(object, "object", format!("{reference}/{OBJECT}: {t}")))?;
+    let bytes = stored.model;
     let parsed = gltf::Gltf::from_slice(&bytes)
         .map_err(|e| fail(object, "object", format!("{reference}: not glTF: {e}")))?;
     let buffers = gltf::import_buffers(&parsed.document, Some(&dir), parsed.blob.clone())
         .map_err(|e| fail(object, "object", format!("{reference}: buffers: {e}")))?;
-    let label = format!("{reference}/{MODEL}");
+    let label = format!("{reference}/{OBJECT}");
     let source = Source {
         object,
         path: &label,
@@ -1568,16 +1631,11 @@ pub fn index(root: &Path) -> Result<Vec<Entry>, Error> {
 
 fn entry(root: &Path, kind: &str, name: &str) -> Result<Entry, Error> {
     let dir = root.join(kind).join(name);
-    let at = |file: &str| format!("{kind}/{name}/{file}");
-    let read = |file: &str| {
-        std::fs::read(dir.join(file)).map_err(|e| Error::new(at(file), format!("cannot read: {e}")))
-    };
-    let sidecar_bytes = read(SIDECAR)?;
-    let text = String::from_utf8(sidecar_bytes.clone())
-        .map_err(|_| Error::new(at(SIDECAR), "not UTF-8"))?;
-    let sidecar = Sidecar::parse(&text).map_err(|t| Error::new(at(SIDECAR), t))?;
-    let model = read(MODEL)?;
-    let summary = pfx_glb::summary(&model).map_err(|e| Error::new(at(MODEL), e.0))?;
+    let at = format!("{kind}/{name}/{OBJECT}");
+    let stored = Stored::read(&dir).map_err(|t| Error::new(at.clone(), t))?;
+    let sidecar = Sidecar::parse(&stored.sidecar).map_err(|t| Error::new(at.clone(), t))?;
+    let model = &stored.model;
+    let summary = pfx_glb::summary(model).map_err(|e| Error::new(at.clone(), e.0))?;
     let mut lo = DVec3::splat(f64::INFINITY);
     let mut hi = DVec3::splat(f64::NEG_INFINITY);
     let mut triangles = 0;
@@ -1592,24 +1650,18 @@ fn entry(root: &Path, kind: &str, name: &str) -> Result<Entry, Error> {
         [0.0; 3]
     };
     let mut sha = BTreeMap::new();
-    sha.insert("model".to_string(), sha256(&model));
-    sha.insert("sidecar".to_string(), sha256(&sidecar_bytes));
-    let thumb = match std::fs::read(dir.join(THUMB)) {
-        Ok(bytes) => {
-            sha.insert("thumb".to_string(), sha256(&bytes));
-            Some(at(THUMB))
-        }
-        Err(_) => None,
-    };
+    sha.insert("model".to_string(), sha256(model));
+    sha.insert("sidecar".to_string(), sha256(stored.sidecar.as_bytes()));
+    if let Some(thumb) = &stored.thumb {
+        sha.insert("thumb".to_string(), sha256(thumb));
+    }
     Ok(Entry {
         kind: kind.to_string(),
         name: name.to_string(),
         tags: sidecar.tags,
         size_m: size,
         triangles,
-        model: at(MODEL),
-        sidecar: at(SIDECAR),
-        thumb,
+        object: at,
         sha256: sha,
     })
 }
@@ -1617,11 +1669,7 @@ fn entry(root: &Path, kind: &str, name: &str) -> Result<Entry, Error> {
 impl Entry {
     pub fn json(&self) -> Value {
         let mut files = Map::new();
-        files.insert("model".into(), json!(self.model));
-        files.insert("sidecar".into(), json!(self.sidecar));
-        if let Some(thumb) = &self.thumb {
-            files.insert("thumb".into(), json!(thumb));
-        }
+        files.insert("object".into(), json!(self.object));
         json!({
             "kind": self.kind,
             "name": self.name,
@@ -1651,9 +1699,7 @@ impl Entry {
                 _ => return None,
             },
             triangles: value.get("triangles")?.as_u64()? as usize,
-            model: text(files.get("model"))?,
-            sidecar: text(files.get("sidecar"))?,
-            thumb: text(files.get("thumb")),
+            object: text(files.get("object"))?,
             sha256: value
                 .get("sha256")?
                 .as_object()?
@@ -1791,10 +1837,10 @@ fn sidecars(root: &Path) -> Result<Vec<Sidecar>, Vec<Problem>> {
     let mut out = Vec::new();
     for kind in folders(root).map_err(refused)? {
         for name in folders(&root.join(&kind)).map_err(refused)? {
-            let path = root.join(&kind).join(&name).join(SIDECAR);
-            let sidecar = Sidecar::read(&path).map_err(|text| {
+            let dir = root.join(&kind).join(&name);
+            let sidecar = Sidecar::read(&dir).map_err(|text| {
                 vec![Problem {
-                    path: format!("{kind}/{name}/{SIDECAR}"),
+                    path: format!("{kind}/{name}/{OBJECT}"),
                     text,
                 }]
             })?;
@@ -1809,7 +1855,7 @@ fn unlicensed_in(sidecars: &[Sidecar]) -> Vec<Problem> {
         .iter()
         .filter(|s| s.licence.trim().is_empty())
         .map(|s| Problem {
-            path: format!("{}/{}/{SIDECAR}", s.kind, s.name),
+            path: format!("{}/{}/{OBJECT}", s.kind, s.name),
             text: "unlicensed: object.licence is empty; `pfx library add --licence <SPDX id> --credit \"<author, source URL>\"` records it".into(),
         })
         .collect()
@@ -1871,18 +1917,25 @@ pub fn check(root: &Path) -> Vec<Problem> {
         };
         for name in names {
             let dir = root.join(&kind).join(&name);
-            let at = |file: &str| format!("{kind}/{name}/{file}");
+            let at = || format!("{kind}/{name}/{OBJECT}");
             if !word(&kind) || !word(&name) {
                 problem(
                     format!("{kind}/{name}"),
                     "folder names are lowercase letters, digits, `_` and `-`".into(),
                 );
             }
-            match Sidecar::read(&dir.join(SIDECAR)) {
+            let stored = match Stored::read(&dir) {
+                Ok(stored) => stored,
+                Err(text) => {
+                    problem(at(), text);
+                    continue;
+                }
+            };
+            match Sidecar::parse(&stored.sidecar) {
                 Ok(sidecar) => {
                     if sidecar.kind != kind || sidecar.name != name {
                         problem(
-                            at(SIDECAR),
+                            at(),
                             format!(
                                 "names {}/{}, expected {kind}/{name} after its folder",
                                 sidecar.kind, sidecar.name
@@ -1891,20 +1944,15 @@ pub fn check(root: &Path) -> Vec<Problem> {
                     }
                     if let Some(text) = licence_problem(&sidecar.licence, sidecar.credit.as_deref())
                     {
-                        problem(at(SIDECAR), text);
+                        problem(at(), text);
                     }
                 }
-                Err(text) => problem(at(SIDECAR), text),
+                Err(text) => problem(at(), text),
             }
-            match std::fs::read(dir.join(MODEL)) {
-                Ok(bytes) => {
-                    if let Err(e) = gltf::Gltf::from_slice(&bytes) {
-                        problem(at(MODEL), format!("not glTF: {e}"));
-                    } else {
-                        model_problems(&bytes, &name, &mut |text| problem(at(MODEL), text));
-                    }
-                }
-                Err(e) => problem(at(MODEL), format!("cannot read: {e}")),
+            if let Err(e) = gltf::Gltf::from_slice(&stored.model) {
+                problem(at(), format!("not glTF: {e}"));
+            } else {
+                model_problems(&stored.model, &name, &mut |text| problem(at(), text));
             }
             if let Ok(entry) = entry(root, &kind, &name) {
                 fresh.push(entry);
@@ -1961,7 +2009,7 @@ fn model_problems(bytes: &[u8], name: &str, problem: &mut dyn FnMut(String)) {
         Ok(found) => {
             for at in found {
                 problem(format!(
-                    "`{at}`: pfx's own data stays in object.toml, the GLB carries standard glTF only"
+                    "`{at}`: pfx's own data stays in the sidecar, the model carries standard glTF only"
                 ));
             }
         }

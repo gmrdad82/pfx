@@ -37,7 +37,7 @@ fn a_packed_scene_opens_from_its_pfx_alone_like_its_toml() {
     let toml = room(&source);
     let expected = Scene::open(&toml).unwrap();
     let alone = folder("pack-alone");
-    let file = alone.root.join("room.pfx");
+    let file = alone.root.join("room.pitofx");
     pack(&toml, &file).unwrap();
     let opened = Scene::open(&file).unwrap();
     assert_eq!(opened.meshes["car"].parts, expected.meshes["car"].parts);
@@ -53,9 +53,9 @@ fn a_packed_scene_opens_from_its_pfx_alone_like_its_toml() {
 
     let mut cut = std::fs::read(&file).unwrap();
     cut.truncate(cut.len() - 9);
-    std::fs::write(alone.root.join("cut.pfx"), cut).unwrap();
-    let refused = String::from(Scene::open(alone.root.join("cut.pfx")).unwrap_err());
-    assert!(refused.contains("cut.pfx"), "{refused}");
+    std::fs::write(alone.root.join("cut.pitofx"), cut).unwrap();
+    let refused = String::from(Scene::open(alone.root.join("cut.pitofx")).unwrap_err());
+    assert!(refused.contains("cut.pitofx"), "{refused}");
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn a_gltf_mesh_reads_the_pfx_files_own_gltf_and_bin() {
         .to_vec()
         .unwrap();
     let alone = folder("own-alone");
-    let file = alone.root.join("room.pfx");
+    let file = alone.root.join("room.pitofx");
     std::fs::write(&file, bytes).unwrap();
     let opened = Scene::open(&file).unwrap();
     assert_eq!(opened.meshes["car"].parts, expected.meshes["car"].parts);
@@ -102,7 +102,7 @@ fn an_edit_in_place_rewrites_the_pfx_and_the_watch_reloads_it() {
     let source = folder("watch-source");
     let toml = room(&source);
     let alone = folder("watch-alone");
-    let file = alone.root.join("room.pfx");
+    let file = alone.root.join("room.pitofx");
     pack(&toml, &file).unwrap();
     let mut watch = SceneWatch::open(&file).unwrap();
     assert!(watch.check().is_none());

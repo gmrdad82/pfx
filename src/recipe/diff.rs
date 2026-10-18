@@ -37,7 +37,7 @@ pub(super) struct Args {
         requires = "render",
         help = "The recipe whose cameras, lights and look draw both"
     )]
-    recipe: Option<PathBuf>,
+    pub(super) recipe: Option<PathBuf>,
     #[arg(
         long,
         value_name = "name",

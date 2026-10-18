@@ -95,7 +95,7 @@ pub struct Library<'a> {
 
 pub fn library_reference(reference: &str) -> Option<Library<'_>> {
     let rest = reference.strip_prefix(LIBRARY_PREFIX)?;
-    let end = rest.find(".pfx/")? + ".pfx".len();
+    let end = rest.find(".pitofx/")? + ".pitofx".len();
     Some(Library {
         file: &rest[..end],
         entry: &rest[end + 1..],
@@ -169,8 +169,8 @@ mod tests {
 
     #[test]
     fn a_library_reference_splits_at_the_pfx_file() {
-        let found = library_reference("lib:shared/props.pfx/prop/crate").unwrap();
-        assert_eq!(found.file, "shared/props.pfx");
+        let found = library_reference("lib:shared/props.pitofx/prop/crate").unwrap();
+        assert_eq!(found.file, "shared/props.pitofx");
         assert_eq!(found.entry, "prop/crate");
         assert!(library_reference("prop/crate").is_none());
         assert!(library_reference("lib:props/crate").is_none());

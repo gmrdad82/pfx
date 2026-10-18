@@ -1,4 +1,4 @@
-# The README's editing clip: pfx edit samples/workshop.toml --clip <dir> --tape samples/edit.tape --poster last
+# The README's editing clip: pfx gui samples/workshop.pitofx --clip <dir> --tape samples/edit.tape --poster last
 # Points are for the default 1586x992 window.
 wait 1
 # pick the mirror ball and slide it along x with the gizmo

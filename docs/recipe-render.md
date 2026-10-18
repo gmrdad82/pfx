@@ -3,7 +3,7 @@
 `pfx render --recipe` traces a recipe through pfx's offline path tracer (`pfx_trace`, pfx rev `075fb1b`). It stages the same parts, materials, sky, sun and lights the live renderer draws, so a render and a `pfx shot --still` of one recipe show one scene.
 
 ```
-pfx render --recipe <recipe> --camera <name> [--spp N] [--threshold T] [--min-samples N] [--draft] [--seed S] [--size WxH] [--equirect|--ortho] [--crop x,y,w,h] [--variant V] [--set key=value]... [--denoise off|on] [--master <file.png>] [--progress plain|json] --out <file>
+pfx render --recipe <x.pitofx> --camera <name> [--spp N] [--threshold T] [--min-samples N] [--draft] [--seed S] [--size WxH] [--equirect|--ortho] [--crop x,y,w,h] [--variant V] [--set key=value]... [--denoise off|on] [--master <file.png>] [--progress plain|json] --out <file>
 ```
 
 | Option | Default | Meaning |
@@ -158,7 +158,7 @@ pfx render --recipe: this GPU is below the tracer's floor, so pfx render --recip
 C3 holds the camera, the size and a samples field (default 256, at least 1). Render runs, on a thread, with the window's own executable:
 
 ```
-pfx render --recipe <recipe> --camera <name> --size WxH --spp N --threshold 0 --out tmp/pfx/renders/<recipe>-<camera>-<W>x<H>.png
+pfx render --recipe <x.pitofx> --camera <name> --size WxH --spp N --threshold 0 --out tmp/pfx/renders/<recipe>-<camera>-<W>x<H>.png
 ```
 
 `pfx render --recipe` runs under `pgpu run --class clip` by its own process line when pgpu is there, so the window wraps nothing. Cancel (or `esc` in C3) sends TERM to that pid; the queued, waiting, running, done and failed states, the result view and the full-size overlay are as before (`docs/cameras.md`).
@@ -168,7 +168,7 @@ pfx render --recipe <recipe> --camera <name> --size WxH --spp N --threshold 0 --
 `pfx clip` renders a camera moving along its path (`docs/recipe-format.md`, cameras), or an object turning under a still camera, to numbered frames, and optionally a video:
 
 ```
-pfx clip <recipe> --camera <name> --frames N --fps F [--spin <object> [--turns N]] --size WxH --out <dir> [--trace [--spp N]] [--variant V] [--set key=value]... [--video <file.mp4|.webm>]
+pfx clip <x.pitofx> --camera <name> --frames N --fps F [--spin <object> [--turns N]] --size WxH --out <dir> [--trace [--spp N]] [--variant V] [--set key=value]... [--video <file.mp4|.webm>]
 ```
 
 | Option | Default | Meaning |

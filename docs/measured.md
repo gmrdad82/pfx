@@ -1,6 +1,6 @@
 # Measured
 
-The numbers the README quotes that have no page of their own, and how each was taken. The path tracer's are in [trace.md](trace.md#the-material-record), the denoiser's in [denoise.md](denoise.md#speed) and the `.pfx` file's load times in [pfx-file.md](pfx-file.md#load-time).
+The numbers the README quotes that have no page of their own, and how each was taken. The path tracer's are in [trace.md](trace.md#the-material-record), the denoiser's in [denoise.md](denoise.md#speed) and the `.pitofx` file's load times in [pfx-file.md](pfx-file.md#load-time).
 
 All were measured on an AMD Radeon RX 9060 XT with an AMD Ryzen 9 9950X (32 threads) under Linux, each GPU run through the machine's GPU queue, which other jobs shared. The live and 2D numbers were measured on 2026-10-15 as an A/B against the commit before them (9e7514a): both release builds alternated run by run, five runs each, at a load average of 13 to 35, and each number is the median of the five. The rest were measured once on 2026-10-14 at commit 637c352 (v0.32.0).
 

@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-pub const MESH_SUFFIXES: [&str; 3] = [".glb", ".gltf", ".pfx"];
+pub const MESH_SUFFIXES: [&str; 3] = [".glb", ".gltf", ".pitofx"];
 
 pub fn is_mesh_file(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
@@ -28,12 +28,12 @@ pub(crate) fn document(reader: &pfx_file::Reader<'_>) -> Result<gltf::Gltf, Stri
         .map_err(|e| format!("mesh: {e}"))?
     else {
         if reader.find(pfx_file::SCNE).is_some() {
-            return Err("mesh: the .pfx holds a scene and no GLTF; open it as a scene".into());
+            return Err("mesh: the .pitofx holds a scene and no GLTF; open it as a scene".into());
         }
-        return Err("mesh: the .pfx holds no GLTF chunk".into());
+        return Err("mesh: the .pitofx holds no GLTF chunk".into());
     };
     if json.starts_with(b"glTF") {
-        return Err("mesh: the .pfx GLTF chunk holds a GLB, not glTF JSON".into());
+        return Err("mesh: the .pitofx GLTF chunk holds a GLB, not glTF JSON".into());
     }
     let mut gltf = gltf::Gltf::from_slice(&json).map_err(|e| format!("mesh: {e}"))?;
     gltf.blob = reader

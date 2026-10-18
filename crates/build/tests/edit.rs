@@ -135,8 +135,13 @@ fn a_library_object_splits_and_carves_its_nodes_too() {
     let root = dir.join("library");
     let folder = root.join("prop/lump");
     std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(folder.join(library::MODEL), &exported.glb).unwrap();
-    std::fs::write(folder.join(library::SIDECAR), exported.sidecar.text()).unwrap();
+    library::Stored {
+        model: exported.glb.clone(),
+        sidecar: exported.sidecar.text(),
+        thumb: None,
+    }
+    .write(&folder)
+    .unwrap();
     library::write_index(&root).unwrap();
     let b = built(
         &dir,
@@ -198,8 +203,13 @@ fn one_pieces_key_reaches_file_nodes_and_the_pieces_cut_from_them() {
     let root = dir.join("library");
     let folder = root.join("prop/lump");
     std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(folder.join(library::MODEL), &exported.glb).unwrap();
-    std::fs::write(folder.join(library::SIDECAR), exported.sidecar.text()).unwrap();
+    library::Stored {
+        model: exported.glb.clone(),
+        sidecar: exported.sidecar.text(),
+        thumb: None,
+    }
+    .write(&folder)
+    .unwrap();
     library::write_index(&root).unwrap();
     let b = built(
         &dir,

@@ -1,6 +1,6 @@
 # Play mode
 
-`pfx-play` (`crates/play`) runs a scene as a game inside an editor, headless: press play and the scene runs live with its game logic, input and sound; pause, step and resume; stop, and the editor is back exactly where it was, its data files untouched. It is what `pfx edit`'s play, pause and stop buttons drive, as Godot, Unity and Unreal do.
+`pfx-play` (`crates/play`) runs a scene as a game inside an editor, headless: press play and the scene runs live with its game logic, input and sound; pause, step and resume; stop, and the editor is back exactly where it was, its data files untouched. It is what `pfx gui`'s play, pause and stop buttons drive, as Godot, Unity and Unreal do.
 
 The crate is a library an app or a game links. It links no harness and no job-status crate, opens no window and reads no clock: the editor passes the real seconds of each frame, the input events of its viewport and the renderer it already has.
 
@@ -51,12 +51,12 @@ The game keeps its run's state in the world (`world.set_state(state)`, `world.st
 A game depends on `pfx-play` and pfx's editor crates, and builds its own editor binary around its own `Game`:
 
 ```rust
-let scene = Scene::open("content/level.scene.toml")?;
+let scene = Scene::open("content/level.pitofx")?;
 let mut staged = renderer.stage(&scene)?;
 let session = PlaySession::play(&scene, &staged, Box::new(MyGame::default()))?;
 ```
 
-`pfx edit` alone plays `SceneGame`. A game that wants the scene's own behaviour as well calls the same world helpers `SceneGame` calls, or holds a `SceneGame` and calls its `start` and `tick` from its own.
+`pfx gui` alone plays `SceneGame`. A game that wants the scene's own behaviour as well calls the same world helpers `SceneGame` calls, or holds a `SceneGame` and calls its `start` and `tick` from its own.
 
 ## The world
 
@@ -99,7 +99,7 @@ Each tick runs in this order:
 4. the animators and sprite players advance to the tick, and `Game::animated` receives their events ([animation.md](animation.md));
 5. the mixer renders the audio of that tick, `rate / tick rate` frames, which the editor drains with `take_audio()` and plays on its device.
 
-A paused session runs no ticks and renders no audio, so it is silent. Stop drops the mixer, so a player takes the last `take_audio()` before it calls `stop`. `Options::audio_rate` and `audio_channels` are what the mixer renders at; the sender does no resampling, so a player on a device sets them to the device's. `pfx edit` does this and plays the audio through a PCM stream (`docs/editor.md`, "Play mode").
+A paused session runs no ticks and renders no audio, so it is silent. Stop drops the mixer, so a player takes the last `take_audio()` before it calls `stop`. `Options::audio_rate` and `audio_channels` are what the mixer renders at; the sender does no resampling, so a player on a device sets them to the device's. `pfx gui` does this and plays the audio through a PCM stream (`docs/editor.md`, "Play mode").
 
 ## The default game
 

@@ -8,7 +8,7 @@ use crate::licence::{Kind, Policy};
 use crate::secret::Credential;
 
 pub const TAG: Tag = *b"CONF";
-pub const FILE: &str = "settings.pfx";
+pub const FILE: &str = "settings.pitofx";
 pub const ACCOUNT_KINDS: [&str; 1] = ["sketchfab"];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,6 +196,10 @@ impl Settings {
     }
 
     pub fn load(path: &Path) -> Result<Settings, String> {
+        let legacy = path.with_extension(pfx_file::LEGACY_EXTENSION);
+        if !path.exists() && pfx_file::is_file_path(path) && pfx_file::has_magic(&legacy) {
+            return Settings::load(&legacy);
+        }
         if !path.exists() {
             return Ok(Settings::default());
         }
@@ -242,7 +246,7 @@ pub fn path() -> Result<PathBuf, String> {
                     .or_else(|| var("HOME").map(|h| h.join(".config/pfx")))
             }
         })
-        .ok_or("no settings folder: set PFX_SETTINGS to a .pfx file")?;
+        .ok_or("no settings folder: set PFX_SETTINGS to a .pitofx file")?;
     Ok(dir.join(FILE))
 }
 
@@ -278,7 +282,7 @@ token_cmd = ["secret-tool", "lookup", "service", "models"]
         assert_eq!(&bytes[..8], &pfx_file::MAGIC);
         assert_eq!(Settings::load(&file).unwrap(), settings);
         assert_eq!(
-            Settings::load(&dir.join("none.pfx")).unwrap(),
+            Settings::load(&dir.join("none.pitofx")).unwrap(),
             Settings::default()
         );
         std::fs::remove_dir_all(&dir).unwrap();

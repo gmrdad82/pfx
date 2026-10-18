@@ -27,7 +27,7 @@ fn scene_name(path: &Path) -> String {
         |name| name.to_string_lossy().into_owned(),
     );
     let name = name
-        .strip_suffix(".pfx")
+        .strip_suffix(".pitofx")
         .or_else(|| name.strip_suffix(".toml"))
         .unwrap_or(&name);
     name.strip_suffix(".scene").unwrap_or(name).to_string()
@@ -197,7 +197,7 @@ fn sha256(path: &Path) -> Result<String, String> {
 pub fn run(plan: &Plan) -> Result<(), String> {
     if plan.scene.is_dir() {
         return Err(format!(
-            "{} is a folder; pfx shot renders one scene file offline and opens no window (a project folder opens with pfx edit)",
+            "{} is a folder; pfx shot renders one scene file offline and opens no window (a project folder opens with pfx gui)",
             plan.scene.display()
         ));
     }

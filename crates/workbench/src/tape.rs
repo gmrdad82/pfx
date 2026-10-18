@@ -1532,15 +1532,15 @@ mod tests {
     #[test]
     fn the_file_steps_are_tape_beats_one_frame_each() {
         let tape = Tape::parse(
-            "open a.pfx\nsave\nsave-as b.pfx\nimport car.glb\nexport out.glb --selected\ndrop car.glb shift\n",
+            "open a.pitofx\nsave\nsave-as b.pitofx\nimport car.glb\nexport out.glb --selected\ndrop car.glb shift\n",
         )
         .unwrap();
         assert_eq!(
             tape.beats,
             vec![
-                Beat::File(FileStep::Open("a.pfx".into())),
+                Beat::File(FileStep::Open("a.pitofx".into())),
                 Beat::File(FileStep::Save),
-                Beat::File(FileStep::SaveAs("b.pfx".into())),
+                Beat::File(FileStep::SaveAs("b.pitofx".into())),
                 Beat::File(FileStep::Import("car.glb".into())),
                 Beat::File(FileStep::Export {
                     path: "out.glb".into(),

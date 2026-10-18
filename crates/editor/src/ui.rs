@@ -37,19 +37,19 @@ impl Editor {
         self.level.shift = ctx.input(|input| input.modifiers.shift);
         self.keys(&ctx);
         self.snap_gizmo();
-        egui::Panel::top("pfx edit toolbar")
+        egui::Panel::top("pfx gui toolbar")
             .resizable(false)
             .exact_size(TOOLBAR_HEIGHT)
             .show(ui, |ui| self.toolbar(ui));
-        egui::Panel::bottom("pfx edit log")
+        egui::Panel::bottom("pfx gui log")
             .resizable(true)
             .default_size(LOG_HEIGHT)
             .show(ui, |ui| self.log_panel(ui));
-        egui::Panel::left("pfx edit outliner")
+        egui::Panel::left("pfx gui outliner")
             .resizable(true)
             .default_size(OUTLINER_WIDTH)
             .show(ui, |ui| self.outliner(ui));
-        egui::Panel::right("pfx edit inspector")
+        egui::Panel::right("pfx gui inspector")
             .resizable(true)
             .default_size(INSPECTOR_WIDTH)
             .show(ui, |ui| self.inspector(ui));
@@ -230,7 +230,7 @@ impl Editor {
     pub fn toolbar(&mut self, ui: &mut Ui) {
         let theme = Theme::of(ui.ctx());
         ui.horizontal_centered(|ui| {
-            ui.label(title(&theme, "pfx edit", theme.size_body, theme.text));
+            ui.label(title(&theme, "pfx gui", theme.size_body, theme.text));
             ui.label(small(&theme, self.name(), theme.muted));
             ui.separator();
             let held = self.viewport.gizmo().mode;

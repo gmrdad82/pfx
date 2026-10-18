@@ -10,7 +10,7 @@ use crate::{Built, Registry, build_with, glb_path};
 
 pub const GLTF_NAME: &str = "@gltf";
 pub const ENTRY: &str = "main.toml";
-pub const ASSET_RECORD: &str = "asset.pfx";
+pub const ASSET_RECORD: &str = "asset.pitofx";
 const RECORD_DEPTH: usize = 4;
 
 const OWNED: [Tag; 10] = [
@@ -73,7 +73,7 @@ pub struct Document {
 
 pub fn is_pfx(path: &Path) -> bool {
     path.extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("pfx"))
+        .is_some_and(|e| e.eq_ignore_ascii_case(pfx_file::EXTENSION))
 }
 
 fn hex(digest: &[u8]) -> String {
@@ -120,7 +120,7 @@ fn relative(root: &Path, file: &Path) -> Option<PathBuf> {
     file.strip_prefix(root).ok().map(Path::to_path_buf)
 }
 
-fn split_glb(glb: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
+pub(crate) fn split_glb(glb: &[u8]) -> Result<(Vec<u8>, Vec<u8>), String> {
     let word = |at: usize| -> Option<u32> {
         Some(u32::from_le_bytes(glb.get(at..at + 4)?.try_into().ok()?))
     };

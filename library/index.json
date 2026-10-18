@@ -1,9 +1,7 @@
 [
   {
     "files": {
-      "model": "buildings/lowrise-a/model.glb",
-      "sidecar": "buildings/lowrise-a/object.toml",
-      "thumb": "buildings/lowrise-a/thumb.png"
+      "object": "buildings/lowrise-a/object.pitofx"
     },
     "kind": "buildings",
     "name": "lowrise-a",
@@ -26,9 +24,7 @@
   },
   {
     "files": {
-      "model": "buildings/lowrise-b/model.glb",
-      "sidecar": "buildings/lowrise-b/object.toml",
-      "thumb": "buildings/lowrise-b/thumb.png"
+      "object": "buildings/lowrise-b/object.pitofx"
     },
     "kind": "buildings",
     "name": "lowrise-b",
@@ -51,9 +47,7 @@
   },
   {
     "files": {
-      "model": "buildings/lowrise-c/model.glb",
-      "sidecar": "buildings/lowrise-c/object.toml",
-      "thumb": "buildings/lowrise-c/thumb.png"
+      "object": "buildings/lowrise-c/object.pitofx"
     },
     "kind": "buildings",
     "name": "lowrise-c",
@@ -76,9 +70,7 @@
   },
   {
     "files": {
-      "model": "buildings/tower-a/model.glb",
-      "sidecar": "buildings/tower-a/object.toml",
-      "thumb": "buildings/tower-a/thumb.png"
+      "object": "buildings/tower-a/object.pitofx"
     },
     "kind": "buildings",
     "name": "tower-a",
@@ -100,9 +92,7 @@
   },
   {
     "files": {
-      "model": "cars/coupe/model.glb",
-      "sidecar": "cars/coupe/object.toml",
-      "thumb": "cars/coupe/thumb.png"
+      "object": "cars/coupe/object.pitofx"
     },
     "kind": "cars",
     "name": "coupe",
@@ -125,9 +115,7 @@
   },
   {
     "files": {
-      "model": "cars/hatch/model.glb",
-      "sidecar": "cars/hatch/object.toml",
-      "thumb": "cars/hatch/thumb.png"
+      "object": "cars/hatch/object.pitofx"
     },
     "kind": "cars",
     "name": "hatch",
@@ -150,9 +138,7 @@
   },
   {
     "files": {
-      "model": "cars/sedan/model.glb",
-      "sidecar": "cars/sedan/object.toml",
-      "thumb": "cars/sedan/thumb.png"
+      "object": "cars/sedan/object.pitofx"
     },
     "kind": "cars",
     "name": "sedan",
@@ -175,9 +161,7 @@
   },
   {
     "files": {
-      "model": "cars/van/model.glb",
-      "sidecar": "cars/van/object.toml",
-      "thumb": "cars/van/thumb.png"
+      "object": "cars/van/object.pitofx"
     },
     "kind": "cars",
     "name": "van",
@@ -200,9 +184,7 @@
   },
   {
     "files": {
-      "model": "furniture/bollard/model.glb",
-      "sidecar": "furniture/bollard/object.toml",
-      "thumb": "furniture/bollard/thumb.png"
+      "object": "furniture/bollard/object.pitofx"
     },
     "kind": "furniture",
     "name": "bollard",
@@ -224,9 +206,7 @@
   },
   {
     "files": {
-      "model": "furniture/lamp-pole/model.glb",
-      "sidecar": "furniture/lamp-pole/object.toml",
-      "thumb": "furniture/lamp-pole/thumb.png"
+      "object": "furniture/lamp-pole/object.pitofx"
     },
     "kind": "furniture",
     "name": "lamp-pole",
@@ -249,9 +229,7 @@
   },
   {
     "files": {
-      "model": "furniture/sign/model.glb",
-      "sidecar": "furniture/sign/object.toml",
-      "thumb": "furniture/sign/thumb.png"
+      "object": "furniture/sign/object.pitofx"
     },
     "kind": "furniture",
     "name": "sign",
@@ -273,9 +251,7 @@
   },
   {
     "files": {
-      "model": "furniture/traffic-light/model.glb",
-      "sidecar": "furniture/traffic-light/object.toml",
-      "thumb": "furniture/traffic-light/thumb.png"
+      "object": "furniture/traffic-light/object.pitofx"
     },
     "kind": "furniture",
     "name": "traffic-light",
@@ -297,9 +273,7 @@
   },
   {
     "files": {
-      "model": "furniture/wires-span/model.glb",
-      "sidecar": "furniture/wires-span/object.toml",
-      "thumb": "furniture/wires-span/thumb.png"
+      "object": "furniture/wires-span/object.pitofx"
     },
     "kind": "furniture",
     "name": "wires-span",
@@ -322,9 +296,7 @@
   },
   {
     "files": {
-      "model": "road/crosswalk-10m/model.glb",
-      "sidecar": "road/crosswalk-10m/object.toml",
-      "thumb": "road/crosswalk-10m/thumb.png"
+      "object": "road/crosswalk-10m/object.pitofx"
     },
     "kind": "road",
     "name": "crosswalk-10m",
@@ -346,9 +318,7 @@
   },
   {
     "files": {
-      "model": "road/straight-10m/model.glb",
-      "sidecar": "road/straight-10m/object.toml",
-      "thumb": "road/straight-10m/thumb.png"
+      "object": "road/straight-10m/object.pitofx"
     },
     "kind": "road",
     "name": "straight-10m",

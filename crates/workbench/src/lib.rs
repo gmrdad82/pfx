@@ -21,6 +21,7 @@ mod sample;
 mod scenes;
 mod shell;
 mod shots;
+mod shown;
 mod spans;
 mod start;
 mod tape;

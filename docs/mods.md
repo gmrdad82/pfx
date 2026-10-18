@@ -44,6 +44,8 @@ Its `Display` reads, for example, ``mod `greedy` ran out of fuel after 1000000 f
 | `depth` | 1,000 nested calls |
 | `component_bytes` | 16 MiB |
 | `manifest_bytes` | 16 KiB |
+| `data_files` | 256 |
+| `data_bytes` | 64 MiB, all data files together |
 | `log` | `None` (off) |
 
 With `Fuel::PerCall(n)` each call starts with `n`. With `Fuel::PerTick(n)` the game calls `ModSet::tick()` (or `Mod::tick()`) at the start of each tick to refill to `n`, and every call in the tick draws from it. Instantiation starts with one budget. `Called::fuel` is what a call used, and `Mod::fuel_left()` what remains.
@@ -135,16 +137,29 @@ mods/
     counter.wasm
 ```
 
-`mod.toml` has exactly four fields; any other is refused:
+`mod.toml` has four fields and an optional fifth; any other is refused:
 
 ```toml
 id = "counter"          # 1 to 64 of a-z, 0-9, - and _, starting with a letter or digit; the folder's name
 version = "1.0.0"       # the mod's own version, semantic
 api = "0.1.0"           # the version of the game's mod API it was made for, semantic
 entry = "counter.wasm"  # a file name beside mod.toml, ending in .wasm; no folders
+data = ["cards.toml", "art/x.png"]   # optional: data files beside the component
 ```
 
-`Host::load_dir(mods)` loads every subfolder in id order (sorted, never directory listing order) and returns `Loaded { packages, refused }`. A missing `mods` folder is an empty set. Each refusal is a `LoadError` naming the folder, the id when it got that far, and a `Refusal` whose message says what is wrong and what is wanted. `Host::load_folder` loads one folder, and `Host::load(manifest, component)` loads from bytes.
+The four-field form is the whole manifest for a mod with no data, and its fingerprint is what it always was.
+
+### Data files
+
+A mod may bring data the game reads: card lists, levels, images, sounds. `data` names each file, relative to the mod's folder:
+
+- a path of up to 8 parts (`DATA_DEPTH`) and 255 bytes (`DATA_CHARS`), separated by `/`, each part of a-z, A-Z, 0-9, `-`, `_` and `.` and none starting with `.`, so no `..`, no hidden files, no absolute path, no drive and no `\`; not `mod.toml` or the entry, and no name twice (`valid_data`);
+- at most `Limits::data_files` files (256) of at most `Limits::data_bytes` together (64 MiB);
+- read from the folder only: a file that resolves outside the mod's folder, through a link or otherwise, is refused, and so is one that is missing or not a file.
+
+The game gets the bytes, never a path: `Package::data` (and `Mod::data()` once it runs) is a `Data` with `get(name)`, `iter()` in the manifest's order, `names()`, `len()` and `bytes()`. The ABI version is still `api`; the data's own format is the game's business, versioned however the game likes. A refusal reads, for example, ``mod `cards` (mods/cards) has data file `art/x.png`: it is missing``.
+
+`Host::load_dir(mods)` loads every subfolder in id order (sorted, never directory listing order) and returns `Loaded { packages, refused }`. A missing `mods` folder is an empty set. Each refusal is a `LoadError` naming the folder, the id when it got that far, and a `Refusal` whose message says what is wrong and what is wanted. `Host::load_folder` loads one folder, whose name must be the id; `Host::load_package` loads one folder whatever its name (a Workshop install folder is named by its item number). `Host::load(manifest, component)` loads from bytes, and `Host::load_with(manifest, component, data)` from bytes with the data files as `(name, bytes)` pairs, each named in the manifest once.
 
 The API version follows caret rules against the game's `Api::version`: a mod made for 1.2.0 runs on a game at 1.4.2 but not at 1.1.0 or 2.0.0; under 1.0, the minor is the major (0.3.0 runs on 0.3.4, not on 0.4.0). A mismatch reads, for example:
 
@@ -152,11 +167,11 @@ The API version follows caret rules against the game's `Api::version`: a mod mad
 mod `future` (mods/future) was made for version 0.2.0 of the game's `play` mod API, but this game has 0.1.2; it needs a mod made for a version compatible with 0.1.2
 ```
 
-Steam Workshop items will land in this folder later; the Workshop calls stay in the Steam plan.
+Steam Workshop items load the same way from their install folders: pfx-steam's `load_items` (its `mods` feature) calls `Host::load_package` for each installed item the player subscribes to and keeps ids unique against the local mods ([steam.md](steam.md), "Workshop items as mods").
 
 ## Fingerprints
 
-Each package has a `Fingerprint`, a sha256 over the manifest's bytes and the component's bytes, each length-prefixed (`b"pfx-mod 1\0"`, then the manifest's length as a little-endian u64 and the manifest, then the same for the component). Changing either changes it; loading the same bytes from a folder or from memory gives the same one.
+Each package has a `Fingerprint`, a sha256 over the manifest's bytes and the component's bytes, each length-prefixed (`b"pfx-mod 1\0"`, then the manifest's length as a little-endian u64 and the manifest, then the same for the component), then each data file in the manifest's order: its name's length and name, its length and bytes (`Fingerprint::of_package`). A mod with no data has exactly the four-field fingerprint (`Fingerprint::of_mod`). Changing any byte of any of them changes it; loading the same bytes from a folder or from memory gives the same one.
 
 `ModSet::fingerprint()` is a sha256 over the set's ids and fingerprints, sorted by id, so it does not depend on load order. A mod stopped during the run still counts: it ran. The empty set has its own fingerprint, and `ModSet::is_empty()` says a run was unmodded. A run's record stores the set's fingerprint (`Fingerprint::hex()`), so a game can keep modded runs off its boards or keep separate boards, and the Steam crate's checked runs can carry it.
 
@@ -210,14 +225,15 @@ A game's own logic can live in WASM components it builds from its own repo, host
 - **Failures.** A call that traps, runs out of fuel or passes a cap stops that module for the run with its typed `ModError`; the others carry on, and so does the game.
 - **Swaps.** `modules.swap(id, bytes)`, or `Reload::changed(path)` (which reads the file), queues a new build; it is loaded and swapped in at the next `tick()` through `Mod::reload`, so state crosses through `save` and `restore` and a module without them restarts clean. A build with the same bytes as the running one is not swapped. A build that does not load leaves the running module as it was. A module that was never running starts.
 - **Notices.** Each of these is an `Event { tick, id, what }` (`What::Started`, `Missing`, `Refused`, `Swapped` or `Failed`) with a level and a line, such as ``module `brain` swapped at tick 412 and kept its state (4 bytes through save and restore)``. `take_events()` drains them typed; `Reload::notices()` drains them as `pfx_core::modules::Notice` lines.
-- **The editor's view.** `Modules` implements `pfx_core::modules::Reload` (`files`, `changed`, `notices`), and a game hands it over through `Game::modules()` (pfx-play), which returns `None` by default. pfx-game's runtime prints the notices to stderr each frame; `pfx edit` and `<game> edit` show them in the log and watch the files while the game plays (`docs/projects.md`, "Live reload").
+- **The editor's view.** `Modules` implements `pfx_core::modules::Reload` (`files`, `changed`, `notices`), and a game hands it over through `Game::modules()` (pfx-play), which returns `None` by default. pfx-game's runtime prints the notices to stderr each frame; `pfx gui` and `<game> edit` show them in the log and watch the files while the game plays (`docs/projects.md`, "Live reload").
 
 No Rust is hot-patched anywhere: a swap replaces a sandboxed component, and the game's own binary never changes while it runs.
 
 ## Tests
 
-- `crates/mod/src/tests.rs`: manifests, API versions, fingerprints, the log's rate and the host's refusals.
+- `crates/mod/src/tests.rs`: manifests and their data paths, API versions, fingerprints, the log's rate and the host's refusals.
 - `crates/mod/tests/host.rs`: loading a folder, refusals, limits, traps, start functions, swaps and, at the depth limit and with it lifted, `Depth` and `Stack`.
+- `crates/mod/tests/data.rs`: data files read through the package and `Mod::data`, in the fingerprint, the same from a folder and from bytes; the four-field fingerprint unchanged; missing, unnamed, oversized and too many data files refused; a link out of the folder refused; `load_package` on a folder named otherwise.
 - `crates/mod/tests/determinism.rs`: the golden, natively and in the Windows phase.
 - `crates/mod/tests/reload.rs`: a swap keeping state through `save` and `restore`; restarting clean without them; a failing `restore` stopping the module and a fixed build starting it again; the depth limit's boundary; every way out of a function (`br_if`, `br_table`, `return`, `return_call`, the end) leaving the count balanced over 600 calls, in a module with no globals of its own; a core module with its component type loading as a gameplay module; and `Modules`: loading from files, a swap only at a tick boundary, the same bytes not swapping, a clean restart with its notice, a failing module disabled while the others run, a build that does not load leaving the running one, and a missing module starting once its file appears.
 

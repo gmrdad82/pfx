@@ -1,13 +1,13 @@
 # Arrange a scene in the window
 
-`pfx edit` opens a recipe in a window drawn by the engine's live renderer. Every edit you make goes straight back into the recipe file, keeping its comments and formatting; there is nothing to save, and Ctrl+Z puts an edit back. A `.pfx` document keeps its edits until you save it.
+`pfx gui` opens a recipe in a window drawn by the engine's live renderer. Every edit you make goes straight back into the recipe file, keeping its comments and formatting; there is nothing to save, and Ctrl+Z puts an edit back. A `.pitofx` document keeps its edits until you save it.
 
 ## Open a recipe
 
 ```sh
-pfx edit desk.toml          # that recipe
-pfx edit samples/          # the picker, on the recipes of that folder
-pfx edit                    # the start scene, the window's own mark on a floor grid
+pfx gui desk.toml          # that recipe
+pfx gui samples/          # the picker, on the recipes of that folder
+pfx gui                    # the start scene, the window's own mark on a floor grid
 ```
 
 Ctrl+O opens the picker over the viewport at any time; Esc closes it. The window watches the recipe and every file it includes: an edit made outside, by an editor or an agent, shows at once.
@@ -16,13 +16,13 @@ Ctrl+O opens the picker over the viewport at any time; Esc closes it. The window
 
 The File menu in the top bar opens, saves, imports and exports, through the window's own file picker:
 
-- **Open** (Ctrl+O) takes a recipe, a scene, a `.pfx` document or a `.glb`, which opens as a new document holding that model.
-- **Save** (Ctrl+S) writes the open `.pfx`. A `.toml` recipe needs no save: every edit is written as you make it. A `.pfx` keeps its edits aside until you save, and shows ● after its name, in the top bar and the window's title, until then.
-- **Save As .pfx** (Ctrl+Shift+S) packs the recipe and the files it uses into one `.pfx`.
-- **Import glTF** adds a `.glb` to the scene as a new mesh object at the origin; in a `.pfx` the file goes inside the document.
+- **Open** (Ctrl+O) takes a recipe, a scene, a `.pitofx` document or a `.glb`, which opens as a new document holding that model.
+- **Save** (Ctrl+S) writes the open `.pitofx`. A `.toml` recipe needs no save: every edit is written as you make it. A `.pitofx` keeps its edits aside until you save, and shows ● after its name, in the top bar and the window's title, until then.
+- **Save As .pitofx** (Ctrl+Shift+S) packs the recipe and the files it uses into one `.pitofx`.
+- **Import glTF** adds a `.glb` to the scene as a new mesh object at the origin; in a `.pitofx` the file goes inside the document.
 - **Export glTF** writes the scene, or the selected object, as a standalone `.glb` for other tools.
 
-Drop a file on the window to open it, or hold Shift as you drop a `.glb` to import it. The recent list keeps `.pfx` documents with their thumbnails.
+Drop a file on the window to open it, or hold Shift as you drop a `.glb` to import it. The recent list keeps `.pitofx` documents with their thumbnails.
 
 
 ## Move around
@@ -31,7 +31,7 @@ Drag in the viewport to orbit, Shift+drag or middle-drag to pan, and the wheel t
 
 ## Clay and wireframe
 
-`z` cycles the viewport through shaded, clay and wireframe, and the `clay`, `wire` and `x-ray` buttons at its bottom right switch each one. Clay draws every surface a matte grey under a soft key light and sky, without textures, emission or effects, the selection outlined in the accent colour; `pfx edit --clay` opens in clay. Wireframe draws light edges over a dark ground, the selection in the accent colour and the recipe's routes on top. The flat diagonals of a face are left out and hidden edges are dimmed; Shift+Z shows them brighter, as an x-ray. It works on a recipe, and the window remembers the mode and the x-ray the next time it opens. `pfx edit --wireframe` opens in wireframe.
+`z` cycles the viewport through shaded, clay and wireframe, and the `clay`, `wire` and `x-ray` buttons at its bottom right switch each one. Clay draws every surface a matte grey under a soft key light and sky, without textures, emission or effects, the selection outlined in the accent colour; `pfx gui --clay` opens in clay. Wireframe draws light edges over a dark ground, the selection in the accent colour and the recipe's routes on top. The flat diagonals of a face are left out and hidden edges are dimmed; Shift+Z shows them brighter, as an x-ray. It works on a recipe, and the window remembers the mode and the x-ray the next time it opens. `pfx gui --wireframe` opens in wireframe.
 
 ## Pick and move a part
 

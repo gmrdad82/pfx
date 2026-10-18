@@ -57,7 +57,7 @@ fn values(text: &str) -> Result<Values, String> {
 #[derive(clap::Args)]
 pub(super) struct KeyArgs {
     #[arg(value_name = "recipe", help = "The recipe to key")]
-    recipe: String,
+    pub(super) recipe: String,
     #[arg(
         value_name = "path",
         help = "What to key, as object.hero.at, camera.chase.fov_y_deg, light.lamp.intensity, particles.spray.rate, look.exposure, sun.hour or haze.amount"
@@ -86,7 +86,7 @@ pub(super) struct KeyArgs {
 #[derive(clap::Args)]
 pub(super) struct UnkeyArgs {
     #[arg(value_name = "recipe", help = "The recipe to unkey")]
-    recipe: String,
+    pub(super) recipe: String,
     #[arg(
         value_name = "path",
         help = "The keyed property, as object.hero.at or light.lamp.intensity"

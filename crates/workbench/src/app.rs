@@ -208,7 +208,10 @@ impl App for Workbench<'_> {
     }
 
     fn theme(&self) -> Theme {
-        crate::theme::workbench()
+        match self.shell.session() {
+            Some(session) if session.plays_a_game() => crate::theme::game(),
+            _ => crate::theme::workbench(),
+        }
     }
 
     fn label(&self) -> Option<String> {
@@ -309,8 +312,11 @@ impl App for Workbench<'_> {
 mod tests {
     use super::*;
     use crate::Script;
+    use egui::Color32;
     use pfx_build::Registry;
+    use pfx_editor::session::Session;
     use pfx_editor_shell::{drive, encode_png, pixels};
+    use std::path::Path;
 
     fn recipe(name: &str) -> PathBuf {
         let path = crate::scratch(name);
@@ -346,6 +352,46 @@ mod tests {
         assert!(!app.opened());
         assert!(app.viewport());
         assert_eq!(app.watched().files, vec![second]);
+    }
+
+    #[test]
+    fn a_game_opened_window_installs_the_game_theme_and_every_other_the_pfx_theme() {
+        let root = std::path::absolute(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp/ui-tests/app-game-theme"),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        pfx_project::scaffold("sample-game", &root, "0.0.0").unwrap();
+        let setup = pfx_editor::session::Setup {
+            pgpu: false,
+            audio: false,
+        };
+        let project = pfx_project::Project::folder(&root).unwrap();
+        let config = pfx_game::Config::new("sample-game", "0.0.0", project.play());
+        let factory = pfx_editor::factory(|| pfx_play::SceneGame);
+        let game = Session::open_game(&root, setup, factory, config).unwrap();
+        let mut shell = Shell::edited(game).without_recent();
+        let theme = Workbench::new(&mut shell, None).theme();
+        assert_eq!(theme, pfx_editor_style::tokens::game());
+        assert_eq!(theme.name, "game");
+        assert!(theme.display.is_none());
+        let ctx = egui::Context::default();
+        crate::theme::apply_theme(&ctx, &theme);
+        assert_eq!(
+            ctx.global_style().visuals.panel_fill,
+            Color32::from_rgb(0x02, 0x26, 0x4A)
+        );
+        let project = Session::open_project(&root, setup, None).unwrap();
+        let mut shell = Shell::edited(project).without_recent();
+        assert_eq!(
+            Workbench::new(&mut shell, None).theme(),
+            pfx_editor_style::tokens::theme()
+        );
+        let mut shell = Shell::new().without_recent();
+        let theme = Workbench::new(&mut shell, None).theme();
+        assert_eq!(theme, pfx_editor_style::tokens::theme());
+        assert_eq!(theme.name, "pfx");
     }
 
     #[test]

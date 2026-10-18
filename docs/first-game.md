@@ -11,7 +11,7 @@ A game on pfx is its own repository and one binary. `pfx new` scaffolds it, `car
 ```
 $ git init my-game
 $ pfx new my-game
-my-game: scaffolded 18 files into my-game on pfx v1.0.0
+my-game: scaffolded 15 files into my-game on pfx v1.0.0
 next: cargo run --release (the game), cargo run --release -- edit (the editor)
 ```
 
@@ -32,9 +32,8 @@ project.toml               the project: its first scene and what the editor sele
 src/lib.rs                 the game: MyGame implements pfx_game::Game, doing nothing yet
 src/main.rs                hands the game to the launcher, with `edit` opening the editor
 tests/first.rs             a GPU test of the first frame, ignored by default
-content/first.scene.toml   the empty world: a grid, pfx's mark, a light and a camera
-content/prefabs/           the mark and wordmark as one group
-content/materials/         the grid's, the axes' and the mark's materials
+content/first.pitofx          the empty world: a grid, pfx's mark, a light and a camera; inside it,
+                           the mark and wordmark's prefab and the grid's, the axes' and the mark's materials
 content/meshes/            badge.glb, wordmark.glb and grid.glb
 content/fonts/             IBM Plex Mono and its licence
 ```
@@ -49,15 +48,15 @@ cargo run --release
 cargo run --release -- edit
 ```
 
-The first build compiles the engine's crates. `cargo run --release` opens the game's window; `edit` opens the same project in the editor, where F5 plays the game's own logic and every change is written back into the scene's TOML ([pfx edit](editor.md)). The game's logic goes in `src/lib.rs`, in `start` and `tick` ([The game runtime](game.md)); its content is data under `content/` ([Scenes as data](scenes.md)).
+The first build compiles the engine's crates. `cargo run --release` opens the game's window; `edit` opens the same project in the editor, where F5 plays the game's own logic and every change is written back into the scene inside `content/first.pitofx` ([pfx gui](editor.md)); `pfx scene print content/first.pitofx` shows its TOML. The game's logic goes in `src/lib.rs`, in `start` and `tick` ([The game runtime](game.md)); its content is data under `content/` ([Scenes as data](scenes.md)).
 
 ## Measure it
 
 `pfx bench` plays the first scene headless, with no window, and prints the frame times as one JSON line. Here at 4K for 5 seconds, on an AMD Radeon RX 9060 XT under Linux:
 
 ```
-$ pfx bench content/first.scene.toml --seconds 5 --size 3840x2160 --stats tmp/bench/first.jsonl
-{"bench":true,"camera":{"at":[2.5,1.65,4.0],"look_at":[0.0,0.495,0.0]},"dropped":0,"frames":300,"gpu_ms":{"max":2.78,"p50":2.608,"p95":2.721,"p99":2.768},"inputs":0,"over_16_67":0,"scene":"content/first.scene.toml","schema_version":1,"seed":0,"sim_ms":{"max":0.26,"p50":0.029,"p95":0.075,"p99":0.102},"size":[3840,2160],"stats":"tmp/bench/first.jsonl","submit_ms":{"max":3.135,"p50":0.761,"p95":1.035,"p99":1.223},"ticks":300}
+$ pfx bench content/first.pitofx --seconds 5 --size 3840x2160 --stats tmp/bench/first.jsonl
+{"bench":true,"camera":{"at":[2.5,1.65,4.0],"look_at":[0.0,0.495,0.0]},"dropped":0,"frames":300,"gpu_ms":{"max":2.78,"p50":2.608,"p95":2.721,"p99":2.768},"inputs":0,"over_16_67":0,"scene":"content/first.pitofx","schema_version":1,"seed":0,"sim_ms":{"max":0.26,"p50":0.029,"p95":0.075,"p99":0.102},"size":[3840,2160],"stats":"tmp/bench/first.jsonl","submit_ms":{"max":3.135,"p50":0.761,"p95":1.035,"p99":1.223},"ticks":300}
 ```
 
 The empty world costs 2.6 ms of GPU time a frame at the median, out of the 16.7 ms a 60 fps frame allows. [Benchmark a scene](benchmark-a-scene.md) reads the rest of the line.

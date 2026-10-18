@@ -45,6 +45,23 @@ impl Game for Hider {
     }
 }
 
+fn laid_out(root: &Path) {
+    let pfx = root.join(pfx_project::scaffold::DOCUMENT);
+    let bytes = fs::read(&pfx).unwrap();
+    pfx_scene::unpack(&bytes, root).unwrap();
+    fs::remove_file(&pfx).unwrap();
+    let manifest = root.join("project.toml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        &manifest,
+        text.replace(
+            pfx_project::scaffold::DOCUMENT,
+            pfx_project::scaffold::SCENE,
+        ),
+    )
+    .unwrap();
+}
+
 fn project(name: &str) -> PathBuf {
     let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join("editor-projects")
@@ -52,6 +69,7 @@ fn project(name: &str) -> PathBuf {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     pfx_project::scaffold("sample-game", &root, "0.0.0").unwrap();
+    laid_out(&root);
     root
 }
 

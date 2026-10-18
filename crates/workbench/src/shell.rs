@@ -337,7 +337,7 @@ fn notice(painter: &Painter, image: Rect, title: &str, colour: Color32, body: &s
         colour,
     );
     let body = painter.layout(
-        body.to_string(),
+        crate::shown::text(body),
         Theme::of(painter.ctx()).font(SIZE_CODE),
         TEXT_CODE,
         inner.width().max(1.0),
@@ -375,6 +375,7 @@ fn remember_in(book: &crate::open::Book, path: &str) {
 }
 
 fn first_line(text: &str, most: usize) -> String {
+    let text = crate::shown::text(text);
     let line = text.lines().next().unwrap_or("");
     if line.chars().count() <= most {
         return line.to_string();
@@ -566,8 +567,8 @@ impl Shell {
 
     fn shown_path(&self) -> String {
         match &self.held {
-            Some(held) => held.shown().display().to_string(),
-            None => self.document.path.clone(),
+            Some(held) => crate::shown::path(held.shown()),
+            None => crate::shown::path(Path::new(&self.document.path)),
         }
     }
 
@@ -638,7 +639,7 @@ impl Shell {
                 Ok(Some(target)) => {
                     self.open_file_as_is(&target);
                     self.said_file(format!(
-                        "{} is kept as {}; edits go to the .pfx",
+                        "{} is kept as {}; edits go to the .pitofx",
                         path.display(),
                         target.display()
                     ));
@@ -669,6 +670,9 @@ impl Shell {
                 Err(error) => self.fail(error),
             },
             Some(Kind::Scene) => self.open_scene(path),
+            None if pfx_file::is_legacy_path(path) => {
+                self.fail(pfx_file::legacy_refusal(path).unwrap_or_default());
+            }
             _ => {
                 self.open_recipe(path, path);
             }
@@ -721,7 +725,7 @@ impl Shell {
         }
         if self.editor.is_some() || self.edits_scene() {
             self.said_file(format!(
-                "{} saves as you edit; save as .pfx packs it",
+                "{} saves as you edit; save as .pitofx packs it",
                 self.document.path
             ));
             return true;
@@ -729,7 +733,7 @@ impl Shell {
         self.fail(if self.scene {
             "a scene is written by building its recipe; open the recipe to save".to_string()
         } else {
-            "nothing to save: open a recipe or a .pfx".to_string()
+            "nothing to save: open a recipe or a .pitofx".to_string()
         });
         false
     }
@@ -741,10 +745,10 @@ impl Shell {
         else {
             return false;
         };
-        let target = if target.extension().is_some_and(|end| end == "pfx") {
+        let target = if pfx_file::is_file_path(target) {
             target.to_path_buf()
         } else {
-            target.with_extension("pfx")
+            target.with_extension(pfx_file::EXTENSION)
         };
         match pfx_load::scene::pack(&scene, &target) {
             Ok(_) => {
@@ -786,7 +790,7 @@ impl Shell {
             return self.pack_scene(path);
         }
         if self.editor.is_none() {
-            self.fail("only a recipe or a .pfx saves as a .pfx".to_string());
+            self.fail("only a recipe or a .pitofx saves as a .pitofx".to_string());
             return false;
         }
         if self.held.is_some() {
@@ -834,7 +838,7 @@ impl Shell {
             .unwrap_or(Path::new("."))
             .to_path_buf();
         let made = match self.editor.as_ref().and_then(Editor::loaded) {
-            None => Err("open a recipe or a .pfx to import into".to_string()),
+            None => Err("open a recipe or a .pitofx to import into".to_string()),
             Some(loaded) => {
                 let placed = match &self.held {
                     Some(_) => file::copy_in(path, &base),
@@ -859,7 +863,7 @@ impl Shell {
     pub fn export(&mut self, path: &Path, selected: bool) -> bool {
         self.file_note = None;
         if self.editor.is_none() {
-            self.fail("export works on a recipe or a .pfx".to_string());
+            self.fail("export works on a recipe or a .pitofx".to_string());
             return false;
         }
         let only = match (selected, self.object) {
@@ -892,7 +896,7 @@ impl Shell {
             .unwrap_or_default();
         let stem = stem.strip_suffix(".scene").unwrap_or(&stem).to_string();
         let (name, selected) = match purpose {
-            Purpose::SaveAs => (format!("{stem}.pfx"), None),
+            Purpose::SaveAs => (format!("{stem}.pitofx"), None),
             Purpose::Export => (format!("{stem}.glb"), self.object.map(|_| false)),
             Purpose::Open | Purpose::Import => (String::new(), None),
         };
@@ -923,7 +927,7 @@ impl Shell {
             for (label, keys, enabled, menu) in [
                 ("Open…", "Ctrl+O", true, Menu::Open),
                 ("Save", "Ctrl+S", savable, Menu::Save),
-                ("Save As .pfx…", "Ctrl+Shift+S", packs, Menu::SaveAs),
+                ("Save As .pitofx…", "Ctrl+Shift+S", packs, Menu::SaveAs),
                 ("Import glTF…", "", editable, Menu::Import),
                 ("Export glTF…", "", editable, Menu::Export),
             ] {
@@ -2538,7 +2542,7 @@ impl Shell {
             );
             if self.dirty() {
                 ui.label(code(ui, file::MARK, ACCENT))
-                    .on_hover_text("unsaved edits: ctrl s saves the .pfx");
+                    .on_hover_text("unsaved edits: ctrl s saves the .pitofx");
             }
             ui.label(code(ui, self.shown_path(), TEXT_MUTED));
             ui.add_space(SECTION_GAP * 2.0);
@@ -4361,7 +4365,7 @@ fn labelled(ui: &mut Ui, label: &str, body: impl FnOnce(&mut Ui)) {
 
 fn item(ui: &mut Ui, label: &str, value: &str, colour: Color32) {
     ui.label(code(ui, label, TEXT_MUTED));
-    ui.label(code(ui, value, colour));
+    ui.label(code(ui, crate::shown::text(value), colour));
 }
 
 fn divider(ui: &mut Ui) {
@@ -4521,11 +4525,46 @@ heading = 0.0
     }
 
     #[test]
+    fn a_file_opened_by_its_absolute_path_draws_no_folder_above_it() {
+        let path = scratch("shell-shown-absolute").with_file_name("model.toml");
+        let path = pfx_recipe::files::clean(&path);
+        std::fs::write(
+            &path,
+            "recipe = 1\nname = \"model\"\n\n[[object]]\nname = \"head\"\nkind = \"mesh\"\npath = \"../kit/model.glb\"\n",
+        )
+        .unwrap();
+        let mut shell = Shell::empty().importing();
+        shell.open_file(&path);
+        let mut viewer = Viewer::new(&path, Mode::Fake);
+        viewer.sync(&mut shell);
+        let ctx = Context::default();
+        theme::apply_theme(&ctx, &theme::workbench());
+        let output = drive(&ctx, SIZE, &Script::default(), |ui| shell.ui(ui));
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            painted(&clipped.shape, &mut texts);
+        }
+        let mut drawn: Vec<String> = texts.into_iter().map(|(text, _, _)| text).collect();
+        drawn.extend(shell.label());
+        let folder = path.parent().unwrap();
+        let above = folder.parent().unwrap().display().to_string();
+        let home = std::env::var("HOME").unwrap_or_default();
+        assert!(
+            drawn.iter().any(|text| text.contains("model.toml")),
+            "{drawn:?}"
+        );
+        for text in &drawn {
+            assert!(!text.contains(&above), "{text}");
+            assert!(home.len() < 2 || !text.contains(&home), "{text}");
+        }
+    }
+
+    #[test]
     fn save_as_packs_a_recipe_and_open_reads_the_same_document_back() {
         let path = scratch("shell-save-as");
         let text = "recipe = 1\nname = \"crate\"\n\n[[object]]\nname = \"crate\"\nkind = \"box\"\nsize = [0.2, 0.2, 0.2]\n";
         std::fs::write(&path, text).unwrap();
-        let saved = path.with_file_name("crate.pfx");
+        let saved = path.with_file_name("crate.pitofx");
         let _ = std::fs::remove_file(&saved);
         let mut shell = Shell::empty();
         shell.file_step(&Step::Open(path.clone()));
@@ -4534,12 +4573,12 @@ heading = 0.0
             shell.file_note.as_ref().map(|(_, error)| *error),
             Some(false)
         );
-        assert_eq!(shell.label().as_deref(), Some("crate.pfx"));
+        assert_eq!(shell.label().as_deref(), Some("crate.pitofx"));
         assert_eq!((shell.kind_word(), shell.dirty()), ("pfx", false));
         assert_ne!(Path::new(shell.recipe_path()), path);
         let mut again = Shell::empty();
         again.file_step(&Step::Open(saved.clone()));
-        assert_eq!(again.shown_path(), saved.display().to_string());
+        assert_eq!(again.shown_path(), "crate.pitofx");
         assert_eq!(std::fs::read_to_string(again.recipe_path()).unwrap(), text);
         let names: Vec<&str> = again
             .document()

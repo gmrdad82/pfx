@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
-use pfx_build::{Registry, missing_materials, outlines};
+use pfx_build::{Registry, missing_files, missing_materials, outlines};
 use pfx_recipe::{Problem, Recipe, load, validate};
 
 use super::{print_problems, read_failure};
@@ -41,11 +41,14 @@ pub(super) fn problems(recipe: &Recipe, file: &str, registry: &Registry) -> Vec<
     if problems.is_empty() {
         problems = outlines(recipe);
     }
+    let base = Path::new(file)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     if problems.is_empty() {
-        let base = Path::new(file)
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
+        problems = missing_files(recipe, base);
+    }
+    if problems.is_empty() {
         problems = missing_materials(recipe, base, registry);
     }
     problems
@@ -124,10 +127,35 @@ outline = { rect = [-0.1, -0.05, 0.1, 0.05], radius = 0.01 }
 
     #[test]
     fn a_clean_recipe_exits_0_and_prints_nothing() {
-        for name in ["full.toml", "plate.toml", "driven.toml", "flat.toml"] {
+        for name in ["plate.toml", "driven.toml", "flat.toml"] {
             let (code, out, err) = run_in(&[&fixture(name)], &catalogue());
             assert_eq!((code, out.as_str(), err.as_str()), (0, "", ""), "{name}");
         }
+        let (code, out, _) = run_in(&[&fixture("full.toml")], &catalogue());
+        assert_eq!(code, 1);
+        assert_eq!(out.lines().count(), 1, "{out}");
+        assert!(
+            out.contains(": object[imported].path: parts/handle.glb is not a file under "),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn a_mesh_path_that_resolves_nowhere_is_one_line_naming_it_and_the_roots() {
+        let file = written(
+            "missing-mesh.toml",
+            "asset_roots = [\"../check-tests-roots\"]\n[[object]]\nname = \"m\"\nkind = \"mesh\"\npath = \"kit/nope.glb\"\n",
+        );
+        let (code, out, err) = run_on(&[&file]);
+        assert_eq!((code, err.as_str()), (1, ""), "{out}");
+        assert_eq!(out.lines().count(), 1, "{out}");
+        assert!(
+            out.starts_with(&format!(
+                "{file}:7: object[m].path: kit/nope.glb is not a file in any of "
+            )),
+            "{out}"
+        );
+        assert!(out.contains("check-tests-roots"), "{out}");
     }
 
     #[test]

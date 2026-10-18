@@ -5,7 +5,7 @@ use glam::{DMat4, DVec3};
 use pfx_build::{Registry, build_with, library};
 use serde_json::{Map, Value, json};
 
-use super::library_bake::{Subject, entry_name, quoted, thumbnail};
+use super::library_bake::{Subject, entry_name, quoted, thumbed, thumbnail};
 use super::refuse;
 
 const VALIDATOR: &str = "gltf_validator";
@@ -27,14 +27,14 @@ pub(super) struct Args {
     entry: String,
     #[arg(
         long,
-        help = "Also render a 512x512 thumbnail, thumb.png, on the live renderer"
+        help = "Also render a 512x512 thumbnail into its object.pitofx on the live renderer"
     )]
     thumb: bool,
     #[arg(
         long,
         value_name = "a,b",
         value_delimiter = ',',
-        help = "Tags for its object.toml and the index"
+        help = "Tags for its sidecar and the index"
     )]
     tags: Vec<String>,
     #[arg(
@@ -66,8 +66,8 @@ pub(super) struct Args {
 
 pub struct Added {
     pub dir: PathBuf,
-    pub model: PathBuf,
-    pub sidecar: PathBuf,
+    pub object: PathBuf,
+    pub model: Vec<u8>,
     pub facts: Map<String, Value>,
 }
 
@@ -279,15 +279,16 @@ pub fn add(
         facts: facts.clone(),
     };
     let dir = root.join(entry);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let model = dir.join("model.glb");
-    let written = dir.join("object.toml");
-    std::fs::write(&model, &bytes).map_err(|e| format!("{}: {e}", model.display()))?;
-    std::fs::write(&written, sidecar.text()).map_err(|e| format!("{}: {e}", written.display()))?;
+    let stored = library::Stored {
+        model: bytes,
+        sidecar: sidecar.text(),
+        thumb: None,
+    };
+    let object = stored.write(&dir)?;
     Ok(Added {
         dir,
-        model,
-        sidecar: written,
+        object,
+        model: stored.model,
         facts,
     })
 }
@@ -323,14 +324,16 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
         Ok(added) => added,
         Err(e) => return refuse("library add", &e),
     };
-    let thumb = if args.thumb {
-        match subject(&added, registry).and_then(|s| thumbnail(&s, &added.dir, registry)) {
-            Ok(path) => Some(path),
-            Err(e) => return refuse("library add", &e),
+    if args.thumb {
+        let model = added.dir.join("model.glb");
+        let mount =
+            pfx_recipe::files::mount(std::iter::once((model, added.model.clone())).collect());
+        let drawn = subject(&added, registry).and_then(|s| thumbnail(&s, &added.dir, registry));
+        drop(mount);
+        if let Err(e) = drawn.and_then(|png| thumbed(&added.dir, png)) {
+            return refuse("library add", &e);
         }
-    } else {
-        None
-    };
+    }
     let index = match library::write_index(&args.library) {
         Ok(path) => path,
         Err(e) => return refuse("library add", &e.to_string()),
@@ -343,9 +346,8 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
                 "kind": kind,
                 "name": name,
                 "dir": quoted(&added.dir),
-                "model": quoted(&added.model),
-                "sidecar": quoted(&added.sidecar),
-                "thumb": thumb.as_deref().map(quoted),
+                "object": quoted(&added.object),
+                "thumb": args.thumb,
                 "index": quoted(&index),
                 "facts": added.facts,
             })
@@ -423,7 +425,11 @@ mod tests {
             &dir.join("library"),
         )
         .unwrap();
-        assert_eq!(std::fs::read(&added.model).unwrap(), glb);
+        assert_eq!(added.model, glb);
+        let stored = library::Stored::read(&added.dir).unwrap();
+        assert_eq!(stored.model, glb);
+        assert_eq!(added.object, added.dir.join(library::OBJECT));
+        assert!(!added.dir.join("model.glb").exists());
         let f = &added.facts;
         let near = |v: &Value, want: [f64; 3]| {
             let got: Vec<f64> = v
@@ -444,7 +450,7 @@ mod tests {
         near(&f["wheels"]["RearWheel"]["centre"], [0.8, 0.3, -1.3]);
         near(&f["anchors"]["headlights"]["centre"], [0.0, 0.9, 1.9]);
         assert!(f["anchors"].get("Body").is_none());
-        let text = std::fs::read_to_string(&added.sidecar).unwrap();
+        let text = stored.sidecar.clone();
         assert!(
             text.contains("hand.glb") && text.contains(&sha256(&glb)),
             "{text}"
@@ -465,7 +471,7 @@ mod tests {
             &root,
         )
         .unwrap();
-        let bare_text = std::fs::read_to_string(&bare.sidecar).unwrap();
+        let bare_text = library::Stored::read(&bare.dir).unwrap().sidecar;
         assert_eq!(library::Sidecar::parse(&bare_text).unwrap().licence, "");
         assert!(!bare_text.contains("MIT"));
         let missing = library::unlicensed(&root);
@@ -488,7 +494,7 @@ mod tests {
 
         assert!(
             add(
-                &dir.join("library/cars/hand/object.toml"),
+                &dir.join("library/cars/hand/object.pitofx"),
                 "cars/x",
                 &[],
                 &library::Provenance::default(),
@@ -528,7 +534,7 @@ mod tests {
             (dir.join("cube.obj"), "props/cube"),
         ] {
             let added = add(&file, entry, &[], &by, &root).unwrap();
-            let glb = std::fs::read(&added.model).unwrap();
+            let glb = library::Stored::read(&added.dir).unwrap().model;
             let parsed = basics(&glb).unwrap();
             assert!(parsed.blob.is_some(), "{entry}");
             assert!(
@@ -538,7 +544,8 @@ mod tests {
                 "{entry}"
             );
             let sidecar =
-                library::Sidecar::parse(&std::fs::read_to_string(&added.sidecar).unwrap()).unwrap();
+                library::Sidecar::parse(&library::Stored::read(&added.dir).unwrap().sidecar)
+                    .unwrap();
             assert_eq!(sidecar.licence, "CC0-1.0");
             assert_eq!(sidecar.source.as_deref(), Some("https://example.org/chair"));
         }

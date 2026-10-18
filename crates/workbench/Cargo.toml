@@ -6,7 +6,7 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "pfx edit's window: recipes, .pfx documents and scenes in one layout of coded panels, with the offscreen shot and the tape clips"
+description = "pfx gui's window: recipes, .pitofx documents and scenes in one layout of coded panels, with the offscreen shot and the tape clips"
 
 [dependencies]
 egui = { version = "=0.36.2", default-features = false }
@@ -33,5 +33,6 @@ toml_edit = { version = "0.25", features = ["serde"] }
 serde_json = "1"
 
 [dev-dependencies]
+pfx-project = { path = "../project", features = ["scaffold"] }
 pfx-scene = { path = "../scene" }
 pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }

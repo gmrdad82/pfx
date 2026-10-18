@@ -1,7 +1,7 @@
 use crate::Error;
 use pfx_glb::{Anisotropy, Image, Look, Looks, Map, Mime, Sampler, Sheen, UvTransform};
 use pfx_materials::Material;
-use pfx_recipe::Recipe;
+use pfx_recipe::{Recipe, Textures};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -254,6 +254,7 @@ fn factors(look: &mut Look, material: &Material) {
 
 pub(crate) fn resolve(
     recipe: &Recipe,
+    textures: &BTreeMap<String, Textures>,
     base: &Path,
     imported: Looks,
     materials: &BTreeMap<String, serde_json::Value>,
@@ -274,7 +275,7 @@ pub(crate) fn resolve(
             map.image = pool.intern(&map.image);
         }
     }
-    for (name, textures) in &recipe.textures {
+    for (name, textures) in textures {
         let look = looks.entry(name.clone()).or_default();
         let mut read = |key: &str, path: &Option<String>| -> Result<Option<Map>, Error> {
             path.as_deref()

@@ -36,8 +36,6 @@ fn library(name: &str, model: &[u8]) -> PathBuf {
     let dir = common::scratch(name);
     let root = dir.join("library");
     let folder = root.join("prop/box");
-    std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(folder.join(library::MODEL), model).unwrap();
     let sidecar = Sidecar {
         kind: "prop".into(),
         name: "box".into(),
@@ -51,7 +49,13 @@ fn library(name: &str, model: &[u8]) -> PathBuf {
         pfx: "1.3.0".into(),
         facts: Default::default(),
     };
-    std::fs::write(folder.join(library::SIDECAR), sidecar.text()).unwrap();
+    library::Stored {
+        model: model.to_vec(),
+        sidecar: sidecar.text(),
+        thumb: None,
+    }
+    .write(&folder)
+    .unwrap();
     library::write_index(&root).unwrap();
     dir
 }

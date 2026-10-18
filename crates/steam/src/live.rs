@@ -6,20 +6,22 @@ use std::sync::{Arc, Mutex, PoisonError};
 use steamworks::networking_messages::SessionRequest;
 use steamworks::networking_types::{NetworkingConnectionState, NetworkingIdentity, SendFlags};
 use steamworks::{
-    CallbackResult, ChatMemberStateChange, Client, ComparisonFilter, DistanceFilter, Leaderboard,
-    LeaderboardDataRequest, LeaderboardDisplayType, LeaderboardEntry, LeaderboardScoreUploaded,
-    LeaderboardSortMethod, LobbyId, LobbyKey, LobbyListFilter, LobbyType, NearFilter, NumberFilter,
-    SResult, SteamAPIInitError, SteamError, SteamId, StringFilter, StringFilterKind,
-    UploadScoreMethod,
+    AppId, CallbackHandle, CallbackResult, ChatMemberStateChange, Client, ComparisonFilter,
+    DistanceFilter, FileType, Leaderboard, LeaderboardDataRequest, LeaderboardDisplayType,
+    LeaderboardEntry, LeaderboardScoreUploaded, LeaderboardSortMethod, LobbyId, LobbyKey,
+    LobbyListFilter, LobbyType, NearFilter, NumberFilter, PublishedFileId, PublishedFileVisibility,
+    SResult, SteamAPIInitError, SteamError, SteamId, StringFilter, StringFilterKind, UpdateStatus,
+    UpdateWatchHandle, UploadScoreMethod,
 };
 
 use crate::board::split_run;
 use crate::{
-    Board, BoardInfo, Call, Change, Compare, DETAILS_MAX, Delivery, Display, Distance, Entry,
-    Error, Event, Lobby, LobbyFilter, LobbyKind, Message, Overlay, PRESENCE_COUNT_MAX, Quota,
-    RUN_FIELDS, Range, Sort, SteamApi, Ugc, Upload, Uploaded, User, api_name, cloud_error,
-    details_len, file_name, fits, lobby_key, lobby_size, lobby_value, message_len, presence_key,
-    presence_value, save_len,
+    Board, BoardInfo, Call, Change, Compare, Created, DETAILS_MAX, Delivery, Display, Distance,
+    Entry, Error, Event, Installed, Item, ItemState, ItemUpdate, Lobby, LobbyFilter, LobbyKind,
+    Message, Overlay, PRESENCE_COUNT_MAX, Progress, Quota, RUN_FIELDS, Range, Sort, Stage,
+    SteamApi, Ugc, Upload, Uploaded, User, Visibility, api_name, cloud_error, details_len,
+    file_name, fits, lobby_key, lobby_size, lobby_value, message_len, presence_key, presence_value,
+    save_len,
 };
 
 enum Done {
@@ -31,6 +33,29 @@ enum Done {
     Lobbies(Call, SResult<Vec<LobbyId>>),
     Joined(Call, Result<LobbyId, ()>),
     Request(SessionRequest),
+    Installed(Item),
+    ItemCreated(Call, SResult<(PublishedFileId, bool)>),
+    ItemSubmitted(Call, SResult<(PublishedFileId, bool)>),
+}
+
+struct ItemInstalled {
+    app: u32,
+    item: u64,
+}
+
+unsafe impl steamworks::Callback for ItemInstalled {
+    const ID: i32 = steamworks::sys::ItemInstalled_t_k_iCallback as i32;
+
+    unsafe fn from_raw(raw: *mut std::ffi::c_void) -> Self {
+        let installed = unsafe {
+            raw.cast::<steamworks::sys::ItemInstalled_t>()
+                .read_unaligned()
+        };
+        Self {
+            app: installed.m_unAppID,
+            item: installed.m_nPublishedFileId,
+        }
+    }
 }
 
 type Completed = Arc<Mutex<Vec<Done>>>;
@@ -46,6 +71,9 @@ pub struct Steam {
     peers: BTreeMap<u64, bool>,
     pending: Vec<Event>,
     downloads: Vec<(Call, Ugc, u32)>,
+    items: BTreeMap<u64, Option<Progress>>,
+    submits: BTreeMap<u64, UpdateWatchHandle>,
+    installed: Option<CallbackHandle>,
     #[cfg(any(feature = "input", test))]
     handles: Handles,
 }
@@ -74,6 +102,12 @@ impl Steam {
                     .session_request_callback(move |request| {
                         post(&requests, Done::Request(request));
                     });
+                let items = done.clone();
+                let installed = client.register_callback(move |installed: ItemInstalled| {
+                    if installed.app == app_id {
+                        post(&items, Done::Installed(Item(installed.item)));
+                    }
+                });
                 Ok(Self {
                     client: Some(client),
                     app_id,
@@ -85,6 +119,9 @@ impl Steam {
                     peers: BTreeMap::new(),
                     pending: Vec::new(),
                     downloads: Vec::new(),
+                    items: BTreeMap::new(),
+                    submits: BTreeMap::new(),
+                    installed: Some(installed),
                     #[cfg(any(feature = "input", test))]
                     handles: Handles::default(),
                 })
@@ -251,7 +288,39 @@ impl Steam {
                 self.requests.insert(peer, request);
                 Event::SessionRequest { peer: User(peer) }
             }
+            Done::Installed(item) => {
+                self.items.remove(&item.0);
+                Event::ItemInstalled { item }
+            }
+            Done::ItemCreated(call, result) => Event::ItemCreated {
+                call,
+                result: created(result),
+            },
+            Done::ItemSubmitted(call, result) => {
+                self.submits.remove(&call.0);
+                Event::ItemSubmitted {
+                    call,
+                    result: created(result),
+                }
+            }
         })
+    }
+
+    fn poll_items(&mut self, client: &Client, events: &mut Vec<Event>) {
+        let ugc = client.ugc();
+        for (item, reported) in self.items.iter_mut() {
+            let Some((done, total)) = ugc.item_download_info(PublishedFileId(*item)) else {
+                continue;
+            };
+            let progress = Some(Progress { done, total });
+            if total > 0 && progress != *reported {
+                *reported = progress;
+                events.push(Event::ItemProgress {
+                    item: Item(*item),
+                    progress: Progress { done, total },
+                });
+            }
+        }
     }
 
     fn poll_downloads(&mut self, events: &mut Vec<Event>) {
@@ -382,6 +451,24 @@ fn post(completed: &Completed, done: Done) {
         .push(done);
 }
 
+fn created(result: SResult<(PublishedFileId, bool)>) -> Result<Created, Error> {
+    result
+        .map(|(item, agreement)| Created {
+            item: Item(item.0),
+            agreement,
+        })
+        .map_err(steam_error)
+}
+
+fn visibility(visibility: Visibility) -> PublishedFileVisibility {
+    match visibility {
+        Visibility::Public => PublishedFileVisibility::Public,
+        Visibility::Friends => PublishedFileVisibility::FriendsOnly,
+        Visibility::Private => PublishedFileVisibility::Private,
+        Visibility::Unlisted => PublishedFileVisibility::Unlisted,
+    }
+}
+
 fn steam_error(error: SteamError) -> Error {
     match error {
         SteamError::IOFailure | SteamError::Timeout | SteamError::NoConnection => Error::Offline,
@@ -453,6 +540,7 @@ impl SteamApi for Steam {
         let Some(client) = self.client.clone() else {
             return Vec::new();
         };
+        let app_id = self.app_id;
         let mut events = std::mem::take(&mut self.pending);
         let mut failed = Vec::new();
         let skipped = drain(
@@ -481,6 +569,12 @@ impl SteamApi for Steam {
                         events.push(Event::JoinRequested {
                             lobby: Lobby(request.lobby_steam_id.raw()),
                             friend: Some(User(request.friend_steam_id.raw())),
+                        });
+                    }
+                    CallbackResult::DownloadItemResult(result) if result.app_id.0 == app_id => {
+                        events.push(Event::ItemDownloaded {
+                            item: Item(result.published_file_id.0),
+                            result: result.error.map_or(Ok(()), |error| Err(steam_error(error))),
                         });
                     }
                     CallbackResult::NetworkingMessagesSessionFailed(failure) => {
@@ -514,8 +608,14 @@ impl SteamApi for Steam {
             }
         }
         events.extend(failed);
+        for event in &events {
+            if let Event::ItemDownloaded { item, .. } = event {
+                self.items.remove(&item.0);
+            }
+        }
         self.poll_peers(&client, &mut events);
         self.poll_downloads(&mut events);
+        self.poll_items(&client, &mut events);
         events
     }
 
@@ -533,6 +633,9 @@ impl SteamApi for Steam {
         self.requests.clear();
         self.pending.clear();
         self.downloads.clear();
+        self.items.clear();
+        self.submits.clear();
+        self.installed.take();
         self.boards.clear();
         self.peers.clear();
         self.done
@@ -855,6 +958,124 @@ impl SteamApi for Steam {
             steamworks::sys::SteamAPI_ISteamUserStats_AttachLeaderboardUGC(stats, board, ugc.0)
         };
         Ok(())
+    }
+
+    fn subscribed_items(&self) -> Result<Vec<Item>, Error> {
+        let mut items: Vec<Item> = self
+            .client()?
+            .ugc()
+            .subscribed_items(false)
+            .into_iter()
+            .map(|item| Item(item.0))
+            .collect();
+        items.sort();
+        Ok(items)
+    }
+
+    fn item_state(&self, item: Item) -> Result<ItemState, Error> {
+        let state = self.client()?.ugc().item_state(PublishedFileId(item.0));
+        Ok(ItemState {
+            subscribed: state.contains(steamworks::ItemState::SUBSCRIBED),
+            installed: state.contains(steamworks::ItemState::INSTALLED),
+            needs_update: state.contains(steamworks::ItemState::NEEDS_UPDATE),
+            downloading: state.contains(steamworks::ItemState::DOWNLOADING),
+            pending: state.contains(steamworks::ItemState::DOWNLOAD_PENDING),
+        })
+    }
+
+    fn item_progress(&self, item: Item) -> Result<Option<Progress>, Error> {
+        Ok(self
+            .client()?
+            .ugc()
+            .item_download_info(PublishedFileId(item.0))
+            .map(|(done, total)| Progress { done, total }))
+    }
+
+    fn item_installed(&self, item: Item) -> Result<Option<Installed>, Error> {
+        Ok(self
+            .client()?
+            .ugc()
+            .item_install_info(PublishedFileId(item.0))
+            .filter(|info| !info.folder.is_empty())
+            .map(|info| Installed {
+                folder: info.folder.into(),
+                bytes: info.size_on_disk,
+                updated: info.timestamp,
+            }))
+    }
+
+    fn download_item(&mut self, item: Item, now: bool) -> Result<(), Error> {
+        if !self
+            .client()?
+            .ugc()
+            .download_item(PublishedFileId(item.0), now)
+        {
+            return Err(Error::Rejected);
+        }
+        self.items.entry(item.0).or_insert(None);
+        Ok(())
+    }
+
+    fn create_item(&mut self) -> Result<Call, Error> {
+        let app = AppId(self.app_id);
+        let (call, done) = self.call()?;
+        self.client()?
+            .ugc()
+            .create_item(app, FileType::Community, move |result| {
+                post(&done, Done::ItemCreated(call, result));
+            });
+        Ok(call)
+    }
+
+    fn submit_item(&mut self, item: Item, update: &ItemUpdate) -> Result<Call, Error> {
+        update.check()?;
+        let app = AppId(self.app_id);
+        let (call, done) = self.call()?;
+        let ugc = self.client()?.ugc();
+        let watch = catch_unwind(AssertUnwindSafe(|| {
+            let mut handle = ugc.start_item_update(app, PublishedFileId(item.0));
+            if let Some(title) = &update.title {
+                handle = handle.title(title);
+            }
+            if let Some(description) = &update.description {
+                handle = handle.description(description);
+            }
+            if let Some(content) = &update.content {
+                handle = handle.content_path(content);
+            }
+            if let Some(preview) = &update.preview {
+                handle = handle.preview_path(preview);
+            }
+            if let Some(shown) = update.visibility {
+                handle = handle.visibility(visibility(shown));
+            }
+            if let Some(tags) = &update.tags {
+                handle = handle.tags(tags.clone(), false);
+            }
+            handle.submit(update.note.as_deref(), move |result| {
+                post(&done, Done::ItemSubmitted(call, result));
+            })
+        }))
+        .map_err(|_| Error::Rejected)?;
+        self.submits.insert(call.0, watch);
+        Ok(call)
+    }
+
+    fn submit_progress(&self, call: Call) -> Result<Option<(Stage, Progress)>, Error> {
+        self.client()?;
+        let Some(watch) = self.submits.get(&call.0) else {
+            return Ok(None);
+        };
+        let (status, done, total) = watch.progress();
+        let stage = match status {
+            UpdateStatus::Invalid => return Ok(None),
+            UpdateStatus::PreparingConfig => Stage::Config,
+            UpdateStatus::PreparingContent => Stage::Content,
+            UpdateStatus::UploadingContent => Stage::Uploading,
+            UpdateStatus::UploadingPreviewFile => Stage::Preview,
+            UpdateStatus::CommittingChanges => Stage::Committing,
+        };
+        Ok(Some((stage, Progress { done, total })))
     }
 
     fn download_ugc(&mut self, ugc: Ugc) -> Result<Call, Error> {

@@ -273,6 +273,10 @@ impl<T: 'static, B> Mod<T, B> {
         self.package.fingerprint
     }
 
+    pub fn data(&self) -> &crate::data::Data {
+        &self.package.data
+    }
+
     pub fn running(&self) -> bool {
         self.running.is_some()
     }

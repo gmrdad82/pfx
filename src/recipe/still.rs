@@ -179,6 +179,7 @@ mod tests {
 
     #[test]
     fn a_figurine_shot_is_planned_with_its_variant_and_sets() {
+        let _sample = super::super::sample("figurine");
         let words = [
             "shot",
             FIGURINE,

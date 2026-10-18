@@ -2,6 +2,8 @@
 
 This is the specification of format 1: one TOML format for 3D scenes, prefabs, material libraries and their projects, which an engine and an editor both read and write. It is pure data: no engine type, no GPU and no clock. `pfx-scene` parses it, checks it, writes it back keeping comments, spacing and order, and migrates older files. An engine loads a checked project into its own types; an editor edits it through the crate's writer; a build tool emits it.
 
+In pfx these files reach a user inside a scene's `.pitofx`, compressed in one file ([Scenes in a .pitofx file](#scenes-in-a-pfx-file), [.pitofx files](pfx-file.md#the-user-file)): this page is the format of the TOML inside it, which `pfx scene print <scene.pitofx>` shows and pfx's editor edits in its TOML panel.
+
 ## Files
 
 | file | holds |
@@ -154,7 +156,7 @@ The crate checks structure, values, references, ids, and that each asset path ex
 | key | type | default | notes |
 |---|---|---|---|
 | `name` | string | needed | the project's name. |
-| `scene` | path | none | the scene an editor opens first. |
+| `scene` | path | none | the scene an editor opens first: a `.scene.toml`, or a scene's `.pitofx`. |
 | `ignore` | array of paths | `[]` | folders (or files) `Project::open` skips, besides `target` and `tmp`; each relative to the root, so `"builds"` is the root's `builds` folder. |
 
 `[tunables.<name>]` is one value the game reads at run time and a person tunes while it runs, such as a jump height or the gravity. The table's key is its name, which the game reads it by: it follows the name rules (`bad-name`), and a name with a space or a `.` is quoted (`[tunables."god mode"]`). A tunable takes no `id`: the game's code names it, so renaming one changes that code too.
@@ -1292,22 +1294,22 @@ pub struct Location {
 
 `docs/schema/` holds a JSON Schema (draft 2020-12) for each kind of file: `project.schema.json`, `scene.schema.json`, `prefab.schema.json`, `materials.schema.json`, `proxies.schema.json` and `finish.schema.json`. They are generated from the crate's types, so they carry every table and key with its type, each enumerated value and an id's form, and refuse unknown keys as the reader does; ranges, references and paths stay the checker's. Each tag of the crate carries the schemas of its version. With the crate's `schema` feature, `json_schema(kind)` gives one as text, and `cargo run -p pfx-scene --features schema --example scene-schema -- <folder>` writes all six.
 
-## Scenes in a .pfx file
+## Scenes in a .pitofx file
 
-A scene and every file it reads can live in one `.pfx` file (the container is the `pfx-file` crate; [pfx-file.md](pfx-file.md) is the byte layout). The TOML files stay exactly as they are on disk, as chunks inside it:
+A scene and every file it reads live in one `.pitofx` file, the form pfx gives a user (`pfx scene migrate <scene.toml>` imports a loose scene into one once) (the container is the `pfx-file` crate; [pfx-file.md](pfx-file.md) is the byte layout). The TOML files stay exactly as they are on disk, as chunks inside it:
 
-- `SMET`, unnamed and stored, is a small TOML table: `format` (the scene format, 1), `entry` (the scene file the `.pfx` opens to), and `recipe` and `scene` when a tool built the scene from a recipe (the SHA-256 of the recipe and of the scene chunks as built, so that tool sees an edit made elsewhere). The editor never changes `recipe` or `scene`.
+- `SMET`, unnamed and stored, is a small TOML table: `format` (the scene format, 1), `entry` (the scene file the `.pitofx` opens to), and `recipe` and `scene` when a tool built the scene from a recipe (the SHA-256 of the recipe and of the scene chunks as built, so that tool sees an edit made elsewhere). The editor never changes `recipe` or `scene`.
 - `SCNE`, one per TOML file of the scene (the root scene, its includes, its material libraries, the prefabs it places and their files), named by its path from the project root, exactly as the scene's own paths name it.
 - `FILE`, one per other file the scene names (meshes, images, fonts, sounds, LUTs), named the same way. Images and other packed data are stored as they are, so a reader borrows them without a copy.
 - Other chunks (`GLTF`, `GBIN`, `THMB`, a recipe and its facts) are kept as they are.
 
-A `.pfx` scene lays its files over the project: inside it, a path resolves to the `.pfx`'s own `SCNE` or `FILE` chunk of that name first and then to the file on disk, still inside the project root. A library prefab or a shared mesh outside the scene stays a file on disk. `mesh.<name>.file = "@gltf"` names the glTF in the `.pfx`'s own `GLTF` and `GBIN` chunks, with `node` naming its node; outside a `.pfx` that holds one it is `missing-file`. The project root is found as for any file: the nearest folder above the `.pfx` with a `project.toml`, or the `.pfx`'s own folder.
+A `.pitofx` scene lays its files over the project: inside it, a path resolves to the `.pitofx`'s own `SCNE` or `FILE` chunk of that name first and then to the file on disk, still inside the project root. A library prefab or a shared mesh outside the scene stays a file on disk. `mesh.<name>.file = "@gltf"` names the glTF in the `.pitofx`'s own `GLTF` and `GBIN` chunks, with `node` naming its node; outside a `.pitofx` that holds one it is `missing-file`. The project root is found as for any file: the nearest folder above the `.pitofx` with a `project.toml`, or the `.pitofx`'s own folder.
 
-- `Project::open_pfx(path)` opens one; `Project::scene`, `check`, `read` and `fix` then work on its files, and `Project::open` of a folder also checks every `.pfx` in it. Diagnostics on a file inside it name it as `<the .pfx>/<its name>` (`scenes/room.pfx/scenes/room.scene.toml:12:5`). A `.pfx` that is cut or corrupt, holds no `SMET`, names an entry it doesn't hold, a chunk name that is not a path inside the project, or a newer scene format is refused (`unreadable`).
-- `Project::asset(path)` gives a file's bytes from the `.pfx` or the disk, refusing a path that leaves the root; `Project::pfx()` gives the container's reader, for the `GLTF` and `GBIN` chunks; `Project::path_of(file)` and `shown(file)` give the path an editor shows for a file.
-- `SceneEdit::open` takes the `.pfx` (or `<the .pfx>/<file>`) and edits its TOML in place: every edit, undo, redo and dry run works as on disk, and a write rewrites the `.pfx` once, through a temporary file and a rename, keeping every chunk it doesn't change byte for byte and in its place (a new chunk goes at the end). `PatchGroup::write` does the same for a group whose files are inside a `.pfx`.
-- `pack(project, scene)` gives the `.pfx` bytes of a scene of TOML files: its `SMET`, then each TOML file it reads (its entry first, the rest in path order), then each other file it names (in path order), compressed with the container's default. The same files give the same bytes. `unpack(bytes, folder)` writes the `SCNE` and `FILE` chunks back out as files under the folder, refusing to write through a link; unpacking and packing again gives the same bytes, and unpacking a packed scene gives its files exactly.
+- `Project::open_pfx(path)` opens one; `Project::scene`, `check`, `read` and `fix` then work on its files, and `Project::open` of a folder also checks every `.pitofx` in it. Diagnostics on a file inside it name it as `<the .pitofx>/<its name>` (`scenes/room.pitofx/scenes/room.scene.toml:12:5`). A `.pitofx` that is cut or corrupt, holds no `SMET`, names an entry it doesn't hold, a chunk name that is not a path inside the project, or a newer scene format is refused (`unreadable`).
+- `Project::asset(path)` gives a file's bytes from the `.pitofx` or the disk, refusing a path that leaves the root; `Project::pfx()` gives the container's reader, for the `GLTF` and `GBIN` chunks; `Project::path_of(file)` and `shown(file)` give the path an editor shows for a file.
+- `SceneEdit::open` takes the `.pitofx` (or `<the .pitofx>/<file>`) and edits its TOML in place: every edit, undo, redo and dry run works as on disk, and a write rewrites the `.pitofx` once, through a temporary file and a rename, keeping every chunk it doesn't change byte for byte and in its place (a new chunk goes at the end). `PatchGroup::write` does the same for a group whose files are inside a `.pitofx`.
+- `pack(project, scene)` gives the `.pitofx` bytes of a scene of TOML files: its `SMET`, then each TOML file it reads (its entry first, the rest in path order), then each other file it names (in path order), compressed with the container's default. The same files give the same bytes. `unpack(bytes, folder)` writes the `SCNE` and `FILE` chunks back out as files under the folder, refusing to write through a link; unpacking and packing again gives the same bytes, and unpacking a packed scene gives its files exactly.
 
 ## The crate
 
-`pfx-scene` is MIT licensed. It depends on `toml`, `toml_edit` and `serde`, and on `pfx-file` (`crates/file`) for `.pfx` scenes. The optional `schema` feature adds `schemars` and `serde_json` for `json_schema`. Vectors are plain arrays (`[f32; 3]`), never a maths crate's types. Its semver is its own; the `format` number changes only with a migration.
+`pfx-scene` is MIT licensed. It depends on `toml`, `toml_edit` and `serde`, and on `pfx-file` (`crates/file`) for `.pitofx` scenes. The optional `schema` feature adds `schemars` and `serde_json` for `json_schema`. Vectors are plain arrays (`[f32; 3]`), never a maths crate's types. Its semver is its own; the `format` number changes only with a migration.

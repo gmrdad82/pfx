@@ -9,7 +9,8 @@ use pfx_gpu::screens::ScreenPolicy;
 use pfx_gpu::window::Attention;
 use pfx_gpu::{Gpu, OffscreenTarget};
 use pfx_input::{InputEvent, KeyLabels};
-use pfx_play::{Level, Reload};
+use pfx_load::scene::Scene;
+use pfx_play::{Game, Level, Notice, Options, Reload, Rigs, SceneGame, Stopped, Tunables};
 use pfx_project::Project;
 
 use crate::audio::Audio;
@@ -63,6 +64,16 @@ fn stamp(file: &Path) -> Option<Stamp> {
         modified: meta.modified().ok(),
         len: meta.len(),
     })
+}
+
+fn game_of(
+    factory: Option<&Factory>,
+    module: &crate::play::Play,
+) -> Result<Option<Box<dyn Game>>, String> {
+    match factory {
+        Some(factory) => Ok(Some(factory())),
+        None => module.game(Some(crate::play::FONT_FAMILY)),
+    }
 }
 
 pub struct Session {
@@ -302,7 +313,53 @@ impl Session {
     }
 
     fn game_modules(&mut self) -> Option<&mut dyn Reload> {
-        self.view.as_mut()?.session()?.game_mut().modules()
+        if self.view.as_deref().is_some_and(View::playing) {
+            return self.view.as_mut()?.session()?.game_mut().modules();
+        }
+        self.editor.module.session_mut()?.game_mut().modules()
+    }
+
+    pub fn play_headless(&mut self) -> Result<(), String> {
+        if self.editor.module.is_running() {
+            return Ok(());
+        }
+        let Editor { module, edit, .. } = &mut self.editor;
+        module.follow(edit.scene());
+        let flat = self.flat();
+        let seed = match &self.config {
+            Some(config) => config.seed,
+            None => self.scene_config().seed,
+        };
+        let game = game_of(self.factory.as_ref(), &self.editor.module)
+            .map_err(|error| format!("play: {error}; play did not start"))?
+            .unwrap_or_else(|| Box::new(SceneGame));
+        let scene = if flat {
+            Scene::empty()
+        } else {
+            self.editor.scene().clone()
+        };
+        let options = Options {
+            seed,
+            tunables: flat.then(Tunables::default),
+            rigs: flat.then(Rigs::default),
+            ..Options::default()
+        };
+        self.editor.module.start_game(&scene, None, game, options)
+    }
+
+    pub fn frame_headless(&mut self, seconds: f32) -> Result<bool, String> {
+        self.poll_modules();
+        let more = self.editor.module.frame(seconds);
+        let notices = self
+            .game_modules()
+            .map(|modules| modules.notices())
+            .unwrap_or_default();
+        self.log_notices(notices);
+        more
+    }
+
+    pub fn stop_headless(&mut self) -> Option<Stopped> {
+        self.editor.module.stop()
     }
 
     pub fn poll_modules(&mut self) {
@@ -354,6 +411,10 @@ impl Session {
             return;
         };
         let notices = driver.take_notices();
+        self.log_notices(notices);
+    }
+
+    fn log_notices(&mut self, notices: Vec<Notice>) {
         for notice in notices {
             let text = format!("modules: {}", notice.text);
             match notice.level {
@@ -421,17 +482,14 @@ impl Session {
                     let Some(config) = self.config.as_ref().or(fallback.as_ref()) else {
                         continue;
                     };
-                    let game = match &self.factory {
-                        Some(factory) => Some(factory()),
-                        None => match self.editor.module.game(Some(crate::play::FONT_FAMILY)) {
-                            Ok(game) => game,
-                            Err(error) => {
-                                self.editor
-                                    .log
-                                    .error(format!("play: {error}; play did not start"));
-                                continue;
-                            }
-                        },
+                    let game = match game_of(self.factory.as_ref(), &self.editor.module) {
+                        Ok(game) => game,
+                        Err(error) => {
+                            self.editor
+                                .log
+                                .error(format!("play: {error}; play did not start"));
+                            continue;
+                        }
                     };
                     let module = self
                         .factory
@@ -598,7 +656,7 @@ impl App for Session {
     }
 
     fn name(&self) -> &str {
-        "pfx edit"
+        "pfx gui"
     }
 
     fn label(&self) -> Option<String> {

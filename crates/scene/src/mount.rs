@@ -135,7 +135,7 @@ impl Mount {
 
 pub(crate) fn pfx_of(path: &Path) -> Option<(PathBuf, String)> {
     for ancestor in path.ancestors().skip(1) {
-        if ancestor.extension().is_some_and(|end| end == "pfx") && ancestor.is_file() {
+        if pfx_file::is_file_path(ancestor) && ancestor.is_file() {
             let inner = path.strip_prefix(ancestor).ok()?;
             return Some((ancestor.to_path_buf(), slashed(inner)));
         }

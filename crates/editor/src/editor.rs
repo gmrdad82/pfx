@@ -156,7 +156,7 @@ impl Editor {
         for file in edit.files() {
             crate::held::load(&mut files, file)?;
         }
-        let viewport = Box::new(Viewport::open("pfx edit viewport", &path));
+        let viewport = Box::new(Viewport::open("pfx gui viewport", &path));
         let mut editor = Editor {
             outline: Outline::default(),
             raw: Raw::default(),
@@ -760,7 +760,7 @@ impl Editor {
     pub fn source(&mut self, file: &Path) -> &mut Source {
         self.sources
             .entry(file.to_path_buf())
-            .or_insert_with(|| Source::new(("pfx edit source", file), file).toolbar(false))
+            .or_insert_with(|| Source::new(("pfx gui source", file), file).toolbar(false))
     }
 
     pub fn toggle_view(&mut self) {

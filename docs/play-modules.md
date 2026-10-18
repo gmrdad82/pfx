@@ -1,6 +1,6 @@
 # Play with a game's module
 
-`pfx edit` plays the open scene with a game's WebAssembly module: press Play (F5) and the scene runs as a game whose logic is the module's, in the editor's viewport, with the editor's renderer, frame and input; press Stop (F8) and the editor is back exactly where it was. The game's logic stays in the game's repository, built there into a `.wasm` file; pfx knows nothing of any game. It hosts the module in [pfx-mod](mods.md)'s sandbox and gives it a small, neutral world: find objects by name, move and hide them, read the keys held, the tick and its step, and write a few lines of text over the frame.
+`pfx gui` plays the open scene with a game's WebAssembly module: press Play (F5) and the scene runs as a game whose logic is the module's, in the editor's viewport, with the editor's renderer, frame and input; press Stop (F8) and the editor is back exactly where it was. The game's logic stays in the game's repository, built there into a `.wasm` file; pfx knows nothing of any game. It hosts the module in [pfx-mod](mods.md)'s sandbox and gives it a small, neutral world: find objects by name, move and hide them, read the keys held, the tick and its step, and write a few lines of text over the frame.
 
 Without a module, Play runs the scene with the default game, as [editor.md](editor.md) ("Play mode") says. In `<game> edit` the game's own factory plays and a module is not used ([projects.md](projects.md)).
 
@@ -9,7 +9,7 @@ Without a module, Play runs the scene with the default game, as [editor.md](edit
 | Where | How |
 |---|---|
 | the scene | `[play] module = "<path>.wasm"` in the scene file, a path from the project's root |
-| the command line | `pfx edit <scene.toml or folder> --play <module.wasm>`, which wins over the scene's key for the session |
+| the command line | `pfx gui <scene.pitofx or folder> --play <module.wasm>`, which wins over the scene's key for the session |
 | the transport bar | the module chip under the viewport, or F4 while stopped: none, then each `.wasm` file the project (or the recipe's folder) holds, then none again |
 | the window | drop a `.wasm` file on it while stopped |
 
@@ -106,6 +106,34 @@ Play never touches the edited scene. The world the module moves is a runtime cop
 
 **Live rebuilds.** While the scene plays, the editor watches the module's file. A rebuilt module swaps in at the next tick ([mods.md](mods.md), "Gameplay modules"): with its state through `save` and `restore` when it exports them, or fresh, and then its `start` runs again on the running world. A build that does not load leaves the running module as it was, with a warning.
 
+## A game's own world
+
+The `pfx:play/game` world above is pfx's, for a module with no game around it. A game that wants its own rules in WASM writes its own WIT world in its own repository and hosts it itself: its factory makes a `Game` that holds a `pfx_mod::Modules<T, B>` (`pfx_game::modules`) opened on the project's `modules = [...]` files with its own `Host`, `Api` and bindings, calls `modules.tick()` first in its `tick`, calls its world through `modules.each` or `modules.call`, and returns the `Modules` from `Game::modules()` ([mods.md](mods.md), "Gameplay modules"). `<game> edit` (`pfx_workbench::run_project`) plays that game: F5 makes a new game from the factory and runs it on a copy of the edited scene, the editor watches the files `Modules` lists and hands a rebuilt one to `Reload::changed`, the module swaps in at the next tick with its state through `save` and `restore`, the log shows a line such as ``modules: module `sim` swapped at tick 21 and kept its state (12 bytes through save and restore)``, and F8 stops the game and hands back the edited scene unchanged, with every file of the project as it was.
+
+pfx never sees that world. The test game in `crates/editor/tests/sim.rs` shows the shape with a neutral one, `test:sim/sim@1.0.0`:
+
+```wit
+package test:sim@1.0.0;
+
+interface sim {
+  new: func(seed: u64);
+  step: func(order: u32) -> list<u32>;
+  snapshot: func() -> list<u8>;
+}
+
+world game {
+  export sim;
+  export save: func() -> list<u8>;
+  export restore: func(state: list<u8>);
+}
+```
+
+Its game calls `new(seed)` in `start`, `step(order)` every tick (moving a scene object by the events it returns) and `snapshot()` after; the component keeps its state across a rebuild through `save` and `restore`.
+
+### Headless play
+
+`pfx_editor::session::Session` plays without a window or a GPU too, for tests and tools: `play_headless()` starts what F5 starts (the factory's game, or the scene's module, or the scene as it is) on the edited scene, with the project's seed; `frame_headless(seconds)` watches the module files, advances the play clock and moves the module notices into the log, `Err(message)` when the game failed; `stop_headless()` stops it and returns its `Stopped`. Nothing is drawn, and the edited scene and the files are untouched as with F8.
+
 ## The API
 
 `pfx_editor::play::Play` is the hook the window's transport bar calls. It holds the chosen module and runs a play session headless; the editor's window hands the same game to pfx-game's `Driver` and `Painter` to draw it.
@@ -139,7 +167,7 @@ Play never touches the edited scene. The world the module moves is a runtime cop
 
 ```sh
 cargo run -p pfx-game --features modules --example marker -- tmp/play/marker.wasm
-pfx edit content/room.scene.toml --play tmp/play/marker.wasm
+pfx gui content/room.pitofx --play tmp/play/marker.wasm
 ```
 
 The example parses the text with `wat` and calls `embed`. A game writes its module in Rust instead: a `cdylib` crate with `wit-bindgen` generating the `game` world from a copy of `play.wit` (and pfx-mod's `log.wit` in its `wit/deps/`), built with `cargo build --target wasm32-unknown-unknown --release`; the host makes the component itself. The `wasm32-wasip2` target is not usable, because its standard library imports WASI.
@@ -147,8 +175,10 @@ The example parses the text with `wat` and calls `embed`. A game writes its modu
 ## Tests
 
 - `crates/editor/src/play_tests.rs` (in the gate, no GPU): the example module, built from its source, plays a copy of the editor's fixture room headless through `Play` for 30 frames with Right held; the marker moves along x only and the HUD counts the ticks; Stop hands back the edited scene, the editor's scene is unchanged and every file is byte for byte as before; a second Play starts the marker where the scene put it, with `score 0`. A module that never returns stops play with `ran out of fuel` and hands back its session, and bytes that are not a module refuse to start with the module's name.
-- `src/main.rs`: `pfx edit`'s `--play` argument and its refusals.
+- `crates/editor/tests/sim.rs` (in the gate, no GPU): a game with its own world, `test:sim/sim@1.0.0`, opened as `run_project` opens it, plays headless for 20 frames, its component rebuilt on disk swaps in through the file watch and counts on from the old one's state (`step`'s events and `snapshot`), the scene object it moves is where the events put it, Stop hands back the edited scene and leaves every file as it was, and the next Play makes a new game.
+- `src/main.rs`: `pfx gui`'s `--play` argument and its refusals.
 
 ```
 cargo test -q -p pfx-editor --lib play_tests
+cargo test -q -p pfx-editor --test sim
 ```

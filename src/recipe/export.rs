@@ -11,8 +11,11 @@ const COMMAND: &str = "export";
 
 #[derive(clap::Args)]
 pub(super) struct Args {
-    #[arg(value_name = "file.pfx|recipe", help = "A .pfx document or a recipe")]
-    source: PathBuf,
+    #[arg(
+        value_name = "file.pitofx|recipe",
+        help = "A .pitofx document or a recipe"
+    )]
+    pub(super) source: PathBuf,
     #[arg(long, value_name = "out.glb", help = "The standalone GLB to write")]
     glb: PathBuf,
     #[arg(

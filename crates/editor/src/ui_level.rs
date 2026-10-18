@@ -182,7 +182,7 @@ impl Editor {
     }
 
     fn brush_input(&mut self, ui: &mut Ui, image: Rect) {
-        let response = ui.interact(image, Id::new("pfx edit brush"), Sense::click_and_drag());
+        let response = ui.interact(image, Id::new("pfx gui brush"), Sense::click_and_drag());
         let (line, horizontal, vertical) = ui.ctx().options(|options| {
             (
                 options.input_options.line_scroll_speed,
@@ -281,7 +281,7 @@ impl Editor {
 
     fn strip(&mut self, ctx: &egui::Context, image: Rect) {
         let theme = Theme::of(ctx);
-        egui::Area::new(Id::new("pfx edit level strip"))
+        egui::Area::new(Id::new("pfx gui level strip"))
             .order(egui::Order::Foreground)
             .fixed_pos(image.left_top() + Vec2::new(8.0, STRIP_TOP))
             .show(ctx, |ui| {

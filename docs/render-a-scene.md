@@ -1,11 +1,11 @@
 # Render a scene
 
-`pfx shot` renders a scene file offline on the live renderer, the one games and the editor show. It writes numbered frames, a `manifest.json` and, when asked, a WAV that pito-codecs' `pcod frames` turns into a video. The clock is fixed: frame n is drawn at t = n / fps, and the scene's animations, movers, physics and play run on that clock, never on the wall clock. So two runs of the same scene, flags and build give the same bytes on the same GPU and driver. It opens no window. Frames go to an offscreen target on a headless GPU device, and a folder path, which would mean the editor, is refused.
+`pfx shot` renders a scene's `.pitofx` offline on the live renderer (a recipe's `.pitofx` draws the scene its build holds; a `.toml` is refused with one line naming `pfx scene migrate`, [.pitofx files](pfx-file.md#the-user-file)), the one games and the editor show. It writes numbered frames, a `manifest.json` and, when asked, a WAV that pito-codecs' `pcod frames` turns into a video. The clock is fixed: frame n is drawn at t = n / fps, and the scene's animations, movers, physics and play run on that clock, never on the wall clock. So two runs of the same scene, flags and build give the same bytes on the same GPU and driver. It opens no window. Frames go to an offscreen target on a headless GPU device, and a folder path, which would mean the editor, is refused.
 
 ## Run it
 
 ```
-pfx shot <scene.toml> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>]
+pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>]
          [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr]
          [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
 ```

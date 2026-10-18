@@ -1,5 +1,3 @@
-use std::borrow::Cow;
-
 use egui::Color32;
 use pfx_editor_style::tokens;
 
@@ -43,8 +41,9 @@ pub const SECTION_GAP: f32 = tokens::SECTION_GAP;
 pub const ROW_HEIGHT: f32 = tokens::ROW_HEIGHT;
 
 pub fn workbench() -> Theme {
-    Theme {
-        name: Cow::Borrowed("workbench"),
-        ..tokens::theme()
-    }
+    tokens::theme()
+}
+
+pub fn game() -> Theme {
+    tokens::game()
 }

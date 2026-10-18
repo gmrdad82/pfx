@@ -266,12 +266,6 @@ fn pieces_of_a_library_object_take_their_own_material_or_hide() {
     let dir = common::scratch("import-library-pieces");
     let root = dir.join("library");
     let folder = root.join("prop/box");
-    std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(
-        folder.join(pfx_build::library::MODEL),
-        Model::default().glb(),
-    )
-    .unwrap();
     let sidecar = pfx_build::library::Sidecar {
         kind: "prop".into(),
         name: "box".into(),
@@ -285,7 +279,13 @@ fn pieces_of_a_library_object_take_their_own_material_or_hide() {
         pfx: "1.3.0".into(),
         facts: Default::default(),
     };
-    std::fs::write(folder.join(pfx_build::library::SIDECAR), sidecar.text()).unwrap();
+    pfx_build::library::Stored {
+        model: Model::default().glb(),
+        sidecar: sidecar.text(),
+        thumb: None,
+    }
+    .write(&folder)
+    .unwrap();
     pfx_build::library::write_index(&root).unwrap();
     let b = built(
         &dir,

@@ -6,7 +6,7 @@ use toml::{Table, Value};
 
 use crate::{Asset, Kind};
 
-pub const RECORD: &str = "asset.pfx";
+pub const RECORD: &str = "asset.pitofx";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Record {
@@ -62,7 +62,7 @@ impl Record {
         let asset = root
             .get("asset")
             .and_then(Value::as_table)
-            .ok_or("[asset]: missing, this .pfx is not a fetched asset's record")?;
+            .ok_or("[asset]: missing, this .pitofx is not a fetched asset's record")?;
         let need = |key: &str| field(asset, key).ok_or_else(|| format!("asset.{key}: missing"));
         let files = root
             .get("files")

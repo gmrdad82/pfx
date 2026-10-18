@@ -1,6 +1,6 @@
 # Steam
 
-A product that ships on Steam depends on `pfx-steam` and links the Steamworks SDK. A product that does not leaves the crate out, and never links the SDK. Nothing else in the workspace depends on it.
+A product that ships on Steam depends on `pfx-steam` and links the Steamworks SDK: achievements, stats, Cloud, leaderboards, lobbies, peer-to-peer lockstep and the Workshop. A product that does not leaves the crate out, and never links the SDK. Nothing else in the workspace depends on it.
 
 The crate is built on `steamworks` (steamworks-rs) pinned at `=0.13.1`. That release carries Steamworks SDK 1.64. `STEAMWORKS_VERSION` is `"0.13.1"` and `SDK_VERSION` is `"1.64"`.
 
@@ -296,6 +296,56 @@ let step = input.update(&mut pads.beside(&mut steam, &mut gilrs));
 
 `Fake` stands in for Steam Input in tests: `plug_pad(handle, type)`, `unplug_pad`, `press`, `tilt`, `bind` (origins as SDK numbers), `action_set` and `vibrations`. Its glyph paths are made up (`steam/glyphs/<origin>-<flags>-<size>.png`) and point at no file.
 
+## Workshop
+
+The Workshop calls wrap steamworks-rs's `UGC` and add nothing linked: the SDK is the one the crate already carries. An item is `Item(u64)`, its published file id.
+
+| Call | What it does |
+|---|---|
+| `subscribed_items()` | the items the player subscribes to, sorted by id |
+| `item_state(item)` | `ItemState { subscribed, installed, needs_update, downloading, pending }` |
+| `item_progress(item)` | the download's `Progress { done, total }` in bytes, when Steam has one |
+| `item_installed(item)` | `Installed { folder, bytes, updated }`: the install folder Steam wrote the item to, its size on disk and the time it was updated (Unix seconds); `None` until it is installed |
+| `download_item(item, now)` | asks Steam to download or update the item; `now` puts it ahead of other downloads |
+
+`run_callbacks` reports the item's way in:
+
+| Event | When |
+|---|---|
+| `ItemProgress { item, progress }` | a download asked with `download_item` moved on; once per change, polled each frame (Steam sends no callback for it) |
+| `ItemDownloaded { item, result }` | a download finished (Steam's `DownloadItemResult`, for this app only) |
+| `ItemInstalled { item }` | Steam installed or updated the item (Steam's `ItemInstalled`, for this app only) |
+
+Steam downloads subscribed items in the background on its own. A game reads the list at start, calls `download_item(item, true)` for an item that is not installed or needs an update, and loads it on `ItemInstalled`.
+
+### Workshop items as mods
+
+With the `mods` feature, the crate depends on `pfx-mod` (the dependency runs from steam to mods) and `load_items(steam, host, local)` maps the installed items into the game's mod host ([mods.md](mods.md)):
+
+```rust
+let local = host.load_dir(Path::new("mods"));
+let items = pfx_steam::load_items(&steam, &host, &local.packages)?;
+let mut packages = local.packages;
+packages.extend(items.packages.into_iter().map(|(_, package)| package));
+let (mut mods, failed) = ModSet::start(&host, packages, bind, make);
+```
+
+- Each installed item's folder holds one mod, its `mod.toml` at the top. The folder is named by Steam after the item's number, so it is loaded with `Host::load_package`, which takes the id from the manifest; everything else is `Host::load_folder`'s: the API version, the size caps, the data files, the imports and their types. What the game's `Limits` refuse is refused.
+- `Items` holds `packages` (`(Item, Package)` in item order), `refused` (`(Item, ItemRefusal)`), `waiting` (subscribed, not installed yet) and `updating` (installed and loaded, with a newer version on its way).
+- `ItemRefusal::Load(LoadError)` is the loader's refusal; `Taken { id, by }` is a second mod with an id a local mod (`by: None`) or an earlier item (`by: Some(item)`) already brings, so ids stay unique and the first one loads; `Steam(Error)` is a call that failed.
+
+### Submitting items
+
+A game that lets its players share their mods creates and updates items:
+
+| Call | What it does |
+|---|---|
+| `create_item()` | a new community item for this app; `ItemCreated { call, result }` carries `Created { item, agreement }`, where `agreement` says the player must accept the Workshop legal agreement before the item is visible |
+| `submit_item(item, &update)` | sends an `ItemUpdate`; `ItemSubmitted { call, result }` when Steam has it |
+| `submit_progress(call)` | `Some((Stage, Progress))` while the update uploads (`Config`, `Content`, `Uploading`, `Preview`, `Committing`), `None` when it is done or unknown |
+
+`ItemUpdate` sets only what it names: `title` (up to `TITLE_MAX`, 128 bytes), `description` (`DESCRIPTION_MAX`, 8,000), `content` (the folder to upload, a mod's folder), `preview` (an image file), `visibility` (`Public`, `Friends`, `Private` or `Unlisted`), `tags` (each up to `TAG_MAX`, 255 printable ASCII characters, no commas) and `note`, the change note. `ItemUpdate::check` refuses a text over its cap or with a NUL (`Error::Rejected`) and a content folder or preview that is not there (`Error::Missing`) before Steam is called.
+
 ## Trading cards
 
 Trading cards need no code. They are set up on Steamworks' partner site (the app's Community Items: cards, badges, emoticons and profile backgrounds), and Steam drops cards from playtime on its own. Nothing in this crate touches them.
@@ -315,7 +365,7 @@ The crate does not set an rpath. At run time the two loaders differ:
 
 Every behaviour above, including `sync`, is tested on `Fake`. Those tests do not need a Steam client or a network.
 
-`Fake::new()` is one player. For two or more, a `Hub` is the fake Steam they share: `hub.client(User(…))` makes a `Fake` for that player, and they see each other's boards, lobbies and messages. The hub also sets what Steam would: `set_server_time`, `befriend`, `set_loss(seed, per_mille)` (unreliable messages dropped from a seeded draw, so a test repeats exactly), and `fail_session(a, b, reason)`. An answer to a call arrives on the next `run_callbacks`. On `Fake`, `AroundUser` stops at the ends of the board; ties rank the earlier score first. One test, `spacewar_client`, is ignored. It inits the public Spacewar app id 480 when a client is running, and it is never part of the gate. It does not change achievements or stats.
+`Fake::new()` is one player. For two or more, a `Hub` is the fake Steam they share: `hub.client(User(…))` makes a `Fake` for that player, and they see each other's boards, lobbies and messages. The hub also sets what Steam would: `set_server_time`, `befriend`, `set_loss(seed, per_mille)` (unreliable messages dropped from a seeded draw, so a test repeats exactly), and `fail_session(a, b, reason)`. An answer to a call arrives on the next `run_callbacks`. On `Fake`, `AroundUser` stops at the ends of the board; ties rank the earlier score first. For the Workshop, `Fake::subscribe(item)`, `download(item, done, total)`, `install(item, folder)`, `outdate(item)` and `unsubscribe(item)` set an item's state as Steam would, `create_item` numbers new items from `FAKE_ITEM`, `submit_item` succeeds only for an item this `Fake` created, and `submitted()` lists what was sent. One test, `spacewar_client`, is ignored. It inits the public Spacewar app id 480 when a client is running, and it is never part of the gate. It does not change achievements or stats.
 
 ## Later
 

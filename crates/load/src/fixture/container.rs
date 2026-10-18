@@ -12,7 +12,7 @@ pub fn pfx_from_glb(glb: &[u8], files: &[(&str, &[u8])], compress: bool) -> Vec<
     for (name, bytes) in files {
         writer = writer.named(pfx_file::FILE, *name, bytes.to_vec(), codec);
     }
-    writer.to_vec().expect("a .pfx")
+    writer.to_vec().expect("a .pitofx")
 }
 
 pub fn pfx_from_gltf(json: &[u8], files: &[(&str, &[u8])]) -> Vec<u8> {
@@ -21,5 +21,5 @@ pub fn pfx_from_gltf(json: &[u8], files: &[(&str, &[u8])]) -> Vec<u8> {
     for (name, bytes) in files {
         writer = writer.named(pfx_file::FILE, *name, bytes.to_vec(), pfx_file::Codec::Auto);
     }
-    writer.to_vec().expect("a .pfx")
+    writer.to_vec().expect("a .pitofx")
 }

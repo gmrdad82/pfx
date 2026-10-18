@@ -3,7 +3,7 @@ name = "pfx-steam"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "pfx's Steam: achievements, stats, Cloud saves, the overlay, rich presence, leaderboards, daily seeded runs, lobbies and peer-to-peer lockstep"
+description = "pfx's Steam: achievements, stats, Cloud saves, the overlay, rich presence, leaderboards, daily seeded runs, lobbies, peer-to-peer lockstep and Workshop items"
 publish.workspace = true
 license.workspace = true
 authors.workspace = true
@@ -12,11 +12,15 @@ authors.workspace = true
 default = ["live"]
 live = ["dep:steamworks"]
 input = ["dep:pfx-input"]
+mods = ["dep:pfx-mod"]
 
 [dependencies]
 pfx-core = { path = "../core" }
 steamworks = { version = "=0.13.1", optional = true, features = ["raw-bindings"] }
 pfx-input = { path = "../input", default-features = false, optional = true }
+pfx-mod = { path = "../mod", optional = true }
 
 [dev-dependencies]
 pfx-input = { path = "../input", default-features = false }
+pfx-mod = { path = "../mod" }
+wat = "=1.258.3"

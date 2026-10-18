@@ -13,6 +13,7 @@ use super::timeline::{base, chosen};
 
 pub(super) const MANIFEST: &str = "shoot.json";
 pub(super) const WAV: &str = "sound.wav";
+pub(super) const SCENE: &str = "scene.pitofx";
 const STAGE: &str = ".stage-";
 const IEND: [u8; 12] = [0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82];
 
@@ -199,6 +200,12 @@ fn harvest(dir: &Path) -> Result<Vec<u32>, String> {
     Ok(moved)
 }
 
+fn packed(scene: &Path, dir: &Path) -> Result<PathBuf, String> {
+    let out = dir.join(SCENE);
+    pfx_load::scene::pack(scene, &out).map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 fn has_sound(scene: &Path) -> bool {
     std::fs::read_to_string(scene)
         .ok()
@@ -284,6 +291,7 @@ impl Shoot<'_> {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
         harvest(dir)?;
+        let shot = packed(&scene, dir).map_err(|e| format!("{file}: {e}"))?;
         let quality = if args.final_ {
             Quality::Final
         } else {
@@ -304,7 +312,7 @@ impl Shoot<'_> {
             let whole = from == 0 && from + count - 1 == timeline.frames;
             let audio = (sound && whole && !wav.is_file()).then_some(wav.as_path());
             let plan = Plan {
-                scene: &scene,
+                scene: &shot,
                 camera: &node,
                 fps: timeline.fps,
                 size: timeline.size,
@@ -371,7 +379,7 @@ impl Shoot<'_> {
         let mut manifest = Map::new();
         manifest.insert("shoot".into(), json!(1));
         manifest.insert("recipe".into(), json!(file));
-        manifest.insert("scene".into(), json!(scene.display().to_string()));
+        manifest.insert("scene".into(), json!(shot.display().to_string()));
         manifest.insert("glb".into(), json!(glb.display().to_string()));
         manifest.insert("camera".into(), json!(node));
         manifest.insert("renderer".into(), json!("live"));
@@ -446,6 +454,43 @@ mod tests {
             super::super::Verb::Shoot(args) => Ok(args),
             _ => Err("not shoot".into()),
         }
+    }
+
+    #[test]
+    fn the_built_scene_is_shot_from_a_scene_pfx_beside_the_frames() {
+        let sample = super::super::sample("chase");
+        let file = sample.recipe.display().to_string();
+        let recipe = chosen(&file).unwrap();
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp/shoot-packed");
+        let _ = std::fs::remove_dir_all(&dir);
+        let built = build_with(&recipe, base(&file), &Registry::new()).unwrap();
+        let written = write(&built, &recipe, base(&file), Some(&dir.join("build"))).unwrap();
+        let scene = written
+            .iter()
+            .find(|p| p.to_string_lossy().ends_with(".scene.toml"))
+            .unwrap();
+        let shot = packed(scene, &dir).unwrap();
+        assert_eq!(shot, dir.join(SCENE));
+        pfx_load::scene::Scene::open(&shot).unwrap();
+        let line = pfx_line(
+            &Plan {
+                scene: &shot,
+                camera: "camera.chase",
+                fps: 60,
+                size: [108, 192],
+                quality: Quality::Draft,
+                from: 0,
+                frames: 1,
+                stage: &dir.join(".stage-00000"),
+                audio: None,
+            },
+            false,
+        );
+        assert!(
+            line.iter().any(|word| word.ends_with("scene.pitofx")),
+            "{line:?}"
+        );
+        assert!(crate::scene::legacy(Path::new(&line[2])).is_none());
     }
 
     #[test]

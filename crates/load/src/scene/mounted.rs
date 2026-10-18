@@ -9,7 +9,7 @@ use crate::sha256;
 
 pub fn is_pfx_path(path: &Path) -> bool {
     path.extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("pfx"))
+        .is_some_and(|extension| extension.eq_ignore_ascii_case(pfx_file::EXTENSION))
 }
 
 pub(super) fn mounted(project: &Project) -> Option<&Project> {
@@ -121,7 +121,9 @@ pub(super) fn own_gltf(
     Some(
         mount
             .and_then(|mount| container(mount, root))
-            .ok_or_else(|| format!("{file} names the glTF of a .pfx, and this scene is not one")),
+            .ok_or_else(|| {
+                format!("{file} names the glTF of a .pitofx, and this scene is not one")
+            }),
     )
 }
 

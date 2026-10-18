@@ -25,4 +25,3 @@ docs/scene-format.md	paper=3
 docs/schema/materials.schema.json	paper=1
 docs/trace-lights.md	dispatch=1
 docs/trace.md	dispatch=6
-samples/hero.toml	paper=2

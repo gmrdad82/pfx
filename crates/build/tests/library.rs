@@ -27,10 +27,13 @@ fn car() -> (Recipe, Built) {
 }
 
 fn put(root: &Path, as_name: &str, exported: &library::Exported) {
-    let dir = root.join(as_name);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(library::MODEL), &exported.glb).unwrap();
-    std::fs::write(dir.join(library::SIDECAR), exported.sidecar.text()).unwrap();
+    library::Stored {
+        model: exported.glb.clone(),
+        sidecar: exported.sidecar.text(),
+        thumb: None,
+    }
+    .write(&root.join(as_name))
+    .unwrap();
 }
 
 fn close(a: DVec3, b: DVec3, tolerance: f64) -> bool {
@@ -176,7 +179,13 @@ fn the_index_is_sorted_and_the_same_bytes_every_time() {
     assert_eq!(order, ["car/alpha", "car/sports", "vehicle/zed"]);
     assert!(entries.iter().all(|e| e.sha256.contains_key("model")));
     assert_eq!(library::check(&dir), []);
-    std::fs::write(dir.join("car/alpha").join(library::SIDECAR), "nonsense").unwrap();
+    let mut broken = library::Stored::read(&dir.join("car/alpha")).unwrap();
+    assert_eq!(
+        broken.model,
+        library::export(&r, &b, "hero", "car/alpha").unwrap().glb
+    );
+    broken.sidecar = "nonsense".into();
+    broken.write(&dir.join("car/alpha")).unwrap();
     assert!(!library::check(&dir).is_empty());
 }
 
@@ -382,10 +391,8 @@ fn a_blender_style_glb_imports_with_its_hierarchy_materials_morphs_and_animation
     let dir = common::scratch("library-blender");
     let root = dir.join("library");
     let folder = root.join("prop/cart");
-    std::fs::create_dir_all(&folder).unwrap();
     let source = blender_style();
     assert!(gltf::Gltf::from_slice(&source).is_ok());
-    std::fs::write(folder.join(library::MODEL), &source).unwrap();
     let sidecar = Sidecar {
         kind: "prop".into(),
         name: "cart".into(),
@@ -399,7 +406,14 @@ fn a_blender_style_glb_imports_with_its_hierarchy_materials_morphs_and_animation
         pfx: "1.3.0".into(),
         facts: Default::default(),
     };
-    std::fs::write(folder.join(library::SIDECAR), sidecar.text()).unwrap();
+    library::Stored {
+        model: source.clone(),
+        sidecar: sidecar.text(),
+        thumb: Some(png()),
+    }
+    .write(&folder)
+    .unwrap();
+    assert_eq!(library::Stored::read(&folder).unwrap().model, source);
     library::write_index(&root).unwrap();
     let text = r#"recipe = 1
 name = "cart"
@@ -537,7 +551,7 @@ fn shelf_pfx(exported: &library::Exported, as_name: &str) -> Vec<u8> {
         .unwrap()
 }
 
-const SHELF_OBJECT: &str = "recipe = 1\nname = \"drive\"\nasset_roots = [\"../shelf\"]\n\n[[object]]\nname = \"hero\"\nkind = \"library\"\nobject = \"lib:props.pfx/car/sports\"\n";
+const SHELF_OBJECT: &str = "recipe = 1\nname = \"drive\"\nasset_roots = [\"../shelf\"]\n\n[[object]]\nname = \"hero\"\nkind = \"library\"\nobject = \"lib:props.pitofx/car/sports\"\n";
 
 #[test]
 fn a_library_object_reads_a_pfx_library_from_an_asset_root_without_writing_into_it() {
@@ -546,15 +560,19 @@ fn a_library_object_reads_a_pfx_library_from_an_asset_root_without_writing_into_
     let dir = common::scratch("library-pfx");
     let shelf = dir.join("shelf");
     std::fs::create_dir_all(&shelf).unwrap();
-    std::fs::write(shelf.join("props.pfx"), shelf_pfx(&exported, "car/sports")).unwrap();
+    std::fs::write(
+        shelf.join("props.pitofx"),
+        shelf_pfx(&exported, "car/sports"),
+    )
+    .unwrap();
     let base = dir.join("scene");
     std::fs::create_dir_all(&base).unwrap();
-    let before = std::fs::read(shelf.join("props.pfx")).unwrap();
+    let before = std::fs::read(shelf.join("props.pitofx")).unwrap();
     let built = build(&parse(SHELF_OBJECT).unwrap(), &base).unwrap();
     let names: Vec<&str> = built.parts.iter().map(|p| p.node.name.as_str()).collect();
     assert!(names.contains(&"hero.body"), "{names:?}");
     assert!(names.contains(&"hero.wheel_rl"), "{names:?}");
-    assert_eq!(std::fs::read(shelf.join("props.pfx")).unwrap(), before);
+    assert_eq!(std::fs::read(shelf.join("props.pitofx")).unwrap(), before);
     let listing: Vec<_> = std::fs::read_dir(&shelf).unwrap().collect();
     assert_eq!(listing.len(), 1);
 }
@@ -565,7 +583,7 @@ fn a_pfx_library_that_is_nowhere_is_refused_in_one_line_naming_the_roots() {
     let base = dir.join("scene");
     std::fs::create_dir_all(&base).unwrap();
     let error = build(&parse(SHELF_OBJECT).unwrap(), &base).unwrap_err();
-    assert!(error.text.contains("props.pfx"), "{}", error.text);
+    assert!(error.text.contains("props.pitofx"), "{}", error.text);
     assert!(error.text.contains("shelf"), "{}", error.text);
     assert!(!error.text.contains('\n'), "{}", error.text);
 }

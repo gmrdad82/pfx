@@ -161,6 +161,8 @@ pub enum NoiseKind {
     Fbm,
     Scratch,
     CoatWobble,
+    Crack,
+    Track,
 }
 
 impl NoiseKind {
@@ -179,6 +181,8 @@ impl NoiseKind {
             Self::Fbm => 16,
             Self::Scratch => 17,
             Self::CoatWobble => 18,
+            Self::Crack => 19,
+            Self::Track => 20,
         }
     }
 
@@ -196,6 +200,8 @@ impl NoiseKind {
             16 => Self::Fbm,
             17 => Self::Scratch,
             18 => Self::CoatWobble,
+            19 => Self::Crack,
+            20 => Self::Track,
             _ => Self::None,
         }
     }
@@ -266,8 +272,10 @@ impl NoiseLayer {
     pub fn active(self) -> bool {
         self.kind != NoiseKind::None
             && self.amplitude != 0.0
-            && (!matches!(self.kind, NoiseKind::PlankWood | NoiseKind::CoatWobble)
-                || self.params[0] > 0.0)
+            && (!matches!(
+                self.kind,
+                NoiseKind::PlankWood | NoiseKind::CoatWobble | NoiseKind::Crack | NoiseKind::Track
+            ) || self.params[0] > 0.0)
     }
 }
 

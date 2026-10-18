@@ -1,7 +1,9 @@
 pub const NAME: &str = "pfx/road";
 
-use super::{rgb, table, tagged, within};
+mod look;
+
 use crate::{Call, Generated, Piece};
+use look::Slot;
 use pfx_mesh::Mesh;
 use pfx_motion::{Frame, Route};
 use serde_json::{Value, json};
@@ -10,6 +12,8 @@ use std::collections::BTreeMap;
 pub const ASPHALT: &str = "road_asphalt";
 pub const PAINT: &str = "road_paint";
 pub const CONCRETE: &str = "road_concrete";
+pub const KERB: &str = "road_kerb";
+pub use look::{DETAILED, FLAT};
 
 const KEYS: &[&str] = &[
     "route",
@@ -35,6 +39,8 @@ const KEYS: &[&str] = &[
     "asphalt",
     "paint",
     "concrete",
+    "kerb",
+    "look",
 ];
 
 const LIFT: f64 = 0.002;
@@ -43,6 +49,7 @@ const TURN: f64 = 0.05;
 const CLEAR: f64 = 0.5;
 const DOUBLE_GAP: f64 = 0.1;
 const WEAR: f64 = 0.12;
+const LANE_WIDTH: f64 = 3.2;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Centre {
@@ -78,7 +85,9 @@ struct Spec {
     seed: u64,
     reveal: f64,
     materials: BTreeMap<String, Value>,
-    names: [String; 3],
+    textures: BTreeMap<String, pfx_recipe::Textures>,
+    names: [String; 4],
+    map_sizes: [f64; 4],
 }
 
 pub fn generate(call: &Call) -> Result<Generated, String> {
@@ -152,7 +161,7 @@ fn spec(params: &BTreeMap<String, Value>, seed: u64) -> Result<Spec, String> {
             .as_u64()
             .ok_or_else(|| "params.seed: expected a whole number of 0 or more".to_string())?,
     };
-    let lane_width = above(params, "lane_width", 3.2)?;
+    let lane_width = above(params, "lane_width", LANE_WIDTH)?;
     let sidewalk = above(params, "sidewalk", 3.0)?;
     let curb = at_least_zero(params, "curb", 0.15)?;
     let curb_width = above(params, "curb_width", 0.3)?.min(sidewalk);
@@ -193,7 +202,12 @@ fn spec(params: &BTreeMap<String, Value>, seed: u64) -> Result<Spec, String> {
     if params.contains_key("offset") && !params.contains_key("every") {
         return Err("params.offset: expected with `every`".to_string());
     }
-    let (materials, names) = surfaces(params)?;
+    let Surfaces {
+        materials,
+        textures,
+        names,
+        map_sizes,
+    } = surfaces(params, lane_width)?;
     Ok(Spec {
         route,
         lanes,
@@ -214,7 +228,9 @@ fn spec(params: &BTreeMap<String, Value>, seed: u64) -> Result<Spec, String> {
         seed,
         reveal: reveal(params)?,
         materials,
+        textures,
         names,
+        map_sizes,
     })
 }
 
@@ -239,68 +255,61 @@ fn shown(runs: Vec<(f64, f64)>, reach: Option<f64>) -> Vec<(f64, f64)> {
     }
 }
 
-fn surfaces(
-    params: &BTreeMap<String, Value>,
-) -> Result<(BTreeMap<String, Value>, [String; 3]), String> {
-    let defaults = materials();
-    let mut out = BTreeMap::new();
-    let mut names = [ASPHALT, PAINT, CONCRETE].map(str::to_string);
-    for (slot, (key, name)) in [
-        ("asphalt", ASPHALT),
-        ("paint", PAINT),
-        ("concrete", CONCRETE),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let default = defaults[name].clone();
-        let mut value = default.clone();
-        if let (Some(given), Some(keys)) = (params.get(key), value.as_object_mut()) {
-            let given = table(given, key, &["base", "roughness", "wet"])?;
-            if let Some(base) = given.get("base") {
-                keys.insert(
-                    "base".to_string(),
-                    json!(rgb(base, &format!("{key}.base"), Some(1.0))?),
-                );
-            }
-            if let Some(roughness) = given.get("roughness") {
-                keys.insert(
-                    "roughness".to_string(),
-                    json!(within(roughness, &format!("{key}.roughness"), 0.0, 1.0)?),
-                );
-            }
-            if let Some(found) = given.get("wet") {
-                keys.insert("wet".to_string(), wet(found, &format!("{key}.wet"))?);
-            }
-        }
-        if value != default {
-            names[slot] = tagged(name, &value);
-        }
-        out.insert(names[slot].clone(), value);
-    }
-    Ok((out, names))
+struct Surfaces {
+    materials: BTreeMap<String, Value>,
+    textures: BTreeMap<String, pfx_recipe::Textures>,
+    names: [String; 4],
+    map_sizes: [f64; 4],
 }
 
-fn wet(value: &Value, key: &str) -> Result<Value, String> {
-    let given = table(value, key, &["amount", "puddles", "puddle_scale", "seed"])?;
-    let mut out = serde_json::Map::new();
-    for (name, item) in given {
-        let at = format!("{key}.{name}");
-        let v = match name.as_str() {
-            "amount" | "puddles" => json!(within(item, &at, 0.0, 1.0)?),
-            "puddle_scale" => json!(
-                item.as_f64()
-                    .filter(|v| v.is_finite() && *v > 0.0)
-                    .ok_or_else(|| format!("params.{at}: expected a number above 0"))?
-            ),
-            _ => json!(
-                item.as_u64()
-                    .ok_or_else(|| format!("params.{at}: expected a whole number of 0 or more"))?
-            ),
-        };
-        out.insert(name.clone(), v);
+fn surfaces(params: &BTreeMap<String, Value>, lane_width: f64) -> Result<Surfaces, String> {
+    let look = look::look(params)?;
+    let mut given = BTreeMap::new();
+    for slot in Slot::ALL {
+        if let Some(value) = params.get(slot.key()) {
+            given.insert(slot.key(), look::check(slot, value)?);
+        }
     }
-    Ok(Value::Object(out))
+    let mut out = Surfaces {
+        materials: BTreeMap::new(),
+        textures: BTreeMap::new(),
+        names: [ASPHALT, PAINT, CONCRETE, KERB].map(str::to_string),
+        map_sizes: [1.0; 4],
+    };
+    let mut made: Vec<look::Surface> = Vec::with_capacity(Slot::ALL.len());
+    for (at, slot) in Slot::ALL.into_iter().enumerate() {
+        let sources: &[&str] = match slot {
+            Slot::Kerb => &["concrete", "kerb"],
+            _ => &[slot.key()],
+        };
+        let tables: Vec<(&str, &serde_json::Map<String, Value>)> = sources
+            .iter()
+            .filter_map(|key| given.get(key).map(|map| (*key, *map)))
+            .collect();
+        let surface = look::surface(slot, look, &tables, lane_width)?;
+        let shared = slot == Slot::Kerb
+            && surface.material == made[2].material
+            && surface.textures == made[2].textures;
+        let name = if shared {
+            out.names[2].clone()
+        } else {
+            let default = look::surface(slot, look::DEFAULT, &[], LANE_WIDTH)?.material;
+            look::named(
+                &out.names[at],
+                &surface.material,
+                &default,
+                surface.textures.as_ref(),
+            )
+        };
+        if let Some(textures) = &surface.textures {
+            out.textures.insert(name.clone(), textures.clone());
+        }
+        out.materials.insert(name.clone(), surface.material.clone());
+        out.names[at] = name;
+        out.map_sizes[at] = surface.map_size;
+        made.push(surface);
+    }
+    Ok(out)
 }
 
 struct Rng(u64);
@@ -486,27 +495,9 @@ fn named(mesh: Mesh, name: String, material: &str) -> Option<Piece> {
 }
 
 pub fn materials() -> BTreeMap<String, Value> {
-    let mut out = BTreeMap::new();
-    out.insert(
-        ASPHALT.to_string(),
-        json!({ "base": [0.045, 0.045, 0.05], "roughness": 0.6 }),
-    );
-    out.insert(
-        PAINT.to_string(),
-        json!({
-            "base": [0.82, 0.82, 0.8],
-            "roughness": 0.55,
-            "ageing": {
-                "fade": 0.1, "yellow": 0.05, "ink": 0.0, "scratch": 0.3,
-                "edge": 0.0, "dust": 0.25, "patina": 0.0, "seed": 0
-            }
-        }),
-    );
-    out.insert(
-        CONCRETE.to_string(),
-        json!({ "base": [0.5, 0.49, 0.46], "roughness": 0.85 }),
-    );
-    out
+    surfaces(&BTreeMap::new(), LANE_WIDTH)
+        .map(|made| made.materials)
+        .unwrap_or_default()
 }
 
 fn road(object: &str, route: &Route, spec: &Spec) -> Result<Generated, String> {
@@ -640,9 +631,12 @@ fn road(object: &str, route: &Route, spec: &Spec) -> Result<Generated, String> {
         lane_centres.push(k as f64 * lw + lw * 0.5);
     }
 
+    sized(&mut asphalt, spec.map_sizes[0]);
+    sized(&mut curbs, spec.map_sizes[3]);
+    sized(&mut sidewalks, spec.map_sizes[2]);
     let pieces = [
         named(asphalt, format!("{object}.asphalt"), &spec.names[0]),
-        named(curbs, format!("{object}.curbs"), &spec.names[2]),
+        named(curbs, format!("{object}.curbs"), &spec.names[3]),
         named(sidewalks, format!("{object}.sidewalks"), &spec.names[2]),
         named(markings, format!("{object}.markings"), &spec.names[1]),
         named(zebra, format!("{object}.crosswalks"), &spec.names[1]),
@@ -672,8 +666,20 @@ fn road(object: &str, route: &Route, spec: &Spec) -> Result<Generated, String> {
         pieces,
         facts,
         materials: spec.materials.clone(),
+        textures: spec.textures.clone(),
         ..Generated::default()
     })
+}
+
+fn sized(mesh: &mut Mesh, size: f64) {
+    if size == 1.0 {
+        return;
+    }
+    let k = (1.0 / size) as f32;
+    for uv in mesh.uvs.iter_mut().flatten() {
+        uv[0] *= k;
+        uv[1] *= k;
+    }
 }
 
 fn wrapped(a: f64, b: f64, length: f64, closed: bool) -> Vec<(f64, f64)> {
@@ -825,5 +831,218 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    fn kinds(material: &Value) -> Vec<String> {
+        material["layers"]
+            .as_array()
+            .map(|list| {
+                list.iter()
+                    .map(|layer| layer["kind"].as_str().unwrap().to_string())
+                    .filter(|kind| kind != "none")
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn surface(g: &Generated, piece: &str) -> (String, Value) {
+        let name = g
+            .pieces
+            .iter()
+            .find(|p| p.name == piece)
+            .unwrap()
+            .mesh
+            .slots[0]
+            .material
+            .clone();
+        let value = g.materials[&name].clone();
+        (name, value)
+    }
+
+    fn spread(material: &Value) -> (f64, f64) {
+        let material: pfx_materials::Material = serde_json::from_value(material.clone()).unwrap();
+        let (mut sum, mut square, mut rough, mut rough_square) = (0.0, 0.0, 0.0, 0.0);
+        let side = 96;
+        for j in 0..side {
+            for i in 0..side {
+                let x = -6.4 + 12.8 * (i as f64 + 0.5) / side as f64;
+                let z = 20.0 + 24.0 * (j as f64 + 0.5) / side as f64;
+                let at = pfx_materials::At {
+                    position: [x as f32, 0.0, z as f32],
+                    uv: [(x + 6.4) as f32, z as f32],
+                    normal: [0.0, 1.0, 0.0],
+                    ..pfx_materials::At::default()
+                };
+                let shaded = pfx_materials::resolve(&material, 0.0, &at).material;
+                let [r, g, b] = shaded.base;
+                let luma = f64::from(0.2126 * r + 0.7152 * g + 0.0722 * b);
+                sum += luma;
+                square += luma * luma;
+                rough += f64::from(shaded.roughness);
+                rough_square += f64::from(shaded.roughness * shaded.roughness);
+            }
+        }
+        let n = (side * side) as f64;
+        let mean = sum / n;
+        let rough_mean = rough / n;
+        (
+            (square / n - mean * mean).max(0.0).sqrt() / mean,
+            (rough_square / n - rough_mean * rough_mean).max(0.0).sqrt(),
+        )
+    }
+
+    #[test]
+    fn the_detailed_look_layers_each_surface_and_the_flat_one_keeps_the_old_materials() {
+        let flat = built(r#"{ "route": "street" }"#, 1);
+        assert_eq!(surface(&flat, "main.asphalt").0, ASPHALT);
+        assert_eq!(surface(&flat, "main.curbs").0, CONCRETE);
+        assert_eq!(surface(&flat, "main.sidewalks").0, CONCRETE);
+        assert_eq!(
+            flat.materials[ASPHALT],
+            json!({ "base": [0.045, 0.045, 0.05], "roughness": 0.6 })
+        );
+        assert_eq!(
+            flat.materials[CONCRETE],
+            json!({ "base": [0.5, 0.49, 0.46], "roughness": 0.85 })
+        );
+        let detailed = built(r#"{ "route": "street", "look": "asphalt-detailed" }"#, 1);
+        let (asphalt, value) = surface(&detailed, "main.asphalt");
+        assert!(asphalt.starts_with("road_asphalt_"), "{asphalt}");
+        assert_eq!(kinds(&value), ["value", "grime", "crack", "track"]);
+        let track = &value["layers"][3]["params"];
+        assert_eq!(track[0], json!(3.2));
+        assert_eq!(track[1], json!(1.6));
+        let (sidewalk, value) = surface(&detailed, "main.sidewalks");
+        assert!(sidewalk.starts_with("road_concrete_"), "{sidewalk}");
+        assert_eq!(kinds(&value), ["value", "grime", "crack"]);
+        let (kerb, value) = surface(&detailed, "main.curbs");
+        assert!(kerb.starts_with("road_kerb_"), "{kerb}");
+        assert_eq!(kinds(&value), ["value", "grime"]);
+        for (name, value) in &detailed.materials {
+            assert!(
+                serde_json::from_value::<pfx_materials::Material>(value.clone()).is_ok(),
+                "{name}"
+            );
+        }
+        let off = built(
+            r#"{ "route": "street", "look": "asphalt-detailed", "asphalt": { "cracks": { "amount": 0 }, "grain": { "scale": 0.05 } } }"#,
+            1,
+        );
+        let (_, value) = surface(&off, "main.asphalt");
+        assert_eq!(kinds(&value), ["value", "grime", "track"]);
+        assert_eq!(value["layers"][0]["frequency"], json!(20.0));
+        let one = built(
+            r#"{ "route": "street", "concrete": { "grain": { "amount": 0.3 } } }"#,
+            1,
+        );
+        let (kerb, value) = surface(&one, "main.curbs");
+        assert!(kerb.starts_with("road_kerb_"), "{kerb}");
+        assert_eq!(kinds(&value), ["value"]);
+        let restyled = built(
+            r#"{ "route": "street", "concrete": { "base": [0.3, 0.3, 0.3] } }"#,
+            1,
+        );
+        assert_eq!(
+            surface(&restyled, "main.curbs").0,
+            surface(&restyled, "main.sidewalks").0
+        );
+        assert!(spec(&params(r#"{ "route": "street", "look": "glossy" }"#), 1).is_err());
+        assert!(
+            spec(
+                &params(r#"{ "route": "street", "kerb": { "tracks": { "amount": 1 } } }"#),
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            spec(
+                &params(r#"{ "route": "street", "asphalt": { "grain": { "amount": 2 } } }"#),
+                1
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn a_surface_seed_builds_the_same_look_and_another_seed_moves_its_noise() {
+        let text = r#"{ "route": "street", "look": "asphalt-detailed", "asphalt": { "seed": 9 } }"#;
+        let a = built(text, 1);
+        let b = built(text, 1);
+        assert_eq!(bytes(&a), bytes(&b));
+        assert_eq!(a.materials, b.materials);
+        let road_seed = built(text, 2);
+        assert_eq!(
+            surface(&a, "main.asphalt"),
+            surface(&road_seed, "main.asphalt")
+        );
+        let other = built(
+            r#"{ "route": "street", "look": "asphalt-detailed", "asphalt": { "seed": 10 } }"#,
+            1,
+        );
+        let (name, value) = surface(&a, "main.asphalt");
+        let (other_name, other_value) = surface(&other, "main.asphalt");
+        assert_ne!(name, other_name);
+        for k in 0..4 {
+            assert_ne!(
+                value["layers"][k]["seed"], other_value["layers"][k]["seed"],
+                "{k}"
+            );
+        }
+        assert_ne!(spread(&value), spread(&other_value));
+    }
+
+    #[test]
+    fn the_detailed_asphalt_varies_where_the_flat_asphalt_is_one_colour() {
+        let flat = built(r#"{ "route": "street" }"#, 1);
+        let detailed = built(r#"{ "route": "street", "look": "asphalt-detailed" }"#, 1);
+        let (flat_tone, flat_rough) = spread(&surface(&flat, "main.asphalt").1);
+        let (tone, rough) = spread(&surface(&detailed, "main.asphalt").1);
+        assert_eq!((flat_tone, flat_rough), (0.0, 0.0));
+        assert!(tone > 0.15, "{tone}");
+        assert!(rough > 0.03, "{rough}");
+        let (concrete, _) = spread(&surface(&detailed, "main.sidewalks").1);
+        assert!(concrete > 0.09, "{concrete}");
+    }
+
+    #[test]
+    fn a_surface_with_maps_names_them_and_tiles_its_uvs_in_metres() {
+        let g = built(
+            r#"{ "route": "street", "look": "asphalt-detailed", "asphalt": { "base_map": "tex/asphalt.png", "normal_map": "tex/asphalt-n.png", "map_size": 4.0 } }"#,
+            1,
+        );
+        let (name, value) = surface(&g, "main.asphalt");
+        assert!(value.get("layers").is_none(), "{value}");
+        let maps = &g.textures[&name];
+        assert_eq!(maps.base_map.as_deref(), Some("tex/asphalt.png"));
+        assert_eq!(maps.normal_map.as_deref(), Some("tex/asphalt-n.png"));
+        assert_eq!(maps.roughness_map, None);
+        let flat = built(r#"{ "route": "street" }"#, 1);
+        let uvs = |g: &Generated| {
+            g.pieces
+                .iter()
+                .find(|p| p.name == "main.asphalt")
+                .unwrap()
+                .mesh
+                .uvs
+                .clone()
+                .unwrap()
+        };
+        for (a, b) in uvs(&g).iter().zip(uvs(&flat).iter()) {
+            assert!((a[0] * 4.0 - b[0]).abs() < 1e-4 && (a[1] * 4.0 - b[1]).abs() < 1e-3);
+        }
+        let other = built(
+            r#"{ "route": "street", "asphalt": { "base_map": "tex/other.png" } }"#,
+            1,
+        );
+        assert_ne!(surface(&other, "main.asphalt").0, name);
+        assert!(
+            spec(
+                &params(
+                    r#"{ "route": "street", "asphalt": { "base_map": "a.png", "wet": { "amount": 0.5 } } }"#
+                ),
+                1
+            )
+            .is_err()
+        );
     }
 }

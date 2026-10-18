@@ -1,14 +1,12 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use pfx_core::cli::{self, Refusal};
 use pfx_load::scene::PatchGroup;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     Migrate,
     Fix,
-    Pack(PathBuf),
-    Unpack(PathBuf),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -16,14 +14,23 @@ pub struct Command {
     pub action: Action,
     pub path: PathBuf,
     pub dry_run: bool,
+    pub bare: bool,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Legacy {
+    Recipe,
+    Scene,
+}
+
+const SKIPPED: [&str; 2] = ["target", "tmp"];
 
 pub fn plan(args: &[String]) -> Result<Command, Refusal> {
     let action = match args.first().map(String::as_str) {
         None => {
             return Err(cli::no_command(
                 "pfx scene",
-                &["migrate", "fix", "list", "save", "unpack", "fold"],
+                &["migrate", "fix", "list", "save", "print", "write", "fold"],
             )
             .into());
         }
@@ -32,53 +39,267 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
         Some(flag) if flag.starts_with('-') => return Err(cli::unexpected(flag).into()),
         Some(word) => return Err(cli::unrecognized(word).into()),
     };
-    let usage = format!("pfx scene {} [OPTIONS] <SCENE>", args[0]);
-    let mut paths: Vec<PathBuf> = Vec::new();
+    let usage = match action {
+        Action::Migrate => "pfx scene migrate [OPTIONS] <FILE>",
+        Action::Fix => "pfx scene fix [OPTIONS] <SCENE>",
+    };
+    let mut path: Option<PathBuf> = None;
     let mut dry_run = false;
-    let mut mode: Option<&str> = None;
+    let mut bare = false;
     for arg in &args[1..] {
         match arg.as_str() {
+            "--bare" if action == Action::Fix => {
+                return Err(Refusal::new(cli::unexpected(arg)).under(usage));
+            }
+            "--bare" if bare => {
+                return Err(Refusal::new(cli::repeated(arg)).under(usage));
+            }
+            "--bare" => bare = true,
             "--dry-run" if dry_run => {
                 return Err(Refusal::new(cli::repeated(arg)).under(usage));
             }
             "--dry-run" => dry_run = true,
-            flag @ ("--pfx" | "--unpack") if action == Action::Migrate => match mode {
-                Some(first) if first == flag => {
-                    return Err(Refusal::new(cli::repeated(flag)).under(usage));
-                }
-                Some(first) => {
-                    return Err(Refusal::new(cli::conflict(flag, first)).under(usage));
-                }
-                None => mode = Some(flag),
-            },
-            other if other.starts_with('-') || paths.len() > usize::from(mode.is_some()) => {
+            other if other.starts_with('-') || path.is_some() => {
                 return Err(Refusal::new(cli::unexpected(other)).under(usage));
             }
-            file => paths.push(PathBuf::from(file)),
+            file => path = Some(PathBuf::from(file)),
         }
     }
-    if let (Some(flag), true) = (mode, dry_run) {
-        return Err(Refusal::new(cli::conflict("--dry-run", flag)).under(usage));
-    }
-    let names: &[&str] = match mode {
-        Some("--pfx") => &["<SCENE>", "<OUT>"],
-        Some(_) => &["<PFX>", "<DIR>"],
-        None => &["<SCENE>"],
-    };
-    if paths.len() < names.len() {
-        return Err(Refusal::new(cli::required(&names[paths.len()..])).under(usage));
-    }
-    let second = paths.get(1).cloned();
-    let action = match (mode, second) {
-        (Some("--pfx"), Some(out)) => Action::Pack(out),
-        (Some(_), Some(dir)) => Action::Unpack(dir),
-        _ => action,
+    let Some(path) = path else {
+        let name = match action {
+            Action::Migrate => "<FILE>",
+            Action::Fix => "<SCENE>",
+        };
+        return Err(Refusal::new(cli::required(&[name])).under(usage));
     };
     Ok(Command {
         action,
-        path: paths.swap_remove(0),
+        path,
         dry_run,
+        bare,
     })
+}
+
+fn is_toml(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("toml"))
+}
+
+pub fn imported(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_string_lossy().to_string();
+    let lower = name.to_lowercase();
+    let stem = if lower.ends_with(".scene.toml") {
+        &name[..name.len() - ".scene.toml".len()]
+    } else if lower.ends_with(".toml") {
+        &name[..name.len() - ".toml".len()]
+    } else if pfx_file::is_legacy_path(path) {
+        return Some(pfx_file::renamed(path));
+    } else {
+        return None;
+    };
+    Some(path.with_file_name(format!("{stem}.pitofx")))
+}
+
+pub fn legacy(path: &Path) -> Option<String> {
+    if let Some(refusal) = pfx_file::legacy_refusal(path) {
+        return Some(refusal);
+    }
+    if !is_toml(path) {
+        return None;
+    }
+    let target = imported(path).unwrap_or_else(|| path.with_extension(pfx_file::EXTENSION));
+    Some(format!(
+        "{} is a plain TOML file; import it once with `pfx scene migrate {}`, which writes {} beside it",
+        path.display(),
+        path.display(),
+        target.display()
+    ))
+}
+
+fn kind(path: &Path) -> Option<Legacy> {
+    let lower = path.file_name()?.to_string_lossy().to_lowercase();
+    if lower.ends_with(".scene.toml") {
+        return Some(Legacy::Scene);
+    }
+    if !lower.ends_with(".toml") {
+        return None;
+    }
+    let table = std::fs::read_to_string(path)
+        .ok()?
+        .parse::<toml::Table>()
+        .ok()?;
+    let header = |key: &str| table.get(key).is_some_and(toml::Value::is_integer);
+    if header("recipe") || header("manfred") {
+        Some(Legacy::Recipe)
+    } else if table.contains_key("format") && !lower.ends_with("materials.toml") {
+        Some(Legacy::Scene)
+    } else {
+        None
+    }
+}
+
+fn current_header(text: &str) -> Option<String> {
+    let mut changed = false;
+    let lines: Vec<&str> = text
+        .split_inclusive('\n')
+        .map(|line| {
+            let bare: String = line.chars().filter(|c| !c.is_whitespace()).collect();
+            if !changed && bare == "manfred=1" {
+                changed = true;
+                if line.ends_with("\r\n") {
+                    "recipe = 1\r\n"
+                } else if line.ends_with('\n') {
+                    "recipe = 1\n"
+                } else {
+                    "recipe = 1"
+                }
+            } else {
+                line
+            }
+        })
+        .collect();
+    changed.then(|| lines.concat())
+}
+
+fn strip(doc: &mut pfx_build::Document, recipe: &Path) {
+    let depth = Path::new(&doc.recipe_name).components().count();
+    let root = recipe.ancestors().nth(depth).unwrap_or(Path::new(""));
+    let outputs = std::mem::take(&mut doc.outputs);
+    doc.files.retain(|name, bytes| {
+        !outputs.contains(name) || std::fs::read(root.join(name)).ok().as_ref() == Some(bytes)
+    });
+    doc.scene.clear();
+    doc.gltf.clear();
+    doc.gbin.clear();
+    doc.facts.clear();
+    doc.nodes.clear();
+    doc.thumb = None;
+    doc.built_from = None;
+    doc.scene_hash = None;
+}
+
+fn import_recipe(path: &Path, target: &Path, bare: bool) -> Result<(), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let _mount = current_header(&text).map(|fixed| {
+        pfx_recipe::files::mount(
+            std::iter::once((path.to_path_buf(), fixed.into_bytes())).collect(),
+        )
+    });
+    let mut doc = pfx_build::Document::pack(path, &pfx_build::Registry::new())?;
+    if bare {
+        strip(&mut doc, path);
+    }
+    doc.write(target)
+}
+
+fn import_scene(path: &Path, target: &Path) -> Result<(), String> {
+    pfx_load::scene::pack(path, target).map_err(|e| e.to_string())?;
+    let migrated = pfx_load::scene::migrate(target, false);
+    if let Err(e) = migrated {
+        let _ = std::fs::remove_file(target);
+        return Err(e.to_string());
+    }
+    Ok(())
+}
+
+fn import_legacy(path: &Path, dry_run: bool) -> Result<String, String> {
+    let shown = path.display();
+    let target = pfx_file::renamed(path);
+    if dry_run {
+        if !pfx_file::has_magic(path) {
+            return Err(pfx_file::legacy_refusal(path).unwrap_or_default());
+        }
+        if target.exists() {
+            return Err(format!(
+                "{} already exists; {shown} was imported before, and edits go to the .pitofx",
+                target.display()
+            ));
+        }
+        return Ok(format!("would import {shown} into {}", target.display()));
+    }
+    let target = pfx_file::import_legacy(path)?;
+    Ok(format!("imported {shown} into {}", target.display()))
+}
+
+fn import(path: &Path, dry_run: bool, bare: bool) -> Result<String, String> {
+    if pfx_file::is_legacy_path(path) {
+        return import_legacy(path, dry_run);
+    }
+    let shown = path.display();
+    let found = kind(path).ok_or_else(|| {
+        format!("{shown}: not a recipe (`recipe = 1`), an old recipe (`manfred = 1`) or a scene")
+    })?;
+    let target = imported(path).ok_or_else(|| format!("{shown}: not a .toml file"))?;
+    if target.exists() {
+        return Err(format!(
+            "{} already exists; {shown} was imported before, and edits go to the .pitofx",
+            target.display()
+        ));
+    }
+    if dry_run {
+        return Ok(format!("would import {shown} into {}", target.display()));
+    }
+    match found {
+        Legacy::Recipe => import_recipe(path, &target, bare)?,
+        Legacy::Scene => import_scene(path, &target)?,
+    }
+    Ok(format!("imported {shown} into {}", target.display()))
+}
+
+fn gather(folder: &Path, top: bool, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.filter_map(|e| Some(e.ok()?.path())).collect();
+    paths.sort();
+    for path in paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if name.starts_with('.') || (top && SKIPPED.contains(&name.as_str())) {
+            continue;
+        }
+        if path.is_dir() {
+            gather(&path, false, out);
+        } else if name.to_lowercase().ends_with(".scene.toml")
+            || kind(&path) == Some(Legacy::Recipe)
+            || (pfx_file::is_legacy_path(&path) && pfx_file::has_magic(&path))
+        {
+            out.push(path);
+        }
+    }
+}
+
+fn import_folder(folder: &Path, dry_run: bool, bare: bool) -> Result<String, String> {
+    let mut files = Vec::new();
+    gather(folder, true, &mut files);
+    let mut lines = Vec::new();
+    let mut failed = Vec::new();
+    for file in &files {
+        if imported(file).is_some_and(|target| target.exists()) {
+            lines.push(format!("kept {}: imported before", file.display()));
+            continue;
+        }
+        match import(file, dry_run, bare) {
+            Ok(line) => lines.push(line),
+            Err(e) => failed.push(e),
+        }
+    }
+    if lines.is_empty() && failed.is_empty() {
+        return Ok(format!(
+            "{}: holds no recipe or scene TOML or legacy .pfx to import",
+            folder.display()
+        ));
+    }
+    if failed.is_empty() {
+        Ok(lines.join("\n"))
+    } else {
+        if !lines.is_empty() {
+            println!("{}", lines.join("\n"));
+        }
+        Err(failed.join("\n"))
+    }
 }
 
 fn report(group: &PatchGroup, done: &str, would: &str, dry_run: bool) -> String {
@@ -94,35 +315,32 @@ fn report(group: &PatchGroup, done: &str, would: &str, dry_run: bool) -> String 
 }
 
 pub fn run(command: &Command) -> Result<(), String> {
-    let (outcome, done, would) = match &command.action {
-        Action::Pack(out) => {
-            let bytes =
-                pfx_load::scene::pack(&command.path, out).map_err(|error| error.to_string())?;
-            println!(
-                "packed {} into {} ({bytes} bytes)",
-                command.path.display(),
-                out.display()
-            );
+    let path = &command.path;
+    let pfx = pfx_load::scene::is_pfx_path(path);
+    let (outcome, done, would) = match command.action {
+        Action::Migrate if path.is_dir() => {
+            println!("{}", import_folder(path, command.dry_run, command.bare)?);
             return Ok(());
         }
-        Action::Unpack(dir) => {
-            let written =
-                pfx_load::scene::unpack(&command.path, dir).map_err(|error| error.to_string())?;
-            for file in written {
-                println!("wrote {}", file.display());
-            }
+        Action::Migrate if !pfx => {
+            println!("{}", import(path, command.dry_run, command.bare)?);
             return Ok(());
         }
         Action::Migrate => (
-            pfx_load::scene::migrate(&command.path, command.dry_run),
+            pfx_load::scene::migrate(path, command.dry_run),
             "migrated",
             "would migrate",
         ),
-        Action::Fix => (
-            pfx_load::scene::fix(&command.path, command.dry_run),
-            "fixed",
-            "would fix",
-        ),
+        Action::Fix => {
+            if let Some(refusal) = legacy(path) {
+                return Err(refusal);
+            }
+            (
+                pfx_load::scene::fix(path, command.dry_run),
+                "fixed",
+                "would fix",
+            )
+        }
     };
     let group = outcome.map_err(|error| error.to_string())?;
     println!("{}", report(&group, done, would, command.dry_run));
@@ -145,33 +363,53 @@ mod tests {
                 action: Action::Migrate,
                 path: PathBuf::from("a/room.scene.toml"),
                 dry_run: true,
+                bare: false,
             }
         );
         assert_eq!(
-            plan(&words("fix room.scene.toml")).unwrap(),
+            plan(&words("fix room.pitofx")).unwrap(),
             Command {
                 action: Action::Fix,
-                path: PathBuf::from("room.scene.toml"),
+                path: PathBuf::from("room.pitofx"),
                 dry_run: false,
+                bare: false,
             }
         );
         assert!(plan(&words("fix")).is_err());
-        assert!(plan(&words("tidy room.scene.toml")).is_err());
-        assert!(plan(&words("fix a.scene.toml b.scene.toml")).is_err());
+        assert!(plan(&words("tidy room.pitofx")).is_err());
+        assert!(plan(&words("fix a.pitofx b.pitofx")).is_err());
         assert!(plan(&words("migrate a.scene.toml --force")).is_err());
+        assert!(plan(&words("migrate --pfx a.scene.toml a.pitofx")).is_err());
+        assert!(plan(&words("migrate --unpack a.pitofx out")).is_err());
+        assert!(plan(&words("migrate a.toml --bare")).unwrap().bare);
+        assert!(plan(&words("fix a.pitofx --bare")).is_err());
+    }
+
+    #[test]
+    fn a_toml_is_refused_with_the_command_that_imports_it() {
         assert_eq!(
-            plan(&words("migrate --pfx a.scene.toml a.pfx"))
+            legacy(Path::new("a/room.scene.toml")).unwrap(),
+            "a/room.scene.toml is a plain TOML file; import it once with `pfx scene migrate a/room.scene.toml`, which writes a/room.pitofx beside it"
+        );
+        assert!(
+            legacy(Path::new("street.TOML"))
                 .unwrap()
-                .action,
-            Action::Pack(PathBuf::from("a.pfx"))
+                .contains("street.pitofx")
         );
+        assert_eq!(legacy(Path::new("a/room.pitofx")), None);
         assert_eq!(
-            plan(&words("migrate --unpack a.pfx out")).unwrap().action,
-            Action::Unpack(PathBuf::from("out"))
+            legacy(Path::new("a/room.pfx")).unwrap(),
+            "a/room.pfx is a legacy .pfx; import it once with `pfx scene migrate a/room.pfx`, which writes a/room.pitofx beside it"
         );
-        assert!(plan(&words("migrate --pfx a.scene.toml")).is_err());
-        assert!(plan(&words("migrate --pfx --unpack a b")).is_err());
-        assert!(plan(&words("migrate --pfx a b --dry-run")).is_err());
-        assert!(plan(&words("fix --pfx a b")).is_err());
+        assert_eq!(legacy(Path::new("a/model.glb")), None);
+    }
+
+    #[test]
+    fn the_old_header_is_rewritten_once_and_alone() {
+        assert_eq!(
+            current_header("# a scene\nmanfred = 1\nname = \"manfred = 1\"\n").unwrap(),
+            "# a scene\nrecipe = 1\nname = \"manfred = 1\"\n"
+        );
+        assert_eq!(current_header("recipe = 1\n"), None);
     }
 }

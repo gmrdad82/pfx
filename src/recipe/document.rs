@@ -6,7 +6,7 @@ use pfx_build::document::{SceneChange, is_pfx};
 use pfx_build::{Document, Registry, files};
 use serde_json::json;
 
-use super::{Verb, refuse};
+use super::{SceneArgs, SceneVerb, Verb, refuse};
 
 pub(super) struct Opened {
     pub pfx: PathBuf,
@@ -50,15 +50,18 @@ impl Opened {
 }
 
 fn swapped(text: &mut String) -> Result<Option<Opened>, String> {
-    if !is_pfx(Path::new(text.as_str())) {
-        return Ok(None);
+    let mut path = PathBuf::from(text.as_str());
+    let opened = swapped_path(&mut path)?;
+    if opened.is_some() {
+        *text = path.display().to_string();
     }
-    let opened = open(Path::new(text.as_str()))?;
-    *text = opened.recipe.display().to_string();
-    Ok(Some(opened))
+    Ok(opened)
 }
 
 fn swapped_path(path: &mut PathBuf) -> Result<Option<Opened>, String> {
+    if let Some(refusal) = crate::scene::legacy(path) {
+        return Err(refusal);
+    }
     if !is_pfx(path) {
         return Ok(None);
     }
@@ -67,8 +70,13 @@ fn swapped_path(path: &mut PathBuf) -> Result<Option<Opened>, String> {
     Ok(Some(opened))
 }
 
+fn refused(path: &Path) -> Result<Option<Opened>, String> {
+    crate::scene::legacy(path).map_or(Ok(None), Err)
+}
+
 pub(super) fn swap(verb: &mut Verb) -> Result<Option<Opened>, (&'static str, String)> {
     let (name, result) = match verb {
+        Verb::Build(a) => ("build", refused(Path::new(&a.recipe))),
         Verb::Check(a) => ("check", swapped(&mut a.recipe)),
         Verb::Route(a) => ("route", swapped(&mut a.recipe)),
         Verb::Timeline(a) => ("timeline", swapped(&mut a.recipe)),
@@ -76,6 +84,20 @@ pub(super) fn swap(verb: &mut Verb) -> Result<Option<Opened>, (&'static str, Str
         Verb::Shot(a) => ("shot", swapped_path(&mut a.recipe)),
         Verb::Render(a) => ("render", swapped_path(&mut a.recipe)),
         Verb::Clip(a) => ("clip", swapped_path(&mut a.recipe)),
+        Verb::Set(a) => ("set", swapped(&mut a.recipe)),
+        Verb::Get(a) => ("get", swapped(&mut a.recipe)),
+        Verb::Curve(a) => ("curve", swapped(&mut a.recipe)),
+        Verb::Key(a) => ("key", swapped(&mut a.recipe)),
+        Verb::Unkey(a) => ("unkey", swapped(&mut a.recipe)),
+        Verb::Add(a) => ("add", swapped(&mut a.recipe)),
+        Verb::Remove(a) => ("remove", swapped(&mut a.recipe)),
+        Verb::Duplicate(a) => ("duplicate", swapped(&mut a.recipe)),
+        Verb::Diff(a) => ("diff", a.recipe.as_mut().map_or(Ok(None), swapped_path)),
+        Verb::Export(a) => ("export", refused(&a.source)),
+        Verb::Library(a) => ("library bake", a.recipe().map_or(Ok(None), swapped_path)),
+        Verb::Scene(SceneArgs {
+            verb: SceneVerb::List(a),
+        }) => ("scene list", swapped(&mut a.recipe)),
         Verb::Align(a) => ("align", swapped(&mut a.recipe)),
         _ => ("", Ok(None)),
     };
@@ -84,9 +106,7 @@ pub(super) fn swap(verb: &mut Verb) -> Result<Option<Opened>, (&'static str, Str
 
 #[derive(clap::Args)]
 pub(super) struct SaveArgs {
-    #[arg(value_name = "recipe", help = "The recipe to pack")]
-    recipe: PathBuf,
-    #[arg(long, value_name = "out.pfx", help = "The document to write")]
+    #[arg(value_name = "file.pitofx", help = "The document to rebuild and write")]
     pfx: PathBuf,
     #[arg(long, help = "Also draw a thumbnail into the document")]
     thumb: bool,
@@ -95,22 +115,12 @@ pub(super) struct SaveArgs {
 }
 
 #[derive(clap::Args)]
-pub(super) struct UnpackArgs {
-    #[arg(value_name = "file.pfx", help = "The document to unpack")]
-    pfx: PathBuf,
-    #[arg(
-        value_name = "dir",
-        help = "The folder to write its recipe and files into"
-    )]
-    dir: PathBuf,
-    #[arg(long, help = "Print one JSON object")]
-    json: bool,
-}
-
-#[derive(clap::Args)]
 #[command(group(clap::ArgGroup::new("how").args(["apply", "keep"])))]
 pub(super) struct FoldArgs {
-    #[arg(value_name = "file.pfx", help = "The .pfx whose scene was edited")]
+    #[arg(
+        value_name = "file.pitofx",
+        help = "The .pitofx whose scene was edited"
+    )]
     pfx: PathBuf,
     #[arg(
         long,
@@ -135,17 +145,37 @@ fn thumb(recipe: &Path, pfx: &Path, registry: &Registry) -> Result<Vec<u8>, Stri
 }
 
 pub(super) fn save(args: &SaveArgs, registry: &Registry) -> ExitCode {
-    let mut doc = match Document::pack(&args.recipe, registry) {
-        Ok(doc) => doc,
+    if !is_pfx(&args.pfx) {
+        let refusal = crate::scene::legacy(&args.pfx)
+            .unwrap_or_else(|| format!("{}: not a .pitofx document", args.pfx.display()));
+        return refuse("scene save", &refusal);
+    }
+    let Opened {
+        mut doc,
+        recipe,
+        mount,
+        ..
+    } = match open(&args.pfx) {
+        Ok(opened) => opened,
         Err(e) => return refuse("scene save", &e),
     };
-    if args.thumb {
-        match thumb(&args.recipe, &args.pfx, registry) {
-            Ok(png) => doc.thumb = Some(png),
-            Err(e) => return refuse("scene save", &e),
-        }
-    }
-    if let Err(e) = doc.write(&args.pfx) {
+    let rebuilt = if doc.fresh() {
+        Ok(())
+    } else {
+        doc.rebuild(&args.pfx, registry)
+    };
+    let drawn = rebuilt
+        .and_then(|()| {
+            if args.thumb {
+                doc.thumb = Some(thumb(&recipe, &args.pfx, registry)?);
+            }
+            Ok(())
+        })
+        .and_then(|()| {
+            drop(mount);
+            doc.write(&args.pfx)
+        });
+    if let Err(e) = drawn {
         return refuse("scene save", &e);
     }
     let size = std::fs::metadata(&args.pfx).map_or(0, |m| m.len());
@@ -163,29 +193,6 @@ pub(super) fn save(args: &SaveArgs, registry: &Registry) -> ExitCode {
         );
     } else {
         println!("{}", args.pfx.display());
-    }
-    ExitCode::SUCCESS
-}
-
-pub(super) fn unpack(args: &UnpackArgs) -> ExitCode {
-    let doc = match Document::open(&args.pfx) {
-        Ok(doc) => doc,
-        Err(e) => return refuse("scene unpack", &e),
-    };
-    let recipe = match doc.unpack(&args.dir) {
-        Ok(recipe) => recipe,
-        Err(e) => return refuse("scene unpack", &e),
-    };
-    if args.json {
-        println!(
-            "{}",
-            json!({
-                "recipe": recipe.display().to_string(),
-                "files": doc.inputs().map(|(p, _)| args.dir.join(p).display().to_string()).collect::<Vec<_>>(),
-            })
-        );
-    } else {
-        println!("{}", recipe.display());
     }
     ExitCode::SUCCESS
 }
@@ -280,7 +287,7 @@ pub(super) fn fold(args: &FoldArgs, registry: &Registry) -> ExitCode {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use pfx_build::pfx_file;
 
@@ -344,18 +351,18 @@ roughness = 0.6
         list.iter().map(|w| w.to_string()).collect()
     }
 
-    fn saved(name: &str) -> (PathBuf, PathBuf) {
+    pub(in crate::recipe) fn saved(name: &str) -> (PathBuf, PathBuf) {
         let dir = scratch(name);
         let recipe = dir.join("project/scenes/doc.toml");
-        let pfx = dir.join("doc.pfx");
-        let code = run(&words(&[
-            "scene",
-            "save",
-            recipe.to_str().unwrap(),
-            "--pfx",
-            pfx.to_str().unwrap(),
-        ]));
-        assert_eq!(code, ExitCode::SUCCESS);
+        crate::scene::run(&crate::scene::Command {
+            action: crate::scene::Action::Migrate,
+            path: recipe.clone(),
+            dry_run: false,
+            bare: false,
+        })
+        .unwrap();
+        let pfx = dir.join("doc.pitofx");
+        std::fs::rename(dir.join("project/scenes/doc.pitofx"), &pfx).unwrap();
         (dir, pfx)
     }
 
@@ -368,42 +375,114 @@ roughness = 0.6
     }
 
     #[test]
-    fn save_then_unpack_then_build_gives_the_same_glb() {
-        let (dir, pfx) = saved("pfx-round-trip");
+    fn a_migrated_recipe_holds_its_files_and_every_verb_refuses_the_toml() {
+        let (dir, pfx) = saved("pfx-migrated");
         let doc = Document::open(&pfx).unwrap();
         assert_eq!(doc.recipe_name, "scenes/doc.toml");
-        assert!(doc.files.contains_key(Path::new("shared/rig.toml")));
+        assert_eq!(doc.recipe_text, RECIPE);
+        assert_eq!(doc.files[Path::new("shared/rig.toml")], RIG.as_bytes());
         assert!(doc.fresh() && !doc.edited());
-        let out = dir.join("unpacked");
-        assert_eq!(
-            run(&words(&[
-                "scene",
-                "unpack",
-                pfx.to_str().unwrap(),
-                out.to_str().unwrap()
-            ])),
-            ExitCode::SUCCESS
-        );
-        assert_eq!(
-            std::fs::read_to_string(out.join("shared/rig.toml")).unwrap(),
-            RIG
-        );
-        let unpacked = out.join("scenes/doc.toml");
-        assert_eq!(
-            run(&words(&["build", unpacked.to_str().unwrap()])),
-            ExitCode::SUCCESS
-        );
         let original = dir.join("project/scenes/doc.toml");
+        let toml = original.to_str().unwrap();
+        for line in [
+            &["build", toml][..],
+            &["check", toml],
+            &["get", toml, "seed"],
+            &["set", toml, "seed=4"],
+            &["key", toml, "object.desk.at", "1", "0,0,0"],
+            &["add", toml, "object", "lamp", "kind=\"box\""],
+            &["scene", "list", toml],
+            &["export", toml, "--glb", "x.glb"],
+        ] {
+            assert_eq!(run(&words(line)), ExitCode::FAILURE, "{line:?}");
+        }
+        assert_eq!(std::fs::read_to_string(&original).unwrap(), RECIPE);
+        std::fs::copy(&pfx, dir.join("project/scenes/doc.pitofx")).unwrap();
+        let again_after = crate::scene::run(&crate::scene::Command {
+            action: crate::scene::Action::Migrate,
+            path: original,
+            dry_run: false,
+            bare: false,
+        })
+        .unwrap_err();
+        assert!(again_after.contains("imported before"), "{again_after}");
+    }
+
+    #[test]
+    fn a_bare_import_holds_only_the_recipe_and_builds_the_same_glb() {
+        let (dir, pfx) = saved("pfx-bare");
+        let full = Document::open(&pfx).unwrap().glb();
+        let recipe = dir.join("project/scenes/doc.toml");
+        crate::scene::run(&crate::scene::Command {
+            action: crate::scene::Action::Migrate,
+            path: recipe,
+            dry_run: false,
+            bare: true,
+        })
+        .unwrap();
+        let bare = dir.join("project/scenes/doc.pitofx");
+        let doc = Document::open(&bare).unwrap();
+        assert!(doc.gltf.is_empty() && doc.scene.is_empty() && !doc.fresh());
         assert_eq!(
-            run(&words(&["build", original.to_str().unwrap()])),
+            doc.files.keys().collect::<Vec<_>>(),
+            [Path::new("shared/rig.toml")]
+        );
+        assert!(std::fs::metadata(&bare).unwrap().len() < 2048);
+        assert_eq!(
+            run(&words(&["build", bare.to_str().unwrap()])),
             ExitCode::SUCCESS
         );
-        let built = std::fs::read(out.join("scenes/out/doc.glb")).unwrap();
-        assert_eq!(
-            built,
-            std::fs::read(dir.join("project/scenes/out/doc.glb")).unwrap()
+        let built = Document::open(&bare).unwrap();
+        assert!(built.fresh());
+        assert_eq!(built.glb(), full);
+    }
+
+    #[test]
+    fn set_get_and_entries_write_straight_into_the_pfx() {
+        let (dir, pfx) = saved("pfx-verbs");
+        let path = pfx.to_str().unwrap();
+        for line in [
+            &["set", path, "seed=9"][..],
+            &[
+                "add",
+                path,
+                "route",
+                "back",
+                "points=[[0.0, 0.0, 0.0], [0.0, 0.0, 3.0]]",
+            ],
+            &[
+                "duplicate",
+                path,
+                "object",
+                "desk",
+                "desk_b",
+                "size=[0.3, 0.04, 0.2]",
+            ],
+            &["get", path, "seed"],
+            &["scene", "list", path, "object"],
+        ] {
+            assert_eq!(run(&words(line)), ExitCode::SUCCESS, "{line:?}");
+        }
+        let doc = Document::open(&pfx).unwrap();
+        assert!(doc.recipe_text.contains("seed = 9"), "{}", doc.recipe_text);
+        assert!(doc.recipe_text.contains("desk_b"), "{}", doc.recipe_text);
+        assert!(
+            doc.recipe_text.contains("name = \"back\""),
+            "{}",
+            doc.recipe_text
         );
-        assert_eq!(built, doc.glb());
+        assert!(doc.fresh());
+        assert_eq!(
+            run(&words(&["set", path, "object.desk.material=\"nothing\""])),
+            ExitCode::FAILURE
+        );
+        assert_eq!(Document::open(&pfx).unwrap().recipe_text, doc.recipe_text);
+        let mut left: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["doc.pitofx", "project"]);
     }
 
     #[test]

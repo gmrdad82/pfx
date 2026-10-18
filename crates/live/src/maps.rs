@@ -770,6 +770,8 @@ fn noise_id(kind: NoiseKind) -> u32 {
         NoiseKind::Fbm => 16,
         NoiseKind::Scratch => 17,
         NoiseKind::CoatWobble => 18,
+        NoiseKind::Crack => 19,
+        NoiseKind::Track => 20,
     }
 }
 

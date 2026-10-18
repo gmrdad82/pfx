@@ -10,7 +10,7 @@ const COMMAND: &str = "credits";
 
 #[derive(clap::Args)]
 pub(super) struct Args {
-    #[arg(value_name = "scene.pfx", help = "A .pfx scene or document")]
+    #[arg(value_name = "scene.pitofx", help = "A .pitofx scene or document")]
     scene: PathBuf,
     #[arg(long, help = "One JSON object on stdout")]
     json: bool,
@@ -18,11 +18,14 @@ pub(super) struct Args {
 
 pub fn run(args: &Args) -> ExitCode {
     let shown = args.scene.display().to_string();
+    if let Some(refusal) = crate::scene::legacy(&args.scene) {
+        return refuse(COMMAND, &refusal);
+    }
     if !pfx_build::document::is_pfx(&args.scene) {
         return refuse(
             COMMAND,
             &format!(
-                "{shown}: expected a .pfx; `pfx scene save <recipe> --pfx <out.pfx>` packs a recipe into one"
+                "{shown}: expected a .pitofx; `pfx scene save <recipe> --pfx <out.pitofx>` packs a recipe into one"
             ),
         );
     }

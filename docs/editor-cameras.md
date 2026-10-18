@@ -1,6 +1,6 @@
 # Cameras and renders from the window
 
-The cameras panel (B2) and the render panel (C3) of `pfx edit`. Both write nothing themselves: B2 pushes gestures onto `Shell::edits()`, which the patch task drains and writes to the recipe, and C3 starts a subprocess.
+The cameras panel (B2) and the render panel (C3) of `pfx gui`. Both write nothing themselves: B2 pushes gestures onto `Shell::edits()`, which the patch task drains and writes to the recipe, and C3 starts a subprocess.
 
 ## The view: free, or through a camera
 

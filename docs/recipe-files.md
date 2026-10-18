@@ -2,7 +2,7 @@
 
 ## The recipe
 
-A recipe is one TOML file, schema 1, starting with `recipe = 1`. [The recipe](recipe-format.md) is the whole schema. A reader refuses a newer schema; an unknown key is an error.
+A recipe is TOML, schema 1, starting with `recipe = 1`, kept with the files it reads inside a `.pitofx` document ([.pitofx files](pfx-file.md#the-user-file), [recipe documents](recipe-documents.md)); `pfx scene print <x.pitofx>` shows it. [The recipe](recipe-format.md) is the whole schema. A reader refuses a newer schema; an unknown key is an error.
 
 ## The GLB
 
@@ -54,7 +54,7 @@ With `[output] bake`, `pfx build` writes a `pfx bake` recipe in the engine's `ba
 
 ## The scene file
 
-With `[output] scene`, `pfx build` writes the engine's runtime scene, a `*.scene.toml` ([pfx-scene](https://docs.pitomd.com/pfx-scene/)). `pfx edit` opens one too, read only, and reloads it as it is saved.
+With `[output] scene`, `pfx build` writes the engine's runtime scene ([pfx-scene](https://docs.pitomd.com/pfx-scene/)): into the `.pitofx` as its scene, and as a `*.scene.toml` beside it only for a build with `--set`, a variant or a pick, which leaves the document as it is. `pfx shot <x.pitofx>` draws the document's scene.
 
 A recipe's shot effects (spot and parented lights, particle systems, flare, motion blur, haze, wet materials, a LUT and a sound file) and the analytic sky's `turbidity` and `ground_albedo` pass into the scene under pfx-scene 1.1.0's keys; [the recipe](recipe-format.md) lists them under "Shot effects".
 
@@ -97,7 +97,7 @@ One JSON object a line on stderr, at most about one a second while tracing. Ever
 
 ## `pfx route --json`
 
-One JSON object on stdout. `list` prints `recipe` (the path as given) and `routes[]`; `set`, `add` and `remove` print `recipe` and the edited `route`, as the file holds it after the edit. A route is `name`, `closed`, `points` (`[x, y, z]` in metres) and `length` (metres along the curve), with `length` null and a `problem` sentence when its points do not make a route.
+One JSON object on stdout. In these commands' JSON, `recipe` is the recipe's path inside the `.pitofx` given, beside the document (`street.pitofx` holding `street.toml` gives `street.toml`). `list` prints `recipe` and `routes[]`; `set`, `add` and `remove` print `recipe` and the edited `route`, as the file holds it after the edit. A route is `name`, `closed`, `points` (`[x, y, z]` in metres) and `length` (metres along the curve), with `length` null and a `problem` sentence when its points do not make a route.
 
 ```json
 {"recipe":"street.toml","routes":[{"closed":false,"length":81.87448581919321,"name":"main","points":[[0.0,0.0,0.0],[0.0,0.0,40.0],[12.0,0.0,80.0]]}]}
@@ -105,7 +105,7 @@ One JSON object on stdout. `list` prints `recipe` (the path as given) and `route
 
 ## `pfx set --json` and `pfx get --json`
 
-One JSON object on stdout. `set` prints `recipe` (the path as given), `set[]` with one entry a key, each its `key`, `old` (null when the key was added), `new` (as the file holds it after the edit) and `file` (the file it was written in, an included file's own path when the key lives there), and `check: "ok"`. `get` prints `recipe` and `values[]`, each a `key` and its `value`; a table comes as an object, an array of tables as an array of objects.
+One JSON object on stdout. `set` prints `recipe`, `set[]` with one entry a key, each its `key`, `old` (null when the key was added), `new` (as the file holds it after the edit) and `file` (the file it was written in, an included file's own path when the key lives there), and `check: "ok"`. `get` prints `recipe` and `values[]`, each a `key` and its `value`; a table comes as an object, an array of tables as an array of objects.
 
 ```json
 {"check":"ok","recipe":"chase.toml","set":[{"file":"chase.toml","key":"sky.intensity","new":1.8,"old":1.5}]}
@@ -114,7 +114,7 @@ One JSON object on stdout. `set` prints `recipe` (the path as given), `set[]` wi
 
 ## `pfx curve --json`
 
-One JSON object on stdout, after the edit when there is one: `recipe` (the path as given), `object`, `param` (the path as given), `view` (`"top"`, `"side"`, `"front"` or `"rear"` from a sibling `view` key or the param's own name, null when neither names one) and `points` (`[a, b]` in metres, as the file holds them).
+One JSON object on stdout, after the edit when there is one: `recipe`, `object`, `param` (the path as given), `view` (`"top"`, `"side"`, `"front"` or `"rear"` from a sibling `view` key or the param's own name, null when neither names one) and `points` (`[a, b]` in metres, as the file holds them).
 
 ```json
 {"object":"hull","param":"silhouettes.side","points":[[0.0,0.5],[2.0,1.3],[4.4,0.6]],"recipe":"hull.toml","view":"side"}
@@ -122,7 +122,7 @@ One JSON object on stdout, after the edit when there is one: `recipe` (the path 
 
 ## `pfx key --json` and `pfx unkey --json`
 
-One JSON object on stdout, the property as the file holds it after the edit: `recipe` (the path as given), `path` (as `object.hero.at`), `keys` (`[t, value]` pairs, the value a number or an array) and `interp` (`linear`, `smooth` or `step`). After `unkey` without a time, `keys` is empty.
+One JSON object on stdout, the property as the recipe holds it after the edit: `recipe`, `path` (as `object.hero.at`), `keys` (`[t, value]` pairs, the value a number or an array) and `interp` (`linear`, `smooth` or `step`). After `unkey` without a time, `keys` is empty.
 
 ```json
 {"interp":"smooth","keys":[[0.0,[0.0,0.0,0.0]],[2.0,[0.0,0.0,12.0]]],"path":"object.hero.at","recipe":"street.toml"}
@@ -137,18 +137,19 @@ One JSON object on stdout, the property as the file holds it after the edit: `re
 
 ## A shoot's folder
 
-`pfx shoot <recipe> --out <dir>` builds the recipe into its `[output]` GLB and scene, then runs `pfx shot` on the scene through `pgpu run --class clip --as pfx` (directly, with a note, when pgpu is not on the `PATH`), with `--from`, `--frames`, `--fps` and `--size` from `[timeline]` and `--range`, `--camera camera.<name>` and `--draft` or `--final`. It writes:
+`pfx shoot <x.pitofx> --out <dir>` builds the recipe into its `[output]` GLB and scene, packs that scene into `<dir>/scene.pitofx`, then runs `pfx shot` on it through `pgpu run --class clip --as pfx` (directly, with a note, when pgpu is not on the `PATH`), with `--from`, `--frames`, `--fps` and `--size` from `[timeline]` and `--range`, `--camera camera.<name>` and `--draft` or `--final`. It writes:
 
 - `frame-00000.png`, `frame-00001.png`…: the timeline's frame numbers, so a `--range` writes only its own. A frame already there and whole is skipped: a shoot stopped part way is run again with the same line and renders only the missing runs of frames (with `--final`, pfx warms up to 8 frames before each run);
 - `sound.wav`: the scene's `sound` mixed by pfx, written by a run that covers the whole timeline from frame 0 when the scene names a sound;
+- `scene.pitofx`: the built scene with every file it reads, the one `pfx shot` draws;
 - `pfx-<from>.json`: pfx's own `manifest.json` of the run that started at frame `<from>`;
-- `shoot.json`: `shoot` (1), `recipe`, `scene`, `glb`, `camera` (the node), `renderer` (`live`), `quality`, `fps`, `size`, `range` (`[a, b]`, both included), `frames` (in the range), `skipped` (already there), `files` (the range's frames on disk), `wav` (`sound.wav` or null), `sound` (whether the scene names one), `pfx` (its version) and `runs[]`: `from`, `frames`, `manifest`, `written`, `quality`, `wall_ms`, `gpu_ms` and `warnings`, from pfx's manifest, for every run into the folder.
+- `shoot.json`: `shoot` (1), `recipe`, `scene` (its `scene.pitofx`), `glb`, `camera` (the node), `renderer` (`live`), `quality`, `fps`, `size`, `range` (`[a, b]`, both included), `frames` (in the range), `skipped` (already there), `files` (the range's frames on disk), `wav` (`sound.wav` or null), `sound` (whether the scene names one), `pfx` (its version) and `runs[]`: `from`, `frames`, `manifest`, `written`, `quality`, `wall_ms`, `gpu_ms` and `warnings`, from pfx's manifest, for every run into the folder.
 
 With `--json` it prints one line a frame as pfx reads it back, `{"frame", "of", "time", "gpu_ms", "wall_ms"}`, then `shoot.json` as the last line. pfx encodes nothing: pfx film and pcod make the video.
 
 ## A window clip
 
-`pfx edit --clip <dir> --tape <file>` writes three files named `<tape>-<W>x<H>-<fps>fps`:
+`pfx gui --clip <dir> --tape <file>` writes three files named `<tape>-<W>x<H>-<fps>fps`:
 
 - `.master.mp4`: H.264, CRF 14, 8-bit 4:2:0, BT.709, with a silent stereo AAC track, encoded on the CPU by pito-codecs' `pcod frames` from the clip's PNG frames;
 - `.poster.png`: the poster frame, 8-bit sRGB;

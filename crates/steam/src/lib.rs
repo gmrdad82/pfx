@@ -12,6 +12,7 @@ mod lockstep;
 mod net;
 #[cfg(any(feature = "input", test))]
 mod steam_input;
+mod workshop;
 
 pub use blob::{BLOB_CHUNK, BLOB_MAX, BLOB_OPEN_MAX, Blob, Blobs, send_blob};
 pub use board::{
@@ -19,7 +20,7 @@ pub use board::{
     Uploaded, run_details, split_run,
 };
 pub use daily::{Clock, Daily, Date, Repeat, Today, daily_seed};
-pub use fake::{FAKE_USER, Fake};
+pub use fake::{FAKE_ITEM, FAKE_USER, Fake};
 pub use health::{Ending, Health, Lost, Quit, RECONNECT_MS, connect_lobby};
 pub use hub::Hub;
 #[cfg(feature = "live")]
@@ -36,6 +37,12 @@ pub use steam_input::{
     ActionKind, Analog, Digital, GlyphFormat, GlyphSize, GlyphStyle, OriginGlyph, STEAM_PAD_BASE,
     SteamBeside, SteamFeed, SteamGlyph, SteamPads, origin_control, origin_controls,
 };
+pub use workshop::{
+    Created, DESCRIPTION_MAX, Installed, Item, ItemState, ItemUpdate, NOTE_MAX, Progress, Stage,
+    TAG_MAX, TITLE_MAX, Visibility,
+};
+#[cfg(any(feature = "mods", test))]
+pub use workshop::{ItemRefusal, Items, load_items};
 
 pub const STEAMWORKS_VERSION: &str = "0.13.1";
 pub const SDK_VERSION: &str = "1.64";
@@ -133,6 +140,25 @@ pub enum Event {
         call: Call,
         ugc: Ugc,
         result: Result<Vec<u8>, Error>,
+    },
+    ItemInstalled {
+        item: Item,
+    },
+    ItemDownloaded {
+        item: Item,
+        result: Result<(), Error>,
+    },
+    ItemProgress {
+        item: Item,
+        progress: Progress,
+    },
+    ItemCreated {
+        call: Call,
+        result: Result<Created, Error>,
+    },
+    ItemSubmitted {
+        call: Call,
+        result: Result<Created, Error>,
     },
     Unrecognised,
 }
@@ -274,6 +300,15 @@ pub trait SteamApi {
     fn share_file(&mut self, name: &str) -> Result<Call, Error>;
     fn attach_ugc(&mut self, board: Board, ugc: Ugc) -> Result<(), Error>;
     fn download_ugc(&mut self, ugc: Ugc) -> Result<Call, Error>;
+
+    fn subscribed_items(&self) -> Result<Vec<Item>, Error>;
+    fn item_state(&self, item: Item) -> Result<ItemState, Error>;
+    fn item_progress(&self, item: Item) -> Result<Option<Progress>, Error>;
+    fn item_installed(&self, item: Item) -> Result<Option<Installed>, Error>;
+    fn download_item(&mut self, item: Item, now: bool) -> Result<(), Error>;
+    fn create_item(&mut self) -> Result<Call, Error>;
+    fn submit_item(&mut self, item: Item, update: &ItemUpdate) -> Result<Call, Error>;
+    fn submit_progress(&self, call: Call) -> Result<Option<(Stage, Progress)>, Error>;
 
     fn create_lobby(&mut self, kind: LobbyKind, max_members: u32) -> Result<Call, Error>;
     fn find_lobbies(&mut self, filter: &LobbyFilter) -> Result<Call, Error>;
@@ -436,3 +471,5 @@ mod tests_net;
 mod tests_runs;
 #[cfg(test)]
 mod tests_steam_input;
+#[cfg(test)]
+mod tests_workshop;

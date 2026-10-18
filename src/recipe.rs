@@ -7,20 +7,21 @@ mod credits;
 mod curve;
 mod diff;
 mod document;
-#[cfg(feature = "editor")]
-mod edit;
-#[cfg(feature = "editor")]
-mod edit_shot;
-#[cfg(feature = "editor")]
-mod edit_tape;
 mod entries;
 mod export;
+#[cfg(feature = "editor")]
+mod gui;
+#[cfg(feature = "editor")]
+mod gui_shot;
+#[cfg(feature = "editor")]
+mod gui_tape;
 mod import;
 mod key;
 mod library;
 mod library_add;
 mod library_bake;
 mod new;
+mod print;
 mod process;
 mod render;
 mod route;
@@ -62,10 +63,10 @@ pub const MOVED: &[&str] = &[
     "asset",
     "credits",
     #[cfg(feature = "editor")]
-    "edit",
+    "gui",
 ];
 
-pub const SCENE: &[&str] = &["list", "save", "unpack", "fold"];
+pub const SCENE: &[&str] = &["list", "save", "print", "write", "fold"];
 
 #[derive(Parser)]
 #[command(
@@ -134,24 +135,24 @@ enum Verb {
     #[command(about = "Copy an entry under a new name, with keys changed")]
     Duplicate(entries::Duplicate),
     #[command(
-        about = "Read a glTF 2.0 binary into a .pfx document with its recipe and detected facts"
+        about = "Read a glTF 2.0 binary into a .pitofx document with its recipe and detected facts"
     )]
     Import(import::Args),
     #[command(
-        about = "Write a .pfx or a recipe as a standalone glTF 2.0 binary with no pfx extras"
+        about = "Write a .pitofx or a recipe as a standalone glTF 2.0 binary with no pfx extras"
     )]
     Export(export::Args),
     #[cfg(feature = "editor")]
     #[command(
-        about = "Open the window on a recipe, a scene, a .pfx, a game's project folder or the start screen; Play runs the scene with a game's module"
+        about = "Open the window on a recipe, a scene, a .pitofx, a game's project folder or the start screen; Play runs the scene with a game's module"
     )]
-    Edit(Box<edit::Args>),
+    Gui(Box<gui::Args>),
     #[command(
         about = "Align, distribute, drop to the ground or snap objects to bounds, writing their places into the recipe"
     )]
     Align(align::Args),
     #[command(
-        about = "A recipe's entries and its .pfx documents",
+        about = "A recipe's entries and its .pitofx documents",
         subcommand_required = true,
         arg_required_else_help = false
     )]
@@ -163,7 +164,7 @@ enum Verb {
     )]
     Asset(asset::Args),
     #[command(
-        about = "The credits of every asset a .pfx scene uses, refusing unlicensed ones by name"
+        about = "The credits of every asset a .pitofx scene uses, refusing unlicensed ones by name"
     )]
     Credits(credits::Args),
 }
@@ -178,12 +179,20 @@ struct SceneArgs {
 enum SceneVerb {
     #[command(about = "List the recipe's entries and their names")]
     List(entries::List),
-    #[command(about = "Pack a recipe, its files and its build into one .pfx document")]
-    Save(document::SaveArgs),
-    #[command(about = "Write a .pfx document's recipe and files into a folder")]
-    Unpack(document::UnpackArgs),
     #[command(
-        about = "List the scene edits made in a .pfx, fold them into the recipe or keep them"
+        about = "Rebuild a .pitofx document from its recipe and write it, with a thumbnail if asked"
+    )]
+    Save(document::SaveArgs),
+    #[command(
+        about = "Print a TOML file a .pitofx holds, its recipe or scene by default, or its table as JSON"
+    )]
+    Print(print::PrintArgs),
+    #[command(
+        about = "Replace a TOML file a .pitofx holds with TOML from stdin, checked before it is kept"
+    )]
+    Write(print::WriteArgs),
+    #[command(
+        about = "List the scene edits made in a .pitofx, fold them into the recipe or keep them"
     )]
     Fold(document::FoldArgs),
 }
@@ -363,6 +372,9 @@ pub fn main_with(args: &[String], registry: &Registry) -> ExitCode {
         Err((name, e)) => return refuse(name, &e),
     };
     let code = run_verb(verb, rest, registry);
+    if code != ExitCode::SUCCESS {
+        return code;
+    }
     match opened.map(|opened| opened.finish(registry)) {
         Some(Err(e)) => refuse("document", &e),
         _ => code,
@@ -396,14 +408,21 @@ fn run_verb(verb: Verb, rest: &[String], registry: &Registry) -> ExitCode {
         Verb::Asset(parsed) => asset::run(&parsed),
         Verb::Credits(parsed) => credits::run(&parsed),
         #[cfg(feature = "editor")]
-        Verb::Edit(parsed) => edit::run(&parsed, rest, registry),
+        Verb::Gui(parsed) => gui::run(&parsed, rest, registry),
         Verb::Scene(SceneArgs { verb }) => match verb {
             SceneVerb::List(parsed) => entries::list(&parsed),
             SceneVerb::Save(parsed) => document::save(&parsed, registry),
-            SceneVerb::Unpack(parsed) => document::unpack(&parsed),
+            SceneVerb::Print(parsed) => print::print(&parsed),
+            SceneVerb::Write(parsed) => print::write(&parsed, registry),
             SceneVerb::Fold(parsed) => document::fold(&parsed, registry),
         },
     }
+}
+
+#[cfg(test)]
+fn sample(name: &str) -> document::Opened {
+    let pfx = std::path::PathBuf::from(format!("samples/{name}.pitofx"));
+    document::open(&pfx).unwrap_or_else(|e| panic!("{e}"))
 }
 
 #[cfg(test)]
@@ -436,17 +455,17 @@ mod tests {
         for line in [
             "build a.toml",
             "library list",
-            "export a.pfx --glb a.glb",
+            "export a.pitofx --glb a.glb",
             "render --recipe a.toml --camera c --out a.png",
             "render --recipe=a.toml",
             "shot a.toml --still",
             "shot crates/recipe/tests/fixtures/full.toml --camera main",
             "new street.toml --from street",
             "scene list a.toml",
-            "scene fold a.pfx",
-            "edit a.toml",
-            "edit",
-            "edit content/room.scene.toml --play game.wasm",
+            "scene fold a.pitofx",
+            "gui a.toml",
+            "gui",
+            "gui content/room.scene.toml --play game.wasm",
         ] {
             assert!(
                 claims(&strings(&line.split(' ').collect::<Vec<_>>())),

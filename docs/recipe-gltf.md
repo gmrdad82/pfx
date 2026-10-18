@@ -5,15 +5,15 @@ pfx reads any standard glTF 2.0 model, a binary `.glb`, a `.gltf` with its buffe
 ## Import
 
 ```
-pfx import <file.glb|file.gltf|file.obj> (--as <kind>/<name> | --out <x.pfx>) [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--tags <tag,tag>] [--thumb] [--json]
+pfx import <file.glb|file.gltf|file.obj> (--as <kind>/<name> | --out <x.pitofx>) [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--tags <tag,tag>] [--thumb] [--json]
 ```
 
 ```
 $ pfx import coupe.glb --as vehicle/coupe --tags car,red
-library/vehicle/coupe.pfx: vehicle/coupe, 4 nodes, 1 wheels, 1 light anchors, 9480 bytes
+library/vehicle/coupe.pitofx: vehicle/coupe, 4 nodes, 1 wheels, 1 light anchors, 9480 bytes
 ```
 
-It writes a `.pfx` document:
+It writes a `.pitofx` document:
 
 - **GLTF and GBIN** hold the file's JSON and BIN chunks as they are, so the node hierarchy, the materials and their KHR extensions, the textures, the morph targets and the animations all stay.
 - **RCPE** is a recipe with one object, `kind = "mesh"`, `path = "@gltf"`, the document's own glTF.
@@ -21,7 +21,7 @@ It writes a `.pfx` document:
 - **NODE** maps each node, as `<name>.<node>`, to its glTF index.
 - **THMB**, with `--thumb`, a 256x256 PNG drawn headless on the live renderer.
 
-`--as <kind>/<name>` writes `library/<kind>/<name>.pfx` under the current folder, `--out` writes where it says and takes the file's name. It refuses a file that is none of the three, a model whose buffers, images, `.mtl` or textures are missing or outside its folder, and, for a `.glb` or `.gltf` when `gltf_validator` (the Khronos glTF Validator) is on the PATH, a file it reports errors in. `--json` prints one object: `out`, `kind`, `name`, `bytes`, `nodes`, `thumb`, `validator` (`passed` or `absent`) and `facts`.
+`--as <kind>/<name>` writes `library/<kind>/<name>.pitofx` under the current folder, `--out` writes where it says and takes the file's name. It refuses a file that is none of the three, a model whose buffers, images, `.mtl` or textures are missing or outside its folder, and, for a `.glb` or `.gltf` when `gltf_validator` (the Khronos glTF Validator) is on the PATH, a file it reports errors in. `--json` prints one object: `out`, `kind`, `name`, `bytes`, `nodes`, `thumb`, `validator` (`passed` or `absent`) and `facts`.
 
 ### Split glTF and OBJ
 
@@ -47,12 +47,12 @@ Both are packed into one standalone GLB first (`pfx_load::pack::model`), and tha
 ## Export
 
 ```
-pfx export <file.pfx|recipe> --glb <out.glb> [--only <object>] [--json]
+pfx export <file.pitofx|recipe> --glb <out.glb> [--only <object>] [--json]
 ```
 
-A `.pfx` exports its own glTF. A recipe is built first: one object (the recipe's only one, or `--only`) exports as a node tree with real pivots, the library's form, and a scene of many keeps its objects' parents as the node hierarchy. Either way the GLB is standalone and carries no pfx extras: every `extras` is dropped but a mesh's `extras.targetNames`, the morph target names glTF tools read, and so is every extension not named `KHR_`, `EXT_` or `MSFT_`. `--json` prints `source`, `glb`, `bytes` and `nodes`.
+A `.pitofx` exports its own glTF. A recipe is built first: one object (the recipe's only one, or `--only`) exports as a node tree with real pivots, the library's form, and a scene of many keeps its objects' parents as the node hierarchy. Either way the GLB is standalone and carries no pfx extras: every `extras` is dropped but a mesh's `extras.targetNames`, the morph target names glTF tools read, and so is every extension not named `KHR_`, `EXT_` or `MSFT_`. `--json` prints `source`, `glb`, `bytes` and `nodes`.
 
 ```
-$ pfx export library/vehicle/coupe.pfx --glb coupe.glb
+$ pfx export library/vehicle/coupe.pitofx --glb coupe.glb
 coupe.glb: 4 nodes, 9480 bytes
 ```

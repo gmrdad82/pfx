@@ -1,6 +1,6 @@
 # Asset sources
 
-`pfx asset` finds and fetches HDRIs, textures, models and model packs from public CC0 sources and from accounts you configure, checks every download, refuses licences you have not allowed, and records each asset's licence facts in a `.pfx` beside its files. `pfx credits` then lists the credits of every asset a scene uses.
+`pfx asset` finds and fetches HDRIs, textures, models and model packs from public CC0 sources and from accounts you configure, checks every download, refuses licences you have not allowed, and records each asset's licence facts in a `.pitofx` beside its files. `pfx credits` then lists the credits of every asset a scene uses.
 
 The crate behind it is `pfx-source`: the `Source` trait, the sources, the HTTPS client, the zip reader, the licence policy, the settings and the credits, for an app or an editor to link on its own.
 
@@ -12,7 +12,7 @@ pfx asset get <source:id> [--out <dir>] [--res <r>] [--format <f>] [--from <file
 pfx asset list [--in <dir>] [--json]
 pfx asset sources [--json]
 pfx asset settings [--stdin] [--json]
-pfx credits <scene.pfx> [--json]
+pfx credits <scene.pitofx> [--json]
 ```
 
 ## Sources
@@ -47,7 +47,7 @@ Every asset carries an SPDX licence id, checked against pfx's SPDX table. Licenc
 
 ## The record
 
-Each fetched asset's folder holds its files and `asset.pfx`, a `.pfx` whose FACT chunk is TOML:
+Each fetched asset's folder holds its files and `asset.pitofx`, a `.pitofx` whose FACT chunk is TOML:
 
 ```toml
 licence = "CC0-1.0"
@@ -66,22 +66,22 @@ pfx = "<pfx version>"
 "<id>_1k.hdr" = "<sha256>"
 ```
 
-`licence`, `credit`, `author` and `source` sit at the top as they do in an imported model's `.pfx`, so both read alike. A zip's own name and sha256 are kept as `archive` and `archive_sha256`. The credit line names the title, the author, the source and the licence; ambientCG's is the line its licence page suggests.
+`licence`, `credit`, `author` and `source` sit at the top as they do in an imported model's `.pitofx`, so both read alike. A zip's own name and sha256 are kept as `archive` and `archive_sha256`. The credit line names the title, the author, the source and the licence; ambientCG's is the line its licence page suggests.
 
 ## Credits
 
 ```
-pfx credits scene.pfx
-pfx credits scene.pfx --json
+pfx credits scene.pitofx
+pfx credits scene.pitofx --json
 ```
 
-`pfx scene save` packs every file a recipe reads into the scene's `.pfx`, and with them the `asset.pfx` of each fetched asset whose files it reads (found in the file's folder or up to three folders above it). `pfx credits` reads the scene's `.pfx` and lists one credit line per asset, ready for a credits card: each fetched asset's record, each embedded model `.pfx` with its licence facts, and each library object's licence from the scene's facts. The same credit used by several files or objects is listed once; `--json` gives each one's name, licence, credit, author, source, `from` (its `source:id`) and what in the scene uses it. pfx's own original library objects need no credit and are left out.
+`pfx scene save` packs every file a recipe reads into the scene's `.pitofx`, and with them the `asset.pitofx` of each fetched asset whose files it reads (found in the file's folder or up to three folders above it). `pfx credits` reads the scene's `.pitofx` and lists one credit line per asset, ready for a credits card: each fetched asset's record, each embedded model `.pitofx` with its licence facts, and each library object's licence from the scene's facts. The same credit used by several files or objects is listed once; `--json` gives each one's name, licence, credit, author, source, `from` (its `source:id`) and what in the scene uses it. pfx's own original library objects need no credit and are left out.
 
 An asset that records no licence, or a licence that is not an SPDX expression, is refused by name, one line each on stderr, and the command exits 1 without printing credits.
 
 ## Settings and accounts
 
-pfx's own settings are a `.pfx` (`settings.pfx`, a CONF chunk of TOML) in pfx's settings folder: `PFX_SETTINGS` names the file, else `PFX_CONFIG` the folder, else `$XDG_CONFIG_HOME/pfx` or `~/.config/pfx` on Linux, `~/Library/Application Support/pfx` on macOS and `%APPDATA%\pfx` on Windows. `pfx asset settings` prints them as TOML; `pfx asset settings --stdin` reads TOML on stdin, checks it and writes the `.pfx`.
+pfx's own settings are a `.pitofx` (`settings.pitofx`, a CONF chunk of TOML) in pfx's settings folder: `PFX_SETTINGS` names the file, else `PFX_CONFIG` the folder, else `$XDG_CONFIG_HOME/pfx` or `~/.config/pfx` on Linux, `~/Library/Application Support/pfx` on macOS and `%APPDATA%\pfx` on Windows. `pfx asset settings` prints them as TOML; `pfx asset settings --stdin` reads TOML on stdin, checks it and writes the `.pitofx`.
 
 ```toml
 [licences]

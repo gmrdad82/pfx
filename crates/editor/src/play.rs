@@ -149,6 +149,19 @@ impl Play {
         let game = self
             .game(Some(FONT_FAMILY))?
             .unwrap_or_else(|| Box::new(SceneGame));
+        self.start_game(scene, staged, game, options)
+    }
+
+    pub fn start_game(
+        &mut self,
+        scene: &Scene,
+        staged: Option<&Staged>,
+        game: Box<dyn Game>,
+        options: Options,
+    ) -> Result<(), String> {
+        if self.session.is_some() {
+            return Ok(());
+        }
         let session = PlaySession::play_with(scene, staged, game, options)
             .map_err(|error| error.to_string())?;
         self.stopped = None;

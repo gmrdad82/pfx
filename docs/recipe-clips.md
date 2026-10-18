@@ -43,8 +43,8 @@ Without a key at 0, the camera's own pose is the key at 0. `ease` is `linear` (t
 ## Make the frames
 
 ```sh
-pfx clip samples/workshop.toml --camera orbit --frames 120 --fps 30 --size 1280x800 --out orbit
-pfx clip samples/workshop.toml --camera orbit --frames 120 --fps 30 --size 1280x800 --out traced --trace --spp 32
+pfx clip samples/workshop.pitofx --camera orbit --frames 120 --fps 30 --size 1280x800 --out orbit
+pfx clip samples/workshop.pitofx --camera orbit --frames 120 --fps 30 --size 1280x800 --out traced --trace --spp 32
 ```
 
 The first draws each frame on the live renderer; `--trace` path-traces them (64 samples a frame by default). Frames are written as `frame-0000.png`, `frame-0001.png`… and each finished frame is printed on stdout.
@@ -78,8 +78,8 @@ fov_y_deg = 30.0
 ```
 
 ```sh
-pfx clip figurine.toml --camera front --spin body --frames 96 --fps 24 --size 1080x1080 --out turn --video turn.mp4
-pfx clip figurine.toml --camera front --spin body --turns -0.5 --frames 48 --fps 24 --size 1080x1080 --out half --trace --spp 64
+pfx clip figurine.pitofx --camera front --spin body --frames 96 --fps 24 --size 1080x1080 --out turn --video turn.mp4
+pfx clip figurine.pitofx --camera front --spin body --turns -0.5 --frames 48 --fps 24 --size 1080x1080 --out half --trace --spp 64
 ```
 
 Frame `i` of `N` turns `body` by `turns × 360° × i / N` (`--turns` is 1 by default, and may be fractional or negative to turn the other way), so a whole number of turns loops without repeating a frame. A camera with a path is refused with `--spin`, and so is `--timeline`. The recipe is read and built once: each frame only moves the turned objects.
@@ -87,7 +87,7 @@ Frame `i` of `N` turns `body` by `turns × 360° × i / N` (`--turns` is 1 by de
 ## Film the timeline
 
 ```sh
-pfx clip chase.toml --camera chase --timeline --size 1080x1920 --out chase
+pfx clip chase.pitofx --camera chase --timeline --size 1080x1920 --out chase
 ```
 
 A recipe with a `[timeline]` (the recipe guide's "Timeline") films with `--timeline` in place of `--frames` and `--fps`: frames 0 to the timeline's last at its `fps`, each the scene posed at `n / fps`, through `--camera`, which the timeline moves when it keys that camera. `--video` encodes at the timeline's `fps`.
@@ -95,7 +95,7 @@ A recipe with a `[timeline]` (the recipe guide's "Timeline") films with `--timel
 ## Make the video
 
 ```sh
-pfx clip samples/workshop.toml --camera orbit --frames 120 --fps 30 --size 1280x800 --out orbit --video orbit.mp4
+pfx clip samples/workshop.pitofx --camera orbit --frames 120 --fps 30 --size 1280x800 --out orbit --video orbit.mp4
 ```
 
 With [pcod](https://github.com/gmrdad82/pito-codecs) on the `PATH`, `--video` encodes the frames into an `.mp4` (H.264) or a `.webm` (VP9). Opaque frames are written as RGB PNGs, which both take; a frame with transparent pixels keeps its alpha, which only `.webm` carries. Without pcod, `--video` says it needs pcod, the frames stay in the folder and the command exits 1.

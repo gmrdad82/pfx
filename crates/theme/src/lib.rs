@@ -60,7 +60,7 @@ mod tests {
         assert_eq!(theme.display.as_ref().unwrap().weight, Some(TITLE_WEIGHT));
         ctx.run_ui(egui::RawInput::default(), |ui| {
             egui::CentralPanel::default().show(ui, |ui| {
-                ui.label(title(&theme, "pfx edit", 13.0, theme.text));
+                ui.label(title(&theme, "pfx gui", 13.0, theme.text));
                 ui.label(label(&theme, "roughness", theme.text2));
             });
         })

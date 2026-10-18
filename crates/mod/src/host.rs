@@ -10,6 +10,7 @@ use wasmtime::component::{Component, InstancePre, Linker};
 use wasmtime::{Config, Engine, OptLevel, Strategy, WasmBacktraceDetails};
 
 use crate::ctx::ModCtx;
+use crate::data::Data;
 use crate::depth::{self, Site};
 use crate::error::{HostError, LoadError, Refusal};
 use crate::fingerprint::Fingerprint;
@@ -130,11 +131,58 @@ impl<T: 'static> Host<T> {
     }
 
     pub fn load(&self, manifest: &[u8], component: &[u8]) -> Result<Package<T>, Refusal> {
+        self.load_with(manifest, component, Vec::new())
+    }
+
+    pub fn load_with(
+        &self,
+        manifest: &[u8],
+        component: &[u8],
+        data: Vec<(String, Vec<u8>)>,
+    ) -> Result<Package<T>, Refusal> {
         capped("manifest", manifest.len(), self.limits.manifest_bytes)?;
         let parsed = parse_manifest(manifest)?;
         self.api.accepts(&parsed.api)?;
         capped("component", component.len(), self.limits.component_bytes)?;
-        self.prepare(manifest, parsed, component)
+        let data = self.data(&parsed, data)?;
+        let mut package = self.prepare(manifest, parsed, component)?;
+        package.fingerprint = Fingerprint::of_package(manifest, component, data.iter());
+        package.data = data;
+        Ok(package)
+    }
+
+    fn data(&self, manifest: &Manifest, given: Vec<(String, Vec<u8>)>) -> Result<Data, Refusal> {
+        if manifest.data.len() > self.limits.data_files {
+            return Err(Refusal::Data {
+                name: manifest.data[self.limits.data_files].clone(),
+                problem: format!("a mod names at most {} data files", self.limits.data_files),
+            });
+        }
+        let mut given: Vec<Option<(String, Vec<u8>)>> = given.into_iter().map(Some).collect();
+        let mut files = Vec::with_capacity(manifest.data.len());
+        let mut total = 0usize;
+        for name in &manifest.data {
+            let Some(found) = given
+                .iter_mut()
+                .find(|file| file.as_ref().is_some_and(|(file, _)| file == name))
+                .and_then(Option::take)
+            else {
+                return Err(Refusal::Data {
+                    name: name.clone(),
+                    problem: "it is missing".to_string(),
+                });
+            };
+            total = total.saturating_add(found.1.len());
+            capped("data", total, self.limits.data_bytes)?;
+            files.push((found.0, Arc::<[u8]>::from(found.1)));
+        }
+        if let Some((name, _)) = given.into_iter().flatten().next() {
+            return Err(Refusal::Data {
+                name,
+                problem: format!("it is not named in {MANIFEST}'s data"),
+            });
+        }
+        Ok(Data::new(files))
     }
 
     pub fn load_module(&self, id: &str, wasm: &[u8]) -> Result<Package<T>, Refusal> {
@@ -191,12 +239,21 @@ impl<T: 'static> Host<T> {
         Ok(Package {
             fingerprint: Fingerprint::of_mod(manifest, component),
             manifest: parsed,
+            data: Data::default(),
             pre,
             sites: instrumented.sites.into(),
         })
     }
 
     pub fn load_folder(&self, folder: &Path) -> Result<Package<T>, LoadError> {
+        self.read_folder(folder, true)
+    }
+
+    pub fn load_package(&self, folder: &Path) -> Result<Package<T>, LoadError> {
+        self.read_folder(folder, false)
+    }
+
+    fn read_folder(&self, folder: &Path, named: bool) -> Result<Package<T>, LoadError> {
         let refuse = |id: Option<String>, refusal| LoadError {
             folder: folder.to_path_buf(),
             id,
@@ -214,7 +271,7 @@ impl<T: 'static> Host<T> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if name != parsed.id {
+        if named && name != parsed.id {
             return Err(refuse(
                 id,
                 Refusal::Folder {
@@ -229,7 +286,54 @@ impl<T: 'static> Host<T> {
             self.limits.component_bytes,
         )
         .map_err(|r| refuse(id.clone(), r))?;
-        self.load(&manifest, &component).map_err(|r| refuse(id, r))
+        let data = self
+            .read_data(folder, &parsed)
+            .map_err(|r| refuse(id.clone(), r))?;
+        self.load_with(&manifest, &component, data)
+            .map_err(|r| refuse(id, r))
+    }
+
+    fn read_data(
+        &self,
+        folder: &Path,
+        manifest: &Manifest,
+    ) -> Result<Vec<(String, Vec<u8>)>, Refusal> {
+        if manifest.data.is_empty() {
+            return Ok(Vec::new());
+        }
+        let root = fs::canonicalize(folder)
+            .map_err(|e| Refusal::Read(format!("{}: {e}", folder.display())))?;
+        let mut files = Vec::with_capacity(manifest.data.len());
+        let mut left = self.limits.data_bytes;
+        for name in manifest.data.iter().take(self.limits.data_files) {
+            let refuse = |problem: String| Refusal::Data {
+                name: name.clone(),
+                problem,
+            };
+            let path = folder.join(name);
+            let real = fs::canonicalize(&path).map_err(|e| refuse(e.to_string()))?;
+            if !real.starts_with(&root) {
+                return Err(refuse(
+                    "it leads outside the mod's folder; a data file is read from the folder only"
+                        .to_string(),
+                ));
+            }
+            if !real.is_file() {
+                return Err(refuse("it is not a file".to_string()));
+            }
+            let used = (self.limits.data_bytes - left) as u64;
+            let bytes = read_capped(&real, "data", left).map_err(|r| match r {
+                Refusal::Size { bytes, .. } => Refusal::Size {
+                    what: "data",
+                    bytes: used + bytes,
+                    cap: self.limits.data_bytes,
+                },
+                r => r,
+            })?;
+            left -= bytes.len();
+            files.push((name.clone(), bytes));
+        }
+        Ok(files)
     }
 
     pub fn load_dir(&self, mods: &Path) -> Loaded<T> {
@@ -268,6 +372,7 @@ impl<T: 'static> Host<T> {
 pub struct Package<T: 'static> {
     pub manifest: Manifest,
     pub fingerprint: Fingerprint,
+    pub data: Data,
     pub(crate) pre: InstancePre<ModCtx<T>>,
     pub(crate) sites: Arc<[Site]>,
 }
@@ -277,6 +382,7 @@ impl<T: 'static> Clone for Package<T> {
         Self {
             manifest: self.manifest.clone(),
             fingerprint: self.fingerprint,
+            data: self.data.clone(),
             pre: self.pre.clone(),
             sites: self.sites.clone(),
         }

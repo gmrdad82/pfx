@@ -81,7 +81,7 @@ pub struct Surface {
 pub fn surface(gpu: &Gpu, size: [u32; 2]) -> Surface {
     let [width, height] = [size[0].max(1), size[1].max(1)];
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("pfx edit play and trace"),
+        label: Some("pfx gui play and trace"),
         size: wgpu::Extent3d {
             width,
             height,

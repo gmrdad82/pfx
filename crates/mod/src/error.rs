@@ -48,6 +48,10 @@ pub enum Refusal {
     },
     Types(String),
     Module(String),
+    Data {
+        name: String,
+        problem: String,
+    },
 }
 
 impl fmt::Display for Refusal {
@@ -92,6 +96,7 @@ impl fmt::Display for Refusal {
                 "imports `{name}`, which is not part of the game's mod API"
             ),
             Self::Types(e) => write!(f, "does not match the game's mod API: {e}"),
+            Self::Data { name, problem } => write!(f, "has data file `{name}`: {problem}"),
             Self::Module(e) => write!(
                 f,
                 "is a core module that cannot be made a component: {e}; build it with wit-bindgen, or as a component"

@@ -689,12 +689,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "GPU: pfx build samples/chase.toml --out tmp/clay/chase, then pgpu run --class bench --as pfx -- cargo test -p pfx-workbench clay -- --ignored --nocapture"]
+    #[ignore = "GPU: pfx build samples/chase.pitofx --out tmp/clay/chase, then pgpu run --class bench --as pfx -- cargo test -p pfx-workbench clay -- --ignored --nocapture"]
     fn the_chase_street_draws_in_clay_in_about_a_millisecond_and_a_half() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tmp/clay/chase/street.scene.toml");
         let scene = pfx_load::scene::Scene::open(&path).unwrap_or_else(|error| {
-            panic!("build samples/chase.toml into tmp/clay/chase first: {error}")
+            panic!("build samples/chase.pitofx into tmp/clay/chase first: {error}")
         });
         let draws = scene.draws();
         let outlines: Vec<Outline<'_>> = draws

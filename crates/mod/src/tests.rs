@@ -47,6 +47,37 @@ fn manifest_refuses_bad_ids_and_entries() {
 }
 
 #[test]
+fn manifest_names_data_files_beside_the_component() {
+    let text = format!("{MANIFEST_TEXT}data = [\"cards.toml\", \"art/x.png\"]\n");
+    let m = Manifest::parse(&text).unwrap();
+    assert_eq!(m.data, ["cards.toml", "art/x.png"]);
+    assert!(Manifest::parse(MANIFEST_TEXT).unwrap().data.is_empty());
+    for name in [
+        "",
+        "../x.toml",
+        "a/../x.toml",
+        "/abs.toml",
+        "a//b",
+        ".hidden",
+        "a/.git/x",
+        "a\\\\b",
+        "c:x",
+        "counter.wasm",
+        "mod.toml",
+        "a/b/c/d/e/f/g/h/i",
+    ] {
+        let text = format!("{MANIFEST_TEXT}data = [{name:?}]\n");
+        assert!(
+            matches!(Manifest::parse(&text), Err(Refusal::Data { .. })),
+            "{name:?}"
+        );
+    }
+    let twice = format!("{MANIFEST_TEXT}data = [\"a.toml\", \"a.toml\"]\n");
+    assert!(matches!(Manifest::parse(&twice), Err(Refusal::Data { .. })));
+    assert!(valid_data("art/cards/x.v2.png"));
+}
+
+#[test]
 fn manifest_needs_semantic_versions() {
     let text = MANIFEST_TEXT.replace("\"1.2.0\"", "\"one\"");
     assert!(matches!(Manifest::parse(&text), Err(Refusal::Manifest(_))));

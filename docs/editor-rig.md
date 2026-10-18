@@ -1,6 +1,6 @@
 # The rig: the live window, hidden
 
-`bin/rig` runs `pfx edit` in a hidden compositor on wlroots' headless backend, takes screenshots of it, types into it and closes it, so a test or a script can drive the live window without it ever appearing on a desktop. For a frame with no compositor at all, `pfx edit --shot` is quicker (`docs/editor-shots.md`); the rig is for what only a live window shows: keys, focus, the pointer, the real swapchain.
+`bin/rig` runs `pfx gui` in a hidden compositor on wlroots' headless backend, takes screenshots of it, types into it and closes it, so a test or a script can drive the live window without it ever appearing on a desktop. For a frame with no compositor at all, `pfx gui --shot` is quicker (`docs/editor-shots.md`); the rig is for what only a live window shows: keys, focus, the pointer, the real swapchain.
 
 It needs `cage` or `labwc`, `grim`, `wtype`, `unshare` with user namespaces, and `wlrctl` for the pointer.
 
@@ -23,7 +23,7 @@ bin/rig shot edit outliner              # tmp/rig-edit/tmp/outliner.png
 bin/rig down edit
 ```
 
-- `bin/rig up <file|neutral> <name>` runs `target/release/pfx edit <copy>` under `cage`, or under `labwc` with `RIG_COMPOSITOR=labwc`. It refuses a path that is not a file, a missing release binary or one older than any file under `src/` or `crates/` (build it first), and a rig already up under that name.
+- `bin/rig up <file|neutral> <name>` runs `target/release/pfx gui <copy>` under `cage`, or under `labwc` with `RIG_COMPOSITOR=labwc`. It refuses a path that is not a file, a missing release binary or one older than any file under `src/` or `crates/` (build it first), and a rig already up under that name.
 - `bin/rig shot <name> <file>`: `grim` from the rig's socket into `tmp/rig-<name>/tmp/<file>.png`.
 - `bin/rig keys <name> <wtype args…>`: one `wtype` call. A panel code is a chord: give both keys in one call (`-k b -k 1`), since the window reads any other key as the end of a pending chord. Give the window a moment before the next `shot`; it redraws on input and idles at zero frames, so a shot taken right after `keys` can be a step behind.
 - `bin/rig pointer <name> <wlrctl pointer args…>`: labwc only (cage has no virtual pointer); moves by a difference, clicks and scrolls.
@@ -33,7 +33,7 @@ bin/rig down edit
 Run a rig in one step so `down` always runs:
 
 ```sh
-bin/rig up samples/workshop.toml w2 && bin/rig shot w2 first && bin/rig keys w2 -k b -k 1 && bin/rig shot w2 second; status=$?; bin/rig down w2; exit $status
+bin/rig up samples/workshop.pitofx w2 && bin/rig shot w2 first && bin/rig keys w2 -k b -k 1 && bin/rig shot w2 second; status=$?; bin/rig down w2; exit $status
 ```
 
 ## When a rig fails

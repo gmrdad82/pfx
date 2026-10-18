@@ -4,7 +4,7 @@
 
 ## From the command line
 
-The `scene-write` example moves, renames or sets a material on an object. On a copy of the demo:
+A user's scene is a `.pitofx` ([Scenes in a .pitofx file](scene-format.md#scenes-in-a-pfx-file)): pfx's editor edits it in place through `SceneEdit`, `pfx scene print <scene.pitofx>` shows its TOML and `pfx scene write <scene.pitofx> [file] < new.toml` replaces one of its files, kept only when the scene still opens. The crate's own `scene-write` example moves, renames or sets a material on an object in a loose scene file. On a copy of the demo:
 
 ```sh
 scene-write scenes/room.scene.toml move 'right crate' 1.5 0.5 0.3
