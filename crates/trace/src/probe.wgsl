@@ -5,7 +5,7 @@ fn probe(@builtin(global_invocation_id) gid: vec3u) {
     _ = triangles[0];
     _ = nodes[0];
     _ = shapes[0];
-    _ = materials[0].tail;
+    _ = materials[0];
     _ = triangle_uv_v[0];
     _ = content_texels[0];
     _ = content_info[0];

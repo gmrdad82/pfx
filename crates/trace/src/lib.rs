@@ -9,6 +9,7 @@ pub mod lights;
 mod math;
 pub mod matte;
 pub mod probe;
+pub mod record;
 pub mod rig;
 pub mod rt;
 pub mod shapes;

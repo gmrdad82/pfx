@@ -61,26 +61,11 @@ struct Material {
     thick_sub_film: vec4f,
     tint_absorption: vec4f,
     emission_film: vec4f,
-    normal_maps: vec4f,
-    maps_content: vec4f,
-    age_a: vec4f,
-    age_b: vec4f,
-    layer0: vec4f,
-    layer1: vec4f,
-    layer2: vec4f,
-    layer3: vec4f,
-    tail: vec4f,
-    params: array<vec4f, 16>,
+    extension: vec4f,
     wet: vec4f,
-    sheen: vec4f,
-    lobes: vec4f,
-    scatter: vec4f,
-    textures: vec4f,
-    texture_scales: vec4f,
-    texture_extra: vec4f,
-    texture_transform: vec4f,
-    detail_transform: vec4f,
 }
+struct MaterialMaps { textures: vec4f, scales: vec4f, extra: vec4f, transform: vec4f, detail: vec4f }
+struct MaterialLobes { sheen: vec4f, lobes: vec4f, scatter: vec4f }
 struct Hit { t: f32, n: vec3f, geometric: vec3f, material: u32, uv: vec2f, tangent: vec3f, bitangent: vec3f, surface: u32, shape: u32 }
 struct ContentInfo { offset: u32, width: u32, height: u32, kind: u32 }
 struct InstanceSurface { clip0: vec4f, clip1: vec4f, transform: vec4f, crop: vec4f }
@@ -93,7 +78,7 @@ struct Candidate { wi: vec3f, scale: vec3f, pdf: f32, roughness: f32, direction:
 @group(0) @binding(1) var<storage, read> triangles: array<Tri>;
 @group(0) @binding(2) var<storage, read> nodes: array<Node>;
 @group(0) @binding(3) var<storage, read> shapes: array<Shape>;
-@group(0) @binding(4) var<storage, read> materials: array<Material>;
+@group(0) @binding(4) var<storage, read> materials: array<vec4f>;
 @group(0) @binding(5) var<storage, read> triangle_uv_v: array<vec4f>;
 @group(0) @binding(6) var<storage, read> content_texels: array<vec4f>;
 @group(0) @binding(7) var<storage, read_write> accum: array<Accum>;
@@ -104,8 +89,40 @@ struct Candidate { wi: vec3f, scale: vec3f, pdf: f32, roughness: f32, direction:
 @group(0) @binding(12) var<storage, read> instance_surfaces: array<InstanceSurface>;
 @group(0) @binding(13) var<storage, read> content_layers: array<ContentLayer>;
 
+const HOT_ROWS: u32 = 8u;
+const EXTENSION_LAYERS: u32 = 7u;
+const EXTENSION_MAPS: u32 = 8u;
+const EXTENSION_LOBES: u32 = 16u;
+fn record_at(at: u32) -> Material {
+    return Material(materials[at],materials[at+1u],materials[at+2u],materials[at+3u],
+        materials[at+4u],materials[at+5u],materials[at+6u],materials[at+7u]);
+}
+fn material_at(material: u32) -> Material {
+    return record_at((material+1u)*HOT_ROWS);
+}
+fn material_row(material: u32, row: u32) -> vec4f {
+    return materials[(material+1u)*HOT_ROWS+row];
+}
 fn effects() -> Material {
-    return materials[arrayLength(&materials)-1u];
+    return record_at(0u);
+}
+fn extension_flags(m: Material) -> u32 {
+    return bitcast<u32>(m.extension.y);
+}
+fn extension_lobes(m: Material) -> u32 {
+    return bitcast<u32>(m.extension.z)+select(0u,5u,(extension_flags(m)&EXTENSION_MAPS)!=0u);
+}
+fn extension_layers(m: Material) -> u32 {
+    return extension_lobes(m)+select(0u,3u,(extension_flags(m)&EXTENSION_LOBES)!=0u);
+}
+fn material_maps(m: Material) -> MaterialMaps {
+    let at=bitcast<u32>(m.extension.z);
+    return MaterialMaps(materials[at],materials[at+1u],materials[at+2u],materials[at+3u],materials[at+4u]);
+}
+fn material_lobes(m: Material) -> MaterialLobes {
+    if ((extension_flags(m)&EXTENSION_LOBES)==0u) { return MaterialLobes(vec4f(0.0),vec4f(0.0),vec4f(0.0)); }
+    let at=extension_lobes(m);
+    return MaterialLobes(materials[at],materials[at+1u],materials[at+2u]);
 }
 
 fn trace_noise_start() {}
@@ -601,11 +618,11 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
     return false;
 }
 fn cast_tint(material: u32) -> vec3f {
-    let transmission=materials[material].sheen_trans_ior_disp.y;
+    let transmission=material_row(material,2u).y;
     if (transmission<=0.0) { return vec3f(0.0); }
-    var passed=materials[material].base_roughness.xyz;
-    let thickness=materials[material].thick_sub_film.x;
-    let absorption=materials[material].tint_absorption.w;
+    var passed=material_row(material,0u).xyz;
+    let thickness=material_row(material,3u).x;
+    let absorption=material_row(material,4u).w;
     if (thickness>0.0 && absorption>0.0) { passed=beer(thickness,passed,absorption); }
     return clamp(passed*transmission,vec3f(0.0),vec3f(1.0));
 }
@@ -691,7 +708,7 @@ fn surface(material: Material) -> Shaded {
         material.sheen_trans_ior_disp.x,material.sheen_trans_ior_disp.y,material.sheen_trans_ior_disp.z,material.sheen_trans_ior_disp.w,
         material.thick_sub_film.x,material.thick_sub_film.y,material.tint_absorption.xyz,material.tint_absorption.w,
         material.thick_sub_film.z,material.thick_sub_film.w,material.emission_film.w,material.emission_film.xyz,
-        material.age_b.w,vec3f(0.0,0.0,1.0));
+        material.extension.x,vec3f(0.0,0.0,1.0));
 }
 fn detail_wobble(p: vec3f, scale: f32) -> vec3f {
     let q=p*scale;
@@ -1233,20 +1250,23 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             *first_normal=vec4f(n,1.0);
             break;
         }
-        let m=materials[hit.material];
+        let m=material_at(hit.material);
         var s=surface(m);
-        let layers=array<vec4f,4>(m.layer0,m.layer1,m.layer2,m.layer3);
-        for (var i=0u;i<4u;i++) {
-            if (layers[i].x>0.0 && layers[i].z!=0.0) {
-                let detailed=detail_layer(s,n,layers[i],m.params[i*4u],m.params[i*4u+1u],m.params[i*4u+2u],m.params[i*4u+3u],p);
+        let flags=extension_flags(m);
+        let layered=flags&EXTENSION_LAYERS;
+        if (layered>0u) {
+            let first=extension_layers(m);
+            for (var i=0u;i<layered;i++) {
+                let at=first+i*5u;
+                let detailed=detail_layer(s,n,materials[at],materials[at+1u],materials[at+2u],materials[at+3u],materials[at+4u],p);
                 s=detailed.shade;
                 n=detailed.normal;
             }
         }
         traced_occlusion=1.0;
         traced_direction=vec3f(1.0,0.0,1.0);
-        if (TRACE_MAPS && traced_textured(m)) {
-            let textured=traced_maps(s,n,m,hit,p);
+        if (TRACE_MAPS && (flags&EXTENSION_MAPS)!=0u) {
+            let textured=traced_maps(s,n,material_maps(m),hit,p);
             s=textured.shade;
             n=textured.normal;
         }
@@ -1303,7 +1323,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         result+=indirect_capped(throughput*s.emission,bounce>1u);
         if (last) { break; }
         let transform=basis(n);
-        if (TRACE_LOBES) { lobes_traced(m,transform,hit,n); }
+        if (TRACE_LOBES) { lobes_traced(material_lobes(m),transform,hit,n); }
         let wo=transpose(transform)*(-d);
         let origin=spawn_point(p,n,o,hit.t);
         let entering=dot(hit.n,d)<0.0;
