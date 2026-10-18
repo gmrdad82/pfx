@@ -7,6 +7,7 @@ crates/gpu/src/pace.rs	dispatch=1
 crates/live/src/deform.rs	paper=3
 crates/live/src/frame.rs	paper=2
 crates/live/src/lights.rs	paper=8
+crates/live/src/screen_shadows.rs	dispatch=12
 crates/live/src/sky.rs	dispatch=10
 crates/live/src/text.rs	paper=5
 crates/materials/src/material.rs	paper=3

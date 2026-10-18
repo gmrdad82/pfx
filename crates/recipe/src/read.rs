@@ -18,9 +18,9 @@ use crate::{
     OLD_HEADER, Object, Orbit, Order, Origin, Ortho, Outline, Output, Owner, PathKey, PathKind,
     PieceRule, Plate, PlateView, Plates, Play, Problem, Profile, ProfileKind, Projection, Proxy,
     REFERENCE_HOUR, RELEASE_EASE, RIG_LOOK, RIG_OFFSET, Recipe, Reference, Rig, RigFocus, RigFrame,
-    RigShake, RigTracks, Room, RootMotion, RouteSpec, SCHEMA, Scatter, Shadow, Sky, SkyAmbient,
-    SkyKind, SkyLight, Span, Spring, Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline,
-    Trace, Use, Uv, Variant, VariantOutput, View, Volume,
+    RigShake, RigTracks, Room, RootMotion, RouteSpec, SCHEMA, Scatter, Shadow, ShadowLook,
+    ShadowQuality, Sky, SkyAmbient, SkyKind, SkyLight, Span, Spring, Stage, Sun, TEXTURE_KEYS,
+    TextSpace, Textures, Timeline, Trace, Use, Uv, Variant, VariantOutput, View, Volume,
 };
 
 pub(crate) struct Source {
@@ -1515,6 +1515,7 @@ fn read_kind(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Kind, Error> 
             clip: tab.opt(cx, "clip", STR)?,
             looped: tab.or(cx, "loop", true, BOOL)?,
             play: read_play(cx, tab)?,
+            edit: read_edit(cx, tab)?,
         },
         "generator" => {
             let generator = tab.req(cx, "generator", STR)?;
@@ -1532,6 +1533,7 @@ fn read_kind(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Kind, Error> 
             clip: tab.opt(cx, "clip", STR)?,
             looped: tab.or(cx, "loop", true, BOOL)?,
             play: read_play(cx, tab)?,
+            edit: read_edit(cx, tab)?,
         },
         "card" => Kind::Card {
             size: size2_or_px(tab, cx)?,
@@ -1613,7 +1615,7 @@ fn read_play(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<Play, Error> {
     })
 }
 
-fn read_pieces(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<Vec<PieceRule>, Error> {
+fn read_pieces(cx: &mut Cx, tab: &mut Tab<'_>, merged: bool) -> Result<Vec<PieceRule>, Error> {
     let Some(item) = tab.peek(cx, "pieces") else {
         return Ok(Vec::new());
     };
@@ -1639,17 +1641,8 @@ fn read_pieces(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<Vec<PieceRule>, Error> 
             ));
         };
         let line = cx.item_line(value);
-        let index = select.strip_prefix('#');
-        let wrong = match index {
-            Some(digits) => digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()),
-            None => select.is_empty() || select.split('/').any(str::is_empty),
-        };
-        if wrong {
-            return Err(Error::new(
-                at,
-                Some(line),
-                "expected a node name, a parent/child path of names or #<node index>",
-            ));
+        if let Some(text) = piece_select(select, merged) {
+            return Err(Error::new(at, Some(line), text));
         }
         let mut sub = Tab::new(cx, fields, at.clone(), format!("{ipath}.{select}"), line);
         let material = sub.opt(cx, "material", STR)?;
@@ -1669,6 +1662,64 @@ fn read_pieces(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<Vec<PieceRule>, Error> 
         });
     }
     Ok(out)
+}
+
+fn piece_select(select: &str, merged: bool) -> Option<&'static str> {
+    const WRONG: &str = "expected a node name, a parent/child path of names or #<node index>, then `/#<k>` for a piece `split` makes and `/<name>` for one a region or panel cuts";
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    let (lead, text) = match select.strip_prefix('/') {
+        Some(rest) => (true, rest),
+        None => (false, select),
+    };
+    let steps: Vec<&str> = text.split('/').collect();
+    if steps.iter().any(|s| s.is_empty()) {
+        return Some(WRONG);
+    }
+    let tail = if lead {
+        if !merged {
+            return Some(
+                "a library object's pieces are cut from its nodes, so the key starts with the node, as in `<node>/#<k>` or `<node>/<region>`",
+            );
+        }
+        &steps[..]
+    } else if let Some(index) = steps[0].strip_prefix('#') {
+        if !digits(index) {
+            return Some(WRONG);
+        }
+        &steps[1..]
+    } else {
+        let at = (1..steps.len())
+            .find(|&i| steps[i].starts_with('#'))
+            .unwrap_or(steps.len());
+        &steps[at..]
+    };
+    if !lead && merged && !tail.is_empty() {
+        return Some(
+            "a mesh object merges the file's nodes into one piece, so a piece cut from it is `/#<k>` or `/<region>`, without a node",
+        );
+    }
+    let rest = match tail.first().and_then(|s| s.strip_prefix('#')) {
+        Some(k) if digits(k) && k.parse::<usize>().is_ok_and(|k| k > 0) => &tail[1..],
+        Some(_) => return Some(WRONG),
+        None => tail,
+    };
+    match rest {
+        [] => None,
+        [name] if !name.starts_with('#') => None,
+        _ => Some(WRONG),
+    }
+}
+
+fn read_edit(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<crate::MeshEdit, Error> {
+    let mut carve = BTreeMap::new();
+    for key in crate::CARVE {
+        if let Some(item) = tab.peek(cx, key) {
+            table_list(cx, &tab.kpath(key), item)?;
+            carve.insert(key.to_string(), json_of_item(item));
+        }
+    }
+    let split = tab.or(cx, "split", false, BOOL)?;
+    Ok(crate::MeshEdit { carve, split })
 }
 
 fn read_morph(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<BTreeMap<String, f64>, Error> {
@@ -1825,7 +1876,7 @@ fn read_object(cx: &mut Cx, t: &dyn TableLike, index: usize, line: usize) -> Res
         None
     };
     let pieces = if imported {
-        read_pieces(cx, &mut tab)?
+        read_pieces(cx, &mut tab, matches!(kind, Kind::Mesh { .. }))?
     } else {
         Vec::new()
     };
@@ -3061,7 +3112,58 @@ fn read_variants(cx: &mut Cx, root: &mut Tab<'_>) -> Result<BTreeMap<String, Var
     Ok(out)
 }
 
-fn read_look(cx: &mut Cx, root: &mut Tab<'_>) -> Result<Option<Look>, Error> {
+fn read_shadows(cx: &mut Cx, look: &mut Tab<'_>) -> Result<Option<ShadowLook>, Error> {
+    let Some(mut tab) = look.sub(cx, "shadows")? else {
+        return Ok(None);
+    };
+    let names = ShadowQuality::NAMES;
+    let quality = match tab.peek(cx, "quality") {
+        Some(item) => Some(choice(cx, &tab.kpath("quality"), item, &names)?),
+        None => None,
+    };
+    let shadows = ShadowLook {
+        quality,
+        cascades: tab.opt(cx, "cascades", UINT)?,
+        resolution: tab.opt(cx, "resolution", UINT)?,
+        softness: tab.opt(cx, "softness", NUM)?,
+        bias: tab.opt(cx, "bias", NUM)?,
+        occlusion: tab.opt(cx, "occlusion", BOOL)?,
+        occlusion_radius: tab.opt(cx, "occlusion_radius", NUM)?,
+        contact: tab.opt(cx, "contact", BOOL)?,
+        contact_length: tab.opt(cx, "contact_length", NUM)?,
+    };
+    let out_of = |key: &str, range: String| {
+        Error::new(
+            tab.kpath(key),
+            cx.lines.get(&tab.kipath(key)).copied(),
+            format!("expected {range}"),
+        )
+    };
+    for (key, value, [low, high]) in [
+        ("cascades", shadows.cascades, [1, 3]),
+        ("resolution", shadows.resolution, [256, 8192]),
+    ] {
+        if value.is_some_and(|v| !(low..=high).contains(&v)) {
+            return Err(out_of(key, format!("a whole number from {low} to {high}")));
+        }
+    }
+    if shadows.softness.is_some_and(|v| !(0.0..=8.0).contains(&v)) {
+        return Err(out_of("softness", "a number from 0 to 8".into()));
+    }
+    for (key, value, high) in [
+        ("bias", shadows.bias, 16.0),
+        ("occlusion_radius", shadows.occlusion_radius, 100.0),
+        ("contact_length", shadows.contact_length, 10.0),
+    ] {
+        if value.is_some_and(|v| !(v > 0.0 && v <= high)) {
+            return Err(out_of(key, format!("a number above 0, up to {high}")));
+        }
+    }
+    tab.finish(cx)?;
+    Ok(Some(shadows))
+}
+
+fn read_look(cx: &mut Cx, root: &mut Tab<'_>) -> Result<(Option<Look>, Option<ShadowLook>), Error> {
     if let Some(item) = root.retired("finish") {
         return Err(Error::new(
             root.kpath("finish"),
@@ -3070,8 +3172,12 @@ fn read_look(cx: &mut Cx, root: &mut Tab<'_>) -> Result<Option<Look>, Error> {
         ));
     }
     let Some(mut tab) = root.sub(cx, "look")? else {
-        return Ok(None);
+        return Ok((None, None));
     };
+    let shadows = read_shadows(cx, &mut tab)?;
+    if !tab.t.is_empty() && tab.t.iter().all(|(key, _)| key == "shadows") {
+        return Ok((None, shadows));
+    }
     let view = pick(
         &mut tab,
         cx,
@@ -3143,13 +3249,16 @@ fn read_look(cx: &mut Cx, root: &mut Tab<'_>) -> Result<Option<Look>, Error> {
         ));
     }
     tab.finish(cx)?;
-    Ok(Some(Look {
-        view,
-        exposure,
-        grade,
-        lut,
-        lut_amount,
-    }))
+    Ok((
+        Some(Look {
+            view,
+            exposure,
+            grade,
+            lut,
+            lut_amount,
+        }),
+        shadows,
+    ))
 }
 
 fn read_trace(cx: &mut Cx, root: &mut Tab<'_>) -> Result<Trace, Error> {
@@ -3644,7 +3753,7 @@ fn read_root(
     let collections = tables(cx, &mut root, "collection", read_collection)?;
     let variants = read_variants(cx, &mut root)?;
     let sidecar = read_sidecar(cx, &mut root)?;
-    let look = read_look(cx, &mut root)?;
+    let (look, shadows) = read_look(cx, &mut root)?;
     let trace = read_trace(cx, &mut root)?;
     let bake = read_bake(cx, &mut root)?;
     let timeline = read_timeline(cx, &mut root, seed)?;
@@ -3730,6 +3839,7 @@ fn read_root(
         variants,
         sidecar,
         look,
+        shadows,
         trace,
         bake,
         timeline,

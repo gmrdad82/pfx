@@ -500,6 +500,7 @@ pub struct View {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Quality {
     pub resolution: u32,
+    pub cascades: u32,
     pub lambda: f32,
     pub blend: f32,
     pub pcf_radius: f32,
@@ -532,6 +533,7 @@ impl Default for Quality {
     fn default() -> Self {
         Self {
             resolution: DEFAULT_RESOLUTION,
+            cascades: CASCADE_COUNT as u32,
             lambda: 0.5,
             blend: 0.1,
             pcf_radius: 1.0,
@@ -558,7 +560,14 @@ impl Default for Quality {
 
 impl Quality {
     pub fn splits_near_map(&self) -> bool {
-        self.near_map && self.receiver.is_some() && outer(self)
+        self.near_map
+            && self.receiver.is_some()
+            && outer(self)
+            && self.cascade_count() == CASCADE_COUNT
+    }
+
+    pub fn cascade_count(&self) -> usize {
+        (self.cascades as usize).clamp(1, CASCADE_COUNT)
     }
 }
 
@@ -706,7 +715,7 @@ pub struct Shadows {
 }
 
 fn outer(quality: &Quality) -> bool {
-    finite(quality.outer_scale) > 1.0
+    finite(quality.outer_scale) > 1.0 && quality.cascade_count() > 1
 }
 
 pub fn transmission_size(resolution: u32) -> u32 {
@@ -714,13 +723,18 @@ pub fn transmission_size(resolution: u32) -> u32 {
 }
 
 pub fn splits(near: f32, far: f32, lambda: f32) -> [f32; 4] {
+    splits_for(near, far, lambda, CASCADE_COUNT)
+}
+
+pub fn splits_for(near: f32, far: f32, lambda: f32, count: usize) -> [f32; 4] {
+    let count = count.clamp(1, CASCADE_COUNT);
     let near = finite(near).max(1.0e-4);
     let far = finite(far).max(near + 1.0e-3);
     let lambda = finite(lambda).clamp(0.0, 1.0);
     let ratio = far / near;
-    let mut out = [near, 0.0, 0.0, far];
-    for (index, slot) in out.iter_mut().enumerate().skip(1).take(CASCADE_COUNT - 1) {
-        let portion = index as f32 / CASCADE_COUNT as f32;
+    let mut out = [near, far, far, far];
+    for (index, slot) in out.iter_mut().enumerate().skip(1).take(count - 1) {
+        let portion = index as f32 / count as f32;
         let logarithmic = near * ratio.powf(portion);
         let uniform = near + (far - near) * portion;
         *slot = lambda * logarithmic + (1.0 - lambda) * uniform;
@@ -824,7 +838,8 @@ pub fn camera_view_proj(view: &View) -> Mat4 {
 
 pub fn fit(view: &View, toward_sun: [f32; 3], quality: &Quality) -> Fit {
     let (fov_y, aspect, near, far) = camera_limits(view);
-    let distances = splits(near, far, quality.lambda);
+    let count = quality.cascade_count();
+    let distances = splits_for(near, far, quality.lambda, count);
     let [_, _, forward] = camera_axes(view);
     let [light_right, light_up, light_forward] = light_basis(toward_sun);
     let resolution = quality.resolution.max(2);
@@ -847,7 +862,7 @@ pub fn fit(view: &View, toward_sun: [f32; 3], quality: &Quality) -> Fit {
             slice_near - (slice_near - previous) * finite(quality.blend).clamp(0.0, 1.0)
         };
         if let Some(receiver) = quality.receiver {
-            let grow = if index == CASCADE_COUNT - 1 && outer(quality) {
+            let grow = if index == count - 1 && outer(quality) {
                 finite(quality.outer_scale)
             } else {
                 1.0
@@ -940,6 +955,10 @@ pub fn fit(view: &View, toward_sun: [f32; 3], quality: &Quality) -> Fit {
             light_center,
             snapped_center: snapped,
         };
+    }
+    let last = cascades[count - 1];
+    for cascade in cascades.iter_mut().skip(count) {
+        *cascade = last;
     }
     Fit {
         splits: distances,
@@ -1225,6 +1244,35 @@ impl Shadows {
         self.quality.get()
     }
 
+    fn drawn(&self) -> &[wgpu::TextureView] {
+        &self.layers[..self.quality.get().cascade_count()]
+    }
+
+    pub fn fill_unused(&self, encoder: &mut wgpu::CommandEncoder) {
+        let count = self.quality.get().cascade_count();
+        let layer = |z: usize| wgpu::TexelCopyTextureInfo {
+            texture: &self.atlas,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: 0,
+                y: 0,
+                z: z as u32,
+            },
+            aspect: wgpu::TextureAspect::All,
+        };
+        for unused in count..CASCADE_COUNT {
+            encoder.copy_texture_to_texture(
+                layer(count - 1),
+                layer(unused),
+                wgpu::Extent3d {
+                    width: self.resolution,
+                    height: self.resolution,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
+
     pub fn set_quality(&self, quality: Quality) -> Result<(), String> {
         if quality.resolution != self.resolution {
             return Err("shadow resolution needs a new atlas".into());
@@ -1342,7 +1390,7 @@ impl Shadows {
                 },
             ],
         });
-        for (index, layer) in self.layers.iter().enumerate() {
+        for (index, layer) in self.drawn().iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 multiview_mask: None,
                 label: Some("creature shadow cascade"),
@@ -1530,6 +1578,7 @@ impl Shadows {
         {
             self.transmission = Some(transmission_maps(device, size, tiles));
         }
+        let drawn = self.quality.get().cascade_count();
         let Some(transmission) = self.transmission.as_mut() else {
             return;
         };
@@ -1543,7 +1592,7 @@ impl Shadows {
             .layers
             .iter()
             .zip(&transmission.depth_layers)
-            .take(CASCADE_COUNT)
+            .take(drawn)
             .enumerate()
         {
             let writes = profiler
@@ -1556,7 +1605,7 @@ impl Shadows {
                         .filter(|_| index == 0),
                     end_of_pass_write_index: writes
                         .end_of_pass_write_index
-                        .filter(|_| index + 1 == CASCADE_COUNT),
+                        .filter(|_| index + 1 == drawn),
                 })
                 .filter(|writes| {
                     writes.beginning_of_pass_write_index.is_some()
@@ -1679,7 +1728,7 @@ impl Shadows {
         if count == 0 {
             return Ok(());
         }
-        for (index, layer) in self.layers.iter().enumerate() {
+        for (index, layer) in self.drawn().iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 multiview_mask: None,
                 label: Some("impostor shadow cascade"),
@@ -1709,7 +1758,7 @@ impl Shadows {
         draw: &mut LayerDraw<'_>,
         mut profiler: Option<&mut GpuProfiler>,
     ) {
-        for (index, layer) in self.layers.iter().enumerate() {
+        for (index, layer) in self.drawn().iter().enumerate() {
             let timing = profiler
                 .as_deref_mut()
                 .and_then(|timer| timer.pass(format!("shadow cascade {}", index + 1)));
@@ -1760,7 +1809,7 @@ impl Shadows {
         if matches!(load, wgpu::LoadOp::Load) && draws.is_empty() {
             return;
         }
-        for (index, layer) in self.layers.iter().enumerate() {
+        for (index, layer) in self.drawn().iter().enumerate() {
             let timing = profiler
                 .as_deref_mut()
                 .and_then(|timer| timer.pass(format!("shadow cascade {}", index + 1)));

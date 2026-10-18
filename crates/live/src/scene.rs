@@ -41,6 +41,7 @@ pub struct Applied {
     pub lens: bool,
     pub finish: bool,
     pub motion_blur: bool,
+    pub shadows: bool,
 }
 
 impl Applied {
@@ -54,6 +55,7 @@ impl Applied {
             || self.lens
             || self.finish
             || self.motion_blur
+            || self.shadows
     }
 }
 
@@ -390,6 +392,14 @@ fn is_glass(draws: &Draws, index: usize) -> bool {
     material.family == Family::Glass || material.transmission > 0.0
 }
 
+fn apply_shadows(renderer: &mut Renderer, look: &pfx_load::scene::Shadows) -> Result<(), String> {
+    let quality = crate::screen_shadows::look_quality(look, renderer.shadows().quality());
+    if quality != renderer.shadows().quality() {
+        renderer.set_shadow_quality(quality);
+    }
+    renderer.set_screen_shadows(crate::screen_shadows::look_screen(look))
+}
+
 fn set_sun_radius(renderer: &mut Renderer, radius: f32) -> bool {
     let quality = renderer.shadows().quality();
     if quality.sun_radius_deg == radius {
@@ -490,6 +500,9 @@ impl Renderer {
         self.set_sky(sky_source(scene.environment()), staged.sun.hour)?;
         apply_haze(self, scene.haze.as_ref());
         set_sun_radius(self, staged.sun.radius);
+        if let Some(look) = &scene.shadows {
+            apply_shadows(self, look)?;
+        }
         self.set_sky_look(scene_look(scene));
         self.set_lens(lens(&staged.camera, aspect_of(self)));
         if let Some(finish) = &scene.finish {
@@ -855,6 +868,10 @@ impl Staged {
             self.blurred = blurred(scene);
             renderer.set_motion_blur(scene.motion_blur);
             applied.motion_blur = true;
+        }
+        if diff.shadows {
+            apply_shadows(renderer, &scene.shadows.unwrap_or_default())?;
+            applied.shadows = true;
         }
         Ok(applied)
     }

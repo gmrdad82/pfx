@@ -678,6 +678,33 @@ fn sky_sun_camera_finish_and_content_changes_are_flagged() {
 }
 
 #[test]
+fn a_shadows_table_reaches_the_scene_and_changes_nothing_else() {
+    let plain = Scene::open(fixtures().join("room.scene.toml")).unwrap();
+    assert!(plain.shadows.is_none());
+    let diff = diff_after("diff-shadows", |folder| {
+        let mut text = folder.read("room.scene.toml");
+        text.push_str("\n[shadows]\nquality = \"high\"\ncascades = 2\ncontact_length = 0.2\n");
+        folder.write("room.scene.toml", &text);
+    });
+    assert!(
+        diff.shadows && !diff.draws() && !diff.finish && !diff.sun,
+        "{diff:?}"
+    );
+    let folder = Folder::new("shadows-on");
+    let mut text = folder.read("room.scene.toml");
+    text.push_str("\n[shadows]\nquality = \"high\"\ncascades = 2\ncontact_length = 0.2\n");
+    folder.write("room.scene.toml", &text);
+    let shadows = folder.open().unwrap().shadows.unwrap();
+    assert_eq!(shadows.quality, Some(ShadowQuality::High));
+    assert_eq!(shadows.cascades, Some(2));
+    assert_eq!(shadows.contact_length, Some(0.2));
+    let error = refused("shadows-cascades", "[shadows]\ncascades = 4\n");
+    assert!(error.message.contains("cascades"), "{error}");
+    let error = refused("shadows-key", "[shadows]\nambient = true\n");
+    assert!(error.message.contains("occlusion"), "{error}");
+}
+
+#[test]
 fn a_trace_table_turns_on_transmissive_shadows_for_the_tracer_alone() {
     let plain = Scene::open(fixtures().join("room.scene.toml")).unwrap();
     assert!(!plain.trace.transmissive_shadows);

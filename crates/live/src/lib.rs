@@ -30,6 +30,7 @@ mod ranges;
 pub mod reflect;
 pub mod renderer;
 pub mod scene;
+pub mod screen_shadows;
 pub mod shadow;
 pub mod skin;
 pub mod sky;

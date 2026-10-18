@@ -7,8 +7,10 @@ use pfx_live::frame::Sun;
 use pfx_live::lights::{LocalLight, MAX_CLUSTERED, MAX_LIGHTS};
 use pfx_live::sky::SkySource;
 use pfx_load::{RoomLamp, RoomSky, Sky};
-use pfx_post::{Bloom, Chain, Pass, Saturation, Tone, Vignette, Warmth};
-use pfx_recipe::{CAP_LUMINANCE, CAP_MEAN, CAPPED, Recipe, Room, SkyAmbient, SkyKind, View};
+use pfx_post::{Bloom, Chain, Flare, MotionBlur, Pass, Saturation, Tone, Vignette, Warmth};
+use pfx_recipe::{
+    CAP_LUMINANCE, CAP_MEAN, CAPPED, Recipe, Room, Setting, Settings, SkyAmbient, SkyKind, View,
+};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -70,6 +72,7 @@ pub struct Lighting {
     pub lights: Vec<LocalLight>,
     pub finish: Chain,
     pub haze: Option<RoomHaze>,
+    pub motion_blur: Option<MotionBlur>,
 }
 
 #[derive(Clone, Copy)]
@@ -127,8 +130,9 @@ impl Lighting {
                 .map(|sky| sky.shade.clone())
                 .unwrap_or_default(),
             lights: lights(recipe)?,
-            finish: finish(recipe),
+            finish: finish(recipe)?,
             haze: haze(recipe),
+            motion_blur: recipe.effects.motion_blur.as_ref().map(motion_blur),
         })
     }
 
@@ -536,7 +540,61 @@ pub fn reach(range: f64, intensity: f64) -> f64 {
     }
 }
 
-fn finish(recipe: &Recipe) -> Chain {
+fn finish(recipe: &Recipe) -> Result<Chain, Error> {
+    let mut chain = graded_or_standard(recipe);
+    if let Some(look) = &recipe.look
+        && let Some(file) = &look.lut
+    {
+        let path = match &recipe.base {
+            Some(base) => base.join(file),
+            None => PathBuf::from(file),
+        };
+        let bytes = pfx_recipe::files::read(&path)
+            .map_err(|e| Error(format!("look.lut: {}: {e}", path.display())))?;
+        let mut lut = pfx_post::cube::parse_bytes(&bytes)
+            .map_err(|e| Error(format!("look.lut: {}: {e}", path.display())))?;
+        if let Some(amount) = look.lut_amount {
+            lut.amount = amount as f32;
+        }
+        pfx_post::put_lut(&mut chain, lut);
+    }
+    if let Some(settings) = &recipe.effects.flare {
+        chain.set_flare(flare(settings));
+    }
+    Ok(chain)
+}
+
+pub fn flare(settings: &Settings) -> Flare {
+    let mut flare = Flare::default();
+    for (key, value) in settings {
+        match (*key, value) {
+            ("amount", Setting::Number(v)) => flare.amount = *v as f32,
+            ("ghosts", Setting::Whole(v)) => flare.ghosts = (*v).min(u64::from(u32::MAX)) as u32,
+            ("ghost_spacing", Setting::Number(v)) => flare.ghost_spacing = *v as f32,
+            ("halo", Setting::Number(v)) => flare.halo = *v as f32,
+            ("halo_radius", Setting::Number(v)) => flare.halo_radius = *v as f32,
+            ("starburst", Setting::Number(v)) => flare.starburst = *v as f32,
+            ("threshold", Setting::Number(v)) => flare.threshold = *v as f32,
+            _ => {}
+        }
+    }
+    flare
+}
+
+pub fn motion_blur(settings: &Settings) -> MotionBlur {
+    let mut blur = MotionBlur::default();
+    for (key, value) in settings {
+        match (*key, value) {
+            ("shutter", Setting::Number(v)) => blur.shutter = *v as f32,
+            ("max_px", Setting::Number(v)) => blur.max_px = *v as f32,
+            ("samples", Setting::Whole(v)) => blur.samples = (*v).min(u64::from(u32::MAX)) as u32,
+            _ => {}
+        }
+    }
+    blur
+}
+
+fn graded_or_standard(recipe: &Recipe) -> Chain {
     let Some(look) = &recipe.look else {
         return graded(1.0, 0.0, 0.0, 1.0, 0.0);
     };
@@ -627,6 +685,36 @@ mod tests {
 
     fn recipe(text: &str) -> Recipe {
         parse(&format!("recipe = 1\nname = \"t\"\n{text}")).unwrap()
+    }
+
+    #[test]
+    fn the_look_lut_flare_and_motion_blur_reach_the_finish_of_every_recipe_view() {
+        let swap =
+            pfx_post::cube::format(&pfx_post::cube::generate(2, |[r, g, b]| [b, g, r]), "swap");
+        let _files = pfx_recipe::files::mount(BTreeMap::from([(
+            PathBuf::from("/look/swap.cube"),
+            swap.into_bytes(),
+        )]));
+        let mut r = recipe(
+            "[look]\nexposure = 1.0\nlut = \"swap.cube\"\nlut_amount = 0.5\n[flare]\namount = 0.4\nghosts = 3\n[motion_blur]\nshutter = 0.5\nsamples = 6\n",
+        );
+        r.base = Some(PathBuf::from("/look"));
+        let lit = Lighting::of(&r).unwrap();
+        let at = |found: fn(&Pass) -> bool| lit.finish.passes.iter().position(found);
+        let lut = at(|pass| matches!(pass, Pass::Lut(lut) if lut.amount == 0.5)).unwrap();
+        let flare =
+            at(|pass| matches!(pass, Pass::Flare(f) if f.amount == 0.4 && f.ghosts == 3)).unwrap();
+        let bloom = at(|pass| matches!(pass, Pass::Bloom(_))).unwrap();
+        let tone = at(|pass| matches!(pass, Pass::Tone(_))).unwrap();
+        assert_eq!(flare, bloom + 1);
+        assert_eq!(lut + 1, tone);
+        let blur = lit.motion_blur.unwrap();
+        assert_eq!((blur.shutter, blur.samples), (0.5, 6));
+        assert_eq!(blur.max_px, MotionBlur::default().max_px);
+        assert_eq!(crate::unapplied(&r, true), ["motion_blur"]);
+        assert!(crate::unapplied(&r, false).is_empty());
+        r.base = Some(PathBuf::from("/nowhere"));
+        assert!(Lighting::of(&r).unwrap_err().0.contains("look.lut"));
     }
 
     #[test]

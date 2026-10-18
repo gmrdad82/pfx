@@ -12,8 +12,8 @@ use crate::spans::{KeyPath, Part, Spans};
 use crate::types::{
     Camera, Content, Emitter, FORMAT, File, FileKind, Finish, FinishKeys, Flare, Haze, Light,
     Material, MaterialsFile, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates, Play,
-    PrefabFile, ProjectFile, ProjectTable, ProxiesFile, Proxy, Rig, SceneFile, Sky, Sound, Sounds,
-    Sun, Text, Tiles, Trace, Tunable,
+    PrefabFile, ProjectFile, ProjectTable, ProxiesFile, Proxy, Rig, SceneFile, Shadows, Sky, Sound,
+    Sounds, Sun, Text, Tiles, Trace, Tunable,
 };
 use crate::{Diagnostic, Location, Severity};
 
@@ -84,6 +84,7 @@ pub(crate) struct Doc {
     pub(crate) flare: Option<Flare>,
     pub(crate) motion_blur: Option<MotionBlur>,
     pub(crate) trace: Option<Trace>,
+    pub(crate) shadows: Option<Shadows>,
     pub(crate) plates: Option<Plates>,
     pub(crate) physics: Option<Physics>,
     pub(crate) play: Option<Play>,
@@ -199,6 +200,7 @@ impl Parsed {
                 flare: doc.flare,
                 motion_blur: doc.motion_blur,
                 trace: doc.trace,
+                shadows: doc.shadows,
                 plates: doc.plates.clone(),
                 physics: doc.physics.clone(),
                 play: doc.play.clone(),
@@ -266,6 +268,7 @@ pub(crate) fn keys(kind: FileKind) -> &'static [&'static str] {
             "flare",
             "motion_blur",
             "trace",
+            "shadows",
             "plates",
             "physics",
             "play",
@@ -642,6 +645,7 @@ pub(crate) fn parse(file: &Path, text: &str, kind: FileKind, context: &Context<'
             (FileKind::Scene, "flare") => doc.flare = reader.typed(value, &path),
             (FileKind::Scene, "motion_blur") => doc.motion_blur = reader.typed(value, &path),
             (_, "trace") => doc.trace = reader.typed(value, &path),
+            (FileKind::Scene, "shadows") => doc.shadows = reader.typed(value, &path),
             (_, "plates") => doc.plates = reader.typed(value, &path),
             (_, "physics") => doc.physics = reader.typed(value, &path),
             (FileKind::Scene, "play") => doc.play = reader.typed(value, &path),

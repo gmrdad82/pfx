@@ -67,8 +67,8 @@ pub use particles::{Attach, Node as ParticleNode, Particles};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
 pub use pfx_scene::types::{
-    Key, KeyShape, KeyValue, Keys, Tunable as DeclaredTunable, TunableKind as DeclaredKind,
-    TunableValue as DeclaredValue,
+    Key, KeyShape, KeyValue, Keys, ShadowQuality, Shadows, Tunable as DeclaredTunable,
+    TunableKind as DeclaredKind, TunableValue as DeclaredValue,
 };
 pub use plates::{PlateCasters, Plates, Proxies, Proxy, ProxyShape};
 pub use play::{
@@ -680,6 +680,7 @@ pub struct Scene {
     pub camera: Option<Camera>,
     pub finish: Option<Finish>,
     pub trace: TraceSettings,
+    pub shadows: Option<Shadows>,
     pub contents: BTreeMap<String, Content>,
     pub texts: BTreeMap<String, Text>,
     pub plates: Option<Plates>,

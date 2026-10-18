@@ -15,6 +15,7 @@ use crate::probes::{
 };
 use crate::ranges::FreeRanges;
 use crate::reflect;
+use crate::screen_shadows::{self, ScreenShadows};
 use crate::shadow::{CASCADE_COUNT, Fit, SAMPLE_UNIFORM_BYTES, SHADOW_WGSL, Shadows};
 use crate::skin::{
     InstancePose, NO_SKIN, PoseLayout, SKIN_BINDING, SKIN_WGSL, SkinData, SkinStore,
@@ -1080,6 +1081,9 @@ pub struct Frame {
     probes: ProbeLighting,
     sky: SkyPass,
     ssr: Option<reflect::Reflections>,
+    screen: ScreenShadows,
+    screen_pass: Option<screen_shadows::Pass>,
+    screen_fallback: wgpu::Buffer,
     viewport: [u32; 2],
     foliage: Option<Foliage>,
     fallbacks: Fallbacks,
@@ -1459,6 +1463,7 @@ pub fn shader_source_with(gobo: &Gobo) -> String {
         reflect::PROBE_WGSL,
         &canopy_light_wgsl(gobo),
         SHADER,
+        screen_shadows::FRAGMENT_WGSL,
         LIGHTS_WGSL,
     ]
     .join("\n")
@@ -1715,6 +1720,7 @@ pub fn lighting_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
         buffer_entry(CONTACT_BINDING + 2, fragment, uniform),
         texture_entry(reflect::GUIDE_BINDING, wgpu::TextureViewDimension::D2),
         buffer_entry(CAUSTIC_BINDING, fragment, uniform),
+        buffer_entry(screen_shadows::BINDING, fragment, read),
     ]
 }
 
@@ -2047,6 +2053,11 @@ impl Frame {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        let screen_fallback = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("live screen shadows off"),
+            contents: &[0; 4],
+            usage: wgpu::BufferUsages::STORAGE,
+        });
         let contact_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("live contact field"),
             contents: bytemuck::bytes_of(&ContactUniform::off()),
@@ -2168,6 +2179,9 @@ impl Frame {
             probes,
             sky,
             ssr: None,
+            screen: ScreenShadows::OFF,
+            screen_pass: None,
+            screen_fallback,
             viewport: [width, height],
             foliage: None,
             fallbacks,
@@ -2707,6 +2721,53 @@ impl Frame {
 
     pub fn contact(&self) -> Option<&ContactField> {
         self.contact.as_ref()
+    }
+
+    pub fn set_screen_shadows(&mut self, settings: ScreenShadows) -> Result<(), String> {
+        settings.check()?;
+        if !settings.on() {
+            self.screen_pass = None;
+        }
+        self.screen = settings;
+        Ok(())
+    }
+
+    pub fn screen_shadows(&self) -> ScreenShadows {
+        self.screen
+    }
+
+    fn prepare_screen(&mut self, scene: &Scene<'_>) -> f32 {
+        if !self.screen.on() {
+            return 0.0;
+        }
+        let capacity = [self.targets.width, self.targets.height];
+        if self
+            .screen_pass
+            .as_ref()
+            .is_none_or(|pass| pass.capacity() != capacity)
+        {
+            self.screen_pass = Some(screen_shadows::Pass::new(
+                &self.gpu.device,
+                &self.targets.depth_view,
+                capacity,
+            ));
+        }
+        let Some(pass) = self.screen_pass.as_mut() else {
+            return 0.0;
+        };
+        pass.write(
+            &self.gpu.queue,
+            &self.screen,
+            &screen_shadows::View {
+                view: scene.camera.view,
+                projection: scene.camera.projection,
+                jitter: self.jitter,
+                toward_sun: scene.sun.direction,
+                seed: scene.seed,
+            },
+            self.viewport,
+        );
+        self.screen.code(pass.stride())
     }
 
     pub fn write_contact(&self, values: &[f32]) -> Result<(), String> {
@@ -3387,6 +3448,7 @@ impl Frame {
         }
         self.targets = new_targets(&self.gpu, width, height)?;
         self.ssr = None;
+        self.screen_pass = None;
         self.viewport = [width, height];
         Ok(())
     }
@@ -3603,6 +3665,7 @@ impl Frame {
             .ssr
             .as_ref()
             .map_or(self.viewport, |history| history.size);
+        let screen = self.prepare_screen(scene);
         let motion_view_projection = multiply(scene.camera.projection, scene.camera.view);
         let wind = scene.wind;
         let uniforms = Uniforms {
@@ -3627,7 +3690,7 @@ impl Frame {
                 scene.sun.direction[0],
                 scene.sun.direction[1],
                 scene.sun.direction[2],
-                0.0,
+                screen,
             ],
             sun_colour_intensity: [
                 scene.sun.colour[0],
@@ -3795,6 +3858,10 @@ impl Frame {
             self.ambient_light.as_entire_binding(),
             view(ssr_guide),
             content.caustic.as_entire_binding(),
+            self.screen_pass
+                .as_ref()
+                .map_or(&self.screen_fallback, screen_shadows::Pass::output)
+                .as_entire_binding(),
         ];
         let mut bindings = 0..;
         let entries = entries.map(|resource| wgpu::BindGroupEntry {
@@ -3909,6 +3976,7 @@ impl Frame {
                 profiler.as_deref_mut(),
             );
             shadow_hook(&self.gpu, encoder, shadows, fit)?;
+            shadows.fill_unused(encoder);
             self.encode_lights(key, &batches, encoder, profiler.as_deref_mut());
             self.lights.write_uniform(
                 &self.gpu.device,
@@ -4203,6 +4271,9 @@ impl Frame {
             if let Some(foliage) = &self.foliage {
                 self.draw_cards(&mut pass, foliage, &foliage.prepass, lighting);
             }
+        }
+        if let Some(screen) = self.screen_pass.as_ref().filter(|_| self.screen.on()) {
+            screen.encode(encoder, profiler.as_deref_mut());
         }
         let opaque_timing = profiler
             .as_deref_mut()
@@ -4871,6 +4942,8 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
             sun *= caustic_gain(caustic_at, caustic_dx, caustic_dy);
         }
     }
+    let screen = screen_terms(input.position);
+    sun *= screen.y;
     let contacted = use_contact && (placed.content_face.z & 1u) != 0u;
     var contact = vec3f(1.0);
     if (contacted) {
@@ -4903,6 +4976,7 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     if (contacted) {
         irradiance *= contact;
     }
+    irradiance *= screen.x;
     var diffuse = surface.base * irradiance / PI * reflection_diffuse_weight(surface, view, n, film, film_normal);
     let previous_uv = input.previous_clip.xy / input.previous_clip.w * vec2f(0.5, -0.5) + vec2f(0.5);
     let view_normal = normalize((frame.view * vec4f(n, 0.0)).xyz);
@@ -4921,6 +4995,9 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
         if (occlusion < 1.0) {
             specular *= mix(occlusion, 1.0, clamp(ssr.a, 0.0, 1.0));
         }
+    }
+    if (screen.x < 1.0) {
+        specular *= mix(screen_specular_occlusion(clamp(wo.z, 0.0, 1.0), screen.x, surface.roughness), 1.0, clamp(ssr.a, 0.0, 1.0));
     }
     if (textured_occlusion < 1.0) {
         diffuse *= textured_occlusion;

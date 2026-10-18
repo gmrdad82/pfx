@@ -38,7 +38,7 @@ const USAGE: &str = "usage:
   pfx edit [<recipe|scene.toml|file.pfx|project folder|folder>] [--play <module.wasm>] [flags]
   pfx new <game> [--path <dir>] [--with-module]
   pfx bench <scene.toml> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
-  pfx shot <scene.toml|scene.pfx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr] [--audio <out.wav>] [--sound <script>] [--shutter S] [--seed S] [--json]
+  pfx shot <scene.toml|scene.pfx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr] [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
   pfx scene migrate <scene.toml> [--dry-run]
   pfx scene migrate --pfx <scene.toml> <out.pfx>
   pfx scene migrate --unpack <scene.pfx> <dir>
@@ -288,6 +288,7 @@ const SHOT_FLAGS: &[&str] = &[
     "--audio",
     "--camera",
     "--draft",
+    "--exposure",
     "--final",
     "--format",
     "--fps",

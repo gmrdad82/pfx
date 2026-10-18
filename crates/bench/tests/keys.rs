@@ -98,6 +98,7 @@ fn shot(scene: &Scene) -> Vec<Vec<u16>> {
             quality: Quality::Final,
             seed: SEED,
             shutter: None,
+            fixed_exposure: false,
         },
         |frame| {
             frames.push(frame.pixels);

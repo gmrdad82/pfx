@@ -59,8 +59,11 @@ fn still(args: &Args, registry: &Registry) -> Result<Vec<u8>, Error> {
         registry,
         args.time,
     )?;
+    if let Some(line) = pfx_recipe_scene::unapplied_line("shot", &recipe, false) {
+        eprintln!("{line}");
+    }
     let gpu = pfx_recipe_scene::headless()?;
-    pfx_recipe_scene::shoot(&gpu, &recipe, &built.parts, &args.camera, args.size)
+    pfx_recipe_scene::shoot_posed(&gpu, (&recipe, &built), &args.camera, args.size, args.time)
 }
 
 const THUMB: [u32; 2] = [320, 200];

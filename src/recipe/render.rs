@@ -468,6 +468,12 @@ fn traced(
         time: args.time,
     };
     let rendered = pfx_still::render(&request, registry, progress)?;
+    if !rendered.left_out.is_empty() {
+        eprintln!(
+            "pfx render: the traced renderer leaves out {}",
+            rendered.left_out.join(", ")
+        );
+    }
     progress(Step::Write);
     written(args, &rendered)?;
     let paced = rendered.paced;

@@ -773,6 +773,50 @@ impl Trace {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
+pub enum ShadowQuality {
+    Low,
+    #[default]
+    Medium,
+    High,
+    Ultra,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Shadows {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quality: Option<ShadowQuality>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cascades: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub softness: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bias: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occlusion: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occlusion_radius: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_length: Option<f32>,
+}
+
+impl Shadows {
+    pub const CASCADES: [u32; 2] = [1, 3];
+    pub const RESOLUTION: [u32; 2] = [256, 8192];
+    pub const SOFTNESS: [f32; 2] = [0.0, 8.0];
+    pub const BIAS: [f32; 2] = [0.0, 16.0];
+    pub const OCCLUSION_RADIUS: [f32; 2] = [0.0, 100.0];
+    pub const CONTACT_LENGTH: [f32; 2] = [0.0, 10.0];
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
 pub enum Casters {
     #[default]
     Meshes,

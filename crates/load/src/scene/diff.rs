@@ -61,6 +61,7 @@ pub struct SceneDiff {
     pub camera: bool,
     pub finish: bool,
     pub trace: bool,
+    pub shadows: bool,
     pub plates: bool,
     pub physics: bool,
     pub motion_blur: bool,
@@ -91,6 +92,7 @@ impl SceneDiff {
             && !self.camera
             && !self.finish
             && !self.trace
+            && !self.shadows
             && !self.plates
             && !self.physics
             && !self.motion_blur
@@ -177,6 +179,7 @@ pub(super) fn diff(older: &Scene, newer: &Scene) -> SceneDiff {
         camera: older.camera != newer.camera || older.keys.camera != newer.keys.camera,
         finish: older.finish != newer.finish || older.keys.finish != newer.keys.finish,
         trace: older.trace != newer.trace,
+        shadows: older.shadows != newer.shadows,
         plates: older.plates != newer.plates,
         physics: older.physics != newer.physics,
         motion_blur: older.motion_blur != newer.motion_blur,

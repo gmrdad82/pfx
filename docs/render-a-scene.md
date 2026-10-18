@@ -7,7 +7,7 @@
 ```
 pfx shot <scene.toml> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>]
          [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr]
-         [--audio <out.wav>] [--sound <script>] [--shutter S] [--seed S] [--json]
+         [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
 ```
 
 | Flag | Default | What it does |
@@ -25,6 +25,7 @@ pfx shot <scene.toml> (--seconds S | --frames N) [--size WxH] [--fps N] [--from 
 | `--audio <out.wav>` | `<out>/audio.wav` when a sound script is known | writes the shot's sound as a 48 kHz stereo float WAV |
 | `--sound <script>` | the scene's `sound` key | the offline mix script (`*.sound.toml`) |
 | `--shutter S` | off | poses the previous frame at t − S / fps for motion blur (below) |
+| `--exposure auto` or `fixed` | auto | auto meters each frame; fixed holds the exposure at 1.0, as `pfx shot --still` and `pfx render --recipe` draw a recipe |
 | `--seed S` | 0 | the play session's seed |
 | `--json` | off | one JSON line per frame and the summary as JSON |
 
@@ -51,7 +52,7 @@ Animations play through the play session as in a game ([Animation](animation.md#
 - **Draft** (the default) uses the scene's settings, with the sun's shadow map at half its resolution (never below 512).
 - **Final** keeps the scene's full shadow resolution.
 
-Frame N of a shot started with `--from N` is the same, byte for byte, as frame N of a run from 0. The live renderer meters exposure automatically: it starts at 1.0 and adapts towards the frame's mean luminance over about half a second. That state depends on every frame before, so under auto exposure, the renderer's default, both draft and final render frames 0 to N − 1 first without writing or reading them back. A warm frame costs its GPU time and the simulation, about a draft frame without its readback and PNG: 4.8 ms each for the room at 2160x3840 (below), so `--from 300` adds about 1.5 s. After each frame the shot waits for the GPU, exposure meter readback included, so the next frame's exposure never depends on when a readback lands. When exposure is fixed, final renders only the up to 8 frames before `--from` to settle TAA's history, and draft none; frames then match a full run once TAA has settled, not bit for bit. The manifest records `warm_frames`. With `--from 0` there is nothing before the first frame, and TAA settles over the first frames as it does live.
+Frame N of a shot started with `--from N` is the same, byte for byte, as frame N of a run from 0. The live renderer meters exposure automatically: it starts at 1.0 and adapts towards the frame's mean luminance over about half a second. That state depends on every frame before, so under auto exposure, the renderer's default, both draft and final render frames 0 to N − 1 first without writing or reading them back. A warm frame costs its GPU time and the simulation, about a draft frame without its readback and PNG: 4.8 ms each for the room at 2160x3840 (below), so `--from 300` adds about 1.5 s. After each frame the shot waits for the GPU, exposure meter readback included, so the next frame's exposure never depends on when a readback lands. Auto exposure takes back a change of the whole frame's brightness: a sky at a third of its `intensity` moves the sky of a test scene from 135.9 to 56.2 in the first frame, and after two seconds only from 157.2 to 138.4, while the floor brightens from 159.4 to 184.8. `--exposure fixed` holds it at 1.0, so the frame moves with the sky (135.9 to 56.2 after two seconds too) and matches the recipe's own views; the manifest records `exposure`. When exposure is fixed, final renders only the up to 8 frames before `--from` to settle TAA's history, and draft none; frames then match a full run once TAA has settled, not bit for bit. The manifest records `warm_frames`. With `--from 0` there is nothing before the first frame, and TAA settles over the first frames as it does live.
 
 The live renderer's TAA jitter follows the scene clock (its sample index is round(t × 60)). Rendering one frame time several times therefore adds no samples, and final does not supersample. A larger internal size would change every pixel-sized effect and cost four times the GPU time. The manifest records `shadow_resolution` and `warm_frames`.
 
@@ -87,7 +88,7 @@ The out folder holds `000000.png`, `000001.png`, … (or `.exr`), numbered from 
 | `wav`, `audio` | the WAV's absolute path or null; its source (`script` or `silence`), script, rate, channels and a note |
 | `scene`, `scene_sha256`, `rev` | the scene file, its SHA-256, and the Git HEAD of its folder (`+dirty` when it has changes), or null |
 | `pfx` | the engine's version |
-| `quality`, `shadow_resolution`, `warm_frames`, `tick_rate`, `shutter` | how it rendered |
+| `quality`, `shadow_resolution`, `warm_frames`, `tick_rate`, `shutter`, `exposure` | how it rendered |
 | `camera`, `hour`, `seed`, `sets` | what was asked; `camera` is the object or `object/node` followed |
 | `gpu_ms` | `p50` and `p99` of the GPU time of the written frames, or null on a GPU without timestamps |
 | `wall_ms` | `total`, and `per_frame`: the total over the frames, readback and file writing included |

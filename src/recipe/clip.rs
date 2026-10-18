@@ -374,10 +374,41 @@ impl Renderer {
         }
     }
 
-    fn frame(&mut self, camera: &Camera, size: [u32; 2], to: &Path) -> Result<String, String> {
+    fn blurs(&self) -> bool {
+        matches!(self, Renderer::Live(reel, _) if reel.blurs())
+    }
+
+    fn traced(&self) -> bool {
+        matches!(self, Renderer::Traced(..))
+    }
+
+    fn settle(&mut self, camera: &Camera) -> Result<f64, String> {
         match self {
             Renderer::Live(reel, _) => {
-                let (rgba, gpu_ms) = reel.shoot(&reel.eye(camera)).map_err(|e| e.0)?;
+                let eye = reel.through(camera);
+                reel.settle(&eye).map_err(|e| e.0)
+            }
+            Renderer::Traced(..) => Ok(0.0),
+        }
+    }
+
+    fn frame(
+        &mut self,
+        camera: &Camera,
+        size: [u32; 2],
+        to: &Path,
+        settled: Option<f64>,
+    ) -> Result<String, String> {
+        match self {
+            Renderer::Live(reel, _) => {
+                let eye = reel.through(camera);
+                let (rgba, gpu_ms) = match settled {
+                    Some(before) => reel
+                        .develop(&eye)
+                        .map(|(rgba, gpu_ms)| (rgba, gpu_ms + before)),
+                    None => reel.shoot(&eye),
+                }
+                .map_err(|e| e.0)?;
                 pfx_recipe_scene::write_frame(to, size, &rgba).map_err(|e| e.0)?;
                 Ok(format!("{gpu_ms:.0} ms on the GPU"))
             }
@@ -466,8 +497,13 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
     } else {
         Some(path_of(&camera)?)
     };
-    for (made, &frame) in todo.iter().enumerate() {
-        let pose = match (spin, path) {
+    if let Some(line) =
+        pfx_recipe_scene::unapplied_line("clip", renderer.recipe(), renderer.traced())
+    {
+        eprintln!("{line}");
+    }
+    let place = |renderer: &mut Renderer, frame: u32| -> Result<Camera, String> {
+        Ok(match (spin, path) {
             (Some(object), _) => {
                 let turned = motion(
                     renderer.recipe(),
@@ -481,10 +517,20 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
             (None, None) => {
                 renderer.pose(f64::from(frame) / f64::from(args.rate()), &args.camera)?
             }
+        })
+    };
+    for (made, &frame) in todo.iter().enumerate() {
+        let settled = match frame.checked_sub(1).filter(|_| renderer.blurs()) {
+            Some(prior) => {
+                let before = place(&mut renderer, prior)?;
+                Some(renderer.settle(&before)?)
+            }
+            None => None,
         };
+        let pose = place(&mut renderer, frame)?;
         let part = args.out.join(partial(frame, count));
         let to = args.out.join(name(frame, count));
-        let summary = renderer.frame(&pose, args.size, &part)?;
+        let summary = renderer.frame(&pose, args.size, &part, settled)?;
         std::fs::rename(&part, &to).map_err(|e| format!("{}: {e}", to.display()))?;
         eprintln!("pfx clip: {}, {summary}", to.display());
         println!("{}", to.display());

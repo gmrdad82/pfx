@@ -4,7 +4,7 @@ use pfx_gpu::wgpu;
 use pfx_mesh::{Mesh, Slot};
 use pfx_recipe::{Recipe, Shadow, load};
 use pfx_recipe_scene::pace::turn;
-use pfx_recipe_scene::{Eye, Stage, camera, headless, shoot, write_png};
+use pfx_recipe_scene::{Eye, Reel, Stage, camera, headless, shoot, write_png};
 use std::path::PathBuf;
 
 const SIZE: [u32; 2] = [640, 400];
@@ -243,6 +243,33 @@ fn the_hour_and_the_size_follow_the_window() {
     assert_eq!(stage.size(), [200, 120]);
     assert_eq!(draw(&mut stage, [200, 120]).len(), 200 * 120 * 4);
     turn();
+}
+
+#[test]
+#[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+fn a_reel_frame_draws_the_lens_of_the_camera_it_looks_through() {
+    let recipe = fixture("box.toml");
+    let gpu = headless().unwrap();
+    let parts = box_parts("orange");
+    let main = camera(&recipe, "main").unwrap();
+    let draw = |fstop: f64| {
+        let mut lens = main.clone();
+        lens.fstop = fstop;
+        let mut reel = Reel::new(&gpu, &recipe, &parts, SIZE).unwrap();
+        let eye = reel.through(&lens);
+        reel.shoot(&eye).unwrap().0
+    };
+    let (sharp, shallow) = (draw(0.0), draw(1.4));
+    turn();
+    let blurred = sharp
+        .chunks(4)
+        .zip(shallow.chunks(4))
+        .filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 8))
+        .count();
+    assert!(
+        blurred > 1000,
+        "{blurred} pixels changed through an open lens"
+    );
 }
 
 #[test]

@@ -313,6 +313,7 @@ pub struct Rendered {
     pub most_samples: u32,
     pub region: Region,
     pub rect: [u32; 4],
+    pub left_out: Vec<&'static str>,
 }
 
 impl Rendered {
@@ -468,6 +469,7 @@ pub fn render(
         most_samples,
         region: frame,
         rect: request.crop.map_or(frame.rect(), |crop| crop.rect),
+        left_out: pfx_recipe_scene::unapplied(&recipe, true),
     })
 }
 
@@ -625,6 +627,7 @@ impl Reel {
             most_samples: samples,
             region: Region::whole(size),
             rect: Region::whole(size).rect(),
+            left_out: pfx_recipe_scene::unapplied(&self.recipe, true),
         })
     }
 }

@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use crate::Diagnostic;
 use crate::types::{
     Camera, Content, Emitter, Finish, FinishKeys, Flare, Haze, Light, Material, Mesh, MotionBlur,
-    Mover, Object, Particles, Physics, Plates, Proxy, Rig, Sky, Sound, Sun, Text, Tiles, Trace,
+    Mover, Object, Particles, Physics, Plates, Proxy, Rig, Shadows, Sky, Sound, Sun, Text, Tiles,
+    Trace,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,6 +43,7 @@ pub struct Scene {
     pub flare: Option<Flare>,
     pub motion_blur: Option<MotionBlur>,
     pub trace: Option<Trace>,
+    pub shadows: Option<Shadows>,
     pub plates: Option<Plates>,
     pub proxies: Vec<Entry<Proxy>>,
     pub physics: Option<Physics>,

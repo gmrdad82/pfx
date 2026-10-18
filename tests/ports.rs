@@ -1,6 +1,6 @@
 use std::path::Path;
 
-const PORTS: [(&str, &str); 23] = [
+const PORTS: [(&str, &str); 24] = [
     ("crates/load/src/uri.rs", "cgltf"),
     ("crates/load/src/obj.rs", "tobj"),
     ("crates/load/src/obj.rs", "tinyobjloader"),
@@ -11,6 +11,7 @@ const PORTS: [(&str, &str); 23] = [
     ("crates/mesh/src/tangents.rs", "MikkTSpace"),
     ("crates/build/src/builtin/loft.rs", "curvo"),
     ("crates/build/src/builtin/loft.rs", "OpenSubdiv"),
+    ("crates/build/src/builtin/loft.rs", "SciPy"),
     ("crates/generators/src/pyrandom.rs", "Matsumoto"),
     ("crates/generators/src/numpy_random.rs", "NumPy"),
     ("crates/load/src/jpeg/mod.rs", "zune-jpeg"),

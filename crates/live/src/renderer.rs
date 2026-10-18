@@ -2075,6 +2075,23 @@ impl Renderer {
         Ok(())
     }
 
+    pub fn set_screen_shadows(
+        &mut self,
+        settings: crate::screen_shadows::ScreenShadows,
+    ) -> Result<(), String> {
+        if self.frame.screen_shadows() == settings {
+            return Ok(());
+        }
+        self.touch();
+        self.frame.set_screen_shadows(settings)?;
+        self.history.invalidate();
+        Ok(())
+    }
+
+    pub fn screen_shadows(&self) -> crate::screen_shadows::ScreenShadows {
+        self.frame.screen_shadows()
+    }
+
     pub fn write_contact(&self, values: &[f32]) -> Result<(), String> {
         self.touch();
         self.frame.write_contact(values)
@@ -3073,6 +3090,7 @@ impl Renderer {
         }
         self.depth_index = 1 - self.depth_index;
         let current_depth = &self.depths[self.depth_index].1;
+        self.dof.set_sky(view.far);
         queue.write_buffer(
             &self.depth_limits,
             0,

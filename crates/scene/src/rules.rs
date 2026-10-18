@@ -6,8 +6,8 @@ use crate::types::{
     Emitter, Finish, FinishKeys, Flare, Haze, Ink, KeyShape, KeyValue, Keys, LAYER_CAP,
     LAYER_COUNT, Light, LightKind, Lut, LutKey, Material, MotionBlur, Mover, MoverKind, Object,
     Particles, Physics, Plates, Preset, Projection, Proxy, ProxyKind, Rig, RigKind, Room,
-    Scratches, Sky, SkyKind, Sound, Sun, SunModel, Tape, Text, Tiles, Tone, ToneKind, Trace,
-    Trigger, Tunable, TunableKind, TunableValue,
+    Scratches, Shadows, Sky, SkyKind, Sound, Sun, SunModel, Tape, Text, Tiles, Tone, ToneKind,
+    Trace, Trigger, Tunable, TunableKind, TunableValue,
 };
 
 pub(crate) struct Issue {
@@ -2022,6 +2022,58 @@ pub(crate) fn trace(trace: &Trace) -> Issues {
             issues.at(
                 &[key],
                 format!("[trace] {key} = {value} is outside 0 to {max}"),
+            );
+        }
+    }
+    issues
+}
+
+pub(crate) fn shadows(shadows: &Shadows) -> Issues {
+    let mut issues = Issues::default();
+    for (key, value, [low, high]) in [
+        ("cascades", shadows.cascades, Shadows::CASCADES),
+        ("resolution", shadows.resolution, Shadows::RESOLUTION),
+    ] {
+        if let Some(value) = value
+            && !(low..=high).contains(&value)
+        {
+            issues.at(
+                &[key],
+                format!("[shadows] {key} = {value} is outside {low} to {high}"),
+            );
+        }
+    }
+    if let Some(softness) = shadows.softness
+        && !(Shadows::SOFTNESS[0]..=Shadows::SOFTNESS[1]).contains(&softness)
+    {
+        issues.at(
+            &["softness"],
+            format!(
+                "[shadows] softness = {softness} is outside {} to {}",
+                Shadows::SOFTNESS[0],
+                Shadows::SOFTNESS[1]
+            ),
+        );
+    }
+    for (key, value, [low, high]) in [
+        ("bias", shadows.bias, Shadows::BIAS),
+        (
+            "occlusion_radius",
+            shadows.occlusion_radius,
+            Shadows::OCCLUSION_RADIUS,
+        ),
+        (
+            "contact_length",
+            shadows.contact_length,
+            Shadows::CONTACT_LENGTH,
+        ),
+    ] {
+        if let Some(value) = value
+            && !(value.is_finite() && value > low && value <= high)
+        {
+            issues.at(
+                &[key],
+                format!("[shadows] {key} = {value} is outside {low} (excluded) to {high}"),
             );
         }
     }

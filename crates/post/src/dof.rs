@@ -5,6 +5,10 @@ pub const TILE: u32 = 16;
 const REACH: i32 = 2;
 const MAX_RINGS: u32 = 5;
 const RING_SPACING: f32 = 6.0;
+const INNER_SPACING: f32 = 2.0;
+const INNER_RINGS: u32 = 2;
+pub const FAR_AWAY: f32 = 1.0e9;
+const NEAREST_CAP: f32 = 60000.0;
 const RING_TURN: f32 = 2.399_963;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -77,21 +81,29 @@ fn slack(distance: f32) -> f32 {
 }
 
 fn rings(radius: f32) -> u32 {
-    ((radius / RING_SPACING).ceil() as u32).clamp(1, MAX_RINGS)
+    let inner = ((radius / INNER_SPACING).ceil() as u32).min(INNER_RINGS);
+    ((radius / RING_SPACING).ceil() as u32)
+        .max(inner)
+        .clamp(1, MAX_RINGS)
+}
+
+pub fn distant(distance: f32, sky: f32) -> f32 {
+    if distance >= sky { FAR_AWAY } else { distance }
 }
 
 pub fn gather(
     image: &[[f32; 4]],
     depth: &[f32],
     heights: &[f32],
-    width: usize,
-    height: usize,
+    (width, height): (usize, usize),
     lens: Lens,
+    sky: f32,
 ) -> Vec<[f32; 4]> {
     let count = width * height;
     if !lens.enabled() || image.len() != count || depth.len() != count || heights.len() != count {
         return image.to_vec();
     }
+    let depth: Vec<f32> = depth.iter().map(|&d| distant(d, sky)).collect();
     let coc: Vec<f32> = (0..count)
         .map(|i| lens.circle_of_confusion(depth[i], heights[i], width as u32))
         .collect();
@@ -102,7 +114,7 @@ pub fn gather(
         for x in 0..width {
             let tile = &mut tiles[(y / TILE as usize) * tiles_x + x / TILE as usize];
             tile.0 = tile.0.max(coc[y * width + x].abs());
-            tile.1 = tile.1.min(depth[y * width + x]);
+            tile.1 = tile.1.min(depth[y * width + x].clamp(0.0, NEAREST_CAP));
         }
     }
     let dilated: Vec<(f32, f32)> = (0..tiles_x * tiles_y)
@@ -195,9 +207,12 @@ pub fn gather(
 const COMMON: &str = r#"
 struct Params {
     size: vec2u, tiles: vec2u,
-    optics: vec4f, focus: vec4f, far: vec4f, height: vec4f,
+    optics: vec4f, focus: vec4f, far: vec4f, height: vec4f, sky: vec4f,
 }
 @group(0) @binding(0) var<uniform> lens: Params;
+fn distant(distance: f32) -> f32 {
+    return select(distance, lens.sky.y, distance >= lens.sky.x);
+}
 fn world_height(pixel: vec2f, distance: f32) -> f32 {
     let ndc = vec2f(pixel.x / f32(lens.size.x) * 2.0 - 1.0, 1.0 - pixel.y / f32(lens.size.y) * 2.0);
     return dot(lens.height.xyz, vec3f(ndc.x * distance, ndc.y * distance, distance)) + lens.height.w;
@@ -234,7 +249,7 @@ fn main(@builtin(global_invocation_id) id: vec3u, @builtin(local_invocation_inde
     }
     workgroupBarrier();
     if (all(id.xy < lens.size)) {
-        let distance = textureLoad(depth, vec2i(id.xy), 0).x;
+        let distance = distant(textureLoad(depth, vec2i(id.xy), 0).x);
         let height = world_height(vec2f(id.xy) + vec2f(0.5), distance);
         atomicMax(&spread, bitcast<u32>(abs(coc(distance, height))));
         atomicMin(&nearest, bitcast<u32>(clamp(distance, 0.0, 60000.0)));
@@ -277,7 +292,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if (any(id.xy >= lens.size)) { return; }
     let pixel = vec2i(id.xy);
     let sharp = textureLoad(source, pixel, 0);
-    let d0 = textureLoad(depth, pixel, 0).x;
+    let d0 = distant(textureLoad(depth, pixel, 0).x);
     let centre = vec2f(pixel) + vec2f(0.5);
     let c0 = coc(d0, world_height(centre, d0));
     let surface = spreads(world_height(centre, d0));
@@ -289,7 +304,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         textureStore(output_tex, pixel, sharp);
         return;
     }
-    let rings = clamp(u32(ceil(radius / 6.0)), 1u, 5u);
+    let rings = clamp(max(u32(ceil(radius / 6.0)), min(u32(ceil(radius / 2.0)), 2u)), 1u, 5u);
     let share = radius * radius / f32(4u * rings * (rings + 1u));
     let last = vec2i(lens.size) - vec2i(1);
     var back = sharp;
@@ -303,7 +318,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
             let angle = 2.399963 * f32(ring) + 6.2831853 * f32(tap) / f32(taps);
             let at = centre + vec2f(cos(angle), sin(angle)) * reach;
             let texel = clamp(vec2i(floor(at)), vec2i(0), last);
-            let ds = textureLoad(depth, texel, 0).x;
+            let ds = distant(textureLoad(depth, texel, 0).x);
             let cs = coc(ds, world_height(vec2f(texel) + vec2f(0.5), ds));
             let colour = textureLoad(source, texel, 0);
             if (ds < d0 - eps) {
@@ -449,6 +464,7 @@ pub struct GpuDof {
     width: u32,
     height: u32,
     viewport: (u32, u32),
+    sky: f32,
     targets: Targets,
     tile_layout: wgpu::BindGroupLayout,
     tile_pipeline: wgpu::ComputePipeline,
@@ -489,6 +505,7 @@ impl GpuDof {
             width,
             height,
             viewport: (width, height),
+            sky: f32::INFINITY,
             targets: Targets::new(device, width, height),
             tile_layout,
             tile_pipeline,
@@ -521,7 +538,15 @@ impl GpuDof {
         Ok(())
     }
 
-    fn params(&self, lens: Lens, height: [f32; 4]) -> [f32; 20] {
+    pub fn set_sky(&mut self, distance: f32) {
+        self.sky = if distance > 0.0 {
+            distance
+        } else {
+            f32::INFINITY
+        };
+    }
+
+    fn params(&self, lens: Lens, height: [f32; 4]) -> [f32; 24] {
         let (width, rows) = self.viewport;
         let (tiles_x, tiles_y) = (width.div_ceil(TILE), rows.div_ceil(TILE));
         [
@@ -545,6 +570,10 @@ impl GpuDof {
             height[1],
             height[2],
             height[3],
+            self.sky.min(f32::MAX),
+            FAR_AWAY,
+            0.0,
+            0.0,
         ]
     }
 
@@ -728,7 +757,14 @@ mod tests {
         let depth = vec![lens().focus_m; width * height];
         let heights = vec![0.0; width * height];
         assert_eq!(
-            gather(&image, &depth, &heights, width, height, lens()),
+            gather(
+                &image,
+                &depth,
+                &heights,
+                (width, height),
+                lens(),
+                f32::INFINITY
+            ),
             image
         );
     }
@@ -748,7 +784,17 @@ mod tests {
             .map(|i| if i % width < 80 { near } else { far })
             .collect();
         let heights = vec![0.0; width * height];
-        (gather(&image, &depth, &heights, width, height, lens), width)
+        (
+            gather(
+                &image,
+                &depth,
+                &heights,
+                (width, height),
+                lens,
+                f32::INFINITY,
+            ),
+            width,
+        )
     }
 
     #[test]
@@ -790,6 +836,37 @@ mod tests {
     }
 
     #[test]
+    fn a_small_blur_spreads_a_near_edge_over_an_infinitely_far_sky() {
+        let open = Lens {
+            aperture: 2.0,
+            ..plain()
+        };
+        let (width, height) = (160, 48);
+        let image: Vec<_> = (0..width * height)
+            .map(|i| {
+                if i % width < 80 {
+                    [1.0, 0.0, 0.0, 1.0]
+                } else {
+                    [0.0, 0.0, 1.0, 1.0]
+                }
+            })
+            .collect();
+        let sky = 3.0;
+        let depth: Vec<_> = (0..width * height)
+            .map(|i| if i % width < 80 { 0.6 } else { sky })
+            .collect();
+        let heights = vec![0.0; width * height];
+        let near = open.circle_of_confusion(0.6, 0.0, width as u32).abs();
+        let far = open.circle_of_confusion(FAR_AWAY, 0.0, width as u32);
+        assert!(near > 2.0 && near < far && far < 6.0, "{near} {far}");
+        assert!(far > open.circle_of_confusion(sky, 0.0, width as u32) + 1.0);
+        let out = gather(&image, &depth, &heights, (width, height), open, sky);
+        let row = 24 * width;
+        assert!(out[row + 81][0] > 0.05, "{:?}", out[row + 81]);
+        assert_eq!(out[row + 120], [0.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
     fn blur_keeps_surface_detail_above_the_ground() {
         let lens = Lens {
             ground_m: Some(0.1),
@@ -807,9 +884,12 @@ mod tests {
             .collect();
         let depth = vec![2.5; width * height];
         let wall = vec![0.4; width * height];
-        assert_eq!(gather(&image, &depth, &wall, width, height, lens), image);
+        assert_eq!(
+            gather(&image, &depth, &wall, (width, height), lens, f32::INFINITY),
+            image
+        );
         let floor = vec![0.0; width * height];
-        let blurred = gather(&image, &depth, &floor, width, height, lens);
+        let blurred = gather(&image, &depth, &floor, (width, height), lens, f32::INFINITY);
         let row: Vec<f32> = (16..80).map(|x| blurred[32 * width + x][0]).collect();
         let (low, high) = row.iter().fold((f32::MAX, f32::MIN), |(low, high), &v| {
             (low.min(v), high.max(v))

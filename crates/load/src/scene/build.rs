@@ -459,6 +459,7 @@ pub(super) fn build_with(
                 filter_glossy: trace.filter_glossy.unwrap_or(file::Trace::FILTER_GLOSSY),
             })
             .unwrap_or_default(),
+        shadows: resolved.shadows,
         contents,
         texts,
         plates,

@@ -227,7 +227,7 @@ A body, a character and a trigger take a layer by its name (`layer`), and a trig
 | `[[rig]]` | tables | none | camera rigs a game drives. |
 | `[[tiles]]` | tables | none | tile layers: grids of prefab placements. |
 | `[[particles]]` | tables | none | particle systems. |
-| `[sun]`, `[sky]`, `[haze]`, `[camera]`, `[finish]`, `[flare]`, `[motion_blur]`, `[trace]`, `[plates]`, `[physics]`, `[play]` | table | none | each held by one file of a scene and its includes at most. |
+| `[sun]`, `[sky]`, `[haze]`, `[camera]`, `[finish]`, `[flare]`, `[motion_blur]`, `[trace]`, `[shadows]`, `[plates]`, `[physics]`, `[play]` | table | none | each held by one file of a scene and its includes at most. |
 | `[authoring]` | table | none | the authoring tool's. |
 
 A glTF material resolves to the library entry of its name, else of its name before the first `.` (`.001` suffixes), else `fallback`.
@@ -959,6 +959,31 @@ Settings only a path tracer reads; a live renderer ignores them.
 | `filter_glossy` | number, 0 to 1 | `0` (off) | the least roughness at every vertex after a diffuse bounce: once a path has bounced off a diffuse surface, sharper lobes are traced at least this rough. The first hit, and a chain of mirror, glossy or glass bounces from the camera, keep their own roughness. |
 
 Both remove fireflies, the lone bright pixels a sharp reflection seen in diffuse light makes, at a cost to the look: `clamp_indirect` takes energy from bright caustics and from what a mirror or glass reflects, so it belongs well above the sunlit brightness of the brightest diffuse surface; `filter_glossy` keeps the energy but softens glints and caustics. `filter_glossy = 0.25`, with `clamp_indirect` as a backstop, is a good start for a small sun.
+
+### `[shadows]`
+
+The live renderer's sun shadows and its two screen-space terms: ambient occlusion on the indirect light, and contact shadows along the sun for the gap where an object meets what it rests on. A path tracer ignores the table. Without it a scene renders exactly as `quality = "medium"`, with both screen-space terms off. Every key is optional; a key left out takes the preset's value.
+
+| key | type | default | notes |
+|---|---|---|---|
+| `quality` | `"low"`, `"medium"`, `"high"` or `"ultra"` | `"medium"` | the preset below. |
+| `cascades` | integer, 1 to 3 | preset | sun shadow cascades drawn. |
+| `resolution` | integer, 256 to 8192 | preset | the side of each cascade's shadow map, in texels. |
+| `softness` | number, 0 to 8 | `1` | the filter radius, in shadow-map texels. |
+| `bias` | number above 0, up to 16 | `1` | a scale on the normal, slope and depth bias. Lower keeps shadows closer to their casters, at the risk of acne. |
+| `occlusion` | bool | preset | screen-space ambient occlusion. |
+| `occlusion_radius` | number above 0, up to 100 | `0.5` | the occlusion's reach in scene units. |
+| `contact` | bool | preset | screen-space contact shadows along the sun. |
+| `contact_length` | number above 0, up to 10 | `0.3` | how far each pixel's ray toward the sun reaches, in scene units. |
+
+| preset | cascades | resolution | occlusion | contact |
+|---|---|---|---|---|
+| `low` | 2 | 2048 | off (1 slice × 2 steps when on) | off |
+| `medium` | 3 | 4096 | off (2 × 2 when on) | off |
+| `high` | 3 | 4096 | on, 3 × 3 | on, 8 steps |
+| `ultra` | 3 | 8192 | on, 9 × 3 | on, 16 steps |
+
+`docs/live-renderer.md` ("Ambient occlusion and contact shadows") has what each term does and what it costs.
 
 ### `[plates]`
 

@@ -215,6 +215,7 @@ pub(crate) fn text_named(
     effects::tables(&mut out, recipe)?;
     haze(&mut out, recipe)?;
     trace(&mut out, recipe)?;
+    shadows(&mut out, recipe)?;
     let stands = match plates(&mut out, recipe, scene, &paths, base)? {
         Some(file) => Some((file, proxies::of(built, recipe)?)),
         None => None,
@@ -1138,6 +1139,37 @@ fn trace(out: &mut String, recipe: &Recipe) -> Result<(), Error> {
         }
         if value > 0.0 {
             s.num(key, value)?;
+        }
+    }
+    Ok(())
+}
+
+fn shadows(out: &mut String, recipe: &Recipe) -> Result<(), Error> {
+    let Some(look) = recipe.shadows else {
+        return Ok(());
+    };
+    let mut s = Section::new(out, "[shadows]", "look.shadows");
+    if let Some(quality) = look.quality {
+        s.put("quality", &format!("\"{}\"", quality.name()));
+    }
+    for (key, value) in [("cascades", look.cascades), ("resolution", look.resolution)] {
+        if let Some(value) = value {
+            s.put(key, &value.to_string());
+        }
+    }
+    for (key, value) in [
+        ("softness", look.softness),
+        ("bias", look.bias),
+        ("occlusion_radius", look.occlusion_radius),
+        ("contact_length", look.contact_length),
+    ] {
+        if let Some(value) = value {
+            s.num(key, value)?;
+        }
+    }
+    for (key, value) in [("occlusion", look.occlusion), ("contact", look.contact)] {
+        if let Some(value) = value {
+            s.put(key, &value.to_string());
         }
     }
     Ok(())

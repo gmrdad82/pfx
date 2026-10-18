@@ -263,6 +263,7 @@ pub fn run(plan: &Plan) -> Result<(), String> {
         quality: quality(plan),
         seed: plan.seed,
         shutter: plan.shutter,
+        fixed_exposure: plan.fixed_exposure,
     };
     let played = play::play(&shot, |frame| {
         if let Some(ms) = frame.gpu_ms {
@@ -327,6 +328,10 @@ pub fn run(plan: &Plan) -> Result<(), String> {
     fields.insert("warm_frames".into(), json!(played.warm_frames));
     fields.insert("tick_rate".into(), json!(played.tick_rate));
     fields.insert("shutter".into(), json!(plan.shutter));
+    fields.insert(
+        "exposure".into(),
+        json!(if plan.fixed_exposure { "fixed" } else { "auto" }),
+    );
     fields.insert("camera".into(), json!(played.followed));
     fields.insert("hour".into(), json!(plan.hour));
     fields.insert("seed".into(), json!(plan.seed));

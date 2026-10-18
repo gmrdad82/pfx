@@ -190,6 +190,7 @@ pub struct Look {
     pub metal_roughness: Option<Map>,
     pub occlusion: Option<Map>,
     pub detail_normal: Option<Map>,
+    pub alpha_cutoff: Option<f32>,
 }
 
 impl Look {

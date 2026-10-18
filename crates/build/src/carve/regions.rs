@@ -82,7 +82,9 @@ pub fn apply(mesh: &mut Mesh, regions: &[Region], frame: Frame) -> Vec<Piece> {
                 let keep: Vec<bool> = picked.iter().map(|p| !p).collect();
                 w.retain(&keep);
             }
-            Mode::Cut => w.cut(&picked, r.lip),
+            Mode::Cut => {
+                w.cut(&picked, r.lip);
+            }
         }
     }
     *mesh = w.to_mesh(&vec![true; w.tris.len()]);

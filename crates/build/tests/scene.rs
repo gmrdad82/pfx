@@ -751,6 +751,44 @@ fn the_traces_glass_shadows_and_a_cards_cutoff_round_trip() {
 }
 
 #[test]
+fn a_looks_shadows_reach_the_scenes_shadows_and_grade_nothing() {
+    let (r, folder) = recipe("table", None);
+    let plain = written_text(&r, &folder, "scene-shadows-off");
+    assert!(!plain.contains("[shadows]"), "{plain}");
+    let look = r.look.clone();
+    let source = r.source.clone();
+    let mut r = parse(&format!(
+        "{source}\n[look.shadows]\nquality = \"ultra\"\nsoftness = 1.5\nocclusion = false\n"
+    ))
+    .unwrap();
+    assert_eq!(r.look, look);
+    r.output.scene = Some("table.scene.toml".into());
+    r.base = Some(folder.clone());
+    let text = written_text(&r, &folder, "scene-shadows-on");
+    let finish = |text: &str| {
+        text.split("\n\n")
+            .filter(|block| block.starts_with("[[finish.pass]]"))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
+    assert_eq!(finish(&text), finish(&plain));
+    assert!(
+        text.contains("\n[shadows]\nquality = \"ultra\"\nsoftness = 1.5\nocclusion = false\n"),
+        "{text}"
+    );
+    let shadows = opened_scene(&r, &folder, "scene-shadows-open")
+        .shadows
+        .unwrap();
+    assert_eq!(shadows.quality, Some(pfx_load::scene::ShadowQuality::Ultra));
+    assert_eq!(
+        (shadows.softness, shadows.occlusion),
+        (Some(1.5), Some(false))
+    );
+    let refused = parse(&format!("{source}\n[look.shadows]\ncascades = 0\n"));
+    assert!(refused.is_err_and(|error| error.to_string().contains("cascades")));
+}
+
+#[test]
 fn the_firefly_settings_are_written_in_the_scenes_trace_and_off_writes_none() {
     let (r, folder) = recipe("table", None);
     let text = written_text(&r, &folder, "scene-fireflies-off");

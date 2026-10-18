@@ -27,8 +27,8 @@ pub use scene::{
     CharacterKind, ClipEvent, Content, Cue, Depth, Emitter, Flare, Haze, Hush, Light, LightKind,
     Look, Mesh, Motion, MotionBlur, Mover, MoverKind, Node, Nudge, Object, Orbit, ParticleBlend,
     Particles, Physics, Plane, Plates, Play, Preset, Projection, Proxy, ProxyKind, Repeat, Rig,
-    RigKind, Scale, Shadow, Sound, Sounds, SpriteClip, Sun, SunModel, Text, TileCell, TilePlane,
-    Tiles, Trace, Trigger, Wander, Zoom,
+    RigKind, Scale, Shadow, ShadowQuality, Shadows, Sound, Sounds, SpriteClip, Sun, SunModel, Text,
+    TileCell, TilePlane, Tiles, Trace, Trigger, Wander, Zoom,
 };
 pub use sky::{Prepare, Room, RoomLamp, Sky, SkyKind};
 pub use tunable::{Tunable, TunableKind, TunableValue};
@@ -125,6 +125,8 @@ pub struct SceneFile {
     pub motion_blur: Option<MotionBlur>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trace: Option<Trace>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadows: Option<Shadows>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plates: Option<Plates>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
