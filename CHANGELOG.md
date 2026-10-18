@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.6.0 — 2026-10-16
+
+### Added
+
+- Keys over time: lights, the camera, particles, the finish, haze, the sun and the sky take a `keys` table of `[[seconds, value], ...]` per key, sampled every frame the same way in `pfx shot` and the live window.
+- The sky's `backdrop` brightens only the sky as seen, and `horizon_color`, `horizon_width` and `horizon_amount` tint it near the horizon; `intensity` now applies to analytic skies too.
+- `pfx sound clean` cleans a field recording: keep a moving harmonic source such as an engine, remove short events such as barks and slams by filling them in, or gate steady noise from a noise print; it reports what it removed and can write a mask image.
+- Games can set and read the system clipboard at run time (`World::set_clipboard`, `World::clipboard_text`), failing quietly where a platform refuses.
+
+### Changed
+
+- Scenes use pfx-scene v1.4.0.
+- Motion blur samples whole pixels and no longer bleeds a moving background over still edges.
+
+### Fixed
+
+- Orthographic cameras had wrong depth for reflections, depth of field, particles, picks and motion blur.
+
 ## v2.5.0 — 2026-10-16
 
 ### Added
