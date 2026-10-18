@@ -1,5 +1,6 @@
 use pfx_build::Registry;
 use pfx_build::gltf_io::{self, GLTF_PATH};
+use pfx_build::library::Provenance;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -214,13 +215,54 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 #[test]
+fn an_import_without_a_licence_records_none_and_a_licence_without_a_credit_is_refused() {
+    let (json_bytes, bin) = blender_style();
+    let sample = gltf_io::join(&json_bytes, &bin);
+    let bare = gltf_io::import(&sample, "vehicle/coupe", &[], &Provenance::default()).unwrap();
+    assert_eq!(bare.facts["licence"], json!(""));
+    assert!(bare.facts.get("credit").is_none());
+    let no_credit = Provenance {
+        licence: "CC0-1.0".into(),
+        ..Provenance::default()
+    };
+    assert!(
+        gltf_io::import(&sample, "vehicle/coupe", &[], &no_credit)
+            .unwrap_err()
+            .contains("credit line")
+    );
+    let not_spdx = Provenance {
+        licence: "free to use".into(),
+        credit: Some("someone".into()),
+        ..Provenance::default()
+    };
+    assert!(
+        gltf_io::import(&sample, "vehicle/coupe", &[], &not_spdx)
+            .unwrap_err()
+            .contains("SPDX")
+    );
+}
+
+#[test]
 fn a_blender_style_glb_round_trips_through_a_pfx_file_without_extras() {
     let (json_bytes, bin) = blender_style();
     let sample = gltf_io::join(&json_bytes, &bin);
     std::fs::write(scratch("sample.glb"), &sample).unwrap();
     let out = scratch("coupe.pfx");
-    let imported =
-        gltf_io::import_pfx(&sample, "vehicle/coupe", &["car".into()], None, &out).unwrap();
+    let provenance = Provenance {
+        licence: "CC-BY-4.0".into(),
+        credit: Some("Coupe by An Author, https://example.org/coupe".into()),
+        author: Some("An Author".into()),
+        source: Some("https://example.org/coupe".into()),
+    };
+    let imported = gltf_io::import_pfx(
+        &sample,
+        "vehicle/coupe",
+        &["car".into()],
+        &provenance,
+        None,
+        &out,
+    )
+    .unwrap();
     assert!(imported.recipe.contains(&format!("path = \"{GLTF_PATH}\"")));
     assert_eq!(imported.kind, "vehicle");
     assert_eq!(imported.name, "coupe");
@@ -228,7 +270,8 @@ fn a_blender_style_glb_round_trips_through_a_pfx_file_without_extras() {
 
     let facts = &imported.facts;
     assert_eq!(facts["size"], json!([1.8, 0.9, 4.0]));
-    assert_eq!(facts["licence"], json!(gltf_io::LICENCE));
+    assert_eq!(facts["licence"], json!("CC-BY-4.0"));
+    assert_eq!(facts["author"], json!("An Author"));
     assert_eq!(
         facts["wheels"]["fl"],
         json!({ "node": "wheel_fl", "centre": [0.9, 0.3, 1.3], "radius": 0.3, "axle": [1.0, 0.0, 0.0] })
@@ -249,7 +292,12 @@ fn a_blender_style_glb_round_trips_through_a_pfx_file_without_extras() {
         std::str::from_utf8(&reader.chunk(pfx_file::FACT).unwrap().unwrap()).unwrap(),
     )
     .unwrap();
-    assert_eq!(fact["licence"].as_str(), Some(gltf_io::LICENCE));
+    assert_eq!(fact["licence"].as_str(), Some("CC-BY-4.0"));
+    assert_eq!(
+        fact["credit"].as_str(),
+        Some("Coupe by An Author, https://example.org/coupe")
+    );
+    assert_eq!(fact["source"].as_str(), Some("https://example.org/coupe"));
 
     let exported = gltf_io::export_glb(&out, &Registry::new(), None).unwrap();
     std::fs::write(scratch("coupe.glb"), &exported).unwrap();

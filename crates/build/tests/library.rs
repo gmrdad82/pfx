@@ -391,6 +391,9 @@ fn a_blender_style_glb_imports_with_its_hierarchy_materials_morphs_and_animation
         name: "cart".into(),
         tags: vec!["test".into()],
         licence: LICENCE.into(),
+        credit: None,
+        author: None,
+        source: None,
         generator: None,
         params: Default::default(),
         pfx: "1.3.0".into(),
@@ -481,5 +484,28 @@ at = [2.0, 0.0, 0.0]
     assert_eq!(
         channel.target().property(),
         gltf::animation::Property::Rotation
+    );
+}
+
+#[test]
+fn the_licence_rule_takes_pfx_own_line_or_an_spdx_expression_with_a_credit() {
+    assert!(library::licence_problem(LICENCE, None).is_none());
+    assert!(library::licence_problem("", None).is_none());
+    assert!(library::licence_problem("CC-BY-4.0", Some("A, https://x.org")).is_none());
+    assert!(library::licence_problem("MIT OR Apache-2.0", Some("B, https://y.org")).is_none());
+    assert!(
+        library::licence_problem("CC-BY-4.0", None)
+            .unwrap()
+            .contains("credit")
+    );
+    assert!(
+        library::licence_problem("CC-BY-4.0", Some("  "))
+            .unwrap()
+            .contains("credit")
+    );
+    assert!(
+        library::licence_problem("Creative Commons", Some("A"))
+            .unwrap()
+            .contains("SPDX")
     );
 }

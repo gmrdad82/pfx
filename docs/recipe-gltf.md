@@ -5,7 +5,7 @@ pfx reads any standard glTF 2.0 binary, a Blender export included, and writes GL
 ## Import
 
 ```
-pfx import <file.glb> (--as <kind>/<name> | --out <x.pfx>) [--tags <tag,tag>] [--thumb] [--json]
+pfx import <file.glb> (--as <kind>/<name> | --out <x.pfx>) [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--tags <tag,tag>] [--thumb] [--json]
 ```
 
 ```
@@ -17,7 +17,7 @@ It writes a `.pfx` document:
 
 - **GLTF and GBIN** hold the file's JSON and BIN chunks as they are, so the node hierarchy, the materials and their KHR extensions, the textures, the morph targets and the animations all stay.
 - **RCPE** is a recipe with one object, `kind = "mesh"`, `path = "@gltf"`, the document's own glTF.
-- **FACT** holds what pfx detects: `size`, `min` and `max` from the bounds (metres, Y up), `nodes`, `triangles`, `wheels` from nodes named `wheel*` (`wheel_fl` is `fl`: its `centre`, its `radius` and its `axle`, the thinnest axis of its bounds), `anchors` from nodes named for a light, lamp, head or tail (`kind` `head`, `tail` or `lamp`, a `position` and the node's `-Z` as `direction`), and `kind`, `name`, `tags` and the `licence` line.
+- **FACT** holds what pfx detects: `size`, `min` and `max` from the bounds (metres, Y up), `nodes`, `triangles`, `wheels` from nodes named `wheel*` (`wheel_fl` is `fl`: its `centre`, its `radius` and its `axle`, the thinnest axis of its bounds), `anchors` from nodes named for a light, lamp, head or tail (`kind` `head`, `tail` or `lamp`, a `position` and the node's `-Z` as `direction`), and `kind`, `name`, `tags`, and the `licence`, `credit`, `author` and `source` the options give (`licence` is empty without `--licence`).
 - **NODE** maps each node, as `<name>.<node>`, to its glTF index.
 - **THMB**, with `--thumb`, a 256x256 PNG drawn headless on the live renderer.
 

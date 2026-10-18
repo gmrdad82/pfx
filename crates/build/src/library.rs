@@ -27,6 +27,9 @@ pub struct Sidecar {
     pub name: String,
     pub tags: Vec<String>,
     pub licence: String,
+    pub credit: Option<String>,
+    pub author: Option<String>,
+    pub source: Option<String>,
     pub generator: Option<String>,
     pub params: BTreeMap<String, Value>,
     pub pfx: String,
@@ -81,6 +84,15 @@ impl Sidecar {
         object.insert("name".into(), json!(self.name));
         object.insert("tags".into(), json!(self.tags));
         object.insert("licence".into(), json!(self.licence));
+        for (key, value) in [
+            ("credit", &self.credit),
+            ("author", &self.author),
+            ("source", &self.source),
+        ] {
+            if let Some(value) = value {
+                object.insert(key.into(), json!(value));
+            }
+        }
         let mut source = Map::new();
         if let Some(generator) = &self.generator {
             source.insert("generator".into(), json!(generator));
@@ -113,7 +125,13 @@ impl Sidecar {
                 .map(str::to_string)
                 .ok_or_else(|| format!("{at}.{key}: missing, expected a string"))
         };
-        known(&object, "object", &["kind", "name", "tags", "licence"])?;
+        known(
+            &object,
+            "object",
+            &[
+                "kind", "name", "tags", "licence", "credit", "author", "source",
+            ],
+        )?;
         known(&source, "source", &["generator", "pfx", "params"])?;
         let tags = match object.get("tags") {
             None => Vec::new(),
@@ -123,6 +141,11 @@ impl Sidecar {
                 .collect::<Option<Vec<_>>>()
                 .ok_or("object.tags: expected an array of strings")?,
             Some(_) => return Err("object.tags: expected an array of strings".into()),
+        };
+        let optional = |key: &str| match object.get(key) {
+            None => Ok(None),
+            Some(Value::String(text)) => Ok(Some(text.clone())),
+            Some(_) => Err(format!("object.{key}: expected a string")),
         };
         let generator = match source.get("generator") {
             None => None,
@@ -139,6 +162,9 @@ impl Sidecar {
             name: text_of(&object, "object", "name")?,
             tags,
             licence: text_of(&object, "object", "licence")?,
+            credit: optional("credit")?,
+            author: optional("author")?,
+            source: optional("source")?,
             generator,
             params,
             pfx: text_of(&source, "source", "pfx")?,
@@ -354,6 +380,9 @@ pub fn export(
             name: name.to_string(),
             tags: Vec::new(),
             licence: LICENCE.to_string(),
+            credit: None,
+            author: None,
+            source: None,
             generator,
             params,
             pfx: env!("CARGO_PKG_VERSION").to_string(),
@@ -1464,6 +1493,111 @@ pub fn pfx_extras(glb: &[u8]) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+pub fn licence_problem(licence: &str, credit: Option<&str>) -> Option<String> {
+    let licence = licence.trim();
+    if licence.is_empty() || licence == LICENCE {
+        return None;
+    }
+    if let Err(e) = spdx::Expression::parse(licence) {
+        return Some(format!(
+            "object.licence: \"{licence}\" is not an SPDX licence expression ({})",
+            e.reason
+        ));
+    }
+    match credit.map(str::trim) {
+        Some(credit) if !credit.is_empty() => None,
+        _ => Some(format!(
+            "object.credit: licence {licence} needs a credit line (author, source URL)"
+        )),
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Provenance {
+    pub licence: String,
+    pub credit: Option<String>,
+    pub author: Option<String>,
+    pub source: Option<String>,
+}
+
+impl Provenance {
+    pub fn validate(&self) -> Result<(), String> {
+        match licence_problem(&self.licence, self.credit.as_deref()) {
+            Some(text) => Err(text),
+            None => Ok(()),
+        }
+    }
+}
+
+fn sidecars(root: &Path) -> Result<Vec<Sidecar>, Vec<Problem>> {
+    let refused = |e: Error| {
+        vec![Problem {
+            path: e.path,
+            text: e.text,
+        }]
+    };
+    let mut out = Vec::new();
+    for kind in folders(root).map_err(refused)? {
+        for name in folders(&root.join(&kind)).map_err(refused)? {
+            let path = root.join(&kind).join(&name).join(SIDECAR);
+            let sidecar = Sidecar::read(&path).map_err(|text| {
+                vec![Problem {
+                    path: format!("{kind}/{name}/{SIDECAR}"),
+                    text,
+                }]
+            })?;
+            out.push(sidecar);
+        }
+    }
+    Ok(out)
+}
+
+fn unlicensed_in(sidecars: &[Sidecar]) -> Vec<Problem> {
+    sidecars
+        .iter()
+        .filter(|s| s.licence.trim().is_empty())
+        .map(|s| Problem {
+            path: format!("{}/{}/{SIDECAR}", s.kind, s.name),
+            text: "unlicensed: object.licence is empty; `pfx library add --licence <SPDX id> --credit \"<author, source URL>\"` records it".into(),
+        })
+        .collect()
+}
+
+pub fn unlicensed(root: &Path) -> Vec<Problem> {
+    sidecars(root)
+        .map(|s| unlicensed_in(&s))
+        .unwrap_or_default()
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Credit {
+    pub kind: String,
+    pub name: String,
+    pub licence: String,
+    pub credit: Option<String>,
+    pub author: Option<String>,
+    pub source: Option<String>,
+}
+
+pub fn credits(root: &Path) -> Result<Vec<Credit>, Vec<Problem>> {
+    let all = sidecars(root)?;
+    let missing = unlicensed_in(&all);
+    if !missing.is_empty() {
+        return Err(missing);
+    }
+    Ok(all
+        .into_iter()
+        .map(|s| Credit {
+            kind: s.kind,
+            name: s.name,
+            licence: s.licence,
+            credit: s.credit,
+            author: s.author,
+            source: s.source,
+        })
+        .collect())
+}
+
 pub fn check(root: &Path) -> Vec<Problem> {
     let mut out = Vec::new();
     let mut problem = |path: String, text: String| out.push(Problem { path, text });
@@ -1503,11 +1637,9 @@ pub fn check(root: &Path) -> Vec<Problem> {
                             ),
                         );
                     }
-                    if sidecar.licence != LICENCE {
-                        problem(
-                            at(SIDECAR),
-                            format!("object.licence: expected \"{LICENCE}\""),
-                        );
+                    if let Some(text) = licence_problem(&sidecar.licence, sidecar.credit.as_deref())
+                    {
+                        problem(at(SIDECAR), text);
                     }
                 }
                 Err(text) => problem(at(SIDECAR), text),

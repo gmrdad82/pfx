@@ -27,7 +27,7 @@ pfx shoot <recipe> --out <dir> [--draft|--final] [--range a..b] [--camera <name>
                                                           builds the recipe and renders its timeline with `pfx shot` on the live renderer: frames, the scene's sound as a WAV and shoot.json; resumes where it stopped
 pfx library list|index|check [--kind <kind>] [--library <dir>] [--json]
                                                           the library's objects, its index rewritten from the folders, or every object checked against the index
-pfx library bake <recipe> <object> --as <kind>/<name> [--thumb] [--tags a,b] [--library <dir>] [--json]
+pfx library bake <recipe> <object> --as <kind>/<name> [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--thumb] [--tags a,b] [--library <dir>] [--json]
                                                           builds the recipe and writes the object to library/<kind>/<name>: model.glb, object.toml (its source, params and facts) and with --thumb a 512x512 still on a neutral ground; then the index
 pfx library add <file.glb> --as <kind>/<name> [--thumb] [--tags a,b] [--library <dir>] [--json]
                                                           brings a glTF 2.0 binary file into the library: copies it, writes its object.toml (file name, sha256, size, wheels and light anchors found by node name), checked by gltf_validator when installed
@@ -51,7 +51,7 @@ pfx scene save <recipe> --pfx <out.pfx> [--thumb] [--json]
                                                           packs the recipe, its includes and every file it reads, its build and its scene into one .pfx
 pfx scene unpack <file.pfx> <dir> [--json]               writes a .pfx's recipe and files into a folder, so building it there gives the same GLB
 pfx scene fold <file.pfx> [--apply | --keep] [--json]    lists the scene edits made in a .pfx, folds them into the recipe or keeps them as overrides
-pfx import <file.glb> (--as <kind>/<name> | --out <x.pfx>) [--tags <a,b>] [--thumb] [--json]
+pfx import <file.glb> (--as <kind>/<name> | --out <x.pfx>) [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--tags <a,b>] [--thumb] [--json]
                                                           a glTF 2.0 binary (a Blender export too) into a .pfx: its glTF as-is, a one-object recipe and detected facts (size, wheels, light anchors)
 pfx export <file.pfx|recipe> --glb <out.glb> [--only <object>] [--json]
                                                           a standalone GLB with its node hierarchy and no pfx extras

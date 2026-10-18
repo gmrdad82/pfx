@@ -508,7 +508,7 @@ fn restore(pts: &[DVec2], tris: &mut Vec<[u32; 3]>, tol: f64) {
             'tris: for (ti, t) in tris.iter().enumerate() {
                 for e in 0..3 {
                     let (a, b) = (t[e], t[(e + 1) % 3]);
-                    if uses[&edge(a, b)] != 1 {
+                    if uses.get(&edge(a, b)) != Some(&1) {
                         continue;
                     }
                     if on_segment(q, pts[a as usize], pts[b as usize], tol) {
@@ -523,7 +523,10 @@ fn restore(pts: &[DVec2], tris: &mut Vec<[u32; 3]>, tol: f64) {
                     let (a, b, c) = (t[e], t[(e + 1) % 3], t[(e + 2) % 3]);
                     tris[ti] = [a, v, c];
                     tris.push([v, b, c]);
-                    *uses.entry(edge(a, b)).or_default() += 1;
+                    uses.remove(&edge(a, b));
+                    *uses.entry(edge(a, v)).or_default() += 1;
+                    *uses.entry(edge(v, b)).or_default() += 1;
+                    *uses.entry(edge(v, c)).or_default() += 2;
                     progress = true;
                 }
                 None => next.push(v),
@@ -1192,5 +1195,66 @@ mod tests {
         let tris = triangulate(&cw);
         let pts = points(&cw.outer);
         assert!(tris.iter().all(|t| tri_area(&pts, t) > 0.0));
+    }
+
+    fn lost_vertex_case() -> Vec<Outline> {
+        vec![
+            Outline(vec![
+                [7.553988350288111, 2.0386739281385773],
+                [7.4451828469523855, 7.03748992419643],
+                [3.9460116497118896, 6.961326071861423],
+                [4.0548171530476145, 1.96251007580357],
+            ]),
+            Outline(vec![[4.0, 3.5], [4.0, 7.5], [1.5, 7.5], [1.5, 3.5]]),
+            Outline(vec![[4.0, 1.0], [4.0, 3.5], [2.5, 3.5], [2.5, 1.0]]),
+            Outline(vec![[6.5, 1.0], [6.5, 2.0], [1.5, 2.0], [1.5, 1.0]]),
+        ]
+    }
+
+    #[test]
+    fn restoring_lost_vertices_survives_the_triangles_it_adds() {
+        for shape in union(&lost_vertex_case()) {
+            let tris = triangulate(&shape);
+            let pts = all_points(&shape);
+            let sum: f64 = tris.iter().map(|t| tri_area(&pts, t)).sum();
+            assert!((sum - shape.area()).abs() < 1e-9 * shape.area().abs().max(1.0));
+        }
+    }
+
+    #[test]
+    fn unions_of_overlapping_skewed_rects_triangulate() {
+        let mut state = 12345u64;
+        let mut next = || {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((state >> 33) as f64) / ((1u64 << 31) as f64)
+        };
+        for case in 0..20000 {
+            let quant = case % 2 == 0;
+            let outlines: Vec<Outline> = (0..2 + case % 3)
+                .map(|_| {
+                    let q = |v: f64| if quant { (v * 2.0).round() / 2.0 } else { v };
+                    let (x, y) = (q(next() * 4.0), q(next() * 4.0));
+                    let (w, h) = (q(1.0 + next() * 4.0), q(1.0 + next() * 4.0));
+                    let skew = if next() < 0.3 {
+                        0.0
+                    } else {
+                        (next() - 0.5) * 6.0
+                    };
+                    turned([x, y, x + w, y + h], 0.0, skew, 1)
+                })
+                .collect();
+            for shape in union(&outlines) {
+                let tris = triangulate(&shape);
+                let pts = all_points(&shape);
+                let sum: f64 = tris.iter().map(|t| tri_area(&pts, t)).sum();
+                assert!(
+                    (sum - shape.area()).abs() < 1e-6 * shape.area().abs().max(1.0),
+                    "case {case}: {sum} vs {}",
+                    shape.area()
+                );
+            }
+        }
     }
 }

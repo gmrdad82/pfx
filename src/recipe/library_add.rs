@@ -36,6 +36,22 @@ pub(super) struct Args {
     tags: Vec<String>,
     #[arg(
         long,
+        value_name = "SPDX id",
+        help = "The model's licence as an SPDX id; the sidecar's licence stays empty when not given"
+    )]
+    licence: Option<String>,
+    #[arg(
+        long,
+        value_name = "line",
+        help = "The credit line the licence asks for (author, source URL)"
+    )]
+    credit: Option<String>,
+    #[arg(long, value_name = "name", help = "The model's author")]
+    author: Option<String>,
+    #[arg(long, value_name = "url", help = "Where the model came from")]
+    source: Option<String>,
+    #[arg(
+        long,
         value_name = "dir",
         default_value = "library",
         help = "The library folder"
@@ -218,7 +234,14 @@ pub fn facts(parsed: &gltf::Gltf) -> Result<Map<String, Value>, String> {
     Ok(out)
 }
 
-pub fn add(file: &Path, entry: &str, tags: &[String], root: &Path) -> Result<Added, String> {
+pub fn add(
+    file: &Path,
+    entry: &str,
+    tags: &[String],
+    provenance: &library::Provenance,
+    root: &Path,
+) -> Result<Added, String> {
+    provenance.validate()?;
     let shown = file.display();
     let bytes = std::fs::read(file).map_err(|e| format!("{shown}: {e}"))?;
     let parsed = basics(&bytes).map_err(|e| format!("{shown}: {e}"))?;
@@ -233,7 +256,10 @@ pub fn add(file: &Path, entry: &str, tags: &[String], root: &Path) -> Result<Add
         kind: kind.into(),
         name: name.into(),
         tags: tags.to_vec(),
-        licence: library::LICENCE.into(),
+        licence: provenance.licence.clone(),
+        credit: provenance.credit.clone(),
+        author: provenance.author.clone(),
+        source: provenance.source.clone(),
         generator: None,
         params: [
             ("file".to_string(), json!(original)),
@@ -272,7 +298,19 @@ fn subject(added: &Added, registry: &Registry) -> Result<Subject, String> {
 }
 
 pub fn run(args: &Args, registry: &Registry) -> ExitCode {
-    let added = match add(&args.file, &args.entry, &args.tags, &args.library) {
+    let provenance = library::Provenance {
+        licence: args.licence.clone().unwrap_or_default(),
+        credit: args.credit.clone(),
+        author: args.author.clone(),
+        source: args.source.clone(),
+    };
+    let added = match add(
+        &args.file,
+        &args.entry,
+        &args.tags,
+        &provenance,
+        &args.library,
+    ) {
         Ok(added) => added,
         Err(e) => return refuse("library add", &e),
     };
@@ -362,7 +400,20 @@ mod tests {
         );
         let file = dir.join("hand.glb");
         std::fs::write(&file, &glb).unwrap();
-        let added = add(&file, "cars/hand", &["car".into()], &dir.join("library")).unwrap();
+        let by = library::Provenance {
+            licence: "CC-BY-4.0".into(),
+            credit: Some("Hand car by An Author, https://example.org/hand".into()),
+            author: Some("An Author".into()),
+            source: Some("https://example.org/hand".into()),
+        };
+        let added = add(
+            &file,
+            "cars/hand",
+            &["car".into()],
+            &by,
+            &dir.join("library"),
+        )
+        .unwrap();
         assert_eq!(std::fs::read(&added.model).unwrap(), glb);
         let f = &added.facts;
         let near = |v: &Value, want: [f64; 3]| {
@@ -389,11 +440,49 @@ mod tests {
             text.contains("hand.glb") && text.contains(&sha256(&glb)),
             "{text}"
         );
+        let parsed = library::Sidecar::parse(&text).unwrap();
+        assert_eq!(parsed.licence, "CC-BY-4.0");
+        assert_eq!(parsed.author.as_deref(), Some("An Author"));
+        assert_eq!(parsed.source.as_deref(), Some("https://example.org/hand"));
+        assert!(library::licence_problem(&parsed.licence, parsed.credit.as_deref()).is_none());
+        let root = dir.join("library");
+        assert_eq!(library::credits(&root).unwrap().len(), 1);
+
+        let bare = add(
+            &file,
+            "cars/bare",
+            &[],
+            &library::Provenance::default(),
+            &root,
+        )
+        .unwrap();
+        let bare_text = std::fs::read_to_string(&bare.sidecar).unwrap();
+        assert_eq!(library::Sidecar::parse(&bare_text).unwrap().licence, "");
+        assert!(!bare_text.contains("MIT"));
+        let missing = library::unlicensed(&root);
+        assert_eq!(missing.len(), 1);
+        assert!(missing[0].path.starts_with("cars/bare/"));
+        let refused = library::credits(&root).unwrap_err();
+        assert!(refused[0].path.starts_with("cars/bare/"), "{refused:?}");
+
+        let no_credit = library::Provenance {
+            licence: "CC0-1.0".into(),
+            ..library::Provenance::default()
+        };
+        assert!(add(&file, "cars/nc", &[], &no_credit, &root).is_err());
+        let not_spdx = library::Provenance {
+            licence: "free to use".into(),
+            credit: Some("someone".into()),
+            ..library::Provenance::default()
+        };
+        assert!(add(&file, "cars/ns", &[], &not_spdx, &root).is_err());
+
         assert!(
             add(
                 &dir.join("library/cars/hand/object.toml"),
                 "cars/x",
                 &[],
+                &library::Provenance::default(),
                 &dir
             )
             .is_err()

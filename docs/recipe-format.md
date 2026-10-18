@@ -1054,7 +1054,7 @@ at = [0.0, 0.0, 4.0]
 - **Morph targets** of a node's mesh are kept, with their names from the mesh's `extras.targetNames` and the file's default weights.
 - **Animations:** with a `[timeline]`, the chosen clip is sampled once a frame (LINEAR and STEP keys, a CUBICSPLINE key's value, rotations by slerp) through the hierarchy, and each piece it moves is keyed in the GLB's `timeline` animation like any animated node. A followed object is keyed by its `[[follow]]` alone. Morph weight channels are kept on export, not played.
 - **Facts:** the sidecar's `[facts]` are the object's facts, as a generator's are: `wheels = { fl = { centre, radius, axle }, … }` is what `[[follow]]` spins and steers each wheel about. A `wheel_<corner>` node missing from them takes its own node's origin as centre, half its height as radius and +X as axle. `lights = [{ name, node, position, direction, cone, range, color, intensity, shadow }]` become spot lights riding `<object>.<node>`, as a car's lights are.
-- **The sidecar,** `object.toml`:
+- **The sidecar,** `object.toml` (`licence` is an SPDX expression with a `credit` line, and optional `author` and `source`, for a model from someone else; empty when unknown; the line below is pfx's own library's):
 
 ```toml
 [object]

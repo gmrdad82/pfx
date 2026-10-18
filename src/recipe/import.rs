@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use pfx_build::gltf_io::{self, Imported};
-use pfx_build::{Registry, build_with};
+use pfx_build::{Registry, build_with, library};
 use serde_json::{Value, json};
 
 use super::refuse;
@@ -34,6 +34,22 @@ pub(super) struct Args {
         help = "Tags kept in the document's facts"
     )]
     tags: Vec<String>,
+    #[arg(
+        long,
+        value_name = "SPDX id",
+        help = "The model's licence as an SPDX id; left empty when not given"
+    )]
+    licence: Option<String>,
+    #[arg(
+        long,
+        value_name = "line",
+        help = "The credit line the licence asks for (author, source URL)"
+    )]
+    credit: Option<String>,
+    #[arg(long, value_name = "name", help = "The model's author")]
+    author: Option<String>,
+    #[arg(long, value_name = "url", help = "Where the model came from")]
+    source: Option<String>,
     #[arg(
         long,
         help = "Render a 256x256 thumbnail into the document (GPU, headless)"
@@ -133,7 +149,13 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
         Some(Ok(())) => "passed",
         Some(Err(text)) => return refuse(COMMAND, &format!("{file}: {text}")),
     };
-    let imported = match gltf_io::import(&bytes, &name, &args.tags) {
+    let provenance = library::Provenance {
+        licence: args.licence.clone().unwrap_or_default(),
+        credit: args.credit.clone(),
+        author: args.author.clone(),
+        source: args.source.clone(),
+    };
+    let imported = match gltf_io::import(&bytes, &name, &args.tags, &provenance) {
         Ok(imported) => imported,
         Err(text) => return refuse(COMMAND, &format!("{file}: {text}")),
     };
