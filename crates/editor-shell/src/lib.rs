@@ -60,6 +60,10 @@ pub trait App {
 
     fn forget(&mut self) {}
 
+    fn settling(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &str {
         "editor"
     }

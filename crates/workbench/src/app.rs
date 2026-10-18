@@ -193,6 +193,10 @@ impl App for Workbench<'_> {
         }
     }
 
+    fn settling(&self) -> bool {
+        !self.shell.edits_scene() && self.viewer.get().is_some_and(Viewer::settling)
+    }
+
     fn forget(&mut self) {
         if let Some(session) = self.shell.session_mut() {
             session.forget();
@@ -401,6 +405,208 @@ mod tests {
         assert!(!app.viewport());
         assert_eq!(app.watched(), Watch::default());
         assert_eq!(app.timing(), Timing::default());
+    }
+
+    const PAINT: &str = r##"recipe = 1
+name = "paint"
+seed = 9
+
+[[object]]
+name = "floor"
+kind = "plane"
+size = [30.0, 30.0]
+material = "asphalt"
+
+[[object]]
+name = "hero"
+kind = "generator"
+generator = "pfx/car"
+params = { style = "sports", paint = "#c8102e" }
+
+[[object]]
+name = "sedan"
+kind = "generator"
+generator = "pfx/car"
+at = [-3.2, 0.0, 3.5]
+rotate = [0.0, 8.0, 0.0]
+params = { style = "sedan", seed = 4 }
+
+[[object]]
+name = "van"
+kind = "generator"
+generator = "pfx/car"
+at = [3.4, 0.0, 5.0]
+params = { style = "van", paint = "#f4f4f2" }
+
+[[camera]]
+name = "main"
+position = [4.6, 1.3, -5.2]
+target = [-0.2, 0.7, 1.4]
+fov_y_deg = 40.0
+
+[sun]
+model = "authored"
+toward = [-0.5, 0.35, -0.8]
+radius_deg = 0.8
+color = [1.0, 0.78, 0.55]
+irradiance = 3.0
+
+[sky]
+kind = "analytic"
+intensity = 0.8
+
+[materials.asphalt]
+base = [0.06, 0.06, 0.065]
+roughness = 0.75
+"##;
+
+    const PANEL: [usize; 4] = [420, 275, 520, 325];
+    const NOISE_MOST: f64 = 0.5;
+
+    fn noise(rgba: &[u8], width: usize, [x0, y0, x1, y1]: [usize; 4]) -> f64 {
+        let luma: Vec<f64> = rgba
+            .chunks_exact(4)
+            .map(|pixel| {
+                0.2126 * f64::from(pixel[0])
+                    + 0.7152 * f64::from(pixel[1])
+                    + 0.0722 * f64::from(pixel[2])
+            })
+            .collect();
+        let mut total = 0.0;
+        let mut count = 0.0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let mut near: Vec<f64> = (0..9)
+                    .map(|k| luma[(y + k / 3 - 1) * width + x + k % 3 - 1])
+                    .collect();
+                near.sort_by(f64::total_cmp);
+                total += (luma[y * width + x] - near[4]).abs();
+                count += 1.0;
+            }
+        }
+        total / count
+    }
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+    fn a_viewport_shot_settles_its_noise_like_the_window_does() {
+        let since = std::time::Instant::now();
+        let size = [960, 540];
+        let path = crate::scratch("polish-noise");
+        std::fs::write(&path, PAINT).unwrap();
+        let mut viewer = Viewer::with(Follow::new_with(&path, Mode::Stage, Registry::new()));
+        let mut shell = Shell::open(&path.display().to_string())
+            .without_recent()
+            .bare();
+        viewer.sync(&mut shell);
+        let rgba = pixels(
+            &mut Workbench::lent(&mut shell, &mut viewer),
+            size,
+            &Script::default(),
+        )
+        .unwrap();
+        crate::gpu_turn(since);
+        assert!(!viewer.settling());
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        std::fs::write(
+            root.join("tmp/polish-noise.png"),
+            encode_png(size, &rgba).unwrap(),
+        )
+        .unwrap();
+        let measured = noise(&rgba, size[0] as usize, PANEL);
+        eprintln!("paint noise {measured:.3}");
+        assert!(measured < NOISE_MOST, "paint noise {measured:.3}");
+    }
+
+    const CHROME: &str = r##"recipe = 1
+name = "chrome"
+seed = 9
+
+[[object]]
+name = "floor"
+kind = "plane"
+size = [30.0, 30.0]
+material = "floor"
+
+[[object]]
+name = "slab"
+kind = "box"
+at = [0.0, 0.4, 0.0]
+size = [2.0, 0.8, 0.1]
+material = "chrome"
+
+[[camera]]
+name = "main"
+position = [1.2, 0.9, -3.0]
+target = [0.0, 0.3, 0.0]
+fov_y_deg = 40.0
+
+[sky]
+kind = "hdr"
+path = "window.hdr"
+source = "made by pfx for its own tests"
+intensity = 1.5
+
+[materials.floor]
+base = [0.5, 0.5, 0.5]
+roughness = 0.8
+
+[materials.chrome]
+family = "metal"
+base = [0.9, 0.9, 0.92]
+roughness = 0.08
+metalness = 1.0
+"##;
+
+    const REFLECTION_NOISE_MOST: f64 = 0.7;
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+    fn a_chrome_slab_under_an_hdr_sky_reflects_the_floor_without_dots() {
+        let since = std::time::Instant::now();
+        let size = [960, 540];
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let path = crate::scratch("polish-chrome");
+        std::fs::copy(
+            root.join("tests/fixtures/sky/window.hdr"),
+            path.with_file_name("window.hdr"),
+        )
+        .unwrap();
+        std::fs::write(&path, CHROME).unwrap();
+        let mut viewer = Viewer::with(Follow::new_with(&path, Mode::Stage, Registry::new()));
+        let mut shell = Shell::open(&path.display().to_string())
+            .without_recent()
+            .bare();
+        viewer.sync(&mut shell);
+        let rgba = pixels(
+            &mut Workbench::lent(&mut shell, &mut viewer),
+            size,
+            &Script::default(),
+        )
+        .unwrap();
+        crate::gpu_turn(since);
+        std::fs::write(
+            root.join("tmp/polish-chrome.png"),
+            encode_png(size, &rgba).unwrap(),
+        )
+        .unwrap();
+        let lens = shell.lens().unwrap();
+        let corners: Vec<egui::Pos2> = [[-0.6, 0.08], [0.6, 0.08], [-0.6, 0.32], [0.6, 0.32]]
+            .into_iter()
+            .map(|[x, y]| lens.project(glam::DVec3::new(x, y, -0.06)).unwrap())
+            .collect();
+        let lower = [
+            corners.iter().map(|at| at.x).fold(f32::MAX, f32::min) as usize,
+            corners.iter().map(|at| at.y).fold(f32::MAX, f32::min) as usize,
+            corners.iter().map(|at| at.x).fold(f32::MIN, f32::max) as usize,
+            corners.iter().map(|at| at.y).fold(f32::MIN, f32::max) as usize,
+        ];
+        let measured = noise(&rgba, size[0] as usize, lower);
+        eprintln!("reflection noise {measured:.3} in {lower:?}");
+        assert!(
+            measured < REFLECTION_NOISE_MOST,
+            "reflection noise {measured:.3}"
+        );
     }
 
     #[test]

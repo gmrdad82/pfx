@@ -102,6 +102,7 @@ pub fn march(
     direction: [f32; 3],
     steps: u32,
     thickness: f32,
+    jitter: f32,
 ) -> Option<Hit> {
     let size = [depth.width as f32, depth.height as f32];
     let near = -origin[2];
@@ -137,8 +138,8 @@ pub fn march(
     let mut previous_depth = start[2];
     let mut front = start[2] <= depth.at([start[0], start[1]]);
     for i in 1..=steps {
-        let u = i as f32 / steps as f32;
-        let travelled = (pixels * u * u).max(i as f32).min(pixels);
+        let u = (i as f32 - jitter) / (steps as f32 - jitter);
+        let travelled = (pixels * u * u).max(i as f32 - jitter).min(pixels);
         let s = travelled / span;
         let ray = ray_depth(s);
         let scene = depth.at(place(s));
@@ -423,7 +424,7 @@ fn ssr_sample_reflection(view_ray: vec3f, n: vec3f, alpha: f32, u: vec2f) -> vec
     let r = reflect(-v, ssr_vndf(v, alpha, u));
     return r.x * tangent + r.y * bitangent + r.z * n;
 }
-fn march(origin: vec3f, direction: vec3f, steps: u32) -> vec3f {
+fn march(origin: vec3f, direction: vec3f, steps: u32, jitter: f32) -> vec3f {
     let near = -origin.z;
     var reach = near * 64.0;
     if (direction.z > 0.0) {
@@ -446,8 +447,8 @@ fn march(origin: vec3f, direction: vec3f, steps: u32) -> vec3f {
     var previous_depth = start.z;
     var front = start.z <= scene_depth(start.xy);
     for (var i = 1u; i <= steps; i++) {
-        let u = f32(i) / f32(steps);
-        let travelled = min(max(pixels * u * u, f32(i)), pixels);
+        let u = (f32(i) - jitter) / (f32(steps) - jitter);
+        let travelled = min(max(pixels * u * u, f32(i) - jitter), pixels);
         let s = travelled / span;
         let ray = ray_depth(k, s);
         let scene = scene_depth(start.xy + delta * s);
@@ -528,7 +529,8 @@ fn trace_pass(@builtin(global_invocation_id) id: vec3u) {
     var hit = vec3f(0.0);
     let fade = 1.0 - smoothstep(0.6, 0.75, roughness);
     if (fade > 0.0) {
-        hit = march(origin + surface * depth * 0.002, direction, march_steps(roughness));
+        let jitter = ssr_random(pixel + vec2u(17u, 59u), params.frame_index + 2654435769u).x;
+        hit = march(origin + surface * depth * 0.002, direction, march_steps(roughness), jitter);
     }
     if (hit.z > 0.0) {
         let at = vec2i(clamp(hit.xy, vec2f(0.0), vec2f(params.size) - vec2f(1.0)));
@@ -1647,6 +1649,7 @@ mod tests {
             direction,
             march_steps(0.05),
             THICKNESS,
+            0.0,
         )
         .is_some_and(|hit| {
             let x = hit.pixel[0] as usize;
@@ -1793,6 +1796,7 @@ mod tests {
                     std::array::from_fn(|axis| origin[axis] + direction[axis] * t),
                 );
                 let start = std::array::from_fn(|axis| origin[axis] - origin[2] * 0.002 * n[axis]);
+                let jitter = ((x * 7 + y * 13) % 16) as f32 / 16.0;
                 match march(
                     &image,
                     &desk.projection,
@@ -1800,6 +1804,7 @@ mod tests {
                     direction,
                     march_steps(0.05),
                     THICKNESS,
+                    jitter,
                 ) {
                     Some(hit) => {
                         let error = (hit.pixel[0] - want[0]).hypot(hit.pixel[1] - want[1]);
