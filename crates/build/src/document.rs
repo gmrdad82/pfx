@@ -8,7 +8,6 @@ use sha2::{Digest, Sha256};
 
 use crate::{Built, Registry, build_with, glb_path};
 
-pub const LICENCE: &str = "MIT, Catalin Ilinca; original, no third-party models or brand marks";
 pub const GLTF_NAME: &str = "@gltf";
 pub const ENTRY: &str = "main.toml";
 
@@ -533,7 +532,13 @@ impl Document {
 
     fn facts_text(&self, built: &Built) -> Result<String, String> {
         let mut table = toml::Table::new();
-        table.insert("licence".into(), toml::Value::String(LICENCE.into()));
+        if let Ok(before) = toml::from_str::<toml::Table>(&self.facts) {
+            for key in ["licence", "credit", "author", "source"] {
+                if let Some(value) = before.get(key).and_then(toml::Value::as_str) {
+                    table.insert(key.into(), toml::Value::String(value.into()));
+                }
+            }
+        }
         table.insert(
             "pfx".into(),
             toml::Value::String(env!("CARGO_PKG_VERSION").into()),
@@ -558,6 +563,14 @@ impl Document {
             .filter_map(|(k, v)| Some((k.clone(), toml_of(v)?)))
             .collect();
         table.insert("objects".into(), toml::Value::Table(objects));
+        let provenance: toml::Table = built
+            .object_provenance()
+            .iter()
+            .filter_map(|(k, v)| Some((k.clone(), toml_of(v)?)))
+            .collect();
+        if !provenance.is_empty() {
+            table.insert("provenance".into(), toml::Value::Table(provenance));
+        }
         toml::to_string(&table).map_err(|e| format!("the facts: {e}"))
     }
 

@@ -359,6 +359,14 @@ roughness = 0.6
     }
 
     #[test]
+    fn a_built_document_claims_no_licence_of_its_own() {
+        let (_, pfx) = saved("pfx-no-licence");
+        let doc = Document::open(&pfx).unwrap();
+        assert!(!doc.facts.contains("licence"), "{}", doc.facts);
+        assert!(!doc.facts.contains("MIT"));
+    }
+
+    #[test]
     fn save_then_unpack_then_build_gives_the_same_glb() {
         let (dir, pfx) = saved("pfx-round-trip");
         let doc = Document::open(&pfx).unwrap();

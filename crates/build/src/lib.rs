@@ -23,6 +23,7 @@ mod maps;
 mod normal_map;
 mod scene;
 mod shape;
+mod spdx;
 mod timeline;
 mod uv;
 
@@ -261,6 +262,7 @@ pub struct Built {
     pub markers: Vec<(String, f64)>,
     pub tracks: Vec<Track>,
     facts_by_object: serde_json::Map<String, serde_json::Value>,
+    provenance_by_object: serde_json::Map<String, serde_json::Value>,
     trees: BTreeMap<String, library::Tree>,
     clips: Vec<(String, Vec<pfx_motion::Trs>)>,
     pub lights: Vec<GeneratedLight>,
@@ -304,6 +306,10 @@ impl Built {
 
     pub fn object_facts(&self) -> &serde_json::Map<String, serde_json::Value> {
         &self.facts_by_object
+    }
+
+    pub fn object_provenance(&self) -> &serde_json::Map<String, serde_json::Value> {
+        &self.provenance_by_object
     }
 
     pub fn try_glb(&self) -> Result<Vec<u8>, Error> {
@@ -1081,6 +1087,7 @@ fn assemble(
     let mut parts = Vec::new();
     let mut generated = serde_json::Map::new();
     let mut by_object = serde_json::Map::new();
+    let mut provenance = serde_json::Map::new();
     let mut offered: BTreeMap<String, (&str, serde_json::Value)> = BTreeMap::new();
     let mut lights = Vec::new();
     let mut imported = Looks::new();
@@ -1103,6 +1110,12 @@ fn assemble(
                 }
                 offer(&mut offered, object, made.materials.clone())?;
                 pfx_glb::merge(&mut generated, &made.facts);
+                if let Some(found) = library::provenance(recipe, object, base) {
+                    provenance.insert(
+                        object.name.clone(),
+                        serde_json::Value::Object(found.fields()),
+                    );
+                }
                 if !made.facts.is_empty() {
                     by_object.insert(
                         object.name.clone(),
@@ -1234,6 +1247,7 @@ fn assemble(
             .collect(),
         tracks: Vec::new(),
         facts_by_object: by_object,
+        provenance_by_object: provenance,
         trees,
         clips,
         parts,

@@ -604,16 +604,7 @@ pub fn import(
     facts.insert("kind".into(), json!(kind));
     facts.insert("name".into(), json!(name));
     facts.insert("tags".into(), json!(tags));
-    facts.insert("licence".into(), json!(provenance.licence));
-    for (key, value) in [
-        ("credit", &provenance.credit),
-        ("author", &provenance.author),
-        ("source", &provenance.source),
-    ] {
-        if let Some(value) = value {
-            facts.insert(key.into(), json!(value));
-        }
-    }
+    facts.extend(provenance.fields());
     facts.extend(detected);
     let mut nodes = BTreeMap::new();
     if let Some(list) = json.get("nodes").and_then(Value::as_array) {

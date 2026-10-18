@@ -390,9 +390,9 @@ fn a_blender_style_glb_imports_with_its_hierarchy_materials_morphs_and_animation
         kind: "prop".into(),
         name: "cart".into(),
         tags: vec!["test".into()],
-        licence: LICENCE.into(),
-        credit: None,
-        author: None,
+        licence: "CC-BY-4.0".into(),
+        credit: Some("Cart by An Author, https://example.org/cart".into()),
+        author: Some("An Author".into()),
         source: None,
         generator: None,
         params: Default::default(),
@@ -418,6 +418,14 @@ at = [2.0, 0.0, 0.0]
     let built = build(&r, &dir).unwrap();
     let names: Vec<&str> = built.parts.iter().map(|p| p.node.name.as_str()).collect();
     assert_eq!(names, ["cart.Body", "cart.Wheel"]);
+    assert_eq!(
+        built.object_provenance()["cart"],
+        json!({
+            "licence": "CC-BY-4.0",
+            "credit": "Cart by An Author, https://example.org/cart",
+            "author": "An Author",
+        })
+    );
     let body = &built.parts[0].node;
     assert_eq!(
         body.targets.as_ref().map(|t| t.morph.names.clone()),

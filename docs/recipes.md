@@ -27,9 +27,9 @@ pfx shoot <recipe> --out <dir> [--draft|--final] [--range a..b] [--camera <name>
                                                           builds the recipe and renders its timeline with `pfx shot` on the live renderer: frames, the scene's sound as a WAV and shoot.json; resumes where it stopped
 pfx library list|index|check [--kind <kind>] [--library <dir>] [--json]
                                                           the library's objects, its index rewritten from the folders, or every object checked against the index
-pfx library bake <recipe> <object> --as <kind>/<name> [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--thumb] [--tags a,b] [--library <dir>] [--json]
+pfx library bake <recipe> <object> --as <kind>/<name> [--thumb] [--tags a,b] [--library <dir>] [--json]
                                                           builds the recipe and writes the object to library/<kind>/<name>: model.glb, object.toml (its source, params and facts) and with --thumb a 512x512 still on a neutral ground; then the index
-pfx library add <file.glb> --as <kind>/<name> [--thumb] [--tags a,b] [--library <dir>] [--json]
+pfx library add <file.glb> --as <kind>/<name> [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--thumb] [--tags a,b] [--library <dir>] [--json]
                                                           brings a glTF 2.0 binary file into the library: copies it, writes its object.toml (file name, sha256, size, wheels and light anchors found by node name), checked by gltf_validator when installed
 pfx route <recipe> list|set|add|remove [--route <name>] [--at <i>] [--point x,y,z] [--json]
                                                           list the routes' points and lengths, or move, add or remove a point in the file

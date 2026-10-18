@@ -1104,6 +1104,24 @@ fn sampled(
     Ok(out)
 }
 
+pub(crate) fn provenance(recipe: &Recipe, object: &Object, base: &Path) -> Option<Provenance> {
+    let Kind::Library {
+        object: reference, ..
+    } = &object.kind
+    else {
+        return None;
+    };
+    let (kind, name) = split_name(reference).ok()?;
+    let dir = root_for(recipe, base)?.join(kind).join(name);
+    let sidecar = Sidecar::read(&dir.join(SIDECAR)).ok()?;
+    Some(Provenance {
+        licence: sidecar.licence,
+        credit: sidecar.credit,
+        author: sidecar.author,
+        source: sidecar.source,
+    })
+}
+
 pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Imported, Error> {
     let Kind::Library {
         object: reference, ..
@@ -1498,10 +1516,9 @@ pub fn licence_problem(licence: &str, credit: Option<&str>) -> Option<String> {
     if licence.is_empty() || licence == LICENCE {
         return None;
     }
-    if let Err(e) = spdx::Expression::parse(licence) {
+    if let Err(text) = crate::spdx::validate(licence) {
         return Some(format!(
-            "object.licence: \"{licence}\" is not an SPDX licence expression ({})",
-            e.reason
+            "object.licence: \"{licence}\" is not an SPDX licence expression ({text})"
         ));
     }
     match credit.map(str::trim) {
@@ -1521,6 +1538,21 @@ pub struct Provenance {
 }
 
 impl Provenance {
+    pub fn fields(&self) -> Map<String, Value> {
+        let mut out = Map::new();
+        out.insert("licence".into(), json!(self.licence));
+        for (key, value) in [
+            ("credit", &self.credit),
+            ("author", &self.author),
+            ("source", &self.source),
+        ] {
+            if let Some(value) = value {
+                out.insert(key.into(), json!(value));
+            }
+        }
+        out
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         match licence_problem(&self.licence, self.credit.as_deref()) {
             Some(text) => Err(text),
