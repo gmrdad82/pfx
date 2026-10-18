@@ -376,7 +376,10 @@ Each font keeps its licence beside it:
 
 - `crates/text/fonts/`: EB Garamond.
 - `crates/text/tests/fonts/`: Bungee Color, DM Sans, IBM Plex Mono and a Noto Sans SC subset.
-- `crates/theme/fonts/`: Exo 2 and JetBrains Mono, each with its `SOURCE.md`.
+- `crates/editor-style/fonts/`: the editor theme's fonts, each subset with `pfx font subset` and kept with its `SOURCE.md` (upstream, commit or release, sha256 before and after) and its `chars.txt`:
+  - `jost/`: Jost, Copyright 2020 The Jost Project Authors (https://github.com/indestructible-type/Jost), the variable `Jost[wght].ttf` from Google Fonts at `6e4b84c9`, with its `OFL.txt`.
+  - `jetbrains-mono/`: JetBrains Mono Regular and Bold, Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono), release v2.304, with its `OFL.txt`.
+  - `icons/`: eighteen Font Awesome Free icon glyphs, Copyright (c) 2022 Fonticons, Inc. (https://fontawesome.com), as Nerd Fonts 3.5.1 patches them into JetBrains Mono, with JetBrains Mono's `OFL.txt` and Font Awesome's `FontAwesome-LICENSE.txt` (SIL Open Font License 1.1, Reserved Font Name "Font Awesome", which the subset does not use).
 - `crates/editor-style/fixture/`: Inconsolata, the editor crates' test font, with its `OFL.txt` and `SOURCE`.
 - `assets/fonts/`: JetBrains Mono (by JetBrains) patched with the Nerd Fonts icon glyphs (Nerd Fonts 3.5.1, OFL-1.1-no-RFN), the recipes' text family, which `pfx-build` and `pfx-recipe-scene` embed, with its `OFL.txt` and `SOURCE`.
 - `crates/project/src/templates/IBMPlexMono-Regular.ttf`: IBM Plex Mono, with `IBMPlexMono-OFL.txt`; `pfx new` ships it unmodified into a new game.

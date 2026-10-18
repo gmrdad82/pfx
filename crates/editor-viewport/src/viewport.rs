@@ -4,6 +4,7 @@ use std::hash::Hash;
 use std::path::{Path, PathBuf};
 
 use egui::{Color32, Id, Key, Painter, Pos2, Rect, Response, Sense, TextureId, Ui};
+use glam::DVec3;
 use pfx_editor_doc::{Changed, Files, History};
 use pfx_editor_shell::{Pgpu, Timing, Wake};
 use pfx_editor_style::Theme;
@@ -848,7 +849,7 @@ impl Viewport {
                     painter,
                     &lens,
                     &picker.outline(selection.index),
-                    theme.accent,
+                    theme.hot,
                     1.5,
                 );
             }
@@ -859,6 +860,11 @@ impl Viewport {
                 self.gizmo.draw(painter, &lens, selection.index, theme);
             }
             overlay::axes(painter, image, &view.basis(), theme);
+            if let Some(per) =
+                overlay::metres_per_point(&lens, DVec3::from_array(view.target), view.basis().right)
+            {
+                overlay::scale(painter, image, per, theme);
+            }
             self.gizmo.badge(painter, image, theme);
         }
         let notice = match (

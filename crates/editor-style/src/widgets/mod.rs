@@ -3,6 +3,8 @@ mod header;
 mod keycap;
 mod number;
 mod pill;
+mod scale;
+mod slider;
 mod tabs;
 
 pub use dotted::Dotted;
@@ -10,11 +12,16 @@ pub use header::Header;
 pub use keycap::KeyCap;
 pub use number::Number;
 pub use pill::{Pill, Tone};
+pub use scale::{ScaleBar, Ticks, ticks};
+pub use slider::{Slider, fraction};
 pub use tabs::Tabs;
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, FontId, Galley, Painter, Pos2, Rect, Response};
+use egui::{
+    Align2, Color32, CornerRadius, FontId, Frame, Galley, Margin, Painter, Pos2, Rect, Response,
+    Stroke,
+};
 
 use crate::theme::{Caps, Theme};
 
@@ -43,6 +50,14 @@ impl State {
             State::Active => theme.hot,
         }
     }
+}
+
+pub fn card(theme: &Theme) -> Frame {
+    Frame::NONE
+        .fill(theme.card)
+        .stroke(Stroke::new(theme.stroke, theme.card_line))
+        .corner_radius(CornerRadius::same(theme.radius))
+        .inner_margin(Margin::same(theme.panel_padding))
 }
 
 fn shaped(painter: &Painter, text: &str, font: FontId, colour: Color32, caps: Caps) -> Arc<Galley> {

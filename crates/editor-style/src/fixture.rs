@@ -18,15 +18,22 @@ pub fn theme() -> Theme {
         name: Cow::Borrowed("fixture"),
         bg: grey(0x10),
         surface: grey(0x20),
+        card: grey(0x04),
+        card_line: grey(0x38),
+        stripe: grey(0x18),
         well: grey(0x08),
         line: grey(0x30),
         track: grey(0x28),
+        grid: grey(0x2C),
+        rule: grey(0xC8),
+        title: grey(0xF8),
         text: grey(0xF0),
         text2: grey(0xC0),
         muted: grey(0x90),
         dim: grey(0x70),
         code: grey(0xD0),
         on_accent: grey(0x00),
+        on_hot: grey(0x02),
         accent: Color32::from_rgb(0x40, 0x40, 0xA0),
         accent_bright: Color32::from_rgb(0x80, 0x80, 0xFF),
         accent_deep: Color32::from_rgb(0x20, 0x20, 0x50),
@@ -34,6 +41,14 @@ pub fn theme() -> Theme {
         secondary_soft: Color32::from_rgb(0x80, 0xD0, 0xD0),
         hot: Color32::from_rgb(0xFF, 0xA0, 0x00),
         hot_dim: Color32::from_rgb(0x50, 0x30, 0x00),
+        value: Color32::from_rgb(0xFF, 0xD0, 0x40),
+        ramp: [
+            Color32::from_rgb(0xC0, 0xA0, 0xF0),
+            Color32::from_rgb(0x90, 0x60, 0xE0),
+            Color32::from_rgb(0x60, 0x30, 0xB0),
+            Color32::from_rgb(0x30, 0x18, 0x60),
+            Color32::from_rgb(0x18, 0x0C, 0x30),
+        ],
         ok: Color32::from_rgb(0x00, 0xC0, 0x00),
         ok_tint: Color32::from_rgb(0x00, 0x40, 0x00),
         error: Color32::from_rgb(0xFF, 0x00, 0x00),
@@ -73,6 +88,7 @@ pub fn theme() -> Theme {
             bold: Cow::Borrowed(BOLD),
         },
         display: None,
+        icons: None,
         titles: Caps::PLAIN,
         labels: Caps::PLAIN,
     }
@@ -82,15 +98,22 @@ pub fn colours(theme: &Theme) -> Vec<Color32> {
     vec![
         theme.bg,
         theme.surface,
+        theme.card,
+        theme.card_line,
+        theme.stripe,
         theme.well,
         theme.line,
         theme.track,
+        theme.grid,
+        theme.rule,
+        theme.title,
         theme.text,
         theme.text2,
         theme.muted,
         theme.dim,
         theme.code,
         theme.on_accent,
+        theme.on_hot,
         theme.accent,
         theme.accent_bright,
         theme.accent_deep,
@@ -98,6 +121,7 @@ pub fn colours(theme: &Theme) -> Vec<Color32> {
         theme.secondary_soft,
         theme.hot,
         theme.hot_dim,
+        theme.value,
         theme.ok,
         theme.ok_tint,
         theme.error,
@@ -116,12 +140,15 @@ pub fn colours(theme: &Theme) -> Vec<Color32> {
         theme.diff.del,
         theme.diff.change,
     ]
+    .into_iter()
+    .chain(theme.ramp)
+    .collect()
 }
 
 fn faces(theme: &Theme) -> Vec<&[u8]> {
     let mut faces = vec![theme.body.regular.as_ref(), theme.body.bold.as_ref()];
-    if let Some(display) = &theme.display {
-        faces.push(display.bytes.as_ref());
+    for face in [&theme.display, &theme.icons].into_iter().flatten() {
+        faces.push(face.bytes.as_ref());
     }
     faces
 }

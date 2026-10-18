@@ -7,7 +7,9 @@ use egui::{Color32, Pos2, Shape, Ui};
 use pfx_editor_shell::{App, Script, context, drive, gpu_turn, shot};
 use pfx_editor_style::fixture::{self, colours};
 use pfx_editor_style::theme::{Caps, Diff, Syntax, Theme};
-use pfx_editor_style::widgets::{Dotted, Header, KeyCap, Number, Pill, Tabs, Tone};
+use pfx_editor_style::widgets::{
+    Dotted, Header, KeyCap, Number, Pill, ScaleBar, Slider, Tabs, Tone, fraction,
+};
 
 const SIZE: [u32; 2] = [240, 64];
 
@@ -19,15 +21,19 @@ enum Board {
     KeyCap,
     Number,
     Dotted,
+    Slider,
+    Scale,
 }
 
-const BOARDS: [Board; 6] = [
+const BOARDS: [Board; 8] = [
     Board::Header,
     Board::Tabs,
     Board::Pill,
     Board::KeyCap,
     Board::Number,
     Board::Dotted,
+    Board::Slider,
+    Board::Scale,
 ];
 
 struct Shelf {
@@ -99,6 +105,14 @@ impl App for Shelf {
                     ui.add(Dotted::new().active(true));
                     first.rect.center()
                 }
+                Board::Slider => {
+                    let range = 0.0..=2.0;
+                    let at = fraction(self.value, &range);
+                    let slider = ui.add(Slider::new(&mut self.value, range).width(120.0));
+                    let inner = slider.rect.shrink2(egui::Vec2::new(6.5, 0.0));
+                    Pos2::new(inner.left() + at * inner.width(), slider.rect.center().y)
+                }
+                Board::Scale => ui.add(ScaleBar::new(0.01)).rect.center(),
             };
             self.target = Some(target);
         });
@@ -164,15 +178,22 @@ fn loud() -> Theme {
         name: Cow::Borrowed("loud"),
         bg: colour(),
         surface: colour(),
+        card: colour(),
+        card_line: colour(),
+        stripe: colour(),
         well: colour(),
         line: colour(),
         track: colour(),
+        grid: colour(),
+        rule: colour(),
+        title: colour(),
         text: colour(),
         text2: colour(),
         muted: colour(),
         dim: colour(),
         code: colour(),
         on_accent: colour(),
+        on_hot: colour(),
         accent: colour(),
         accent_bright: colour(),
         accent_deep: colour(),
@@ -180,6 +201,8 @@ fn loud() -> Theme {
         secondary_soft: colour(),
         hot: colour(),
         hot_dim: colour(),
+        value: colour(),
+        ramp: [colour(), colour(), colour(), colour(), colour()],
         ok: colour(),
         ok_tint: colour(),
         error: colour(),
@@ -251,7 +274,10 @@ fn shapes(theme: &Theme, board: Board, script: &Script) -> Vec<Shape> {
     let mut shelf = Shelf::new(board);
     let output = drive(&ctx, SIZE, script, |ui| shelf.ui(ui));
     let families = fixture::assert_faces(&ctx, theme, &output.shapes);
-    assert!(families > 0 || matches!(board, Board::Dotted), "{board:?}");
+    assert!(
+        families > 0 || matches!(board, Board::Dotted | Board::Slider),
+        "{board:?}"
+    );
     output
         .shapes
         .into_iter()
@@ -307,18 +333,24 @@ fn each_state_paints_its_own_roles() {
     };
     let has = |seen: &BTreeSet<[u8; 4]>, colour: Color32| seen.contains(&colour.to_array());
     assert!(has(&roles(Board::Dotted, "rest"), theme.track));
-    assert!(has(&roles(Board::Dotted, "rest"), theme.accent_bright));
+    assert!(has(&roles(Board::Dotted, "rest"), theme.hot));
     assert!(has(&roles(Board::Header, "rest"), theme.hot));
+    assert!(has(&roles(Board::Header, "rest"), theme.on_hot));
+    assert!(has(&roles(Board::Header, "rest"), theme.card));
     assert!(!has(&roles(Board::Header, "rest"), theme.accent));
-    assert!(has(&roles(Board::Header, "hover"), theme.accent));
     assert!(has(&roles(Board::KeyCap, "hover"), theme.accent_deep));
     assert!(has(&roles(Board::KeyCap, "rest"), theme.accent_bright));
-    assert!(has(&roles(Board::Tabs, "rest"), theme.accent_bright));
+    assert!(has(&roles(Board::Tabs, "rest"), theme.hot));
     assert!(has(&roles(Board::Tabs, "hover"), theme.accent_deep));
     assert!(has(&roles(Board::Number, "rest"), theme.well));
     assert!(has(&roles(Board::Number, "rest"), theme.code));
     assert!(!has(&roles(Board::Number, "rest"), theme.hot));
     assert!(has(&roles(Board::Number, "active"), theme.hot));
+    assert!(has(&roles(Board::Slider, "rest"), theme.hot));
+    assert!(has(&roles(Board::Slider, "rest"), theme.track));
+    assert!(!has(&roles(Board::Slider, "rest"), theme.accent));
+    assert!(has(&roles(Board::Slider, "hover"), theme.accent));
+    assert!(has(&roles(Board::Scale, "rest"), theme.rule));
     let pills = roles(Board::Pill, "rest");
     for colour in [
         theme.surface,
@@ -362,6 +394,7 @@ fn titles_upper_and_track_when_the_theme_says_so() {
         titles: Caps {
             upper: true,
             tracking: 0.3,
+            weight: None,
         },
         ..fixture::theme()
     };
@@ -372,6 +405,7 @@ fn titles_upper_and_track_when_the_theme_says_so() {
         titles: Caps {
             upper: true,
             tracking: 0.0,
+            weight: None,
         },
         ..fixture::theme()
     };
@@ -396,13 +430,14 @@ fn data_labels_upper_and_track_when_the_theme_says_so() {
         labels: Caps {
             upper: true,
             tracking: 0.2,
+            weight: None,
         },
         ..fixture::theme()
     };
     let (_, spacing, _) = find(&texts(&labels, Board::Header), "12 ITEMS").clone();
     assert_eq!(spacing, 0.2 * labels.size_code);
     find(&texts(&labels, Board::Pill), "READY");
-    find(&texts(&labels, Board::Number), "M");
+    find(&texts(&labels, Board::Number), "m");
     find(&texts(&fixture::theme(), Board::Pill), "ready");
     find(&texts(&fixture::theme(), Board::Number), "m");
 }

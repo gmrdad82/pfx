@@ -2,6 +2,7 @@ use egui::{Align2, Color32, CornerRadius, Response, Sense, Stroke, StrokeKind, U
 
 use super::{place, shaped};
 use crate::theme::Theme;
+use crate::tokens::{PILL_DOT, PILL_DOT_X, PILL_HEIGHT, PILL_PAD, PILL_TEXT_X};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
@@ -55,7 +56,7 @@ impl Widget for Pill<'_> {
             theme.labels,
         );
         let width = galley.size().x;
-        let size = Vec2::new((width + 22.0).round(), 16.0);
+        let size = Vec2::new((width + PILL_PAD).round(), PILL_HEIGHT);
         let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
         if !ui.is_rect_visible(rect) {
             return response;
@@ -69,10 +70,14 @@ impl Widget for Pill<'_> {
             Stroke::new(theme.stroke, border),
             StrokeKind::Inside,
         );
-        painter.circle_filled(rect.left_center() + Vec2::new(8.0, 0.0), 2.5, ink);
+        painter.circle_filled(
+            rect.left_center() + Vec2::new(PILL_DOT_X, 0.0),
+            PILL_DOT,
+            ink,
+        );
         place(
             painter,
-            rect.left_center() + Vec2::new(15.0, -0.5),
+            rect.left_center() + Vec2::new(PILL_TEXT_X, -0.5),
             Align2::LEFT_CENTER,
             galley,
             ink,

@@ -4,7 +4,8 @@ use egui::{
 };
 
 use super::{State, place, shaped};
-use crate::theme::Theme;
+use crate::theme::{Caps, Theme};
+use crate::tokens::{NUMBER_CARET, NUMBER_CARET_GAP, NUMBER_INSET, NUMBER_WIDTH};
 
 pub struct Number<'a> {
     value: &'a mut f32,
@@ -21,7 +22,7 @@ impl<'a> Number<'a> {
             unit: "",
             speed: 0.01,
             decimals: 3,
-            width: 76.0,
+            width: NUMBER_WIDTH,
         }
     }
 
@@ -154,31 +155,31 @@ impl Widget for Number<'_> {
                 self.unit,
                 value_font.clone(),
                 theme.muted,
-                theme.labels,
+                Caps::PLAIN,
             );
             place(
                 painter,
-                rect.right_center() - Vec2::new(6.0, 0.5),
+                rect.right_center() - Vec2::new(NUMBER_INSET, 0.5),
                 Align2::RIGHT_CENTER,
                 unit,
                 theme.muted,
             )
             .width()
-                + 6.0
+                + NUMBER_INSET
         };
-        let right = rect.right_center() - Vec2::new(6.0 + unit_width, 0.5);
+        let right = rect.right_center() - Vec2::new(NUMBER_INSET + unit_width, 0.5);
         match &editing {
             Some(text) => {
                 let shown = painter.text(
-                    right - Vec2::new(3.0, 0.0),
+                    right - Vec2::new(NUMBER_CARET_GAP, 0.0),
                     Align2::RIGHT_CENTER,
                     text,
                     value_font,
                     theme.text,
                 );
                 let caret = Rect::from_min_max(
-                    shown.right_top() + Vec2::new(1.0, 0.0),
-                    shown.right_bottom() + Vec2::new(3.0, 0.0),
+                    shown.right_top() + Vec2::new(NUMBER_CARET_GAP - NUMBER_CARET, 0.0),
+                    shown.right_bottom() + Vec2::new(NUMBER_CARET_GAP, 0.0),
                 );
                 painter.rect_filled(caret, CornerRadius::ZERO, theme.hot);
             }

@@ -1,6 +1,8 @@
 use egui::{Align2, Color32, CornerRadius, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2};
 use glam::DVec3;
 use pfx_editor_style::Theme;
+use pfx_editor_style::tokens::SCALE_WIDTH;
+use pfx_editor_style::widgets::ScaleBar;
 
 use crate::camera::Basis;
 use crate::gizmo::colours;
@@ -26,7 +28,7 @@ pub fn checker(painter: &Painter, image: Rect, theme: &Theme) {
 }
 
 pub fn border(painter: &Painter, image: Rect, theme: &Theme, focused: bool) {
-    let colour = if focused { theme.accent } else { theme.line };
+    let colour = if focused { theme.rule } else { theme.card_line };
     painter.rect_stroke(
         image,
         CornerRadius::ZERO,
@@ -69,7 +71,7 @@ pub fn passepartout(painter: &Painter, image: Rect, frame: Rect, theme: &Theme) 
 pub fn grid(painter: &Painter, lens: &Lens, theme: &Theme) {
     let reach = f64::from(GRID_LINES) * GRID_STEP;
     let [x, _, z] = colours(theme);
-    let faint = Stroke::new(1.0_f32, theme.line.gamma_multiply(0.35));
+    let faint = Stroke::new(1.0_f32, theme.grid);
     for line in -GRID_LINES..=GRID_LINES {
         let at = f64::from(line) * GRID_STEP;
         for (a, b, axis) in [
@@ -88,9 +90,34 @@ pub fn grid(painter: &Painter, lens: &Lens, theme: &Theme) {
     }
 }
 
-pub fn axes(painter: &Painter, image: Rect, basis: &Basis, theme: &Theme) {
+fn compass(image: Rect) -> (Pos2, f32) {
     let reach = (image.height() * 0.05).clamp(14.0, 32.0).round();
     let centre = Pos2::new(image.left() + reach + 22.0, image.bottom() - reach - 22.0).round();
+    (centre, reach)
+}
+
+pub fn metres_per_point(lens: &Lens, target: DVec3, right: DVec3) -> Option<f64> {
+    let a = lens.project(target)?;
+    let b = lens.project(target + right)?;
+    let points = f64::from(a.distance(b));
+    (points > 0.0).then(|| 1.0 / points)
+}
+
+pub fn scale(painter: &Painter, image: Rect, metres_per_point: f64, theme: &Theme) {
+    let (centre, reach) = compass(image);
+    let left = centre.x + reach + 12.0 + theme.section_gap;
+    let width = SCALE_WIDTH.min(image.right() - left - theme.section_gap);
+    if width < SCALE_WIDTH / 2.0 {
+        return;
+    }
+    ScaleBar::new(metres_per_point)
+        .width(width)
+        .backing(theme.well.gamma_multiply(0.8))
+        .paint(painter, Pos2::new(left, centre.y + reach + 12.0), theme);
+}
+
+pub fn axes(painter: &Painter, image: Rect, basis: &Basis, theme: &Theme) {
+    let (centre, reach) = compass(image);
     let tones = colours(theme);
     let mut order: Vec<(f64, &str, Vec2, Color32)> = [DVec3::X, DVec3::Y, DVec3::Z]
         .into_iter()
@@ -116,7 +143,7 @@ pub fn axes(painter: &Painter, image: Rect, basis: &Basis, theme: &Theme) {
             colour,
         );
     }
-    painter.circle_filled(centre, 2.0, theme.accent);
+    painter.circle_filled(centre, 2.0, theme.hot);
 }
 
 pub fn outline(painter: &Painter, lens: &Lens, boxes: &[[DVec3; 8]], colour: Color32, width: f32) {

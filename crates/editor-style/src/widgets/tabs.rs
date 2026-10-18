@@ -2,6 +2,7 @@ use egui::{Align2, CornerRadius, Id, Rect, Response, Sense, Stroke, Ui, Vec2, Wi
 
 use super::State;
 use crate::theme::Theme;
+use crate::tokens::{TAB_GAP, TAB_HEIGHT, TAB_PAD, TAB_TEXT_LIFT, TAB_UNDERLINE};
 
 pub struct Tabs<'a> {
     selected: &'a mut Option<usize>,
@@ -24,14 +25,14 @@ impl Widget for Tabs<'_> {
         let text_font = theme.font(theme.size_body);
         let mut whole: Option<Response> = None;
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.spacing_mut().item_spacing.x = TAB_GAP;
             for (index, name) in self.names.iter().enumerate() {
                 let width = ui
                     .painter()
                     .layout_no_wrap((*name).into(), text_font.clone(), theme.text)
                     .size()
                     .x;
-                let size = Vec2::new((width + 24.0).round(), 24.0);
+                let size = Vec2::new((width + TAB_PAD).round(), TAB_HEIGHT);
                 let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
                 let mut response = ui.interact(rect, Tabs::id(name), Sense::click());
                 if response.clicked() {
@@ -40,14 +41,14 @@ impl Widget for Tabs<'_> {
                 }
                 let state = State::of(&response, *self.selected == Some(index));
                 let (fill, text) = match state {
-                    State::Rest => (theme.surface, theme.text2),
+                    State::Rest => (theme.bg, theme.text2),
                     State::Hovered => (theme.accent_deep, theme.text),
-                    State::Active => (theme.bg, theme.text),
+                    State::Active => (theme.card, theme.hot),
                 };
                 let painter = ui.painter();
                 painter.rect_filled(rect, CornerRadius::same(theme.radius), fill);
                 painter.text(
-                    rect.center() - Vec2::new(0.0, 1.0),
+                    rect.center() - Vec2::new(0.0, TAB_TEXT_LIFT),
                     Align2::CENTER_CENTER,
                     name,
                     text_font.clone(),
@@ -55,10 +56,10 @@ impl Widget for Tabs<'_> {
                 );
                 if state == State::Active {
                     let underline = Rect::from_min_max(
-                        rect.left_bottom() - Vec2::new(0.0, 2.0),
+                        rect.left_bottom() - Vec2::new(0.0, TAB_UNDERLINE),
                         rect.right_bottom(),
                     );
-                    painter.rect_filled(underline, CornerRadius::ZERO, theme.accent_bright);
+                    painter.rect_filled(underline, CornerRadius::ZERO, theme.hot);
                 } else {
                     painter.hline(
                         rect.x_range(),
