@@ -18,6 +18,8 @@ use pfx_editor_shell::paint::clear;
 use pfx_editor_shell::worker::{Poll, Wake, Worker};
 
 const SETTLE_FRAMES: u32 = 16;
+const CLOCK_RATE: f32 = 60.0;
+const CLOCK_WRAP: u32 = 1 << 20;
 pub const FAKE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 pub struct Fake;
@@ -77,15 +79,15 @@ impl Drawing {
     fn render(
         &mut self,
         gpu: &Gpu,
-        eye: &Eye,
+        (eye, time): (&Eye, f32),
         view: &wgpu::TextureView,
         live_window: bool,
     ) -> Result<(), String> {
         match self {
             Drawing::Stage(stage) if live_window => {
-                stage.submit(eye, 0.0, view).map_err(|error| error.0)
+                stage.submit(eye, time, view).map_err(|error| error.0)
             }
-            Drawing::Stage(stage) => stage.render(eye, 0.0, view).map_err(|error| error.0),
+            Drawing::Stage(stage) => stage.render(eye, time, view).map_err(|error| error.0),
             Drawing::Fake(_) => {
                 let mut encoder =
                     gpu.device
@@ -289,6 +291,8 @@ pub struct Viewer {
     away: bool,
     change: Option<Change>,
     settling: u32,
+    clock: u32,
+    looked: Option<Eye>,
     gate: Option<Wake>,
     previewed: Option<(usize, Matrix)>,
     picking: bool,
@@ -326,6 +330,8 @@ impl Viewer {
             away: false,
             change: None,
             settling: 0,
+            clock: 0,
+            looked: None,
             gate: None,
             previewed: None,
             picking: false,
@@ -407,6 +413,10 @@ impl Viewer {
 
     fn live(&self) -> bool {
         self.worker.is_some() && !self.steady
+    }
+
+    pub fn settling(&self) -> bool {
+        self.settling > 0 || self.drawing.as_ref().is_some_and(Drawing::settling)
     }
 
     pub fn steady(&mut self) {
@@ -713,8 +723,14 @@ impl Viewer {
         if !shell.paused()
             && let (Some(drawing), Some(eye)) = (self.drawing.as_mut(), shell.view_eye())
         {
+            if live && self.looked.is_some_and(|looked| looked != eye) {
+                self.settling = self.settling.max(SETTLE_FRAMES);
+            }
+            self.looked = Some(eye);
             settle = self.settling > 0;
             self.settling = self.settling.saturating_sub(1);
+            let time = self.clock as f32 / CLOCK_RATE;
+            self.clock = (self.clock + 1) % CLOCK_WRAP;
             let fresh = self
                 .target
                 .as_ref()
@@ -749,7 +765,7 @@ impl Viewer {
                     stage.look_through(shell.shown_camera().filter(|_| !shell.chasing()));
                 }
                 let view = &self.target.as_ref().ok_or("no viewport texture")?.draw;
-                drawing.render(gpu, &eye, view, live)
+                drawing.render(gpu, (&eye, time), view, live)
             })();
             settle |= live && drawing.settling();
             let result = result.and_then(|()| self.outline(gpu, shell, pixels_per_point));

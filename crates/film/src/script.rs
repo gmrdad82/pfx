@@ -5,6 +5,7 @@ use crate::duck::{self, Duck, DuckPart, Side};
 use crate::input::Touch;
 use crate::layers::{Flash, Shake, Sound, Style, Text};
 use crate::track::Key;
+use crate::transition::Transition;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
@@ -80,6 +81,7 @@ pub struct Film<K: Kinds> {
     pub layout: [f32; 2],
     pub ceiling: f32,
     pub limit: f32,
+    pub true_peak: f32,
     pub beat: Option<Grid>,
     pub app: K::Film,
 }
@@ -99,6 +101,7 @@ pub struct Scene<K: Kinds> {
     pub input: Vec<Touch>,
     pub duck: Option<DuckPart>,
     pub score_db: f32,
+    pub transition: Option<Transition>,
     pub app: K::Scene,
 }
 
@@ -117,6 +120,7 @@ struct FilmPart {
     layout: [f32; 2],
     ceiling: f32,
     limit: f32,
+    true_peak: f32,
     bpm: Option<f64>,
     beats_per_bar: Option<u32>,
     signature: Option<Vec<u32>>,
@@ -141,6 +145,7 @@ impl Default for FilmPart {
             layout: WIDE,
             ceiling: CEILING,
             limit: LIMIT,
+            true_peak: TRUE_PEAK,
             bpm: None,
             beats_per_bar: None,
             signature: None,
@@ -154,8 +159,9 @@ impl Default for FilmPart {
 
 pub const CEILING: f32 = 0.89;
 pub const LIMIT: f32 = 0.72;
+pub const TRUE_PEAK: f32 = -1.0;
 
-const FILM_KEYS: [&str; 19] = [
+const FILM_KEYS: [&str; 20] = [
     "frames",
     "audio",
     "bars",
@@ -168,6 +174,7 @@ const FILM_KEYS: [&str; 19] = [
     "layout",
     "ceiling",
     "limit",
+    "true_peak",
     "bpm",
     "beats_per_bar",
     "signature",
@@ -204,6 +211,8 @@ struct ScenePart {
     duck: Option<DuckPart>,
     #[serde(default)]
     score: Option<ScorePart>,
+    #[serde(default)]
+    transition: Option<Transition>,
 }
 
 #[derive(Deserialize)]
@@ -212,9 +221,21 @@ struct ScorePart {
     gain_db: f32,
 }
 
-const SCENE_KEYS: [&str; 13] = [
-    "name", "seconds", "from", "still", "key", "text", "art", "sound", "flash", "shake", "input",
-    "duck", "score",
+const SCENE_KEYS: [&str; 14] = [
+    "name",
+    "seconds",
+    "from",
+    "still",
+    "key",
+    "text",
+    "art",
+    "sound",
+    "flash",
+    "shake",
+    "input",
+    "duck",
+    "score",
+    "transition",
 ];
 
 #[derive(Deserialize)]
@@ -246,6 +267,18 @@ pub fn read<T: DeserializeOwned>(table: toml::Table) -> Result<T, String> {
 
 pub fn frames(seconds: f64, fps: u32) -> u64 {
     ((seconds * f64::from(fps)).round() as u64).max(1)
+}
+
+pub fn cuts(starts: &[f64], fps: u32) -> Vec<u64> {
+    let mut out: Vec<u64> = Vec::with_capacity(starts.len());
+    for t in starts {
+        let at = (t * f64::from(fps)).round() as u64;
+        out.push(match out.last() {
+            Some(last) => at.max(last + 1),
+            None => at,
+        });
+    }
+    out
 }
 
 pub fn plain(name: &str) -> bool {
@@ -305,6 +338,7 @@ impl<K: Kinds> Film<K> {
             layout: f.layout,
             ceiling: f.ceiling,
             limit: f.limit,
+            true_peak: f.true_peak,
             beat,
             app,
         })
@@ -333,6 +367,9 @@ impl<K: Kinds> Film<K> {
         }
         if !(self.limit.is_finite() && (0.1..1.0).contains(&self.limit)) {
             return Err("[film] limit is where the master's soft limit starts, in [0.1, 1)".into());
+        }
+        if !(self.true_peak.is_finite() && (-20.0..=0.0).contains(&self.true_peak)) {
+            return Err("[film] true_peak is the master's ceiling in dBTP, in [-20, 0]".into());
         }
         K::check_film(&self.app)
     }
@@ -370,6 +407,7 @@ impl<K: Kinds> Scene<K> {
             input: s.input,
             duck: s.duck,
             score_db: s.score.map_or(0.0, |p| p.gain_db),
+            transition: s.transition,
             app,
         })
     }
@@ -396,6 +434,9 @@ impl<K: Kinds> Scene<K> {
         }
         if !(self.score_db.is_finite() && (-60.0..=12.0).contains(&self.score_db)) {
             return Err(at("[scene.score] gain_db is in [-60, 12]".into()));
+        }
+        if let Some(t) = &self.transition {
+            t.check(self.seconds).map_err(at)?;
         }
         K::check_scene(self).map_err(at)?;
         self.check_layers(styles, known).map_err(at)
@@ -466,6 +507,12 @@ impl<K: Kinds> Script<K> {
             start += scene.seconds;
             scenes.push(scene);
         }
+        if scenes[0].transition.is_some() {
+            return Err(format!(
+                "scene '{}': the first scene has nothing to come from, so no [scene.transition]",
+                scenes[0].name
+            ));
+        }
         for (i, scene) in scenes.iter().enumerate() {
             scene.check(&styles, known)?;
             if scenes[..i].iter().any(|s| s.name == scene.name) {
@@ -488,7 +535,22 @@ impl<K: Kinds> Script<K> {
     }
 
     pub fn frames(&self, fps: u32) -> u64 {
-        self.scenes.iter().map(|s| frames(s.seconds, fps)).sum()
+        self.cuts(fps).last().copied().unwrap_or(0)
+    }
+
+    pub fn starts(&self) -> Vec<f64> {
+        let mut out = Vec::with_capacity(self.scenes.len() + 1);
+        let mut start = 0.0;
+        out.push(start);
+        for s in &self.scenes {
+            start += s.seconds;
+            out.push(start);
+        }
+        out
+    }
+
+    pub fn cuts(&self, fps: u32) -> Vec<u64> {
+        cuts(&self.starts(), fps)
     }
 
     pub fn seconds(&self) -> f64 {

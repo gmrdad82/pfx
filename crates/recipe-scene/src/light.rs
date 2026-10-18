@@ -6,10 +6,12 @@ use pfx_live::effects::RoomHaze;
 use pfx_live::frame::Sun;
 use pfx_live::lights::{LocalLight, MAX_CLUSTERED, MAX_LIGHTS};
 use pfx_live::sky::SkySource;
+use pfx_load::scene::{SPOT_CONE, SPOT_DIRECTION, Spot};
 use pfx_load::{RoomLamp, RoomSky, Sky};
 use pfx_post::{Bloom, Chain, Flare, MotionBlur, Pass, Saturation, Tone, Vignette, Warmth};
 use pfx_recipe::{
-    CAP_LUMINANCE, CAP_MEAN, CAPPED, Recipe, Room, Setting, Settings, SkyAmbient, SkyKind, View,
+    CAP_LUMINANCE, CAP_MEAN, CAPPED, LightKind, Recipe, Room, Setting, Settings, SkyAmbient,
+    SkyKind, View,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -517,19 +519,50 @@ pub(crate) fn lights_of(lights: &[pfx_recipe::Light]) -> Result<Vec<LocalLight>,
             lights.len()
         )));
     }
-    Ok(lights
+    lights
         .iter()
         .filter(|light| light.parent.is_none())
-        .map(|light| LocalLight {
-            position: light.position.map(|v| v as f32),
-            colour: light.color.map(|v| v as f32),
-            intensity: light.intensity as f32,
-            radius: light.radius as f32,
-            range: reach(light.range, light.intensity) as f32,
-            shadow: light.shadow,
-            spot: None,
+        .map(|light| {
+            Ok(LocalLight {
+                position: light.position.map(|v| v as f32),
+                colour: light.color.map(|v| v as f32),
+                intensity: light.intensity as f32,
+                radius: light.radius as f32,
+                range: reach(light.range, light.intensity) as f32,
+                shadow: light.shadow,
+                spot: spot(light)?,
+            })
         })
-        .collect())
+        .collect()
+}
+
+fn spot(light: &pfx_recipe::Light) -> Result<Option<Spot>, Error> {
+    if light.kind != LightKind::Spot {
+        return Ok(None);
+    }
+    let [inner, outer] = light.cone.map_or(SPOT_CONE, |cone| cone.map(|v| v as f32));
+    if !(inner.is_finite() && outer.is_finite() && 0.0 <= inner && inner <= outer && outer <= 90.0)
+    {
+        return Err(Error(format!(
+            "light[{}].cone: expected 0 <= inner <= outer <= 90 degrees",
+            light.name
+        )));
+    }
+    let direction = light
+        .direction
+        .map_or(SPOT_DIRECTION, |d| d.map(|v| v as f32));
+    let length = direction.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if !(length.is_finite() && length > 1e-6) {
+        return Err(Error(format!(
+            "light[{}].direction: expected a finite direction that is not [0, 0, 0]",
+            light.name
+        )));
+    }
+    Ok(Some(Spot {
+        direction: direction.map(|v| v / length),
+        inner,
+        outer,
+    }))
 }
 
 pub fn reach(range: f64, intensity: f64) -> f64 {

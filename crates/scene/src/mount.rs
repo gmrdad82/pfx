@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use pfx_file::{Codec, FILE, GLTF, Reader, SCNE, SMET, Writer};
 
-use crate::paths::{rooted, slashed};
+use crate::paths::{folder, join, rooted, slashed};
 use crate::{Diagnostic, FORMAT, Project, Severity};
 
 pub const GLTF_PATH: &str = "@gltf";
@@ -19,6 +19,7 @@ pub(crate) struct Mount {
     pub texts: BTreeMap<PathBuf, String>,
     pub files: BTreeSet<String>,
     pub gltf: bool,
+    pub memory: bool,
     bytes: Arc<[u8]>,
 }
 
@@ -30,6 +31,7 @@ impl fmt::Debug for Mount {
             .field("texts", &self.texts.keys().collect::<Vec<_>>())
             .field("files", &self.files)
             .field("gltf", &self.gltf)
+            .field("memory", &self.memory)
             .finish()
     }
 }
@@ -65,6 +67,10 @@ impl Mount {
         let bytes: Arc<[u8]> = std::fs::read(root.join(file))
             .map_err(|error| format!("cannot read: {error}"))?
             .into();
+        Mount::from_bytes(file.to_path_buf(), bytes, false)
+    }
+
+    pub fn from_bytes(file: PathBuf, bytes: Arc<[u8]>, memory: bool) -> Result<Mount, String> {
         let reader = Reader::from_bytes(&bytes).map_err(|error| error.to_string())?;
         let meta = reader
             .chunk(SMET)
@@ -101,14 +107,20 @@ impl Mount {
                 meta.entry
             ));
         }
+        let gltf = reader.find(GLTF).is_some();
         Ok(Mount {
-            file: file.to_path_buf(),
+            file,
             entry,
             texts,
             files,
-            gltf: reader.find(GLTF).is_some(),
+            gltf,
+            memory,
             bytes,
         })
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
     }
 
     pub fn reader(&self) -> Option<Reader<'_>> {
@@ -265,6 +277,16 @@ pub fn pack(project: &Project, scene: &Path) -> Result<Vec<u8>, Vec<Diagnostic>>
         })?;
         texts.push((slashed(file), text));
     }
+    let beside: Vec<PathBuf> = assets
+        .iter()
+        .filter(|path| path.extension().is_some_and(|end| end == "gltf"))
+        .filter_map(|path| {
+            let bytes = project.asset(&slashed(path)).ok()?;
+            Some(gltf_files(path, &bytes))
+        })
+        .flatten()
+        .collect();
+    assets.extend(beside);
     let mut files = Vec::new();
     for path in &assets {
         let name = slashed(path);
@@ -303,6 +325,22 @@ pub fn pack(project: &Project, scene: &Path) -> Result<Vec<u8>, Vec<Diagnostic>>
     writer
         .to_vec()
         .map_err(|error| vec![refusal(&entry, error.to_string())])
+}
+
+fn gltf_files(gltf: &Path, bytes: &[u8]) -> Vec<PathBuf> {
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(bytes) else {
+        return Vec::new();
+    };
+    let base = folder(gltf);
+    ["buffers", "images"]
+        .iter()
+        .filter_map(|key| json.get(key)?.as_array())
+        .flatten()
+        .filter_map(|item| item.get("uri")?.as_str())
+        .filter(|uri| !uri.starts_with("data:"))
+        .filter_map(|uri| join(&base, uri).ok())
+        .map(PathBuf::from)
+        .collect()
 }
 
 fn linked(dir: &Path, name: &Path) -> io::Result<()> {

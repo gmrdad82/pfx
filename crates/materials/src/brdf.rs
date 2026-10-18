@@ -96,6 +96,16 @@ pub fn fresnel_dielectric(cos_theta: f32, eta: f32) -> f32 {
     0.5 * (rs * rs + rp * rp)
 }
 
+pub fn thin_dielectric(reflected: f32) -> [f32; 2] {
+    let mut r = reflected;
+    let mut t = 1.0 - r;
+    if r < 1.0 {
+        r += t * t * r / (1.0 - r * r);
+        t = 1.0 - r;
+    }
+    [r, t]
+}
+
 pub fn fresnel_conductor(cos_theta: f32, eta: f32, k: f32) -> f32 {
     let c = clamp01(cos_theta);
     if c <= 1e-6 {

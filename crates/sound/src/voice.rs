@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use crate::adaptive::Adaptive;
 use crate::channel::{ChannelId, Ramp};
 use crate::envelope::EnvState;
 use crate::interp::{Kernel, MAX_RATIO, MIN_RATIO, Resample, hermite};
@@ -44,6 +45,7 @@ pub(crate) enum Source {
     },
     Tone(Synth),
     Pcm(PcmVoice),
+    Adaptive(Box<Adaptive>),
 }
 
 pub(crate) struct History {
@@ -256,6 +258,10 @@ impl Voice {
         if let Source::Pcm(pcm) = source {
             pcm.fill(block.frames);
         }
+        if let Source::Adaptive(adaptive) = source {
+            let first = start.saturating_sub(block.clock).min(block.frames as u64) as usize;
+            adaptive.fill(first, block.frames);
+        }
         for i in 0..block.frames {
             let at = block.clock + i as u64;
             if at < *start {
@@ -351,6 +357,16 @@ impl Voice {
                         length: None,
                     }
                 }
+                Source::Adaptive(adaptive) => {
+                    let (left, right) = adaptive.frame(i);
+                    Played {
+                        left,
+                        right,
+                        channels: 2,
+                        local: at - *start,
+                        length: None,
+                    }
+                }
                 Source::Stream {
                     queue,
                     channels,
@@ -435,6 +451,13 @@ impl Voice {
                 )
             }
             Source::Tone(_) => (self.start, u64::MAX),
+            Source::Adaptive(adaptive) => {
+                if adaptive.finished() {
+                    (self.start, self.start)
+                } else {
+                    (self.start, block_end)
+                }
+            }
             Source::Pcm(pcm) => {
                 if pcm.finished() {
                     (self.start, self.start)
@@ -474,6 +497,7 @@ impl Voice {
             } => history.queue_finished(queue, *channels) && self.cursor >= history.end() as f64,
             Source::Tone(_) => false,
             Source::Pcm(pcm) => pcm.finished(),
+            Source::Adaptive(adaptive) => adaptive.finished(),
         }
     }
 

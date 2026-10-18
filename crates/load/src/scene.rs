@@ -63,6 +63,10 @@ pub use keyed::{
 pub use lights::{Attach as LightAttach, SPOT_CONE, SPOT_DIRECTION, Spot};
 pub use lod::{COVERAGE_HEIGHT, GeometryLevel};
 pub use mounted::{container_of, held_text, is_pfx_path, pack, unpack};
+
+pub fn from_pfx_bytes(name: impl AsRef<Path>, bytes: &[u8]) -> Result<Scene, SceneError> {
+    Scene::from_pfx_bytes(name, bytes)
+}
 pub use particles::{Attach, Node as ParticleNode, Particles};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
@@ -709,6 +713,10 @@ impl Scene {
 
     pub fn open_at(path: impl AsRef<Path>, hour: f64) -> Result<Self, SceneError> {
         build::open(path.as_ref(), Some(hour))
+    }
+
+    pub fn from_pfx_bytes(name: impl AsRef<Path>, bytes: &[u8]) -> Result<Self, SceneError> {
+        mounted::open_bytes(name.as_ref(), bytes)
     }
 
     pub fn sun_or_dark(&self) -> Sun {

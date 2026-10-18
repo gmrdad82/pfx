@@ -230,3 +230,121 @@ fn fabric_and_anisotropy_reach_the_glb_as_khr_extensions() {
     assert_eq!(anisotropy["anisotropyStrength"], 0.8);
     assert_eq!(anisotropy["anisotropyRotation"], 0.25);
 }
+
+#[test]
+fn normal_and_occlusion_maps_keep_their_own_texture_transforms_through_a_build() {
+    let dir = common::scratch("maps-transforms");
+    head(&dir);
+    let glb = std::fs::read(dir.join("head.glb")).unwrap();
+    let mut root = gltf::Gltf::from_slice(&glb).unwrap().document.into_json();
+    let blob = gltf::Gltf::from_slice(&glb).unwrap().blob.unwrap();
+    let mut normal = root.materials[0].normal_texture.clone().unwrap();
+    normal.extensions = Some(gltf::json::extensions::material::NormalTexture {
+        others: serde_json::from_str(
+            r#"{"KHR_texture_transform":{"offset":[0.25,0.5],"rotation":0.5,"scale":[3.0,3.0],"texCoord":0}}"#,
+        )
+        .unwrap(),
+    });
+    root.materials[0].occlusion_texture = Some(gltf::json::material::OcclusionTexture {
+        index: normal.index,
+        strength: gltf::json::material::StrengthFactor(0.8),
+        tex_coord: 0,
+        extensions: Some(gltf::json::extensions::material::OcclusionTexture {
+            others: serde_json::from_str(r#"{"KHR_texture_transform":{"scale":[6.0,6.0]}}"#)
+                .unwrap(),
+        }),
+        extras: Default::default(),
+    });
+    root.materials[0].normal_texture = Some(normal);
+    let edited = gltf::binary::Glb {
+        header: gltf::binary::Header {
+            magic: *b"glTF",
+            version: 2,
+            length: 0,
+        },
+        json: std::borrow::Cow::Owned(gltf::json::serialize::to_vec(&root).unwrap()),
+        bin: Some(std::borrow::Cow::Owned(blob)),
+    };
+    std::fs::write(dir.join("head.glb"), edited.to_vec().unwrap()).unwrap();
+    let built = build(&recipe(""), &dir).unwrap().glb();
+    let parsed = gltf::Gltf::from_slice(&built).unwrap();
+    let skin = parsed
+        .document
+        .materials()
+        .find(|m| m.name() == Some("skin"))
+        .unwrap();
+    let normal = skin.normal_texture().unwrap();
+    let moved = normal.extension_value("KHR_texture_transform").unwrap();
+    assert_eq!(moved["offset"], serde_json::json!([0.25, 0.5]));
+    assert_eq!(moved["rotation"], serde_json::json!(0.5));
+    assert_eq!(moved["scale"], serde_json::json!([3.0, 3.0]));
+    let occlusion = skin.occlusion_texture().unwrap();
+    let tiled = occlusion.extension_value("KHR_texture_transform").unwrap();
+    assert_eq!(tiled["scale"], serde_json::json!([6.0, 6.0]));
+    let base = skin.pbr_metallic_roughness().base_color_texture().unwrap();
+    assert!(base.texture_transform().is_none());
+    assert!(
+        parsed
+            .document
+            .extensions_used()
+            .any(|name| name == "KHR_texture_transform")
+    );
+}
+
+#[test]
+fn a_material_uv_transform_reaches_every_map_as_khr_texture_transform() {
+    let dir = common::scratch("maps-uv");
+    head(&dir);
+    let r = recipe(
+        "base_map = \"tex/other.png\"\nroughness_map = \"tex/bumps.png\"\nuv_scale = [0.5, 0.5]\nuv_offset = [0.25, 0.0]\nuv_rotation = 0.5\n",
+    );
+    let glb = build(&r, &dir).unwrap().glb();
+    assert!(glb == build(&r, &dir).unwrap().glb());
+    let parsed = gltf::Gltf::from_slice(&glb).unwrap();
+    assert!(
+        parsed
+            .document
+            .extensions_used()
+            .any(|e| e == "KHR_texture_transform")
+    );
+    let skin = parsed.document.materials().next().unwrap();
+    let pbr = skin.pbr_metallic_roughness();
+    let same = |info: gltf::texture::Info| {
+        let t = info.texture_transform().unwrap();
+        assert_eq!(t.scale(), [0.5, 0.5]);
+        assert_eq!(t.offset(), [0.25, 0.0]);
+        assert_eq!(t.rotation(), 0.5);
+    };
+    same(pbr.base_color_texture().unwrap());
+    same(pbr.metallic_roughness_texture().unwrap());
+    let normal = skin.normal_texture().unwrap();
+    let raw = normal.extensions().unwrap();
+    assert_eq!(
+        raw["KHR_texture_transform"]["scale"],
+        serde_json::json!([0.5, 0.5])
+    );
+    assert_eq!(raw["KHR_texture_transform"]["rotation"], 0.5);
+}
+
+#[test]
+fn a_recipe_without_uv_keys_writes_no_texture_transform() {
+    let dir = common::scratch("maps-uv-none");
+    head(&dir);
+    let glb = build(&recipe("base_map = \"tex/other.png\"\n"), &dir)
+        .unwrap()
+        .glb();
+    let parsed = gltf::Gltf::from_slice(&glb).unwrap();
+    assert!(
+        !parsed
+            .document
+            .extensions_used()
+            .any(|e| e == "KHR_texture_transform")
+    );
+}
+
+#[test]
+fn a_malformed_uv_key_is_refused_at_the_key() {
+    let text = "recipe = 1\nname = \"t\"\n\n[materials.skin]\nuv_scale = [1.0]\n";
+    let e = parse(text).unwrap_err();
+    assert_eq!(e.path, "materials.skin.uv_scale");
+}

@@ -776,3 +776,18 @@ fn the_writer_adds_and_sets_a_rig_and_a_rename_follows_its_target() {
     assert_eq!(error.code, code::BAD_REFERENCE);
     assert_eq!(folder.read("room.scene.toml"), text);
 }
+
+#[test]
+fn a_music_table_reaches_the_resolved_scene_as_written() {
+    let music = "\n[music]\nbpm = 120\nstart = \"calm\"\n\n[[music.stem]]\nname = \"pads\"\nfile = \"music/pads.wav\"\n";
+    let folder = played("play-music", LAYERS, music);
+    let diagnostics = folder.check();
+    assert!(diagnostics.is_empty(), "{}", show(&diagnostics));
+    let scene = folder
+        .project()
+        .scene(&folder.path("room.scene.toml"))
+        .unwrap_or_else(|diagnostics| panic!("{}", show(&diagnostics)));
+    let table = scene.music.unwrap();
+    assert_eq!(table["bpm"].as_integer(), Some(120));
+    assert_eq!(table["stem"][0]["file"].as_str(), Some("music/pads.wav"));
+}

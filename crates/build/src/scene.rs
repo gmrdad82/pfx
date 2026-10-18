@@ -8,9 +8,9 @@ use pfx_materials::{Blend, ContentLayer, Library, Material};
 use pfx_mesh::math::Real;
 use pfx_recipe::toml_edit::{DocumentMut, Item, Value};
 use pfx_recipe::{
-    CAP_LUMINANCE, CAP_MEAN, CAPPED, Camera, Casters, Kind, LightKind, MONO, Object, Projection,
-    Recipe, RigFocus, Room, SCENE_SUFFIX, Shadow, SkyAmbient, SkyKind, Table, TextSpace, Trace,
-    View,
+    CAP_LUMINANCE, CAP_MEAN, CAPPED, Camera, Casters, Kind, LightKind, MAX_LIGHTS, MONO, Object,
+    Projection, Recipe, RigFocus, Room, SCENE_SUFFIX, Shadow, SkyAmbient, SkyKind, Table,
+    TextSpace, Trace, View,
 };
 use pfx_scene::types::{FORMAT, MaterialsFile, SceneFile};
 use pfx_scene::{Id, Project};
@@ -39,7 +39,6 @@ const HAZE_HI: [f64; 3] = [1.0, 0.95, 0.95];
 const HAZE_PHASE: f64 = 0.35;
 const HAZE_BACK: f64 = 0.7;
 const LIGHT_FLOOR: f64 = 0.01;
-const MAX_LIGHTS: usize = 4 + 1024;
 const CONTENT_SLOTS: usize = 4;
 const STILL: [f64; 2] = [1586.0, 992.0];
 const LIFT: f64 = 0.0005;
@@ -1191,8 +1190,10 @@ fn lights(
         ));
     }
     let room = MAX_LIGHTS.saturating_sub(recipe.lights.len());
-    let generated: Vec<pfx_recipe::Light> =
-        ordered(&built.lights).take(room).map(generated).collect();
+    let generated: Vec<pfx_recipe::Light> = ordered(&built.lights)
+        .take(room)
+        .map(GeneratedLight::light)
+        .collect();
     for (index, light) in recipe.lights.iter().chain(&generated).enumerate() {
         let at = format!("light[{}]", light.name);
         let keyed = if index < recipe.lights.len() {
@@ -1253,26 +1254,7 @@ fn lights(
     Ok(())
 }
 
-fn generated(light: &GeneratedLight) -> pfx_recipe::Light {
-    pfx_recipe::Light {
-        name: light.name.clone(),
-        kind: LightKind::Spot,
-        position: light.position,
-        parent: light
-            .parent
-            .as_ref()
-            .map(|node| (node.clone(), light.position)),
-        direction: Some(light.direction),
-        cone: Some(light.cone),
-        color: light.color,
-        intensity: light.intensity,
-        radius: 0.0,
-        range: light.range,
-        shadow: light.shadow,
-    }
-}
-
-fn ordered(lights: &[GeneratedLight]) -> impl Iterator<Item = &GeneratedLight> {
+pub(crate) fn ordered(lights: &[GeneratedLight]) -> impl Iterator<Item = &GeneratedLight> {
     let riding = lights.iter().filter(|light| light.parent.is_some());
     riding.chain(lights.iter().filter(|light| light.parent.is_none()))
 }

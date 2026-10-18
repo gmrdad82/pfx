@@ -143,6 +143,7 @@ enum Lens {
     None,
     Thin(Material),
     Sheet(Material),
+    Block(Material),
 }
 
 struct Taken {
@@ -213,9 +214,10 @@ fn take(lens: Lens, size: [u32; 2], frames: usize) -> Taken {
     let lens_model = turned(LENS_AT, LENS_TURN);
     let surfaces: Vec<glass::Surface> = match lens {
         Lens::None => Vec::new(),
-        Lens::Thin(material) | Lens::Sheet(material) => {
+        Lens::Thin(material) | Lens::Sheet(material) | Lens::Block(material) => {
             let mesh = match lens {
                 Lens::Sheet(_) => sheet_mesh(LENS_HALF),
+                Lens::Block(_) => box_mesh([LENS_HALF, LENS_HALF, 0.15]),
                 _ => box_mesh([LENS_HALF, LENS_HALF, 0.001]),
             };
             vec![glass::Surface {
@@ -419,6 +421,59 @@ fn a_lens_with_no_transmission_hides_the_pattern() {
             look.dark
         );
     }
+}
+
+fn aligned(bare: &Taken, lensed: &Taken) -> f32 {
+    let pixels = lens_pixels(bare.size);
+    let luma = |c: [f32; 3]| c.iter().sum::<f32>() / 3.0;
+    let mut light = 0.0;
+    let mut dark = 0.0;
+    let mut lights = 0;
+    let mut darks = 0;
+    for &pixel in &pixels {
+        let through = luma(lensed.at(pixel));
+        if luma(bare.at(pixel)) > 0.6 {
+            light += through;
+            lights += 1;
+        } else {
+            dark += through;
+            darks += 1;
+        }
+    }
+    let threshold = (light / lights.max(1) as f32 + dark / darks.max(1) as f32) * 0.5;
+    let kept = pixels
+        .iter()
+        .filter(|&&pixel| (luma(bare.at(pixel)) > 0.6) == (luma(lensed.at(pixel)) > threshold))
+        .count();
+    kept as f32 / pixels.len() as f32
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_thin_walled_block_shows_the_pattern_in_place_where_a_solid_block_shifts_it() {
+    let bare = take(Lens::None, [SIZE, SIZE], 6);
+    let clear = Material {
+        base: [0.95; 3],
+        roughness: 0.05,
+        transmission: 1.0,
+        ior: 1.5,
+        ..Material::default()
+    };
+    let solid = aligned(&bare, &take(Lens::Block(clear), [SIZE, SIZE], 6));
+    let thin = aligned(
+        &bare,
+        &take(
+            Lens::Block(Material {
+                thin_walled: true,
+                ..clear
+            }),
+            [SIZE, SIZE],
+            6,
+        ),
+    );
+    println!("pattern kept in place: solid {solid:.3}, thin walled {thin:.3}");
+    assert!(thin > 0.95, "thin walled block keeps {thin}");
+    assert!(solid < thin - 0.1, "solid {solid} against thin {thin}");
 }
 
 #[test]

@@ -48,6 +48,7 @@ pub struct Scene {
     pub proxies: Vec<Entry<Proxy>>,
     pub physics: Option<Physics>,
     pub play_module: Option<PathBuf>,
+    pub music: Option<toml::Table>,
     pub layers: BTreeMap<String, Vec<String>>,
     pub warnings: Vec<Diagnostic>,
 }

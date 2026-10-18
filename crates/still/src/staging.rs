@@ -5,11 +5,12 @@ use pfx_live::sky::SkySource;
 use pfx_materials::{Blend, Material};
 use pfx_post::Chain;
 use pfx_recipe::{Recipe, Shadow};
-use pfx_recipe_scene::{Card, Cards, Error, Eye, Laid, Lighting, Palette, Picture, Piece};
-use pfx_trace::detail::Lens;
+use pfx_recipe_scene::{Card, Cards, Error, Eye, Laid, Lighting, MapSet, Palette, Picture, Piece};
+use pfx_trace::detail::{Lens, Textures};
 use pfx_trace::lights::{LightShape, LocalLight};
 use pfx_trace::sky::Environment;
 use pfx_trace::stage::{Image, Mesh, Placement, PlacementContent, Stage, Staged};
+use pfx_trace::textured::from_scene;
 use pfx_trace::{Camera, Projection, Sun};
 
 pub use pfx_recipe_scene::IDENTITY;
@@ -36,7 +37,7 @@ pub struct Staging {
     pub names: Vec<String>,
     pub materials: Vec<Material>,
     pub cards: Vec<Option<Card>>,
-    pub mapped: Vec<Option<usize>>,
+    pub textures: Textures,
     pub images: Vec<Picture>,
     pub clips: Vec<[[f32; 4]; 2]>,
     pub sky: Environment,
@@ -55,7 +56,7 @@ impl Staging {
     pub fn of(recipe: &Recipe, parts: &[Part]) -> Result<Staging, Error> {
         let pieces = pfx_recipe_scene::pieces(parts);
         let found = Cards::of(recipe, &pieces)?;
-        let mut images: Vec<Picture> = found
+        let images: Vec<Picture> = found
             .pictures
             .iter()
             .map(|picture| Picture {
@@ -64,46 +65,22 @@ impl Staging {
                 texels: pfx_recipe_scene::premultiplied(picture),
             })
             .collect();
-        let mut mapped: Vec<Option<usize>> = vec![None; pieces.len()];
-        let mut seen: Vec<(&[u8], usize)> = Vec::new();
-        for ((at, piece), card) in pieces.iter().enumerate().zip(&found.cards) {
-            let Some(map) = piece
-                .look
-                .as_ref()
-                .and_then(|look| look.base.as_ref())
-                .filter(|map| card.is_none() && map.tex_coord == 0)
-            else {
-                continue;
-            };
-            let index = match seen.iter().find(|(bytes, _)| **bytes == *map.image.bytes) {
-                Some(&(_, index)) => index,
-                None => {
-                    let picture = pfx_recipe_scene::decode(&map.image.bytes).map_err(|e| {
-                        Error(format!("materials.{}: the base map: {e}", piece.material))
-                    })?;
-                    images.push(Picture {
-                        width: picture.width,
-                        height: picture.height,
-                        texels: pfx_recipe_scene::premultiplied(&picture),
-                    });
-                    seen.push((&map.image.bytes, images.len() - 1));
-                    images.len() - 1
-                }
-            };
-            mapped[at] = Some(index);
-        }
-        let layers = found.cards.iter().zip(&mapped).map(|(card, map)| {
-            if card.is_some() {
-                Some(Blend::Over)
-            } else {
-                map.map(|_| Blend::Multiply)
-            }
-        });
+        let layers = found
+            .cards
+            .iter()
+            .map(|card| card.is_some().then_some(Blend::Over));
         let Palette {
             names,
-            materials,
+            mut materials,
             slots,
         } = pfx_recipe_scene::palette_with(recipe, &pieces, layers)?;
+        let textures = match MapSet::of(&pieces) {
+            Some(set) => {
+                set.dress(&names, &mut materials);
+                from_scene(&set.images()?)
+            }
+            None => Textures::default(),
+        };
         let clips = pieces
             .iter()
             .map(|piece| pfx_recipe_scene::clips(recipe, piece.object))
@@ -124,7 +101,13 @@ impl Staging {
                 radius: light.radius,
                 range: light.range,
                 shadow: light.shadow,
-                shape: LightShape::Point,
+                shape: light
+                    .spot
+                    .map_or(LightShape::Point, |spot| LightShape::Spot {
+                        direction: spot.direction,
+                        inner_deg: spot.inner,
+                        outer_deg: spot.outer,
+                    }),
             })
             .collect();
         let count = pieces.len();
@@ -134,7 +117,7 @@ impl Staging {
             names,
             materials,
             cards: found.cards,
-            mapped,
+            textures,
             images,
             clips,
             sky,
@@ -195,9 +178,8 @@ impl Staging {
             .zip(&self.pieces)
             .zip(&self.cards)
             .zip(&self.clips)
-            .zip(&self.mapped)
             .enumerate()
-            .map(|(mesh, ((((&material, piece), card), clip), mapped))| {
+            .map(|(mesh, (((&material, piece), card), clip))| {
                 let faced = card
                     .and_then(|card| card.face)
                     .map_or(IDENTITY, |face| pfx_recipe_scene::facing(&face, eye));
@@ -209,9 +191,7 @@ impl Staging {
                 };
                 let mut placed = Placement {
                     casts_shadow: piece.shadow != Shadow::None,
-                    content: card.as_ref().map(|card| self.content(card)).or_else(|| {
-                        mapped.map(|picture| PlacementContent::new(self.image(picture)))
-                    }),
+                    content: card.as_ref().map(|card| self.content(card)),
                     clip: *clip,
                     shadow_only: piece.shadow == Shadow::Only,
                     two_sided: piece.two_sided,
@@ -249,6 +229,7 @@ impl Staging {
         .build()
         .map_err(|e| Error(format!("the tracer's stage: {e}")))?;
         staged.detail.lights = self.lights.clone();
+        staged.detail.textures = self.textures.clone();
         staged.detail.sun_radius_deg = self.sun_radius_deg;
         staged.detail.transmissive_shadows = self.transmissive_shadows;
         staged.detail.clamp_indirect = self.clamp_indirect;
@@ -464,6 +445,47 @@ mod tests {
         let eye = eyepiece(&recipe.cameras[0], View::Lens, [8, 8]).unwrap();
         let detail = traced.stage(eye).unwrap().detail;
         assert_eq!((detail.clamp_indirect, detail.filter_glossy), (4.0, 0.25));
+    }
+
+    #[test]
+    fn a_street_of_128_authored_and_generated_lights_reaches_the_tracer_whole() {
+        let mut text = String::from(
+            "recipe = 1\nname = \"street\"\n\n[[route]]\nname = \"main\"\npoints = [[0.0, 0.0, 0.0], [0.0, 0.0, 800.0]]\n\n[[object]]\nname = \"furniture\"\nkind = \"generator\"\ngenerator = \"pfx/furniture\"\nparams = { route = \"main\", spacing = [8.0, 8.0], max_lights = 96, extras = false, seed = 3 }\n\n[[camera]]\nname = \"main\"\nposition = [0.0, 20.0, -10.0]\ntarget = [0.0, 0.0, 40.0]\nfov_y_deg = 60.0\n",
+        );
+        for k in 0..32 {
+            let kind = if k % 2 == 0 {
+                "kind = \"spot\"\ndirection = [0.0, -1.0, 0.0]\ncone = [20.0, 40.0]\n"
+            } else {
+                ""
+            };
+            text.push_str(&format!(
+                "\n[[light]]\nname = \"window{k}\"\n{kind}position = [9.0, 4.0, {}.0]\nintensity = 3.0\nrange = 10.0\n",
+                k * 5
+            ));
+        }
+        let recipe = parse(&text).unwrap();
+        assert!(pfx_recipe::validate(&recipe).is_empty());
+        let built = pfx_build::build(&recipe, Path::new("")).unwrap();
+        assert_eq!(built.lights.len(), 96);
+        let drawn = built.recipe(&recipe);
+        assert_eq!(drawn.lights.len(), 128);
+        let staging = Staging::of(&drawn, &built.parts).unwrap();
+        assert_eq!(staging.lights.len(), 128);
+        let spots = staging
+            .lights
+            .iter()
+            .filter(|light| matches!(light.shape, LightShape::Spot { .. }))
+            .count();
+        assert_eq!(spots, 16 + 96);
+        for (light, generated) in staging.lights[32..].iter().zip(&built.lights) {
+            assert_eq!(light.position, generated.position.map(|v| v as f32));
+            let LightShape::Spot { outer_deg, .. } = light.shape else {
+                panic!("a generated lamp is a spot");
+            };
+            assert_eq!(outer_deg, generated.cone[1] as f32);
+        }
+        let eye = eyepiece(&drawn.cameras[0], View::Lens, [8, 8]).unwrap();
+        assert_eq!(staging.stage(eye).unwrap().detail.lights, staging.lights);
     }
 
     #[test]

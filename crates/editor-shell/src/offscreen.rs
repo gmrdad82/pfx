@@ -12,6 +12,7 @@ pub const MAX_SIDE: u32 = 8192;
 const DT: f32 = 1.0 / 60.0;
 const DRAG_STEPS: u32 = 4;
 const SETTLE: usize = 2;
+const SETTLE_MOST: usize = 64;
 const CLOCK: &str = "pfx-editor-shell/drive-passes";
 
 struct Driver<'a> {
@@ -91,7 +92,7 @@ pub fn drive(
     script: &Script,
     ui: impl FnMut(&mut Ui),
 ) -> FullOutput {
-    let mut output = drive_painted(ctx, size, script, ui);
+    let mut output = drive_painted(ctx, size, script, ui, || false);
     output.textures_delta.clear();
     output
 }
@@ -101,6 +102,7 @@ fn drive_painted(
     size: [u32; 2],
     script: &Script,
     mut ui: impl FnMut(&mut Ui),
+    settling: impl Fn() -> bool,
 ) -> FullOutput {
     let mut driver = Driver {
         ctx,
@@ -213,6 +215,11 @@ fn drive_painted(
     if fresh || !events.is_empty() {
         last = driver.pass(events, &mut ui);
     }
+    let mut extra = 0;
+    while extra < SETTLE_MOST && settling() {
+        last = driver.pass(Vec::new(), &mut ui);
+        extra += 1;
+    }
     ctx.data_mut(|data| data.insert_temp(Id::new(CLOCK), driver.passes));
     last.textures_delta = driver.textures;
     last
@@ -235,17 +242,35 @@ pub fn pixels(app: &mut impl App, size: [u32; 2], script: &Script) -> Result<Vec
     let format = wgpu::TextureFormat::Rgba8UnormSrgb;
     let mut painter = Painter::new(&gpu, format, RendererOptions::PREDICTABLE);
     if !app.viewport() {
-        return finish(&gpu, &mut painter, size, script, &theme, |ui, _| app.ui(ui));
+        return finish(
+            &gpu,
+            &mut painter,
+            size,
+            script,
+            &theme,
+            |ui, _| app.ui(ui),
+            || false,
+        );
     }
     app.forget();
     let mut settled = script.clone();
     settled
         .steps
         .extend(std::iter::repeat_n(Step::Frame, SETTLE));
-    finish(&gpu, &mut painter, size, &settled, &theme, |ui, painter| {
-        app.ui(ui);
-        app.frame(&gpu, painter.renderer(), ui.ctx().pixels_per_point());
-    })
+    let settling = std::cell::Cell::new(false);
+    finish(
+        &gpu,
+        &mut painter,
+        size,
+        &settled,
+        &theme,
+        |ui, painter| {
+            app.ui(ui);
+            app.frame(&gpu, painter.renderer(), ui.ctx().pixels_per_point());
+            settling.set(app.settling());
+        },
+        || settling.get(),
+    )
 }
 
 fn finish(
@@ -255,11 +280,12 @@ fn finish(
     script: &Script,
     app_theme: &Theme,
     mut ui: impl FnMut(&mut Ui, &mut Painter),
+    settling: impl Fn() -> bool,
 ) -> Result<Vec<u8>, Error> {
     let ctx = context(app_theme);
     let mut output = {
         let painter = &mut *painter;
-        drive_painted(&ctx, size, script, |root| ui(root, painter))
+        drive_painted(&ctx, size, script, |root| ui(root, painter), settling)
     };
     let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
     let target = gpu

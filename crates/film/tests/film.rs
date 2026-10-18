@@ -379,7 +379,7 @@ fn the_fixture_film_keeps_its_hash() {
         h = fnv(h, &s.to_le_bytes());
     }
     if cfg!(not(windows)) {
-        assert_eq!(h, 17_911_994_450_967_581_415);
+        assert_eq!(h, 3_650_561_030_329_662_894);
     }
 }
 

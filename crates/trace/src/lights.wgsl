@@ -198,10 +198,201 @@ fn light_candidate(light: Light, transform: mat3x3f, p: vec3f, origin: vec3f, ge
     let roughness=sqrt(clamp(radius/(2.0*distance),0.0,1.0));
     return Candidate(local,light.b.xyz*(window*window*cone/(reach*reach)),0.0,roughness,ray.xyz,ray.w,0u);
 }
+fn sin_from_cos(c: f32) -> f32 {
+    return sqrt(max(1.0-c*c,0.0));
+}
+fn tree_importance(n: vec3f, to: vec3f, cos_u: f32, axis: vec3f, theta_o: f32, theta_e: f32, far: f32, near: f32, energy: f32) -> vec2f {
+    let sin_u=sin_from_cos(cos_u);
+    let cos_i=dot(to,n);
+    let sin_i=sin_from_cos(cos_i);
+    let cos_min_i=select(cos_i*cos_u+sin_i*sin_u,1.0,cos_i>=cos_u);
+    if (cos_min_i<0.0) { return vec2f(0.0); }
+    let cos_max_i=max(cos_i*cos_u-sin_i*sin_u,0.0);
+    var cos_t=1.0;
+    var sin_t=0.0;
+    if (any(axis!=-to)) {
+        cos_t=dot(axis,-to);
+        sin_t=sin_from_cos(cos_t);
+    }
+    let cos_t_minus_u=cos_t*cos_u+sin_t*sin_u;
+    let cos_o=cos(theta_o);
+    let sin_o=sin(theta_o);
+    var cos_min_out=1.0;
+    if (cos_t>=cos_u || cos_t_minus_u>=cos_o) {
+        cos_min_out=1.0;
+    } else if (theta_o+theta_e>PI || cos_t_minus_u>cos(theta_o+theta_e)) {
+        cos_min_out=cos_t_minus_u*cos_o+sin_from_cos(cos_t_minus_u)*sin_o;
+    } else {
+        return vec2f(0.0);
+    }
+    let most=abs(cos_min_i*energy*cos_min_out/(near*near));
+    let cos_t_plus_u=cos_t*cos_u-sin_t*sin_u;
+    if (theta_e-theta_o<0.0 || cos_t<0.0 || cos_u<0.0 || cos_t_plus_u<cos(theta_e-theta_o)) { return vec2f(most,0.0); }
+    let cos_max_out=cos_t_plus_u*cos_o-sin_from_cos(cos_t_plus_u)*sin_o;
+    return vec2f(most,abs(cos_max_i*energy*cos_max_out/(far*far)));
+}
+fn node_importance(node: Light, p: vec3f, n: vec3f) -> vec2f {
+    let centroid=0.5*(node.a.xyz+node.b.xyz);
+    let extent=node.b.xyz-centroid;
+    if (dot(n,centroid-p)+dot(abs(n),abs(extent))<=0.0) { return vec2f(0.0); }
+    if (length(p-clamp(p,node.a.xyz,node.b.xyz))>=node.b.w) { return vec2f(0.0); }
+    let to=centroid-p;
+    let reach=length(to);
+    let radius2=dot(extent,extent);
+    var cos_u=-1.0;
+    if (reach*reach>radius2) { cos_u=sqrt(max(1.0-radius2/(reach*reach),0.0)); }
+    let distance=max(max(0.5*sqrt(radius2),reach),1e-6);
+    return tree_importance(n,to/max(reach,1e-30),cos_u,node.c.xyz,node.c.w,node.d.x,distance,distance,node.a.w);
+}
+fn spot_cone(light: Light, cosine: f32) -> f32 {
+    let along=clamp(cosine*light.d.x+light.d.y,0.0,1.0);
+    return along*along;
+}
+fn emitter_importance(light: Light, p: vec3f, n: vec3f) -> vec2f {
+    let to=light.a.xyz-p;
+    let near=length(to);
+    if (near>=light.b.w || near<=1e-6) { return vec2f(0.0); }
+    let toward=to/near;
+    let radius=light.c.w;
+    let far=sqrt(radius*radius+near*near);
+    let cos_u=near/far;
+    var energy=(light.b.x+light.b.y+light.b.z)/3.0;
+    if (u32(light.a.w)==1u) {
+        let theta_e=acos(clamp(-light.d.y/light.d.x,-1.0,1.0));
+        let cos_min_out=cos(max(0.0,acos(clamp(dot(light.c.xyz,-toward),-1.0,1.0))-acos(cos_u)));
+        energy*=spot_cone(light,cos_min_out);
+        return tree_importance(n,toward,cos_u,light.c.xyz,0.0,theta_e,far,near,energy);
+    }
+    return tree_importance(n,toward,cos_u,-toward,0.0,PI/2.0,far,near,energy);
+}
+fn child_importance(node: Light, p: vec3f, n: vec3f) -> vec2f {
+    if (u32(node.d.y)==1u) { return emitter_importance(lights[u32(node.d.z)],p,n); }
+    return node_importance(node,p,n);
+}
+fn tree_leaf(first: u32, count: u32, p: vec3f, n: vec3f, start: f32) -> vec2f {
+    var rand=start;
+    let sample_max=rand>0.5;
+    if (count>1u) { rand=rand*2.0-select(0.0,1.0,sample_max); }
+    var selected=-1;
+    var chosen=0.0;
+    var chosen_other=0.0;
+    var total=0.0;
+    var total_other=0.0;
+    var has=0u;
+    for (var i=0u;i<count;i++) {
+        let index=i32(first+i);
+        let importance=emitter_importance(lights[first+i],p,n);
+        let weight=select(importance.y,importance.x,sample_max);
+        let other=select(importance.x,importance.y,sample_max);
+        if (weight>0.0) {
+            total+=weight;
+            if (selected<0) {
+                selected=index;
+                chosen=weight;
+            } else {
+                let thresh=weight/total;
+                if (rand<=thresh) {
+                    selected=index;
+                    chosen=weight;
+                    rand=rand/thresh;
+                } else {
+                    rand=(rand-thresh)/(1.0-thresh);
+                }
+                rand=clamp(rand,0.0,1.0);
+            }
+        }
+        if (selected==index) { chosen_other=other; }
+        total_other+=other;
+        has|=select(0u,1u,importance.x>0.0)<<i;
+    }
+    if (has==0u) { return vec2f(0.0); }
+    var chosen_max=select(chosen_other,chosen,sample_max);
+    var total_max=select(total_other,total,sample_max);
+    var chosen_min=select(chosen,chosen_other,sample_max);
+    var total_min=select(total,total_other,sample_max);
+    if (total_min==0.0) {
+        if (sample_max) {
+            chosen_min=1.0;
+            total_min=f32(countOneBits(has));
+        } else {
+            selected=-1;
+            var valid=0.0;
+            var bits=has;
+            for (var i=0u;i<count;i++) {
+                if ((bits&1u)!=0u) {
+                    valid+=1.0;
+                    if (selected<0) {
+                        selected=i32(first+i);
+                    } else {
+                        let thresh=1.0/valid;
+                        if (rand<=thresh) {
+                            selected=i32(first+i);
+                            rand=rand/thresh;
+                        } else {
+                            rand=(rand-thresh)/(1.0-thresh);
+                        }
+                        rand=clamp(rand,0.0,1.0);
+                    }
+                }
+                bits>>=1u;
+            }
+            chosen_min=1.0;
+            total_min=valid;
+            chosen_max=emitter_importance(lights[u32(selected)],p,n).x;
+        }
+    }
+    return vec2f(f32(selected),0.5*(chosen_max/total_max+chosen_min/total_min));
+}
+fn tree_pick(p: vec3f, n: vec3f, start: f32) -> vec2f {
+    var at=u32(emitters[0].a.y+emitters[0].a.w);
+    var rand=start;
+    var pdf=1.0;
+    loop {
+        let node=lights[at];
+        let count=u32(node.d.y);
+        if (count>0u) {
+            let leaf=tree_leaf(u32(node.d.z),count,p,n,rand);
+            return vec2f(leaf.x,leaf.y*pdf);
+        }
+        let left=at+1u;
+        let right=u32(node.d.z);
+        let l=child_importance(lights[left],p,n);
+        let r=child_importance(lights[right],p,n);
+        let total_max=l.x+r.x;
+        if (total_max==0.0) { return vec2f(0.0); }
+        let total_min=l.y+r.y;
+        var probability_min=0.5*(select(0.0,1.0,l.x>0.0)+select(0.0,1.0,r.x==0.0));
+        if (total_min>0.0) { probability_min=l.y/total_min; }
+        let left_probability=0.5*(l.x/total_max+probability_min);
+        let right_weight=1.0-left_probability;
+        at=left;
+        if (right_weight>0.0) {
+            let thresh=right_weight/(left_probability+right_weight);
+            if (rand<=thresh) {
+                at=right;
+                rand=rand/thresh;
+            } else {
+                rand=(rand-thresh)/(1.0-thresh);
+            }
+            rand=clamp(rand,0.0,1.0);
+        }
+        pdf*=select(1.0-left_probability,left_probability,at==left);
+    }
+    return vec2f(0.0);
+}
+fn tree_light(transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>, u: vec4f) -> Candidate {
+    let picked=tree_pick(p,transform[2],rnd(state,u.z));
+    if (!(picked.y>0.0)) { return candidate_none(); }
+    var candidate=light_candidate(lights[u32(picked.x)],transform,p,origin,geometric,state,u);
+    candidate.scale/=picked.y;
+    return candidate;
+}
 fn light_slots() -> u32 {
-    return 1u+u32(emitters[0].a.y);
+    return 1u+u32(emitters[0].a.y)+select(0u,1u,emitters[0].a.w>0.5);
 }
 fn direct_light(slot: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>, u: vec4f) -> Candidate {
+    let looped=u32(emitters[0].a.y);
+    if (slot>looped) { return tree_light(transform,p,origin,geometric,state,u); }
     if (slot>0u) { return light_candidate(lights[slot-1u],transform,p,origin,geometric,state,u); }
     if (emitters[0].a.x<0.5) { return candidate_none(); }
     return emitter_candidate(transform,p,origin,state,u);

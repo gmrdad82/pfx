@@ -49,6 +49,14 @@
       ],
       "type": "object"
     },
+    "AlphaMode": {
+      "enum": [
+        "opaque",
+        "mask",
+        "blend"
+      ],
+      "type": "string"
+    },
     "Anisotropy": {
       "additionalProperties": false,
       "properties": {
@@ -155,6 +163,37 @@
       ],
       "type": "string"
     },
+    "Flakes": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "format": "float",
+          "type": "number"
+        },
+        "color": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "roughness": {
+          "format": "float",
+          "type": "number"
+        },
+        "size": {
+          "format": "float",
+          "type": "number"
+        },
+        "spread": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "Id": {
       "pattern": "^[0-9a-hjkmnp-tv-z]{10}$",
       "type": "string"
@@ -207,6 +246,17 @@
             "seed": 0,
             "yellow": 0.0
           }
+        },
+        "alpha": {
+          "format": "float",
+          "type": "number"
+        },
+        "alpha_cutoff": {
+          "format": "float",
+          "type": "number"
+        },
+        "alpha_mode": {
+          "$ref": "#/$defs/AlphaMode"
         },
         "anisotropy": {
           "$ref": "#/$defs/Anisotropy"
@@ -275,6 +325,9 @@
         "family": {
           "$ref": "#/$defs/Family",
           "default": "plain"
+        },
+        "flakes": {
+          "$ref": "#/$defs/Flakes"
         },
         "fresnel_power": {
           "default": 5.0,
@@ -372,6 +425,9 @@
           "default": 1.5,
           "format": "float",
           "type": "number"
+        },
+        "thin_walled": {
+          "type": "boolean"
         },
         "transmission": {
           "default": 0.0,

@@ -1,6 +1,7 @@
 use crate::duck::{self, Duck, Law, Side};
 use crate::score::{Play, Sounds};
 use crate::script::{Kinds, Script};
+use pfx_sound::Limiter;
 use std::collections::VecDeque;
 
 const STEREO: usize = 2;
@@ -30,6 +31,7 @@ pub struct Mixdown<'a> {
     split: Option<Split>,
     ceiling: f32,
     limit: f32,
+    true_peak: f32,
     pub track: Vec<f32>,
 }
 
@@ -128,6 +130,7 @@ impl<'a> Mixdown<'a> {
             split: None,
             ceiling: script.film.ceiling,
             limit: script.film.limit,
+            true_peak: script.film.true_peak,
             track: Vec::new(),
         }
     }
@@ -304,6 +307,7 @@ impl<'a> Mixdown<'a> {
                 *s *= k;
             }
         }
+        Limiter::new(self.true_peak).master(&mut self.track, STEREO, self.rate);
         self.track
     }
 }

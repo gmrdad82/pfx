@@ -387,14 +387,19 @@ pub(crate) fn bounding_sphere(shape: Shape, shapes: &[Shape]) -> ([f32; 3], f32)
     (center, radius + SHAPE_MARGIN)
 }
 
-pub(crate) fn build_emitters(candidates: &[Candidate], lights: usize) -> EmitterList {
+pub(crate) fn build_emitters(candidates: &[Candidate], lights: usize, tree: usize) -> EmitterList {
     let powers: Vec<f64> = candidates
         .iter()
         .map(|candidate| f64::from(candidate.area()) * f64::from(luminance(candidate.emission)))
         .collect();
     let total: f64 = powers.iter().sum();
     let mut entries = vec![GpuEmitter {
-        a: [candidates.len() as f32, lights as f32, total as f32, 0.0],
+        a: [
+            candidates.len() as f32,
+            lights as f32,
+            total as f32,
+            tree as f32,
+        ],
         b: [0.0; 4],
         c: [0.0; 4],
         emission: [0.0; 4],
@@ -475,7 +480,7 @@ mod tests {
                 emission: [0.5; 3],
             });
         }
-        let list = build_emitters(&candidates, 1);
+        let list = build_emitters(&candidates, 1, 0);
         assert_eq!(list.entries.len(), 5);
         assert_eq!(list.entries[0].a[0], 4.0);
         assert_eq!(list.entries[0].a[1], 1.0);
@@ -498,7 +503,7 @@ mod tests {
 
     #[test]
     fn empty_list_keeps_its_header() {
-        let list = build_emitters(&[], 2);
+        let list = build_emitters(&[], 2, 0);
         assert_eq!(list.entries.len(), 1);
         assert_eq!(list.entries[0].a[..2], [0.0, 2.0]);
         assert!(list.cdf.is_empty());

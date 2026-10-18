@@ -10,6 +10,12 @@ use crate::painter::Painter;
 
 pub(crate) fn scene(config: &Config) -> Result<Option<Scene>, String> {
     config.bind_text();
+    if let Some(bytes) = config.packed {
+        let name = format!("{}.pitofx", config.name);
+        return Scene::from_pfx_bytes(&name, bytes)
+            .map(Some)
+            .map_err(|error| format!("{name}: {error:?}"));
+    }
     let Some(path) = &config.scene else {
         return Ok(None);
     };
@@ -40,7 +46,7 @@ pub(crate) fn driver(
 ) -> Result<Driver, String> {
     let first = settings(game.as_ref(), config);
     let empty = Scene::empty();
-    let flat = scene.is_none();
+    let rootless = scene.is_none() || config.packed.is_some();
     let mut session = PlaySession::play_with(
         scene.unwrap_or(&empty),
         painter.and_then(Painter::staged),
@@ -49,8 +55,8 @@ pub(crate) fn driver(
             seed: config.seed,
             audio_rate: audio.0,
             audio_channels: audio.1,
-            tunables: flat.then(Tunables::default),
-            rigs: flat.then(Rigs::default),
+            tunables: rootless.then(Tunables::default),
+            rigs: rootless.then(Rigs::default),
             ..Options::default()
         },
     )

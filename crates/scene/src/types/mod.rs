@@ -138,6 +138,12 @@ pub struct SceneFile {
         feature = "schema",
         schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")
     )]
+    pub music: Option<toml::Table>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")
+    )]
     pub authoring: Option<toml::Table>,
 }
 

@@ -775,11 +775,21 @@ fn pbr(glb: &[u8], materials: &BTreeMap<String, Value>) -> Result<Vec<u8>, Strin
                 .get("pbrMetallicRoughness")
                 .and_then(|p| p.get("baseColorTexture"))
                 .is_some();
+            let alpha = number(&spec, "alpha").unwrap_or(1.0).clamp(0.0, 1.0);
+            match spec.get("alpha_mode").and_then(Value::as_str) {
+                Some("mask") => {
+                    material["alphaMode"] = json!("MASK");
+                    material["alphaCutoff"] =
+                        json!(number(&spec, "alpha_cutoff").unwrap_or(0.5).max(0.0));
+                }
+                Some("blend") => material["alphaMode"] = json!("BLEND"),
+                _ => {}
+            }
             if !textured {
                 let base = vec3(spec.get("base")).unwrap_or(DVec3::splat(0.8));
                 let base = base.clamp(DVec3::ZERO, DVec3::ONE);
                 material["pbrMetallicRoughness"] = json!({
-                    "baseColorFactor": [base.x, base.y, base.z, 1.0],
+                    "baseColorFactor": [base.x, base.y, base.z, alpha],
                     "metallicFactor": number(&spec, "metalness").unwrap_or(0.0).clamp(0.0, 1.0),
                     "roughnessFactor": number(&spec, "roughness").unwrap_or(0.5).clamp(0.0, 1.0),
                 });
@@ -895,6 +905,27 @@ fn material_of(m: &Value) -> Value {
     };
     let mut out = Map::new();
     out.insert("base".into(), json!(base));
+    let alpha = pbr
+        .and_then(|p| p.get("baseColorFactor"))
+        .and_then(|c| c.get(3))
+        .and_then(Value::as_f64)
+        .unwrap_or(1.0);
+    if alpha != 1.0 {
+        out.insert("alpha".into(), json!(alpha));
+    }
+    match m.get("alphaMode").and_then(Value::as_str) {
+        Some("MASK") => {
+            out.insert("alpha_mode".into(), json!("mask"));
+            let cutoff = m.get("alphaCutoff").and_then(Value::as_f64).unwrap_or(0.5);
+            if cutoff != 0.5 {
+                out.insert("alpha_cutoff".into(), json!(cutoff));
+            }
+        }
+        Some("BLEND") => {
+            out.insert("alpha_mode".into(), json!("blend"));
+        }
+        _ => {}
+    }
     out.insert("roughness".into(), json!(factor("roughnessFactor", 1.0)));
     let metalness = factor("metallicFactor", 1.0);
     if metalness > 0.0 {

@@ -56,10 +56,10 @@ pub(crate) fn bake(b: &Bake) -> Result<Vec<Track>, String> {
     Ok(made.into_iter().flat_map(|(_, tracks)| tracks).collect())
 }
 
-struct State<'a> {
+struct State {
     poses: Vec<DMat4>,
     scales: Option<Vec<DVec3>>,
-    drive: Option<(follow::Drive, &'a Route)>,
+    drive: Option<follow::Drive>,
     aims: Option<Vec<DVec3>>,
     fov: Option<Vec<f64>>,
 }
@@ -86,9 +86,13 @@ fn owner(
                 let route = b.routes.get(&f.route).ok_or_else(|| {
                     format!("{}.route: no route named `{}`", constraint.path, f.route)
                 })?;
-                let drive = follow::drive(f, route, b.timeline);
+                let size = match (&c.owner, f.dynamics) {
+                    (Owner::Object(name), Some(_)) => follow::size_of(b, name)?,
+                    _ => (0.0, 0.0),
+                };
+                let drive = follow::drive(f, route, b.timeline, size);
                 s.poses = drive.pose.clone();
-                s.drive = Some((drive, route));
+                s.drive = Some(drive);
             }
             ConstraintKind::LookAt(l) => look_at(b, known, &c.owner, constraint, l, &mut s)?,
             ConstraintKind::Copy(copy) => copied(b, known, constraint, copy, &mut s)?,
@@ -123,13 +127,16 @@ fn owner(
                 .iter()
                 .find(|o| o.name == *name)
                 .map_or(DVec3::ONE, |o| DVec3::from_array(o.scale));
-            let subs = follow::subs(b, name)?;
+            let subs = follow::subs(b, name, true)?;
             follow::nodes(
                 name,
-                &s.poses,
-                s.scales.as_deref(),
-                scale,
-                s.drive.as_ref().map(|(drive, route)| (drive, *route)),
+                follow::Motion {
+                    poses: &s.poses,
+                    scales: s.scales.as_deref(),
+                    scale,
+                    drive: s.drive.as_ref(),
+                    step: b.timeline.step(),
+                },
                 (b.nodes, &subs),
                 b.facts.get(name),
             )
@@ -163,6 +170,7 @@ fn owner(
             camera: None,
             focus: None,
             fov: None,
+            between: Vec::new(),
         }],
     })
 }

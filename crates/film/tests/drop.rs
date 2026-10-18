@@ -196,3 +196,23 @@ fn named_sidechains_refuse_what_the_score_lacks() {
         .is_ok()
     );
 }
+
+#[test]
+fn a_hot_score_masters_under_its_true_peak_ceiling() {
+    let hot = |head: &str| film(head, "").replace("sound = \"kick\"", "sound = \"kick\"\ngain = 4");
+    for (head, ceiling) in [
+        ("", -1.0),
+        ("true_peak = -1.0", -1.0),
+        ("true_peak = -3.0", -3.0),
+    ] {
+        let audio = mixdown(&hot(head)).unwrap();
+        let peak = pfx_sound::true_peak(&audio, 2);
+        assert!(
+            peak <= 10f32.powf(ceiling / 20.0),
+            "{head}: {} dBTP",
+            pfx_sound::decibels(peak)
+        );
+        assert!(pfx_sound::decibels(peak) > ceiling - 0.5, "{head}");
+    }
+    assert!(mixdown(&hot("true_peak = 1.0")).is_err());
+}

@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use crate::adaptive::{Adaptive, PreparedAdaptive, Quantize};
 use crate::channel::{
     BUILT_IN, Channel, ChannelId, DuckState, Ducking, RAMP_SECONDS, clamp_volume, ramp_frames,
 };
@@ -722,6 +723,56 @@ impl Mixer {
         id
     }
 
+    pub fn play_adaptive(
+        &mut self,
+        track: &PreparedAdaptive,
+        fade_seconds: f32,
+        level: Level,
+    ) -> VoiceId {
+        let track = track.for_rate(self.rate);
+        let seed = self.rng.seed();
+        let source = Source::Adaptive(Box::new(Adaptive::new(&track, seed)));
+        let id = self.push_voice(ChannelId::MUSIC, self.clock, source, level);
+        self.begin_music(id, fade_seconds);
+        id
+    }
+
+    pub fn set_music_intensity(&mut self, intensity: f32, seconds: f32) {
+        let frames = seconds_to_frames(seconds, self.rate);
+        if let Some(adaptive) = self.adaptive_mut() {
+            adaptive.set_intensity(intensity, frames);
+        }
+    }
+
+    pub fn music_intensity(&self) -> Option<f32> {
+        self.adaptive().map(Adaptive::intensity)
+    }
+
+    pub fn request_music_section(&mut self, section: &str, at: Quantize) -> bool {
+        self.adaptive_mut()
+            .is_some_and(|adaptive| adaptive.request(section, at))
+    }
+
+    pub fn music_section(&self) -> Option<&str> {
+        self.adaptive().map(Adaptive::section)
+    }
+
+    fn adaptive(&self) -> Option<&Adaptive> {
+        let id = self.music?;
+        match &self.voices.iter().find(|voice| voice.id == id)?.source {
+            Source::Adaptive(adaptive) => Some(adaptive),
+            _ => None,
+        }
+    }
+
+    fn adaptive_mut(&mut self) -> Option<&mut Adaptive> {
+        let id = self.music?;
+        match &mut self.voices.iter_mut().find(|voice| voice.id == id)?.source {
+            Source::Adaptive(adaptive) => Some(adaptive),
+            _ => None,
+        }
+    }
+
     pub fn stop_music(&mut self, fade_seconds: f32) {
         if let Some(old) = self.music.take() {
             self.stop(old, fade_seconds);
@@ -750,6 +801,13 @@ impl Mixer {
             Source::Buffer { frames, .. } => Bounds::Once(*frames),
             _ => Bounds::Open,
         };
+        if let Source::Adaptive(adaptive) = &voice.source {
+            return Some(MusicPlace {
+                played: adaptive.position() as f64,
+                ratio: 1.0,
+                bounds,
+            });
+        }
         let played = match bounds {
             Bounds::Loop(start, end) if voice.laps > 0 => {
                 end as f64 + (voice.laps - 1) as f64 * (end - start) as f64 + voice.cursor

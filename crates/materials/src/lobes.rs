@@ -116,6 +116,8 @@ pub struct Textures {
     pub detail_scale: f32,
     pub main: UvTransform,
     pub detail_uv: UvTransform,
+    pub normal_uv: Option<UvTransform>,
+    pub orm_uv: Option<UvTransform>,
 }
 
 impl Default for Textures {
@@ -134,11 +136,21 @@ impl Default for Textures {
                 set: 1,
                 ..UvTransform::default()
             },
+            normal_uv: None,
+            orm_uv: None,
         }
     }
 }
 
 impl Textures {
+    pub fn normal_transform(&self) -> UvTransform {
+        self.normal_uv.unwrap_or(self.main)
+    }
+
+    pub fn orm_transform(&self) -> UvTransform {
+        self.orm_uv.unwrap_or(self.main)
+    }
+
     pub fn any(&self) -> bool {
         self.base >= 0
             || self.normal >= 0

@@ -1,6 +1,6 @@
 use crate::Error;
-use pfx_glb::{Anisotropy, Image, Look, Looks, Map, Mime, Sampler, Sheen, UvTransform};
-use pfx_materials::Material;
+use pfx_glb::{Anisotropy, Coverage, Image, Look, Looks, Map, Mime, Sampler, Sheen, UvTransform};
+use pfx_materials::{ALPHA_CUTOFF, AlphaMode, Material};
 use pfx_recipe::{Recipe, Textures};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -131,6 +131,29 @@ fn kept(
     }))
 }
 
+fn raw_transform(
+    extensions: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<UvTransform> {
+    let raw = extensions?.get("KHR_texture_transform")?;
+    let pair = |key: &str, fallback: [f32; 2]| {
+        raw.get(key)
+            .and_then(|value| serde_json::from_value::<[f32; 2]>(value.clone()).ok())
+            .unwrap_or(fallback)
+    };
+    Some(UvTransform {
+        offset: pair("offset", [0.0; 2]),
+        rotation: raw
+            .get("rotation")
+            .and_then(serde_json::Value::as_f64)
+            .map_or(0.0, |value| value as f32),
+        scale: pair("scale", [1.0; 2]),
+        tex_coord: raw
+            .get("texCoord")
+            .and_then(serde_json::Value::as_u64)
+            .map(|value| value as u32),
+    })
+}
+
 fn transform(info: &gltf::texture::Info) -> Option<UvTransform> {
     info.texture_transform().map(|t| UvTransform {
         offset: t.offset(),
@@ -160,6 +183,13 @@ pub(crate) fn look(
         }
     };
     Ok(Look {
+        coverage: match material.alpha_mode() {
+            gltf::material::AlphaMode::Opaque => None,
+            gltf::material::AlphaMode::Mask => Some(Coverage::Mask(
+                material.alpha_cutoff().unwrap_or(ALPHA_CUTOFF),
+            )),
+            gltf::material::AlphaMode::Blend => Some(Coverage::Blend),
+        },
         base_color: Some(pbr.base_color_factor()),
         metallic: Some(pbr.metallic_factor()),
         roughness: Some(pbr.roughness_factor()),
@@ -169,7 +199,14 @@ pub(crate) fn look(
         base: info(pbr.base_color_texture())?,
         metal_roughness: info(pbr.metallic_roughness_texture())?,
         normal: match material.normal_texture() {
-            Some(t) => kept(t.texture(), t.tex_coord(), t.scale(), None, buffers, folder)?,
+            Some(t) => kept(
+                t.texture(),
+                t.tex_coord(),
+                t.scale(),
+                raw_transform(t.extensions()),
+                buffers,
+                folder,
+            )?,
             None => None,
         },
         occlusion: match material.occlusion_texture() {
@@ -177,7 +214,7 @@ pub(crate) fn look(
                 t.texture(),
                 t.tex_coord(),
                 t.strength(),
-                None,
+                raw_transform(t.extensions()),
                 buffers,
                 folder,
             )?,
@@ -236,9 +273,43 @@ fn set(map: &mut Option<Map>, scale: Option<f64>) {
     }
 }
 
-fn factors(look: &mut Look, material: &Material) {
+fn place(look: &mut Look, textures: &Textures) {
+    if textures.uv_scale.is_none() && textures.uv_offset.is_none() && textures.uv_rotation.is_none()
+    {
+        return;
+    }
+    let [sx, sy] = textures.uv_scale.unwrap_or([1.0, 1.0]);
+    let [ox, oy] = textures.uv_offset.unwrap_or([0.0, 0.0]);
+    for map in [
+        &mut look.base,
+        &mut look.normal,
+        &mut look.metal_roughness,
+        &mut look.occlusion,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        map.transform = Some(UvTransform {
+            offset: [ox as f32, oy as f32],
+            rotation: textures.uv_rotation.unwrap_or(0.0) as f32,
+            scale: [sx as f32, sy as f32],
+            tex_coord: map.transform.and_then(|t| t.tex_coord),
+        });
+    }
+}
+
+fn coverage(material: &Material) -> Option<Coverage> {
+    match material.alpha_mode {
+        AlphaMode::Opaque => None,
+        AlphaMode::Mask => Some(Coverage::Mask(material.alpha_cutoff)),
+        AlphaMode::Blend => Some(Coverage::Blend),
+    }
+}
+
+pub(crate) fn factors(look: &mut Look, material: &Material) {
     let [r, g, b] = material.base;
-    look.base_color = Some([r, g, b, 1.0]);
+    look.base_color = Some([r, g, b, material.alpha]);
+    look.coverage = coverage(material);
     look.metallic = Some(material.metalness);
     look.roughness = Some(material.roughness);
     look.emission = (material.emission != [0.0; 3]).then_some(material.emission);
@@ -303,12 +374,14 @@ pub(crate) fn resolve(
         set(&mut look.normal, textures.normal_scale);
         set(&mut look.occlusion, textures.occlusion_strength);
         set(&mut look.detail_normal, textures.detail_normal_scale);
+        place(look, textures);
     }
     for (name, value) in materials {
         let Ok(material) = serde_json::from_value::<Material>(value.clone()) else {
             continue;
         };
-        let lobed = !material.fabric.off() || !material.anisotropy.off();
+        let lobed =
+            !material.fabric.off() || !material.anisotropy.off() || !material.alpha_mode.opaque();
         if !lobed && !looks.get(name).is_some_and(Look::has_maps) {
             continue;
         }

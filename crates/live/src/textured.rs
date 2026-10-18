@@ -21,15 +21,26 @@ fn textured_maps(mapped: MapResult, material: MaterialData, tangent: vec4f, uv0:
     if (layers.x >= 0) {
         result.base *= textureSampleGrad(map_base, map_sampler, uv, layers.x, dx, dy).rgb;
     }
+    let own = u32(round(material.map_turns.z));
     if (layers.z >= 0) {
-        let orm = textureSampleGrad(map_roughness, map_sampler, uv, layers.z, dx, dy);
+        let orm_one = (own & 2u) != 0u;
+        let orm_turn = material.map_turns.y;
+        let orm_at = uv_place(select(uv0, uv1, orm_one), material.orm_transform, orm_turn);
+        let orm_dx = uv_turn(select(dx0, dx1, orm_one), orm_turn, material.orm_transform.zw);
+        let orm_dy = uv_turn(select(dy0, dy1, orm_one), orm_turn, material.orm_transform.zw);
+        let orm = textureSampleGrad(map_roughness, map_sampler, orm_at, layers.z, orm_dx, orm_dy);
         result.roughness *= orm.g;
         result.metalness *= orm.b;
         textured_occlusion = 1.0 + material.texture_scales.y * (orm.r - 1.0);
     }
     var local = vec3f(0.0, 0.0, 1.0);
     if (layers.y >= 0) {
-        local = textured_normal(textureSampleGrad(map_normal, map_sampler, uv, layers.y, dx, dy), material.texture_scales.x);
+        let normal_one = (own & 1u) != 0u;
+        let normal_turn = material.map_turns.x;
+        let normal_at = uv_place(select(uv0, uv1, normal_one), material.normal_transform, normal_turn);
+        let normal_dx = uv_turn(select(dx0, dx1, normal_one), normal_turn, material.normal_transform.zw);
+        let normal_dy = uv_turn(select(dy0, dy1, normal_one), normal_turn, material.normal_transform.zw);
+        local = textured_normal(textureSampleGrad(map_normal, map_sampler, normal_at, layers.y, normal_dx, normal_dy), material.texture_scales.x);
     }
     if (layers.w >= 0) {
         let turn = material.texture_extra.w;

@@ -186,7 +186,11 @@ pub fn run(command: &Command) -> Result<(), String> {
         .map_err(|e| format!("{}: {e}", command.script.display()))?;
     let roll = Roll::open(&script)?;
     if command.plan {
+        let misses = roll.script.off_grid(roll.fps())?;
         let mut plan = head(&roll);
+        if !misses.is_empty() {
+            plan["off_grid"] = json!(misses);
+        }
         if let Some(out) = &command.out {
             let out = std::path::absolute(out).map_err(|e| format!("{}: {e}", out.display()))?;
             plan["pcod"] = json!(pcod(&roll, &out));
@@ -210,6 +214,9 @@ pub fn run(command: &Command) -> Result<(), String> {
             }
             let [w, h] = roll.size();
             println!("{} frames at {w}x{h}, {} fps", roll.frames(), roll.fps());
+            for miss in &misses {
+                println!("off grid: {miss}");
+            }
         }
         return Ok(());
     }

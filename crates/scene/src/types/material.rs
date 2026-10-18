@@ -212,6 +212,32 @@ pub struct Scatter {
     pub amount: Option<f32>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum AlphaMode {
+    #[default]
+    Opaque,
+    Mask,
+    Blend,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Flakes {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spread: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<f32>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
@@ -277,6 +303,16 @@ pub struct Material {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scatter: Option<Scatter>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub thin_walled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpha: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpha_mode: Option<AlphaMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alpha_cutoff: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub flakes: Option<Flakes>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema", schemars(with = "Option<serde_json::Value>"))]
     pub authoring: Option<toml::Value>,
 }
@@ -315,6 +351,11 @@ impl Default for Material {
             fabric: None,
             anisotropy: None,
             scatter: None,
+            thin_walled: None,
+            alpha: None,
+            alpha_mode: None,
+            alpha_cutoff: None,
+            flakes: None,
             authoring: None,
         }
     }

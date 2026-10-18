@@ -203,6 +203,46 @@ impl Project {
         })
     }
 
+    pub fn from_pfx_bytes(
+        name: impl Into<PathBuf>,
+        bytes: impl Into<std::sync::Arc<[u8]>>,
+    ) -> Result<Project, Diagnostic> {
+        let file = PathBuf::from(slashed(&name.into()));
+        let mount =
+            Mount::from_bytes(file.clone(), bytes.into(), true).map_err(|message| Diagnostic {
+                file: file.clone(),
+                line: 1,
+                column: 1,
+                end_line: 1,
+                end_column: 1,
+                severity: Severity::Error,
+                code: code::UNREADABLE,
+                key: String::new(),
+                message: format!("{} {message}", file.display()),
+                related: Vec::new(),
+            })?;
+        let texts = mount
+            .texts
+            .iter()
+            .map(|(file, text)| (file.clone(), Ok(text.clone())))
+            .collect();
+        Ok(Project {
+            marked: false,
+            root: PathBuf::new(),
+            texts,
+            pfx_files: Vec::new(),
+            mount: Some(mount),
+        })
+    }
+
+    pub fn in_memory(&self) -> bool {
+        self.mount.as_ref().is_some_and(|mount| mount.memory)
+    }
+
+    pub fn pfx_bytes(&self) -> Option<&[u8]> {
+        self.mount.as_ref().map(Mount::bytes)
+    }
+
     pub fn pfx_path(&self) -> Option<&Path> {
         self.mount.as_ref().map(|mount| mount.file.as_path())
     }
@@ -237,6 +277,12 @@ impl Project {
             if let Some(text) = mount.texts.get(Path::new(&rooted)) {
                 return Ok(Cow::Owned(text.clone().into_bytes()));
             }
+            if mount.memory {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("{rooted} is not in {}", mount.file.display()),
+                ));
+            }
         }
         let target = self.root.join(&rooted);
         let inside =
@@ -250,6 +296,14 @@ impl Project {
     pub(crate) fn source(&self, file: &Path) -> std::io::Result<String> {
         match self.texts.get(file) {
             Some(Ok(text)) => Ok(text.clone()),
+            Some(Err(message)) if self.in_memory() => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                message.clone(),
+            )),
+            None if self.in_memory() => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("{} is not in the .pfx", file.display()),
+            )),
             _ => std::fs::read_to_string(self.root.join(file)),
         }
     }
@@ -742,6 +796,7 @@ struct Scope {
     plates: Option<Single<Plates>>,
     physics: Option<Single<Physics>>,
     play: Option<Single<Play>>,
+    music: Option<Single<toml::Table>>,
 }
 
 enum Lookup {
@@ -1023,6 +1078,9 @@ impl<'p> Checker<'p> {
         if let Some(text) = self.project.texts.get(file) {
             return Some(text.clone());
         }
+        if self.project.in_memory() {
+            return None;
+        }
         let path = self.project.root.join(file);
         if !path.is_file() {
             return None;
@@ -1111,9 +1169,18 @@ impl<'p> Checker<'p> {
         }
         let overlay: BTreeSet<String> = self.overlay.keys().map(|key| slashed(key)).collect();
         let mount = self.project.mount.as_ref();
-        match self.listing.find(&self.project.root, &rooted, &|path| {
-            overlay.contains(path) || mount.is_some_and(|mount| mount.holds(path))
-        }) {
+        let held =
+            |path: &str| overlay.contains(path) || mount.is_some_and(|mount| mount.holds(path));
+        let found = if self.project.in_memory() {
+            if held(&rooted) {
+                Found::Exact
+            } else {
+                Found::Missing
+            }
+        } else {
+            self.listing.find(&self.project.root, &rooted, &held)
+        };
+        match found {
             Found::Exact => {
                 self.found.insert(PathBuf::from(&rooted));
                 Some(PathBuf::from(rooted))
@@ -1849,6 +1916,7 @@ impl<'p> Checker<'p> {
             self.single(&mut scope.plates, member, "plates", doc.plates);
             self.single(&mut scope.physics, member, "physics", doc.physics);
             self.single(&mut scope.play, member, "play", doc.play);
+            self.single(&mut scope.music, member, "music", doc.music);
         }
         for kind in Kind::ALL {
             let names: Vec<(String, PathBuf, KeyPath)> = scope
@@ -2815,6 +2883,7 @@ impl<'p> Checker<'p> {
             .and_then(|single| single.value.module.as_deref())
             .and_then(|raw| rooted(raw).ok())
             .map(PathBuf::from);
+        scene.music = scope.music.as_ref().map(|single| single.value.clone());
         scene.files = placed.files.clone();
         scene.tiles = self.tile_layers(&scope, &chain, &mut scene.files);
         if let Some(finish) = &scope.finish {

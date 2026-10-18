@@ -9,7 +9,7 @@ pfx gui samples/workshop.pitofx --shot workshop.png
 pfx gui --start --shot start.png --size 1280x800
 ```
 
-`--size` sets the window (1586x992 by default). The frame shows the settled window: the scene built, the stage drawn, every panel laid out. `--bare` draws the viewport alone instead, filling the whole frame (see below).
+`--size` sets the window (1586x992 by default). The frame shows the settled window: the scene built, the stage drawn, every panel laid out, and the viewport drawn until it settles as the window does after a change (16 frames, each stepping the temporal AA jitter and the screen-space reflections' sample pattern), so its edges and glossy paint come out as smooth as the window's. `--bare` draws the viewport alone instead, filling the whole frame (see below).
 
 `--wireframe` draws the viewport as a wireframe, `--blend <0..1>` stops part way between shaded and wireframe, and `--xray` shows the hidden edges brighter. `--clay` draws it in clay: every surface a matte grey under a soft key light and sky, no textures, emission or effects, the selection outlined in the accent colour. In the window `z` cycles shaded, clay and wireframe. They work for a recipe, with `--shot` and with `--clip`:
 

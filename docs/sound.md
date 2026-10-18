@@ -46,6 +46,82 @@ mixer.play_music(&track, 2.0, Level::default());
 - `Mixer::music_position()` is the current track's render position in seconds into the track: the next frame the mixer renders, loop-aware (a looped track reads back inside its loop). `None` when no track plays.
 - `Output::music_heard()` is the frame reaching the speaker now, in seconds into the track, for a meter or a playhead read every UI frame. The audio callback records the track's position at the start of each block it renders and when that block plays (the callback's time plus the latency cpal reports, playback minus callback) in a few atomics, without a lock; the read extrapolates from there by the elapsed time and the track's pitch, at most one block ahead (so it holds still if callbacks stop), and steps back across a loop point to the end of the loop. It reads `0.0` until a new track's start is heard, and `None` once no track plays (the old track's fade-out is not followed). A decoded music stream (`play_music_vorbis`) reads the frames its stream has delivered, not wrapped by its loop.
 
+## Adaptive music
+
+An `AdaptiveTrack` is one piece of music made of stems: N clips of one length (one tempo, one bar grid), each with a gain curve over a live intensity from 0 to 1, and named sections the music moves between on the bar or the beat. It plays in the music slot, so it crossfades with a `MusicTrack` like any other track.
+
+```rust
+let mut track = AdaptiveTrack::new(stems, 120.0, 4);
+track.sections = vec![
+    Section { variants: vec![(0, 8), (8, 16)], avoid_repeat: true, ..Section::new("calm", (0, 8)) },
+    Section { next: Next::Section("calm".into()), ..Section::new("fight", (16, 24)) },
+];
+let prepared = track.prepare(mixer.rate())?;
+mixer.play_adaptive(&prepared, 1.0, Level::default());
+mixer.set_music_intensity(0.8, 2.0);
+mixer.request_music_section("fight", Quantize::Bar);
+```
+
+- **Stems.** `Stem { name, clip, gain }`: mono or stereo clips, all at one rate and of one length (`prepare` refuses anything else, naming the stem). Every stem reads the same source frame on every output frame, so they stay sample-exact in sync through intensity changes, section jumps and crossfades.
+- **Gain curves.** `StemGain { keys, power }`: `[(intensity, gain), ...]` keys, held before the first and after the last. Between two keys the gain moves linearly, or with `power` along a quarter sine (rising) or cosine (falling), so a stem leaving over the same span another enters keeps the summed power constant. `StemGain::above(0.3, 0.1)` brings a stem in from 0.3 to 0.4 (drums above 0.3), `below` takes one out, `constant` holds it.
+- **Intensity.** `set_music_intensity(value, seconds)` eases from the current value to the new one over the given time with the track's `ease`: `Linear`, `In(n)`, `Out(n)` or `InOut(n)` (the integer power easings of kira's tweens, see [INSPIRATION.md](../INSPIRATION.md)). The stems' gains are worked out every 16 frames (`CONTROL_FRAMES`) on the track's own clock and ramp linearly inside each block, so the block size the device asks for never changes a sample. `music_intensity()` reads it back.
+- **Sections.** `Section { name, variants, next, avoid_repeat }`: each variant is a `[from, to)` range of whole bars of the stems, on the grid of `bpm`, `beats_per_bar` and `offset` (seconds before bar 0). When a variant ends the section flows to `next`: `Repeat` (the default; a fresh variant), `Section(name)` or `Stop` (the track ends and its voice is freed). With no sections the whole length loops as `main`.
+- **Variants.** Entering a section picks one of its variants from the track's seeded generator, which takes its seed from the mixer's (`set_seed`) when the track starts: the same seed and the same calls at the same frames give the same samples. `avoid_repeat` never plays the same variant of a section twice in a row.
+- **Transitions.** `request_music_section(name, at)` is taken at `Quantize::Now`, the next `Beat`, the next `Bar` or the current variant's `End`, and never later than that end. A boundary the music sits on is taken at once, and a later request replaces one still waiting. `music_section()` is the section playing. With `transition` (seconds, default 0) a jump crossfades equal power: the old position keeps playing on (its tail past the bar line) under a cosine while the new one comes in under a sine; at 0 the cut is sample exact on the boundary, as a `MusicTrack` loop is.
+- **Not here.** Pitch does not apply to an adaptive track (the bar grid stays exact); its voice's level, fades, channel and ducking apply as to any music. `Output` mirrors `play_adaptive` (preparing the track before it takes the lock), `set_music_intensity`, `music_intensity`, `request_music_section` and `music_section`.
+
+### The `[music]` table (feature `music`)
+
+A game ships its music as a `[music]` table in a scene, its stems as files inside the same `.pitofx` (or beside it). `pfx_sound::manifest::load(path)` opens a `.pitofx`, finds the first scene in it with a `[music]` table and reads each stem's WAV from the file's own chunks by name, then from the folder beside it (never outside it); `load_bytes` does the same from memory. `Manifest::parse(text)` reads a scene document's TOML and `Manifest::from_table` the table the scene reader hands over (`Scene::music`, as written), and `Manifest::track(read)` loads the stems through the caller's reader.
+
+```toml
+[music]
+bpm = 120
+beats_per_bar = 4
+start = "calm"
+ease = "in_out"
+transition = 0.02
+
+[[music.stem]]
+name = "pads"
+file = "music/pads.wav"
+gain = [[0.0, 1.0], [0.6, 0.4]]
+
+[[music.stem]]
+name = "drums"
+file = "music/drums.wav"
+gain = [[0.3, 0.0], [0.4, 1.0]]
+
+[[music.section]]
+name = "calm"
+bars = [[0, 8], [8, 16]]
+avoid_repeat = true
+
+[[music.section]]
+name = "fight"
+bars = [16, 24]
+next = "calm"
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `bpm` | required | beats a minute |
+| `beats_per_bar` | 4 | beats in a bar |
+| `offset` | 0 | seconds of the stems before bar 0 |
+| `start` | the first section | the section the track opens with |
+| `intensity` | 0 | the intensity it opens at |
+| `ease`, `ease_power` | `"linear"`, 2 | `"linear"`, `"in"`, `"out"` or `"in_out"`, and the power of the last three |
+| `transition` | 0 | seconds of equal-power crossfade at a section change |
+| `[[music.stem]] name`, `file` | required | the stem's name and its WAV, a chunk name or a path relative to the file's folder |
+| `[[music.stem]] gain` | 1 | a number, or `[[intensity, gain], ...]` keys |
+| `[[music.stem]] shape` | `"power"` | `"power"` (sine and cosine between keys) or `"linear"` |
+| `[[music.section]] name` | required | the section's name (`stop` is kept for `next`) |
+| `[[music.section]] bars` | required | `[from, to]`, or `[[from, to], ...]` for variants, in whole bars |
+| `[[music.section]] next` | repeat | a section's name, or `"stop"` |
+| `[[music.section]] avoid_repeat` | false | never the same variant twice in a row |
+
+Unknown keys and wrong types are errors naming the table and the key.
+
 ## Ducking
 
 Off until a game sets it:
@@ -519,6 +595,12 @@ Cost, measured once (`bench_shot_mix` in `crates/sound/tests/bench.rs`), the exa
 
 The engine costs about 3.3 ms a second of audio for its pipes plus 1.2 ms a second per cylinder.
 
+## True peak and the limiter
+
+`true_peak(samples, channels)` measures interleaved audio's true peak as ITU-R BS.1770-4 defines it: each channel oversampled 4x through the recommendation's 48-tap, 4-phase polyphase filter (Annex 2, its coefficients kept exactly), the largest rectified value, or the largest sample if that is higher; `decibels` turns it into dBTP. `local_peaks` gives each frame the largest of its own samples and the oversampled points on either side of it, and `oversampled` returns one channel's 4x stream. The Annex 2 filter reads a little high near the top of the band: 0.09 to 0.25 dB over a quarter-rate tone's true peak, 0.38 dB at 17 kHz, within 0.3 dB of the ebur128 crate's windowed-sinc meter on every test signal, and over the true value on each of them, which is the safe side for a ceiling.
+
+`Limiter::new(ceiling_db)` holds a master under a true-peak ceiling, offline, over the whole buffer: `master(samples, channels, rate)` leaves audio already under it untouched (and returns false); otherwise each frame's gain is the ceiling over its true peak, linked across channels, held as a moving minimum over `attack` plus `hold` (5 ms each by default), released exponentially over `release` (80 ms) and smoothed by a box over the attack, with the audio read `attack` ahead. It measures the result again, up to four passes, and scales by whatever is left over, so no oversampled point ends above the ceiling. A three-minute stereo master is measured in about 0.28 s and limited in about 1 s on one core (release build).
+
 ## Cost
 
 `crates/sound/tests/bench.rs` (`cargo test --release -p pfx-sound --test bench -- --ignored --nocapture`): a 48 kHz stereo mixer rendering 800-frame ticks (60 a second), a 0.1 s mono hit triggered 2,000 times a second with `max_voices: 20`, `Steal::Oldest`, 2 semitones of pitch jitter and 0.2 of volume jitter (about 20 live voices plus the stolen ones fading), and 20 live sine tones. Release build, Ryzen 9 9950X, CPU time a tick:
@@ -537,6 +619,8 @@ Channel drive (`bench_channel_drive`, 4 saw tones on one channel, 800-frame ster
 
 Before, 92 % of the jittered case was the sinc: for every pitched frame `Kernel::taps` built 33 weights (a distance in f64, a table read and a lerp each, then a normalising divide over all of them) and the voice read 33 frames through bounds and loop checks. Now a voice with no ramp, curve, envelope or fade in flight renders its block in one tight loop with its gain, pan and step worked out once, and the cubic read is four loads and a Horner polynomial. The fades of stolen voices read the sine table instead of a libm cosine.
 
+Adaptive music (`bench_adaptive_eight_stems`): eight stereo stems at 48 kHz, 800-frame ticks, release build, Ryzen 9 9950X, CPU time per second of audio: 0.50 ms with every stem playing and the intensity settled, 0.48 ms with the intensity ramping between 0 and 1 over 2 s (the silent stems are skipped), and 0.90 ms with a 0.5 s crossfade between sections running all the time (the old position is mixed as well). That is about 0.05 % of one core for the plain case.
+
 ## Tests
 
-No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, drive off bit for bit, the three curves pinned by a hash, a compensated drive keeping a quiet tone's level, scheduled glides matching the plain call made at the same frame bit for bit (and leaving the frames before it alone), and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The voice effects' tests cover the crusher's bit-depth steps and sample-and-hold runs, the chorus's seed (the same seed the same samples, another seed others), the vocoder singing at the carrier's harmonics and falling silent with the voice, the segmentation finding synthesised bursts between silences (with and without onsets) and onsets splitting a run that steps up without a gap, and the grain helpers' lengths, seeded order and a repitch landing on the moved pitch. The media reader's tests (feature `media`) cut, resample and shape a WAV to its spec, decode an AAC tone in MP4 to its exact length and at its track's gain, and refuse Ogg, FLAC and DTS by name. The crate's own tests turn `vorbis`, `voicefx`, `shot` and `media` on through a self dev-dependency, so the workspace gate runs them. The shot mix's tests (`crates/sound/tests/shot.rs`, feature `shot`) cover the mix's exact length for a frame count and rate, the same script giving the same samples (and another seed others), and the engine's cycle following its rpm curve (the autocorrelation's period within 2 % of 120 / rpm seconds at 2,000 and 5,000 rpm). The recorded engine's tests generate their recording in the test (a four-cylinder pulse train with uneven cylinders and a little seeded noise: an idle at 900 rpm, a rise, a rev held at 3,000 and a fall; no third-party sample) and cover its exact length, the same seed giving the same samples (and another seed others), its firing period following an rpm curve within 3 % at 900, 2,000, 3,000 and 5,500 rpm (past the recording) both alone, through the Stretch copies, and with the synthesised engine taking over, an unmarked recording finding its idle and rpm, grain seams no steeper (relative to the level) than 1.5 times the recording's own steepest step, and a looped `[[sample]]` whose crossfaded seam stays within 1.5 times a sine's own steepest step where a hard loop jumps, with its trims and fades holding. The road surfaces' tests cover asphalt mixing bit for bit as a road without `surface`, gravel's grains coming four times as often at four times the speed (a unit test in `src/shot/surface.rs`), the cobbles' thump period matching spacing / speed within 3 % at two spacings, and the same surfaces and seed giving the same samples (and another seed others).
+No audio device: tests drive the `Mixer` directly. They cover the volume product, mute, the ramp step size, the loop seam, crossfade power, the ducking envelope's timing and block-size independence, pitch and rate ramps without clicks, aliasing at 2x and 4x, the voice cap, stealing and seeded jitter (and a 10,000-hit burst), the soft limiter, the tone's frequency within 0.1 %, tone sounds sharing the cap, stealing order and jitter, a frame-offset start matching a block-edge start bit for bit, a golden hash of a seeded mix of sine tones and jittered cubic hits, PCM streams (pushed frames out unchanged after the ramp, the block size not mattering, underrun and resume without a step, finish and drop, the capacity; `crates/sound/tests/pcm.rs`), noise (seeded, bounded, white flat and pink -3 dB an octave), envelopes (exact linear stages, exponential landing, release from any level, no step at start or stop, delayed starts, `SoundSpec`; `crates/sound/tests/noise_envelope.rs`), the filters' -3 dB at their cutoff, drive off bit for bit, the three curves pinned by a hash, a compensated drive keeping a quiet tone's level, scheduled glides matching the plain call made at the same frame bit for bit (and leaving the frames before it alone), and a 1 s sine fixture (`crates/sound/tests/fixtures/sine.ogg`, made with the pinned ffmpeg's libvorbis; `sine.wav` is that ffmpeg's own decode of it) decoded within 0.001 of its twin. The voice effects' tests cover the crusher's bit-depth steps and sample-and-hold runs, the chorus's seed (the same seed the same samples, another seed others), the vocoder singing at the carrier's harmonics and falling silent with the voice, the segmentation finding synthesised bursts between silences (with and without onsets) and onsets splitting a run that steps up without a gap, and the grain helpers' lengths, seeded order and a repitch landing on the moved pitch. The media reader's tests (feature `media`) cut, resample and shape a WAV to its spec, decode an AAC tone in MP4 to its exact length and at its track's gain, and refuse Ogg, FLAC and DTS by name. The crate's own tests turn `vorbis`, `voicefx`, `shot` and `media` on through a self dev-dependency, so the workspace gate runs them. The shot mix's tests (`crates/sound/tests/shot.rs`, feature `shot`) cover the mix's exact length for a frame count and rate, the same script giving the same samples (and another seed others), and the engine's cycle following its rpm curve (the autocorrelation's period within 2 % of 120 / rpm seconds at 2,000 and 5,000 rpm). The recorded engine's tests generate their recording in the test (a four-cylinder pulse train with uneven cylinders and a little seeded noise: an idle at 900 rpm, a rise, a rev held at 3,000 and a fall; no third-party sample) and cover its exact length, the same seed giving the same samples (and another seed others), its firing period following an rpm curve within 3 % at 900, 2,000, 3,000 and 5,500 rpm (past the recording) both alone, through the Stretch copies, and with the synthesised engine taking over, an unmarked recording finding its idle and rpm, grain seams no steeper (relative to the level) than 1.5 times the recording's own steepest step, and a looped `[[sample]]` whose crossfaded seam stays within 1.5 times a sine's own steepest step where a hard loop jumps, with its trims and fades holding. The road surfaces' tests cover asphalt mixing bit for bit as a road without `surface`, gravel's grains coming four times as often at four times the speed (a unit test in `src/shot/surface.rs`), the cobbles' thump period matching spacing / speed within 3 % at two spacings, and the same surfaces and seed giving the same samples (and another seed others). The adaptive music's tests (`src/adaptive.rs`, `src/manifest.rs`) cover the stem curves (equal power across a crossing pair) and kira's easings, stems crossing by an eased intensity, two stems of opposite sign summing to exact silence through intensity ramps, beat jumps and crossfades in odd block sizes (sample-exact sync), a section change taken exactly at its beat, bar or end, sections flowing to their next and stopping, the seeded variant pick (the same seed the same picks, another seed others, `avoid_repeat` never twice), the block size not changing a sample, mismatched stems and sections refused, a golden hash of eight stems through a seeded intensity ramp with two section changes (bit-exact on every platform), and the `[music]` table loading from a `.pitofx` built in the test with its stems as chunks, with its errors naming the table and key. `crates/sound/tests/peak.rs` checks the true-peak meter against the true peaks of quarter-rate tones at 0, 45, 60 and 67.5 degrees, a +3 dBTP tone whose samples sit at full scale, tones at 1, 9.6 and 17 kHz and a click (within -0.4 and +0.4 dB, the EBU Tech 3341 window widened by the Annex 2 filter's 0.2 dB over-read near the top of the band) and against the ebur128 crate on the same signals, and that a generated mix at +2.6 dBTP masters to -1 dBTP with nothing over it while a quiet tone stays bit for bit.

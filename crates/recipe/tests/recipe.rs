@@ -278,11 +278,11 @@ fn parse_errors_name_the_key_the_line_and_what_was_expected() {
     let cases: &[(&str, &str)] = &[
         (
             "unknown_key",
-            "line 8: object[a].colour: unknown key `colour` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lod, size, size_px, keys, interp, constraint",
+            "line 8: object[a].colour: unknown key `colour` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lod, bake_layers, size, size_px, keys, interp, constraint",
         ),
         (
             "wrong_kind_key",
-            "line 8: object[a].radius: unknown key `radius` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lod, size, size_px, keys, interp, constraint",
+            "line 8: object[a].radius: unknown key `radius` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lod, bake_layers, size, size_px, keys, interp, constraint",
         ),
         (
             "unknown_top",
@@ -314,7 +314,7 @@ fn parse_errors_name_the_key_the_line_and_what_was_expected() {
         ),
         (
             "unknown_kind",
-            "line 6: object[a].kind: expected one of \"box\", \"cylinder\", \"sphere\", \"plane\", \"disc\", \"torus\", \"capsule\", \"outline\", \"pocket\", \"lathe\", \"sweep\", \"mesh\", \"generator\", \"library\", \"card\", \"text\", found \"cube\"",
+            "line 6: object[a].kind: expected one of \"box\", \"cylinder\", \"sphere\", \"plane\", \"disc\", \"torus\", \"capsule\", \"outline\", \"pocket\", \"lathe\", \"sweep\", \"mesh\", \"generator\", \"library\", \"card\", \"text\", \"empty\", found \"cube\"",
         ),
         (
             "bad_choice",
@@ -428,10 +428,6 @@ fn validation_problems_name_the_key_and_the_line() {
             &["line 10: camera[flat].shift: `shift` is only for perspective cameras"],
         ),
         (
-            "v_five_lights",
-            &["line 24: light[l4]: the engine takes 4 point lights at most, found 5"],
-        ),
-        (
             "v_drop_no_match",
             &[
                 "line 10: variant.bare.drop: `slat*` matches no object, expected a name or a glob that matches at least one",
@@ -507,6 +503,40 @@ fn validation_problems_name_the_key_and_the_line() {
             assert!(line.starts_with(wanted), "{name}: {line}");
         }
     }
+}
+
+fn with_lights(count: usize) -> String {
+    let mut text = String::from("recipe = 1\nname = \"t\"\n");
+    for k in 0..count {
+        let kind = if k % 2 == 0 { "" } else { "kind = \"spot\"\n" };
+        text.push_str(&format!(
+            "\n[[light]]\nname = \"l{k}\"\n{kind}position = [{}.0, 3.0, 0.0]\nintensity = 1.0\n",
+            k
+        ));
+    }
+    text
+}
+
+#[test]
+fn a_recipe_takes_as_many_lights_as_the_live_renderer_draws_and_refuses_more_in_one_line() {
+    for count in [5, 128, pfx_recipe::MAX_LIGHTS] {
+        let recipe = pfx_recipe::parse(&with_lights(count)).unwrap();
+        assert_eq!(recipe.lights.len(), count);
+        assert!(validate(&recipe).is_empty(), "{count} lights");
+    }
+    let over = pfx_recipe::MAX_LIGHTS + 3;
+    let found: Vec<String> = validate(&pfx_recipe::parse(&with_lights(over)).unwrap())
+        .iter()
+        .map(Problem::to_string)
+        .collect();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(
+        found[0].ends_with(&format!(
+            "light[l1028]: the engine draws 1028 local lights at most, found {over}"
+        )),
+        "{}",
+        found[0]
+    );
 }
 
 #[test]

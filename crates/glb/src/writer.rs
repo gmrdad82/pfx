@@ -1,6 +1,6 @@
 use crate::{
-    ANIMATION, Animation, Error, Image, Lens, Lod, Look, Looks, Map, Mime, Node, Order, Sampler,
-    Track, Trs,
+    ANIMATION, Animation, Coverage, Error, Image, Lens, Lod, Look, Looks, Map, Mime, Node, Order,
+    Sampler, Track, Trs,
 };
 use gltf_json as json;
 use json::accessor::{ComponentType, GenericComponentType, Type};
@@ -237,21 +237,37 @@ impl Builder<'_> {
         Index::new(at as u32)
     }
 
+    fn transform(&mut self, map: &Map) -> Option<json::extensions::texture::TextureTransform> {
+        map.transform.map(|t| {
+            self.uses(TRANSFORM);
+            json::extensions::texture::TextureTransform {
+                offset: json::extensions::texture::TextureTransformOffset(t.offset),
+                rotation: json::extensions::texture::TextureTransformRotation(t.rotation),
+                scale: json::extensions::texture::TextureTransformScale(t.scale),
+                tex_coord: t.tex_coord,
+                extras: Default::default(),
+            }
+        })
+    }
+
+    fn transform_others(&mut self, map: &Map) -> serde_json::Map<String, serde_json::Value> {
+        let mut others = serde_json::Map::new();
+        if let Some(t) = self.transform(map)
+            && let Ok(value) = serde_json::to_value(t)
+        {
+            others.insert(TRANSFORM.into(), value);
+        }
+        others
+    }
+
     fn info(&mut self, map: &Map) -> json::texture::Info {
         let index = self.texture(map);
-        let extensions = map.transform.map(|t| {
-            self.uses(TRANSFORM);
-            json::extensions::texture::Info {
-                texture_transform: Some(json::extensions::texture::TextureTransform {
-                    offset: json::extensions::texture::TextureTransformOffset(t.offset),
-                    rotation: json::extensions::texture::TextureTransformRotation(t.rotation),
-                    scale: json::extensions::texture::TextureTransformScale(t.scale),
-                    tex_coord: t.tex_coord,
-                    extras: Default::default(),
-                }),
+        let extensions = self
+            .transform(map)
+            .map(|t| json::extensions::texture::Info {
+                texture_transform: Some(t),
                 others: Default::default(),
-            }
-        });
+            });
         json::texture::Info {
             index,
             tex_coord: map.tex_coord,
@@ -298,7 +314,12 @@ impl Builder<'_> {
             index: self.texture(m),
             scale: m.scale,
             tex_coord: m.tex_coord,
-            extensions: None,
+            extensions: m
+                .transform
+                .is_some()
+                .then(|| json::extensions::material::NormalTexture {
+                    others: self.transform_others(m),
+                }),
             extras: Default::default(),
         });
         let occlusion = look
@@ -308,7 +329,11 @@ impl Builder<'_> {
                 index: self.texture(m),
                 strength: json::material::StrengthFactor(m.scale),
                 tex_coord: m.tex_coord,
-                extensions: None,
+                extensions: m.transform.is_some().then(|| {
+                    json::extensions::material::OcclusionTexture {
+                        others: self.transform_others(m),
+                    }
+                }),
                 extras: Default::default(),
             });
         let extras = look.detail_normal.as_ref().and_then(|m| {
@@ -322,9 +347,25 @@ impl Builder<'_> {
             look.base_color
                 .unwrap_or(if base.is_some() { [1.0; 4] } else { BASE_COLOR });
         let fallback = |mapped_value: f32, plain: f32| if mapped { mapped_value } else { plain };
+        let (alpha_mode, alpha_cutoff) = match look.coverage {
+            Some(Coverage::Mask(cutoff)) => (
+                json::material::AlphaMode::Mask,
+                Some(json::material::AlphaCutoff(cutoff)),
+            ),
+            Some(Coverage::Blend) => (json::material::AlphaMode::Blend, None),
+            None => match look.alpha_cutoff {
+                Some(cutoff) => (
+                    json::material::AlphaMode::Mask,
+                    Some(json::material::AlphaCutoff(cutoff)),
+                ),
+                None => (json::material::AlphaMode::Opaque, None),
+            },
+        };
         json::Material {
             double_sided: true,
             name: Some(name.to_string()),
+            alpha_mode: json::validation::Checked::Valid(alpha_mode),
+            alpha_cutoff,
             pbr_metallic_roughness: json::material::PbrMetallicRoughness {
                 base_color_factor: json::material::PbrBaseColorFactor(base_color),
                 base_color_texture: base,
@@ -342,11 +383,6 @@ impl Builder<'_> {
             emissive_factor: json::material::EmissiveFactor(look.emission.unwrap_or([0.0; 3])),
             extensions: self.lobes(look),
             extras,
-            alpha_mode: Checked::Valid(match look.alpha_cutoff {
-                Some(_) => json::material::AlphaMode::Mask,
-                None => json::material::AlphaMode::Opaque,
-            }),
-            alpha_cutoff: look.alpha_cutoff.map(json::material::AlphaCutoff),
             ..Default::default()
         }
     }
@@ -916,24 +952,34 @@ fn animate(
                 track.node
             )));
         };
-        let translations: Vec<[f32; 3]> = track
-            .keys
+        let keyed = (!track.between.is_empty()).then(|| track.keyed(animation.fps));
+        let keys: Vec<Trs> = match &keyed {
+            Some(keyed) => keyed.iter().map(|(_, k)| *k).collect(),
+            None => track.keys.clone(),
+        };
+        let own = match &keyed {
+            Some(keyed) => {
+                let times: Vec<[f32; 1]> = keyed.iter().map(|(t, _)| [*t as f32]).collect();
+                Some(builder.keyed(&times))
+            }
+            None => None,
+        };
+        let translations: Vec<[f32; 3]> = keys
             .iter()
             .map(|k| k.translation.map(|v| v as f32))
             .collect();
-        let turns = rotations(&track.keys);
-        let scales: Vec<[f32; 3]> = track
-            .keys
-            .iter()
-            .map(|k| k.scale.map(|v| v as f32))
-            .collect();
+        let turns = rotations(&keys);
+        let scales: Vec<[f32; 3]> = keys.iter().map(|k| k.scale.map(|v| v as f32)).collect();
         let mut channel = |builder: &mut Builder, output, path| {
-            let times = *input.get_or_insert_with(|| {
-                let times: Vec<[f32; 1]> = (0..count)
-                    .map(|n| [(n as f64 / f64::from(animation.fps)) as f32])
-                    .collect();
-                builder.keyed(&times)
-            });
+            let times = match own {
+                Some(times) => times,
+                None => *input.get_or_insert_with(|| {
+                    let times: Vec<[f32; 1]> = (0..count)
+                        .map(|n| [(n as f64 / f64::from(animation.fps)) as f32])
+                        .collect();
+                    builder.keyed(&times)
+                }),
+            };
             samplers.push(json::animation::Sampler {
                 extensions: None,
                 extras: Default::default(),

@@ -42,9 +42,15 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 
 ## Cycles, under the Apache License 2.0
 
-`crates/trace/src/sobol.rs` and `crates/trace/src/sobol.wgsl` (in the package `pfx-trace`) are a port of Cycles' tabulated Sobol sampler (https://github.com/blender/cycles, tag `v5.2.0`, commit `3b97e190c5ff1a2ed2160d879ad5bf95bea7b8ba`), SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0. Its text ships in [crates/trace/LICENSE-APACHE](crates/trace/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Cycles. The port is a translation into Rust and WGSL, changed by pfx's authors: the 4D table generator after Helmer, Christensen and Kensler's "Stochastic Generation of (t, s) Sample Sequences" with its xor tables (`scene/tabulated_sobol.cpp`), the shuffled lookup (`kernel/sample/tabulated_sobol.h`), the Owen scramble (`kernel/sample/util.h`), the hashes (`util/hash.h`), the per-pixel seed and the table sizes (`kernel/sample/pattern.h`, `kernel/types.h`, `scene/integrator.cpp`). `crates/trace/src/levels.rs` and the instance traversal in `crates/trace/src/trace.wgsl` port, from the same tag, Cycles' BVH2 instance traversal (`kernel/bvh/traversal.h`, its `ENTRYPOINT_SENTINEL`) and its instance push and pop (`kernel/geom/object.h`), translated to Rust and WGSL and changed by pfx's authors.
+`crates/trace/src/sobol.rs` and `crates/trace/src/sobol.wgsl` (in the package `pfx-trace`) are a port of Cycles' tabulated Sobol sampler (https://github.com/blender/cycles, tag `v5.2.0`, commit `3b97e190c5ff1a2ed2160d879ad5bf95bea7b8ba`), SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0. Its text ships in [crates/trace/LICENSE-APACHE](crates/trace/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Cycles. The port is a translation into Rust and WGSL, changed by pfx's authors: the 4D table generator after Helmer, Christensen and Kensler's "Stochastic Generation of (t, s) Sample Sequences" with its xor tables (`scene/tabulated_sobol.cpp`), the shuffled lookup (`kernel/sample/tabulated_sobol.h`), the Owen scramble (`kernel/sample/util.h`), the hashes (`util/hash.h`), the per-pixel seed and the table sizes (`kernel/sample/pattern.h`, `kernel/types.h`, `scene/integrator.cpp`). `crates/trace/src/levels.rs` and the instance traversal in `crates/trace/src/trace.wgsl` port, from the same tag, Cycles' BVH2 instance traversal (`kernel/bvh/traversal.h`, its `ENTRYPOINT_SENTINEL`) and its instance push and pop (`kernel/geom/object.h`), translated to Rust and WGSL and changed by pfx's authors. `crates/trace/src/tree.rs` and the light tree functions in `crates/trace/src/lights.wgsl` port, from the same tag, Cycles' many-light tree (`scene/light_tree.cpp`, `scene/light_tree.h`, `kernel/light/tree.h`, and the point and spot terms of `kernel/light/point.h` and `kernel/light/spot.h`), after Conty Estevez and Kulla's "Importance Sampling of Many Lights with Adaptive Tree Splitting", translated to Rust and WGSL and changed by pfx's authors.
 
 `voronoi_edge2` in `crates/materials/src/pavement.rs` and `crates/materials/src/wgsl/noise.wgsl` (in the package `pfx-materials`) is a port, from the same tag, of Cycles' two-dimensional Voronoi distance to edge (`voronoi_distance_to_edge` for `float2` in `kernel/svm/voronoi.h`), SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0, whose text ships in [crates/materials/LICENSE-APACHE](crates/materials/LICENSE-APACHE). It is translated to Rust and WGSL and changed by pfx's authors: the feature points come from pfx's own `hash2` in place of Cycles' `hash_int2_to_float2`, and the search keeps Cycles' two passes over the 3 × 3 neighbourhood.
+
+`crates/materials/src/flakes.rs` and `crates/materials/src/wgsl/flakes.wgsl` (in the package `pfx-materials`) port Cycles' 3D Voronoi F1 (`src/kernel/svm/voronoi.h`, `voronoi_f1` with the Euclidean metric) and its PCG hash (`hash_pcg3d_i` and `hash_int3_to_float3` in `src/util/hash.h`, after Jarzynski and Olano, "Hash Functions for GPU Rendering", JCGT 2020) from the same tag and commit, SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0. Its text ships in [crates/materials/LICENSE-APACHE](crates/materials/LICENSE-APACHE). The port is a translation into Rust and WGSL, changed by pfx's authors: the cell search, the hash and its constants are kept; the flake layer built on the cells (which cells are flakes, their tilt and their lobe under the coat) is pfx's.
+
+## pbrt-v4, under the Apache License 2.0
+
+`thin_dielectric` in `crates/materials/src/brdf.rs` and `crates/materials/src/wgsl/film.wgsl` (in the package `pfx-materials`), and the thin-walled transmission that `crates/trace/src/trace.wgsl` (`pfx-trace`) and `crates/live/src/glass.rs` (`pfx-live`) draw with it, are a port of pbrt-v4's `ThinDielectricBxDF` (https://github.com/mmp/pbrt-v4, commit `b4ce9687e6c695f5582997c61b0c66cf064bdb4a`, `src/pbrt/bxdfs.h`), pbrt is Copyright(c) 1998-2020 Matt Pharr, Wenzel Jakob, and Greg Humphreys, licensed under the Apache License 2.0. Its text ships in [crates/materials/LICENSE-APACHE](crates/materials/LICENSE-APACHE); the packages are MIT like the rest of pfx, and this notice and that licence go with the parts ported from pbrt-v4. The port is a translation into Rust and WGSL, changed by pfx's authors: the slab's reflectance `R + T²R / (1 − R²)` and its straight transmission are kept; the choice between them in the tracer's own sampler, the colour channels and the live glass pass's use of it are pfx's.
 
 ## Filament, under the Apache License 2.0
 
@@ -54,7 +60,7 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 
 ## kira, under the MIT licence
 
-`hermite` in `crates/sound/src/interp.rs` (in the package `pfx-sound`), the 4-point, 3rd-order Hermite behind `Resample::Cubic`, is ported from kira's `interpolate_frame` (https://github.com/tesselode/kira, `crates/kira/src/frame.rs`, commit `74b3ef0fd8bd15f90e3b469208ee741f04374a62`), and `Drive` in `crates/sound/src/drive.rs` (the soft and hard clip curves, the drive gain with its division back out, and the equal-power dry and wet blend) from kira's `Distortion` effect (`crates/kira/src/effect/distortion.rs`, the same commit), and `gains` in `crates/film/src/duck.rs` (in the package `pfx-film`; the dB level, the amount over the threshold and its envelope follower with its attack and release speeds) from kira's `Compressor` effect (`crates/kira/src/effect/compressor.rs`, the same commit), Copyright 2021 Andrew Minnich, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+`hermite` in `crates/sound/src/interp.rs` (in the package `pfx-sound`), the 4-point, 3rd-order Hermite behind `Resample::Cubic`, is ported from kira's `interpolate_frame` (https://github.com/tesselode/kira, `crates/kira/src/frame.rs`, commit `74b3ef0fd8bd15f90e3b469208ee741f04374a62`), and `Drive` in `crates/sound/src/drive.rs` (the soft and hard clip curves, the drive gain with its division back out, and the equal-power dry and wet blend) from kira's `Distortion` effect (`crates/kira/src/effect/distortion.rs`, the same commit), and `gains` in `crates/film/src/duck.rs` (in the package `pfx-film`; the dB level, the amount over the threshold and its envelope follower with its attack and release speeds) from kira's `Compressor` effect (`crates/kira/src/effect/compressor.rs`, the same commit), and `Ease` in `crates/sound/src/adaptive.rs` (in the package `pfx-sound`; the integer power easings and their in-out split) from kira's tween `Easing` (`crates/kira/src/tween.rs`, the same commit), Copyright 2021 Andrew Minnich, licensed MIT OR Apache-2.0 and used here under the MIT licence:
 
 > Copyright 2021 Andrew Minnich
 >
@@ -87,6 +93,34 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 > The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## etagere, under the MIT licence
+
+`Shelves` and `pack` in `crates/film/src/reel/pack.rs` (in the package `pfx-film`), the film image atlas's packer, are ported from etagere's `AtlasAllocator` (https://github.com/nical/etagere, `src/allocator.rs`, version 0.3.0, commit `2a178998597191e45631ea5f35d712352e15b0ef`): the atlas as one full-height empty shelf, the choice of the shortest shelf that fits with its bad-fit threshold of one and a half times the height, an empty shelf split vertically above 8 pixels to spare and a free span split horizontally above 8, and `shelf_height`'s rounding of heights to 8, 16, 32 or 64. Copyright (c) 2020 Nicolas Silva, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+
+> Copyright (c) 2020 Nicolas Silva
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Signalsmith Basics, under the MIT licence
+
+`Limiter` in `crates/sound/src/peak.rs` (in the package `pfx-sound`), the lookahead true-peak limiter, is ported from Signalsmith Basics' limiter (https://github.com/Signalsmith-Audio/basics, `include/signalsmith-basics/limiter.h`, tag `1.1.0`, commit `c70d0d9f3cb28a3391a5b67281c7f9fc2e914f87`): the gain that clips each sample to the limit, its moving minimum over the attack and hold, the exponential release with its ln 2 / (release + ln 2) slew held under the moving minimum, the box filter over the attack and the audio delayed by the attack. Copyright 2022-2025 Signalsmith Audio / Geraint Luff, licensed MIT:
+
+> Copyright 2022-2025 Signalsmith Audio / Geraint Luff
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## ebur128, under the MIT licence
+
+`local_peaks`, `true_peak` and `oversampled` in `crates/sound/src/peak.rs` (in the package `pfx-sound`) follow the true-peak scanner of the ebur128 crate (https://github.com/sdroege/ebur128, `src/true_peak.rs` and `src/interp.rs`, version 0.1.10, commit `ef08d2b84d6b042dbe6dd25f4e7074de4787a27e`), itself a port of libebur128: each channel's history run through every phase of a 48-tap, 4-phase polyphase interpolator per input frame, the rectified maximum kept, and 4x oversampling below 96 kHz. The filter's taps are not ebur128's windowed sinc but the 48 coefficients of ITU-R BS.1770-4, Annex 2. The crate is also a test-only dependency of pfx-sound, the reference its meter is checked against. Copyright (c) 2011 Jan Kokemüller, Copyright (c) 2020 Sebastian Dröge, licensed MIT; its licence text ships verbatim, with its author's address, as `crates/sound/LICENSE-ebur128.md` in the source and next to this file in every release.
 
 ## mda VST plug-ins, under the MIT licence
 
@@ -721,6 +755,10 @@ CPython is under the Python Software Foundation License Version 2, as section B 
 > 8. By copying, installing or otherwise using Python, Licensee
 > agrees to be bound by the terms and conditions of this License
 > Agreement.
+
+## Rapier, under the Apache License 2.0
+
+The sprung vehicle body in `crates/motion/src/vehicle.rs` (in the package `pfx-motion`) follows the structure of Rapier's `DynamicRayCastVehicleController` (https://github.com/dimforge/rapier, 0.36.0, commit `b716d375efc0201003f0cd9ef7168eee0b62c177`, `src/control/ray_cast_vehicle_controller.rs`, after Bullet's `btRaycastVehicle`), licensed under the Apache License 2.0: a spring and a damper at each wheel whose force on the chassis is never below 0. No code is copied: the body, its units and its constants are pfx's own, so no licence text of Rapier ships with it.
 
 ## fast_poisson and Rand, under the MIT licence
 

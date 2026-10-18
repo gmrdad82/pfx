@@ -18,6 +18,7 @@ pub mod sobol;
 pub mod stage;
 pub mod text;
 pub mod textured;
+pub mod tree;
 pub const TRACE_WGSL: &str = include_str!("trace.wgsl");
 pub const TEXTURED_WGSL: &str = include_str!("textured.wgsl");
 

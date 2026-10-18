@@ -1,6 +1,7 @@
 #[cfg(feature = "video")]
 mod clip;
 pub mod footage;
+pub mod pack;
 pub mod paint;
 pub mod wav;
 
@@ -27,6 +28,8 @@ pub const SIZE: [u32; 2] = [1920, 1080];
 pub const MOST_FPS: u32 = 240;
 pub const SIDES: [u32; 2] = [16, 16_384];
 pub const LOUDEST: f32 = 4.0;
+pub const MOST_BLUR: f32 = 400.0;
+const SILENT_SCORE: &str = "limiter = 1.0\nmaster = 1.0\nrecipe = {}\n";
 const BLACK: Srgba = Srgba([0.0, 0.0, 0.0, 1.0]);
 
 #[derive(Clone, Debug, PartialEq)]
@@ -41,6 +44,31 @@ pub struct Image {
     pub height: Option<f32>,
     #[serde(default)]
     pub fit: Fit,
+    pub from: Option<f64>,
+    pub radius: Option<f32>,
+    pub shadow: Option<DropShadow>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DropShadow {
+    #[serde(default)]
+    pub offset: [f32; 2],
+    #[serde(default)]
+    pub blur: f32,
+    #[serde(default = "half")]
+    pub alpha: f32,
+}
+
+fn half() -> f32 {
+    0.5
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Playing {
+    pub path: PathBuf,
+    pub from: f64,
+    pub at: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -48,6 +76,10 @@ pub struct Shown {
     pub centre: [f32; 2],
     pub size: [f32; 2],
     pub uv: [f32; 4],
+    pub radius: f32,
+    pub shadow: Option<DropShadow>,
+    pub clip: Option<Playing>,
+    pub page: usize,
 }
 
 impl Drawn for Shown {
@@ -145,19 +177,50 @@ impl Kinds for Reel {
     type Film = Setup;
     type Art = Image;
     type Drawn = Shown;
-    const ART: &'static [&'static str] = &["image"];
+    const ART: &'static [&'static str] = &["image", "clip"];
 
     fn check_art(art: &crate::art::Art<Image>) -> Result<(), String> {
         let crate::art::What::App(image) = &art.what else {
             return Ok(());
         };
+        let what = image.kind.as_str();
         let side =
             |v: Option<f32>| v.is_none_or(|v| v.is_finite() && v > 0.0 && v <= SIDES[1] as f32);
         if !(side(image.width) && side(image.height)) {
             return Err(format!(
-                "an image's width and height are in (0, {}]",
+                "an {what}'s width and height are in (0, {}]",
                 SIDES[1]
             ));
+        }
+        match image.from {
+            Some(_) if what != "clip" => {
+                return Err("from is a clip art's start in its video; an image has none".into());
+            }
+            Some(f) if !(f.is_finite() && f >= 0.0) => {
+                return Err("a clip art's from is 0 or more seconds into its video".into());
+            }
+            _ => {}
+        }
+        if image
+            .radius
+            .is_some_and(|r| !(r.is_finite() && (0.0..=SIDES[1] as f32).contains(&r)))
+        {
+            return Err(format!("an {what}'s radius is in [0, {}]", SIDES[1]));
+        }
+        if let Some(d) = image.shadow {
+            let finite = d
+                .offset
+                .iter()
+                .all(|v| v.is_finite() && v.abs() <= SIDES[1] as f32);
+            if !(finite
+                && d.blur.is_finite()
+                && (0.0..=MOST_BLUR).contains(&d.blur)
+                && (0.0..=1.0).contains(&d.alpha))
+            {
+                return Err(format!(
+                    "an {what}'s shadow is an offset in layout units, a blur in [0, {MOST_BLUR}] and an alpha in [0, 1]"
+                ));
+            }
         }
         Ok(())
     }
@@ -219,11 +282,13 @@ impl Kinds for Reel {
 pub struct Slot {
     pub uv: [f32; 4],
     pub size: [u32; 2],
+    pub page: usize,
 }
 
 #[derive(Default)]
 pub struct Words {
     pub images: HashMap<String, Slot>,
+    pub clips: HashMap<String, (PathBuf, [u32; 2])>,
 }
 
 pub fn posed(image: &Image, slot: Slot, centre: [f32; 2]) -> Shown {
@@ -258,7 +323,15 @@ pub fn posed(image: &Image, slot: Slot, centre: [f32; 2]) -> Shown {
         }
         (_, None) => (boxed, slot.uv),
     };
-    Shown { centre, size, uv }
+    Shown {
+        centre,
+        size,
+        uv,
+        radius: image.radius.unwrap_or(0.0),
+        shadow: image.shadow,
+        clip: None,
+        page: slot.page,
+    }
 }
 
 impl Cast<Reel> for Words {
@@ -267,6 +340,22 @@ impl Cast<Reel> for Words {
     }
 
     fn pose(&self, art: &Image, posed_at: Posed) -> Option<(Shown, f32)> {
+        if art.kind == "clip" {
+            let (path, size) = self.clips.get(&art.file)?;
+            let slot = Slot {
+                uv: [0.0, 0.0, 1.0, 1.0],
+                size: *size,
+                page: 0,
+            };
+            let mut shown = posed(art, slot, posed_at.centre);
+            let from = art.from.unwrap_or(0.0);
+            shown.clip = Some(Playing {
+                path: path.clone(),
+                from,
+                at: from + posed_at.age.max(0.0),
+            });
+            return Some((shown, 1.0));
+        }
         let slot = *self.images.get(&art.file)?;
         Some((posed(art, slot, posed_at.centre), 1.0))
     }
@@ -274,52 +363,92 @@ impl Cast<Reel> for Words {
 
 const GUTTER: u32 = 2;
 const ATLAS_SIDE: u32 = 8192;
+const MOST_PAGES: usize = 4;
 
-pub struct Atlas {
+pub struct Page {
     pub size: [u32; 2],
     pub rgba: Vec<u8>,
+}
+
+pub struct Atlas {
+    pub pages: Vec<Page>,
     pub slots: HashMap<String, Slot>,
 }
 
 pub fn atlas(images: &[(String, [u32; 2], Vec<u8>)]) -> Result<Option<Atlas>, String> {
+    atlas_in(images, ATLAS_SIDE, MOST_PAGES)
+}
+
+pub fn atlas_in(
+    images: &[(String, [u32; 2], Vec<u8>)],
+    side: u32,
+    most_pages: usize,
+) -> Result<Option<Atlas>, String> {
     if images.is_empty() {
         return Ok(None);
     }
-    let width = images.iter().map(|(_, s, _)| s[0]).max().unwrap_or(1) + GUTTER * 2;
-    let height: u32 = images.iter().map(|(_, s, _)| s[1] + GUTTER * 2).sum();
-    if width > ATLAS_SIDE || height > ATLAS_SIDE {
-        return Err(format!(
-            "the film's images need a {width}x{height} atlas; together they fit in {ATLAS_SIDE}x{ATLAS_SIDE}"
-        ));
+    let boxes: Vec<[u32; 2]> = images
+        .iter()
+        .map(|(_, [w, h], _)| [w + GUTTER * 2, h + GUTTER * 2])
+        .collect();
+    let placed = pack::pack(&boxes, side, most_pages).map_err(|i| {
+        let (name, [w, h], _) = &images[i];
+        let most = side - GUTTER * 2;
+        if *w > most || *h > most {
+            format!("the image '{name}' is {w}x{h}; a film's image is at most {most}x{most}")
+        } else {
+            format!(
+                "the image '{name}' ({w}x{h}) does not fit: the film's {} images fill {most_pages} atlas pages of {side}x{side}",
+                images.len()
+            )
+        }
+    })?;
+    let count = placed.iter().map(|p| p.page + 1).max().unwrap_or(1);
+    let mut sizes = vec![[1u32; 2]; count];
+    for (p, b) in placed.iter().zip(&boxes) {
+        let size = &mut sizes[p.page];
+        size[0] = size[0].max(p.at[0] + b[0]);
+        size[1] = size[1].max(p.at[1] + b[1]);
     }
-    let mut rgba = vec![0u8; (width * height * 4) as usize];
+    let mut pages: Vec<Page> = sizes
+        .iter()
+        .map(|size| Page {
+            size: *size,
+            rgba: vec![0u8; (size[0] * size[1] * 4) as usize],
+        })
+        .collect();
     let mut slots = HashMap::new();
-    let mut top = 0u32;
-    for (name, [w, h], pixels) in images {
+    for ((name, [w, h], pixels), p) in images.iter().zip(&placed) {
         let (w, h) = (*w, *h);
+        let page = &mut pages[p.page];
+        let width = page.size[0];
+        let [left, top] = p.at;
         for y in 0..h + GUTTER * 2 {
             let sy = y.saturating_sub(GUTTER).min(h - 1);
             for x in 0..w + GUTTER * 2 {
                 let sx = x.saturating_sub(GUTTER).min(w - 1);
                 let from = ((sy * w + sx) * 4) as usize;
-                let to = (((top + y) * width + x) * 4) as usize;
-                rgba[to..to + 4].copy_from_slice(&pixels[from..from + 4]);
+                let to = (((top + y) * width + left + x) * 4) as usize;
+                page.rgba[to..to + 4].copy_from_slice(&pixels[from..from + 4]);
             }
         }
+        let [pw, ph] = [page.size[0] as f32, page.size[1] as f32];
         let uv = [
-            GUTTER as f32 / width as f32,
-            (top + GUTTER) as f32 / height as f32,
-            (GUTTER + w) as f32 / width as f32,
-            (top + GUTTER + h) as f32 / height as f32,
+            (left + GUTTER) as f32 / pw,
+            (top + GUTTER) as f32 / ph,
+            (left + GUTTER + w) as f32 / pw,
+            (top + GUTTER + h) as f32 / ph,
         ];
-        slots.insert(name.clone(), Slot { uv, size: [w, h] });
-        top += h + GUTTER * 2;
+        slots.insert(
+            name.clone(),
+            Slot {
+                uv,
+                size: [w, h],
+                page: p.page,
+            },
+        );
     }
-    Ok(Some(Atlas {
-        size: [width, height],
-        rgba,
-        slots,
-    }))
+    Ok(Some(Atlas { pages, slots }))
 }
 
 #[derive(Clone, Debug)]
@@ -347,6 +476,7 @@ pub struct Roll {
     base: PathBuf,
     marks: Vec<(String, String)>,
     images: Vec<(String, [u32; 2], Vec<u8>)>,
+    clips: Vec<(String, [u32; 2])>,
     score: String,
     font: Option<Vec<u8>>,
 }
@@ -402,13 +532,18 @@ impl Roll {
                 Ok((name, size, rgba))
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let clips = art_files(&raw, "clip")
+            .into_iter()
+            .map(|name| Ok((name.clone(), clip_size(&base.join(&name))?)))
+            .collect::<Result<Vec<_>, String>>()
+            .map_err(at)?;
         let marks = art_files(&raw, "mark")
             .into_iter()
             .map(|name| Ok((name.clone(), read_text(&base.join(&name))?)))
             .collect::<Result<Vec<_>, String>>()?;
         let score = match film_path(&raw, "score") {
             Some(p) => read_text(&base.join(p))?,
-            None => String::new(),
+            None => SILENT_SCORE.to_string(),
         };
         let font = match film_path(&raw, "font") {
             Some(p) => {
@@ -434,6 +569,7 @@ impl Roll {
             base,
             marks,
             images,
+            clips,
             score,
             font,
         };
@@ -487,15 +623,17 @@ impl Roll {
     }
 
     pub fn plan(&self) -> Vec<Planned> {
+        let cuts = self.script.cuts(self.fps());
         self.script
             .scenes
             .iter()
-            .map(|scene| Planned {
+            .zip(cuts.windows(2))
+            .map(|(scene, cut)| Planned {
                 name: scene.name.clone(),
                 kind: scene.app.kind,
                 seconds: scene.seconds,
                 from: scene.from,
-                frames: crate::script::frames(scene.seconds, self.fps()),
+                frames: cut[1] - cut[0],
                 source: self.source(scene),
             })
             .collect()
@@ -537,6 +675,11 @@ impl Roll {
         let atlas = atlas(&self.images)?;
         let words = Words {
             images: atlas.as_ref().map(|a| a.slots.clone()).unwrap_or_default(),
+            clips: self
+                .clips
+                .iter()
+                .map(|(name, size)| (name.clone(), (self.base.join(name), *size)))
+                .collect(),
         };
         let painter = Painter::new(gpu, self.size(), icons, font, tick, seed, atlas)?;
         let mut player = Player {
@@ -626,6 +769,22 @@ fn clip(path: &Path, from: f64, track: usize) -> Result<Box<dyn Source>, String>
 #[cfg(not(feature = "video"))]
 fn clip(_path: &Path, _from: f64, _track: usize) -> Result<Box<dyn Source>, String> {
     Err("this build plays no clips (pfx-film's video feature is off)".into())
+}
+
+#[cfg(feature = "video")]
+fn clip_size(path: &Path) -> Result<[u32; 2], String> {
+    let probe = pito_codecs::media::probe(path, &pito_codecs::media::Prefs::default())
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(if probe.rotation % 180 == 90 {
+        [probe.height, probe.width]
+    } else {
+        [probe.width, probe.height]
+    })
+}
+
+#[cfg(not(feature = "video"))]
+fn clip_size(_path: &Path) -> Result<[u32; 2], String> {
+    Err("a clip art needs pfx-film's video feature, which this build lacks".into())
 }
 
 impl Show for Player<'_> {

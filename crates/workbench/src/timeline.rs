@@ -216,6 +216,7 @@ mod tests {
                 camera: None,
                 focus: None,
                 fov: None,
+                between: Vec::new(),
             },
             Track {
                 node: "camera.chase".into(),
@@ -227,6 +228,7 @@ mod tests {
                 }),
                 focus: None,
                 fov: None,
+                between: Vec::new(),
             },
         ];
         let posed = poses(&built, 1, 0.5);

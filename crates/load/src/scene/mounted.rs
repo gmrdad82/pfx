@@ -16,6 +16,24 @@ pub(super) fn mounted(project: &Project) -> Option<&Project> {
     project.pfx_path().map(|_| project)
 }
 
+pub(super) fn open_bytes(name: &Path, bytes: &[u8]) -> Result<Scene, SceneError> {
+    let root = PathBuf::new();
+    let project =
+        Project::from_pfx_bytes(name, bytes).map_err(|found| diagnostic(&root, &found))?;
+    let file = project.pfx_path().unwrap_or(name).to_path_buf();
+    let resolved = project
+        .scene(&file)
+        .map_err(|found| refused(&root, &found))?;
+    build::build_with(
+        &file,
+        &root,
+        &resolved,
+        None,
+        &BTreeMap::new(),
+        Some(&project),
+    )
+}
+
 pub(super) fn open(path: &Path, hour: Option<f64>) -> Result<Scene, SceneError> {
     let root = project_root(path);
     let project = Project::open_pfx(path).map_err(|found| diagnostic(&root, &found))?;
@@ -61,40 +79,70 @@ pub(super) fn read(
     let mount = mount?;
     let file = container(mount, root)?;
     if path == file {
-        return Some(whole(&file, files));
+        return Some(whole(mount, &file, files));
     }
-    let name = inner(root, path)?;
-    if !holds(mount, &name) {
-        return None;
-    }
+    let Some(name) = inner(root, path).filter(|name| holds(mount, name)) else {
+        return mount
+            .in_memory()
+            .then(|| Err(format!("{} is not in {}", path.display(), file.display())));
+    };
     Some(
         mount
             .asset(&name)
             .map(|bytes| bytes.into_owned())
             .map_err(|e| format!("cannot read {}: {e}", file.join(&name).display()))
             .and_then(|bytes| {
-                record(&file, files)?;
+                record(mount, &file, files)?;
                 Ok(bytes)
             }),
     )
 }
 
-fn whole(file: &Path, files: &mut BTreeMap<PathBuf, [u8; 32]>) -> Result<Vec<u8>, String> {
-    let bytes = std::fs::read(file).map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+fn whole(
+    mount: &Project,
+    file: &Path,
+    files: &mut BTreeMap<PathBuf, [u8; 32]>,
+) -> Result<Vec<u8>, String> {
+    let bytes = match mount.pfx_bytes().filter(|_| mount.in_memory()) {
+        Some(held) => held.to_vec(),
+        None => std::fs::read(file).map_err(|e| format!("cannot read {}: {e}", file.display()))?,
+    };
     files.insert(file.to_path_buf(), sha256(&bytes));
     Ok(bytes)
 }
 
-fn record(file: &Path, files: &mut BTreeMap<PathBuf, [u8; 32]>) -> Result<(), String> {
-    if !files.contains_key(file) {
-        whole(file, files)?;
+fn record(
+    mount: &Project,
+    file: &Path,
+    files: &mut BTreeMap<PathBuf, [u8; 32]>,
+) -> Result<(), String> {
+    if files.contains_key(file) {
+        return Ok(());
+    }
+    match mount.pfx_bytes().filter(|_| mount.in_memory()) {
+        Some(held) => {
+            files.insert(file.to_path_buf(), sha256(held));
+        }
+        None => {
+            whole(mount, file, files)?;
+        }
     }
     Ok(())
+}
+
+pub(super) fn is_file(mount: Option<&Project>, root: &Path, path: &Path) -> bool {
+    match mount.filter(|mount| mount.in_memory()) {
+        Some(mount) => inner(root, path).is_some_and(|name| holds(mount, &name)),
+        None => path.is_file(),
+    }
 }
 
 pub(super) fn text(mount: Option<&Project>, file: &Path) -> Option<Option<String>> {
     let mount = mount?;
     let name = file.to_str()?.replace('\\', "/");
+    if mount.in_memory() && !holds(mount, &name) {
+        return Some(None);
+    }
     holds(mount, &name).then(|| {
         mount
             .asset(&name)

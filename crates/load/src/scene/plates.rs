@@ -61,7 +61,7 @@ pub(super) fn build(
     let steps = [Step::Key("plates")];
     let dir = places.root.join(&plates.dir);
     let manifest_path = dir.join("manifest.json");
-    let manifest = if manifest_path.is_file() {
+    let manifest = if super::mounted::is_file(places.mount, &places.root, &manifest_path) {
         let bytes = reader
             .read(&manifest_path)
             .map_err(|message| places.refusal(holder, &steps, message))?;

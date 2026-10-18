@@ -40,7 +40,7 @@ pub(crate) fn animates(recipe: &Recipe) -> Vec<String> {
         .collect()
 }
 
-fn world_at(recipe: &Recipe, index: usize, time: f64) -> DMat4 {
+pub(crate) fn world_at(recipe: &Recipe, index: usize, time: f64) -> DMat4 {
     let mut matrix = DMat4::IDENTITY;
     let mut at = index;
     for _ in 0..=recipe.objects.len() {
@@ -75,6 +75,18 @@ fn owner<'a>(names: &'a [&'a str], node: &str) -> Option<&'a str> {
         .copied()
 }
 
+fn wheeled(b: &Bake, index: usize) -> bool {
+    let recipe = b.recipe;
+    let name = &recipe.objects[index].name;
+    let corner = format!("{name}.wheel_");
+    b.nodes.iter().any(|n| n.name.starts_with(&corner))
+        && !(0..recipe.objects.len()).any(|up| {
+            up != index
+                && keyed(recipe, &recipe.objects[up].name)
+                && super::follow::descends(recipe, index, up)
+        })
+}
+
 pub(crate) fn bake(b: &Bake) -> Result<Vec<Track>, String> {
     let recipe = b.recipe;
     let times: Vec<f64> = (0..=b.timeline.frames)
@@ -93,7 +105,46 @@ pub(crate) fn bake(b: &Bake) -> Result<Vec<Track>, String> {
                 );
             }
         }
+        let mut driven: BTreeSet<String> = BTreeSet::new();
+        for (index, object) in recipe.objects.iter().enumerate() {
+            if !keyed(recipe, &object.name) || !wheeled(b, index) {
+                continue;
+            }
+            let (poses, scales): (Vec<DMat4>, Vec<DVec3>) = worlds[object.name.as_str()]
+                .iter()
+                .map(|m| {
+                    let (scale, turn, at) = m.to_scale_rotation_translation();
+                    (
+                        DMat4::from_rotation_translation(turn.normalize(), at),
+                        scale,
+                    )
+                })
+                .unzip();
+            let drive = super::follow::keyed(&poses, b.timeline.step());
+            let subs = super::follow::subs(b, &object.name, false)?;
+            let made = super::follow::nodes(
+                &object.name,
+                super::follow::Motion {
+                    poses: &poses,
+                    scales: Some(&scales),
+                    scale: DVec3::ONE,
+                    drive: Some(&drive),
+                    step: b.timeline.step(),
+                },
+                (b.nodes, &subs),
+                b.facts.get(&object.name),
+            );
+            for track in made {
+                let moves = owner(&names, &track.node).is_some_and(|o| moving.contains(o));
+                if moves && driven.insert(track.node.clone()) {
+                    tracks.push(track);
+                }
+            }
+        }
         for node in b.nodes {
+            if driven.contains(&node.name) {
+                continue;
+            }
             let Some(world) = owner(&names, &node.name).and_then(|name| worlds.get(name)) else {
                 continue;
             };
@@ -103,6 +154,7 @@ pub(crate) fn bake(b: &Bake) -> Result<Vec<Track>, String> {
                 camera: None,
                 focus: None,
                 fov: None,
+                between: Vec::new(),
             });
         }
     }

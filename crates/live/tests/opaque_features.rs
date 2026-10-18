@@ -239,6 +239,7 @@ fn a_plain_scene_draws_the_same_bytes_with_its_unused_features_compiled_out() {
             "crinkle",
             "content_cutout",
             "film",
+            "flakes",
         ],
     );
 }
@@ -271,6 +272,7 @@ fn a_soft_sun_scene_with_detail_on_one_part_draws_the_same_bytes() {
             "crinkle",
             "content_cutout",
             "film",
+            "flakes",
         ],
     );
 }
@@ -303,6 +305,7 @@ fn an_unshadowed_scene_draws_the_same_bytes_without_the_sun_shadow() {
             "crinkle",
             "content_cutout",
             "film",
+            "flakes",
         ],
     );
 }

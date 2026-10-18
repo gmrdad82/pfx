@@ -1057,3 +1057,28 @@ fn the_runtime_collects_the_notices_of_a_games_modules_and_keeps_running() {
     assert!(run.driver.take_notices().is_empty());
     assert!(ran.ticks >= 20, "{ran:?}");
 }
+
+const ROOM: &[u8] = include_bytes!("../../load/tests/data/room.pitofx");
+
+struct Seen(Rc<RefCell<Vec<String>>>);
+
+impl Game for Seen {
+    fn start(&mut self, world: &mut World) {
+        let mut seen = self.0.borrow_mut();
+        seen.push(world.scene().path.display().to_string());
+        seen.extend(world.ids().map(|id| world.name(id).to_string()));
+    }
+}
+
+#[test]
+fn a_game_plays_a_scene_embedded_as_pitofx_bytes() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let config = Config::packed("room", "0.0.0", ROOM).device(Device::Desktop);
+    let mut run = Headless::new(Seen(seen.clone()), config, WINDOW).unwrap();
+    run.run_for(0.1).unwrap();
+    let seen = seen.borrow();
+    assert_eq!(seen[0], "room.pitofx");
+    for name in ["floor", "crate", "screen", "tri"] {
+        assert!(seen.iter().any(|seen| seen == name), "{name}: {seen:?}");
+    }
+}
