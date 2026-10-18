@@ -20,12 +20,17 @@ pub(crate) fn animates(recipe: &Recipe) -> Vec<String> {
     let mut out = owners.clone();
     for owner in &owners {
         let prefix = format!("{owner}.");
+        let root = recipe.objects.iter().position(|o| o.name == *owner);
         out.extend(
             recipe
                 .objects
                 .iter()
-                .filter(|o| o.name.starts_with(&prefix))
-                .map(|o| o.name.clone()),
+                .enumerate()
+                .filter(|(at, o)| {
+                    o.name.starts_with(&prefix)
+                        || root.is_some_and(|root| follow::descends(recipe, *at, root))
+                })
+                .map(|(_, o)| o.name.clone()),
         );
     }
     out

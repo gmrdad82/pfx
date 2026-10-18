@@ -16,10 +16,10 @@ use crate::{
     Casters, Constrained, Cup, Curl, Daylight, DetailUv, Drift, Ease, Error, Follow, Grade, Kind,
     Lines, Loaded, Lod, LodTarget, Look, Marker, Mover, NO_SIDECAR, NORMAL_SIZE, OLD_HEADER,
     Object, Orbit, Order, Origin, Ortho, Outline, Output, Owner, PathKey, PathKind, Plate,
-    PlateView, Plates, Problem, Profile, ProfileKind, Projection, Proxy, REFERENCE_HOUR,
+    PlateView, Plates, Play, Problem, Profile, ProfileKind, Projection, Proxy, REFERENCE_HOUR,
     RELEASE_EASE, RIG_LOOK, RIG_OFFSET, Recipe, Reference, Rig, RigFocus, RigFrame, RigShake,
-    RigTracks, Room, RouteSpec, SCHEMA, Shadow, Sky, SkyAmbient, SkyKind, SkyLight, Span, Spring,
-    Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline, Trace, Use, Uv, Variant,
+    RigTracks, Room, RootMotion, RouteSpec, SCHEMA, Shadow, Sky, SkyAmbient, SkyKind, SkyLight,
+    Span, Spring, Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline, Trace, Use, Uv, Variant,
     VariantOutput, View, Volume,
 };
 
@@ -1512,6 +1512,9 @@ fn read_kind(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Kind, Error> 
             path: tab.req(cx, "path", STR)?,
             node: tab.opt(cx, "node", STR)?,
             morph: read_morph(cx, tab)?,
+            clip: tab.opt(cx, "clip", STR)?,
+            looped: tab.or(cx, "loop", true, BOOL)?,
+            play: read_play(cx, tab)?,
         },
         "generator" => {
             let generator = tab.req(cx, "generator", STR)?;
@@ -1528,6 +1531,7 @@ fn read_kind(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Kind, Error> 
             object: tab.req(cx, "object", STR)?,
             clip: tab.opt(cx, "clip", STR)?,
             looped: tab.or(cx, "loop", true, BOOL)?,
+            play: read_play(cx, tab)?,
         },
         "card" => Kind::Card {
             size: size2_or_px(tab, cx)?,
@@ -1544,6 +1548,68 @@ fn read_kind(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Kind, Error> 
                 format!("expected one of {}, found \"{other}\"", kinds()),
             ));
         }
+    })
+}
+
+fn read_play(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<Play, Error> {
+    let start = tab.or(cx, "clip_start", 0.0, NUM)?;
+    let speed = tab.or(cx, "clip_speed", 1.0, NUM)?;
+    let next = tab.opt(cx, "next_clip", STR)?;
+    let next_at = tab.opt(cx, "next_at", NUM)?;
+    let blend = tab.or(cx, "blend", 0.0, NUM)?;
+    let wrong = |cx: &Cx, tab: &Tab<'_>, key: &str, text: &str| {
+        Error::new(
+            tab.kpath(key),
+            cx.lines.get(&tab.kipath(key)).copied(),
+            text.to_string(),
+        )
+    };
+    if !start.is_finite() {
+        return Err(wrong(
+            cx,
+            tab,
+            "clip_start",
+            "expected a finite number of seconds",
+        ));
+    }
+    if !(speed.is_finite() && speed >= 0.0) {
+        return Err(wrong(
+            cx,
+            tab,
+            "clip_speed",
+            "expected a speed of 0 or more",
+        ));
+    }
+    if !(blend.is_finite() && blend >= 0.0) {
+        return Err(wrong(cx, tab, "blend", "expected seconds, 0 or more"));
+    }
+    if next.is_none() {
+        for key in ["next_at", "blend"] {
+            if tab.retired(key).is_some() {
+                return Err(wrong(
+                    cx,
+                    tab,
+                    key,
+                    "goes with `next_clip`, the clip it blends into",
+                ));
+            }
+        }
+    }
+    let next_at = next_at.unwrap_or(start);
+    if !next_at.is_finite() {
+        return Err(wrong(
+            cx,
+            tab,
+            "next_at",
+            "expected a finite number of seconds",
+        ));
+    }
+    Ok(Play {
+        start,
+        speed,
+        next,
+        next_at,
+        blend,
     })
 }
 
@@ -2795,6 +2861,13 @@ fn follow_keys(cx: &mut Cx, tab: &mut Tab<'_>, object: String) -> Result<Follow,
         None => None,
     };
     let ride = tab.or(cx, "ride", 0.0, NUM)?;
+    let path = tab.kpath("root_motion");
+    let root_motion = match tab.peek(cx, "root_motion") {
+        None => RootMotion::Ignore,
+        Some(item) if item.as_str() == Some("ignore") => RootMotion::Ignore,
+        Some(item) if item.as_str() == Some("apply") => RootMotion::Apply,
+        Some(item) => return Err(bad_item(cx, &path, item, "\"ignore\" or \"apply\"")),
+    };
     Ok(Follow {
         object,
         route,
@@ -2803,6 +2876,7 @@ fn follow_keys(cx: &mut Cx, tab: &mut Tab<'_>, object: String) -> Result<Follow,
         speed,
         drift,
         ride,
+        root_motion,
     })
 }
 
@@ -3321,11 +3395,12 @@ pub(crate) fn parse_doc(path: &Path, text: &str) -> Result<(Recipe, DocumentMut)
 }
 
 fn read_recipe(
-    asm: Assembly,
+    mut asm: Assembly,
     text: &str,
     base: Option<&Path>,
     edits: &[Edit],
 ) -> Result<Recipe, Error> {
+    crate::preset::expand(&mut asm.table, &Sources::of(&asm.list), base)?;
     let mut cx = Cx {
         src: Sources::of(&asm.list),
         params: ParamsState::Absent,

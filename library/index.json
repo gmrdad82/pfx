@@ -8,7 +8,7 @@
     "kind": "buildings",
     "name": "lowrise-a",
     "sha256": {
-      "model": "8620b1ee84d4e9eafc1669676157143cdd9f7c310c3daf26ae2d70cf9a2b316e",
+      "model": "a6ba5bcbd11bb0d081bd12677865d3be152242de8fdb5133b44246934142d177",
       "sidecar": "d531a629c4067f1fb95c4f8cdb473f1e8b8fd87c48cb382d3bf373451114a673",
       "thumb": "ce170aba454e80f4e41e93ba3395f9b96d6cfa2488e6541c0ff743422be05c09"
     },
@@ -33,7 +33,7 @@
     "kind": "buildings",
     "name": "lowrise-b",
     "sha256": {
-      "model": "f3bf235ee5ea9b4b16f56515840dcdb32978d2cca3c861a9352bfde316e41828",
+      "model": "1b1ee792de50e4010beba4e06e26790f5523f110b9f2682e88527761bebed91f",
       "sidecar": "6801d28711a35bdcbc1b8d80cb1c7d7290c5fa49fba005734072898a76633e4d",
       "thumb": "c304880d26ce1642d85e73ad4696f15a839a2ca38b846486863ed6739d9d00ae"
     },
@@ -58,7 +58,7 @@
     "kind": "buildings",
     "name": "lowrise-c",
     "sha256": {
-      "model": "b74090d8e196a9b0fcab13c1263b98fbb3af81402d41436f1127438e3dbe7d16",
+      "model": "955beacc3f750ad7b2d4166e6eba5afb0e80a76a69ddba17408885c1c764c82c",
       "sidecar": "780e592834dfccfc1262da8b6af68d7286136ff7b33d12955f7f38b32ade6ba2",
       "thumb": "c137ef6f54b8fe45f73fb8690c903cbe54fd1ef9cffe2afbc852fe6b43609374"
     },
@@ -83,7 +83,7 @@
     "kind": "buildings",
     "name": "tower-a",
     "sha256": {
-      "model": "4691436545f974eaaef26859b0d5fdba52329d51b59e341a22d3d78a6737c5ab",
+      "model": "1efc696a4022a668585a1e31d0fe1bb03e7d0fe66f0c0917327f1eab0efef0ea",
       "sidecar": "522509e4d4442c0906cb70ed5e2f9f893c73a3fcdf84a174c63b7a26db57ccb9",
       "thumb": "d4e763a35b367452a9c477d901ee5ebd10b3e2470b53ab4dbb1002fdea7d3656"
     },
@@ -107,7 +107,7 @@
     "kind": "cars",
     "name": "coupe",
     "sha256": {
-      "model": "77ea87d69b1e7a110eada8d3a4e32338acca88e940fe95573b02d4d5fe8b17b3",
+      "model": "23ef64e1cbc3bccb4cd37666d283df6be30150cc35b2b363d0aa8df57cb9ef44",
       "sidecar": "79db6ed0befd58c67e213cab5884d22a80fabf86c5d7fda9dc77a8cf56c525c1",
       "thumb": "83258b2134b4b5d2e459b32b7e6023d1b9e5473f3cdc5971668c189f017b1ddf"
     },
@@ -132,7 +132,7 @@
     "kind": "cars",
     "name": "hatch",
     "sha256": {
-      "model": "07651957e83c6f2a86899a6f3a6408173d25b564b98e62305cc2910d3148f229",
+      "model": "848878a2455d75ced4be8a977a8f4cfd991d7e2bd13f05df20af05a94d24f63f",
       "sidecar": "f1a92a91891af8dafe4633de0eec668c94abb9da98d4b1c69edb84caa358d7ea",
       "thumb": "96f3911ee7b16becabc2b7790a3ae06276092921e95d5f985ef884ab28eb20cb"
     },
@@ -157,7 +157,7 @@
     "kind": "cars",
     "name": "sedan",
     "sha256": {
-      "model": "b6e3df68c67591093f6dff8cc62dc55f1683ce201ed345a777a35c9ec9595d15",
+      "model": "60d1c29b73cb61cd7fbd363353774d636fd725d895c092a31c7ec9903dcbc9c1",
       "sidecar": "57cd6bc017df91868166f7bd7c40990b6ba22ba3df2a07a96c34188d186a3077",
       "thumb": "6bc457e6506906c81013ffda34c8782739d95f2a31472ff114cb1d3df4a8edbe"
     },
@@ -182,7 +182,7 @@
     "kind": "cars",
     "name": "van",
     "sha256": {
-      "model": "2c568ce3bcf00cb7dc982771cc4afcd2d1d0f0016bb0c5c565d9983f7d76522e",
+      "model": "07b8dc5e8896ee9567728882f878a6fed574476845156efeea0fc8eabd3b9b5d",
       "sidecar": "d327a5e152f94b251d8cedbb3d913f8ae9f64cae32896b9a92ce21784a3eeb92",
       "thumb": "54708afe561627f0338ab32918cea1aa247647eaf4164476da3eefceb809c01e"
     },
@@ -207,7 +207,7 @@
     "kind": "furniture",
     "name": "bollard",
     "sha256": {
-      "model": "7010f03516af3c4bf362c6f31df5ce03702149a3b2a3e4003fb7d177f19e83b2",
+      "model": "a33511ad17b21f2784739866eed94746822a24a9b74d32592150830ec1d046e5",
       "sidecar": "b7221d4e635db84ccaf986fc26f46aaee9fe6b4711015c4e3b2df5c70497ad34",
       "thumb": "95738315a5fbe5781491b5400b924f246783204c394b6e1dbdb02626d7d437c0"
     },
@@ -231,7 +231,7 @@
     "kind": "furniture",
     "name": "lamp-pole",
     "sha256": {
-      "model": "792770a14bef894d3f95ee1d379fff4545a112226c886d8a776bb8cdbc0f1fb3",
+      "model": "72279e0cecab9d806ffefcb0e7df09875f1d1aacc66dc9221f8a4e95546ff467",
       "sidecar": "ac6e1e0f5f0db8d9696a1e64892b448633fd459d8d1c7d2532828768a802d6bd",
       "thumb": "e831157acbd87009b2a92363121c718d0c052ca82aba2f280d914d57aa66cce0"
     },
@@ -256,7 +256,7 @@
     "kind": "furniture",
     "name": "sign",
     "sha256": {
-      "model": "520bfc4bd5b8501fd43038b1e8c41b0cdff20ce11c643af4f90674e072b3088b",
+      "model": "56bcda348069469f0c5e80d7f61433829bc240d23c30ca575370aaffbe047092",
       "sidecar": "ae9aa0f9f00a5e5fa81f4188de016b5e6099ff86273cbc5a87c0ac04fbe0a858",
       "thumb": "6c3ec953195befbc8f2ec398a1945105a9c23f2b087e2e4fbc2d2c2b6dbb759e"
     },
@@ -280,7 +280,7 @@
     "kind": "furniture",
     "name": "traffic-light",
     "sha256": {
-      "model": "6702358899012fd5941462e8de19a02efdfad07b385c3e63035e7c401a2619b8",
+      "model": "edf70756bfe49b1498b96d20ca6f88b44a8d7dd756879bcf952940f34a4dee99",
       "sidecar": "ef61651bae267ab9769c10a65791dade637ce51ce48fb717546e5dedf5178041",
       "thumb": "eb61646ac13103b7609870713d754176922922f715bbd923abffcce4656e95cc"
     },
@@ -304,7 +304,7 @@
     "kind": "furniture",
     "name": "wires-span",
     "sha256": {
-      "model": "62fe07b5f9fcfa295a43e2e3c69767caff301e114732e638aed80353aadaa825",
+      "model": "3248ea35d88371df28e060b42dc42f299f2009423d1756f0591de48ac0a74772",
       "sidecar": "45b7d76bb83b2b49c6c1c9b1d1e7569580c649591bfb158902af56f67f547e0e",
       "thumb": "d1b80b0ec87bafeb884222883f7a2ec28cb3918a218f4fed90d4c688f3d830c8"
     },
@@ -329,7 +329,7 @@
     "kind": "road",
     "name": "crosswalk-10m",
     "sha256": {
-      "model": "4fbbb3a238f789762a9681da8dce169e775944b83428b7ea3f088ac0d14e9d77",
+      "model": "8ce4ab1ca1a3f9687e53161fbf1c1671bf129a5f7b7c4dfad7d2f0bfc1d52ea0",
       "sidecar": "a4c41245eba3cd6838b474b58ceb7b422440470458a305bcb18c1262a172e251",
       "thumb": "9a9b16aa2552f84ac41eab70140d2d1ea10ed68cb9d962c16cd514cf55d67030"
     },
@@ -353,7 +353,7 @@
     "kind": "road",
     "name": "straight-10m",
     "sha256": {
-      "model": "74c8328b1ca839cf304296724ef28510c871e715eeac82a68358074545d3fc2a",
+      "model": "f5ff1bb99bbdfc1de8df7cc94e6a34c813ebd637a94a65a706d429a74587373e",
       "sidecar": "f20227f4fbfdbca92ba51fcf40110b2a7fd19bf19e56dd1cce5378f8be96cf35",
       "thumb": "312aaaca9f69992462d9f87fb6d10d62cf6ea472680aa16966986e42b7fc405a"
     },

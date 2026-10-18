@@ -13,7 +13,10 @@ const LIGHTING: &str = "\n[sun]\nmodel = \"authored\"\ntoward = [-0.5, 0.55, 0.6
 
 #[derive(clap::Args, Debug, PartialEq)]
 pub(super) struct Args {
-    #[arg(value_name = "file.glb", help = "A glTF 2.0 binary file to bring in")]
+    #[arg(
+        value_name = "model",
+        help = "A glTF 2.0 model to bring in: a .glb, a .gltf with its files beside it, or an .obj with its .mtl and textures"
+    )]
     file: PathBuf,
     #[arg(
         long = "as",
@@ -243,9 +246,15 @@ pub fn add(
 ) -> Result<Added, String> {
     provenance.validate()?;
     let shown = file.display();
-    let bytes = std::fs::read(file).map_err(|e| format!("{shown}: {e}"))?;
+    let read = std::fs::read(file).map_err(|e| format!("{shown}: {e}"))?;
+    let bytes = pfx_load::pack::model(file)?;
     let parsed = basics(&bytes).map_err(|e| format!("{shown}: {e}"))?;
-    validated(file).map_err(|e| format!("{shown}: {e}"))?;
+    if !file
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("obj"))
+    {
+        validated(file).map_err(|e| format!("{shown}: {e}"))?;
+    }
     let facts = facts(&parsed).map_err(|e| format!("{shown}: {e}"))?;
     let (kind, name) = entry.split_once('/').unwrap_or_default();
     let original = file
@@ -263,7 +272,7 @@ pub fn add(
         generator: None,
         params: [
             ("file".to_string(), json!(original)),
-            ("sha256".to_string(), json!(sha256(&bytes))),
+            ("sha256".to_string(), json!(sha256(&read))),
         ]
         .into(),
         pfx: super::VERSION.into(),
@@ -487,5 +496,53 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn a_split_gltf_and_an_obj_with_its_mtl_come_in_as_one_standalone_glb() {
+        let dir = scratch("library-add-split");
+        let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/load/tests/data");
+        std::fs::create_dir_all(dir.join("chair")).unwrap();
+        for name in ["triangle.gltf", "triangle.bin"] {
+            std::fs::copy(data.join(name), dir.join("chair").join(name)).unwrap();
+        }
+        std::fs::write(
+            dir.join("cube.obj"),
+            "mtllib cube.mtl\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\no face\nusemtl grey\nf 1 2 3 4\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("cube.mtl"),
+            "newmtl grey\nKd 0.5 0.5 0.5\nPr 0.5\n",
+        )
+        .unwrap();
+        let by = library::Provenance {
+            licence: "CC0-1.0".into(),
+            credit: Some("Chair by An Author, https://example.org/chair".into()),
+            author: Some("An Author".into()),
+            source: Some("https://example.org/chair".into()),
+        };
+        let root = dir.join("library");
+        for (file, entry) in [
+            (dir.join("chair/triangle.gltf"), "props/chair"),
+            (dir.join("cube.obj"), "props/cube"),
+        ] {
+            let added = add(&file, entry, &[], &by, &root).unwrap();
+            let glb = std::fs::read(&added.model).unwrap();
+            let parsed = basics(&glb).unwrap();
+            assert!(parsed.blob.is_some(), "{entry}");
+            assert!(
+                parsed
+                    .buffers()
+                    .all(|b| matches!(b.source(), gltf::buffer::Source::Bin)),
+                "{entry}"
+            );
+            let sidecar =
+                library::Sidecar::parse(&std::fs::read_to_string(&added.sidecar).unwrap()).unwrap();
+            assert_eq!(sidecar.licence, "CC0-1.0");
+            assert_eq!(sidecar.source.as_deref(), Some("https://example.org/chair"));
+        }
+        let refused = add(&dir.join("cube.mtl"), "props/mtl", &[], &by, &root).err();
+        assert!(refused.is_some_and(|e| e.contains("not a model pfx imports")));
     }
 }

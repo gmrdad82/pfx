@@ -23,6 +23,7 @@ mod maps;
 mod normal_map;
 mod scene;
 mod shape;
+pub mod skin;
 mod spdx;
 mod timeline;
 mod uv;
@@ -44,7 +45,7 @@ pub use pfx_recipe::{apply_only as only, apply_stage as staged};
 pub use scene::object_ids;
 pub use timeline::{Animates, Bake, Baker, camera_track, lens, pose, pose_cameras, time_refusal};
 
-pub const GENERATOR: &str = concat!("pfx ", env!("CARGO_PKG_VERSION"));
+pub const GENERATOR: &str = "pfx";
 
 pub const BUILTIN: &str = "pfx/";
 
@@ -265,6 +266,8 @@ pub struct Built {
     provenance_by_object: serde_json::Map<String, serde_json::Value>,
     trees: BTreeMap<String, library::Tree>,
     clips: Vec<(String, Vec<pfx_motion::Trs>)>,
+    skins: Vec<(String, String, skin::Skin)>,
+    players: BTreeMap<String, skin::Player>,
     pub lights: Vec<GeneratedLight>,
     pub looks: Arc<Looks>,
     pub lods: Vec<Lod>,
@@ -273,6 +276,21 @@ pub struct Built {
 }
 
 impl Built {
+    pub fn skinned(&self) -> bool {
+        !self.players.is_empty()
+    }
+
+    pub fn skinned_parts(&self, time: f64) -> Vec<Part> {
+        let mut parts: Vec<Part> = self
+            .parts
+            .iter()
+            .filter(|p| self.skins.iter().any(|(name, _, _)| *name == p.node.name))
+            .cloned()
+            .collect();
+        skin::pose(&mut parts, &self.skins, &self.players, time);
+        parts
+    }
+
     pub fn recipe(&self, recipe: &Recipe) -> Recipe {
         let mut merged = self.recipe_without_catalogue(recipe);
         for (name, value) in &self.catalogue {
@@ -837,6 +855,8 @@ struct Made {
     looks: Looks,
     tree: Option<library::Tree>,
     clips: Vec<(String, Vec<pfx_motion::Trs>)>,
+    skins: Vec<(String, skin::Skin)>,
+    player: Option<skin::Player>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -909,6 +929,8 @@ fn make(
 ) -> Result<Made, Error> {
     let object = &recipe.objects[index];
     let mut morphs: Vec<Option<Morph>> = Vec::new();
+    let mut skins: Vec<Option<skin::Skin>> = Vec::new();
+    let mut player = None;
     let mut looks = Looks::new();
     let mut tree = None;
     let mut clips = Vec::new();
@@ -918,16 +940,23 @@ fn make(
         let imported = library::import(recipe, object, base)?;
         looks = imported.looks;
         morphs = imported.morphs;
+        skins = imported.skins;
+        player = imported.player;
         tree = Some(imported.tree);
         clips = imported.clips;
         imported.generated
     } else {
         let mesh = match &object.kind {
             Kind::Mesh { path, node, .. } => {
-                let (mesh, mut found, kept) = shape::imported(object, base, path, node.as_deref())?;
+                let (mesh, mut found, kept, rigged) =
+                    shape::imported(object, base, path, node.as_deref())?;
                 shape::weights(object, &mut found)?;
                 morphs = vec![(!found.is_empty()).then_some(found)];
                 looks = kept;
+                if let Some((made, rig)) = rigged {
+                    player = skin::player(recipe, object, Arc::new(rig.rig), true)?;
+                    skins = vec![Some(made)];
+                }
                 mesh
             }
             _ => shape::local(object, cuts, base)?,
@@ -956,6 +985,8 @@ fn make(
         looks,
         tree,
         clips: Vec::new(),
+        skins: Vec::new(),
+        player: None,
     };
     taken(
         pieces.iter().map(|piece| piece.name.as_str()).collect(),
@@ -985,13 +1016,26 @@ fn make(
         .collect();
     for (at, Piece { name, mut mesh }) in pieces.into_iter().enumerate() {
         let mut morph = morphs.get_mut(at).and_then(Option::take);
-        let follow = |morph: &mut Option<Morph>, sources: Option<Vec<u32>>| {
-            if let (Some(morph), Some(sources)) = (morph.as_mut(), sources) {
-                morph.remap(&sources);
+        let mut skin = skins
+            .get_mut(at)
+            .and_then(Option::take)
+            .filter(|_| player.is_some());
+        let follow = |morph: &mut Option<Morph>,
+                      skin: &mut Option<skin::Skin>,
+                      sources: Option<Vec<u32>>| {
+            if let Some(sources) = sources {
+                if let Some(morph) = morph.as_mut() {
+                    morph.remap(&sources);
+                }
+                if let Some(skin) = skin.as_mut() {
+                    skin.remap(&sources);
+                }
             }
         };
-        follow(&mut morph, shape::uvs(recipe, object, matrix, &mut mesh)?);
-        follow(&mut morph, detail_uv::apply(object, matrix, &mut mesh)?);
+        let sources = shape::uvs(recipe, object, matrix, &mut mesh)?;
+        follow(&mut morph, &mut skin, sources);
+        let sources = detail_uv::apply(object, matrix, &mut mesh)?;
+        follow(&mut morph, &mut skin, sources);
         shape::materials(object, &mut mesh)?;
         let transform = if object.keep_transform {
             matrix
@@ -1000,9 +1044,15 @@ fn make(
             if let Some(morph) = morph.as_mut() {
                 morph.transform(matrix);
             }
+            if let Some(skin) = skin.as_mut() {
+                skin.frame = matrix;
+            }
             DMat4::IDENTITY
         };
-        shape::normals(object, &mut mesh, morph.as_mut());
+        match skin.as_mut() {
+            Some(skin) => skin.remap(&shape::normals_traced(object, &mut mesh, morph.as_mut())),
+            None => shape::normals(object, &mut mesh, morph.as_mut()),
+        }
         let (transform, keep_transform) = match pivots.get(&name) {
             Some(&pivot) => {
                 let local = DVec3::from(pivot);
@@ -1016,6 +1066,9 @@ fn make(
                 if let Some(morph) = morph.as_mut() {
                     morph.transform(back);
                 }
+                if let Some(skin) = skin.as_mut() {
+                    skin.frame = back * skin.frame;
+                }
                 (transform * DMat4::from_translation(at), true)
             }
             None => (transform, object.keep_transform),
@@ -1025,6 +1078,10 @@ fn make(
             morph.pose(&mut mesh);
             Box::new(Targets { base, morph })
         });
+        if let (Some(mut skin), Some(player)) = (skin, &player) {
+            skin.bound(&mesh, &player.rest);
+            made.skins.push((name.clone(), skin));
+        }
         let node = Node {
             name,
             mesh,
@@ -1040,6 +1097,7 @@ fn make(
         );
         made.nodes.push(node);
     }
+    made.player = player.filter(|_| !made.skins.is_empty());
     Ok(made)
 }
 
@@ -1094,6 +1152,8 @@ fn assemble(
     let mut lods = Vec::new();
     let mut trees = BTreeMap::new();
     let mut clips = Vec::new();
+    let mut skins = Vec::new();
+    let mut players = BTreeMap::new();
     for (index, object) in recipe.objects.iter().enumerate() {
         if matches!(object.kind, Kind::Pocket { .. }) {
             continue;
@@ -1153,6 +1213,16 @@ fn assemble(
         }
         if !object.hidden {
             clips.extend(made.clips);
+            let kept: Vec<(String, String, skin::Skin)> = made
+                .skins
+                .into_iter()
+                .filter(|(name, _)| recipe.keeps(&object.name, name))
+                .map(|(name, skin)| (name, object.name.clone(), skin))
+                .collect();
+            if let Some(player) = made.player.filter(|_| !kept.is_empty()) {
+                players.insert(object.name.clone(), player);
+                skins.extend(kept);
+            }
         }
         for (name, look) in made.looks {
             imported.entry(name).or_insert(look);
@@ -1250,6 +1320,8 @@ fn assemble(
         provenance_by_object: provenance,
         trees,
         clips,
+        skins,
+        players,
         parts,
         order: glb_order(recipe.output.order),
         sidecar,

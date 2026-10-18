@@ -319,6 +319,68 @@ The JPEG decoder in `crates/load/src/jpeg/` (in the package `pfx-load`: `mod.rs`
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
 
+## cgltf, under the MIT licence
+
+`crates/load/src/uri.rs` (in the package `pfx-load`) ports the URI handling of cgltf 1.15 (https://github.com/jkuhlmann/cgltf, `cgltf.h`, tag `v1.15`, commit `360db1a95480fe102ae9c69b27c5d101167ff5ba`): `cgltf_load_buffers`' split between base64 data URIs and relative files, `cgltf_combine_paths` and `cgltf_decode_uri`'s lenient percent decoding, altered (paths that leave the model's folder and other schemes are refused), under the MIT licence, as its `LICENSE` at that tag reads:
+
+> Copyright (c) 2018-2021 Johannes Kuhlmann
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## tobj and tinyobjloader, under the MIT licence
+
+`crates/load/src/obj.rs` (in the package `pfx-load`) is a port of tobj 4.0.5 (https://github.com/Twinklebear/tobj, `src/lib.rs`, tag `4.0.5`, commit `a54fea9d6ee5138bb95de0d2906e4e0323fe3524`): its OBJ line parser, single-index vertex export and fan triangulation, and its MTL parser, altered, with the MTL keys tobj leaves unknown (`Tr`, `Pr`, `Pm`, `Pc`, `Pcr`, `norm`, `map_Ke`, `map_Pr`, `map_Pm`) and the texture options of `ParseTextureNameAndOption` taken from tinyobjloader 2.0.0rc13 (https://github.com/tinyobjloader/tinyobjloader, `tiny_obj_loader.h`, tag `v2.0.0rc13`, commit `2945a967c5303b2c8c14174117c45f3302591150`). The test files in `crates/load/tests/data/obj/` are tobj's own (`obj/` at that tag; its Cornell box files come from Intel's Embree samples). Both under the MIT licence; tobj's `LICENSE.md` at that tag reads:
+
+> The MIT License (MIT)
+>
+> Copyright (c) 2015 Will Usher
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in
+> all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+> THE SOFTWARE.
+
+and tinyobjloader's `LICENSE` at that tag reads:
+
+> The MIT License (MIT)
+>
+> Copyright (c) 2012-2019 Syoyo Fujita and many contributors.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in
+> all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+> THE SOFTWARE.
+
 ## Godot Engine, under the MIT licence
 
 The route spline's arc-length table in `crates/motion/src/route.rs` (in the package `pfx-motion`) ports the arc-length baking of Godot Engine's Curve3D (https://github.com/godotengine/godot, `scene/resources/curve.cpp`, tag `4.5-stable`, commit `876b290332ec6f2e6d173d08162a02aa7e6ca46d`): the even-length subdivision of each segment, the distance table searched by bisection, and the nearest distance by projection onto the baked polyline, altered, under the MIT licence, as its `LICENSE.txt` at that commit reads:
@@ -509,69 +571,7 @@ Its `NOTICE.txt` at that commit reads:
 > NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 > SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-NumPy's MT19937 core carries that licence and, beside it, the MIT licence of the randomkit functions it keeps. Its `numpy/random/src/mt19937/LICENSE.md` at that tag reads:
-
-> # MT19937
->
-> Copyright (c) 2003-2005, Jean-Sebastien Roy (js@jeannot.org)
->
-> The rk_random and rk_seed functions algorithms and the original design of
-> the Mersenne Twister RNG:
->
->   Copyright (C) 1997 - 2002, Makoto Matsumoto and Takuji Nishimura,
->   All rights reserved.
->
->   Redistribution and use in source and binary forms, with or without
->   modification, are permitted provided that the following conditions
->   are met:
->
->   1. Redistributions of source code must retain the above copyright
->   notice, this list of conditions and the following disclaimer.
->
->   2. Redistributions in binary form must reproduce the above copyright
->   notice, this list of conditions and the following disclaimer in the
->   documentation and/or other materials provided with the distribution.
->
->   3. The names of its contributors may not be used to endorse or promote
->   products derived from this software without specific prior written
->   permission.
->
-> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-> "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-> LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-> A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER
-> OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
-> EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
-> PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
-> PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
-> LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
-> NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
-> SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
->
-> Original algorithm for the implementation of rk_interval function from
-> Richard J. Wagner's implementation of the Mersenne Twister RNG, optimised by
-> Magnus Jonsson.
->
-> Constants used in the rk_double implementation by Isaku Wada.
->
-> Permission is hereby granted, free of charge, to any person obtaining a
-> copy of this software and associated documentation files (the
-> "Software"), to deal in the Software without restriction, including
-> without limitation the rights to use, copy, modify, merge, publish,
-> distribute, sublicense, and/or sell copies of the Software, and to
-> permit persons to whom the Software is furnished to do so, subject to
-> the following conditions:
->
-> The above copyright notice and this permission notice shall be included
-> in all copies or substantial portions of the Software.
->
-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
-> OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
-> MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
-> IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-> CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
-> TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
-> SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+NumPy's MT19937 core carries that licence and, beside it, the MIT licence of the randomkit functions it keeps. Its `numpy/random/src/mt19937/LICENSE.md` at that tag ships verbatim, with its author's address, as `crates/generators/LICENSE-MT19937.md` in the source and next to this file in every release.
 
 NumPy is under the BSD 3-Clause licence, as its `LICENSE.txt` at that tag reads:
 

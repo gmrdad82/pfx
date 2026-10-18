@@ -144,3 +144,17 @@ fn a_plate_with_a_pocket_keeps_its_floor_flat() {
     assert!(tilt(&smoothed(&base, false), floor) > 1.0);
     assert!(tilt(&smoothed(&base, false), None) > 4.0);
 }
+
+#[test]
+fn a_traced_split_names_each_new_vertex_by_its_source_and_matches_the_plain_split() {
+    let source = plate();
+    for flat in [false, true] {
+        let mut traced = source.clone();
+        let sources = smooth_traced(&mut traced, 35.0, flat, None);
+        assert_eq!(traced, smoothed(&source, flat));
+        assert_eq!(sources.len(), traced.positions.len());
+        for (p, &s) in traced.positions.iter().zip(&sources) {
+            assert_eq!(*p, source.positions[s as usize]);
+        }
+    }
+}

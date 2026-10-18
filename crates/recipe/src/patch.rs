@@ -50,10 +50,17 @@ pub fn path_text(path: &[Key]) -> String {
     let mut out = String::new();
     for key in path {
         match key {
-            Key::Table(name) if out.is_empty() => out.push_str(name),
             Key::Table(name) => {
-                out.push('.');
-                out.push_str(name);
+                if !out.is_empty() {
+                    out.push('.');
+                }
+                if name.contains(['.', '"', '[', ']']) {
+                    out.push('"');
+                    out.push_str(&name.replace('\\', "\\\\").replace('"', "\\\""));
+                    out.push('"');
+                } else {
+                    out.push_str(name);
+                }
             }
             Key::Object(name) => {
                 out.push('[');
@@ -124,11 +131,20 @@ fn refuse_copy(l: &Loaded, p: &Patch) -> Result<(), Error> {
 }
 
 pub fn apply_all(l: &mut Loaded, patches: &[Patch]) -> Result<Vec<Patch>, Error> {
+    apply_all_with(l, patches, true)
+}
+
+pub fn apply_over(l: &mut Loaded, p: &Patch) -> Result<Patch, Error> {
+    let mut inverses = apply_all_with(l, std::slice::from_ref(p), false)?;
+    Ok(inverses.remove(0))
+}
+
+fn apply_all_with(l: &mut Loaded, patches: &[Patch], through: bool) -> Result<Vec<Patch>, Error> {
     for p in patches {
         refuse_copy(l, p)?;
     }
     if l.recipe.files.included() {
-        return routed(l, patches);
+        return routed(l, patches, through);
     }
     let mut doc = l.doc.clone();
     let mut inverses = Vec::with_capacity(patches.len());
@@ -153,7 +169,7 @@ fn start_of(l: &Loaded, name: &str) -> Option<String> {
     }
 }
 
-fn routed(l: &mut Loaded, patches: &[Patch]) -> Result<Vec<Patch>, Error> {
+fn routed(l: &mut Loaded, patches: &[Patch], through: bool) -> Result<Vec<Patch>, Error> {
     let base = l.recipe.base.clone();
     let main_name = l.recipe.files.main_name().to_string();
     let mut main: DocumentMut = l.recipe.source.parse().map_err(|e: toml_edit::TomlError| {
@@ -191,7 +207,18 @@ fn routed(l: &mut Loaded, patches: &[Patch]) -> Result<Vec<Patch>, Error> {
     let mut inverses = Vec::with_capacity(patches.len());
     for p in patches {
         remember(&mut homes, &before);
-        let (file, local) = route(&before, &homes, p);
+        let (mut file, mut local) = route(&before, &homes, p);
+        if !through && file != 0 {
+            if pulled(&mut main, &before, p) {
+                before = view_of(&main, &docs)?;
+                (file, local) = route(&before, &homes, p);
+            } else if !matches!(p.path.as_slice(), [Key::Table(key), Key::Index(_), ..] if is_array(key))
+            {
+                parents(&mut main, p);
+                file = 0;
+                local = p.clone();
+            }
+        }
         let name = before.names[file].clone();
         let doc = if file == 0 {
             &mut main
@@ -241,6 +268,78 @@ fn routed(l: &mut Loaded, patches: &[Patch]) -> Result<Vec<Patch>, Error> {
     l.recipe = recipe;
     inverses.reverse();
     Ok(inverses)
+}
+
+fn parents(main: &mut DocumentMut, p: &Patch) {
+    let mut at = main.as_table_mut();
+    for key in &p.path[..p.path.len().saturating_sub(1)] {
+        let Key::Table(name) = key else {
+            return;
+        };
+        if !at.contains_key(name) {
+            let mut table = Table::new();
+            table.set_implicit(true);
+            at.insert(name, Item::Table(table));
+        }
+        match at.get_mut(name).and_then(Item::as_table_mut) {
+            Some(next) => at = next,
+            None => return,
+        }
+    }
+}
+
+fn pulled(main: &mut DocumentMut, view: &View, p: &Patch) -> bool {
+    match p.path.as_slice() {
+        [Key::Table(key), Key::Object(name) | Key::Table(name), ..] if is_array(key) => {
+            let Some((at, _)) = view.entry(key, name) else {
+                return false;
+            };
+            let Some(mut table) = view
+                .doc
+                .get(key)
+                .and_then(Item::as_array_of_tables)
+                .and_then(|list| list.get(at))
+                .cloned()
+            else {
+                return false;
+            };
+            table.decor_mut().clear();
+            if !main.contains_key(key) {
+                main.insert(key, Item::ArrayOfTables(ArrayOfTables::new()));
+            }
+            match main.get_mut(key).and_then(Item::as_array_of_tables_mut) {
+                Some(list) => {
+                    list.push(table);
+                    true
+                }
+                None => false,
+            }
+        }
+        [Key::Table(top), Key::Table(name), ..] if top == "materials" => {
+            let Some(entry) = view
+                .doc
+                .get("materials")
+                .and_then(Item::as_table)
+                .and_then(|t| t.get(name))
+                .cloned()
+            else {
+                return false;
+            };
+            if !main.contains_key("materials") {
+                let mut table = Table::new();
+                table.set_implicit(true);
+                main.insert("materials", Item::Table(table));
+            }
+            match main.get_mut("materials").and_then(Item::as_table_mut) {
+                Some(into) if !into.contains_key(name) => {
+                    into.insert(name, entry);
+                    true
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
 }
 
 fn first_entry(doc: &DocumentMut, p: &Patch) -> Option<Patch> {
@@ -580,7 +679,7 @@ fn label_of(t: &Table) -> Option<&str> {
 pub(crate) fn morph_room(t: &mut Table, path: &[Key]) -> bool {
     let [
         Key::Table(top),
-        Key::Table(name),
+        Key::Table(name) | Key::Object(name),
         Key::Table(key),
         Key::Table(_),
     ] = path

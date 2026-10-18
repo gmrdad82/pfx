@@ -575,12 +575,33 @@ impl Asm<'_> {
         id: &str,
         table: Table,
         file: usize,
+        over: bool,
     ) -> Result<(), Error> {
         if let Some(name) = label(&table, id).filter(|name| !name.is_empty()) {
             let at = vec![key.to_string(), name.clone()];
             if let Some(&other) = acc.prov.get(&at)
                 && other != file
             {
+                if over {
+                    let slot = acc
+                        .table
+                        .get_mut(key)
+                        .and_then(Item::as_array_of_tables_mut)
+                        .and_then(|list| {
+                            let i = list
+                                .iter()
+                                .position(|t| label(t, id).as_deref() == Some(name.as_str()))?;
+                            *list.get_mut(i)? = table.clone();
+                            Some(i)
+                        });
+                    if let Some(i) = slot {
+                        if let Some(owner) = acc.order.get_mut(key).and_then(|o| o.get_mut(i)) {
+                            *owner = file;
+                        }
+                        acc.prov.insert(at, file);
+                        return Ok(());
+                    }
+                }
                 return Err(Error::new(
                     format!("{key}[{name}]"),
                     self.line_of(table.span()),
@@ -614,10 +635,10 @@ impl Asm<'_> {
                 let files = sub.order.get(key).cloned().unwrap_or_default();
                 for (i, table) in self.entries(item, key)?.into_iter().enumerate() {
                     let file = files.get(i).copied().unwrap_or(0);
-                    self.push(acc, key, id, table, file)?;
+                    self.push(acc, key, id, table, file, false)?;
                 }
             } else if key == "materials" {
-                self.materials(acc, item, &sub.prov)?;
+                self.materials(acc, item, &sub.prov, false)?;
             } else if let Some(existing) = acc.table.get(key) {
                 let first = acc.prov.get(&path_of(&[key])).copied().unwrap_or(0);
                 let second = sub.prov.get(&path_of(&[key])).copied().unwrap_or(0);
@@ -643,7 +664,7 @@ impl Asm<'_> {
         Ok(())
     }
 
-    fn materials(&self, acc: &mut Part, item: &Item, prov: &Prov) -> Result<(), Error> {
+    fn materials(&self, acc: &mut Part, item: &Item, prov: &Prov, over: bool) -> Result<(), Error> {
         let Some(from) = item.as_table() else {
             return Err(Error::new(
                 "materials",
@@ -661,6 +682,7 @@ impl Asm<'_> {
             let file = prov.get(&at).copied().unwrap_or(0);
             if let Some(&other) = acc.prov.get(&at)
                 && other != file
+                && !over
             {
                 return Err(Error::new(
                     format!("materials.{name}"),
@@ -672,7 +694,11 @@ impl Asm<'_> {
                     ),
                 ));
             }
-            acc.prov.entry(at).or_insert(file);
+            if over {
+                acc.prov.insert(at, file);
+            } else {
+                acc.prov.entry(at).or_insert(file);
+            }
             if let (Some(key), Some(into)) = (
                 from.key(name),
                 acc.table.get_mut("materials").and_then(Item::as_table_mut),
@@ -691,7 +717,7 @@ impl Asm<'_> {
             }
             if let Some((_, id)) = ARRAYS.iter().find(|(name, _)| *name == key) {
                 for table in self.entries(item, key)? {
-                    self.push(acc, key, id, table, k)?;
+                    self.push(acc, key, id, table, k, true)?;
                 }
                 continue;
             }
@@ -702,7 +728,7 @@ impl Asm<'_> {
                         prov.insert(path_of(&["materials", name]), k);
                     }
                 }
-                self.materials(acc, item, &prov)?;
+                self.materials(acc, item, &prov, true)?;
                 continue;
             }
             let Some(name) = own.key(key) else {
@@ -783,7 +809,7 @@ impl Asm<'_> {
             let mut names = Vec::new();
             for mut t in objects {
                 let Some(old) = label(&t, "name") else {
-                    self.push(acc, "object", "name", t, part_at)?;
+                    self.push(acc, "object", "name", t, part_at, false)?;
                     continue;
                 };
                 let new = format!("{prefix}{old}");
@@ -821,7 +847,7 @@ impl Asm<'_> {
                         ),
                     ));
                 }
-                self.push(acc, "object", "name", t, part_at)?;
+                self.push(acc, "object", "name", t, part_at, false)?;
                 if !chain.is_empty() {
                     acc.copies.insert(new.clone(), chain);
                 }

@@ -11,6 +11,7 @@ mod include;
 mod keyframes;
 mod patch;
 mod path;
+mod preset;
 mod read;
 mod route;
 mod set;
@@ -30,14 +31,14 @@ pub use keyframes::{
     Table, key_patches, place, properties, property,
 };
 pub use patch::{
-    apply, apply_all, edit, flag, number, numbers, params_in, path_text, reread, save, save_to,
-    string, value_at, write,
+    apply, apply_all, apply_over, edit, flag, number, numbers, params_in, path_text, reread, save,
+    save_to, string, value_at, write,
 };
 pub use path::{CameraPath, Ease, Orbit, PathKey, PathKind};
 pub use read::effects::{Colour, Effects, Particles, Setting, Settings};
 pub use read::{load, materials, parse};
 pub use route::{PointEdit, route_patch};
-pub use set::{Change, apply_set, json_of, set_values, tidy, value_of};
+pub use set::{Change, apply_set, json_of, set_values, set_values_with, tidy, value_of};
 pub use stage::{Pick, apply_only, apply_stage, stage_index};
 pub use text::{ANCHORS, MONO, anchor_names, anchor_point, default_anchor};
 pub use validate::{bake_product, missing_material_text, slug, validate};
@@ -311,6 +312,9 @@ pub enum Kind {
         path: String,
         node: Option<String>,
         morph: BTreeMap<String, f64>,
+        clip: Option<String>,
+        looped: bool,
+        play: Play,
     },
     Generator {
         generator: String,
@@ -320,6 +324,7 @@ pub enum Kind {
         object: String,
         clip: Option<String>,
         looped: bool,
+        play: Play,
     },
     Card {
         size: [f64; 2],
@@ -809,6 +814,64 @@ pub struct Follow {
     pub speed: Vec<[f64; 2]>,
     pub drift: Option<Drift>,
     pub ride: f64,
+    pub root_motion: RootMotion,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RootMotion {
+    #[default]
+    Ignore,
+    Apply,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Play {
+    pub start: f64,
+    pub speed: f64,
+    pub next: Option<String>,
+    pub next_at: f64,
+    pub blend: f64,
+}
+
+impl Default for Play {
+    fn default() -> Play {
+        Play {
+            start: 0.0,
+            speed: 1.0,
+            next: None,
+            next_at: 0.0,
+            blend: 0.0,
+        }
+    }
+}
+
+impl Play {
+    pub fn local(&self, time: f64, from: f64, length: f64, looped: bool) -> f64 {
+        let t = (time - from).max(0.0) * self.speed;
+        if looped && length > 0.0 {
+            t.rem_euclid(length)
+        } else {
+            t.min(length.max(0.0))
+        }
+    }
+
+    pub fn first(&self, time: f64, length: f64, looped: bool) -> f64 {
+        self.local(time, self.start, length, looped)
+    }
+
+    pub fn second(&self, time: f64, length: f64, looped: bool) -> f64 {
+        self.local(time, self.next_at, length, looped)
+    }
+
+    pub fn weight(&self, time: f64) -> f64 {
+        if self.next.is_none() || time < self.next_at {
+            return 0.0;
+        }
+        if self.blend <= 0.0 {
+            return 1.0;
+        }
+        ((time - self.next_at) / self.blend).clamp(0.0, 1.0)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

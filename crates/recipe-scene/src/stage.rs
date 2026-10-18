@@ -585,6 +585,27 @@ impl Stage {
         Ok(true)
     }
 
+    pub fn reshape(&mut self, parts: &[Part]) -> Result<usize, Error> {
+        let mut replaced = 0;
+        for piece in parts::pieces(parts) {
+            let Some(at) = self
+                .pieces
+                .iter()
+                .position(|p| p.name == piece.name && p.material == piece.material)
+            else {
+                continue;
+            };
+            if let Some(slot) = self.opaque.iter().position(|&index| index == at) {
+                self.renderer
+                    .replace_mesh(self.uploaded[slot].handle, data(&piece))
+                    .map_err(|e| Error(format!("object {}: {e}", piece.name)))?;
+                replaced += 1;
+            }
+            self.pieces[at].geometry = piece.geometry;
+        }
+        Ok(replaced)
+    }
+
     pub fn set_poses(&mut self, posed: BTreeMap<String, Matrix>) -> bool {
         if posed == self.posed {
             return false;

@@ -29,11 +29,11 @@ pfx library list|index|check [--kind <kind>] [--library <dir>] [--json]
                                                           the library's objects, its index rewritten from the folders, or every object checked against the index
 pfx library bake <recipe> <object> --as <kind>/<name> [--thumb] [--tags a,b] [--library <dir>] [--json]
                                                           builds the recipe and writes the object to library/<kind>/<name>: model.glb, object.toml (its source, params and facts) and with --thumb a 512x512 still on a neutral ground; then the index
-pfx library add <file.glb> --as <kind>/<name> [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--thumb] [--tags a,b] [--library <dir>] [--json]
-                                                          brings a glTF 2.0 binary file into the library: copies it, writes its object.toml (file name, sha256, size, wheels and light anchors found by node name), checked by gltf_validator when installed
+pfx library add <file.glb|file.gltf|file.obj> --as <kind>/<name> [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--thumb] [--tags a,b] [--library <dir>] [--json]
+                                                          brings a glTF 2.0 model (.glb, a split .gltf, or an .obj with its .mtl) into the library as one standalone model.glb, writes its object.toml (file name, sha256, size, wheels and light anchors found by node name), checked by gltf_validator when installed
 pfx route <recipe> list|set|add|remove [--route <name>] [--at <i>] [--point x,y,z] [--json]
                                                           list the routes' points and lengths, or move, add or remove a point in the file
-pfx set <recipe> <key>=<value>... [--json]               writes values into the recipe file by dotted key, as --set takes them, keeping its comments; refused and left untouched when the result does not check
+pfx set <recipe> <key>=<value>... [--through] [--json]    writes values into the recipe file by dotted key, as --set takes them, keeping its comments; refused and left untouched when the result does not check
 pfx get <recipe> <key>... [--json]                       prints the recipe's values by dotted key, as TOML or JSON
 pfx curve <recipe> <object> <param> list|set|add|remove [--at <i>] [--point a,b] [--json]
                                                           list one curve param of a generator object, or move, add or remove a point in the file
@@ -51,8 +51,8 @@ pfx scene save <recipe> --pfx <out.pfx> [--thumb] [--json]
                                                           packs the recipe, its includes and every file it reads, its build and its scene into one .pfx
 pfx scene unpack <file.pfx> <dir> [--json]               writes a .pfx's recipe and files into a folder, so building it there gives the same GLB
 pfx scene fold <file.pfx> [--apply | --keep] [--json]    lists the scene edits made in a .pfx, folds them into the recipe or keeps them as overrides
-pfx import <file.glb> (--as <kind>/<name> | --out <x.pfx>) [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--tags <a,b>] [--thumb] [--json]
-                                                          a glTF 2.0 binary (a Blender export too) into a .pfx: its glTF as-is, a one-object recipe and detected facts (size, wheels, light anchors)
+pfx import <file.glb|file.gltf|file.obj> (--as <kind>/<name> | --out <x.pfx>) [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--tags <a,b>] [--thumb] [--json]
+                                                          a glTF 2.0 model (.glb, a split .gltf, or an .obj with its .mtl) into a .pfx: its glTF packed into one GLB, a one-object recipe and detected facts (size, wheels, light anchors)
 pfx export <file.pfx|recipe> --glb <out.glb> [--only <object>] [--json]
                                                           a standalone GLB with its node hierarchy and no pfx extras
 pfx edit [<recipe|scene|file.pfx|project folder|folder>] [--play <module.wasm>] [--stage N|name] [--only <glob>,...] [--clay] [--wireframe [--blend <0..1>] [--xray]]

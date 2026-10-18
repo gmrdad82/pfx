@@ -3,7 +3,7 @@ use glam::{DMat4, DQuat, DVec3};
 use pfx_glb::Node;
 use pfx_mesh::math::Real;
 use pfx_motion::{Route, Timeline, Trs, noise1, trs_from_matrix};
-use pfx_recipe::{Follow, Recipe};
+use pfx_recipe::{Follow, Owner, Recipe};
 
 const STEER_MAX_DEG: f64 = 35.0;
 const SLIP_SMOOTH_S: f64 = 0.2;
@@ -168,10 +168,19 @@ fn wheel_of(node: &Node, corner: &str, facts: Option<&serde_json::Value>) -> Whe
     }
 }
 
+#[derive(Clone, Copy)]
+struct Carry {
+    front: bool,
+    wheel: Wheel,
+    hub: DMat4,
+    offset: DMat4,
+}
+
 pub(crate) struct Sub<'a> {
     name: String,
     rel: DMat4,
     wheel: Option<(bool, Wheel)>,
+    carry: Option<Carry>,
     facts: Option<&'a serde_json::Value>,
 }
 
@@ -182,6 +191,14 @@ impl Sub<'_> {
     }
 
     fn spins(&self, node: &str) -> bool {
+        if self
+            .facts
+            .and_then(|f| f.get("spin"))
+            .and_then(serde_json::Value::as_bool)
+            == Some(false)
+        {
+            return false;
+        }
         node.strip_prefix(self.name.as_str())
             .and_then(|rest| rest.strip_prefix('.'))
             .and_then(|piece| self.facts?.get(piece)?.get("spin")?.as_bool())
@@ -196,15 +213,21 @@ impl Sub<'_> {
         base: f64,
         scaled: &dyn Fn(usize) -> DMat4,
     ) -> Vec<Trs> {
-        let (Some((front, wheel)), Some((path, route))) = (self.wheel, drive) else {
+        let (Some(carry), Some((path, route))) = (self.carry, drive) else {
             return poses
                 .iter()
                 .enumerate()
                 .map(|(n, pose)| trs_from_matrix(*pose * scaled(n) * self.rel))
                 .collect();
         };
+        let Carry {
+            front,
+            wheel,
+            hub,
+            offset,
+        } = carry;
         let spins = self.spins(node);
-        let pivot = self.rel.transform_point3(wheel.centre);
+        let pivot = hub.transform_point3(wheel.centre);
         poses
             .iter()
             .zip(&path.distance)
@@ -215,17 +238,18 @@ impl Sub<'_> {
                 let local = DMat4::from_translation(pivot)
                     * DMat4::from_rotation_y(turn)
                     * DMat4::from_translation(-pivot)
-                    * self.rel
+                    * hub
                     * DMat4::from_translation(wheel.centre)
                     * DMat4::from_quat(DQuat::from_axis_angle(wheel.axle, roll))
-                    * DMat4::from_translation(-wheel.centre);
+                    * DMat4::from_translation(-wheel.centre)
+                    * offset;
                 trs_from_matrix(*pose * scaled(n) * local)
             })
             .collect()
     }
 }
 
-fn descends(recipe: &Recipe, from: usize, to: usize) -> bool {
+pub(crate) fn descends(recipe: &Recipe, from: usize, to: usize) -> bool {
     let mut at = from;
     for _ in 0..recipe.objects.len() {
         let Some(parent) = &recipe.objects[at].parent else {
@@ -242,19 +266,53 @@ fn descends(recipe: &Recipe, from: usize, to: usize) -> bool {
     false
 }
 
+fn independent(recipe: &Recipe, owners: &[String], from: usize, root: usize) -> bool {
+    let mut at = from;
+    for _ in 0..recipe.objects.len() {
+        if at == root {
+            return false;
+        }
+        if owners.contains(&recipe.objects[at].name) {
+            return true;
+        }
+        let Some(parent) = &recipe.objects[at].parent else {
+            return false;
+        };
+        let Some(up) = recipe.objects.iter().rposition(|o| o.name == *parent) else {
+            return false;
+        };
+        at = up;
+    }
+    false
+}
+
 pub(crate) fn subs<'a>(b: &Bake<'a>, object: &str) -> Result<Vec<Sub<'a>>, String> {
     let prefix = format!("{object}.");
     let wheel_prefix = format!("{object}.wheel_");
     let Some(root) = b.recipe.objects.iter().position(|o| o.name == object) else {
         return Ok(Vec::new());
     };
+    let owners: Vec<String> = b
+        .recipe
+        .constrained()
+        .into_iter()
+        .filter_map(|c| match c.owner {
+            Owner::Object(name) => Some(name),
+            _ => None,
+        })
+        .collect();
     let world = |at: usize| crate::world(b.recipe, at).map_err(|e| e.to_string());
-    let mut out = Vec::new();
+    let mut found: Vec<(usize, Sub<'a>)> = Vec::new();
     for (at, sub) in b.recipe.objects.iter().enumerate() {
-        if !sub.name.starts_with(&prefix) {
+        if at == root {
             continue;
         }
-        let rel = if descends(b.recipe, at, root) {
+        let below = descends(b.recipe, at, root);
+        let named = sub.name.starts_with(&prefix);
+        if !named && (!below || independent(b.recipe, &owners, at, root)) {
+            continue;
+        }
+        let rel = if below {
             world(root)?.inverse() * world(at)?
         } else {
             world(at)?
@@ -283,13 +341,51 @@ pub(crate) fn subs<'a>(b: &Bake<'a>, object: &str) -> Result<Vec<Sub<'a>>, Strin
                     },
                 )
             });
-        out.push(Sub {
-            name: sub.name.clone(),
-            rel,
+        let carry = wheel.map(|(front, wheel)| Carry {
+            front,
             wheel,
-            facts,
+            hub: rel,
+            offset: DMat4::IDENTITY,
         });
+        found.push((
+            at,
+            Sub {
+                name: sub.name.clone(),
+                rel,
+                wheel,
+                carry,
+                facts,
+            },
+        ));
     }
+    let hubs: Vec<(usize, String, Carry)> = found
+        .iter()
+        .filter(|(_, s)| s.wheel.is_some())
+        .filter_map(|(at, s)| Some((*at, s.name.clone(), s.carry?)))
+        .collect();
+    for (at, sub) in &mut found {
+        if sub.carry.is_some() {
+            continue;
+        }
+        let hub = hubs
+            .iter()
+            .filter(|(hub_at, name, _)| {
+                hub_at != at
+                    && (descends(b.recipe, *at, *hub_at)
+                        || sub
+                            .name
+                            .strip_prefix(name.as_str())
+                            .is_some_and(|rest| rest.starts_with('.')))
+            })
+            .max_by_key(|(_, name, _)| name.len());
+        if let Some((_, _, carry)) = hub {
+            sub.carry = Some(Carry {
+                offset: carry.hub.inverse() * sub.rel,
+                ..*carry
+            });
+        }
+    }
+    let mut out: Vec<Sub<'a>> = found.into_iter().map(|(_, sub)| sub).collect();
     out.sort_by_key(|s| std::cmp::Reverse(s.name.len()));
     Ok(out)
 }
@@ -335,7 +431,9 @@ pub(crate) fn nodes(
     let wheel_prefix = format!("{object}.wheel_");
     let owned: Vec<&Node> = nodes
         .iter()
-        .filter(|n| n.name == object || n.name.starts_with(&prefix))
+        .filter(|n| {
+            n.name == object || n.name.starts_with(&prefix) || subs.iter().any(|s| s.owns(&n.name))
+        })
         .collect();
     let sub_of = |node: &Node| subs.iter().find(|s| s.owns(&node.name));
     let wheels: Vec<(bool, Wheel)> = owned
@@ -428,6 +526,7 @@ mod tests {
             speed,
             drift,
             ride: 0.0,
+            root_motion: pfx_recipe::RootMotion::Ignore,
         }
     }
 

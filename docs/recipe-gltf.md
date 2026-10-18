@@ -1,11 +1,11 @@
 # glTF in and out of recipes
 
-pfx reads any standard glTF 2.0 binary, a Blender export included, and writes GLBs other tools open: Blender, a game engine, a viewer. Both commands are CPU only, except `--thumb`.
+pfx reads any standard glTF 2.0 model, a binary `.glb`, a `.gltf` with its buffers and images beside it, or an `.obj` with its `.mtl` and textures, and writes GLBs other tools open: Blender, a game engine, a viewer. Both commands are CPU only, except `--thumb`.
 
 ## Import
 
 ```
-pfx import <file.glb> (--as <kind>/<name> | --out <x.pfx>) [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--tags <tag,tag>] [--thumb] [--json]
+pfx import <file.glb|file.gltf|file.obj> (--as <kind>/<name> | --out <x.pfx>) [--licence <SPDX id>] [--credit <line>] [--author <name>] [--source <url>] [--tags <tag,tag>] [--thumb] [--json]
 ```
 
 ```
@@ -21,7 +21,28 @@ It writes a `.pfx` document:
 - **NODE** maps each node, as `<name>.<node>`, to its glTF index.
 - **THMB**, with `--thumb`, a 256x256 PNG drawn headless on the live renderer.
 
-`--as <kind>/<name>` writes `library/<kind>/<name>.pfx` under the current folder, `--out` writes where it says and takes the file's name. It refuses a file that is not a standalone glTF 2.0 binary (a buffer or image in an outside file), and, when `gltf_validator` (the Khronos glTF Validator) is on the PATH, a file it reports errors in. `--json` prints one object: `out`, `kind`, `name`, `bytes`, `nodes`, `thumb`, `validator` (`passed` or `absent`) and `facts`.
+`--as <kind>/<name>` writes `library/<kind>/<name>.pfx` under the current folder, `--out` writes where it says and takes the file's name. It refuses a file that is none of the three, a model whose buffers, images, `.mtl` or textures are missing or outside its folder, and, for a `.glb` or `.gltf` when `gltf_validator` (the Khronos glTF Validator) is on the PATH, a file it reports errors in. `--json` prints one object: `out`, `kind`, `name`, `bytes`, `nodes`, `thumb`, `validator` (`passed` or `absent`) and `facts`.
+
+### Split glTF and OBJ
+
+Both are packed into one standalone GLB first (`pfx_load::pack::model`), and that GLB is what the document keeps:
+
+- **A `.gltf`:** every buffer is read from its `uri`, a relative path resolved beside the `.gltf` and percent-decoded (`wood%20diff.jpg` is `wood diff.jpg`), or a base64 `data:` URI, the way cgltf resolves them; the buffers are joined into one BIN chunk with their views moved along, and every image with a `uri` is embedded as a buffer view with its `mimeType` (PNG or JPEG, read from its bytes). A path that climbs out of the model's folder (`../`), an absolute path and any other scheme (`https:`, `file:`) are refused. A `.glb` that names outside files is packed the same way; one that names none is kept byte for byte.
+- **An `.obj`:** read as tobj reads it, with fan-triangulated faces; points and lines are dropped. Each `o` or `g` is a node with one mesh, a primitive per `usemtl` in it; texture coordinates are flipped to glTF's top-left origin, `v x y z r g b` colours become `COLOR_0`, and normals stay out when the file has none (the renderer smooths them). Its `mtllib` files are read beside it and their textures beside each `.mtl`, PNG or JPEG only, each embedded once. Each MTL material becomes a glTF metallic-roughness material:
+
+| MTL | glTF |
+|---|---|
+| `Kd`, `map_Kd` | `baseColorFactor` and `baseColorTexture` |
+| `d`, or `Tr` as 1 − `Tr` (`d` wins) | the base colour's alpha, `alphaMode` `BLEND` below 1 |
+| `Pr` | `roughnessFactor`; without it, `Ns` through the Beckmann width, (2 / (`Ns` + 2))^¼, and 1 when `Ks` is black |
+| `Pm` | `metallicFactor` (0 without it) |
+| `Ks` (when there is no `Pr` or `Pm`) | `KHR_materials_specular`'s `specularColorFactor` |
+| `Ke`, `map_Ke` | `emissiveFactor` and `emissiveTexture`, with `KHR_materials_emissive_strength` above 1 |
+| `norm`, else `map_Bump` or `bump` (with `-bm`) | `normalTexture` and its `scale` |
+| `Pc`, `Pcr` | `KHR_materials_clearcoat` |
+| a map's `-s` and `-o` | `KHR_texture_transform` |
+
+`map_Ka`, `map_Ks`, `map_Ns`, `map_d`, `map_Pr`, `map_Pm`, `Ni`, `illum` and `Ka` are read but not carried: glTF keeps roughness and metalness in one image, which an OBJ does not have.
 
 ## Export
 

@@ -37,6 +37,7 @@ fn a_follow_reads_and_set_and_variants_reach_it() {
                 slip_deg: 6.0,
             }),
             ride: 0.0,
+            root_motion: pfx_recipe::RootMotion::Ignore,
         }]
     );
     let set = apply_set(

@@ -7,6 +7,8 @@ use crate::image::{ColorSpace, Image, Pixels};
 
 pub const SHEEN: &str = "KHR_materials_sheen";
 pub const ANISOTROPY: &str = "KHR_materials_anisotropy";
+pub const CLEARCOAT: &str = "KHR_materials_clearcoat";
+pub const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
 pub const DETAIL_NORMAL: &str = "detailNormalTexture";
 pub const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
 
@@ -80,9 +82,11 @@ where
                 };
                 (bytes, Some(mime_type), label)
             }
-            gltf::image::Source::Uri { uri, mime_type } => {
-                ((self.read)(uri).ok(), mime_type, uri.to_string())
-            }
+            gltf::image::Source::Uri { uri, mime_type } => (
+                crate::uri::load(uri, self.read).ok(),
+                mime_type,
+                uri.to_string(),
+            ),
         };
         let Some(bytes) = bytes else {
             return Ok(None);
@@ -273,6 +277,15 @@ where
             texture_index(anisotropy.get("anisotropyTexture")),
             ColorSpace::Linear,
         )?;
+    }
+    if let Some(clearcoat) = material.extension_value(CLEARCOAT) {
+        extended = true;
+        out.clearcoat = number(clearcoat.get("clearcoatFactor"), 0.0);
+        out.clearcoat_roughness = number(clearcoat.get("clearcoatRoughnessFactor"), 0.0);
+    }
+    if let Some(strength) = material.extension_value(EMISSIVE_STRENGTH) {
+        let strength = number(strength.get("emissiveStrength"), 1.0);
+        out.emission = out.emission.map(|e| e * strength);
     }
     if let Some(detail) = material
         .extras()

@@ -122,22 +122,27 @@ fn the_recipes_own_keys_win_over_an_included_table() {
 }
 
 #[test]
-fn a_name_defined_in_two_files_is_refused_naming_both() {
-    let rig = "[[light]]\nname = \"lamp\"\nposition = [0.0, 1.0, 0.0]\nintensity = 1.0\n";
-    let main = format!(
-        "{HEAD}include = [\"rig.toml\"]\n\n[[light]]\nname = \"lamp\"\nposition = [0.0, 2.0, 0.0]\nintensity = 1.0\n"
+fn a_name_defined_in_two_sibling_files_is_refused_naming_both() {
+    let lamp = |y: f64| {
+        format!("[[light]]\nname = \"lamp\"\nposition = [0.0, {y}, 0.0]\nintensity = 1.0\n")
+    };
+    let main = format!("{HEAD}include = [\"one.toml\", \"two.toml\"]\n");
+    let dir = scratch(
+        "twice",
+        &[
+            ("one.toml", &lamp(1.0)),
+            ("two.toml", &lamp(2.0)),
+            ("scene.toml", &main),
+        ],
     );
-    let dir = scratch("twice", &[("rig.toml", rig), ("scene.toml", &main)]);
     let e = error(&dir.join("scene.toml"));
-    assert_eq!(e.path, "light[lamp]");
-    assert_eq!(e.line, Some(5));
+    assert_eq!(e.path, "two.toml:1: light[lamp]");
     assert!(
-        e.text.contains("rig.toml") && e.text.contains("scene.toml"),
+        e.text.contains("one.toml") && e.text.contains("two.toml"),
         "{e}"
     );
 
     let sky = "[sky]\nkind = \"analytic\"\n";
-    let main = format!("{HEAD}include = [\"one.toml\", \"two.toml\"]\n");
     let dir = scratch(
         "twice-sky",
         &[("one.toml", sky), ("two.toml", sky), ("scene.toml", &main)],
@@ -149,18 +154,62 @@ fn a_name_defined_in_two_files_is_refused_naming_both() {
         "{e}"
     );
 
-    let main =
-        format!("{HEAD}include = [\"rig.toml\"]\n\n[materials.tile]\nbase = [1.0, 1.0, 1.0]\n");
-    let rig = "[materials.tile]\nbase = [0.5, 0.5, 0.5]\n";
+    let tile = |v: f64| format!("[materials.tile]\nbase = [{v}, {v}, {v}]\n");
     let dir = scratch(
         "twice-material",
-        &[("rig.toml", rig), ("scene.toml", &main)],
+        &[
+            ("one.toml", &tile(0.5)),
+            ("two.toml", &tile(0.6)),
+            ("scene.toml", &main),
+        ],
     );
     let e = error(&dir.join("scene.toml"));
-    assert_eq!(e.path, "materials.tile");
+    assert!(e.path.ends_with("materials.tile"), "{e}");
     assert!(
-        e.text.contains("rig.toml") && e.text.contains("scene.toml"),
+        e.text.contains("one.toml") && e.text.contains("two.toml"),
         "{e}"
+    );
+}
+
+#[test]
+fn the_including_file_overrides_an_included_entry_by_name() {
+    let rig = "[[light]]\nname = \"lamp\"\nposition = [0.0, 1.0, 0.0]\nintensity = 1.0\n\n[[light]]\nname = \"fill\"\nposition = [1.0, 1.0, 0.0]\nintensity = 2.0\n\n[materials.tile]\nbase = [0.5, 0.5, 0.5]\n\n[materials.floor]\nbase = [0.1, 0.1, 0.1]\n";
+    let main = format!(
+        "{HEAD}include = [\"rig.toml\"]\n\n[[light]]\nname = \"lamp\"\nposition = [0.0, 2.0, 0.0]\nintensity = 9.0\n\n[materials.tile]\nbase = [1.0, 1.0, 1.0]\n"
+    );
+    let dir = scratch("override", &[("rig.toml", rig), ("scene.toml", &main)]);
+    let r = read(&dir.join("scene.toml"));
+    let lights: Vec<(&str, f64)> = r
+        .lights
+        .iter()
+        .map(|l| (l.name.as_str(), l.intensity))
+        .collect();
+    assert_eq!(lights, [("lamp", 9.0), ("fill", 2.0)]);
+    assert_eq!(r.lights[0].position, [0.0, 2.0, 0.0]);
+    assert_eq!(
+        r.materials["tile"]["base"],
+        serde_json::json!([1.0, 1.0, 1.0])
+    );
+    assert_eq!(
+        r.materials["floor"]["base"],
+        serde_json::json!([0.1, 0.1, 0.1])
+    );
+    assert_eq!(validate(&r), []);
+
+    let chain = "include = [\"rig.toml\"]\n\n[materials.floor]\nbase = [0.3, 0.3, 0.3]\n";
+    let top = format!("{HEAD}include = [\"mid.toml\"]\n");
+    let dir = scratch(
+        "override-chain",
+        &[("rig.toml", rig), ("mid.toml", chain), ("scene.toml", &top)],
+    );
+    let r = read(&dir.join("scene.toml"));
+    assert_eq!(
+        r.materials["floor"]["base"],
+        serde_json::json!([0.3, 0.3, 0.3])
+    );
+    assert_eq!(
+        r.materials["tile"]["base"],
+        serde_json::json!([0.5, 0.5, 0.5])
     );
 }
 

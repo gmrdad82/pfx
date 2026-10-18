@@ -464,6 +464,7 @@ mod tests {
                 speed: vec![[0.0, 20.0]],
                 drift: None,
                 ride: 0.0,
+                root_motion: pfx_recipe::RootMotion::Ignore,
             });
         }
         let tracks = [Track {

@@ -223,6 +223,10 @@ impl Reel {
         self.stage.set_poses(posed)
     }
 
+    pub fn reshape(&mut self, parts: &[Part]) -> Result<usize, Error> {
+        self.stage.reshape(parts)
+    }
+
     pub fn set_lights(&mut self, lights: &[pfx_recipe::Light]) -> Result<bool, Error> {
         self.stage.set_lights(lights)
     }

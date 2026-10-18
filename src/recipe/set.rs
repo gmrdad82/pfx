@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use pfx_build::Registry;
 use pfx_recipe::toml_edit::Value as Toml;
-use pfx_recipe::{Change, Loaded, json_of, load, save, set_values, tidy, value_of};
+use pfx_recipe::{Change, Loaded, json_of, load, save, set_values_with, tidy, value_of};
 use serde_json::{Value, json};
 
 use super::{check, pair, read_failure, refuse};
@@ -20,6 +20,11 @@ pub(super) struct SetArgs {
         help = "A dotted key, as --set takes it, and its new value as TOML of the kind it replaces"
     )]
     sets: Vec<String>,
+    #[arg(
+        long,
+        help = "Write a key an included file defines into that file; by default the recipe given takes the override"
+    )]
+    through: bool,
     #[arg(long, help = "One JSON object on stdout")]
     json: bool,
 }
@@ -115,7 +120,8 @@ fn set(args: &SetArgs, registry: &Registry) -> Result<(), String> {
     let file = args.recipe.as_str();
     let mut loaded = load(Path::new(file)).map_err(|e| read_failure(file, &e))?;
     let saved = originals(file, &loaded);
-    let changes = set_values(&mut loaded, &args.sets).map_err(|e| read_failure(file, &e))?;
+    let changes = set_values_with(&mut loaded, &args.sets, args.through)
+        .map_err(|e| read_failure(file, &e))?;
     let written = save(&loaded)
         .map_err(|e| read_failure(file, &e))
         .and_then(|()| rechecked(file, registry));
@@ -196,6 +202,7 @@ mod tests {
         SetArgs {
             recipe: file.to_string(),
             sets: sets.iter().map(|s| s.to_string()).collect(),
+            through: false,
             json: true,
         }
     }

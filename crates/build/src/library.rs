@@ -1,4 +1,5 @@
 use crate::shape::{Source, fail, read_mesh};
+use crate::skin::{self, Player, Skin};
 use crate::{Built, Error, GENERATOR, Generated, GeneratedLight, Piece, world};
 use glam::{DMat4, DQuat, DVec3};
 use pfx_glb::{Looks, Node, Order, Targets};
@@ -7,6 +8,7 @@ use pfx_recipe::{Kind, Object, Recipe};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub const LICENCE: &str = "MIT, Catalin Ilinca; original, no third-party models or brand marks";
 pub const FOLDER: &str = "library";
@@ -897,6 +899,7 @@ pub(crate) struct TreeNode {
     pub rest: DMat4,
     pub world: DMat4,
     pub piece: Option<String>,
+    pub skinned: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -909,6 +912,8 @@ pub(crate) struct Imported {
     pub generated: Generated,
     pub looks: Looks,
     pub morphs: Vec<Option<Morph>>,
+    pub skins: Vec<Option<Skin>>,
+    pub player: Option<Player>,
     pub tree: Tree,
     pub clips: Vec<(String, Vec<DMat4>)>,
 }
@@ -1013,22 +1018,49 @@ fn duration(clip: &Clip) -> f64 {
         .fold(0.0, |m, &t| m.max(f64::from(t)))
 }
 
-fn posed(tree: &Tree, clip: &Clip, t: f64) -> Vec<DMat4> {
+fn local_trs(tree: &Tree, clip: &Clip, at: usize, t: f64) -> (DVec3, DQuat, DVec3) {
+    let (mut scale, mut rotation, mut translation) =
+        tree.nodes[at].rest.to_scale_rotation_translation();
+    for channel in clip.channels.iter().filter(|c| c.node == at) {
+        let Some(v) = keyed(channel, t) else {
+            continue;
+        };
+        match (channel.property, v.as_slice()) {
+            (Property::Translation, [x, y, z]) => translation = DVec3::new(*x, *y, *z),
+            (Property::Scale, [x, y, z]) => scale = DVec3::new(*x, *y, *z),
+            (Property::Rotation, [x, y, z, w]) => {
+                rotation = DQuat::from_xyzw(*x, *y, *z, *w).normalize();
+            }
+            _ => {}
+        }
+    }
+    (scale, rotation, translation)
+}
+
+pub(crate) struct Playing<'a> {
+    pub first: (&'a Clip, f64),
+    pub second: Option<(&'a Clip, f64, f64)>,
+    pub grounded: bool,
+}
+
+fn posed(tree: &Tree, playing: &Playing) -> Vec<DMat4> {
     let mut out: Vec<DMat4> = Vec::with_capacity(tree.nodes.len());
     for (at, node) in tree.nodes.iter().enumerate() {
-        let (mut scale, mut rotation, mut translation) = node.rest.to_scale_rotation_translation();
-        for channel in clip.channels.iter().filter(|c| c.node == at) {
-            let Some(v) = keyed(channel, t) else {
-                continue;
-            };
-            match (channel.property, v.as_slice()) {
-                (Property::Translation, [x, y, z]) => translation = DVec3::new(*x, *y, *z),
-                (Property::Scale, [x, y, z]) => scale = DVec3::new(*x, *y, *z),
-                (Property::Rotation, [x, y, z, w]) => {
-                    rotation = DQuat::from_xyzw(*x, *y, *z, *w).normalize();
-                }
-                _ => {}
-            }
+        let (clip, local) = playing.first;
+        let (mut scale, mut rotation, mut translation) = local_trs(tree, clip, at, local);
+        if let Some((clip, local, weight)) = playing.second
+            && weight > 0.0
+        {
+            let (s, r, p) = local_trs(tree, clip, at, local);
+            scale = scale.lerp(s, weight);
+            translation = translation.lerp(p, weight);
+            let r = if rotation.dot(r) < 0.0 { -r } else { r };
+            rotation = rotation.lerp(r, weight).normalize();
+        }
+        if playing.grounded && node.parent.is_none() {
+            let (_, _, rest) = node.rest.to_scale_rotation_translation();
+            translation.x = rest.x;
+            translation.z = rest.z;
         }
         let local = DMat4::from_scale_rotation_translation(scale, rotation, translation);
         let parent = node.parent.and_then(|p| out.get(p).copied());
@@ -1037,61 +1069,104 @@ fn posed(tree: &Tree, clip: &Clip, t: f64) -> Vec<DMat4> {
     out
 }
 
+fn named<'a>(object: &Object, tree: &'a Tree, key: &str, want: &str) -> Result<&'a Clip, Error> {
+    tree.clips
+        .iter()
+        .find(|c| c.name.as_deref() == Some(want))
+        .ok_or_else(|| {
+            let names: Vec<&str> = tree
+                .clips
+                .iter()
+                .filter_map(|c| c.name.as_deref())
+                .collect();
+            fail(
+                object,
+                key,
+                format!(
+                    "the model has no animation named `{want}`, expected one of: {}",
+                    if names.is_empty() {
+                        "none".to_string()
+                    } else {
+                        names.join(", ")
+                    }
+                ),
+            )
+        })
+}
+
+pub(crate) fn grounded(recipe: &Recipe, object: &Object) -> bool {
+    let owner = pfx_recipe::Owner::Object(object.name.clone());
+    recipe
+        .constrained()
+        .into_iter()
+        .filter(|c| c.owner == owner)
+        .flat_map(|c| c.list)
+        .any(|c| {
+            matches!(c.kind, pfx_recipe::ConstraintKind::FollowPath(f)
+                if f.root_motion == pfx_recipe::RootMotion::Ignore)
+        })
+}
+
+pub(crate) type Chosen<'a> = (&'a Clip, Option<&'a Clip>, &'a pfx_recipe::Play, bool);
+
+pub(crate) fn chosen<'a>(object: &'a Object, tree: &'a Tree) -> Result<Option<Chosen<'a>>, Error> {
+    let (clip, looped, play) = match &object.kind {
+        Kind::Library {
+            clip, looped, play, ..
+        }
+        | Kind::Mesh {
+            clip, looped, play, ..
+        } => (clip, *looped, play),
+        _ => return Ok(None),
+    };
+    let first = match clip {
+        Some(want) => Some(named(object, tree, "clip", want)?),
+        None => tree.clips.first(),
+    };
+    let Some(first) = first else {
+        return Ok(None);
+    };
+    let second = match &play.next {
+        Some(want) => Some(named(object, tree, "next_clip", want)?),
+        None => None,
+    };
+    Ok(Some((first, second, play, looped)))
+}
+
+pub(crate) fn playing<'a>(
+    (first, second, play, looped): Chosen<'a>,
+    grounded: bool,
+    t: f64,
+) -> Playing<'a> {
+    Playing {
+        first: (first, play.first(t, duration(first), looped)),
+        second: second.map(|clip| (clip, play.second(t, duration(clip), looped), play.weight(t))),
+        grounded,
+    }
+}
+
 fn sampled(
     recipe: &Recipe,
     object: &Object,
     tree: &Tree,
 ) -> Result<Vec<(String, Vec<DMat4>)>, Error> {
-    let (Some(timeline), Kind::Library { clip, looped, .. }) = (&recipe.timeline, &object.kind)
-    else {
+    let Some(timeline) = &recipe.timeline else {
         return Ok(Vec::new());
     };
-    let chosen = match clip {
-        Some(want) => Some(
-            tree.clips
-                .iter()
-                .find(|c| c.name.as_deref() == Some(want.as_str()))
-                .ok_or_else(|| {
-                    let names: Vec<&str> = tree
-                        .clips
-                        .iter()
-                        .filter_map(|c| c.name.as_deref())
-                        .collect();
-                    fail(
-                        object,
-                        "clip",
-                        format!(
-                            "the model has no animation named `{want}`, expected one of: {}",
-                            if names.is_empty() {
-                                "none".to_string()
-                            } else {
-                                names.join(", ")
-                            }
-                        ),
-                    )
-                })?,
-        ),
-        None => tree.clips.first(),
-    };
-    let Some(chosen) = chosen else {
+    let Some(found) = chosen(object, tree)? else {
         return Ok(Vec::new());
     };
-    let length = duration(chosen);
+    let grounded = grounded(recipe, object);
     let fps = f64::from(timeline.fps.max(1));
     let frames: Vec<Vec<DMat4>> = (0..=timeline.frames)
         .map(|n| {
             let t = f64::from(n) / fps;
-            let t = if *looped && length > 0.0 {
-                t.rem_euclid(length)
-            } else {
-                t
-            };
-            posed(tree, chosen, t)
+            posed(tree, &playing(found, grounded, t))
         })
         .collect();
     let mut out = Vec::new();
     for (at, node) in tree.nodes.iter().enumerate() {
-        let Some(piece) = &node.piece else {
+        let Some(piece) = node.piece.as_ref().filter(|_| !node.skinned) else {
             continue;
         };
         let rest = node.world.inverse();
@@ -1178,6 +1253,8 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
     let mut looks = Looks::new();
     let mut pieces = Vec::new();
     let mut morphs = Vec::new();
+    let mut skins = Vec::new();
+    let mut rig: Option<(usize, pfx_load::SkinRig)> = None;
     let mut tree = Tree::default();
     let mut at = BTreeMap::new();
     let mut facts = sidecar.facts.clone();
@@ -1207,10 +1284,48 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             taken.insert(node.clone());
         }
         let mut piece = None;
+        let skinned = n.mesh().is_some() && n.skin().is_some();
         if let Some(m) = n.mesh() {
             let mut mesh = Mesh::default();
             let mut morph = Morph::default();
-            read_mesh(&source, &m, world, &mut mesh, &mut morph, &mut looks)?;
+            let skin = match n.skin() {
+                Some(found) => {
+                    read_mesh(
+                        &source,
+                        &m,
+                        DMat4::IDENTITY,
+                        &mut mesh,
+                        &mut morph,
+                        &mut looks,
+                    )?;
+                    let index = found.index();
+                    if rig.as_ref().is_some_and(|(at, _)| *at != index) {
+                        return Err(fail(
+                            object,
+                            "object",
+                            format!(
+                                "{reference}: the model has two skins, and an object takes one"
+                            ),
+                        ));
+                    }
+                    if rig.is_none() {
+                        let found = skin::rigged(&bytes, &dir, index)
+                            .map_err(|e| fail(object, "object", format!("{reference}: {e}")))?;
+                        rig = Some((index, found));
+                    }
+                    let (raw, weights) = skin::influences(&m, &buffers);
+                    let made = rig
+                        .as_ref()
+                        .map(|(_, found)| skin::skinned(&mut mesh, 0, &raw, &weights, found))
+                        .transpose()
+                        .map_err(|e| fail(object, "object", format!("{reference}: {e}")))?;
+                    made.filter(|made| made.joints.len() == mesh.positions.len())
+                }
+                None => {
+                    read_mesh(&source, &m, world, &mut mesh, &mut morph, &mut looks)?;
+                    None
+                }
+            };
             if let Some(corner) = node.strip_prefix("wheel_") {
                 wheel_fact(&mut facts, corner, world, &mesh);
             }
@@ -1218,6 +1333,7 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             piece = Some(full.clone());
             pieces.push(Piece { name: full, mesh });
             morphs.push((!morph.is_empty()).then_some(morph));
+            skins.push(skin);
         }
         at.insert(n.index(), tree.nodes.len());
         tree.nodes.push(TreeNode {
@@ -1226,6 +1342,7 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             rest,
             world,
             piece,
+            skinned,
         });
         let me = tree.nodes.len() - 1;
         for child in n.children().collect::<Vec<_>>().into_iter().rev() {
@@ -1234,6 +1351,10 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
     }
     tree.clips = clips_of(document, &buffers, &at);
     let clips = sampled(recipe, object, &tree)?;
+    let player = match rig {
+        Some((_, found)) => skin::player(recipe, object, Arc::new(found.rig), false)?,
+        None => None,
+    };
     looks.retain(|_, look| look.has_maps());
     let materials = split_glb(&bytes)
         .ok()
@@ -1257,6 +1378,8 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
         },
         looks,
         morphs,
+        skins,
+        player,
         tree,
         clips,
     })

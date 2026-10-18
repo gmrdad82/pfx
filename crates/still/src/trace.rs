@@ -529,6 +529,19 @@ impl Reel {
         for (model, piece) in self.staging.posed.iter_mut().zip(&self.staging.pieces) {
             *model = posed.get(&piece.name).copied().unwrap_or(IDENTITY);
         }
+        if self.built.skinned() {
+            for piece in pfx_recipe_scene::pieces(&self.built.skinned_parts(time)) {
+                if let Some(found) = self
+                    .staging
+                    .pieces
+                    .iter_mut()
+                    .find(|p| p.name == piece.name && p.material == piece.material)
+                {
+                    found.geometry = piece.geometry;
+                    self.kept = None;
+                }
+            }
+        }
         Ok(())
     }
 

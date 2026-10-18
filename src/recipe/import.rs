@@ -14,8 +14,8 @@ const THUMB: [u32; 2] = [256, 256];
 #[command(group(clap::ArgGroup::new("into").required(true).args(["as_name", "out"])))]
 pub(super) struct Args {
     #[arg(
-        value_name = "file.glb",
-        help = "A glTF 2.0 binary (a Blender export included)"
+        value_name = "model",
+        help = "A glTF 2.0 model: a .glb, a .gltf with its buffers and images beside it, or an .obj with its .mtl and textures"
     )]
     file: PathBuf,
     #[arg(
@@ -107,6 +107,22 @@ fn framed(facts: &serde_json::Map<String, Value>) -> ([f64; 3], [f64; 3]) {
 }
 
 fn thumbnail(
+    glb: &[u8],
+    out: &Path,
+    imported: &Imported,
+    registry: &Registry,
+) -> Result<Vec<u8>, String> {
+    let model = out.with_extension("thumb.glb");
+    if let Some(dir) = model.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    std::fs::write(&model, glb).map_err(|e| format!("{}: {e}", model.display()))?;
+    let shot = shoot(&model, out, imported, registry);
+    let _ = std::fs::remove_file(&model);
+    shot
+}
+
+fn shoot(
     file: &Path,
     out: &Path,
     imported: &Imported,
@@ -134,17 +150,24 @@ fn thumbnail(
     bytes
 }
 
+fn validator(file: &Path) -> Option<Result<(), String>> {
+    let gltf = file
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("glb") || e.eq_ignore_ascii_case("gltf"));
+    gltf.then(|| gltf_io::validator(file)).flatten()
+}
+
 pub fn run(args: &Args, registry: &Registry) -> ExitCode {
     let (out, name) = match target(args) {
         Ok(found) => found,
         Err(text) => return refuse(COMMAND, &text),
     };
     let file = args.file.display().to_string();
-    let bytes = match std::fs::read(&args.file) {
+    let bytes = match pfx_load::pack::model(&args.file) {
         Ok(bytes) => bytes,
-        Err(e) => return refuse(COMMAND, &format!("{file}: {e}")),
+        Err(text) => return refuse(COMMAND, &text),
     };
-    let validated = match gltf_io::validator(&args.file) {
+    let validated = match validator(&args.file) {
         None => "absent",
         Some(Ok(())) => "passed",
         Some(Err(text)) => return refuse(COMMAND, &format!("{file}: {text}")),
@@ -160,7 +183,7 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
         Err(text) => return refuse(COMMAND, &format!("{file}: {text}")),
     };
     let thumb = if args.thumb {
-        match thumbnail(&args.file, &out, &imported, registry) {
+        match thumbnail(&bytes, &out, &imported, registry) {
             Ok(png) => Some(png),
             Err(text) => return refuse(COMMAND, &format!("--thumb: {text}")),
         }

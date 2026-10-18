@@ -31,11 +31,76 @@ pub(crate) fn glob_matches(pattern: &str, text: &str) -> bool {
     pi == p.len()
 }
 
-pub(crate) fn keys(dotted: &str) -> Vec<Key> {
-    dotted
-        .split('.')
-        .map(|s| Key::Table(s.to_string()))
-        .collect()
+pub(crate) fn keys(dotted: &str) -> Result<Vec<Key>, String> {
+    let mut out = Vec::new();
+    let mut rest = dotted.trim();
+    let mut first = true;
+    while !rest.is_empty() {
+        if !first {
+            rest = match rest.strip_prefix('.') {
+                Some(after) => after.trim_start(),
+                None if rest.starts_with('[') => rest,
+                None => return Err(format!("expected `.` or `[` before `{rest}`")),
+            };
+            if rest.is_empty() {
+                return Err("ends with a `.`".to_string());
+            }
+        }
+        first = false;
+        if let Some(after) = rest.strip_prefix('"') {
+            let mut name = String::new();
+            let mut chars = after.char_indices();
+            let end = loop {
+                match chars.next() {
+                    Some((i, '"')) => break i + 1,
+                    Some((_, '\\')) => match chars.next() {
+                        Some((_, c)) => name.push(c),
+                        None => return Err("ends inside a quoted name".to_string()),
+                    },
+                    Some((_, c)) => name.push(c),
+                    None => return Err("has an unclosed `\"`".to_string()),
+                }
+            };
+            if name.is_empty() {
+                return Err("has an empty quoted name".to_string());
+            }
+            out.push(Key::Table(name));
+            rest = after[end..].trim_start();
+        } else if let Some(after) = rest.strip_prefix('[') {
+            let Some(close) = after.find(']') else {
+                return Err("has an unclosed `[`".to_string());
+            };
+            let inner = after[..close].trim();
+            if inner.is_empty() {
+                return Err("has an empty `[]`".to_string());
+            }
+            out.push(if inner.bytes().all(|b| b.is_ascii_digit()) {
+                Key::Index(
+                    inner
+                        .parse()
+                        .map_err(|_| format!("`{inner}` is too large an index"))?,
+                )
+            } else {
+                Key::Object(inner.to_string())
+            });
+            rest = after[close + 1..].trim_start();
+        } else {
+            let end = rest.find(['.', '[']).unwrap_or(rest.len());
+            let name = rest[..end].trim();
+            if name.is_empty() {
+                return Err("has an empty key".to_string());
+            }
+            if name.contains(['"', ']']) {
+                return Err(format!("`{name}` has a stray quote or bracket"));
+            }
+            out.push(Key::Table(name.to_string()));
+            rest = &rest[end..];
+        }
+    }
+    if out.is_empty() {
+        return Err("is empty".to_string());
+    }
+    Ok(out)
 }
 
 fn toml_value(value: &serde_json::Value) -> Option<Value> {
@@ -163,13 +228,16 @@ pub(crate) fn apply_to_table(
                 "expected a number, string, boolean, array or table",
             )
         })?;
-        let path = keys(dotted);
+        let path =
+            keys(dotted).map_err(|why| Error::new(format!("{at}.set.{dotted}"), None, why))?;
         morph_room(doc, &path);
         edit_root(doc, &path, Some(Item::Value(value)))
             .map_err(|text| Error::new(format!("{at}.set.{dotted}"), None, text))?;
     }
     for dotted in &variant.remove {
-        edit_root(doc, &keys(dotted), None).map_err(|text| {
+        let path = keys(dotted)
+            .map_err(|why| Error::new(format!("{at}.remove"), None, format!("`{dotted}` {why}")))?;
+        edit_root(doc, &path, None).map_err(|text| {
             Error::new(format!("{at}.remove"), None, format!("`{dotted}`: {text}"))
         })?;
     }

@@ -352,6 +352,9 @@ impl Renderer {
                 let (recipe, built) = (&base.0, &base.1);
                 let fps = recipe.timeline.map_or(1, |t| t.fps);
                 reel.set_poses(pfx_recipe_scene::poses(built, fps, time));
+                if built.skinned() {
+                    reel.reshape(&built.skinned_parts(time)).map_err(|e| e.0)?;
+                }
                 let lit = recipe.keyed.keys().any(|entry| entry.starts_with("light."));
                 let recipe =
                     pfx_build::pose_cameras(recipe, built, time).map_err(|e| e.to_string())?;

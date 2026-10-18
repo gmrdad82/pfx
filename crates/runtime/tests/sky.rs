@@ -30,5 +30,6 @@ fn an_rle_row_with_a_full_128_literal_decodes() {
 fn a_zero_count_is_the_engines_own_error() {
     let mut rle = header();
     rle.extend_from_slice(&[2, 2, 0, WIDTH as u8, 0]);
+    rle.extend_from_slice(&[0; 32]);
     assert_eq!(sky::decode(&rle).unwrap_err(), "bad hdr run");
 }

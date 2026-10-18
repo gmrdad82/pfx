@@ -1,3 +1,4 @@
+use crate::skin::Skin;
 use crate::{Error, holes, maps, rotation};
 use glam::{DMat4, DVec3};
 use pfx_mesh::outline::{self, Outline as Ring, Shape};
@@ -340,12 +341,19 @@ pub(crate) fn read_mesh(
     Ok(())
 }
 
+pub(crate) type Imported = (
+    Mesh,
+    Morph,
+    pfx_glb::Looks,
+    Option<(Skin, pfx_load::SkinRig)>,
+);
+
 pub(crate) fn imported(
     object: &Object,
     base: &Path,
     path: &str,
     node: Option<&str>,
-) -> Result<(Mesh, Morph, pfx_glb::Looks), Error> {
+) -> Result<Imported, Error> {
     let file = base.join(path);
     let bytes = pfx_recipe::files::read(&file)
         .map_err(|e| fail(object, "path", format!("cannot read {path}: {e}")))?;
@@ -359,6 +367,7 @@ pub(crate) fn imported(
     let mut morph = Morph::default();
     let mut looks = pfx_glb::Looks::new();
     let mut found = false;
+    let mut rig: Option<(usize, pfx_load::SkinRig, Option<Skin>)> = None;
     let roots: Vec<gltf::Node> = match document
         .default_scene()
         .or_else(|| document.scenes().next())
@@ -394,7 +403,45 @@ pub(crate) fn imported(
                 folder,
                 buffers: &buffers,
             };
-            read_mesh(&source, &m, matrix, &mut out, &mut morph, &mut looks)?;
+            let before = out.positions.len();
+            match n.skin() {
+                Some(skin) => {
+                    read_mesh(
+                        &source,
+                        &m,
+                        DMat4::IDENTITY,
+                        &mut out,
+                        &mut morph,
+                        &mut looks,
+                    )?;
+                    let index = skin.index();
+                    if rig.as_ref().is_some_and(|(at, _, _)| *at != index) {
+                        return Err(fail(
+                            object,
+                            "path",
+                            format!("{path}: the file has two skins, and an object takes one"),
+                        ));
+                    }
+                    if rig.is_none() {
+                        let found = crate::skin::rigged(&bytes, folder, index)
+                            .map_err(|e| fail(object, "path", format!("{path}: {e}")))?;
+                        rig = Some((index, found, None));
+                    }
+                    let (raw, weights) = crate::skin::influences(&m, &buffers);
+                    if let Some((_, found, kept)) = rig.as_mut() {
+                        let made = crate::skin::skinned(&mut out, before, &raw, &weights, found)
+                            .map_err(|e| fail(object, "path", format!("{path}: {e}")))?;
+                        match kept {
+                            Some(skin) => {
+                                skin.extend_static(before);
+                                skin.join(made);
+                            }
+                            None => *kept = Some(made),
+                        }
+                    }
+                }
+                None => read_mesh(&source, &m, matrix, &mut out, &mut morph, &mut looks)?,
+            }
         }
         for child in n.children().collect::<Vec<_>>().into_iter().rev() {
             stack.push((child, matrix, chosen));
@@ -408,7 +455,12 @@ pub(crate) fn imported(
         )),
         _ => {
             looks.retain(|_, look| look.has_maps());
-            Ok((out, morph, looks))
+            let skin = rig.and_then(|(_, found, skin)| {
+                let mut skin = skin?;
+                skin.extend_static(out.positions.len());
+                Some((skin, found))
+            });
+            Ok((out, morph, looks, skin))
         }
     }
 }
@@ -744,6 +796,18 @@ pub(crate) fn normals(object: &Object, m: &mut Mesh, morph: Option<&mut Morph>) 
         (None, false) if generated(object) && carries_normals(m) => {}
         (None, false) => mesh::flat(m),
     }
+}
+
+pub(crate) fn normals_traced(object: &Object, m: &mut Mesh, morph: Option<&mut Morph>) -> Vec<u32> {
+    if m.indices.is_empty() {
+        return (0..m.positions.len() as u32).collect();
+    }
+    let (degrees, flat_faces) = match (object.smooth_angle, object.smooth) {
+        (Some(angle), _) => (angle, object.flat_faces),
+        (None, true) => (180.0, false),
+        (None, false) => (0.01, false),
+    };
+    mesh::smooth_traced(m, degrees, flat_faces, morph)
 }
 
 fn carries_normals(m: &Mesh) -> bool {

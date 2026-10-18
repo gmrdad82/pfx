@@ -83,12 +83,7 @@ fn missing(table: &str, name: &str, names: &[String]) -> Error {
 }
 
 fn value_of(text: &str) -> Value {
-    let mut value = text
-        .trim()
-        .parse::<Value>()
-        .unwrap_or_else(|_| Value::from(text));
-    value.decor_mut().clear();
-    value
+    crate::set::parsed(text)
 }
 
 fn put(table: &mut Table, pair: &str) -> Result<(), Error> {

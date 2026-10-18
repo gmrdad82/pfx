@@ -909,7 +909,7 @@ fov_y_deg = 30.0
     );
     let glb = summary(&std::fs::read(&into[0]).unwrap()).unwrap();
     assert_eq!(glb.generator.as_deref(), Some(pfx_build::GENERATOR));
-    assert!(pfx_build::GENERATOR.starts_with("pfx "));
+    assert_eq!(pfx_build::GENERATOR, "pfx");
     let mut left: Vec<String> = std::fs::read_dir(&out)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
