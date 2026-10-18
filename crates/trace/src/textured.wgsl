@@ -107,12 +107,18 @@ fn lobes_traced(m: Material, transform: mat3x3f, hit: Hit, n: vec3f) {
     );
 }
 fn traced_eval(s: Shaded, wo: vec3f, wi: vec3f) -> vec3f {
+    if (!TRACE_LOBES) {
+        return eval(s, wo, wi);
+    }
     if (wi.z > 0.0 || !lobes_scatter_on()) {
         return eval_lobes(s, wo, wi);
     }
     return scatter_beyond(s, wi.z) / min(wi.z, -1e-6);
 }
 fn eval_bounce(s: Shaded, wo: vec3f, wi: vec3f) -> vec3f {
+    if (!TRACE_LOBES) {
+        return eval(s, wo, wi);
+    }
     let amount = surface_lobes.scatter.w;
     surface_lobes.scatter.w = 0.0;
     let value = eval_lobes(s, wo, wi);

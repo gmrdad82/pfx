@@ -310,6 +310,41 @@ pub struct SceneBuffers {
     pub rt: crate::rt::RtGeometry,
     levels: Option<Placing>,
     bottom_builds: usize,
+    features: Features,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Features {
+    lobes: bool,
+    maps: bool,
+    wet: bool,
+}
+
+impl Features {
+    fn of(materials: &[PackedMaterial]) -> Self {
+        Self {
+            lobes: materials.iter().any(|m| {
+                m.sheen[..3].iter().any(|&value| value > 0.0)
+                    || m.lobes[0] != 0.0
+                    || m.lobes[2] > 0.0
+            }),
+            maps: materials
+                .iter()
+                .any(|m| m.textures.iter().any(|&slot| slot >= 0.0) || m.texture_extra[0] >= 0.0),
+            wet: materials.iter().any(|m| m.wet[0] > 0.0 || m.wet[1] > 0.0),
+        }
+    }
+
+    fn constants(self) -> impl Iterator<Item = (&'static str, f64)> {
+        [
+            ("TRACE_LOBES", self.lobes),
+            ("TRACE_MAPS", self.maps),
+            ("TRACE_WET", self.wet),
+        ]
+        .into_iter()
+        .filter(|(_, on)| !on)
+        .map(|(name, _)| (name, 0.0))
+    }
 }
 
 struct Placing {
@@ -572,6 +607,7 @@ impl SceneBuffers {
         for packed in &mut packed_materials {
             texture_slots.remap(packed);
         }
+        let features = Features::of(&packed_materials);
         if packed_materials.iter().any(crate::textured::wants_uvs1) {
             effects.texture_extra[1] = f32::from_bits(crate::textured::place_uvs1(
                 order.iter().map(|&index| detailed[index as usize].uvs1),
@@ -711,6 +747,7 @@ impl SceneBuffers {
                 lights: detail.lights.len(),
             }),
             bottom_builds: laid.bottom_builds,
+            features,
         })
     }
 }
@@ -792,8 +829,13 @@ fn bounce_limits(bounces: Bounces) -> [(&'static str, f64); 4] {
     ]
 }
 
-fn pipeline_constants(detail: &Detail, height: u32) -> Vec<(&'static str, f64)> {
+fn pipeline_constants(
+    detail: &Detail,
+    height: u32,
+    features: Features,
+) -> Vec<(&'static str, f64)> {
     let mut constants = bounce_limits(detail.bounces).to_vec();
+    constants.extend(features.constants());
     constants.push((
         "BLOCK_STRIDE",
         f64::from(block_stride(height.div_ceil(BAND_STEP))),
@@ -1555,7 +1597,7 @@ impl Trace {
                 module: &module,
                 entry_point: Some("main"),
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &pipeline_constants(detail, height),
+                    constants: &pipeline_constants(detail, height, buffers.features),
                     ..Default::default()
                 },
                 cache: None,
@@ -2557,7 +2599,7 @@ mod tests {
         assert!(source.contains("override CLAMP_INDIRECT: f32 = 0.0;"));
         assert!(source.contains("override FILTER_GLOSSY: f32 = 0.0;"));
         let named = |detail: &Detail| -> Vec<(&'static str, f64)> {
-            pipeline_constants(detail, 64)
+            pipeline_constants(detail, 64, Features::of(&[]))
                 .into_iter()
                 .filter(|(name, _)| ["CLAMP_INDIRECT", "FILTER_GLOSSY"].contains(name))
                 .collect()
@@ -2575,6 +2617,39 @@ mod tests {
                 ("FILTER_GLOSSY", f64::from(0.15f32))
             ]
         );
+    }
+    #[test]
+    fn a_scene_skips_only_the_material_features_none_of_its_materials_use() {
+        let off = |materials: &[Material]| -> Vec<&'static str> {
+            let buffers = SceneBuffers::build(&[], &[], materials, &Detail::default()).unwrap();
+            pipeline_constants(&Detail::default(), 64, buffers.features)
+                .into_iter()
+                .filter(|(name, value)| name.starts_with("TRACE_") && *value == 0.0)
+                .map(|(name, _)| name)
+                .collect()
+        };
+        let plain = Material::default();
+        assert_eq!(off(&[plain]), ["TRACE_LOBES", "TRACE_MAPS", "TRACE_WET"]);
+        let mut fabric = plain;
+        fabric.fabric.color = [0.4, 0.2, 0.1];
+        let mut brushed = plain;
+        brushed.anisotropy.strength = -0.5;
+        let mut skin = plain;
+        skin.scatter.amount = 0.3;
+        for lobed in [fabric, brushed, skin] {
+            assert_eq!(off(&[plain, lobed]), ["TRACE_MAPS", "TRACE_WET"]);
+        }
+        let mut wet = plain;
+        wet.wet.amount = 0.5;
+        let mut puddled = plain;
+        puddled.wet.puddles = 0.5;
+        for soaked in [wet, puddled] {
+            assert_eq!(off(&[soaked, plain]), ["TRACE_LOBES", "TRACE_MAPS"]);
+        }
+        let source = include_str!("trace.wgsl");
+        for name in ["TRACE_LOBES", "TRACE_MAPS", "TRACE_WET"] {
+            assert!(source.contains(&format!("override {name}: bool = true;")));
+        }
     }
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]

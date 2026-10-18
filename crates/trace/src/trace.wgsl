@@ -20,6 +20,9 @@ override TRANSMISSIVE_SHADOWS: bool = false;
 override CLAMP_INDIRECT: f32 = 0.0;
 override FILTER_GLOSSY: f32 = 0.0;
 override SOBOL: bool = false;
+override TRACE_LOBES: bool = true;
+override TRACE_MAPS: bool = true;
+override TRACE_WET: bool = true;
 override SOBOL_LENGTH: u32 = 256u;
 override STEAM_SPREAD_BASE: f32 = 0.7;
 override STEAM_SPREAD_GROWTH: f32 = 4.0;
@@ -1090,7 +1093,7 @@ fn sample_bsdf(s: Shaded, wo: vec3f, entering: bool, carried: u32, state: ptr<fu
         let phi=2.0*PI*u1;
         let cos_theta=sqrt((1.0-u2)/(1.0+(alpha*alpha-1.0)*u2));
         var h=vec3f(cos(phi)*sqrt(max(0.0,1.0-cos_theta*cos_theta)),sin(phi)*sqrt(max(0.0,1.0-cos_theta*cos_theta)),cos_theta);
-        if (!coat && lobes_anisotropy_on()) { h=anisotropic_half(s.roughness,u1,u2); }
+        if (TRACE_LOBES && !coat && lobes_anisotropy_on()) { h=anisotropic_half(s.roughness,u1,u2); }
         let wi=reflect(-wo,h);
         return LightSample(wi,bsdf_pdf(s,wo,wi),3u,vec3f(1.0),1u);
     }
@@ -1111,7 +1114,7 @@ fn bsdf_pdf(s: Shaded, wo: vec3f, wi: vec3f) -> f32 {
     let ca=alpha_rough(s.clearcoat_roughness);
     let denom=max(4.0*abs(dot(wi,h)),1e-8);
     var base_pdf=ggx_d(max(h.z,0.0),a*a)*max(h.z,0.0)/denom;
-    if (lobes_anisotropy_on()) { base_pdf=anisotropic_density(s.roughness,h)*max(h.z,0.0)/denom; }
+    if (TRACE_LOBES && lobes_anisotropy_on()) { base_pdf=anisotropic_density(s.roughness,h)*max(h.z,0.0)/denom; }
     let coat_pdf=ggx_d(max(h.z,0.0),ca*ca)*max(h.z,0.0)/denom;
     return (1.0-trans)*(coat*coat_pdf+spec*base_pdf+(1.0-coat-spec)*wi.z/PI);
 }
@@ -1242,7 +1245,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         }
         traced_occlusion=1.0;
         traced_direction=vec3f(1.0,0.0,1.0);
-        if (traced_textured(m)) {
+        if (TRACE_MAPS && traced_textured(m)) {
             let textured=traced_maps(s,n,m,hit,p);
             s=textured.shade;
             n=textured.normal;
@@ -1280,7 +1283,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                 }
             }
         }
-        if (wet_active(m.wet)) {
+        if (TRACE_WET && wet_active(m.wet)) {
             let soaked=wet_soak(s,n,geometric,p,m.wet,0.0);
             s=soaked.shade;
             n=soaked.normal;
@@ -1300,7 +1303,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         result+=indirect_capped(throughput*s.emission,bounce>1u);
         if (last) { break; }
         let transform=basis(n);
-        lobes_traced(m,transform,hit,n);
+        if (TRACE_LOBES) { lobes_traced(m,transform,hit,n); }
         let wo=transpose(transform)*(-d);
         let origin=spawn_point(p,n,o,hit.t);
         let entering=dot(hit.n,d)<0.0;

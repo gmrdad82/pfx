@@ -109,6 +109,31 @@ What it costs and keeps:
 
 - **Same picture.** A scene without instances traces the same bytes (`paced_traces_keep_the_bytes_of_eight_row_bands` still matches its pins). With instances the hits are the same up to float differences at triangle edges: the triangle slots are laid out per instance, so the BVH visits triangles in another order (two triangles sharing an edge can trade a tie) and an emissive scene lists its emitters in another order, and ray queries intersect in object space. On the firefly scene (16 samples) the colour mean moved by 0.03%, 99.4% of the colour floats stayed bit for bit on the software BVH and 89% with ray queries, and the albedo and normal hashes did not move; the glass-shadow scene kept its software bytes, and with ray queries its mean absolute difference is under 1e-5. Those two colour pins were moved. `moved_instances_trace_as_a_fresh_stage_on_both_paths` moves a shared sphere twice, a floor and an emissive panel with `set_instance_transforms` and gets the bytes a fresh `Stage` of the moved scene traces, on the software BVH and with ray queries; `a_camera_move_keeps_the_trace_and_builds_nothing` counts the builds across a camera move and two moves. `levels::tests` walks the packed nodes on the CPU against brute force over the posed triangles.
 - **Speed.** A 4,000,000-triangle lumpy sphere turning in place over a floor at 2160×3840 (`crates/trace/examples/turning.rs`, under `pgpu run --class bench`, RX 9060 XT, 6 frames): staging and building a new `Trace` each frame took 4.2 s a frame with ray queries and 4.3 to 5.0 s on the software BVH (main took 4.4 and 4.3 s), and that trace's first sample a further 3.6 to 4.5 s. Keeping the trace, `set_instance_transforms` took 170 ms a frame with ray queries and 198 ms on the software BVH (re-posing the 4 M triangles on every core, uploading their 384 MB of records, rebuilding the top level and the TLAS), and the next sample 175 ms and 4.3 s, as on any kept trace; the trace stayed at two bottom builds. On the neutral desk (`the_desk_runs_every_lane_and_reports_its_throughput`, 1280×720, 16 samples, many placements) a trace took 342 ms of GPU with ray queries against main's 399 to 412 ms, each mesh's BLAS being tighter than one over the whole world, and 702 to 948 ms on the software BVH against 855 to 888 ms: the top level costs a few percent there at most.
+- **One level or two for a still.** A still whose instances never move could keep the single flat BVH it had before the two levels. Measured at 3840×2160 with ray queries (RX 9060 XT, `pgpu run --class bench`, 5 runs each interleaved, medians): on the desk at 32 samples the flat layout took 4,433 ms of GPU against 3,562 ms with two levels, and on a 19-object workshop still adaptive to 64 samples it took 6,806 ms against 7,054 ms. Across the tags, the desk took 3,937 ms at v2.0.0, 3,934 at v2.2.0, 4,163 at v2.3.0 (the sheen, anisotropy, scatter and wet layers and the material maps), 3,514 at v2.4.0 (two levels) and 3,556 at v2.6.0. The flat layout gains under 4% on one scene and loses 24% on another, so every trace with instances keeps two levels.
+
+## Material features a scene skips
+
+The tracer's shader carries the sheen, anisotropy and scatter lobes, the material maps (base colour, normal, ORM, detail normal and the anisotropy direction) and the wet layer for every scene. A scene whose materials use none of them pays for that code anyway in registers and occupancy, even though each hit skips it at run time. As Cycles does with its kernel features (`KERNEL_FEATURE_*`, compiled out of a kernel when the scene uses none of them, as Metal function constants or OptiX specialisation), `Trace` turns a feature off with a pipeline override constant when none of the scene's materials uses it, and the shader compiler drops that code:
+
+| constant | off when no material has | reads |
+|---|---|---|
+| `TRACE_LOBES` | a fabric colour above 0, an anisotropy strength other than 0, or a scatter amount above 0 | `PackedMaterial::sheen`, `lobes` |
+| `TRACE_MAPS` | a texture slot (`textures`, `texture_extra.x`) at 0 or above, after the trace's texture slots are placed | `PackedMaterial::textures`, `texture_extra` |
+| `TRACE_WET` | a wet amount or puddles above 0 | `PackedMaterial::wet` |
+
+Each test is the shader's own test of that material (`lobes_sheen_on`, `lobes_anisotropy_on`, `lobes_scatter_on`, `traced_textured`, `wet_active`), so with the feature off every hit takes the branch it took before and the frame keeps its bytes. The constants default to on, so another pipeline that compiles the tracer's shader without them (the probe) keeps the full shader. `a_scene_skips_only_the_material_features_none_of_its_materials_use` checks which constants a scene sets.
+
+Measured against v2.6.0 at 3840×2160 with ray queries (RX 9060 XT, release builds, each render its own `pgpu run --class bench` job, interleaved A B A B, 5 runs each, medians, the GPU shared with one other bench job and a load average of 17 to 35 on 32 threads). The workshop is a 19-object still life rendered through an engine consumer, staged once and sampled, with none of the three features in use:
+
+| still | v2.6.0 | gated | change |
+|---|---|---|---|
+| desk, 32 samples | 3,890 ms | 3,488 ms | −10.3% |
+| workshop final, adaptive to 64 samples (59.9 a pixel) | 7,380 ms | 6,835 ms | −7.4% |
+| workshop draft, adaptive to 12 samples (11.5 a pixel) | 1,619 ms | 1,574 ms | −2.8% |
+| workshop crop, 1920×1080 of the 4K frame | 2,346 ms | 2,279 ms | −2.9% |
+| workshop clip, 8 frames at 1920×1080, 16 samples, one object turning (`set_instance_transforms` each frame) | 3,958 ms | 3,891 ms | −1.7% |
+
+Every output was byte for byte the same as v2.6.0's: the desk's colour floats, the final's and the draft's PNG, the crop's EXR and the clip's frames.
 
 ## Transmissive shadows
 
