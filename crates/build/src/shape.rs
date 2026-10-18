@@ -1,3 +1,4 @@
+use crate::pieces::{self, Rules, Step};
 use crate::skin::Skin;
 use crate::{Error, holes, maps, rotation};
 use glam::{DMat4, DVec3};
@@ -214,21 +215,25 @@ fn target_names(m: &gltf::Mesh) -> Vec<String> {
         .unwrap_or_default()
 }
 
+type Target = (Vec<[f32; 3]>, Vec<[f32; 3]>);
+
 fn join(
     morph: &mut Morph,
     names: &[String],
     weights: Option<&[f32]>,
-    targets: Vec<Vec<[f32; 3]>>,
+    targets: Vec<Target>,
     matrix: DMat4,
     before: usize,
     count: usize,
 ) {
+    let (positions, normals) = targets.into_iter().unzip();
     let mut part = Morph {
-        positions: targets,
+        positions,
+        normals,
         ..Morph::default()
     };
     part.transform(matrix);
-    for (i, deltas) in part.positions.into_iter().enumerate() {
+    for (i, (deltas, turns)) in part.positions.into_iter().zip(part.normals).enumerate() {
         let name = names
             .get(i)
             .filter(|n| !n.is_empty())
@@ -242,6 +247,7 @@ fn join(
                     .weights
                     .push(weights.and_then(|w| w.get(i)).copied().unwrap_or(0.0));
                 morph.positions.push(Vec::new());
+                morph.normals.push(Vec::new());
                 morph.names.len() - 1
             }
         };
@@ -249,9 +255,12 @@ fn join(
         if list.len() <= before {
             list.resize(before, [0.0; 3]);
             list.extend(deltas);
+            let list = &mut morph.normals[at];
+            list.resize(before, [0.0; 3]);
+            list.extend(turns);
         }
     }
-    for list in &mut morph.positions {
+    for list in morph.positions.iter_mut().chain(morph.normals.iter_mut()) {
         list.resize(before + count, [0.0; 3]);
     }
 }
@@ -266,7 +275,7 @@ pub(crate) struct Source<'a> {
 pub(crate) fn read_mesh(
     source: &Source,
     m: &gltf::Mesh,
-    matrix: DMat4,
+    (matrix, chosen): (DMat4, Option<&str>),
     out: &mut Mesh,
     morph: &mut Morph,
     looks: &mut pfx_glb::Looks,
@@ -306,17 +315,21 @@ pub(crate) fn read_mesh(
             .read_tex_coords(0)
             .map(|t| t.into_f32().collect::<Vec<[f32; 2]>>())
             .filter(|uvs| uvs.len() == count);
-        let targets: Vec<Vec<[f32; 3]>> = reader
+        let sized = |list: Option<Vec<[f32; 3]>>| {
+            list.filter(|d| d.len() == count)
+                .unwrap_or_else(|| vec![[0.0; 3]; count])
+        };
+        let targets: Vec<Target> = reader
             .read_morph_targets()
-            .map(|(deltas, _, _)| {
-                deltas
-                    .map(|d| d.collect::<Vec<[f32; 3]>>())
-                    .filter(|d| d.len() == count)
-                    .unwrap_or_else(|| vec![[0.0; 3]; count])
+            .map(|(deltas, turns, _)| {
+                (
+                    sized(deltas.map(Iterator::collect)),
+                    sized(turns.map(Iterator::collect)),
+                )
             })
             .collect();
         let mut part = Mesh {
-            normals: vec![[0.0; 3]; positions.len()],
+            normals: sized(reader.read_normals().map(Iterator::collect)),
             positions,
             uvs,
             uvs1: None,
@@ -324,13 +337,16 @@ pub(crate) fn read_mesh(
             slots: Vec::new(),
         };
         let material = primitive.material();
-        let name = material.name().unwrap_or("");
-        if material.index().is_some() && !looks.contains_key(name) {
+        let name = match chosen {
+            Some(name) => name.to_string(),
+            None => crate::library::material_name(material.name(), material.index()),
+        };
+        if chosen.is_none() && material.index().is_some() && !looks.contains_key(&name) {
             let look = maps::look(&material, buffers, folder)
                 .map_err(|e| fail(object, "path", format!("{path}: material `{name}`: {e}")))?;
-            looks.insert(name.to_string(), look);
+            looks.insert(name.clone(), look);
         }
-        part.set_material(name);
+        part.set_material(&name);
         mesh::transform(&mut part, matrix);
         let before = out.positions.len();
         out.append(&part);
@@ -341,20 +357,24 @@ pub(crate) fn read_mesh(
     Ok(())
 }
 
-pub(crate) type Imported = (
-    Mesh,
-    Morph,
-    pfx_glb::Looks,
-    Option<(Skin, pfx_load::SkinRig)>,
-);
+pub(crate) struct Imported {
+    pub mesh: Mesh,
+    pub morph: Morph,
+    pub looks: pfx_glb::Looks,
+    pub materials: std::collections::BTreeMap<String, serde_json::Value>,
+    pub skin: Option<(Skin, pfx_load::SkinRig)>,
+}
 
 pub(crate) fn imported(
     object: &Object,
+    recipe: &recipe::Recipe,
     base: &Path,
     path: &str,
     node: Option<&str>,
 ) -> Result<Imported, Error> {
-    let file = base.join(path);
+    let file = recipe
+        .asset(base, path)
+        .map_err(|e| fail(object, "path", e))?;
     let bytes = pfx_recipe::files::read(&file)
         .map_err(|e| fail(object, "path", format!("cannot read {path}: {e}")))?;
     let parsed = gltf::Gltf::from_slice(&bytes)
@@ -375,19 +395,32 @@ pub(crate) fn imported(
         Some(scene) => scene.nodes().collect(),
         None => document.nodes().collect(),
     };
-    let mut stack: Vec<(gltf::Node, DMat4, bool)> = roots
+    let mut stack: Vec<(gltf::Node, DMat4, bool, Option<usize>)> = roots
         .into_iter()
         .rev()
-        .map(|n| (n, DMat4::IDENTITY, false))
+        .map(|n| (n, DMat4::IDENTITY, false, None))
         .collect();
     let mut visited = vec![false; document.nodes().len()];
-    while let Some((n, parent, inside)) = stack.pop() {
+    let mut rules = Rules::new(object);
+    let mut steps = Vec::new();
+    let mut taken = std::collections::BTreeSet::new();
+    while let Some((n, parent, inside, up)) = stack.pop() {
         if visited
             .get_mut(n.index())
             .is_none_or(|done| std::mem::replace(done, true))
         {
             continue;
         }
+        let name = n.name().map(str::to_string);
+        let label = name.clone().unwrap_or_else(|| format!("node{}", n.index()));
+        steps.push(Step {
+            index: n.index(),
+            unique: pieces::unique(&mut taken, label, n.index()),
+            name,
+            parent: up,
+        });
+        let at = steps.len() - 1;
+        let choice = rules.choose(&steps, at);
         let local = DMat4::from_cols_array_2d(&n.transform().matrix().map(|c| c.map(f64::from)));
         let chosen = inside || node.is_none_or(|want| n.name() == Some(want));
         let matrix = if node.is_some() && !inside && chosen {
@@ -397,56 +430,57 @@ pub(crate) fn imported(
         };
         if chosen && let Some(m) = n.mesh() {
             found = true;
-            let source = Source {
-                object,
-                path,
-                folder,
-                buffers: &buffers,
-            };
-            let before = out.positions.len();
-            match n.skin() {
-                Some(skin) => {
-                    read_mesh(
-                        &source,
-                        &m,
-                        DMat4::IDENTITY,
-                        &mut out,
-                        &mut morph,
-                        &mut looks,
-                    )?;
-                    let index = skin.index();
-                    if rig.as_ref().is_some_and(|(at, _, _)| *at != index) {
-                        return Err(fail(
-                            object,
-                            "path",
-                            format!("{path}: the file has two skins, and an object takes one"),
-                        ));
-                    }
-                    if rig.is_none() {
-                        let found = crate::skin::rigged(&bytes, folder, index)
-                            .map_err(|e| fail(object, "path", format!("{path}: {e}")))?;
-                        rig = Some((index, found, None));
-                    }
-                    let (raw, weights) = crate::skin::influences(&m, &buffers);
-                    if let Some((_, found, kept)) = rig.as_mut() {
-                        let made = crate::skin::skinned(&mut out, before, &raw, &weights, found)
-                            .map_err(|e| fail(object, "path", format!("{path}: {e}")))?;
-                        match kept {
-                            Some(skin) => {
-                                skin.extend_static(before);
-                                skin.join(made);
+            if !choice.hidden {
+                let source = Source {
+                    object,
+                    path,
+                    folder,
+                    buffers: &buffers,
+                };
+                let before = out.positions.len();
+                match n.skin() {
+                    Some(skin) => {
+                        let placed = (DMat4::IDENTITY, choice.material);
+                        read_mesh(&source, &m, placed, &mut out, &mut morph, &mut looks)?;
+                        let index = skin.index();
+                        if rig.as_ref().is_some_and(|(at, _, _)| *at != index) {
+                            return Err(fail(
+                                object,
+                                "path",
+                                format!("{path}: the file has two skins, and an object takes one"),
+                            ));
+                        }
+                        if rig.is_none() {
+                            let found = crate::skin::rigged(&bytes, folder, index)
+                                .map_err(|e| fail(object, "path", format!("{path}: {e}")))?;
+                            rig = Some((index, found, None));
+                        }
+                        let (raw, weights) = crate::skin::influences(&m, &buffers);
+                        if let Some((_, found, kept)) = rig.as_mut() {
+                            let made =
+                                crate::skin::skinned(&mut out, before, &raw, &weights, found)
+                                    .map_err(|e| fail(object, "path", format!("{path}: {e}")))?;
+                            match kept {
+                                Some(skin) => {
+                                    skin.extend_static(before);
+                                    skin.join(made);
+                                }
+                                None => *kept = Some(made),
                             }
-                            None => *kept = Some(made),
                         }
                     }
+                    None => {
+                        let placed = (matrix, choice.material);
+                        read_mesh(&source, &m, placed, &mut out, &mut morph, &mut looks)?;
+                    }
                 }
-                None => read_mesh(&source, &m, matrix, &mut out, &mut morph, &mut looks)?,
             }
         }
         for child in n.children().collect::<Vec<_>>().into_iter().rev() {
-            stack.push((child, matrix, chosen));
+            stack.push((child, matrix, chosen, Some(at)));
         }
     }
+    rules.finish(path, &steps)?;
     match node {
         Some(want) if !found => Err(fail(
             object,
@@ -460,7 +494,15 @@ pub(crate) fn imported(
                 skin.extend_static(out.positions.len());
                 Some((skin, found))
             });
-            Ok((out, morph, looks, skin))
+            let mut materials = crate::library::file_materials(&bytes);
+            materials.retain(|name, _| out.slots.iter().any(|slot| slot.material == *name));
+            Ok(Imported {
+                mesh: out,
+                morph,
+                looks,
+                materials,
+                skin,
+            })
         }
     }
 }
@@ -489,7 +531,12 @@ pub(crate) fn weights(object: &Object, morph: &mut Morph) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) fn local(object: &Object, pockets: &[&Object], base: &Path) -> Result<Mesh, Error> {
+pub(crate) fn local(
+    object: &Object,
+    pockets: &[&Object],
+    recipe: &recipe::Recipe,
+    base: &Path,
+) -> Result<Mesh, Error> {
     let uv = uv_mode(object);
     Ok(match &object.kind {
         Kind::Box { size } => match &object.bevel {
@@ -616,7 +663,9 @@ pub(crate) fn local(object: &Object, pockets: &[&Object], base: &Path) -> Result
             caps,
             along: None,
         } => mesh::sweep(path, radii, *ring, *closed, *caps),
-        Kind::Mesh { path, node, .. } => imported(object, base, path, node.as_deref())?.0,
+        Kind::Mesh { path, node, .. } => {
+            imported(object, recipe, base, path, node.as_deref())?.mesh
+        }
         Kind::Generator { generator, .. } => {
             return Err(fail(
                 object,
@@ -647,7 +696,11 @@ fn unweld(m: &mut Mesh) -> Vec<u32> {
     if let Some(uvs1) = &m.uvs1 {
         m.uvs1 = Some(m.indices.iter().map(|&i| uvs1[i as usize]).collect());
     }
-    m.normals = vec![[0.0; 3]; positions.len()];
+    m.normals = m
+        .indices
+        .iter()
+        .map(|&i| m.normals.get(i as usize).copied().unwrap_or([0.0; 3]))
+        .collect();
     m.indices = (0..positions.len() as u32).collect();
     m.positions = positions;
     sources
@@ -743,6 +796,7 @@ fn generated(object: &Object) -> bool {
 pub(crate) fn materials(object: &Object, m: &mut Mesh) -> Result<(), Error> {
     let names = &object.materials;
     match (&object.material, names.len()) {
+        (Some(_), _) if Rules::overrides(object) => {}
         (Some(name), _) => m.set_material(name),
         (None, 0) if generated(object) || matches!(object.kind, Kind::Mesh { .. }) => {}
         (None, 0) => m.slots.clear(),
@@ -777,10 +831,11 @@ pub(crate) fn materials(object: &Object, m: &mut Mesh) -> Result<(), Error> {
 }
 
 pub(crate) fn normals(object: &Object, m: &mut Mesh, morph: Option<&mut Morph>) {
-    if m.indices.is_empty() {
+    if m.indices.is_empty() || keeps_normals(object, m) {
         return;
     }
     if let Some(morph) = morph {
+        morph.normals.clear();
         let (degrees, flat_faces) = match (object.smooth_angle, object.smooth) {
             (Some(angle), _) => (angle, object.flat_faces),
             (None, true) => (180.0, false),
@@ -793,13 +848,13 @@ pub(crate) fn normals(object: &Object, m: &mut Mesh, morph: Option<&mut Morph>) 
         (Some(angle), _) if object.flat_faces => mesh::smooth_by_angle_flat_faces(m, angle),
         (Some(angle), _) => mesh::smooth_by_angle(m, angle),
         (None, true) => mesh::smooth(m),
-        (None, false) if generated(object) && carries_normals(m) => {}
+        (None, false) if matches!(object.kind, Kind::Generator { .. }) && carries_normals(m) => {}
         (None, false) => mesh::flat(m),
     }
 }
 
 pub(crate) fn normals_traced(object: &Object, m: &mut Mesh, morph: Option<&mut Morph>) -> Vec<u32> {
-    if m.indices.is_empty() {
+    if m.indices.is_empty() || keeps_normals(object, m) {
         return (0..m.positions.len() as u32).collect();
     }
     let (degrees, flat_faces) = match (object.smooth_angle, object.smooth) {
@@ -808,6 +863,16 @@ pub(crate) fn normals_traced(object: &Object, m: &mut Mesh, morph: Option<&mut M
         (None, false) => (0.01, false),
     };
     mesh::smooth_traced(m, degrees, flat_faces, morph)
+}
+
+fn keeps_normals(object: &Object, m: &Mesh) -> bool {
+    let imported = matches!(object.kind, Kind::Mesh { .. } | Kind::Library { .. });
+    imported
+        && object.keep_normals != Some(false)
+        && !object.smooth
+        && object.smooth_angle.is_none()
+        && m.normals.len() == m.positions.len()
+        && m.normals.iter().all(|n| *n != [0.0; 3])
 }
 
 fn carries_normals(m: &Mesh) -> bool {
@@ -854,7 +919,7 @@ mod tests {
         for uv in ["", "uv = \"none\"\n", "uv = \"local\"\n"] {
             let object = card_object(uv);
             let recipe = recipe::parse("recipe = 1\nname = \"t\"\n").unwrap();
-            let mut m = local(&object, &[], Path::new("")).unwrap();
+            let mut m = local(&object, &[], &recipe, Path::new("")).unwrap();
             let before = m.uvs.clone();
             uvs(&recipe, &object, DMat4::IDENTITY, &mut m).unwrap();
             assert_eq!(m.uvs, before, "{uv}");

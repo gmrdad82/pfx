@@ -110,6 +110,7 @@ GUIDES = [
     ("recipe-clips", 125, None),
     ("recipe-runtime", 126, None),
     ("recipe-noise", 127, None),
+    ("asset-sources", 128, None),
     ("play", 201, None),
     ("input", 202, "pfx-input: keyboard, mouse and controllers behind one action map, with controller glyphs, rumble and input recording."),
     ("sound", 203, None),

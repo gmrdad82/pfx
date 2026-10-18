@@ -8,6 +8,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub mod align;
 mod bake;
 pub mod builtin;
 pub mod carve;
@@ -21,10 +22,12 @@ pub mod library;
 mod lod;
 mod maps;
 mod normal_map;
+mod pieces;
+pub mod poisson;
+pub mod scatter;
 mod scene;
 mod shape;
 pub mod skin;
-mod spdx;
 mod timeline;
 mod uv;
 
@@ -683,6 +686,7 @@ pub fn missing_materials(
     let generated = recipe.objects.iter().any(|object| {
         matches!(&object.kind, Kind::Generator { generator, .. } if registry.generators.contains_key(generator))
             || matches!(object.kind, Kind::Library { .. })
+            || pieces::Rules::overrides(object)
     });
     if generated && let Ok(built) = build_with(recipe, base, registry) {
         defined.extend(built.materials.keys().cloned());
@@ -691,6 +695,20 @@ pub fn missing_materials(
     for (i, object) in recipe.objects.iter().enumerate() {
         if object.hidden || matches!(object.kind, Kind::Pocket { .. } | Kind::Text { .. }) {
             continue;
+        }
+        for rule in &object.pieces {
+            let Some(name) = rule
+                .material
+                .as_deref()
+                .filter(|name| !defined.contains(*name))
+            else {
+                continue;
+            };
+            out.push(recipe.problem(
+                format!("object[{}].pieces.{}.material", object.name, rule.select),
+                &format!("object#{i}.pieces"),
+                recipe::missing_material_text(defined.iter().map(String::as_str), name),
+            ));
         }
         let names: Vec<&str> = match &object.material {
             Some(name) => vec![name.as_str()],
@@ -812,6 +830,58 @@ fn claim<'a>(
     }
 }
 
+fn share(
+    recipe: &Recipe,
+    object: &Object,
+    made: &mut Made,
+    offered: &BTreeMap<String, (&str, serde_json::Value)>,
+    imported: &Looks,
+) -> Vec<String> {
+    let names: std::collections::BTreeSet<String> = made
+        .materials
+        .keys()
+        .chain(made.looks.keys())
+        .cloned()
+        .collect();
+    let mut notes = Vec::new();
+    for name in names {
+        let Some((owner, value)) = offered.get(&name) else {
+            continue;
+        };
+        if made.materials.get(&name) == Some(value) && made.looks.get(&name) == imported.get(&name)
+        {
+            continue;
+        }
+        let own = format!("{}.{name}", object.name);
+        if let Some(mut value) = made.materials.remove(&name) {
+            if let (Some(theirs), false) = (
+                recipe.materials.get(&name),
+                recipe.materials.contains_key(&own),
+            ) {
+                value = theirs.clone();
+            }
+            made.materials.insert(own.clone(), value);
+        }
+        if let Some(look) = made.looks.remove(&name) {
+            made.looks.insert(own.clone(), look);
+        }
+        let meshes = made.nodes.iter_mut().flat_map(|node| {
+            let base = node.targets.as_mut().map(|targets| &mut targets.base);
+            std::iter::once(&mut node.mesh).chain(base)
+        });
+        for mesh in meshes.chain(made.lods.iter_mut().map(|lod| &mut lod.node.mesh)) {
+            for slot in mesh.slots.iter_mut().filter(|slot| slot.material == name) {
+                slot.material = own.clone();
+            }
+        }
+        notes.push(format!(
+            "materials.{name}: the object `{}` has its own `{name}`, unlike the object `{owner}`'s, so it is named `{own}`",
+            object.name
+        ));
+    }
+    notes
+}
+
 fn offer<'a>(
     offered: &mut BTreeMap<String, (&'a str, serde_json::Value)>,
     object: &'a Object,
@@ -857,6 +927,7 @@ struct Made {
     clips: Vec<(String, Vec<pfx_motion::Trs>)>,
     skins: Vec<(String, skin::Skin)>,
     player: Option<skin::Player>,
+    hidden: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -934,6 +1005,8 @@ fn make(
     let mut looks = Looks::new();
     let mut tree = None;
     let mut clips = Vec::new();
+    let mut offered = BTreeMap::new();
+    let mut hidden = std::collections::BTreeSet::new();
     let generated = if matches!(object.kind, Kind::Generator { .. }) {
         generate(recipe, index, base, registry, routes)?
     } else if matches!(object.kind, Kind::Library { .. }) {
@@ -944,28 +1017,30 @@ fn make(
         player = imported.player;
         tree = Some(imported.tree);
         clips = imported.clips;
+        hidden = imported.hidden;
         imported.generated
     } else {
         let mesh = match &object.kind {
             Kind::Mesh { path, node, .. } => {
-                let (mesh, mut found, kept, rigged) =
-                    shape::imported(object, base, path, node.as_deref())?;
-                shape::weights(object, &mut found)?;
-                morphs = vec![(!found.is_empty()).then_some(found)];
-                looks = kept;
-                if let Some((made, rig)) = rigged {
+                let mut found = shape::imported(object, recipe, base, path, node.as_deref())?;
+                shape::weights(object, &mut found.morph)?;
+                morphs = vec![(!found.morph.is_empty()).then_some(found.morph)];
+                looks = found.looks;
+                offered = found.materials;
+                if let Some((made, rig)) = found.skin {
                     player = skin::player(recipe, object, Arc::new(rig.rig), true)?;
                     skins = vec![Some(made)];
                 }
-                mesh
+                found.mesh
             }
-            _ => shape::local(object, cuts, base)?,
+            _ => shape::local(object, cuts, recipe, base)?,
         };
         Generated {
             pieces: vec![Piece {
                 name: object.name.clone(),
                 mesh,
             }],
+            materials: offered,
             ..Generated::default()
         }
     };
@@ -987,6 +1062,7 @@ fn make(
         clips: Vec::new(),
         skins: Vec::new(),
         player: None,
+        hidden,
     };
     taken(
         pieces.iter().map(|piece| piece.name.as_str()).collect(),
@@ -1098,6 +1174,14 @@ fn make(
         made.nodes.push(node);
     }
     made.player = player.filter(|_| !made.skins.is_empty());
+    if matches!(object.kind, Kind::Mesh { .. }) {
+        let nodes = &made.nodes;
+        made.materials.retain(|name, _| {
+            nodes
+                .iter()
+                .any(|node| node.mesh.slots.iter().any(|slot| slot.material == *name))
+        });
+    }
     Ok(made)
 }
 
@@ -1147,6 +1231,8 @@ fn assemble(
     let mut by_object = serde_json::Map::new();
     let mut provenance = serde_json::Map::new();
     let mut offered: BTreeMap<String, (&str, serde_json::Value)> = BTreeMap::new();
+    let mut quiet = std::collections::BTreeSet::new();
+    let mut renamed = Vec::new();
     let mut lights = Vec::new();
     let mut imported = Looks::new();
     let mut lods = Vec::new();
@@ -1168,7 +1254,9 @@ fn assemble(
                 for name in names {
                     claim(&mut claimed, &names_of, object, name)?;
                 }
-                offer(&mut offered, object, made.materials.clone())?;
+                if matches!(object.kind, Kind::Generator { .. }) {
+                    offer(&mut offered, object, made.materials.clone())?;
+                }
                 pfx_glb::merge(&mut generated, &made.facts);
                 if let Some(found) = library::provenance(recipe, object, base) {
                     provenance.insert(
@@ -1185,7 +1273,7 @@ fn assemble(
             }
             Ok(())
         };
-        let made = match key.as_ref().and_then(|key| cache.made.get(key)) {
+        let mut made = match key.as_ref().and_then(|key| cache.made.get(key)) {
             Some(made) => {
                 take(
                     made.nodes.iter().map(|node| node.name.as_str()).collect(),
@@ -1204,6 +1292,13 @@ fn assemble(
         };
         if let Some(key) = key {
             used.insert(key);
+        }
+        if matches!(object.kind, Kind::Mesh { .. } | Kind::Library { .. }) {
+            renamed.extend(share(recipe, object, &mut made, &offered, &imported));
+            offer(&mut offered, object, made.materials.clone())?;
+            if matches!(object.kind, Kind::Mesh { .. }) {
+                quiet.extend(made.materials.keys().cloned());
+            }
         }
         if !object.hidden {
             lights.extend(made.lights);
@@ -1250,24 +1345,30 @@ fn assemble(
             .zip(&shown)
             .filter(|(_, at)| at.is_some())
         {
+            let hidden = object.hidden || made.hidden.contains(&node.name);
             parts.push(Part {
                 node,
                 object: index,
                 shadow: object.shadow,
                 two_sided: object.two_sided,
-                hidden: object.hidden,
+                hidden,
                 looks: Arc::default(),
             });
         }
+    }
+    let scattered = scatter::scatter(recipe, base, &mut parts)?;
+    let mut nested = nest(recipe, &parts[..parts.len() - scattered]);
+    if !nested.is_empty() {
+        nested.extend(std::iter::repeat_n(None, scattered));
     }
     let facts = facts::facts(recipe, &generated);
     let sidecar = sidecar(recipe, registry, &facts)?;
     let mut materials = BTreeMap::new();
     let mut wet = BTreeMap::new();
-    let mut notes = Vec::new();
+    let mut notes = renamed;
     for (name, (owner, mut value)) in offered {
         match recipe.materials.get(&name) {
-            Some(own) if *own != value => notes.push(format!(
+            Some(own) if *own != value && !quiet.contains(&name) => notes.push(format!(
                 "materials.{name}: the recipe's entry replaces the one the object `{owner}` returned"
             )),
             Some(_) => {}
@@ -1307,7 +1408,7 @@ fn assemble(
         looks,
         lods,
         extras: extras::of(recipe, &parts, &facts.movers),
-        nest: nest(recipe, &parts),
+        nest: nested,
         wet,
         timeline: recipe.timeline,
         markers: recipe

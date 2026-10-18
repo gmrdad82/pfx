@@ -24,17 +24,14 @@ pub(super) fn format_1_key(recipe: &Recipe) -> Option<String> {
         .map(|light| format!("light[{}]", light.name))
 }
 
-pub(super) fn file(paths: &Paths, base: &Path, file: &str, key: &str) -> Result<String, Error> {
-    let path = base.join(file);
-    if !pfx_recipe::files::is_file(&path) {
-        return Err(Error::new(
-            key,
-            format!(
-                "{} is not a file, expected a path relative to the recipe",
-                path.display()
-            ),
-        ));
-    }
+pub(super) fn file(
+    paths: &Paths,
+    recipe: &Recipe,
+    base: &Path,
+    file: &str,
+    key: &str,
+) -> Result<String, Error> {
+    let path = recipe.asset(base, file).map_err(|e| Error::new(key, e))?;
     paths.relative(&path, key)
 }
 

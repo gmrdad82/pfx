@@ -94,6 +94,44 @@ pub(crate) fn keep_in(table: &mut Table, globs: &[String]) {
     retain(table, "object", |t| {
         kept.contains(text(t, "name").unwrap_or(""))
     });
+    retain(table, "scatter", |t| {
+        ["object", "on"]
+            .iter()
+            .all(|key| text(t, key).is_some_and(|name| kept.contains(name)))
+    });
+    let scattered: BTreeSet<String> = table
+        .get("scatter")
+        .map(each)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|t| text(t, "name").map(str::to_string))
+        .collect();
+    let live = |glob: &str| {
+        kept.iter().any(|name| selects(glob, name))
+            || scattered.iter().any(|name| glob_matches(glob, name))
+    };
+    let prune = |entry: &mut dyn TableLike| {
+        if let Some(objects) = entry
+            .get_mut("objects")
+            .and_then(Item::as_value_mut)
+            .and_then(toml_edit::Value::as_array_mut)
+        {
+            objects.retain(|glob| glob.as_str().is_some_and(live));
+        }
+    };
+    match table.get_mut("collection") {
+        Some(Item::ArrayOfTables(list)) => list.iter_mut().for_each(|t| prune(t)),
+        Some(Item::Value(toml_edit::Value::Array(list))) => list
+            .iter_mut()
+            .filter_map(toml_edit::Value::as_inline_table_mut)
+            .for_each(|t| prune(t)),
+        _ => {}
+    }
+    retain(table, "collection", |t| {
+        t.get("objects")
+            .and_then(Item::as_array)
+            .is_some_and(|list| !list.is_empty())
+    });
     retain(table, "follow", |t| {
         !dropped.contains(text(t, "object").unwrap_or(""))
     });
@@ -186,6 +224,24 @@ pub fn apply_stage(r: &Recipe, which: &str) -> Result<Recipe, Error> {
     replay(r, Edit::Keep(globs))
 }
 
+fn expand(r: &Recipe, globs: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for glob in globs {
+        let names = match r.collections.iter().find(|c| c.name == *glob) {
+            Some(collection) => collection.objects.clone(),
+            None => vec![glob.clone()],
+        };
+        for name in names {
+            for scatter in r.scatters.iter().filter(|s| glob_matches(&name, &s.name)) {
+                out.push(scatter.on.clone());
+                out.push(scatter.object.clone());
+            }
+            out.push(name);
+        }
+    }
+    out
+}
+
 pub fn apply_only(r: &Recipe, globs: &[String]) -> Result<Recipe, Error> {
     if globs.is_empty() {
         return Err(Error::new(
@@ -195,17 +251,19 @@ pub fn apply_only(r: &Recipe, globs: &[String]) -> Result<Recipe, Error> {
         ));
     }
     for glob in globs {
-        if !r.objects.iter().any(|o| selects(glob, &o.name)) {
+        let named = r.collections.iter().any(|c| c.name == *glob)
+            || r.scatters.iter().any(|s| glob_matches(glob, &s.name));
+        if !named && !r.objects.iter().any(|o| selects(glob, &o.name)) {
             return Err(Error::new(
                 "only",
                 None,
                 format!(
-                    "`{glob}` matches no object, expected an object's name, a glob, or <object>.<piece>"
+                    "`{glob}` matches no object, expected an object's name, a glob, <object>.<piece>, a collection or a scatter"
                 ),
             ));
         }
     }
-    replay(r, Edit::Keep(globs.to_vec()))
+    replay(r, Edit::Keep(expand(r, globs)))
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

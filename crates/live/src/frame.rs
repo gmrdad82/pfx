@@ -606,6 +606,7 @@ pub struct OpaqueFeatures {
 }
 
 const OPAQUE_FEATURES: usize = 28;
+const FLAT_TRANSFORM: f64 = 1e-6;
 
 impl OpaqueFeatures {
     pub const NAMES: [&'static str; OPAQUE_FEATURES] = [
@@ -1404,31 +1405,34 @@ pub fn ambient_irradiance(
     }
 }
 
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+fn normal_columns(model: Matrix) -> Result<[[f32; 4]; 3], String> {
+    let column = |i: usize| [0, 1, 2].map(|k| f64::from(model[i][k]));
+    let (a, b, c) = (column(0), column(1), column(2));
+    let columns = [cross(b, c), cross(c, a), cross(a, b)];
+    let determinant = (0..3).map(|k| a[k] * columns[0][k]).sum::<f64>();
+    let length = |v: [f64; 3]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
+    let volume = length(a) * length(b) * length(c);
+    if !determinant.is_finite() || determinant.abs() <= volume * FLAT_TRANSFORM {
+        return Err("instance model has a singular normal transform".into());
+    }
+    let largest = columns.iter().map(|v| length(*v)).fold(0.0, f64::max);
+    let scale = determinant.signum() / largest;
+    Ok(columns.map(|v| {
+        [
+            (v[0] * scale) as f32,
+            (v[1] * scale) as f32,
+            (v[2] * scale) as f32,
+            0.0,
+        ]
+    }))
+}
+
+fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
         a[0] * b[1] - a[1] * b[0],
     ]
-}
-
-fn normal_columns(model: Matrix) -> Result<[[f32; 4]; 3], String> {
-    let a = [model[0][0], model[0][1], model[0][2]];
-    let b = [model[1][0], model[1][1], model[1][2]];
-    let c = [model[2][0], model[2][1], model[2][2]];
-    let columns = [cross(b, c), cross(c, a), cross(a, b)];
-    let determinant = a.iter().zip(columns[0]).map(|(x, y)| x * y).sum::<f32>();
-    if !determinant.is_finite() || determinant.abs() < 1e-8 {
-        return Err("instance model has a singular normal transform".into());
-    }
-    Ok(columns.map(|v| {
-        [
-            v[0] / determinant,
-            v[1] / determinant,
-            v[2] / determinant,
-            0.0,
-        ]
-    }))
 }
 
 pub fn shader_source() -> String {
@@ -5151,6 +5155,23 @@ mod tests {
         let normals = normal_columns(scaled).unwrap();
         assert_eq!(normals[0][0], 0.5);
         assert_eq!(normals[1][1], 0.25);
+        for tiny in [1e-4, 1e-6] {
+            let mut small = identity();
+            small[0][0] = -tiny;
+            small[1][1] = tiny;
+            small[2][2] = tiny;
+            let normals = normal_columns(small).unwrap();
+            assert_eq!(
+                [normals[0][0], normals[1][1], normals[2][2]],
+                [-1.0, 1.0, 1.0]
+            );
+        }
+        let mut flat = identity();
+        flat[2] = [0.0; 4];
+        assert!(normal_columns(flat).is_err());
+        let mut sheared = identity();
+        sheared[2] = [1.0, 1e-9, 0.0, 0.0];
+        assert!(normal_columns(sheared).is_err());
         let shift = jitter_matrix([0.25, -0.5]);
         assert_eq!(
             transform(shift, [0.0, 0.0, 0.3, 1.0]),

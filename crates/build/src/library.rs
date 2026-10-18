@@ -1,3 +1,4 @@
+use crate::pieces::{Rules, Step};
 use crate::shape::{Source, fail, read_mesh};
 use crate::skin::{self, Player, Skin};
 use crate::{Built, Error, GENERATOR, Generated, GeneratedLight, Piece, world};
@@ -770,6 +771,34 @@ fn pbr(glb: &[u8], materials: &BTreeMap<String, Value>) -> Result<Vec<u8>, Strin
     Ok(join_glb(&json, &bin))
 }
 
+pub(crate) fn material_name(name: Option<&str>, index: Option<usize>) -> String {
+    match (name, index) {
+        (Some(name), _) => name.to_string(),
+        (None, Some(index)) => format!("material{index}"),
+        (None, None) => String::new(),
+    }
+}
+
+pub(crate) fn file_materials(bytes: &[u8]) -> BTreeMap<String, Value> {
+    let json = match bytes.get(0..4) {
+        Some(b"glTF") => split_glb(bytes).ok().map(|(json, _)| json),
+        _ => serde_json::from_slice::<Value>(bytes).ok(),
+    };
+    json.as_ref()
+        .and_then(|json| json.get("materials"))
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .enumerate()
+                .map(|(i, m)| {
+                    let name = material_name(m.get("name").and_then(Value::as_str), Some(i));
+                    (name, material_of(m))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 fn material_of(m: &Value) -> Value {
     let pbr = m.get("pbrMetallicRoughness");
     let factor = |key: &str, default: f64| {
@@ -853,9 +882,69 @@ pub fn find_root(from: &Path) -> Option<PathBuf> {
 
 pub fn root_for(recipe: &Recipe, base: &Path) -> Option<PathBuf> {
     match &recipe.library {
-        Some(path) => Some(base.join(path)),
+        Some(path) => Some(
+            recipe
+                .asset_where(base, path, "a library folder", &has_index)
+                .unwrap_or_else(|_| base.join(path)),
+        ),
         None => find_root(base),
     }
+}
+
+struct Shelf {
+    dir: PathBuf,
+    _mount: Option<pfx_recipe::files::Mount>,
+}
+
+fn shelf(
+    recipe: &Recipe,
+    base: &Path,
+    reference: &str,
+    named: Result<(&str, &str), String>,
+) -> Result<Shelf, String> {
+    if let Some(lib) = pfx_recipe::library_reference(reference) {
+        let (kind, name) = split_name(lib.entry)?;
+        let file = recipe.asset(base, lib.file)?;
+        let mount = mount_pfx(&file)?;
+        return Ok(Shelf {
+            dir: file.join(kind).join(name),
+            _mount: Some(mount),
+        });
+    }
+    let (kind, name) = named?;
+    let searched = match &recipe.library {
+        Some(path) => recipe
+            .asset_where(base, path, "a library folder", &has_index)
+            .map_err(|e| format!("{reference}: {e}"))?,
+        None => find_root(base).ok_or_else(|| {
+            "no library: set the recipe's top-level `library = \"<path>\"`, or keep the recipe under a folder whose `library/` holds an index.json".to_string()
+        })?,
+    };
+    Ok(Shelf {
+        dir: searched.join(kind).join(name),
+        _mount: None,
+    })
+}
+
+fn mount_pfx(file: &Path) -> Result<pfx_recipe::files::Mount, String> {
+    let bytes = pfx_recipe::files::read(file)
+        .map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+    let reader =
+        pfx_file::Reader::from_bytes(&bytes).map_err(|e| format!("{}: {e}", file.display()))?;
+    let mut held = BTreeMap::new();
+    for (index, entry) in reader.entries().iter().enumerate() {
+        let plain = Path::new(&entry.name)
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)));
+        if entry.tag != pfx_file::FILE || !plain {
+            continue;
+        }
+        let data = reader
+            .read(index)
+            .map_err(|e| format!("{}: {}: {e}", file.display(), entry.name))?;
+        held.insert(file.join(&entry.name), data.into_owned());
+    }
+    Ok(pfx_recipe::files::mount(held))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -916,6 +1005,7 @@ pub(crate) struct Imported {
     pub player: Option<Player>,
     pub tree: Tree,
     pub clips: Vec<(String, Vec<DMat4>)>,
+    pub hidden: BTreeSet<String>,
 }
 
 fn clips_of(
@@ -1186,9 +1276,8 @@ pub(crate) fn provenance(recipe: &Recipe, object: &Object, base: &Path) -> Optio
     else {
         return None;
     };
-    let (kind, name) = split_name(reference).ok()?;
-    let dir = root_for(recipe, base)?.join(kind).join(name);
-    let sidecar = Sidecar::read(&dir.join(SIDECAR)).ok()?;
+    let shelf = shelf(recipe, base, reference, split_name(reference)).ok()?;
+    let sidecar = Sidecar::read(&shelf.dir.join(SIDECAR)).ok()?;
     Some(Provenance {
         licence: sidecar.licence,
         credit: sidecar.credit,
@@ -1204,15 +1293,9 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
     else {
         return Err(fail(object, "kind", "expected a library object"));
     };
-    let (kind, name) = split_name(reference).map_err(|t| fail(object, "object", t))?;
-    let root = root_for(recipe, base).ok_or_else(|| {
-        fail(
-            object,
-            "object",
-            "no library: set the recipe's top-level `library = \"<path>\"`, or keep the recipe under a folder whose `library/` holds an index.json",
-        )
-    })?;
-    let dir = root.join(kind).join(name);
+    let shelf = shelf(recipe, base, reference, split_name(reference))
+        .map_err(|t| fail(object, "object", t))?;
+    let dir = shelf.dir.clone();
     let sidecar = Sidecar::read(&dir.join(SIDECAR))
         .map_err(|t| fail(object, "object", format!("{reference}: {t}")))?;
     let model = dir.join(MODEL);
@@ -1263,6 +1346,9 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
     let mut stack: Vec<(gltf::Node, Option<usize>)> =
         roots.into_iter().rev().map(|n| (n, None)).collect();
     let mut taken = BTreeSet::new();
+    let mut rules = Rules::new(object);
+    let mut steps = Vec::new();
+    let mut hidden = BTreeSet::new();
     while let Some((n, parent)) = stack.pop() {
         if visited
             .get_mut(n.index())
@@ -1283,6 +1369,13 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             node = format!("{node}.{}", n.index());
             taken.insert(node.clone());
         }
+        steps.push(Step {
+            index: n.index(),
+            name: n.name().map(str::to_string),
+            unique: node.clone(),
+            parent,
+        });
+        let choice = rules.choose(&steps, steps.len() - 1);
         let mut piece = None;
         let skinned = n.mesh().is_some() && n.skin().is_some();
         if let Some(m) = n.mesh() {
@@ -1290,14 +1383,8 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             let mut morph = Morph::default();
             let skin = match n.skin() {
                 Some(found) => {
-                    read_mesh(
-                        &source,
-                        &m,
-                        DMat4::IDENTITY,
-                        &mut mesh,
-                        &mut morph,
-                        &mut looks,
-                    )?;
+                    let placed = (DMat4::IDENTITY, choice.material);
+                    read_mesh(&source, &m, placed, &mut mesh, &mut morph, &mut looks)?;
                     let index = found.index();
                     if rig.as_ref().is_some_and(|(at, _)| *at != index) {
                         return Err(fail(
@@ -1322,7 +1409,8 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
                     made.filter(|made| made.joints.len() == mesh.positions.len())
                 }
                 None => {
-                    read_mesh(&source, &m, world, &mut mesh, &mut morph, &mut looks)?;
+                    let placed = (world, choice.material);
+                    read_mesh(&source, &m, placed, &mut mesh, &mut morph, &mut looks)?;
                     None
                 }
             };
@@ -1330,6 +1418,9 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
                 wheel_fact(&mut facts, corner, world, &mesh);
             }
             let full = format!("{}.{node}", object.name);
+            if choice.hidden {
+                hidden.insert(full.clone());
+            }
             piece = Some(full.clone());
             pieces.push(Piece { name: full, mesh });
             morphs.push((!morph.is_empty()).then_some(morph));
@@ -1349,6 +1440,7 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             stack.push((child, Some(me)));
         }
     }
+    rules.finish(&label, &steps)?;
     tree.clips = clips_of(document, &buffers, &at);
     let clips = sampled(recipe, object, &tree)?;
     let player = match rig {
@@ -1356,13 +1448,7 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
         None => None,
     };
     looks.retain(|_, look| look.has_maps());
-    let materials = split_glb(&bytes)
-        .ok()
-        .and_then(|(json, _)| json.get("materials").and_then(Value::as_array).cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|m| Some((m.get("name")?.as_str()?.to_string(), material_of(m))))
-        .collect();
+    let materials = file_materials(&bytes);
     let lights = facts
         .get("lights")
         .and_then(Value::as_array)
@@ -1382,6 +1468,7 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
         player,
         tree,
         clips,
+        hidden,
     })
 }
 
@@ -1639,7 +1726,7 @@ pub fn licence_problem(licence: &str, credit: Option<&str>) -> Option<String> {
     if licence.is_empty() || licence == LICENCE {
         return None;
     }
-    if let Err(text) = crate::spdx::validate(licence) {
+    if let Err(text) = pfx_core::spdx::validate(licence) {
         return Some(format!(
             "object.licence: \"{licence}\" is not an SPDX licence expression ({text})"
         ));

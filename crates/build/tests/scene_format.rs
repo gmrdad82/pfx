@@ -246,3 +246,81 @@ fn object_ids_gives_the_ids_the_writer_derives_and_skips_what_has_one() {
             .is_empty()
     );
 }
+
+fn cards_edit() -> String {
+    format!("{TURN};{NOTE};space = \"overlay\">space = \"lit\"")
+}
+
+fn shared(name: &str) -> PathBuf {
+    let shared = scratch(name);
+    std::fs::copy(golden("cards").join("badge.png"), shared.join("badge.png")).unwrap();
+    shared
+}
+
+#[test]
+fn an_asset_root_outside_the_project_is_copied_beside_the_scene_and_never_written_into() {
+    let (root, mut r) = project("cards", "format1-roots", &cards_edit(), &[]);
+    let shelf = shared("format1-roots-shelf");
+    r.asset_roots = vec![shelf.display().to_string()];
+    let written = emit(&root, &r).unwrap();
+    let kept = root
+        .canonicalize()
+        .unwrap()
+        .join("scenes/assets/0/badge.png");
+    assert!(
+        written
+            .iter()
+            .any(|file| file.ends_with("scenes/assets/0/badge.png")),
+        "{written:?}"
+    );
+    assert_eq!(
+        std::fs::read(&kept).unwrap(),
+        std::fs::read(shelf.join("badge.png")).unwrap()
+    );
+    let scene = scene_of(&root, "cards");
+    assert_eq!(scene.content["badge"].image, "scenes/assets/0/badge.png");
+    let listing: Vec<_> = std::fs::read_dir(&shelf).unwrap().collect();
+    assert_eq!(listing.len(), 1);
+    checked(&root);
+}
+
+#[test]
+fn a_reference_found_in_no_root_is_refused_in_one_line_naming_it_and_the_roots_searched() {
+    let (root, mut r) = project("cards", "format1-roots-missing", &cards_edit(), &[]);
+    let shelf = scratch("format1-roots-empty");
+    r.asset_roots = vec![shelf.display().to_string()];
+    let error = emit(&root, &r).unwrap_err();
+    assert_eq!(error.path, "object[badge].image");
+    assert!(error.text.contains("badge.png"), "{}", error.text);
+    assert!(
+        error
+            .text
+            .contains(&shelf.canonicalize().unwrap().display().to_string()),
+        "{}",
+        error.text
+    );
+    assert!(!error.text.contains('\n'), "{}", error.text);
+}
+
+#[test]
+fn a_declared_project_root_holds_assets_in_place_and_must_carry_a_project_file() {
+    let (root, mut r) = project("cards", "format1-roots-declared", &cards_edit(), &[]);
+    let base = root.join("recipes");
+    std::fs::copy(golden("cards").join("badge.png"), root.join("badge.png")).unwrap();
+    std::fs::create_dir_all(root.join("scenes")).unwrap();
+    r.project_root = Some("..".into());
+    for card in r.objects.iter_mut() {
+        if let pfx_recipe::Kind::Card { image, .. } = &mut card.kind {
+            *image = Some("../badge.png".into());
+        }
+    }
+    let built = build(&r, &base).unwrap();
+    write(&built, &r, &base, Some(&root.join("scenes"))).unwrap();
+    assert_eq!(scene_of(&root, "cards").content["badge"].image, "badge.png");
+    assert!(!root.join("scenes/assets").exists());
+
+    std::fs::remove_file(root.join("project.toml")).unwrap();
+    let error = write(&built, &r, &base, Some(&root.join("scenes"))).unwrap_err();
+    assert_eq!(error.path, "project_root");
+    assert!(error.text.contains("project.toml"), "{}", error.text);
+}

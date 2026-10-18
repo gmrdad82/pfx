@@ -267,7 +267,11 @@ fn found(recipe: &Recipe, pieces: &[Piece], memory: &Memory) -> Result<Found, Er
         if shown.contains_key(&piece.object) {
             continue;
         }
-        let source = image.as_ref().map(|path| base.join(path));
+        let source = image
+            .as_ref()
+            .map(|path| recipe.asset(&base, path))
+            .transpose()
+            .map_err(|e| Error(format!("object[{}].image: {e}", object.name)))?;
         let at = match found.get(&source) {
             Some(&at) => at,
             None => {
@@ -953,7 +957,9 @@ mod tests {
         let (recipe, pieces) = built(&dir, &text);
         let error = dress(&recipe, pieces, &Memory::default()).err().unwrap();
         assert!(
-            error.0.starts_with("object[photo].image: cannot read"),
+            error
+                .0
+                .starts_with("object[photo].image: gone.png is not a file under "),
             "{error}"
         );
     }

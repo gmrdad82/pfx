@@ -173,7 +173,11 @@ fn a_missing_a_foreign_or_an_oversized_map_is_refused() {
     huge[16..20].copy_from_slice(&20_000u32.to_be_bytes());
     std::fs::write(dir.join("tex/huge.png"), &huge).unwrap();
     for (key, path, said) in [
-        ("base_map", "tex/gone.png", "cannot read tex/gone.png"),
+        (
+            "base_map",
+            "tex/gone.png",
+            "tex/gone.png is not a file under",
+        ),
         ("normal_map", "tex/photo.jpg", "tex/photo.jpg is not a PNG"),
         (
             "roughness_map",

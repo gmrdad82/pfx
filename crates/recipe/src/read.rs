@@ -13,14 +13,14 @@ mod keys;
 
 use crate::{
     Along, Bake, Bend, BendForm, Bevel, CAP_LUMINANCE, CAP_MEAN, CAPPED, Camera, CameraPath, Caps,
-    Casters, Constrained, Cup, Curl, Daylight, DetailUv, Drift, Ease, Error, Follow, Grade, Kind,
-    Lines, Loaded, Lod, LodTarget, Look, Marker, Mover, NO_SIDECAR, NORMAL_SIZE, OLD_HEADER,
-    Object, Orbit, Order, Origin, Ortho, Outline, Output, Owner, PathKey, PathKind, Plate,
-    PlateView, Plates, Play, Problem, Profile, ProfileKind, Projection, Proxy, REFERENCE_HOUR,
-    RELEASE_EASE, RIG_LOOK, RIG_OFFSET, Recipe, Reference, Rig, RigFocus, RigFrame, RigShake,
-    RigTracks, Room, RootMotion, RouteSpec, SCHEMA, Shadow, Sky, SkyAmbient, SkyKind, SkyLight,
-    Span, Spring, Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline, Trace, Use, Uv, Variant,
-    VariantOutput, View, Volume,
+    Casters, Collection, Constrained, Cup, Curl, Daylight, DetailUv, Drift, Ease, Error, Follow,
+    Grade, Kind, Lines, Loaded, Lod, LodTarget, Look, Marker, Mover, NO_SIDECAR, NORMAL_SIZE,
+    OLD_HEADER, Object, Orbit, Order, Origin, Ortho, Outline, Output, Owner, PathKey, PathKind,
+    PieceRule, Plate, PlateView, Plates, Play, Problem, Profile, ProfileKind, Projection, Proxy,
+    REFERENCE_HOUR, RELEASE_EASE, RIG_LOOK, RIG_OFFSET, Recipe, Reference, Rig, RigFocus, RigFrame,
+    RigShake, RigTracks, Room, RootMotion, RouteSpec, SCHEMA, Scatter, Shadow, Sky, SkyAmbient,
+    SkyKind, SkyLight, Span, Spring, Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline,
+    Trace, Use, Uv, Variant, VariantOutput, View, Volume,
 };
 
 pub(crate) struct Source {
@@ -1613,6 +1613,64 @@ fn read_play(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<Play, Error> {
     })
 }
 
+fn read_pieces(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<Vec<PieceRule>, Error> {
+    let Some(item) = tab.peek(cx, "pieces") else {
+        return Ok(Vec::new());
+    };
+    let path = tab.kpath("pieces");
+    let ipath = tab.kipath("pieces");
+    let Some(table) = item.as_table_like() else {
+        return Err(bad_item(
+            cx,
+            &path,
+            item,
+            "a table of node names, parent/child paths or #indices to { material, hidden }",
+        ));
+    };
+    let mut out = Vec::new();
+    for (select, value) in table.iter() {
+        let at = dotted(&path, select);
+        let Some(fields) = value.as_table_like() else {
+            return Err(bad_item(
+                cx,
+                &at,
+                value,
+                "a table with `material` or `hidden`",
+            ));
+        };
+        let line = cx.item_line(value);
+        let index = select.strip_prefix('#');
+        let wrong = match index {
+            Some(digits) => digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()),
+            None => select.is_empty() || select.split('/').any(str::is_empty),
+        };
+        if wrong {
+            return Err(Error::new(
+                at,
+                Some(line),
+                "expected a node name, a parent/child path of names or #<node index>",
+            ));
+        }
+        let mut sub = Tab::new(cx, fields, at.clone(), format!("{ipath}.{select}"), line);
+        let material = sub.opt(cx, "material", STR)?;
+        let hidden = sub.opt(cx, "hidden", BOOL)?;
+        sub.finish(cx)?;
+        if material.is_none() && hidden.is_none() {
+            return Err(Error::new(
+                at,
+                Some(line),
+                "expected `material` or `hidden`",
+            ));
+        }
+        out.push(PieceRule {
+            select: select.to_string(),
+            material,
+            hidden,
+        });
+    }
+    Ok(out)
+}
+
 fn read_morph(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<BTreeMap<String, f64>, Error> {
     let Some(item) = tab.peek(cx, "morph") else {
         return Ok(BTreeMap::new());
@@ -1760,6 +1818,17 @@ fn read_object(cx: &mut Cx, t: &dyn TableLike, index: usize, line: usize) -> Res
     }
     let lod = read_lod(cx, &mut tab, &kind_name)?;
     let kind = read_kind(cx, &mut tab, &kind_name)?;
+    let imported = matches!(kind, Kind::Mesh { .. } | Kind::Library { .. });
+    let keep_normals = if imported {
+        tab.opt(cx, "keep_normals", BOOL)?
+    } else {
+        None
+    };
+    let pieces = if imported {
+        read_pieces(cx, &mut tab)?
+    } else {
+        Vec::new()
+    };
     keys::read(
         cx,
         &mut tab,
@@ -1784,6 +1853,8 @@ fn read_object(cx: &mut Cx, t: &dyn TableLike, index: usize, line: usize) -> Res
         smooth_angle,
         smooth,
         flat_faces,
+        keep_normals,
+        pieces,
         bevel,
         uv,
         detail_uv,
@@ -2763,6 +2834,50 @@ fn as_pixel_pair(cx: &mut Cx, path: &str, item: &Item) -> Result<[[f64; 2]; 2], 
     }
 }
 
+fn read_scatter(
+    cx: &mut Cx,
+    t: &dyn TableLike,
+    index: usize,
+    line: usize,
+) -> Result<Scatter, Error> {
+    let path = format!("scatter[{}]", label(t, "name", index));
+    let mut tab = Tab::new(cx, t, path, format!("scatter#{index}"), line);
+    let scatter = Scatter {
+        name: tab.req(cx, "name", STR)?,
+        object: tab.req(cx, "object", STR)?,
+        on: tab.req(cx, "on", STR)?,
+        seed: tab.opt(cx, "seed", U64)?,
+        spacing: tab.opt(cx, "spacing", NUM)?,
+        density: tab.opt(cx, "density", NUM)?,
+        map: tab.opt(cx, "map", STR)?,
+        rotate_min: tab.or(cx, "rotate_min", [0.0; 3], V3)?,
+        rotate_max: tab.or(cx, "rotate_max", [0.0; 3], V3)?,
+        scale_min: tab.or(cx, "scale_min", 1.0, NUM)?,
+        scale_max: tab.or(cx, "scale_max", 1.0, NUM)?,
+        align: tab.or(cx, "align", false, BOOL)?,
+    };
+    tab.finish(cx)?;
+    Ok(scatter)
+}
+
+fn read_collection(
+    cx: &mut Cx,
+    t: &dyn TableLike,
+    index: usize,
+    line: usize,
+) -> Result<Collection, Error> {
+    let path = format!("collection[{}]", label(t, "name", index));
+    let mut tab = Tab::new(cx, t, path, format!("collection#{index}"), line);
+    let collection = Collection {
+        name: tab.req(cx, "name", STR)?,
+        objects: tab.req(cx, "objects", STRS)?,
+        hidden: tab.or(cx, "hidden", false, BOOL)?,
+        solo: tab.or(cx, "solo", false, BOOL)?,
+    };
+    tab.finish(cx)?;
+    Ok(collection)
+}
+
 fn read_marker(cx: &mut Cx, t: &dyn TableLike, index: usize, line: usize) -> Result<Marker, Error> {
     let path = format!("marker[{}]", label(t, "name", index));
     let mut tab = Tab::new(cx, t, path, format!("marker#{index}"), line);
@@ -3486,6 +3601,8 @@ fn read_root(
     };
     let params = root.opt(cx, "params", STR)?;
     let library = root.opt(cx, "library", STR)?;
+    let project_root = root.opt(cx, "project_root", STR)?;
+    let asset_roots = root.or(cx, "asset_roots", Vec::new(), STRS)?;
     cx.params = match (&params, base) {
         (None, _) => ParamsState::Absent,
         (Some(file), Some(base)) => {
@@ -3518,6 +3635,13 @@ fn read_root(
     let follows = tables(cx, &mut root, "follow", read_follow)?;
     let stages = tables(cx, &mut root, "stage", read_stage)?;
     let markers = tables(cx, &mut root, "marker", read_marker)?;
+    let mut scatters = tables(cx, &mut root, "scatter", read_scatter)?;
+    for (i, scatter) in scatters.iter_mut().enumerate() {
+        if let Some(map) = &mut scatter.map {
+            relocated(cx, &format!("scatter#{i}.map"), map);
+        }
+    }
+    let collections = tables(cx, &mut root, "collection", read_collection)?;
     let variants = read_variants(cx, &mut root)?;
     let sidecar = read_sidecar(cx, &mut root)?;
     let look = read_look(cx, &mut root)?;
@@ -3577,12 +3701,14 @@ fn read_root(
     }
     let keyed = std::mem::take(&mut cx.keyed);
 
-    Ok(Recipe {
+    let mut recipe = Recipe {
         schema: schema as u32,
         name,
         seed,
         params,
         library,
+        project_root,
+        asset_roots,
         plate,
         output,
         objects,
@@ -3596,6 +3722,8 @@ fn read_root(
         references,
         follows,
         stages,
+        scatters,
+        collections,
         keep: Vec::new(),
         markers,
         constraints: std::mem::take(&mut cx.constraints),
@@ -3615,5 +3743,14 @@ fn read_root(
         base: base.map(Path::to_path_buf),
         lines: Lines::default(),
         twins: Vec::new(),
-    })
+    };
+    let hides: Vec<bool> = recipe
+        .objects
+        .iter()
+        .map(|o| recipe.collection_hides(&o.name))
+        .collect();
+    for (object, hide) in recipe.objects.iter_mut().zip(hides) {
+        object.hidden |= hide;
+    }
+    Ok(recipe)
 }

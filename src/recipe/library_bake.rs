@@ -171,6 +171,8 @@ fn ground(like: &Object, at: DVec3, side: f64) -> Object {
         smooth_angle: None,
         smooth: false,
         flat_faces: false,
+        keep_normals: None,
+        pieces: Vec::new(),
         bevel: None,
         uv: None,
         detail_uv: None,

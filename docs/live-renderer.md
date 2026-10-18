@@ -593,7 +593,7 @@ wgpu gives a pipeline four bind groups. The opaque passes share one layout, and 
 | Group | Binding | Resource | Stage | Owner |
 |---|---:|---|---|---|
 | 0 scene | 0 | frame uniform: jittered, motion and previous view-projection, view, camera, sun, time and size, flags, wind now and before | vertex, fragment | `frame` |
-| | 1 | instances: model, previous model, normal matrix, material, id, opacity, cutoff, deformer, sway base, age, LOD coverage, the skin word (vertex record base, current and previous joint palette, joint count) and the morph word (delta base, target count, weights offset, weight count with a normals bit) | vertex, fragment | `frame` |
+| | 1 | instances: model, previous model, normal matrix (the model's cofactor matrix scaled to unit size, so any node scale shades alike; only a flat model is refused), material, id, opacity, cutoff, deformer, sway base, age, LOD coverage, the skin word (vertex record base, current and previous joint palette, joint count) and the morph word (delta base, target count, weights offset, weight count with a normals bit) | vertex, fragment | `frame` |
 | | 2 | packed materials | fragment | `frame` |
 | | 3 | tree sway vertices (pivot, level, stiffness) | vertex | `frame` |
 | | 4 | skins: per skinned vertex its four joints and weights, then each posed instance's joint matrices, current and previous (`skin::SkinStore`, [animation.md](animation.md)) | vertex | `skin` |

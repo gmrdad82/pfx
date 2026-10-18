@@ -327,7 +327,10 @@ fn plate_uvs_build_and_imports_without_a_file_and_generators_are_refused_by_name
         r.objects.retain(|o| o.name == name);
         build(&r, &fixtures()).unwrap_err().to_string()
     };
-    assert!(only("imported").starts_with("object[imported].path: cannot read parts/handle.glb"));
+    assert!(
+        only("imported")
+            .starts_with("object[imported].path: parts/handle.glb is not a file under ")
+    );
     assert!(only("birds").starts_with(
         "object[birds].generator: `app/birds` is built by the app's own build binary"
     ));

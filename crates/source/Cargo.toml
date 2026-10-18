@@ -1,0 +1,19 @@
+[package]
+name = "pfx-source"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "pfx's asset sources: search and fetch CC0 and account assets over HTTPS, check their licences, unpack them and record their licence facts in a .pfx, and build a scene's credits"
+
+[dependencies]
+pfx-core = { path = "../core" }
+pfx-file = { path = "../file" }
+serde_json = "1"
+toml = "1.1"
+sha2 = "0.11"
+md-5 = "0.11"
+miniz_oxide = "0.9"
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }

@@ -1,9 +1,11 @@
 use std::path::Path;
 
-const PORTS: [(&str, &str); 20] = [
+const PORTS: [(&str, &str); 23] = [
     ("crates/load/src/uri.rs", "cgltf"),
     ("crates/load/src/obj.rs", "tobj"),
     ("crates/load/src/obj.rs", "tinyobjloader"),
+    ("crates/build/src/poisson.rs", "fast_poisson"),
+    ("crates/build/src/poisson.rs", "rand_distr"),
     ("crates/motion/src/route.rs", "Godot Engine"),
     ("crates/mesh/src/simplify.rs", "meshoptimizer"),
     ("crates/mesh/src/tangents.rs", "MikkTSpace"),
@@ -21,6 +23,7 @@ const PORTS: [(&str, &str); 20] = [
     ("crates/load/src/jpeg/idct.rs", "zune-jpeg"),
     ("crates/load/src/jpeg/upsample.rs", "zune-jpeg"),
     ("crates/load/src/jpeg/color.rs", "zune-jpeg"),
+    ("crates/source/src/zip.rs", "zip-rs"),
 ];
 
 fn read(name: &str) -> String {

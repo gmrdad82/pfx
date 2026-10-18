@@ -40,6 +40,8 @@ scene_format = 1
 - `include`: other files whose cameras, lights, sky, look, materials, routes, markers, particles, flare, motion blur, haze and objects merge into this recipe, under "Includes and uses" below.
 - `sound`: an optional `*.sound.toml` file, relative to the recipe, which the scene names as its top-level `sound` (format 1 only; see "Shot effects").
 - `library`: the object library's folder, relative to the recipe, for `kind = "library"` objects; see "Library" below.
+- `project_root`: a folder above the written scene, relative to the recipe or absolute, that holds a `project.toml`. The scene's paths are written relative to it, so assets under it are referenced in place. Without the key the root is the nearest folder above the scene with a `project.toml`, else the scene's own folder. A folder that does not hold the scene, or has no `project.toml`, is refused.
+- `asset_roots`: read-only folders, relative to the recipe or absolute, searched in order after the recipe's own folder for every asset the recipe names (mesh files, card images, fonts, LUTs, the sky, textures, the sound file, the library). A file found in a root outside the project root is copied beside the written scene under `assets/<n>/`, `n` counting the roots from 0, and nothing is ever written into a root. A reference found in none is refused in one line naming it and the folders searched. An asset outside the project root and outside every root is still refused.
 - `params`: an optional JSON or TOML file whose values can be substituted into numeric fields as `"${params.camera.focal_mm}"`. An app's own solver writes the file; the recipe consumes it.
 - `[plate]`: declares plate pixels, and fixes the `plate` UV projection. `camera` names the camera that projection looks through; without it, the first `[[camera]]`.
   - **Twins:** with a plate, these keys have a `_px` twin read in pixels: `at_px`, `size_px`, `rect_px`, `radius_px`, `circle_px`, `points_px`, and a mover's `pivot_px`, `travel_px`, `clip_px` and `clip2_px`. A key and its twin together are an error, and a twin without a `[plate]` is a problem.
@@ -91,6 +93,8 @@ Common keys on every `[[object]]`:
 | `parent` | another object's name; transforms compose, the GLB stays flat unless `[output] hierarchy = true` |
 | `material` | a name resolved through the app's registered catalogue, then the recipe's own `[materials]`; or `materials = ["a", "b"]` for slots, assigned by face groups the kind defines. Only `cylinder` defines groups today: `[side, caps]`. Every other kind takes one name |
 | `smooth_angle` | split normals on edges sharper than this; absent means flat shading; `smooth = true` means smooth everywhere |
+| `pieces` | on a `mesh` or `library` object only: `{ <node> = { material, hidden }, … }` gives a node of the file its own material or hides it; see [Pieces](#pieces) |
+| `keep_normals` | on a `mesh` or `library` object only: `true` (the default when every vertex of the file has a normal) keeps the file's own normals; `false` makes it flat. Refused with `smooth` or `smooth_angle`, which make new normals |
 | `flat_faces` | `true` (default `false`) keeps a large flat face's own normal at all its vertices instead of smoothing it into its bevel; needs `smooth_angle`; see [Flat faces](#flat-faces) |
 | `bevel` | `{ width, segments, angle = 30, clamp = true }` for kinds that take an edge profile |
 | `uv` | `"local"` (the default: the builder's own UVs, or a box projection where the kind has none), `"plate"`, `"none"`, or an override table, `{ kind = "rect", … }` or `{ kind = "cylinder", … }`; see [UVs](#uvs) |
@@ -142,7 +146,7 @@ Every count that sizes a mesh (`segments`, `rings`, `ring`, `grid`, `bevel.segme
 - **`lathe`**: `profile = [[r, y], …]` revolved around Y, `segments = 128`, `weld = 1e-7`.
 - **`sweep`**: `path = [[x, y, z], …]`, `radius` or `radii = [r, …]`, `ring = 16`, `closed`, `caps`. Beads and tubes. Caps are n-gon fans, as Blender's.
   - `along = { outline = <outline>, offset, depth }` replaces `path`. The ring is swept along an outline in the plate frame, pushed out by `offset` along the outline's outward normal, at `depth`. It is closed and capless, with one `radius`. The ring starts on the outward normal and turns toward the camera: a lip round a pocket, a bezel round a slot. Its outline is one contour, with no hole.
-- **`mesh`**: `path = "file.glb"`, optional `node`. Imported geometry, glTF only. Without `node`, every node of the file's scene is read into the one object, with its transforms applied, so a GLB of many parts is one mesh. It keeps the file's material names, one slot per material, unless the object sets `material`; its normals come from the object's `smooth` or `smooth_angle`, and it is flat without either. It keeps the file's morph targets, and `morph` sets their weights; see [Morph targets](#morph-targets). A skinned node of the file is posed by its skin, and `clip`, `loop`, `clip_start`, `clip_speed`, `next_clip`, `next_at` and `blend` play the file's animations on it as a library object's do (Library, Skins); a name the file's skin has no animation for is refused, listing the ones it has. It keeps the file's material texture maps, and the recipe's `[materials]` set or replace them; see [Texture maps](#texture-maps).
+- **`mesh`**: `path = "file.glb"`, optional `node`. Imported geometry, glTF only. Without `node`, every node of the file's scene is read into the one object, with its transforms applied, so a GLB of many parts is one mesh. It keeps the file's material names, one slot per material, unless the object sets `material`, and draws each of those materials as the file defines it, read as a library object's are (see [Library](#library), Materials), so it needs no `[materials]` of its own; a recipe `[materials.<name>]` replaces only the one of that name. An unnamed glTF material is called `material<index>`, its index in the file; it keeps the file's own normals when every vertex the object reads has one, turned by each node's transform (`keep_normals = false` makes it flat instead), `smooth` or `smooth_angle` make new ones, and a file without normals is flat. It keeps the file's morph targets, and `morph` sets their weights; see [Morph targets](#morph-targets). A skinned node of the file is posed by its skin, and `clip`, `loop`, `clip_start`, `clip_speed`, `next_clip`, `next_at` and `blend` play the file's animations on it as a library object's do (Library, Skins); a name the file's skin has no animation for is refused, listing the ones it has. It keeps the file's material texture maps, and the recipe's `[materials]` set or replace them; see [Texture maps](#texture-maps).
   - **`path = "@gltf"`** is reserved: in a `.pfx` document it names the document's own glTF (its GLTF and GBIN chunks) instead of a file, with `node = "<glTF node name>"` for one node of it. `pfx import` writes a document whose recipe is that one object. Read, built or unpacked, the document keeps that glTF as its own file `@gltf` beside the recipe, so a build reads the imported glTF rather than its last output, and `pfx scene unpack` writes it out with the recipe.
 - **`generator`**: `generator = "app/birds"`, `params = { … }`. Built by a function an app registers under that name, in the app's own build code, which builds through `pfx_build::build_with` and its `Registry`. pfx itself registers only its built-ins, named `pfx/…`: [`pfx/road`](#pfxroad), [`pfx/buildings`](#pfxbuildings), [`pfx/furniture`](#pfxfurniture), [`pfx/car`](#pfxcar), [`pfx/loft`](#pfxloft), [`pfx/sweep-profile`](#pfxsweep-profile) and the vehicle parts kit, [`pfx/wheel`](#pfxwheel) and [`pfx/vehicle-parts`](#pfxvehicle-parts). The window builds it through the same registry and lets you place it.
   - The generator gets the object, its `params`, the recipe's folder and a seed: the recipe's `seed` mixed with the object's index in the file (`pfx_build::seed`), so two objects never share one.
@@ -173,7 +177,7 @@ Every count that sizes a mesh (`segments`, `rings`, `ring`, `grid`, `bevel.segme
 
 A `mesh` object keeps the morph targets of the file's triangle primitives:
 
-- **What is kept:** each target's POSITION deltas, its name from the glTF mesh's `extras.targetNames` (a target without a name is called by its index, `"0"`, `"1"`, …), and the mesh's `weights` as the default weights. The file's NORMAL and TANGENT deltas are not read: pfx computes the normals from `smooth` or `smooth_angle` on the neutral positions, and each target's NORMAL deltas are the normals the same smoothing gives on the fully morphed positions, minus those. The deltas follow every vertex pfx splits for UVs and normals, and vertices that sit together but move apart under a target are never merged.
+- **What is kept:** each target's POSITION deltas, its name from the glTF mesh's `extras.targetNames` (a target without a name is called by its index, `"0"`, `"1"`, …), and the mesh's `weights` as the default weights. When the object keeps the file's normals, each target keeps the file's NORMAL deltas too (none reads as no change), turned by the node's transform with its scale taken out. With `smooth` or `smooth_angle` the file's NORMAL deltas are not read: pfx computes the normals on the neutral positions, and each target's NORMAL deltas are the normals the same smoothing gives on the fully morphed positions, minus those. TANGENT deltas are never read. The deltas follow every vertex pfx splits for UVs and normals, and vertices that sit together but move apart under a target are never merged.
 - **Many nodes:** without `node`, the deltas take each node's transform without its translation, and targets of the same name are one target; a primitive without it moves by nothing. A name first seen takes its default weight from the first mesh that has it.
 - **`morph = { smile = 0.6, angry = 0.2 }`** sets a target's weight by name; a target not named keeps the file's weight, and a target without one 0. A weight is any finite number: glTF allows below 0 and above 1.
 - **Variants and `--set`** reach it by its dotted path, and both may add a target the object's `morph` doesn't name yet, or `morph` itself: `set = { "object.face.morph.smile" = 0.0 }`, `--set object.face.morph.angry=0.5`.
@@ -1082,8 +1086,76 @@ A `[[stage]]` is one step of building the scene up, for a breakdown: `pfx build 
 - **`camera`** (optional) names a `[[camera]]` that frames the stage, for the window and the tools that look through it.
 - **`--stage`** takes a number from 1 or a stage's name: `--stage 3` and `--stage city` build the same. Anything else is refused with the stages listed.
 - **What is dropped** goes as a variant's `drop` takes it, and with it what can't stand without it: an object whose `parent`, `on` or `into` is dropped, the `[[follow]]` of a dropped object (and so its tracks), a camera whose `rig` (or `rig` constraint) follows one, an `output.scene_camera` that names such a camera, the `[[light]]` and `[[particles]]` parented to a dropped object or one of its pieces, and any constraint whose `target` or `follow` names one of them (the entry it sits under stays). The built recipe carries no `[[stage]]` or `[variant]` tables.
-- **`--only <glob>[,<glob>]`** builds only these objects or pieces, with the same rules, on `build`, `shot` and `render`; after `--stage` when both are given.
+- **`--only <glob>[,<glob>]`** builds only these objects or pieces, or a collection's or scatter's (see Collections), with the same rules, on `build`, `shot` and `render`; after `--stage` when both are given.
 - **Order:** the variant, then each `--set` (so `--set stage.<name>.objects=[...]` and a variant's `set` reach a stage), then `--stage`, then `--only`. In Rust: `pfx_recipe::apply_stage(&recipe, "3")`, `apply_only(&recipe, &globs)` and `Pick { stage, only }.apply(&recipe)`; `pfx_build::staged` and `pfx_build::only` are the same functions.
+
+## Scatter
+
+```toml
+[[object]]
+name = "pebble"
+kind = "library"
+object = "rocks/pebble"
+hidden = true
+
+[[scatter]]
+name = "pebbles"
+object = "pebble"
+on = "ground"
+spacing = 0.4
+density = 3.0
+map = "masks/pebbles.png"
+rotate_max = [0.0, 360.0, 0.0]
+scale_min = 0.7
+scale_max = 1.3
+align = true
+```
+
+A `[[scatter]]` places copies of one object over the surface of another when the recipe builds. The copies are pieces of the build like any other (`pebbles.0`, `pebbles.1`, … or `pebbles.<n>.<piece>` for an object of several pieces): they take the object's materials, shadow and sides, share its mesh with a transform each, and draw, trace, export and pack as the object would. The same recipe and seed give the same copies on every machine.
+- **`name`** (needed, unique, not an object's name) and **`object`** (needed): the object copied, usually `hidden = true` so it stays out of the scene at its own place. Its own `rotate` and `scale` stay on every copy; its position and parents do not.
+- **`on`** (needed): the object whose surface takes the copies, seen from above: the copies spread over its bounds in X and Z and each drops straight down onto the highest face below it; a point over no face places nothing. Hiding the surface keeps its copies.
+- **`spacing`**: a least distance between copies in metres, by Poisson-disk sampling (Bridson's algorithm, ported from fast_poisson and equal to it point for point). **`density`**: copies per square metre of those bounds; alone it places that many at random, with `spacing` it thins the Poisson set down to it. One of the two is needed.
+- **`map`** (optional): a PNG over the same bounds, +X to the right and +Z down the image; its grey (or luminance) from black to white is the chance each copy is kept.
+- **`rotate_min`**, **`rotate_max`** (degrees per axis, default `[0, 0, 0]`) and **`scale_min`**, **`scale_max`** (uniform, default 1): each copy draws its turn and scale evenly between them. **`align`** (default `false`) turns each copy's up axis to the face's normal first.
+- **`seed`** (optional): the scatter's own seed; by default it comes from the recipe's `seed` and the scatter's name, so renaming reshuffles it and adding another scatter does not.
+- A scatter of more than 100,000 copies is refused, naming it.
+
+## Collections
+
+```toml
+[[collection]]
+name = "fence"
+objects = ["post_*", "rail"]
+hidden = true
+
+[[collection]]
+name = "rocks"
+objects = ["pebbles", "boulder*"]
+solo = true
+```
+
+A `[[collection]]` names a set of objects and scatters, by name or glob, to show, hide or render alone together.
+- **`name`** (needed, unique) and **`objects`** (needed): names or globs of objects and scatters; one that matches neither is refused.
+- **`hidden`** (default `false`): its objects and scatters are hidden, as `hidden = true` on each.
+- **`solo`** (default `false`): while any collection is solo, everything in no solo collection is hidden.
+- **`--only <collection>`** builds a collection's objects alone, dropping the rest by the rules of `--stage`; `--only <scatter>` keeps a scatter with its object and its surface. A scatter whose object or surface is dropped goes with it, and a collection keeps only the names still in the build.
+
+## Pieces
+
+`pieces` on a `mesh` or `library` object reaches into the file's nodes, so an imported model can be restyled or trimmed from the recipe:
+
+```toml
+[[object]]
+name = "prop"
+kind = "mesh"
+path = "model.glb"
+pieces = { "Arm/Lid" = { material = "rubber" }, "#5" = { hidden = true }, Stand = { hidden = true } }
+```
+
+- **Keys** pick nodes: a node's name (every node of that name), a `parent/child` path of names ending at the node (`Arm/Lid` is a `Lid` whose parent is an `Arm`), or `#<index>`, the node's index in the file. A name also matches the unique name pfx gives a repeated one, `<name>.<index>` (as a library piece is named), and an unnamed node is `node<index>`.
+- **Values:** `material` draws every primitive of the node in that material instead of the file's, and `hidden = true` leaves the node out (a mesh object drops its triangles; a library piece is built but hidden, as a hidden object is). At least one of them; `hidden = false` shows a node a wider key hid.
+- **Reach:** a key applies to the node it picks and every node under it. Where two keys reach one node, the one picking the deeper node wins, then `#index` over a path over a name, for each value on its own. A piece without a `material` key keeps the object's `material` when it sets one, else the file's.
+- **Refused:** a key that is not a name, a path or `#` and digits, or a value with neither key, when the recipe is read; at build, a key that picks no node, naming the file and its nodes: `` object[prop].pieces.Wheel: model.glb has no node `Wheel`, expected a node name, a parent/child path or #<index> of: Root, Lid, Arm, Lid.3 ``; and `pfx check` reports a piece `material` that no `[materials]` entry, catalogue or file defines.
 
 ## Library
 
@@ -1100,10 +1172,11 @@ at = [0.0, 0.0, 4.0]
 ```
 
 - **Where the library is:** the recipe's top-level `library = "<path>"`, relative to the recipe; without it, the nearest folder named `library` holding an `index.json`, from the recipe's folder up (the folder itself when it is called `library`, else its `library/`).
+- **From a `.pfx` library:** `object = "lib:<file>.pfx/<kind>/<name>"` reads the object from a `.pfx` whose files are named `<kind>/<name>/model.glb` and `<kind>/<name>/object.toml`. The `.pfx` is found like any asset (the recipe's folder, then `asset_roots`) and is only read.
 - **The layout:** `library/<kind>/<name>/` holds `model.glb`, `object.toml` and an optional `thumb.png`, and `library/index.json` lists them. Kinds and names are lowercase letters, digits, `_` and `-`.
-- **`object`** (required) is `"<kind>/<name>"`. **`clip`** names the model's glTF animation the timeline plays, the first one when absent; **`loop`** (`true` by default) repeats it over the timeline, `false` holds its last pose. **`clip_start`** (seconds, 0 by default) is the timeline time the clip's first key plays at, its first pose held before; **`clip_speed`** (0 or more, 1 by default) scales the clip's time. **`next_clip`** names a second animation of the model that starts at **`next_at`** seconds (`clip_start` by default) and blends in over **`blend`** seconds (0, a cut, by default): each node's translation and scale are mixed linearly and its rotation by normalised lerp on the shorter arc, the weight rising from 0 at `next_at` to 1 at `next_at + blend`. It plays from its own start at the same speed and `loop`. `next_at` and `blend` without `next_clip` are refused, and so is a name the model lacks, listing the ones it has. Every common key (`at`, `rotate`, `scale`, `material`, `hidden`, `shadow` and the rest) works as on any object; `material` replaces every slot.
+- **`object`** (required) is `"<kind>/<name>"`. **`clip`** names the model's glTF animation the timeline plays, the first one when absent; **`loop`** (`true` by default) repeats it over the timeline, `false` holds its last pose. **`clip_start`** (seconds, 0 by default) is the timeline time the clip's first key plays at, its first pose held before; **`clip_speed`** (0 or more, 1 by default) scales the clip's time. **`next_clip`** names a second animation of the model that starts at **`next_at`** seconds (`clip_start` by default) and blends in over **`blend`** seconds (0, a cut, by default): each node's translation and scale are mixed linearly and its rotation by normalised lerp on the shorter arc, the weight rising from 0 at `next_at` to 1 at `next_at + blend`. It plays from its own start at the same speed and `loop`. `next_at` and `blend` without `next_clip` are refused, and so is a name the model lacks, listing the ones it has. Every common key (`at`, `rotate`, `scale`, `material`, `hidden`, `shadow` and the rest) works as on any object; `material` replaces every slot. A piece keeps the model's own normals, as a `mesh` object does (`keep_normals`).
 - **Pieces:** every node of the model with a mesh is a piece named `<object>.<node>`, in the object's own frame with the node's whole transform applied (the hierarchy and each node's translation, rotation and scale). The model's first root, when it is the only root or has a mesh, is `<object>.body`, so a car from the library has the same pieces as `pfx/car` builds (`hero.body`, `hero.wheel_rl`, …), and `[[follow]]`, lights and particles name them alike. Two nodes of one name get the second's index after a dot.
-- **Materials:** each glTF material becomes a material of its own name, offered as a generator's are (a recipe's own `[materials.<name>]` replaces it): `base` from `baseColorFactor`, `roughness`, `metalness`, `emission` (the emissive factor times `KHR_materials_emissive_strength`), `transmission` (`KHR_materials_transmission`), `ior` (`KHR_materials_ior`) and `clearcoat` and `clearcoat_roughness` (`KHR_materials_clearcoat`), with the family `emissive`, `glass`, `lacquer` or `metal` that follows from them. Embedded maps (base colour, metal-roughness, normal, occlusion) are kept as under "Texture maps".
+- **Materials:** each glTF material becomes a material of its own name, offered as a generator's are (a recipe's own `[materials.<name>]` replaces it): `base` from `baseColorFactor`, `roughness`, `metalness`, `emission` (the emissive factor times `KHR_materials_emissive_strength`), `transmission` (`KHR_materials_transmission`), `ior` (`KHR_materials_ior`) and `clearcoat` and `clearcoat_roughness` (`KHR_materials_clearcoat`), with the family `emissive`, `glass`, `lacquer` or `metal` that follows from them. Embedded maps (base colour, metal-roughness, normal, occlusion) are kept as under "Texture maps". Two imported objects (`library` or `mesh`) whose files reuse a material name with other values or other maps both build: the later object's copy is named `<object>.<name>` (a note says so), and its slots follow. A recipe `[materials.<name>]` replaces both, and `[materials."<object>.<name>"]` replaces that object's alone.
 - **Morph targets** of a node's mesh are kept, with their names from the mesh's `extras.targetNames` and the file's default weights.
 - **Animations:** with a `[timeline]`, the chosen clip is sampled once a frame (LINEAR and STEP keys, a CUBICSPLINE key's value, rotations by slerp) through the hierarchy, and each piece it moves is keyed in the GLB's `timeline` animation like any animated node. A followed object keeps its clip: each piece is keyed with the follow's pose times the clip's motion of that piece in the object's frame, and the follow's `root_motion` says whether the clip's own travel of its root node is kept (below, Follow). Morph weight channels are kept on export, not played.
 - **Skins:** a node with a glTF skin is a skinned piece. Its vertices keep their `JOINTS_0` and `WEIGHTS_0` (weights normalised to sum 1) and are posed by the skin's joints, the engine's own skeleton and clip runtime (`pfx_core::anim`, the same one a game's animator plays): the built mesh is the skin at its rest pose, and with a `[timeline]` the chosen clip (and `next_clip`, blended per joint) poses it at each time: `pfx shot --still` and `pfx render --recipe` at `--time`, and `pfx clip --timeline`, live or traced, draw the deformed mesh, every frame skinned on the CPU (linear blend skinning; normals turn with the joints). Under a `[[follow]]` the piece is placed by the follow and deformed by the clip, and `root_motion = "ignore"` holds the skeleton's root joints on the ground plane. One skin a model: a second is refused at `object[<name>].object`. A skinned piece's levels of detail, and the GLB and scene that `pfx build` writes, carry its rest pose.

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
+mod assets;
 mod constraint;
 mod curve;
 mod entries;
@@ -20,6 +21,7 @@ mod text;
 mod validate;
 mod variant;
 
+pub use assets::{LIBRARY_PREFIX, Library, library_reference};
 pub use curve::{CurveEdit, CurveParam, curve_keys, curve_patch, curve_points, curves_of};
 pub use entries::{
     Entry, TABLES, add_patch, duplicate_patch, entries, label_key, referrers, remove_patch,
@@ -65,6 +67,8 @@ pub struct Recipe {
     pub seed: u64,
     pub params: Option<String>,
     pub library: Option<String>,
+    pub project_root: Option<String>,
+    pub asset_roots: Vec<String>,
     pub plate: Option<Plate>,
     pub output: Output,
     pub objects: Vec<Object>,
@@ -78,6 +82,8 @@ pub struct Recipe {
     pub references: Vec<Reference>,
     pub follows: Vec<Follow>,
     pub stages: Vec<Stage>,
+    pub scatters: Vec<Scatter>,
+    pub collections: Vec<Collection>,
     pub keep: Vec<Vec<String>>,
     pub markers: Vec<Marker>,
     pub constraints: Vec<Constrained>,
@@ -187,6 +193,8 @@ pub struct Object {
     pub smooth_angle: Option<f64>,
     pub smooth: bool,
     pub flat_faces: bool,
+    pub keep_normals: Option<bool>,
+    pub pieces: Vec<PieceRule>,
     pub bevel: Option<Bevel>,
     pub uv: Option<Uv>,
     pub detail_uv: Option<DetailUv>,
@@ -196,6 +204,13 @@ pub struct Object {
     pub dynamic: Option<bool>,
     pub proxy: Option<Proxy>,
     pub lod: Vec<Lod>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PieceRule {
+    pub select: String,
+    pub material: Option<String>,
+    pub hidden: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -882,6 +897,30 @@ pub struct Stage {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Scatter {
+    pub name: String,
+    pub object: String,
+    pub on: String,
+    pub seed: Option<u64>,
+    pub spacing: Option<f64>,
+    pub density: Option<f64>,
+    pub map: Option<String>,
+    pub rotate_min: [f64; 3],
+    pub rotate_max: [f64; 3],
+    pub scale_min: f64,
+    pub scale_max: f64,
+    pub align: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Collection {
+    pub name: String,
+    pub objects: Vec<String>,
+    pub hidden: bool,
+    pub solo: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Marker {
     pub name: String,
     pub t: f64,
@@ -1328,6 +1367,21 @@ impl Recipe {
             }
         }
         false
+    }
+
+    pub fn collected(&self, name: &str) -> Vec<&str> {
+        self.collections
+            .iter()
+            .filter(|c| c.objects.iter().any(|g| variant::glob_matches(g, name)))
+            .map(|c| c.name.as_str())
+            .collect()
+    }
+
+    pub fn collection_hides(&self, name: &str) -> bool {
+        let within = |c: &&Collection| c.objects.iter().any(|g| variant::glob_matches(g, name));
+        let solo = self.collections.iter().any(|c| c.solo);
+        self.collections.iter().filter(within).any(|c| c.hidden)
+            || (solo && !self.collections.iter().filter(within).any(|c| c.solo))
     }
 
     pub fn keeps(&self, object: &str, node: &str) -> bool {

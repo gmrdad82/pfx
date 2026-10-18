@@ -10,6 +10,8 @@ use crate::{Built, Registry, build_with, glb_path};
 
 pub const GLTF_NAME: &str = "@gltf";
 pub const ENTRY: &str = "main.toml";
+pub const ASSET_RECORD: &str = "asset.pfx";
+const RECORD_DEPTH: usize = 4;
 
 const OWNED: [Tag; 10] = [
     pfx_file::GLTF,
@@ -419,6 +421,18 @@ fn text_of(bytes: &[u8], what: &str) -> Result<String, String> {
     String::from_utf8(bytes.to_vec()).map_err(|_| format!("{what} is not UTF-8"))
 }
 
+fn asset_records(seen: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
+    seen.iter()
+        .filter_map(|file| {
+            file.ancestors()
+                .skip(1)
+                .take(RECORD_DEPTH)
+                .map(|dir| dir.join(ASSET_RECORD))
+                .find(|record| record.is_file())
+        })
+        .collect()
+}
+
 fn real_folder(pfx: &Path) -> PathBuf {
     match pfx.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
@@ -440,14 +454,17 @@ impl Document {
         drop(recorder);
         if let Some(sky) = &loaded.recipe.sky
             && let Some(path) = &sky.path
+            && let Ok(found) = loaded.recipe.asset(&base, path)
         {
-            let file = files::clean(&base.join(path));
+            let file = files::clean(&found);
             if file.is_file() {
                 seen.insert(file);
             }
         }
         let main = files::clean(recipe);
         seen.remove(&main);
+        let records = asset_records(&seen);
+        seen.extend(records);
         let mut root = main.parent().map(Path::to_path_buf).unwrap_or_default();
         for file in &seen {
             while !file.starts_with(&root) {

@@ -1,6 +1,9 @@
+mod align;
+mod asset;
 mod build;
 mod check;
 mod clip;
+mod credits;
 mod curve;
 mod diff;
 mod document;
@@ -55,6 +58,9 @@ pub const MOVED: &[&str] = &[
     "duplicate",
     "import",
     "export",
+    "align",
+    "asset",
+    "credits",
     #[cfg(feature = "editor")]
     "edit",
 ];
@@ -141,11 +147,25 @@ enum Verb {
     )]
     Edit(Box<edit::Args>),
     #[command(
+        about = "Align, distribute, drop to the ground or snap objects to bounds, writing their places into the recipe"
+    )]
+    Align(align::Args),
+    #[command(
         about = "A recipe's entries and its .pfx documents",
         subcommand_required = true,
         arg_required_else_help = false
     )]
     Scene(SceneArgs),
+    #[command(
+        about = "Asset sources: search, get and list CC0 and account assets with their licence facts",
+        subcommand_required = true,
+        arg_required_else_help = false
+    )]
+    Asset(asset::Args),
+    #[command(
+        about = "The credits of every asset a .pfx scene uses, refusing unlicensed ones by name"
+    )]
+    Credits(credits::Args),
 }
 
 #[derive(clap::Args)]
@@ -244,7 +264,7 @@ pub(super) struct Picks {
         long,
         value_name = "glob[,glob]",
         value_delimiter = ',',
-        help = "Build only these objects, or <object>.<piece> pieces; globs take * and ?"
+        help = "Build only these objects, <object>.<piece> pieces, collections or scatters; globs take * and ?"
     )]
     pub(super) only: Vec<String>,
 }
@@ -372,6 +392,9 @@ fn run_verb(verb: Verb, rest: &[String], registry: &Registry) -> ExitCode {
         Verb::Duplicate(parsed) => entries::duplicate(&parsed),
         Verb::Import(parsed) => import::run(&parsed, registry),
         Verb::Export(parsed) => export::run(&parsed, registry),
+        Verb::Align(parsed) => align::run(&parsed, registry),
+        Verb::Asset(parsed) => asset::run(&parsed),
+        Verb::Credits(parsed) => credits::run(&parsed),
         #[cfg(feature = "editor")]
         Verb::Edit(parsed) => edit::run(&parsed, rest, registry),
         Verb::Scene(SceneArgs { verb }) => match verb {

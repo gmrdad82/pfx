@@ -12,6 +12,7 @@ pub use crate::maps::CausticProjection;
 
 pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const REACTIVE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+const FLAT_TRANSFORM: f32 = 1e-6;
 
 pub type Matrix = [[f32; 4]; 4];
 
@@ -539,6 +540,19 @@ fn normal_columns(model_view: Matrix) -> [[f32; 4]; 3] {
             0.0,
         ]
     })
+}
+
+fn volume(m: Matrix) -> f32 {
+    (0..3)
+        .map(|i| dot([m[i][0], m[i][1], m[i][2]], [m[i][0], m[i][1], m[i][2]]).sqrt())
+        .product()
+}
+
+fn normal_matrix(model_view: Matrix) -> [[f32; 4]; 3] {
+    let columns = normal_columns(model_view);
+    let length = |v: &[f32; 4]| dot([v[0], v[1], v[2]], [v[0], v[1], v[2]]).sqrt();
+    let largest = columns.iter().map(length).fold(0.0, f32::max);
+    columns.map(|v| [v[0] / largest, v[1] / largest, v[2] / largest, 0.0])
 }
 
 fn world_from_view(view: Matrix) -> [[f32; 4]; 3] {
@@ -1202,7 +1216,7 @@ impl Pass {
                     [mv[2][0], mv[2][1], mv[2][2]],
                 ),
             );
-            if !determinant.is_finite() || determinant.abs() < 1e-8 {
+            if !determinant.is_finite() || determinant.abs() <= volume(mv) * FLAT_TRANSFORM {
                 return Err("glass model has a singular transform".into());
             }
             if !surface.clip.iter().flatten().all(|value| value.is_finite()) {
@@ -1237,7 +1251,7 @@ impl Pass {
                 ObjectGpu {
                     model_view: mv,
                     mvp: multiply(camera.projection, mv),
-                    normal: normal_columns(mv),
+                    normal: normal_matrix(mv),
                     base_roughness: [m.base[0], m.base[1], m.base[2], m.roughness],
                     tint_absorption: [
                         m.subsurface_tint[0],
@@ -2094,6 +2108,33 @@ pub fn compose_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tiny_scaled_model_keeps_unit_normals_and_a_flat_one_is_refused() {
+        let scaled = |s: f32| -> Matrix {
+            [
+                [s, 0.0, 0.0, 0.0],
+                [0.0, s, 0.0, 0.0],
+                [0.0, 0.0, s, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]
+        };
+        for s in [1.0, 1e-3, 1e-5] {
+            let normals = normal_matrix(scaled(s));
+            for (k, column) in normals.iter().enumerate() {
+                assert!((column[k] - 1.0).abs() < 1e-5, "{s}: {normals:?}");
+            }
+            assert!(volume(scaled(s)) > 0.0);
+        }
+        let mut flat = scaled(1.0);
+        flat[1] = [1.0, 1e-9, 0.0, 0.0];
+        let m = flat;
+        let det = dot(
+            [m[0][0], m[0][1], m[0][2]],
+            cross([m[1][0], m[1][1], m[1][2]], [m[2][0], m[2][1], m[2][2]]),
+        );
+        assert!(det.abs() <= volume(m) * FLAT_TRANSFORM);
+    }
     use pfx_geom::shapes::Shape;
     use pfx_gpu::Gpu;
 

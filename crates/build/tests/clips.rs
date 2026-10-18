@@ -349,6 +349,34 @@ fn a_skinned_clip_bends_the_mesh_as_the_reference_skinning_does() {
 }
 
 #[test]
+fn a_skinned_piece_takes_its_material_override_and_still_bends() {
+    let dir = column_dir("skin-pieces");
+    for kind in ["library", "mesh"] {
+        let text = format!(
+            "{}clip = \"bend\"\nloop = false\npieces = {{ column = {{ material = \"Rubber\" }} }}\n\n[materials.Rubber]\nbase = [0.05, 0.05, 0.05]\n",
+            column_text(TIMELINE, kind)
+        );
+        let r = parse(&text).unwrap_or_else(|e| panic!("{e}"));
+        let b = build(&r, &dir).unwrap_or_else(|e| panic!("{e}"));
+        let part = b
+            .parts
+            .iter()
+            .find(|p| p.node.name.starts_with("col"))
+            .unwrap();
+        assert!(
+            part.node.mesh.slots.iter().all(|s| s.material == "Rubber"),
+            "{kind}"
+        );
+        let placed = DMat4::from_translation(DVec3::new(1.0, 0.0, -2.0));
+        same_shape(
+            &posed(&dir, &text, 0.5),
+            &reference("bend", 0.5, false),
+            placed,
+        );
+    }
+}
+
+#[test]
 fn a_skinned_object_without_a_timeline_builds_at_rest() {
     let dir = column_dir("skin-rest");
     let r = parse(&column_text("", "library")).unwrap();

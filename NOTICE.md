@@ -669,6 +669,65 @@ CPython is under the Python Software Foundation License Version 2, as section B 
 > agrees to be bound by the terms and conditions of this License
 > Agreement.
 
+## fast_poisson and Rand, under the MIT licence
+
+The Poisson-disk sampler in `crates/build/src/poisson.rs` (in the package `pfx-build`) is a port of fast_poisson 1.0.2 by Travis Veazey (https://github.com/Kromey/fast_poisson, tag `v1.0.2`, commit `5c8273cb790c600219fc32121f70458220ac9dfe`): Bridson's algorithm with its active list, 30 tries per point in the annulus from the radius to twice it, and its first point near the middle, with a background grid in place of its k-d tree; licensed MIT OR Apache-2.0 and used here under the MIT licence. Its `COPYRIGHT` file reads "Copyright 2021 Travis Veazey" and its `LICENSE-MIT` file at that version reads:
+
+> Copyright (c) 2016 The Amethyst Project Developers
+>
+> Permission is hereby granted, free of charge, to any
+> person obtaining a copy of this software and associated
+> documentation files (the "Software"), to deal in the
+> Software without restriction, including without
+> limitation the rights to use, copy, modify, merge,
+> publish, distribute, sublicense, and/or sell copies of
+> the Software, and to permit persons to whom the Software
+> is furnished to do so, subject to the following
+> conditions:
+>
+> The above copyright notice and this permission notice
+> shall be included in all copies or substantial portions
+> of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+> ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+> TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+> PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+> SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+> CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+> OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+> IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+> DEALINGS IN THE SOFTWARE.
+
+The same file ports the parts of Rand that fast_poisson draws through, so its points match fast_poisson's bit for bit: the ziggurat standard normal with its tables (`ZIG_NORM_X`, `ZIG_NORM_F`, `ZIG_NORM_R`) and tail from rand_distr 0.5.1 (https://github.com/rust-random/rand_distr, commit `c5de6c776b9d7fed87138c5d1f70f5f8368aebca`), and the open (0, 1) float and the single-sample integer range from rand 0.9.5 (https://github.com/rust-random/rand, commit `3474ec047279e5de32676c50154ff7d76d12a94e`), licensed MIT OR Apache-2.0 and used here under the MIT licence, as their `LICENSE-MIT` files read:
+
+> Copyright 2018 Developers of the Rand project
+> Copyright (c) 2014 The Rust Project Developers
+>
+> Permission is hereby granted, free of charge, to any
+> person obtaining a copy of this software and associated
+> documentation files (the "Software"), to deal in the
+> Software without restriction, including without
+> limitation the rights to use, copy, modify, merge,
+> publish, distribute, sublicense, and/or sell copies of
+> the Software, and to permit persons to whom the Software
+> is furnished to do so, subject to the following
+> conditions:
+>
+> The above copyright notice and this permission notice
+> shall be included in all copies or substantial portions
+> of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+> ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+> TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+> PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+> SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+> CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+> OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+> IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+> DEALINGS IN THE SOFTWARE.
+
 ## Fonts, under the SIL Open Font License 1.1
 
 Each font keeps its licence beside it:
@@ -682,3 +741,29 @@ Each font keeps its licence beside it:
 - `crates/editor-style/fixture/`: Inconsolata, the editor crates' test font, with its `OFL.txt` and `SOURCE`.
 - `assets/fonts/`: JetBrains Mono (by JetBrains) patched with the Nerd Fonts icon glyphs (Nerd Fonts 3.5.1, OFL-1.1-no-RFN), the recipes' text family, which `pfx-build` and `pfx-recipe-scene` embed, with its `OFL.txt` and `SOURCE`.
 - `crates/project/src/templates/IBMPlexMono-Regular.ttf`: IBM Plex Mono, with `IBMPlexMono-OFL.txt`; `pfx new` ships it unmodified into a new game.
+
+## zip, under the MIT licence
+
+The zip archive reader in `crates/source/src/zip.rs` (in the package `pfx-source`) is a port of the zip crate 0.6.6 (https://github.com/zip-rs/zip, commit `21a20584bc9e05dfa4f3c5b0bc420a1389fae2c3`): its end-of-central-directory search, the zip64 locator and end record, the archive offset for prepended bytes, the central directory headers with their zip64 extra field, the local header's data start, the IBM code page 437 name table and the enclosed-name check, altered, licensed under the MIT licence, as its `LICENSE` file at that version reads:
+
+> The MIT License (MIT)
+>
+> Copyright (c) 2014 Mathijs van de Nes
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.

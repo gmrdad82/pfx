@@ -517,3 +517,55 @@ fn the_licence_rule_takes_pfx_own_line_or_an_spdx_expression_with_a_credit() {
             .contains("SPDX")
     );
 }
+
+fn shelf_pfx(exported: &library::Exported, as_name: &str) -> Vec<u8> {
+    use pfx_build::pfx_file::{Codec, FILE, Writer};
+    Writer::new()
+        .named(
+            FILE,
+            format!("{as_name}/{}", library::MODEL),
+            exported.glb.clone(),
+            Codec::Auto,
+        )
+        .named(
+            FILE,
+            format!("{as_name}/{}", library::SIDECAR),
+            exported.sidecar.text().into_bytes(),
+            Codec::Auto,
+        )
+        .to_vec()
+        .unwrap()
+}
+
+const SHELF_OBJECT: &str = "recipe = 1\nname = \"drive\"\nasset_roots = [\"../shelf\"]\n\n[[object]]\nname = \"hero\"\nkind = \"library\"\nobject = \"lib:props.pfx/car/sports\"\n";
+
+#[test]
+fn a_library_object_reads_a_pfx_library_from_an_asset_root_without_writing_into_it() {
+    let (r, b) = car();
+    let exported = library::export(&r, &b, "hero", "car/sports").unwrap();
+    let dir = common::scratch("library-pfx");
+    let shelf = dir.join("shelf");
+    std::fs::create_dir_all(&shelf).unwrap();
+    std::fs::write(shelf.join("props.pfx"), shelf_pfx(&exported, "car/sports")).unwrap();
+    let base = dir.join("scene");
+    std::fs::create_dir_all(&base).unwrap();
+    let before = std::fs::read(shelf.join("props.pfx")).unwrap();
+    let built = build(&parse(SHELF_OBJECT).unwrap(), &base).unwrap();
+    let names: Vec<&str> = built.parts.iter().map(|p| p.node.name.as_str()).collect();
+    assert!(names.contains(&"hero.body"), "{names:?}");
+    assert!(names.contains(&"hero.wheel_rl"), "{names:?}");
+    assert_eq!(std::fs::read(shelf.join("props.pfx")).unwrap(), before);
+    let listing: Vec<_> = std::fs::read_dir(&shelf).unwrap().collect();
+    assert_eq!(listing.len(), 1);
+}
+
+#[test]
+fn a_pfx_library_that_is_nowhere_is_refused_in_one_line_naming_the_roots() {
+    let dir = common::scratch("library-pfx-missing");
+    let base = dir.join("scene");
+    std::fs::create_dir_all(&base).unwrap();
+    let error = build(&parse(SHELF_OBJECT).unwrap(), &base).unwrap_err();
+    assert!(error.text.contains("props.pfx"), "{}", error.text);
+    assert!(error.text.contains("shelf"), "{}", error.text);
+    assert!(!error.text.contains('\n'), "{}", error.text);
+}

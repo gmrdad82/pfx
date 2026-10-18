@@ -12,5 +12,6 @@ pub mod numbers;
 pub mod rig;
 pub mod sim;
 pub mod sky;
+pub mod spdx;
 pub mod tween;
 pub mod words;

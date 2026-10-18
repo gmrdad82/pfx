@@ -51,6 +51,7 @@ const USAGE: &str = "usage:
   pfx build|check|timeline <recipe> [flags]
   pfx clip|shoot <recipe> [flags]
   pfx route|set|get|curve|key|unkey|add|remove|duplicate <recipe> ...
+  pfx align <recipe|file.pfx> <object>... (--axis x|y|z [--edge min|center|max] [--to <object>] | --distribute --axis x|y|z | --ground [--on <object>] | --snap <object> --axis x|y|z [--edge min|center|max]) [--json]
   pfx diff <a.glb> <b.glb> [flags]
   pfx library list|index|check|bake|add [flags]
   pfx import <file.glb> (--as <kind/name> | --out <file.pfx>) [flags]
@@ -59,6 +60,11 @@ const USAGE: &str = "usage:
   pfx scene save <recipe> --pfx <out.pfx> [--thumb] [--json]
   pfx scene unpack <file.pfx> <dir> [--json]
   pfx scene fold <file.pfx> [--apply | --keep] [--json]
+  pfx asset search [words...] [--source <name>] [--kind hdri|texture|model|pack] [--limit N] [--allow <kind>]... [--json]
+  pfx asset get <source:id> [--out <dir>] [--res <r>] [--format <f>] [--from <file.zip>] [--allow nc|nd|editorial|custom]... [--json]
+  pfx asset list|sources [--json]
+  pfx asset settings [--stdin] [--json]
+  pfx credits <scene.pfx> [--json]
   pfx --version
   pfx --help
 clip masters are H.264 (pito-codecs) at 60 fps; pcod (pito-codecs) makes video deliveries
@@ -362,6 +368,9 @@ const COMMANDS: &[&str] = &[
     "duplicate",
     "import",
     "export",
+    "align",
+    "asset",
+    "credits",
     "help",
 ];
 
@@ -1616,7 +1625,7 @@ mod tests {
         for (line, message, usage) in [
             (
                 "",
-                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, shot, scene, film, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, help]",
+                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, shot, scene, film, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, align, asset, credits, help]",
                 TOP,
             ),
             ("tui", "unrecognized subcommand 'tui'", TOP),

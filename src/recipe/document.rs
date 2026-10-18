@@ -76,6 +76,7 @@ pub(super) fn swap(verb: &mut Verb) -> Result<Option<Opened>, (&'static str, Str
         Verb::Shot(a) => ("shot", swapped_path(&mut a.recipe)),
         Verb::Render(a) => ("render", swapped_path(&mut a.recipe)),
         Verb::Clip(a) => ("clip", swapped_path(&mut a.recipe)),
+        Verb::Align(a) => ("align", swapped(&mut a.recipe)),
         _ => ("", Ok(None)),
     };
     result.map_err(|e| (name, e))

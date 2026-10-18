@@ -1,5 +1,5 @@
 mod codec;
-mod crc32;
+pub mod crc32;
 pub mod lz4;
 mod read;
 pub mod sha256;

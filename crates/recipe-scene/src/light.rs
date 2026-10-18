@@ -400,15 +400,20 @@ fn hdr_file(recipe: &Recipe, sky: &pfx_recipe::Sky) -> Option<PathBuf> {
     }
     let path = sky.path.as_ref()?;
     Some(match &recipe.base {
-        Some(base) => base.join(path),
+        Some(base) => recipe.asset(base, path).unwrap_or_else(|_| base.join(path)),
         None => Path::new(path).to_path_buf(),
     })
 }
 
 fn hdr(recipe: &Recipe, sky: &pfx_recipe::Sky) -> Result<Sky, Error> {
-    let Some(file) = hdr_file(recipe, sky) else {
+    let Some(mut file) = hdr_file(recipe, sky) else {
         return Err(Error("sky.path: an HDR sky needs a path".into()));
     };
+    if let (Some(base), Some(path)) = (&recipe.base, &sky.path) {
+        file = recipe
+            .asset(base, path)
+            .map_err(|e| Error(format!("sky.path: {e}")))?;
+    }
     let bytes = pfx_recipe::files::read(&file)
         .map_err(|e| Error(format!("sky.path: {}: {e}", file.display())))?;
     let parsed =
