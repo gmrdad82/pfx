@@ -71,6 +71,6 @@ pub fn run_project(
 }
 
 #[cfg(test)]
-mod manf_tests;
+mod pfx_tests;
 #[cfg(test)]
 mod tests;

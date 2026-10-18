@@ -2,6 +2,7 @@ use egui::{Align2, CornerRadius, Response, Sense, Stroke, StrokeKind, Ui, Vec2, 
 
 use super::State;
 use crate::theme::Theme;
+use crate::tokens::{KEYCAP_HEIGHT, KEYCAP_LIP, KEYCAP_MIN, KEYCAP_PAD};
 
 pub struct KeyCap<'a> {
     key: &'a str,
@@ -38,7 +39,7 @@ impl Widget for KeyCap<'_> {
             .layout_no_wrap(self.key.into(), key_font.clone(), theme.text)
             .size()
             .x;
-        let size = Vec2::new((width + 10.0).round().max(18.0), 17.0);
+        let size = Vec2::new((width + KEYCAP_PAD).round().max(KEYCAP_MIN), KEYCAP_HEIGHT);
         let sense = if self.button {
             Sense::click()
         } else {
@@ -71,7 +72,7 @@ impl Widget for KeyCap<'_> {
         );
         painter.hline(
             rect.x_range().shrink(1.0),
-            rect.bottom() - 1.5,
+            rect.bottom() - KEYCAP_LIP,
             Stroke::new(
                 theme.stroke,
                 if state == State::Active {

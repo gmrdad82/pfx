@@ -15,6 +15,8 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 - `crates/live/examples/bench/`: the bench's room.
 - `crates/live/tests/flat/`: the flat pass's neutral reference scenes, made by `crates/live/tests/flat/scenes.py`.
 - `crates/load/tests/data/`, `crates/load/tests/level/` and `crates/load/tests/scenes/`: minimal neutral meshes, images, skies and a sine tone.
+- `crates/scene/tests/fixtures/` and `crates/scene/examples/demo/`: the scene format's neutral test meshes and image, and the demo project built from copies of them. The scene format, its checks, writer and tests began as pfx's own scene loader and were kept in the separate crate pfx-scene until v1.6.0 (commit `4b5e12d`), which moved back into this tree as `crates/scene` and `crates/file`.
+- `docs/schema/`: the scene format's JSON Schemas, generated from `pfx-scene`'s types by `cargo run -p pfx-scene --features schema --example scene-schema -- docs/schema`.
 - `crates/play/tests/characters/`: blocks for the character tests.
 - `crates/sound/tests/fixtures/`: sine tones made with ffmpeg.
 - `crates/project/src/templates/grid.glb`: the floor grid of the scaffold's first scene.
@@ -236,12 +238,43 @@ The round bloom in `crates/post/src/bloom.rs` (`round_glow`, `blend_factor`, `ro
 
 The outdoor height fog's density and its closed-form optical path in `crates/live/src/height_fog.rs` (in the package `pfx-live`) are ported from Filament's fog (https://github.com/google/filament, `shaders/src/surface_fog.fs` and `filament/src/ds/ColorPassDescriptorSet.cpp`, tag `v1.56.0`, commit `003e5005713cba55cbd3f3a423c472000b96b868`), Copyright The Android Open Source Project, licensed under the Apache License 2.0. Its text ships in [crates/live/LICENSE-APACHE](crates/live/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Filament. The port is a translation into WGSL, changed by pfx's authors: the density is sampled inside a ray march instead of applied once per surface, and the optical path is taken along each light's chord.
 
+## lz4_flex, under the MIT licence
+
+`crates/file/src/lz4.rs` (in the package `pfx-file`) is a port of the LZ4 block encoder and decoder of lz4_flex 0.14.0 (https://github.com/pseitz/lz4_flex, commit `1bffdcbbf906a234b913937cb2f57c0245915038`), altered, under the MIT licence:
+
+> The MIT License (MIT)
+>
+> Copyright (c) 2020 Pascal Seitz
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## crc32fast, under the MIT licence
+
+`crates/file/src/crc32.rs` (in the package `pfx-file`) is a port of the slice-by-16 CRC-32 of crc32fast 1.5.0 (https://github.com/srijs/rust-crc32fast, tag `v1.5.0`), altered, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+
+> MIT License
+>
+> Copyright (c) 2018 Sam Rijs, Alex Crichton and contributors
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 ## Fonts, under the SIL Open Font License 1.1
 
 Each font keeps its licence beside it:
 
 - `crates/text/fonts/`: EB Garamond.
 - `crates/text/tests/fonts/`: Bungee Color, DM Sans, IBM Plex Mono and a Noto Sans SC subset.
-- `crates/theme/fonts/`: Exo 2 and JetBrains Mono, each with its `SOURCE.md`.
+- `crates/editor-style/fonts/`: the editor theme's fonts, each subset with `pfx font subset` and kept with its `SOURCE.md` (upstream, commit or release, sha256 before and after) and its `chars.txt`:
+  - `jost/`: Jost, Copyright 2020 The Jost Project Authors (https://github.com/indestructible-type/Jost), the variable `Jost[wght].ttf` from Google Fonts at `6e4b84c9`, with its `OFL.txt`.
+  - `jetbrains-mono/`: JetBrains Mono Regular and Bold, Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono), release v2.304, with its `OFL.txt`.
+  - `icons/`: eighteen Font Awesome Free icon glyphs, Copyright (c) 2022 Fonticons, Inc. (https://fontawesome.com), as Nerd Fonts 3.5.1 patches them into JetBrains Mono, with JetBrains Mono's `OFL.txt` and Font Awesome's `FontAwesome-LICENSE.txt` (SIL Open Font License 1.1, Reserved Font Name "Font Awesome", which the subset does not use).
 - `crates/editor-style/fixture/`: Inconsolata, the editor crates' test font, with its `OFL.txt` and `SOURCE`.
 - `crates/project/src/templates/IBMPlexMono-Regular.ttf`: IBM Plex Mono, with `IBMPlexMono-OFL.txt`; `pfx new` ships it unmodified into a new game.

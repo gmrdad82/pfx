@@ -20,40 +20,41 @@ The editor runs on five crates of pfx's own, `crates/editor-*`, which other edit
 
 pfx keeps only what is its own: the outliner, the inspector, the log, the toolbar, play, the trace preview, the pgpu status line and the theme. Nothing of the old viewport, camera or gizmo is left in pfx.
 
-**One engine in the build.** The editor crates are workspace members and take `pfx-gpu`, `pfx-live` and `pfx-load` by path, so every build holds one copy of each engine crate and the viewport draws on this tree's `Gpu`; `cargo tree -d --workspace` names no pfx crate and one wgpu. The editor takes `pfx-scene` directly, at the rev pfx-load pins, for its `check`.
+**One engine in the build.** The editor crates are workspace members and take `pfx-gpu`, `pfx-live` and `pfx-load` by path, so every build holds one copy of each engine crate and the viewport draws on this tree's `Gpu`; `cargo tree -d --workspace` names no pfx crate and one wgpu. The editor takes `pfx-scene` by path too, for its `check`.
 
 ## The look: pfx's theme
 
-The editor crates hold only what is common: `pfx-editor-style`'s `Theme` has no default and bundles no fonts. pfx's theme is complete in itself, in one place, the `pfx-theme` crate (`crates/theme`, `pfx_theme::pfx()`, which the dev HUD shares; `crates/editor/src/theme.rs` re-exports it), and `Session::theme` hands it to the shell, which applies it before the first pass in the window and in the shot harness. Every widget, pfx's own included, reads it back with `Theme::of(ctx)`; nothing in `ui.rs` names a colour. It follows one reference: near-black, violet light, one lime accent, hairline line work. Manfred keeps its amber-on-blueprint look in its own theme.
+pfx's look lives in one tokens file, `crates/editor-style/src/tokens.rs`: every colour, the fonts, the type sizes, the title and label tracking, the spacing, the radii, the strokes and the widgets' own metrics. `tokens::theme()` builds the `Theme` from them; `pfx-theme` (`pfx_theme::pfx()`, shared with the dev HUD and re-exported by `crates/editor/src/theme.rs`) hands that theme on, and `Session::theme` gives it to the shell, which applies it before the first pass in the window and in the shot harness. Every widget, pfx's own included, reads it back with `Theme::of(ctx)`, and every egui style the editor crates set (`theme::visuals`, `theme::style`) and every widget they draw reads the tokens; nothing in `ui.rs` names a colour. Another editor on the crates can still bring a `Theme` of its own.
 
-| Role | Colour | Used for |
+It follows one reference: near-black ground, thin wide-tracked uppercase titles, a lime accent for whatever is live (slider fills, the selection, the focused panel's marker, the active tab), violet for hover and pressed fills, white text, inset cards with a hairline edge, and round numbered markers for the panel codes.
+
+| Token | Colour | Used for |
 |---|---|---|
-| `bg` | `#0E0E0E` | the window, the panels and the viewport surround |
-| `surface` | `#1D1928` | cards, chips, keycaps, the viewport badges |
-| `well` | `#080808` | number fields and text wells |
-| `line` | `#2E2D30` | separators and hairline borders |
-| `track` | `#3B3A3A` | tracks and inactive strokes |
-| `text`, `text2`, `muted`, `dim` | `#EEEDED`, `#9E9BA1`, `#6F6D70`, `#504E53` | text by weight; `dim` is file names and the status lines |
-| `code` | `#D4D1D8` | values and a file's text |
-| `accent` | `#5331A8` | hover borders; the viewport's selection and hover outlines, and their highlight (its linear colour × 0.35 selected, × 0.12 hovered, the editor crates') |
-| `accent_bright` | `#542ACD` | active and selected fills |
-| `accent_deep` | `#342850` | selection and hover backgrounds, striped rows |
-| `on_accent` | `#EEEDED` | text on `accent_bright` fills |
-| `secondary`, `secondary_soft` | `#9B80C6`, `#B6ABCB` | links, the gizmo's Z axis, TOML keys and tables |
-| `hot`, `hot_dim` | `#CEF03B`, `#ACC33B` | the one hot accent, used sparingly: focus, the caret, the playing badge; `hot_dim` the paused and trace badges, TOML strings; `ok` the gizmo's Y axis |
-| `error`, `warning` | `#FF4D6D`, `#FF9F43` | refusals and errors, the gizmo's X axis; warnings (added beyond the reference) |
-| `ok_tint`, `error_tint` | `#23280F`, `#3A1820` | tinted backgrounds and the diff's added and removed lines |
+| `BG` | `#0B0B0C` | the window, the panels, inactive tabs and the viewport surround |
+| `SURFACE` | `#1A1822` | buttons, chips and keycaps |
+| `CARD`, `CARD_LINE` | `#060607`, `#3A393F` | inset cards (`widgets::card`), the panel markers, windows, popups and code backgrounds |
+| `STRIPE` | `#141318` | striped rows |
+| `WELL` | `#050505` | number fields and text wells |
+| `LINE`, `TRACK` | `#262529`, `#3B3A3A` | hairlines; slider rails and inactive strokes |
+| `TEXT`, `TEXT2`, `MUTED`, `DIM` | `#F4F3F5`, `#A9A6AD`, `#77747B`, `#524F56` | text by weight; `DIM` is file names and the status lines |
+| `CODE` | `#D9D6DD` | values and a file's text |
+| `HOT`, `HOT_DIM`, `HOT_TINT`, `ON_HOT` | `#CEF03B`, `#ACC33B`, `#22280E`, `#0B0B0C` | the lime: slider fills and knobs under the pointer, the selection, the focused marker, the active tab, the caret; `HOT_DIM` and `HOT_TINT` ok and added; `ON_HOT` text on lime |
+| `ACCENT`, `ACCENT_BRIGHT`, `ACCENT_DEEP`, `ON_ACCENT` | `#5331A8`, `#5B2EE6`, `#2B2145`, `#F4F3F5` | violet: hover borders and the viewport's outlines; pressed fills and lit keycaps; hover backgrounds and the diff's changed lines; text on violet |
+| `SECONDARY`, `SECONDARY_SOFT` | `#9B80C6`, `#B6ABCB` | links, the gizmo's Z axis, TOML keys and tables |
+| `ERROR`, `ERROR_TINT`, `WARNING` | `#FF4D6D`, `#3A1820`, `#FF9F43` | refusals and errors, the gizmo's X axis; warnings |
 
-A held or hovered gizmo axis lights in `text`. The metrics are the editor crates' usual ones (code 11, small 12, body 13, heading 16, title 20; radius 2, hairline stroke 1, row 19).
+The metrics are the editor crates' usual ones (code 11, small 12, body 13, heading 16, title 20; radius 2, markers fully round, hairline stroke 1, slider rail 4, row 19), so a theme change moves no widget.
 
 **Type.**
-- Titles (`pfx edit`, the panel headers) are Exo 2 Light, uppercase, tracked 0.3 em (`Caps` with egui's `extra_letter_spacing`).
-- Everything else is JetBrains Mono: labels, values, the log, the inspector, a file's text.
-- Data labels (the inspector's keys, the outliner's sections, the viewport badges) are small, uppercase and tracked 0.12 em.
+- Titles (`pfx edit`, the panel headers) are Jost at weight 300, uppercase, tracked 0.3 em (`Caps` with egui's `extra_letter_spacing`).
+- Data labels (the inspector's keys, the outliner's sections, the headers' notes) are Jost at weight 420, uppercase, tracked 0.12 em. egui 0.36 reads variable fonts, so one `Jost[wght].ttf` gives both weights: the display face's `FontTweak` sets 300 and the labels' `TextFormat::coords` set 420.
+- Everything else is JetBrains Mono: values and units, the log, a file's text, the keycaps and pills.
+- The icon face sits last in every family, so icon glyphs draw beside any text.
 
-**Fonts.** Both are bundled in the theme crate under `crates/theme/fonts/`, each from its upstream release with its `OFL.txt` and a `SOURCE.md` (URL, version, sha256) beside it, and listed in `tests/agnostic/fixtures.txt`:
-- `jetbrains-mono/`: JetBrains Mono Regular and Bold, release v2.304;
-- `exo-2/`: Exo 2 Light 2.001, from NDISCOVER/Exo-2.0 at commit `182060cd` (the project has no releases). The licence text also travels in the theme's `Display`.
+**Fonts.** They live in `crates/editor-style/fonts/`, each subset with `pfx font subset` to the characters in its `chars.txt`, with its licence and a `SOURCE.md` (upstream, commit or release, sha256 before and after), and listed in `tests/agnostic/fixtures.txt`:
+- `jost/`: Jost, the variable font from Google Fonts at `6e4b84c9` (indestructible-type/Jost at `35f141c9`), 86 KB;
+- `jetbrains-mono/`: JetBrains Mono Regular and Bold, release v2.304, 178 and 181 KB;
+- `icons/`: eighteen Font Awesome Free glyphs from the JetBrains Mono Nerd Font 3.5.1, 8 KB.
 
 ## The host
 

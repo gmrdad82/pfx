@@ -1,0 +1,535 @@
+{
+  "$defs": {
+    "Ageing": {
+      "additionalProperties": false,
+      "properties": {
+        "dust": {
+          "format": "float",
+          "type": "number"
+        },
+        "edge": {
+          "format": "float",
+          "type": "number"
+        },
+        "fade": {
+          "format": "float",
+          "type": "number"
+        },
+        "ink": {
+          "format": "float",
+          "type": "number"
+        },
+        "patina": {
+          "format": "float",
+          "type": "number"
+        },
+        "scratch": {
+          "format": "float",
+          "type": "number"
+        },
+        "seed": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "yellow": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "fade",
+        "yellow",
+        "ink",
+        "scratch",
+        "edge",
+        "dust",
+        "patina",
+        "seed"
+      ],
+      "type": "object"
+    },
+    "Anisotropy": {
+      "additionalProperties": false,
+      "properties": {
+        "rotation": {
+          "format": "float",
+          "type": "number"
+        },
+        "strength": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Blend": {
+      "enum": [
+        "over",
+        "multiply",
+        "emit"
+      ],
+      "type": "string"
+    },
+    "Content": {
+      "enum": [
+        "none",
+        "ink",
+        "decal",
+        "screen",
+        "photo",
+        "scroll",
+        "print",
+        "field"
+      ],
+      "type": "string"
+    },
+    "ContentLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "blend": {
+          "$ref": "#/$defs/Blend",
+          "default": "over"
+        },
+        "emboss": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "ink_roughness": {
+          "default": -1.0,
+          "format": "float",
+          "type": "number"
+        },
+        "slot": {
+          "default": -1,
+          "format": "int32",
+          "type": "integer"
+        },
+        "strength": {
+          "default": 1.0,
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Fabric": {
+      "additionalProperties": false,
+      "properties": {
+        "color": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "roughness": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Family": {
+      "enum": [
+        "plain",
+        "paper",
+        "plaster",
+        "stone",
+        "cloth",
+        "metal",
+        "occluder",
+        "petal",
+        "leaf",
+        "bark",
+        "cord",
+        "wood",
+        "lacquer",
+        "glass",
+        "liquid",
+        "emissive",
+        "chrome"
+      ],
+      "type": "string"
+    },
+    "Id": {
+      "pattern": "^[0-9a-hjkmnp-tv-z]{10}$",
+      "type": "string"
+    },
+    "Maps": {
+      "additionalProperties": false,
+      "properties": {
+        "albedo": {
+          "format": "float",
+          "type": "number"
+        },
+        "layer": {
+          "format": "float",
+          "type": "number"
+        },
+        "normal": {
+          "format": "float",
+          "type": "number"
+        },
+        "tile": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "layer",
+        "tile",
+        "normal",
+        "albedo"
+      ],
+      "type": "object"
+    },
+    "Material": {
+      "additionalProperties": false,
+      "properties": {
+        "absorption": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "ageing": {
+          "$ref": "#/$defs/Ageing",
+          "default": {
+            "dust": 0.0,
+            "edge": 0.0,
+            "fade": 0.0,
+            "ink": 0.0,
+            "patina": 0.0,
+            "scratch": 0.0,
+            "seed": 0,
+            "yellow": 0.0
+          }
+        },
+        "anisotropy": {
+          "$ref": "#/$defs/Anisotropy"
+        },
+        "authoring": true,
+        "base": {
+          "default": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "clearcoat": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "clearcoat_roughness": {
+          "default": 0.05000000074505806,
+          "format": "float",
+          "type": "number"
+        },
+        "content": {
+          "$ref": "#/$defs/Content",
+          "default": "none"
+        },
+        "content_layer": {
+          "$ref": "#/$defs/ContentLayer",
+          "default": {
+            "blend": "over",
+            "emboss": 0.0,
+            "ink_roughness": -1.0,
+            "slot": -1,
+            "strength": 1.0
+          }
+        },
+        "dispersion": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "emission": {
+          "default": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "fabric": {
+          "$ref": "#/$defs/Fabric"
+        },
+        "family": {
+          "$ref": "#/$defs/Family",
+          "default": "plain"
+        },
+        "fresnel_power": {
+          "default": 5.0,
+          "format": "float",
+          "type": "number"
+        },
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "ior": {
+          "default": 1.5,
+          "format": "float",
+          "type": "number"
+        },
+        "layers": {
+          "items": {
+            "$ref": "#/$defs/NoiseLayer"
+          },
+          "type": "array"
+        },
+        "maps": {
+          "$ref": "#/$defs/Maps",
+          "default": {
+            "albedo": 1.0,
+            "layer": -1.0,
+            "normal": 1.0,
+            "tile": 1.0
+          }
+        },
+        "metalness": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "normal": {
+          "$ref": "#/$defs/Normal",
+          "default": {
+            "source": "flat",
+            "strength": 0.0
+          }
+        },
+        "roughness": {
+          "default": 0.5,
+          "format": "float",
+          "type": "number"
+        },
+        "scatter": {
+          "$ref": "#/$defs/Scatter"
+        },
+        "sheen": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "specular": {
+          "default": 0.03999999910593033,
+          "format": "float",
+          "type": "number"
+        },
+        "subsurface": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "subsurface_tint": {
+          "default": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "thickness": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "thin_film": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "thin_film_amount": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "thin_film_ior": {
+          "default": 1.5,
+          "format": "float",
+          "type": "number"
+        },
+        "transmission": {
+          "default": 0.0,
+          "format": "float",
+          "type": "number"
+        },
+        "wet": {
+          "$ref": "#/$defs/Wet"
+        }
+      },
+      "type": "object"
+    },
+    "NoiseKind": {
+      "enum": [
+        "none",
+        "fibre",
+        "crinkle",
+        "plank_wood",
+        "wall_mottle",
+        "grime",
+        "leaf",
+        "bark",
+        "flow",
+        "value",
+        "fbm",
+        "scratch",
+        "coat_wobble"
+      ],
+      "type": "string"
+    },
+    "NoiseLayer": {
+      "additionalProperties": false,
+      "properties": {
+        "amplitude": {
+          "format": "float",
+          "type": "number"
+        },
+        "frequency": {
+          "format": "float",
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/NoiseKind"
+        },
+        "params": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 12,
+          "minItems": 12,
+          "type": "array"
+        },
+        "seed": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind",
+        "frequency",
+        "amplitude",
+        "seed"
+      ],
+      "type": "object"
+    },
+    "Normal": {
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/NormalSource"
+        },
+        "strength": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "source",
+        "strength"
+      ],
+      "type": "object"
+    },
+    "NormalSource": {
+      "enum": [
+        "flat",
+        "bump",
+        "map"
+      ],
+      "type": "string"
+    },
+    "Scatter": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "format": "float",
+          "type": "number"
+        },
+        "color": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "radius": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Wet": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "format": "float",
+          "type": "number"
+        },
+        "puddle_scale": {
+          "format": "float",
+          "type": "number"
+        },
+        "puddles": {
+          "format": "float",
+          "type": "number"
+        },
+        "seed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authoring": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "format": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "materials": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Material"
+      },
+      "type": "object"
+    }
+  },
+  "title": "pfx-scene material library, format 1",
+  "type": "object"
+}

@@ -197,10 +197,10 @@ impl Mesh {
     where
         F: Fn(&str) -> Result<Vec<u8>, String>,
     {
-        if crate::manf::is_manf(bytes) {
-            let container = crate::manf::reader(bytes)?;
-            let gltf = crate::manf::document(&container)?;
-            return Self::from_gltf(gltf, |uri| match crate::manf::file(&container, uri)? {
+        if crate::pfx::is_pfx(bytes) {
+            let container = crate::pfx::reader(bytes)?;
+            let gltf = crate::pfx::document(&container)?;
+            return Self::from_gltf(gltf, |uri| match crate::pfx::file(&container, uri)? {
                 Some(data) => Ok(data),
                 None => read(uri),
             });

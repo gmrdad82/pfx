@@ -2,6 +2,7 @@ use egui::{Align2, CornerRadius, Id, Rect, Response, Sense, Stroke, StrokeKind, 
 
 use super::{State, place, shaped};
 use crate::theme::Theme;
+use crate::tokens::{HEADER_CODE, HEADER_EXTRA, HEADER_GAP, MARKER_RADIUS};
 
 pub struct Header<'a> {
     code: &'a str,
@@ -50,7 +51,7 @@ impl Widget for Header<'_> {
         let theme = Theme::of(ui.ctx());
         let size = Vec2::new(
             self.width.unwrap_or_else(|| ui.available_width()),
-            theme.row_height + 2.0,
+            theme.row_height + HEADER_EXTRA,
         );
         let (rect, response) = match self.id {
             Some(id) => {
@@ -70,17 +71,17 @@ impl Widget for Header<'_> {
             .size()
             .x;
         let code_rect = Rect::from_min_size(
-            rect.left_center() - Vec2::new(0.0, 8.0),
-            Vec2::new((code_width + 8.0).round(), 16.0),
+            rect.left_center() - Vec2::new(0.0, HEADER_CODE.y / 2.0),
+            Vec2::new((code_width + HEADER_CODE.x).round(), HEADER_CODE.y),
         );
         let (code_fill, code_border, code_text, title_text) = match state {
-            State::Rest => (theme.bg, theme.line, theme.dim, theme.text2),
-            State::Hovered => (theme.bg, theme.accent, theme.text2, theme.text),
-            State::Active => (theme.hot, theme.hot, theme.on_accent, theme.text),
+            State::Rest => (theme.card, theme.text2, theme.text, theme.text2),
+            State::Hovered => (theme.card, theme.hot, theme.text, theme.text),
+            State::Active => (theme.hot, theme.hot, theme.on_hot, theme.text),
         };
         painter.rect(
             code_rect,
-            CornerRadius::same(theme.radius),
+            CornerRadius::same(MARKER_RADIUS),
             code_fill,
             Stroke::new(theme.stroke, code_border),
             StrokeKind::Inside,
@@ -101,7 +102,7 @@ impl Widget for Header<'_> {
         );
         place(
             painter,
-            code_rect.right_center() + Vec2::new(8.0, 0.0),
+            code_rect.right_center() + Vec2::new(HEADER_GAP, 0.0),
             Align2::LEFT_CENTER,
             title,
             title_text,
@@ -110,7 +111,7 @@ impl Widget for Header<'_> {
             let info = shaped(
                 painter,
                 info,
-                theme.font(theme.size_code),
+                theme.label_font(theme.size_code),
                 theme.muted,
                 theme.labels,
             );

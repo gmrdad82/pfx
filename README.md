@@ -146,7 +146,9 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-materials` | one physically based material for both renderers, with ageing and a WGSL BSDF library |
 | `pfx-text` | glyphs from vector outlines (coverage and MSDF atlases), laid along any baseline |
 | `pfx-post` | the finish chain (tone map, bloom, grade, vignette, grain, dither) and image styles |
-| `pfx-load` | meshes, images, HDR skies and fonts, scenes in [pfx-scene](https://github.com/gmrdad82/pfx-scene)'s format with in-place edits, and a content-addressed cache |
+| `pfx-scene` | the TOML scene format ([docs/scene-format.md](docs/scene-format.md)): typed tables, errors at file:line:column, stable ids, migrations and a writer that keeps comments |
+| `pfx-file` | the `.pfx` file, pfx's native container of checksummed, LZ4-compressed chunks ([docs/pfx-file.md](docs/pfx-file.md)) |
+| `pfx-load` | meshes, images, HDR skies and fonts, scenes in pfx-scene's format with in-place edits, and a content-addressed cache |
 | `pfx-physics` | rigid bodies, character controllers and world queries, fluid, ripples, rope, flocks and wind |
 | `pfx-sound` | live mixing, decoded streams and deterministic mixdown |
 | `pfx-input` | keyboard, mouse and controllers behind one action map, glyphs, keycaps in the player's layout, rumble and recording |
@@ -162,7 +164,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-mod` | the mod host: sandboxed, deterministic WASM components, metered by fuel and capped in memory |
 | `pfx-editor` | `pfx edit` and `<game> edit`: the scene editor, with play in the viewport and live gameplay modules |
 | `pfx-editor-style`, `-shell`, `-doc`, `-toml`, `-viewport` | the egui crates editors on pfx share: a theme and its widgets, a window host with an offscreen shot harness, document edits on one undo history, a TOML source panel and a 3D scene viewport with picking and a gizmo |
-| `pfx-theme` | the colours, fonts and type the editor and the dev HUD paint with |
+| `pfx-theme` | the editor-style tokens as the theme the editor and the dev HUD paint with |
 | `pfx-bench` | `pfx bench` |
 | `pfx-assets` | path-traced renders of logos, icons and scenes from SVG masters and small specs |
 | `pfx-run` | the `pfx` tool's process plumbing: GPU queueing, ending children cleanly, the clip master's H.264 and AAC encode through pito-codecs ([docs/render-a-still.md](docs/render-a-still.md#clip-masters)) and the alpha master ([docs/alpha-master.md](docs/alpha-master.md)) |
@@ -185,7 +187,6 @@ pfx --help
 
 pfx is the engine under the [PITO MD](https://pitomd.com) games and apps. It is generic: no game keeps its names, values or assets in it; each game owns its content and uses the engine ([docs/agnostic.md](docs/agnostic.md)). It works with:
 
-- [pfx-scene](https://github.com/gmrdad82/pfx-scene), the TOML scene format pfx reads and the editor writes in place.
 - [prec](https://github.com/gmrdad82/prec), [pito-codecs](https://github.com/gmrdad82/pito-codecs) (pcod) and [pito-compare](https://github.com/gmrdad82/pito-compare), which recorded, encoded and charted this page.
 
 ## Build and test

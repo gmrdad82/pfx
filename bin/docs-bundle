@@ -80,13 +80,24 @@ root, dest, tag, notes_path, api, crates = sys.argv[1:7]
 api = api == "1"
 crates = crates.split()
 repo = "https://github.com/gmrdad82/pfx"
-estate = {"pfx-scene", "manfred", "prec", "pito-compare", "pito-codecs"}
+estate = {"manfred", "prec", "pito-compare", "pito-codecs"}
 
 GUIDES = [
     ("first-game", 101, "Scaffold a game with pfx new, play it with cargo run, open it in the editor and measure it with pfx bench."),
     ("projects", 102, "A game on pfx is its own repo and one binary: what pfx new scaffolds, the project.toml, and how a game plays and opens in the editor."),
     ("game", 103, "pfx-game, the one call a game's main makes: the window, pacing, input, sound, the fixed tick and the game's own launcher."),
     ("scenes", 104, None),
+    ("scene-format", 105, None),
+    ("scene-projects", 106, None),
+    ("scene-check", 107, None),
+    ("scene-check-buffer", 108, None),
+    ("scene-resolve", 109, None),
+    ("scene-edit", 110, None),
+    ("scene-ids", 111, None),
+    ("scene-migrate", 112, None),
+    ("scene-speed", 113, None),
+    ("scene-schema", 114, None),
+    ("pfx-file", 115, None),
     ("play", 201, None),
     ("input", 202, "pfx-input: keyboard, mouse and controllers behind one action map, with controller glyphs, rumble and input recording."),
     ("sound", 203, None),
@@ -137,6 +148,8 @@ GUIDES = [
 
 FORMATS = [
     ("Scenes and projects", "Scenes are pfx-scene's TOML format; a project is a folder with a project.toml.", [("scenes", "The format is pfx-scene's"), ("projects", "A project")]),
+    (".pfx files", "pfx's native file: a chunk table, then checksummed chunks, each stored or LZ4 compressed.", [("pfx-file", "The layout"), ("pfx-file", "Tags")]),
+    ("Scene JSON Schemas", "A JSON Schema for every kind of scene file, generated from the format's types.", [("scene-schema", None)]),
     ("Material libraries", "One TOML file of named materials that both renderers and the bake share.", [("materials", None)]),
     ("Frame stats", "One JSON line per presented frame, and an end line.", [("frame-stats", "The line"), ("frame-stats", "The end line")]),
     ("The bench summary", "The JSON line pfx bench prints last.", [("frame-stats", "The summary")]),
