@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 use std::thread::JoinHandle;
 
-pub const PITO_CODECS: &str = "1.12.1";
+pub const PITO_CODECS: &str = "1.14.3";
 pub const COLOR: &str = "BT.709 primaries, transfer and matrix, limited range (SDR)";
 pub const CRF: u8 = 12;
 pub const B_FRAMES: u8 = 2;

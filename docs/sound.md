@@ -242,7 +242,7 @@ mixer.stream_vorbis(ChannelId::DIALOG, &source, None, Level::default())?;
 
 ## Media files (feature `media`)
 
-`Decode::start(&DecodeSpec)` and `Output::stream` decode a media file to f32 PCM at the spec's rate and channel count, on their own thread two seconds ahead of the mixer, through [pito-codecs](https://github.com/gmrdad82/pito-codecs) v1.12.1 (MIT, pinned by tag, CPU decoders only); no other program runs. The feature is off by default and the `pfx` tool turns it on. pito-codecs builds its media front only with its video codecs on, so a build with `media` also compiles its H.264, HEVC and VP9 decoders and its GPU loaders, though the sound never uses them.
+`Decode::start(&DecodeSpec)` and `Output::stream` decode a media file to f32 PCM at the spec's rate and channel count, on their own thread two seconds ahead of the mixer, through [pito-codecs](https://github.com/gmrdad82/pito-codecs) v1.14.3 (MIT, pinned by tag, CPU decoders only); no other program runs. The feature is off by default and the `pfx` tool turns it on. The build takes pito-codecs' audio-only set (`audio`, AAC, AC-3, MP3, Opus, MP4 and MKV), so no video decoder or GPU code is compiled in.
 
 ```rust
 let spec = DecodeSpec {
