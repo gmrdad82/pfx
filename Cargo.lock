@@ -3126,7 +3126,7 @@ checksum = "9b4f627cb1b25917193a259e49bdad08f671f8d9708acfd5fe0a8c1455d87220"
 
 [[package]]
 name = "pfx"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "clap",
  "exr",
@@ -3167,7 +3167,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-assets"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "clap",
  "image",
@@ -3189,7 +3189,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-bake"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "block_compression",
  "bytemuck",
@@ -3213,7 +3213,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-bench"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "pfx-core",
  "pfx-gpu",
@@ -3227,7 +3227,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-build"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "glam 0.33.12",
  "gltf",
@@ -3255,7 +3255,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-core"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -3263,7 +3263,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-denoise"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "bytemuck",
  "naga",
@@ -3277,7 +3277,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-editor"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -3311,14 +3311,14 @@ dependencies = [
 
 [[package]]
 name = "pfx-editor-doc"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "toml_edit",
 ]
 
 [[package]]
 name = "pfx-editor-shell"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "egui",
  "egui-wgpu",
@@ -3331,7 +3331,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-editor-style"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "egui",
  "pfx-editor-shell",
@@ -3340,7 +3340,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-editor-toml"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "egui",
  "pfx-editor-doc",
@@ -3352,7 +3352,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-editor-viewport"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "clap",
  "egui",
@@ -3370,7 +3370,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-file"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "crc32fast",
  "lz4_flex",
@@ -3379,7 +3379,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-film"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "pfx-core",
  "pfx-gpu",
@@ -3398,7 +3398,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-game"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "arboard",
  "pfx-core",
@@ -3424,7 +3424,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-generators"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "glam 0.33.12",
  "pfx-build",
@@ -3435,7 +3435,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-geom"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "i_overlay",
  "lyon_tessellation",
@@ -3447,7 +3447,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-glb"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "glam 0.33.12",
  "gltf",
@@ -3461,7 +3461,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-gpu"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "pfx-gpu",
  "pollster",
@@ -3473,7 +3473,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-input"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "gilrs",
  "pfx-gpu",
@@ -3487,7 +3487,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-live"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "bytemuck",
  "egui",
@@ -3517,7 +3517,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-load"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "gltf",
  "notify",
@@ -3538,7 +3538,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-materials"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "bytemuck",
  "pollster",
@@ -3549,7 +3549,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-mesh"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "glam 0.33.12",
  "gltf",
@@ -3559,7 +3559,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-mod"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "pfx-core",
  "semver",
@@ -3576,7 +3576,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-motion"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "glam 0.33.12",
  "libm",
@@ -3584,7 +3584,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-physics"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "bytemuck",
  "half",
@@ -3599,7 +3599,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-play"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "half",
  "pfx-core",
@@ -3620,7 +3620,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-post"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "bytemuck",
  "half",
@@ -3635,7 +3635,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-project"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "pfx-file",
  "pfx-mod",
@@ -3645,7 +3645,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-recipe"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "pfx-materials",
  "pfx-mesh",
@@ -3658,7 +3658,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-recipe-scene"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "pfx-build",
  "pfx-core",
@@ -3679,7 +3679,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-run"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "chrono",
  "fs2",
@@ -3697,7 +3697,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-runtime"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "half",
  "pfx-bake",
@@ -3717,7 +3717,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-scene"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "pfx-file",
  "schemars",
@@ -3729,7 +3729,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-sound"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "cpal",
  "ebur128",
@@ -3743,7 +3743,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-source"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "md-5",
  "miniz_oxide 0.9.1",
@@ -3757,7 +3757,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-steam"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "pfx-core",
  "pfx-input",
@@ -3768,7 +3768,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-still"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "exr",
  "pfx-build",
@@ -3787,7 +3787,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-text"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "cosmic-text",
  "encoding_rs",
@@ -3804,7 +3804,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-theme"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "egui",
  "pfx-editor-style",
@@ -3812,7 +3812,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-trace"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "bytemuck",
  "half",
@@ -3834,7 +3834,7 @@ dependencies = [
 
 [[package]]
 name = "pfx-workbench"
-version = "3.0.0-alpha.1"
+version = "3.0.0"
 dependencies = [
  "egui",
  "egui-wgpu",

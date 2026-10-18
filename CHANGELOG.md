@@ -1,5 +1,40 @@
 # Changelog
 
+## v3.0.0 — 2026-10-18
+
+pfx takes in the scene builder, its window and the scene format: one engine, one binary, one file.
+
+### Added
+
+- `pfx gui`: a window for recipes, scenes, projects and games, with outliner, cameras, lights, viewport, properties and render panels; undo, redo and a history list; cut, copy, paste and duplicate of objects with their materials and keys; Play with a game's WebAssembly module. `pfx` alone opens it, and `pfx <file.pitofx>` opens a document in it.
+- `.pitofx` is pfx's own compressed document (TOML inside, chunked and LZ4-compressed): every scene, recipe, project and library object is one, the verbs work on it directly, and `pfx scene print` shows its TOML. A plain `.toml` or an older `.pfx` is imported once with `pfx scene migrate`.
+- Scene recipes and their commands as pfx verbs: build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, align, import, export, `pfx render --recipe`, `pfx shot <recipe> --still` and `pfx new --from street`, with an object library and samples.
+- Camera presets (chase, orbit, dolly, crane, drone, drive-by) and lighting presets (three-point, golden hour, overcast, night).
+- Vehicles on a route take `dynamics` (pitch, roll, slip and steer from mass, wheelbase, track, centre of gravity, suspension and grip); riders keep their own keys; a keyed car's wheels steer and spin from its motion; `kind = "empty"` group nodes.
+- glTF skins and clips play on a recipe's timeline and blend; split `.gltf` and OBJ with MTL import; imported meshes keep their own materials, normals, alpha and texture transforms, and take per-node edits through one `pieces` key, regions, decals and `split`.
+- Scatter over a surface, collections, and align, distribute and drop to ground.
+- `pfx asset` finds and fetches CC0 and other licensed assets from public sources and accounts you configure, and `pfx credits` lists the credits a scene needs.
+- Live ambient occlusion and contact shadows, shadow quality presets, live depth of field, and one look (LUT, flare, motion blur, wet) on every renderer path.
+- A metallic flake paint layer, thin-walled glass, JPEG textures, UV transforms on recipe maps, and detailed asphalt, sidewalk and kerb surfaces.
+- Up to 1028 lights in a recipe, with the tracer sampling them through a light tree.
+- Adaptive music: stems crossed by a live intensity, with bar-quantised sections and seeded variants.
+- `pfx film`: cuts placed exactly on the beat grid, true-peak mastering (`[film] true_peak`), dissolve, push and whip transitions, video clip art with rounded corners and shadows.
+- Games load a `.pitofx` embedded in their binary, mods carry data files, Steam Workshop items load as mods, and a game opened through `<game> edit` uses the navy game theme.
+
+### Changed
+
+- 4K path-traced stills are faster (the workshop final at 5,969 ms on the GPU), and many-light scenes much faster (128 lights: 9.4 s to 4.8 s).
+- The window's viewport settles: anti-aliasing, soft shadows and reflections converge instead of freezing, and captures wait until it has settled.
+- pito-codecs v1.14.3; built GLBs name their generator `pfx`.
+
+### Removed
+
+- `.manf` files and `pfx scene unpack`.
+
+### Fixed
+
+- Running out of memory on a file or recipe that asks for too much stops with one line instead of crashing; long region outlines no longer hang; an outline of overlapping skewed rectangles no longer crashes; `pfx check` fails on a missing path; the window never shows a home path.
+
 ## v3.0.0-alpha.1 — 2026-10-18
 
 A pre-release of pfx with the scene builder and its window folded in.
