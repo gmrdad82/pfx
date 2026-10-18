@@ -244,131 +244,404 @@ The outdoor height fog's density and its closed-form optical path in `crates/liv
 
 ## lz4_flex, under the MIT licence
 
-`crates/file/src/lz4.rs` (in the package `pfx-file`) is a port of the LZ4 block encoder and decoder of lz4_flex 0.14.0 (https://github.com/pseitz/lz4_flex, commit `1bffdcbbf906a234b913937cb2f57c0245915038`), altered, under the MIT licence:
+`crates/file/src/lz4.rs` (in the package `pfx-file`) is a port of the LZ4 block encoder and decoder of lz4_flex 0.14.0 (https://github.com/pseitz/lz4_flex, commit `1bffdcbbf906a234b913937cb2f57c0245915038`), altered, under the MIT licence, as its `LICENSE` file at that commit reads:
 
 > The MIT License (MIT)
 >
 > Copyright (c) 2020 Pascal Seitz
 >
-> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+> Permission is hereby granted, free of charge, to any person obtaining a copy of
+> this software and associated documentation files (the "Software"), to deal in
+> the Software without restriction, including without limitation the rights to
+> use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+> the Software, and to permit persons to whom the Software is furnished to do so,
+> subject to the following conditions:
 >
-> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
 >
-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+> FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+> COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+> IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+> CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## crc32fast, under the MIT licence
 
-`crates/file/src/crc32.rs` (in the package `pfx-file`) is a port of the slice-by-16 CRC-32 of crc32fast 1.5.0 (https://github.com/srijs/rust-crc32fast, tag `v1.5.0`), altered, licensed MIT OR Apache-2.0 and used here under the MIT licence:
+`crates/file/src/crc32.rs` (in the package `pfx-file`) is a port of the slice-by-16 CRC-32 of crc32fast 1.5.0 (https://github.com/srijs/rust-crc32fast, tag `v1.5.0`, commit `dbf4f76cd71cdcc57d9164cbd46890d53ce0423c`), altered, licensed MIT OR Apache-2.0 and used here under the MIT licence, as its `LICENSE-MIT` file at that tag reads:
 
 > MIT License
 >
 > Copyright (c) 2018 Sam Rijs, Alex Crichton and contributors
 >
-> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
 >
-> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
 >
-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
 
 ## Godot Engine, under the MIT licence
 
-The route spline's arc-length table in `crates/motion/src/route.rs` (in the package `pfx-motion`) ports the arc-length baking of Godot Engine's Curve3D (https://github.com/godotengine/godot, `scene/resources/curve.cpp`, tag `4.5-stable`, commit `876b290332ec6f2e6d173d08162a02aa7e6ca46d`): the even-length subdivision of each segment, the distance table searched by bisection, and the nearest distance by projection onto the baked polyline, altered, under the MIT licence:
+The route spline's arc-length table in `crates/motion/src/route.rs` (in the package `pfx-motion`) ports the arc-length baking of Godot Engine's Curve3D (https://github.com/godotengine/godot, `scene/resources/curve.cpp`, tag `4.5-stable`, commit `876b290332ec6f2e6d173d08162a02aa7e6ca46d`): the even-length subdivision of each segment, the distance table searched by bisection, and the nearest distance by projection onto the baked polyline, altered, under the MIT licence, as its `LICENSE.txt` at that commit reads:
 
 > Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md).
 > Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.
 >
-> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
 >
-> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
 >
-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
 
 ## meshoptimizer, under the MIT licence
 
-`crates/mesh/src/simplify.rs` (in the package `pfx-mesh`) is a port of the edge-collapse simplifier of meshoptimizer 0.25 (https://github.com/zeux/meshoptimizer, `src/simplifier.cpp`, as vendored by the meshopt 0.6.2 crate), altered, under the MIT licence:
+`crates/mesh/src/simplify.rs` (in the package `pfx-mesh`) is a port of the edge-collapse simplifier of meshoptimizer 0.25 (https://github.com/zeux/meshoptimizer, `src/simplifier.cpp`, tag `v0.25`, commit `6daea4695c48338363b08022d2fb15deaef6ac09`, the version the meshopt 0.6.2 crate vendors), altered, under the MIT licence, as its `LICENSE.md` at that tag reads:
 
+> MIT License
+>
 > Copyright (c) 2016-2025 Arseny Kapoulkine
 >
-> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
 >
-> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
 >
-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
 
 ## bevy_mikktspace and MikkTSpace, under the MIT and zlib licences
 
-`crates/mesh/src/tangents.rs` (in the package `pfx-mesh`) is a port, for triangles only, of bevy_mikktspace 1.0.0 (https://github.com/bevyengine/bevy_mikktspace), Copyright (c) 2017 The mikktspace Library Developers, licensed MIT OR Apache-2.0 and used here under the MIT licence above, itself a reimplementation of MikkTSpace (https://github.com/mmikk/MikkTSpace), altered here, under the zlib licence:
+`crates/mesh/src/tangents.rs` (in the package `pfx-mesh`) is a port, for triangles only, of bevy_mikktspace 1.0.0 (https://github.com/bevyengine/bevy_mikktspace, commit `9de78a281bca0505142da521eb5152146da28656`), licensed MIT OR Apache-2.0 and used here under the MIT licence, as its `LICENSE-MIT` file at that commit reads:
 
+> Copyright (c) 2017 The mikktspace Library Developers
+>
+> Permission is hereby granted, free of charge, to any
+> person obtaining a copy of this software and associated
+> documentation files (the "Software"), to deal in the
+> Software without restriction, including without
+> limitation the rights to use, copy, modify, merge,
+> publish, distribute, sublicense, and/or sell copies of
+> the Software, and to permit persons to whom the Software
+> is furnished to do so, subject to the following
+> conditions:
+>
+> The above copyright notice and this permission notice
+> shall be included in all copies or substantial portions
+> of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+> ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+> TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+> PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+> SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+> CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+> OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+> IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+> DEALINGS IN THE SOFTWARE.
+
+bevy_mikktspace is itself a reimplementation of MikkTSpace (https://github.com/mmikk/MikkTSpace, commit `3e895b49d05ea07e4c2133156cfa94369e19e409`), altered here, under the zlib licence, as the header comment of its `mikktspace.h` at that commit reads:
+
+> /**
 > Copyright (C) 2011 by Morten S. Mikkelsen
->
-> This software is provided 'as-is', without any express or implied warranty. In no event will the authors be held liable for any damages arising from the use of this software.
->
-> Permission is granted to anyone to use this software for any purpose, including commercial applications, and to alter it and redistribute it freely, subject to the following restrictions:
->
-> 1. The origin of this software must not be misrepresented; you must not claim that you wrote the original software. If you use this software in a product, an acknowledgment in the product documentation would be appreciated but is not required.
-> 2. Altered source versions must be plainly marked as such, and must not be misrepresented as being the original software.
+>  *
+> This software is provided 'as-is', without any express or implied
+> warranty.  In no event will the authors be held liable for any damages
+> arising from the use of this software.
+>  *
+> Permission is granted to anyone to use this software for any purpose,
+> including commercial applications, and to alter it and redistribute it
+> freely, subject to the following restrictions:
+>  *
+> 1. The origin of this software must not be misrepresented; you must not
+>    claim that you wrote the original software. If you use this software
+>    in a product, an acknowledgment in the product documentation would be
+>    appreciated but is not required.
+> 2. Altered source versions must be plainly marked as such, and must not be
+>    misrepresented as being the original software.
 > 3. This notice may not be removed or altered from any source distribution.
 
 ## curvo, under the MIT licence
 
-The loft in `crates/build/src/builtin/loft.rs` (in the package `pfx-build`) ports the loft of curvo (https://github.com/mattatz/curvo, version 0.3.2, commit `6f6a51847a50092507936e9fd5735feedfecb69c`): `NurbsSurface::try_loft`, the curve interpolation by knot averaging and the B-spline basis, altered, under the MIT licence:
+The loft in `crates/build/src/builtin/loft.rs` (in the package `pfx-build`) ports the loft of curvo (https://github.com/mattatz/curvo, version 0.3.2, commit `6f6a51847a50092507936e9fd5735feedfecb69c`): `NurbsSurface::try_loft`, the curve interpolation by knot averaging and the B-spline basis, altered, under the MIT licence, as its `LICENSE` file at that commit reads:
 
 > MIT License
 >
 > Copyright (c) 2024 mattatz
 >
-> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+> Permission is hereby granted, free of charge, to any person obtaining a copy
+> of this software and associated documentation files (the "Software"), to deal
+> in the Software without restriction, including without limitation the rights
+> to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+> copies of the Software, and to permit persons to whom the Software is
+> furnished to do so, subject to the following conditions:
 >
-> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
 >
-> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+> FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+> AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+> LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+> OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+> SOFTWARE.
 
 ## OpenSubdiv, under the Tomorrow Open Source Technology License 1.0
 
-The same file ports OpenSubdiv's Catmull-Clark subdivision with semi-sharp creases (https://github.com/PixarAnimationStudios/OpenSubdiv, tag `v3_7_0`, commit `9dab8a47bfbb1388ec8388fe61f5f916e6123f38`): the masks of `opensubdiv/sdc/catmarkScheme.h` and `scheme.h` and the sharpness rules of `opensubdiv/sdc/crease.cpp`, changed from C++ into Rust by pfx's authors. `crease.cpp` is Copyright 2014 DreamWorks Animation LLC. OpenSubdiv is under the Tomorrow Open Source Technology License 1.0, which is the Apache License 2.0 (its text ships in [crates/build/LICENSE-APACHE](crates/build/LICENSE-APACHE)) with Section 6 replaced by:
+The same file ports OpenSubdiv's Catmull-Clark subdivision with semi-sharp creases (https://github.com/PixarAnimationStudios/OpenSubdiv, tag `v3_7_0`, commit `9dab8a47bfbb1388ec8388fe61f5f916e6123f38`): the masks of `opensubdiv/sdc/catmarkScheme.h` and `scheme.h` and the sharpness rules of `opensubdiv/sdc/crease.cpp`, changed from C++ into Rust by pfx's authors. `crease.cpp` is Copyright 2014 DreamWorks Animation LLC. OpenSubdiv is under the Tomorrow Open Source Technology License 1.0, which is the Apache License 2.0 with Section 6 replaced. Its `LICENSE.txt` at that commit ships unchanged in [crates/build/LICENSE-APACHE](crates/build/LICENSE-APACHE); its Section 6 reads:
 
-> 6. Trademarks. This License does not grant permission to use the trade names, trademarks, service marks, or product names of the Licensor and its affiliates, except as required to comply with Section 4(c) of the License and to reproduce the content of the NOTICE file.
+> 6. Trademarks. This License does not grant permission to use the trade
+>    names, trademarks, service marks, or product names of the Licensor
+>    and its affiliates, except as required to comply with Section 4(c) of
+>    the License and to reproduce the content of the NOTICE file.
 
-Its NOTICE:
+Its `NOTICE.txt` at that commit reads:
 
 > OpenSubdiv
 > Copyright 2013 Pixar
 > All rights reserved.
 >
 > This product includes software developed at:
-> Pixar (http://www.pixar.com/).
-> Dreamworks Animation (http://www.dreamworksanimation.com/)
-> Autodesk, Inc. (http://www.autodesk.com/).
-> Google, Inc. (http://www.google.com/).
-> DigitalFish (http://digitalfish.com/).
+>     Pixar (http://www.pixar.com/).
+>     Dreamworks Animation (http://www.dreamworksanimation.com/)
+>     Autodesk, Inc. (http://www.autodesk.com/).
+>     Google, Inc. (http://www.google.com/).
+>     DigitalFish (http://digitalfish.com/).
 
-## The Mersenne Twister, CPython's random and NumPy's RandomState, under BSD and PSF licences
+## The Mersenne Twister, CPython's random and NumPy's RandomState, under BSD, MIT and PSF licences
 
-`crates/generators/src/pyrandom.rs` and `crates/generators/src/numpy_random.rs` (in the package `pfx-generators`) reproduce, byte for byte, the streams of CPython's `random` module (https://github.com/python/cpython, `Modules/_randommodule.c` and `Lib/random.py`) and NumPy's legacy `RandomState` (https://github.com/numpy/numpy, `numpy/random/mtrand.pyx` and its MT19937 core), so a generator first written in Python gives the same shapes in pfx. Both rest on MT19937, by Makoto Matsumoto and Takuji Nishimura, under this licence:
+`crates/generators/src/pyrandom.rs` and `crates/generators/src/numpy_random.rs` (in the package `pfx-generators`) reproduce, byte for byte, the streams of CPython's `random` module (https://github.com/python/cpython, `Modules/_randommodule.c` and `Lib/random.py`, tag `v3.14.0`, commit `ebf955df7a89ed0c7968f79faec1de49f61ed7cb`) and NumPy's legacy `RandomState` (https://github.com/numpy/numpy, `numpy/random/mtrand.pyx` and its MT19937 core, tag `v2.3.0`, commit `0532af47d6a815298b7841de00bdbc547104b237`), so a generator first written in Python gives the same shapes in pfx. Both rest on MT19937 by Makoto Matsumoto and Takuji Nishimura (`mt19937ar.c`, initialization improved 2002/1/26, from http://www.math.sci.hiroshima-u.ac.jp/~m-mat/MT/MT2002/emt19937ar.html), whose licence block reads:
 
-> Copyright (c) 1997 - 2002, Makoto Matsumoto and Takuji Nishimura
+> A C-program for MT19937, with initialization improved 2002/1/26.
+> Coded by Takuji Nishimura and Makoto Matsumoto.
+>
+> Before using, initialize the state by using init_genrand(seed)
+> or init_by_array(init_key, key_length).
+>
+> Copyright (C) 1997 - 2002, Makoto Matsumoto and Takuji Nishimura,
 > All rights reserved.
 >
-> Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions
+> are met:
 >
-> 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-> 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-> 3. The names of its contributors may not be used to endorse or promote products derived from this software without specific prior written permission.
+>   1. Redistributions of source code must retain the above copyright
+>      notice, this list of conditions and the following disclaimer.
 >
-> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+>   2. Redistributions in binary form must reproduce the above copyright
+>      notice, this list of conditions and the following disclaimer in the
+>      documentation and/or other materials provided with the distribution.
+>
+>   3. The names of its contributors may not be used to endorse or promote
+>      products derived from this software without specific prior written
+>      permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+> "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+> LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+> A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+> CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+> EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+> PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+> PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+> LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+> NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+> SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-CPython is Copyright (c) 2001 Python Software Foundation, under the Python Software Foundation License Version 2. NumPy is under the BSD 3-Clause licence:
+NumPy's MT19937 core carries that licence and, beside it, the MIT licence of the randomkit functions it keeps. Its `numpy/random/src/mt19937/LICENSE.md` at that tag reads:
 
-> Copyright (c) 2005-2025, NumPy Developers
+> # MT19937
+>
+> Copyright (c) 2003-2005, Jean-Sebastien Roy (js@jeannot.org)
+>
+> The rk_random and rk_seed functions algorithms and the original design of
+> the Mersenne Twister RNG:
+>
+>   Copyright (C) 1997 - 2002, Makoto Matsumoto and Takuji Nishimura,
+>   All rights reserved.
+>
+>   Redistribution and use in source and binary forms, with or without
+>   modification, are permitted provided that the following conditions
+>   are met:
+>
+>   1. Redistributions of source code must retain the above copyright
+>   notice, this list of conditions and the following disclaimer.
+>
+>   2. Redistributions in binary form must reproduce the above copyright
+>   notice, this list of conditions and the following disclaimer in the
+>   documentation and/or other materials provided with the distribution.
+>
+>   3. The names of its contributors may not be used to endorse or promote
+>   products derived from this software without specific prior written
+>   permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+> "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+> LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+> A PARTICULAR PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT OWNER
+> OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+> EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+> PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+> PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+> LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+> NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+> SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+>
+> Original algorithm for the implementation of rk_interval function from
+> Richard J. Wagner's implementation of the Mersenne Twister RNG, optimised by
+> Magnus Jonsson.
+>
+> Constants used in the rk_double implementation by Isaku Wada.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a
+> copy of this software and associated documentation files (the
+> "Software"), to deal in the Software without restriction, including
+> without limitation the rights to use, copy, modify, merge, publish,
+> distribute, sublicense, and/or sell copies of the Software, and to
+> permit persons to whom the Software is furnished to do so, subject to
+> the following conditions:
+>
+> The above copyright notice and this permission notice shall be included
+> in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+> OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+> MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+> IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+> CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+> TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+> SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+NumPy is under the BSD 3-Clause licence, as its `LICENSE.txt` at that tag reads:
+
+> Copyright (c) 2005-2025, NumPy Developers.
 > All rights reserved.
 >
-> Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions are
+> met:
 >
-> 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
-> 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
-> 3. The names of its contributors may not be used to endorse or promote products derived from this software without specific prior written permission.
+>     * Redistributions of source code must retain the above copyright
+>        notice, this list of conditions and the following disclaimer.
 >
-> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+>     * Redistributions in binary form must reproduce the above
+>        copyright notice, this list of conditions and the following
+>        disclaimer in the documentation and/or other materials provided
+>        with the distribution.
+>
+>     * Neither the name of the NumPy Developers nor the names of any
+>        contributors may be used to endorse or promote products derived
+>        from this software without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+> "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+> LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+> A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+> OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+> SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+> LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+> DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+> THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+> (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+> OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+CPython is under the Python Software Foundation License Version 2, as section B of its `LICENSE` at the tag above reads:
+
+> B. TERMS AND CONDITIONS FOR ACCESSING OR OTHERWISE USING PYTHON
+> ===============================================================
+>
+> Python software and documentation are licensed under the
+> Python Software Foundation License Version 2.
+>
+> Starting with Python 3.8.6, examples, recipes, and other code in
+> the documentation are dual licensed under the PSF License Version 2
+> and the Zero-Clause BSD license.
+>
+> Some software incorporated into Python is under different licenses.
+> The licenses are listed with code falling under that license.
+>
+>
+> PYTHON SOFTWARE FOUNDATION LICENSE VERSION 2
+> --------------------------------------------
+>
+> 1. This LICENSE AGREEMENT is between the Python Software Foundation
+> ("PSF"), and the Individual or Organization ("Licensee") accessing and
+> otherwise using this software ("Python") in source or binary form and
+> its associated documentation.
+>
+> 2. Subject to the terms and conditions of this License Agreement, PSF hereby
+> grants Licensee a nonexclusive, royalty-free, world-wide license to reproduce,
+> analyze, test, perform and/or display publicly, prepare derivative works,
+> distribute, and otherwise use Python alone or in any derivative version,
+> provided, however, that PSF's License Agreement and PSF's notice of copyright,
+> i.e., "Copyright (c) 2001 Python Software Foundation; All Rights Reserved"
+> are retained in Python alone or in any derivative version prepared by Licensee.
+>
+> 3. In the event Licensee prepares a derivative work that is based on
+> or incorporates Python or any part thereof, and wants to make
+> the derivative work available to others as provided herein, then
+> Licensee hereby agrees to include in any such work a brief summary of
+> the changes made to Python.
+>
+> 4. PSF is making Python available to Licensee on an "AS IS"
+> basis.  PSF MAKES NO REPRESENTATIONS OR WARRANTIES, EXPRESS OR
+> IMPLIED.  BY WAY OF EXAMPLE, BUT NOT LIMITATION, PSF MAKES NO AND
+> DISCLAIMS ANY REPRESENTATION OR WARRANTY OF MERCHANTABILITY OR FITNESS
+> FOR ANY PARTICULAR PURPOSE OR THAT THE USE OF PYTHON WILL NOT
+> INFRINGE ANY THIRD PARTY RIGHTS.
+>
+> 5. PSF SHALL NOT BE LIABLE TO LICENSEE OR ANY OTHER USERS OF PYTHON
+> FOR ANY INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES OR LOSS AS
+> A RESULT OF MODIFYING, DISTRIBUTING, OR OTHERWISE USING PYTHON,
+> OR ANY DERIVATIVE THEREOF, EVEN IF ADVISED OF THE POSSIBILITY THEREOF.
+>
+> 6. This License Agreement will automatically terminate upon a material
+> breach of its terms and conditions.
+>
+> 7. Nothing in this License Agreement shall be deemed to create any
+> relationship of agency, partnership, or joint venture between PSF and
+> Licensee.  This License Agreement does not grant permission to use PSF
+> trademarks or trade name in a trademark sense to endorse or promote
+> products or services of Licensee, or any third party.
+>
+> 8. By copying, installing or otherwise using Python, Licensee
+> agrees to be bound by the terms and conditions of this License
+> Agreement.
 
 ## Fonts, under the SIL Open Font License 1.1
 
