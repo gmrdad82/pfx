@@ -116,7 +116,6 @@ impl Project {
         start.to_path_buf()
     }
 
-    #[allow(clippy::result_large_err)]
     pub fn open(root: &Path) -> Result<Project, Diagnostic> {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         if !root.is_dir() {
@@ -162,7 +161,6 @@ impl Project {
         })
     }
 
-    #[allow(clippy::result_large_err)]
     pub fn open_pfx(file: &Path) -> Result<Project, Diagnostic> {
         let absolute = std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf());
         let root = Self::root_of(&absolute);

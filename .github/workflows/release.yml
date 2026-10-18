@@ -51,5 +51,7 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "tmp/docs/docs-$tag.tar.gz" --clobber
           else
-            gh release create "$tag" --verify-tag --title "$tag" --notes-file "tmp/docs/notes-$tag.md" "tmp/docs/docs-$tag.tar.gz"
+            pre=()
+            case $tag in *-*) pre=(--prerelease) ;; esac
+            gh release create "$tag" --verify-tag "${pre[@]}" --title "$tag" --notes-file "tmp/docs/notes-$tag.md" "tmp/docs/docs-$tag.tar.gz"
           fi

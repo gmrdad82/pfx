@@ -1012,7 +1012,7 @@ mod tests {
         if std::env::var_os("PFX_TURN_CHILD").is_none() {
             return;
         }
-        let mut state = TurnState::new(50.0);
+        let mut state = TurnState::new(50.0).with_wall_ms(600_000.0);
         assert!(!turn_soon(&mut state, 20.0));
         assert!(turn_soon(&mut state, 31.5));
         assert!(!turn_soon(&mut state, 4.0));
