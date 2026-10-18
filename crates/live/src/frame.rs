@@ -604,9 +604,10 @@ pub struct OpaqueFeatures {
     pub crinkle: bool,
     pub procedural_detail: bool,
     pub film: bool,
+    pub flakes: bool,
 }
 
-const OPAQUE_FEATURES: usize = 28;
+const OPAQUE_FEATURES: usize = 29;
 const FLAT_TRANSFORM: f64 = 1e-6;
 
 impl OpaqueFeatures {
@@ -639,6 +640,7 @@ impl OpaqueFeatures {
         "crinkle",
         "procedural_detail",
         "film",
+        "flakes",
     ];
 
     pub const ALL: Self = Self::from_flags([true; OPAQUE_FEATURES]);
@@ -675,6 +677,7 @@ impl OpaqueFeatures {
             crinkle: flags[25],
             procedural_detail: flags[26],
             film: flags[27],
+            flakes: flags[28],
         }
     }
 
@@ -708,6 +711,7 @@ impl OpaqueFeatures {
             self.crinkle,
             self.procedural_detail,
             self.film,
+            self.flakes,
         ]
     }
 
@@ -1223,6 +1227,7 @@ fn opaque_instance_features(
     instance: &GpuInstance,
     material: &GpuMapMaterial,
     filmed: bool,
+    flaked: bool,
 ) -> OpaqueFeatures {
     let packed = material.seeds[2] == 3 && material.indices[3] >= 0;
     let unbaked = material.seeds[3] == 0;
@@ -1263,6 +1268,7 @@ fn opaque_instance_features(
         uv1: material.seeds[3] >= 2 && material.packed[1] != 0.0,
         content_cutout: instance.content_face[2] & 4 != 0,
         film: filmed,
+        flakes: flaked,
         ..OpaqueFeatures::NONE
     }
 }
@@ -1280,6 +1286,7 @@ fn scene_instance_features(
                 instance,
                 &map_materials[index],
                 materials[index].thin_film_amount > 0.0,
+                !materials[index].flakes.off(),
             )
         })
         .collect()
@@ -2520,7 +2527,13 @@ impl Frame {
             scene.instances,
             |mesh| self.deforms(mesh),
             |index| surfaces[index].clipped(),
-            |index| surfaces[index].cutout,
+            |index| {
+                surfaces[index].cutout
+                    || scene
+                        .materials
+                        .get(scene.instances[index].material as usize)
+                        .is_some_and(|material| !material.alpha_mode.opaque())
+            },
         );
         let sample = shadows.map_or(self.shadow_sample, |(shadows, fit)| {
             shadows.sample_uniform(fit)
@@ -3793,7 +3806,13 @@ impl Frame {
             scene.instances,
             |mesh| self.deforms(mesh),
             |index| surfaces[index].clipped(),
-            |index| surfaces[index].cutout,
+            |index| {
+                surfaces[index].cutout
+                    || scene
+                        .materials
+                        .get(scene.instances[index].material as usize)
+                        .is_some_and(|material| !material.alpha_mode.opaque())
+            },
         );
         Ok((batches, surfaces))
     }
@@ -4460,6 +4479,7 @@ impl Frame {
 
 const SHADER: &str = r#"
 override use_sun_shadow: bool = true;
+override use_flakes: bool = true;
 override use_ssr: bool = true;
 override use_canopy: bool = true;
 override use_contact: bool = true;
@@ -4529,6 +4549,12 @@ struct MaterialData {
     texture_extra: vec4f,
     texture_transform: vec4f,
     detail_transform: vec4f,
+    normal_transform: vec4f,
+    orm_transform: vec4f,
+    map_turns: vec4f,
+    coverage: vec4f,
+    flakes: vec4f,
+    flake_color: vec4f,
 }
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 @group(0) @binding(1) var<storage, read> instances: array<InstanceData>;
@@ -4699,6 +4725,7 @@ struct ShadowCutOutput {
     @location(0) world_position: vec3f,
     @location(1) @interpolate(flat) instance: u32,
     @location(2) uv_alpha: vec4f,
+    @location(3) second: f32,
 }
 @vertex fn shadow_cut_vertex(input: VertexInput) -> ShadowCutOutput {
     let instance = instances[input.instance_index];
@@ -4713,6 +4740,7 @@ struct ShadowCutOutput {
     output.world_position = world.xyz;
     output.instance = input.instance_index;
     output.uv_alpha = input.uv_alpha;
+    output.second = input.normal.w;
     return output;
 }
 @fragment fn shadow_cut_fragment(input: ShadowCutOutput) {
@@ -4727,6 +4755,27 @@ struct ShadowCutOutput {
     if (cut_by_content(input.instance, data.fields.x, input.uv_alpha.xy, cutoff)) {
         discard;
     }
+    if (material_cut(data.fields.x, input.uv_alpha.xy, vec2f(input.uv_alpha.w, input.second), vec2u(input.position.xy), data.fields.y)) {
+        discard;
+    }
+}
+fn material_cut(material_index: u32, uv0: vec2f, uv1: vec2f, pixel: vec2u, id: u32) -> bool {
+    let material = materials[material_index];
+    let mode = material.coverage.z;
+    if (mode < 0.5) {
+        return false;
+    }
+    var alpha = material.coverage.x;
+    let layer = i32(round(material.textures.x));
+    if (layer >= 0) {
+        let main_one = (u32(round(material.texture_scales.w)) & 1u) != 0u;
+        let at = uv_place(select(uv0, uv1, main_one), material.texture_transform, material.texture_extra.z);
+        alpha *= textureSampleLevel(map_base, map_sampler, at, layer, 0.0).a;
+    }
+    if (mode < 1.5) {
+        return alpha < material.coverage.y;
+    }
+    return !lod_keep(pixel, id ^ frame.flags.x ^ bitcast<u32>(frame.time_size.x), alpha);
 }
 fn cut_by_content(instance: u32, material: u32, uv: vec2f, cutoff: f32) -> bool {
     let data = instances[instance];
@@ -4740,6 +4789,9 @@ fn cutout(input: VertexOutput) {
         discard;
     }
     if (use_content_cutout && cut_by_content(input.instance, input.material, input.uv_alpha.xy, input.settings.y)) {
+        discard;
+    }
+    if (use_content_cutout && material_cut(input.material, input.uv_alpha.xy, vec2f(input.uv_alpha.w, input.normal.w), vec2u(input.position.xy), input.id)) {
         discard;
     }
     if (input.settings.w < 1.0 && !lod_keep(vec2u(input.position.xy), input.id, input.settings.w)) {
@@ -4922,6 +4974,15 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     let n = surface.normal;
     let t = normalize(input.tangent.xyz - n * dot(input.tangent.xyz, n));
     let b = cross(n, t) * input.tangent.w;
+    var flake = vec4f(n, 0.0);
+    if (use_flakes) {
+        flake = flake_normal(input.object_position, n, material.flakes);
+    }
+    let flaked = flake.w > 0.5;
+    var facet = flake_facet(surface, material.flake_color.xyz);
+    facet.roughness = material.flakes.w;
+    let flake_t = flake_frame_t(flake.xyz);
+    let flake_b = cross(flake.xyz, flake_t);
     lobes_live(material, curvature);
     let view = normalize(frame.camera_position.xyz - input.world_position);
     let light = normalize(frame.sun_direction.xyz);
@@ -4957,6 +5018,12 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
         film_normal = film_colour(surface, 1.0);
     }
     var direct = eval_lobed(surface, wo, wi, film) * sun;
+    if (flaked) {
+        let flake_wo = vec3f(dot(view, flake_t), dot(view, flake_b), dot(view, flake.xyz));
+        let flake_wi = vec3f(dot(light, flake_t), dot(light, flake_b), dot(light, flake.xyz));
+        let tilted = max(flake_wi.z, 0.0) / max(wi.z, 1e-4);
+        direct = (flake_coat(surface, wo, wi) + eval_filmed(facet, flake_wo, flake_wi, vec3f(0.0)) * tilted * flake_under_coat(surface, wo.z)) * sun;
+    }
     if (facing <= 0.0 && scatter_reach() > 0.0) {
         direct += scatter_beyond(surface, dot(n, light)) * frame.sun_colour_intensity.xyz * frame.sun_colour_intensity.w * shadow_visibility(input.world_position, geometric);
     }
@@ -4978,6 +5045,9 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     }
     irradiance *= screen.x;
     var diffuse = surface.base * irradiance / PI * reflection_diffuse_weight(surface, view, n, film, film_normal);
+    if (flaked) {
+        diffuse = vec3f(0.0);
+    }
     let previous_uv = input.previous_clip.xy / input.previous_clip.w * vec2f(0.5, -0.5) + vec2f(0.5);
     let view_normal = normalize((frame.view * vec4f(n, 0.0)).xyz);
     var ssr = vec4f(0.0);
@@ -4990,6 +5060,11 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     }
     let sky_visible = select(1.0, reflection_sky_visibility(seen, sky_direction, lookup, grid, release), any(toward != vec3f(0.0)));
     var specular = reflection_radiance(surface, view, lobes_reflection_normal(n, t, b, view, surface.roughness), ssr, sky_cube, local_probes, selected_reflections.first, selected_reflections.second, lookup, reflect_sampler, selected_reflections.weights_mip.z, selected_reflections.weights_mip.w, film, film_normal, sky_visible);
+    if (flaked) {
+        let substrate = reflection_radiance(facet, view, flake.xyz, vec4f(0.0), sky_cube, local_probes, selected_reflections.first, selected_reflections.second, lookup, reflect_sampler, selected_reflections.weights_mip.z, selected_reflections.weights_mip.w, vec3f(0.0), vec3f(0.0), sky_visible);
+        let coat = coat_radiance(surface, view, n, ssr, sky_cube, local_probes, selected_reflections.first, selected_reflections.second, lookup, reflect_sampler, selected_reflections.weights_mip.z, selected_reflections.weights_mip.w, sky_visible);
+        specular = substrate * flake_under_coat(surface, dot(n, view)) + coat;
+    }
     if (probe_grid.shade.x > 0.0 && grid.x >= 0.0) {
         let occlusion = mix(probe_reflection_occlusion(grid, reflection_irradiance(n, input.world_position, sky_visible)), 1.0, release);
         if (occlusion < 1.0) {

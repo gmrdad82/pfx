@@ -20,6 +20,7 @@ mod extras;
 mod facts;
 pub mod gltf_io;
 mod holes;
+mod layers;
 pub mod library;
 mod lod;
 mod maps;
@@ -99,6 +100,27 @@ pub struct GeneratedLight {
     pub intensity: f64,
     pub shadow: bool,
     pub parent: Option<String>,
+}
+
+impl GeneratedLight {
+    pub fn light(&self) -> pfx_recipe::Light {
+        pfx_recipe::Light {
+            name: self.name.clone(),
+            kind: pfx_recipe::LightKind::Spot,
+            position: self.position,
+            parent: self
+                .parent
+                .as_ref()
+                .map(|node| (node.clone(), self.position)),
+            direction: Some(self.direction),
+            cone: Some(self.cone),
+            color: self.color,
+            intensity: self.intensity,
+            radius: 0.0,
+            range: self.range,
+            shadow: self.shadow,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -281,6 +303,7 @@ pub struct Built {
     nest: Vec<Option<(usize, DMat4)>>,
     wet: BTreeMap<String, (String, pfx_scene::types::Wet)>,
     art: BTreeMap<usize, art::Art>,
+    layers: BTreeMap<usize, Vec<layers::Baked>>,
 }
 
 impl Built {
@@ -319,6 +342,12 @@ impl Built {
                 .entry(name.clone())
                 .or_insert_with(|| value.clone());
         }
+        let room = pfx_recipe::MAX_LIGHTS.saturating_sub(merged.lights.len());
+        merged.lights.extend(
+            scene::ordered(&self.lights)
+                .take(room)
+                .map(GeneratedLight::light),
+        );
         merged
     }
 
@@ -344,6 +373,10 @@ impl Built {
 
     pub(crate) fn dressed(&self, at: usize, looks: &mut Option<Looks>) -> Node {
         let mut node = self.parts[at].node.clone();
+        if let Some(baked) = self.layers.get(&at) {
+            let looks = looks.get_or_insert_with(|| (*self.looks).clone());
+            layers::dress(&mut node, baked, looks);
+        }
         if let Some(art) = self.art.get(&self.parts[at].object) {
             let looks = looks.get_or_insert_with(|| (*self.looks).clone());
             art::dress(&mut node, art, looks);
@@ -395,7 +428,11 @@ impl Built {
             .iter()
             .filter_map(|lod| {
                 let of = placed.get(lod.of).copied().flatten()?;
-                Some(Lod { of, ..lod.clone() })
+                let mut level = Lod { of, ..lod.clone() };
+                if let Some(baked) = self.layers.get(&lod.of) {
+                    layers::rename(&mut level.node, &self.parts[lod.of].node, baked);
+                }
+                Some(level)
             })
             .collect();
         let tracks: Vec<Track> = self
@@ -1486,6 +1523,13 @@ fn assemble(
         part.looks = looks.clone();
     }
     let art = art::read(recipe, base, &parts, &mut notes);
+    let layers = layers::bake(
+        recipe,
+        &parts[..parts.len() - scattered],
+        &merged,
+        &looks,
+        &mut notes,
+    )?;
     notes.extend(scene::left_out(recipe));
     notes.extend(scene::lights_left_out(recipe, &lights));
     Ok(Built {
@@ -1499,6 +1543,7 @@ fn assemble(
         nest: nested,
         wet,
         art,
+        layers,
         timeline: recipe.timeline,
         markers: recipe
             .markers

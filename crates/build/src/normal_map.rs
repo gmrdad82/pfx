@@ -50,12 +50,17 @@ fn edge(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> f64 {
     (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
 }
 
-struct Raster {
-    owner: Vec<u32>,
-    weights: Vec<[f32; 3]>,
+pub(crate) struct Raster {
+    pub(crate) owner: Vec<u32>,
+    pub(crate) weights: Vec<[f32; 3]>,
 }
 
-fn raster(low: &Mesh, uvs: &[[f32; 2]], size: usize) -> Result<Raster, String> {
+pub(crate) fn raster(
+    low: &Mesh,
+    uvs: &[[f32; 2]],
+    size: usize,
+    what: &str,
+) -> Result<Raster, String> {
     let mut owner = vec![NOBODY; size * size];
     let mut weights = vec![[0.0f32; 3]; size * size];
     let mut strict = vec![false; size * size];
@@ -98,11 +103,11 @@ fn raster(low: &Mesh, uvs: &[[f32; 2]], size: usize) -> Result<Raster, String> {
         }
     }
     if covered == 0 {
-        return Err("the level's TEXCOORD_0 covers no texel of the normal map".to_string());
+        return Err(format!("the TEXCOORD_0 covers no texel of the {what}"));
     }
     if overlap as f64 > covered as f64 * OVERLAP_SHARE {
         return Err(format!(
-            "the normal map needs a level whose TEXCOORD_0 doesn't overlap, and {overlap} of the {covered} texels it covers lie under two triangles"
+            "the {what} needs a TEXCOORD_0 that doesn't overlap, and {overlap} of the {covered} texels it covers lie under two triangles"
         ));
     }
     Ok(Raster { owner, weights })
@@ -194,7 +199,8 @@ fn texel(
     normalize(local).map(|c| ((c * 0.5 + 0.5) * 255.0).round().clamp(0.0, 255.0) as u8)
 }
 
-fn dilate(pixels: &mut [u8], filled: &mut [bool], size: usize) {
+pub(crate) fn dilate(pixels: &mut [u8], filled: &mut [bool], size: usize, empty: &[u8]) {
+    let channels = empty.len();
     for _ in 0..DILATE {
         let before = filled.to_vec();
         let mut grew = false;
@@ -204,7 +210,7 @@ fn dilate(pixels: &mut [u8], filled: &mut [bool], size: usize) {
                 if before[at] {
                     continue;
                 }
-                let mut sum = [0u32; 3];
+                let mut sum = [0u32; 4];
                 let mut count = 0u32;
                 let around = [
                     (x > 0).then(|| at - 1),
@@ -214,8 +220,8 @@ fn dilate(pixels: &mut [u8], filled: &mut [bool], size: usize) {
                 ];
                 for n in around.into_iter().flatten() {
                     if before[n] {
-                        for c in 0..3 {
-                            sum[c] += u32::from(pixels[n * 3 + c]);
+                        for c in 0..channels {
+                            sum[c] += u32::from(pixels[n * channels + c]);
                         }
                         count += 1;
                     }
@@ -223,9 +229,9 @@ fn dilate(pixels: &mut [u8], filled: &mut [bool], size: usize) {
                 if count == 0 {
                     continue;
                 }
-                for c in 0..3 {
+                for c in 0..channels {
                     let mean = (sum[c] + count / 2).checked_div(count).unwrap_or(0);
-                    pixels[at * 3 + c] = mean as u8;
+                    pixels[at * channels + c] = mean as u8;
                 }
                 filled[at] = true;
                 grew = true;
@@ -237,7 +243,7 @@ fn dilate(pixels: &mut [u8], filled: &mut [bool], size: usize) {
     }
     for (at, done) in filled.iter().enumerate() {
         if !done {
-            pixels[at * 3..at * 3 + 3].copy_from_slice(&FLAT);
+            pixels[at * channels..(at + 1) * channels].copy_from_slice(empty);
         }
     }
 }
@@ -259,7 +265,7 @@ pub(crate) fn bake(
         return Err("the level has no normals".to_string());
     }
     let side = size as usize;
-    let raster = raster(low, uvs, side)?;
+    let raster = raster(low, uvs, side, "normal map")?;
     let triangles: Vec<Triangle> = master
         .indices
         .chunks_exact(3)
@@ -311,15 +317,17 @@ pub(crate) fn bake(
             });
         }
     });
-    dilate(&mut pixels, &mut filled, side);
+    dilate(&mut pixels, &mut filled, side, &FLAT);
+    rgb_png(&pixels, size)
+}
+
+pub(crate) fn rgb_png(pixels: &[u8], size: u32) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
     let mut encoder = png::Encoder::new(&mut out, size, size);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().map_err(|e| e.to_string())?;
-    writer
-        .write_image_data(&pixels)
-        .map_err(|e| e.to_string())?;
+    writer.write_image_data(pixels).map_err(|e| e.to_string())?;
     writer.finish().map_err(|e| e.to_string())?;
     Ok(out)
 }

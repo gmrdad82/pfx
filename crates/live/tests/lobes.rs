@@ -52,6 +52,12 @@ base = [0.8, 0.6, 0.5]
 roughness = 0.7
 specular = 0.02
 scatter = { color = [1.0, 0.3, 0.2], radius = 0.25, amount = 1.0 }
+
+[materials.flaked]
+base = [0.05, 0.1, 0.6]
+roughness = 0.6
+specular = 0.02
+flakes = { amount = 0.5, size = 0.15, spread = 0.0, color = [0.9, 0.1, 0.1], roughness = 0.4 }
 ";
 
 fn folder(name: &str, glb: &[u8], body: &str) -> PathBuf {
@@ -438,6 +444,170 @@ fn a_base_colour_map_paints_the_ball_in_both_renderers() {
         assert!(bottom[2] > bottom[0] * 3.0, "{renderer}: bottom {bottom:?}");
         let top = mean(&region(&moved[k], |n| n[1] > 0.3));
         assert!(top[2] > top[0] * 3.0, "{renderer}: moved top {top:?}");
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_metal_roughness_map_moves_by_its_own_texture_transform_in_both_renderers() {
+    let white = flat(16, 16, |_, _| [255, 255, 255, 255]);
+    let stripes = flat(16, 16, |_, y| {
+        if y < 8 {
+            [255, 13, 255, 255]
+        } else {
+            [255, 255, 0, 255]
+        }
+    });
+    let lit = sun([0.0, 0.0, 1.0]);
+    let material = |transform: Value| {
+        let mut orm = json!({ "index": 1 });
+        if !transform.is_null() {
+            orm["extensions"] = json!({ "KHR_texture_transform": transform });
+        }
+        pbr(json!({ "pbrMetallicRoughness": {
+            "baseColorTexture": { "index": 0 },
+            "metallicRoughnessTexture": orm,
+            "metallicFactor": 1.0,
+            "roughnessFactor": 1.0,
+        } }))
+    };
+    let images = [white, stripes];
+    let still = textured("orm", material(Value::Null), &images, &lit);
+    let moved = textured(
+        "orm-moved",
+        material(json!({ "offset": [0.0, 0.5] })),
+        &images,
+        &lit,
+    );
+    let luma = |c: [f32; 3]| (c[0] + c[1] + c[2]) / 3.0;
+    for (k, renderer) in RENDERERS.iter().enumerate() {
+        let top = luma(mean(&region(&still[k], |n| n[1] > 0.3)));
+        let bottom = luma(mean(&region(&still[k], |n| n[1] < -0.3)));
+        println!("{renderer}: smooth metal top {top}, rough dielectric bottom {bottom}");
+        assert!(top < bottom * 0.5, "{renderer}: top {top} bottom {bottom}");
+        let top = luma(mean(&region(&moved[k], |n| n[1] > 0.3)));
+        let bottom = luma(mean(&region(&moved[k], |n| n[1] < -0.3)));
+        println!("{renderer}: moved top {top}, bottom {bottom}");
+        assert!(
+            bottom < top * 0.5,
+            "{renderer}: moved top {top} bottom {bottom}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn imported_alpha_masks_and_blends_the_ball_in_both_renderers() {
+    let holes = flat(16, 16, |_, y| {
+        if y < 8 {
+            [220, 220, 220, 20]
+        } else {
+            [220, 220, 220, 255]
+        }
+    });
+    let lit = sun([0.0, 0.0, 1.0]);
+    let opaque = textured(
+        "alpha-opaque",
+        pbr(json!({ "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } } })),
+        std::slice::from_ref(&holes),
+        &lit,
+    );
+    let masked = textured(
+        "alpha-mask",
+        pbr(json!({
+            "alphaMode": "MASK",
+            "alphaCutoff": 0.5,
+            "pbrMetallicRoughness": { "baseColorTexture": { "index": 0 } },
+        })),
+        std::slice::from_ref(&holes),
+        &lit,
+    );
+    let blended = textured(
+        "alpha-blend",
+        pbr(json!({
+            "alphaMode": "BLEND",
+            "pbrMetallicRoughness": { "baseColorFactor": [0.7, 0.7, 0.7, 0.5] },
+        })),
+        &[],
+        &lit,
+    );
+    let plain = textured("alpha-plain", pbr(json!({})), &[], &lit);
+    let luma = |c: [f32; 3]| (c[0] + c[1] + c[2]) / 3.0;
+    for (k, renderer) in RENDERERS.iter().enumerate() {
+        let top = |pixels: &[Vec<[f32; 3]>; 2]| luma(mean(&region(&pixels[k], |n| n[1] > 0.3)));
+        let bottom = |pixels: &[Vec<[f32; 3]>; 2]| luma(mean(&region(&pixels[k], |n| n[1] < -0.3)));
+        println!(
+            "{renderer}: opaque top {} bottom {}, masked top {} bottom {}",
+            top(&opaque),
+            bottom(&opaque),
+            top(&masked),
+            bottom(&masked)
+        );
+        assert!(
+            top(&opaque) > 0.2,
+            "{renderer}: opaque top {}",
+            top(&opaque)
+        );
+        assert!(
+            top(&masked) < top(&opaque) * 0.05,
+            "{renderer}: masked top {} against {}",
+            top(&masked),
+            top(&opaque)
+        );
+        assert!(
+            (bottom(&masked) / bottom(&opaque) - 1.0).abs() < 0.1,
+            "{renderer}: masked bottom {} against {}",
+            bottom(&masked),
+            bottom(&opaque)
+        );
+        let face = |pixels: &[Vec<[f32; 3]>; 2]| luma(mean(&region(&pixels[k], |n| n[2] > 0.8)));
+        let share = face(&blended) / face(&plain);
+        println!(
+            "{renderer}: blended face {} of plain {}",
+            face(&blended),
+            face(&plain)
+        );
+        assert!(
+            (0.3..0.85).contains(&share),
+            "{renderer}: a half-alpha blend keeps {share} of the plain face"
+        );
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn flake_cells_land_where_the_cpu_port_puts_them_in_both_renderers() {
+    let toward = [0.0, 0.0, 1.0];
+    let pixels = render_material("flaked", "flaked", toward);
+    let flakes = pfx_materials::Flakes {
+        amount: 0.5,
+        size: 0.15,
+        spread: 0.0,
+        color: [0.9, 0.1, 0.1],
+        roughness: 0.4,
+    };
+    for (k, renderer) in RENDERERS.iter().enumerate() {
+        let mut agree = 0;
+        let mut flaked = 0;
+        let mut seen = 0;
+        for (index, pixel) in pixels[k].iter().enumerate() {
+            let Some(n) = normal_at(index).filter(|n| n[2] > 0.5) else {
+                continue;
+            };
+            let at = n.map(|value| value * BALL_RADIUS);
+            let predicted = pfx_materials::flake_normal(&flakes, at, n).is_some();
+            let paint = pixel[2] > 2.0 * pixel[0] && pixel[2] > 0.02;
+            seen += 1;
+            flaked += usize::from(predicted);
+            agree += usize::from(predicted != paint);
+        }
+        let share = agree as f32 / seen as f32;
+        println!("{renderer}: {agree} of {seen} pixels where the port says ({flaked} flakes)");
+        assert!(
+            flaked * 4 > seen && flaked * 4 < seen * 3,
+            "{renderer}: {flaked} of {seen}"
+        );
+        assert!(share > 0.85, "{renderer}: flake cells agree on {share}");
     }
 }
 

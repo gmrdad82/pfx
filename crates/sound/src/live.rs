@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+use crate::adaptive::{AdaptiveTrack, PreparedAdaptive, Quantize};
 use crate::channel::{ChannelId, Ducking};
 use crate::clip::Clip;
 use crate::drive::Drive;
@@ -382,6 +383,42 @@ impl Output {
         let prepared = Prepared::track(track, self.rate);
         self.mixer()
             .play_music_prepared(&prepared, fade_seconds, level)
+    }
+
+    pub fn play_adaptive(
+        &self,
+        track: &AdaptiveTrack,
+        fade_seconds: f32,
+        level: Level,
+    ) -> Result<VoiceId, String> {
+        let prepared = track.prepare(self.rate)?;
+        Ok(self.play_adaptive_prepared(&prepared, fade_seconds, level))
+    }
+
+    pub fn play_adaptive_prepared(
+        &self,
+        track: &PreparedAdaptive,
+        fade_seconds: f32,
+        level: Level,
+    ) -> VoiceId {
+        let track = track.for_rate(self.rate);
+        self.mixer().play_adaptive(&track, fade_seconds, level)
+    }
+
+    pub fn set_music_intensity(&self, intensity: f32, seconds: f32) {
+        self.mixer().set_music_intensity(intensity, seconds);
+    }
+
+    pub fn music_intensity(&self) -> Option<f32> {
+        self.mixer().music_intensity()
+    }
+
+    pub fn request_music_section(&self, section: &str, at: Quantize) -> bool {
+        self.mixer().request_music_section(section, at)
+    }
+
+    pub fn music_section(&self) -> Option<String> {
+        self.mixer().music_section().map(str::to_string)
     }
 
     pub fn stop_music(&self, fade_seconds: f32) {

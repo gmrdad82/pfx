@@ -83,6 +83,7 @@ repo = "https://github.com/gmrdad82/pfx"
 estate = {"manfred", "prec", "pito-compare", "pito-codecs"}
 
 GUIDES = [
+    ("migrate-3", 100, "Move a game from pfx 2.6.0 to 3.0.0: the crates, what moved in, the renames, converting scenes and recipes, one binary, the window and Play."),
     ("first-game", 101, "Scaffold a game with pfx new, play it with cargo run, open it in the editor and measure it with pfx bench."),
     ("projects", 102, "A game on pfx is its own repo and one binary: what pfx new scaffolds, the project.toml, and how a game plays and opens in the editor."),
     ("game", 103, "pfx-game, the one call a game's main makes: the window, pacing, input, sound, the fixed tick and the game's own launcher."),

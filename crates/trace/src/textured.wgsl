@@ -37,7 +37,7 @@ fn traced_maps(s_in: Shaded, n_in: vec3f, m: MaterialMaps, hit: Hit, p: vec3f) -
     let slots = m.textures;
     let sets = u32(round(m.scales.w));
     var second = hit.uv;
-    if (sets != 0u) {
+    if (sets != 0u || u32(round(m.turns.z)) != 0u) {
         second = traced_uv1(hit, p);
     }
     let uv = uv_place(select(hit.uv, second, (sets & 1u) != 0u), m.transform, m.extra.z);
@@ -45,15 +45,16 @@ fn traced_maps(s_in: Shaded, n_in: vec3f, m: MaterialMaps, hit: Hit, p: vec3f) -
     if (slots.x >= 0.0) {
         s.base *= traced_map(slots.x, uv).rgb;
     }
+    let own = u32(round(m.turns.z));
     if (slots.z >= 0.0) {
-        let orm = traced_map(slots.z, uv);
+        let orm = traced_map(slots.z, uv_place(select(hit.uv, second, (own & 2u) != 0u), m.orm, m.turns.y));
         s.roughness *= orm.g;
         s.metalness *= orm.b;
         traced_occlusion = 1.0 + m.scales.y * (orm.r - 1.0);
     }
     var local = vec3f(0.0, 0.0, 1.0);
     if (slots.y >= 0.0) {
-        local = traced_normal(traced_map(slots.y, uv), m.scales.x);
+        local = traced_normal(traced_map(slots.y, uv_place(select(hit.uv, second, (own & 1u) != 0u), m.normal, m.turns.x)), m.scales.x);
     }
     if (slots.w >= 0.0) {
         let detail = traced_normal(traced_map(slots.w, detail_uv), m.scales.z);
@@ -104,6 +105,9 @@ fn lobes_traced(m: MaterialLobes, transform: mat3x3f, hit: Hit, n: vec3f) {
     );
 }
 fn traced_eval(s: Shaded, wo: vec3f, wi: vec3f) -> vec3f {
+    if (TRACE_FLAKES && traced_flaked) {
+        return flake_eval(s, wo, wi);
+    }
     if (!TRACE_LOBES) {
         return eval(s, wo, wi);
     }
@@ -113,6 +117,9 @@ fn traced_eval(s: Shaded, wo: vec3f, wi: vec3f) -> vec3f {
     return scatter_beyond(s, wi.z) / min(wi.z, -1e-6);
 }
 fn eval_bounce(s: Shaded, wo: vec3f, wi: vec3f) -> vec3f {
+    if (TRACE_FLAKES && traced_flaked) {
+        return flake_eval(s, wo, wi);
+    }
     if (!TRACE_LOBES) {
         return eval(s, wo, wi);
     }

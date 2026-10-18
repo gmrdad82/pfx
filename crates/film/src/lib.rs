@@ -20,6 +20,7 @@ pub mod shoot;
 pub mod show;
 pub mod titles;
 pub mod track;
+pub mod transition;
 pub mod write;
 
 pub use art::{Art, Plain, What};
@@ -37,4 +38,5 @@ pub use sheet::{Letter, Sheet};
 pub use shoot::{Crew, RATE, Reeled, Rig, shoot};
 pub use show::{Cue, FilmFrame, Show, Take, plan};
 pub use titles::{Align, Setter, Words};
+pub use transition::Transition;
 pub use write::{Encoder, Files};

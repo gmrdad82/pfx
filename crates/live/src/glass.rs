@@ -1283,7 +1283,7 @@ impl Pass {
                         surface.id,
                         m.clearcoat.to_bits(),
                         m.clearcoat_roughness.to_bits(),
-                        0,
+                        u32::from(m.thin_walled && m.transmission > 0.0),
                     ],
                     clip: surface.clip,
                 }
@@ -1834,7 +1834,11 @@ fn sky_irradiance(n: vec3f) -> vec3f {
     let uv = position.xy / scene.extent.xy;
     let ray = normalize(vec3f(vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0) / vec2f(scene.projection[0].x, scene.projection[1].y), -1.0));
     let normal = normalize(front.xyz);
-    let inner = refract_ray(ray, normal, 1.0 / max(object.optics.x, 1.01));
+    let thin = object.pick.w != 0u;
+    var inner = refract_ray(ray, normal, 1.0 / max(object.optics.x, 1.01));
+    if (thin) {
+        inner = ray;
+    }
     let distance = (back.w - front.w) / max(-inner.z, 0.1);
     var background_depth = back.w + max(back.w - front.w, 0.01) * 2.0;
     if (opaque_z < 0.999) {
@@ -1843,7 +1847,10 @@ fn sky_irradiance(n: vec3f) -> vec3f {
     }
     let max_lod = max(scene.extent.z - 1.0, 0.0);
     let lod = clamp(object.base_roughness.w * object.base_roughness.w * max_lod, 0.0, max_lod);
-    let ior = vec3f(object.optics.x - 0.016 * object.optics.y, object.optics.x, object.optics.x + 0.022 * object.optics.y);
+    var ior = vec3f(object.optics.x - 0.016 * object.optics.y, object.optics.x, object.optics.x + 0.022 * object.optics.y);
+    if (thin) {
+        ior = vec3f(1.0);
+    }
     var refracted = vec3f(0.0);
     for (var channel = 0u; channel < 3u; channel++) {
         let sample_at = sample_uv(uv, front.w, back.w, normal, normalize(back.xyz), ior[channel], background_depth);
@@ -1865,6 +1872,9 @@ fn sky_irradiance(n: vec3f) -> vec3f {
     var fresnel = vec3f(f0 + (1.0 - f0) * pow(1.0 - cosine, 5.0));
     if (film_amount > 0.0 && object.film.x > 0.0) {
         fresnel = mix(fresnel, film_dielectric(cosine, object.film.x, object.film.y, object.optics.x), clamp(film_amount, 0.0, 1.0));
+    }
+    if (thin) {
+        fresnel = vec3f(thin_dielectric(fresnel.x).x, thin_dielectric(fresnel.y).x, thin_dielectric(fresnel.z).x);
     }
     let reflected_world = normalize(world * reflect(ray, normal));
     let reflected = textureSampleLevel(reflection_tex, linear_sampler, reflected_world, lod).rgb;

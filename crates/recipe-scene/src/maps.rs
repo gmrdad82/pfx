@@ -41,18 +41,22 @@ fn kinds(look: &Look) -> [Option<&Map>; 3] {
     ]
 }
 
-fn main(look: &Look) -> UvTransform {
-    kinds(look)
-        .into_iter()
-        .flatten()
-        .next()
-        .and_then(|map| map.transform)
+fn own(map: &Map) -> UvTransform {
+    map.transform
         .map_or_else(UvTransform::default, |t| UvTransform {
             set: 0,
             offset: t.offset,
             rotation: t.rotation,
             scale: t.scale,
         })
+}
+
+fn main(look: &Look) -> UvTransform {
+    kinds(look)
+        .into_iter()
+        .flatten()
+        .next()
+        .map_or_else(UvTransform::default, own)
 }
 
 impl Set {
@@ -135,6 +139,8 @@ impl Set {
                 normal_scale: kinds(look)[1].map_or(1.0, |m| m.scale),
                 occlusion: 0.0,
                 main: main(look),
+                normal_uv: kinds(look)[1].map(own),
+                orm_uv: kinds(look)[2].map(own),
                 ..Textures::default()
             };
         }

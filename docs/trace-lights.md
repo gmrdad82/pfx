@@ -42,6 +42,24 @@ Every local light is sampled at every bounce, as the live renderer loops over it
 - points and spots are delta lights, sampled directly with live's falloff, with live's check that the light is above the geometric normal;
 - a rect is sampled uniformly by area, with MIS against BSDF sampling. A BSDF ray that crosses a shadowed rect (in front of whatever it hits next) picks up its radiance with the matching weight; rects are transparent to rays and to shadow rays, so the two strategies see the same light. Camera rays see a rect's front face as a glowing pane. An unshadowed rect is sampled only, with weight 1, since a BSDF ray cannot see through walls.
 
+## Many lights: the light tree
+
+With four point and spot lights or fewer, each one is sampled at every bounce as above, one shadow ray each. Past four (`pfx_trace::tree::LOOPED`), the point and spot lights go into a light tree ported from Cycles (tag `v5.2.0`, `scene/light_tree.cpp` and `kernel/light/tree.h`; [INSPIRATION.md](../INSPIRATION.md)) and each bounce picks one of them through it, with one shadow ray, and divides its light by the chance it was picked; rects and discs keep their own slot each. So 128 street lamps cost one light sample per bounce, not 128.
+
+The tree is built once per `Trace::build` on the CPU: every lit point or spot is an emitter with a bounding box (its position grown by its radius), an orientation cone (a point emits all round, a spot within its outer cone) and an energy (the mean of its colour times intensity). Cycles' builder splits each node along the axis and at the one of 12 buckets with the lowest cost (energy × box area × cone measure), and keeps a leaf of at most 8. The nodes are packed after the lights in the same light buffer, so the tree needs no binding of its own. At a shading point the kernel walks from the root: at each inner node it weighs both children by Cycles' importance (energy over squared distance, bounded by the angles the box subtends and the cone's spread), averages the pick chances its maximum and minimum bounds give, and follows one child, rescaling the one random number as it goes; at a leaf it picks one light by the same two bounds with Cycles' reservoirs. Importance is zero only where a light cannot reach: behind the surface, outside a spot's cone, or past the light's `range` (a node whose box is farther than its farthest reach), so the estimate stays unbiased.
+
+`many_lights_through_the_tree_match_the_sum_of_their_light_by_light_renders` renders a street of 128 lamps (every third a spot) over a floor with eight occluding spheres through the tree, 4 × 2048 samples, against the sum of 32 renders of four lamps each through the light-by-light path, 1024 samples each: image mean 0.14457 against 0.14456 (ratio 1.0001), per-pixel gap median 0.06% and 95th percentile 0.52% of the peak.
+
+Cost of a traced still, the same streets as the live table in [live-renderer.md](live-renderer.md#many-lights-clustered-forward): `pfx render --recipe <street> --camera main --spp 16 --threshold 0 --denoise off --size 3840x2160`, GPU time as the render prints it, under `pgpu run --class bench`, five runs of each build alternating, medians. "Light by light" is the same build with the tree turned off (`LOOPED` set past any count), which is the tracer's path before the tree:
+
+| Lights | Light by light | Through the tree | |
+|---:|---:|---:|---:|
+| 4 | 4,569 ms | 4,518 ms | same bytes |
+| 32 | 5,745 ms | 4,722 ms | −18% |
+| 128 | 9,356 ms | 4,803 ms | −49% |
+
+With the tree, 128 lights cost 6% more than 4; light by light they cost 105% more. With four lights the two builds write the same bytes, since the tree only starts past four. The lamps' `range` (9 to 12 m) already lets the light-by-light loop skip most lights before their shadow ray, so the gap grows with lights that reach farther. The two paths agree: at 960×540 and 256 samples, linear, the 128-light street's mean luminance is 0.060643 through the tree and 0.060662 light by light (ratio 0.9997). Through the tone curve at 16 samples the tree's 8-bit means are about 1% lower, because its noisier pixels bend down through the curve's shoulder; the linear means match.
+
 ## Shadow rays
 
 All shadow rays (sun, sky, emitter and local light) go through one any-hit traversal, `occluded`, over the scene's own BVH, triangles, clip planes and analytic shapes. It answers "is anything between here and there", stops at the first blocker and carries no hit record; it counts `shadow_only` triangles, as the sun's shadow always has. The answer is the one the closest-hit `scene()` gave. Sun and sky shadows are unchanged, and shadow rays are cheaper: a desk scene without emitters traces in 180.5 ms per sample against 213.4 ms before.

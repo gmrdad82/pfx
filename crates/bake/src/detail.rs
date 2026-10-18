@@ -375,6 +375,49 @@ pub fn bake(input: &Input<'_>, size: u32, padding: u32) -> Result<Maps, String> 
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sample {
+    pub base: [f32; 3],
+    pub roughness: f32,
+    pub normal: [f32; 3],
+    pub at: At,
+}
+
+pub fn sample(input: &Input<'_>, ids: [usize; 3], weight: [f32; 3], at_uv: [f32; 2]) -> Sample {
+    let position = mix3(ids.map(|id| input.positions[id]), weight);
+    let normal = unit(mix3(ids.map(|id| input.normals[id]), weight));
+    let tangent = ids.map(|id| input.tangents[id]);
+    let tangent_xyz = unit(mix3(tangent.map(|v| [v[0], v[1], v[2]]), weight));
+    let tangent_xyz = unit(sub(
+        tangent_xyz,
+        normal.map(|v| v * dot(normal, tangent_xyz)),
+    ));
+    let handedness: f32 = (0..3).map(|i| tangent[i][3] * weight[i]).sum();
+    let bitangent = cross(normal, tangent_xyz).map(|v| v * handedness.signum());
+    let surface_uv = match input.uvs1 {
+        Some(_) => mix2(ids.map(|id| input.uvs[id]), weight),
+        None => at_uv,
+    };
+    let at = At {
+        position,
+        uv: surface_uv,
+        normal,
+        edge: 0.0,
+        time: 0.0,
+    };
+    let resolved = resolve(input.material, 0.0, &at);
+    Sample {
+        base: resolved.material.base,
+        roughness: resolved.material.roughness,
+        normal: [
+            dot(resolved.normal, tangent_xyz),
+            dot(resolved.normal, bitangent),
+            dot(resolved.normal, normal),
+        ],
+        at,
+    }
+}
+
 pub fn bake_crop(input: &Input<'_>, size: u32, padding: u32, crop: Crop) -> Result<Region, String> {
     check_input(input, size)?;
     if crop.width == 0
@@ -432,50 +475,21 @@ pub fn bake_crop(input: &Input<'_>, size: u32, padding: u32, crop: Crop) -> Resu
                 if covered[index] {
                     continue;
                 }
-                let position = mix3(ids.map(|id| input.positions[id]), weight);
-                let normal = unit(mix3(ids.map(|id| input.normals[id]), weight));
-                let tangent = ids.map(|id| input.tangents[id]);
-                let tangent_xyz = unit(mix3(tangent.map(|v| [v[0], v[1], v[2]]), weight));
-                let tangent_xyz = unit(sub(
-                    tangent_xyz,
-                    normal.map(|v| v * dot(normal, tangent_xyz)),
-                ));
-                let handedness: f32 = (0..3).map(|i| tangent[i][3] * weight[i]).sum();
-                let bitangent = cross(normal, tangent_xyz).map(|v| v * handedness.signum());
-                let surface_uv = match input.uvs1 {
-                    Some(_) => mix2(ids.map(|id| input.uvs[id]), weight),
-                    None => at_uv,
-                };
-                let resolved = resolve(
-                    input.material,
-                    0.0,
-                    &At {
-                        position,
-                        uv: surface_uv,
-                        normal,
-                        edge: 0.0,
-                        time: 0.0,
-                    },
-                );
-                let mapped = [
-                    dot(resolved.normal, tangent_xyz),
-                    dot(resolved.normal, bitangent),
-                    dot(resolved.normal, normal),
-                ];
+                let found = sample(input, ids, weight, at_uv);
                 set_texel(
                     &mut region.base,
                     index,
-                    resolved.material.base.map(byte).map_with_alpha(),
+                    found.base.map(byte).map_with_alpha(),
                 );
-                let rough = byte(resolved.material.roughness);
+                let rough = byte(found.roughness);
                 set_texel(&mut region.roughness, index, [rough, rough, rough, 255]);
                 set_texel(
                     &mut region.normal,
                     index,
                     [
-                        byte(mapped[0] * 0.5 + 0.5),
-                        byte(mapped[1] * 0.5 + 0.5),
-                        byte(mapped[2] * 0.5 + 0.5),
+                        byte(found.normal[0] * 0.5 + 0.5),
+                        byte(found.normal[1] * 0.5 + 0.5),
+                        byte(found.normal[2] * 0.5 + 0.5),
                         255,
                     ],
                 );

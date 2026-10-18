@@ -1,6 +1,9 @@
 use std::time::Instant;
 
-use pfx_sound::{ChannelId, Clip, Mixer, SoundSpec, Wave};
+use pfx_sound::{
+    AdaptiveTrack, ChannelId, Clip, Level, Mixer, Quantize, Section, SoundSpec, Stem, StemGain,
+    Wave,
+};
 
 const RATE: u32 = 48_000;
 const TICK: usize = 800;
@@ -205,4 +208,53 @@ fn bench_shot_mix() {
         );
     }
     println!("{:<10} {:7.2} ms for 10 s", "all", time(&full));
+}
+
+fn adaptive_cost(case: &str) -> f64 {
+    let frames = RATE as usize * 8;
+    let stems = (0..8)
+        .map(|n| Stem {
+            name: format!("stem{n}"),
+            clip: Clip {
+                rate: RATE,
+                channels: 2,
+                samples: (0..frames * 2)
+                    .map(|i| ((i * (n + 3)) % 997) as f32 / 9970.0 - 0.05)
+                    .collect(),
+            },
+            gain: StemGain::above(n as f32 / 10.0, 0.1),
+        })
+        .collect();
+    let mut track = AdaptiveTrack::new(stems, 120.0, 4);
+    track.sections = vec![Section::new("a", (0, 2)), Section::new("b", (2, 4))];
+    track.transition = 0.5;
+    track.intensity = 1.0;
+    let prepared = track.prepare(RATE).unwrap();
+    let mut mixer = Mixer::new(RATE, 2);
+    mixer.play_adaptive(&prepared, 0.0, Level::default());
+    let mut out = vec![0.0f32; TICK * 2];
+    let started = Instant::now();
+    for tick in 0..TICKS {
+        match case {
+            "ramping" if tick % 120 == 0 => {
+                mixer.set_music_intensity(if tick % 240 == 0 { 0.0 } else { 1.0 }, 2.0)
+            }
+            "crossfading" if tick % 30 == 0 => {
+                let _ = mixer
+                    .request_music_section(if tick % 60 == 0 { "b" } else { "a" }, Quantize::Now);
+            }
+            _ => {}
+        }
+        mixer.render_into(&mut out);
+    }
+    started.elapsed().as_secs_f64() * 1000.0 / (TICKS * TICK) as f64 * RATE as f64
+}
+
+#[test]
+#[ignore = "bench; run with --release"]
+fn bench_adaptive_eight_stems() {
+    for case in ["settled", "ramping", "crossfading"] {
+        let best = (0..5).map(|_| adaptive_cost(case)).fold(f64::MAX, f64::min);
+        println!("8 stereo stems, {case}: {best:.3} ms a second of audio");
+    }
 }

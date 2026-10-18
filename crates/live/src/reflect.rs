@@ -980,6 +980,33 @@ fn reflection_radiance(
     }
     return radiance * substrate + coated * coat_spec;
 }
+fn coat_radiance(
+    surface: Shaded,
+    view: vec3f,
+    normal: vec3f,
+    hit: vec4f,
+    sky: texture_cube<f32>,
+    local: texture_cube_array<f32>,
+    probe_a: ReflectionProbe,
+    probe_b: ReflectionProbe,
+    lookup: LocalLookup,
+    samp: sampler,
+    local_mip: f32,
+    sky_mip: f32,
+    sky_visible: f32,
+) -> vec3f {
+    let ndv = clamp(dot(normal, view), 0.0, 1.0);
+    let coat_spec = clamp(surface.clearcoat, 0.0, 1.0) * schlick(vec3f(0.04), ndv, 5.0).r;
+    if (coat_spec <= 0.0) {
+        return vec3f(0.0);
+    }
+    let direction = reflect(-view, normal);
+    let open = (1.0 - lookup.weights.x - lookup.weights.y) * sky_visible;
+    let confidence = clamp(hit.a, 0.0, 1.0);
+    let coat_rough = clamp(surface.clearcoat_roughness, 0.0, 1.0);
+    let coated = reflection_fallback(direction, lookup, coat_rough, open, sky, local, probe_a, probe_b, samp, local_mip, sky_mip) * (1.0 - confidence) + max(hit.rgb, vec3f(0.0));
+    return coated * coat_spec;
+}
 "#
 );
 

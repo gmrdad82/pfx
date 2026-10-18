@@ -183,6 +183,7 @@ fn ground(like: &Object, at: DVec3, side: f64) -> Object {
         dynamic: None,
         proxy: None,
         lod: Vec::new(),
+        bake_layers: None,
     }
 }
 

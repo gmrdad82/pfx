@@ -1,12 +1,17 @@
 use pfx_materials::PackedMaterial;
 
 pub const HOT_ROWS: usize = 8;
-pub const MAP_ROWS: usize = 5;
+pub const MAP_ROWS: usize = 8;
 pub const LOBE_ROWS: usize = 3;
 pub const LAYER_ROWS: usize = 5;
 pub const LAYERS: u32 = 7;
 pub const MAPS: u32 = 8;
 pub const LOBES: u32 = 16;
+pub const THIN: u32 = 32;
+pub const ALPHA: u32 = 64;
+pub const ALPHA_ROWS: usize = 1;
+pub const FLAKES: u32 = 128;
+pub const FLAKE_ROWS: usize = 2;
 
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
@@ -92,6 +97,18 @@ pub fn lobes_on(packed: &PackedMaterial) -> bool {
         .any(|value| value.to_bits() != 0)
 }
 
+pub fn thin_on(packed: &PackedMaterial) -> bool {
+    packed.tail[1] != 0.0 && packed.sheen_trans_ior_disp[1] > 0.0
+}
+
+pub fn alpha_on(packed: &PackedMaterial) -> bool {
+    packed.coverage[2] != 0.0
+}
+
+pub fn flakes_on(packed: &PackedMaterial) -> bool {
+    packed.flakes[0] > 0.0 && packed.flakes[1] > 0.0
+}
+
 fn layer_on(row: [f32; 4]) -> bool {
     row[0] > 0.0 && row[2] != 0.0
 }
@@ -107,11 +124,17 @@ fn hot_of(packed: &PackedMaterial, first: u32) -> (Hot, Vec<[f32; 4]>) {
             packed.texture_extra,
             packed.texture_transform,
             packed.detail_transform,
+            packed.normal_transform,
+            packed.orm_transform,
+            packed.map_turns,
         ]);
     }
     if lobes_on(packed) {
         flags |= LOBES;
         rows.extend([packed.sheen, packed.lobes, packed.scatter]);
+    }
+    if thin_on(packed) {
+        flags |= THIN;
     }
     let layers = [packed.layer0, packed.layer1, packed.layer2, packed.layer3];
     for (index, layer) in layers.into_iter().enumerate() {
@@ -120,6 +143,14 @@ fn hot_of(packed: &PackedMaterial, first: u32) -> (Hot, Vec<[f32; 4]>) {
             rows.push(layer);
             rows.extend_from_slice(&packed.params[index * 4..index * 4 + 4]);
         }
+    }
+    if alpha_on(packed) {
+        flags |= ALPHA;
+        rows.push(packed.coverage);
+    }
+    if flakes_on(packed) {
+        flags |= FLAKES;
+        rows.extend([packed.flakes, packed.flake_color]);
     }
     let first = if rows.is_empty() { 0 } else { first };
     let hot = Hot {
@@ -150,7 +181,9 @@ mod tests {
         let flags = hot.flags();
         let rows = (flags & MAPS != 0) as usize * MAP_ROWS
             + (flags & LOBES != 0) as usize * LOBE_ROWS
-            + (flags & LAYERS) as usize * LAYER_ROWS;
+            + (flags & LAYERS) as usize * LAYER_ROWS
+            + (flags & ALPHA != 0) as usize * ALPHA_ROWS
+            + (flags & FLAKES != 0) as usize * FLAKE_ROWS;
         let first = hot.first() as usize - records.hot.len() * HOT_ROWS;
         records.extension[first..first + rows].to_vec()
     }
@@ -189,6 +222,36 @@ mod tests {
         assert_eq!(hot.wet, plain.wet);
         assert_eq!((hot.flags(), hot.first()), (0, 0));
         assert_eq!(records.hot(1).flags(), MAPS | LOBES | 1);
+        let mut lens = plain;
+        lens.sheen_trans_ior_disp = [0.0, 1.0, 1.5, 0.0];
+        lens.tail[1] = 1.0;
+        let mut opaque = lens;
+        opaque.sheen_trans_ior_disp[1] = 0.0;
+        let thin = Records::split(&[lens, opaque], Hot::default());
+        assert_eq!((thin.hot(0).flags(), thin.hot(0).first()), (THIN, 0));
+        assert_eq!(thin.hot(1).flags(), 0);
+        assert_eq!(thin.bytes().len(), 3 * HOT_ROWS * 16);
+        let mut decal = rich;
+        decal.coverage = [0.8, 0.3, 1.0, 0.0];
+        let alpha = Records::split(&[plain, decal], Hot::default());
+        assert_eq!(alpha.hot(1).flags(), MAPS | LOBES | ALPHA | 1);
+        let rows = extension(&alpha, 1);
+        assert_eq!(rows.len(), MAP_ROWS + LOBE_ROWS + LAYER_ROWS + ALPHA_ROWS);
+        assert_eq!(rows[rows.len() - 1], decal.coverage);
+        assert_eq!(rows[..rows.len() - 1], extension(&records, 1)[..]);
+        let mut paint = decal;
+        paint.flakes = [0.3, 0.001, 0.25, 0.2];
+        paint.flake_color = [0.9, 0.8, 0.6, 0.0];
+        let flaked = Records::split(&[paint], Hot::default());
+        assert_eq!(flaked.hot(0).flags(), MAPS | LOBES | ALPHA | FLAKES | 1);
+        let rows = extension(&flaked, 0);
+        assert_eq!(
+            rows[rows.len() - 3..],
+            [decal.coverage, paint.flakes, paint.flake_color]
+        );
+        let mut sized = plain;
+        sized.flakes = [0.3, 0.0, 0.25, 0.2];
+        assert_eq!(Records::split(&[sized], Hot::default()).hot(0).flags(), 0);
         assert_eq!(
             extension(&records, 1),
             [
@@ -197,6 +260,9 @@ mod tests {
                 rich.texture_extra,
                 rich.texture_transform,
                 rich.detail_transform,
+                rich.normal_transform,
+                rich.orm_transform,
+                rich.map_turns,
                 rich.sheen,
                 rich.lobes,
                 rich.scatter,

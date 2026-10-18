@@ -66,7 +66,11 @@ pub(crate) fn wants_uvs1(packed: &PackedMaterial) -> bool {
         || packed.textures[1] >= 0.0
         || packed.textures[2] >= 0.0
         || packed.texture_extra[0] >= 0.0;
-    (main && sets & 1 != 0) || (packed.textures[3] >= 0.0 && sets & 2 != 0)
+    let own = packed.map_turns[2].round() as u32;
+    (main && sets & 1 != 0)
+        || (packed.textures[3] >= 0.0 && sets & 2 != 0)
+        || (packed.textures[1] >= 0.0 && own & 1 != 0)
+        || (packed.textures[2] >= 0.0 && own & 2 != 0)
 }
 
 pub(crate) fn place_uvs1(
@@ -111,5 +115,37 @@ pub fn from_scene(textures: &SceneTextures) -> Textures {
         colour: list(&textures.colour, true),
         linear: list(&textures.linear, false),
         orm: list(&textures.orm, false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pfx_materials::{Material, UvTransform};
+
+    #[test]
+    fn a_normal_or_orm_map_on_the_second_set_asks_for_the_second_uvs() {
+        let mut material = Material::default();
+        material.textures.base = 0;
+        material.textures.normal = 1;
+        material.textures.orm = 2;
+        assert!(!wants_uvs1(&PackedMaterial::pack(&material)));
+        let second = UvTransform {
+            set: 1,
+            ..UvTransform::default()
+        };
+        for slot in 0..2 {
+            let mut own = material;
+            if slot == 0 {
+                own.textures.normal_uv = Some(second);
+            } else {
+                own.textures.orm_uv = Some(second);
+            }
+            assert!(wants_uvs1(&PackedMaterial::pack(&own)));
+            let mut unused = own;
+            unused.textures.normal = -1;
+            unused.textures.orm = -1;
+            assert!(!wants_uvs1(&PackedMaterial::pack(&unused)));
+        }
     }
 }

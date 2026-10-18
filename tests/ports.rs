@@ -1,11 +1,13 @@
 use std::path::Path;
 
-const PORTS: [(&str, &str); 24] = [
+const PORTS: [(&str, &str); 26] = [
     ("crates/load/src/uri.rs", "cgltf"),
     ("crates/load/src/obj.rs", "tobj"),
     ("crates/load/src/obj.rs", "tinyobjloader"),
     ("crates/build/src/poisson.rs", "fast_poisson"),
     ("crates/build/src/poisson.rs", "rand_distr"),
+    ("crates/materials/src/flakes.rs", "Cycles"),
+    ("crates/materials/src/brdf.rs", "pbrt-v4"),
     ("crates/motion/src/route.rs", "Godot Engine"),
     ("crates/mesh/src/simplify.rs", "meshoptimizer"),
     ("crates/mesh/src/tangents.rs", "MikkTSpace"),

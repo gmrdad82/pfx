@@ -1,5 +1,5 @@
-use super::footage::Picture;
-use super::{Atlas, Fit, Shown};
+use super::footage::{EPSILON, Picture, Source};
+use super::{Atlas, DropShadow, Fit, Playing, Shown};
 use crate::camera::layout_in;
 use crate::overlay::Overlay;
 use crate::sheet::{Letter, Sheet};
@@ -8,7 +8,7 @@ use pfx_gpu::window::Rect;
 use pfx_gpu::{Gpu, OffscreenTarget, wgpu};
 use pfx_live::flat::look::{LookFrame, TokenSet};
 use pfx_live::flat::{
-    Draw, FlatIcons, FlatScene, FlatSprites, FlatText, Glyphs, Group, Icon, IconShape, Icons,
+    Draw, FlatIcons, FlatScene, FlatSprites, FlatText, Glow, Glyphs, Group, Icon, IconShape, Icons,
     Light, Shadow, ShadowCurve, Shape, SpriteFilter, SpriteImage, Srgba, multiply, scaling,
     translation,
 };
@@ -17,6 +17,7 @@ use pfx_live::text::{GlyphPages, RichQuad, page_quads};
 use pfx_live::upscale::{self, Upscale};
 use pfx_text::{Anchor, Face, Placement, Representation, Span, TextEngine};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -28,6 +29,10 @@ const TICK_REACH: f32 = 0.2;
 const TICK_LOW: f32 = 2.0;
 const TICK_PER_OCTAVE: f32 = 4.0;
 const TICK_STEPS: u32 = 36;
+const CLIP: u32 = 0x4000_0000;
+const PAGE: u32 = 0x2000_0000;
+const SHARP: f32 = 0.5;
+const SILENT: usize = usize::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Backdrop {
@@ -48,7 +53,14 @@ pub struct Font {
     pub family: String,
 }
 
+struct Reader {
+    source: Box<dyn Source>,
+    last: f64,
+    sprite: Option<(u64, FlatSprites)>,
+}
+
 pub struct Painter {
+    readers: HashMap<(PathBuf, u64), Reader>,
     gpu: Gpu,
     renderer: Renderer,
     target: OffscreenTarget,
@@ -57,7 +69,7 @@ pub struct Painter {
     font: Option<Font>,
     pages: GlyphPages,
     sprite: Option<((u64, u64), [u32; 2], FlatSprites)>,
-    images: Option<FlatSprites>,
+    images: Vec<FlatSprites>,
     tokens: TokenSet,
     curve: ShadowCurve,
     size: [u32; 2],
@@ -84,6 +96,7 @@ struct Page<'a> {
     placed: HashMap<(String, u32, u16), Placed>,
     widths: HashMap<(String, u32, u16), f32>,
     failed: Option<String>,
+    clips: Vec<Playing>,
 }
 
 fn span(font: &Font, text: &str, size: f32, weight: u16) -> Span {
@@ -204,9 +217,99 @@ impl Sheet for Page<'_> {
     }
 
     fn art(&mut self, art: &Shown) {
-        self.draws
-            .push(Draw::sprite(art.centre, art.size, art.uv).shadow(Shadow::None));
+        let id = match &art.clip {
+            Some(playing) => {
+                self.clips.push(playing.clone());
+                CLIP | (self.clips.len() as u32 - 1)
+            }
+            None if art.page > 0 => PAGE | art.page as u32,
+            None => 0,
+        };
+        let half = [art.size[0] * 0.5, art.size[1] * 0.5];
+        let radius = art.radius.min(half[0]).min(half[1]).max(0.0);
+        if let Some(d) = art.shadow {
+            self.draws.push(shadow(art, d, radius).id(id));
+        }
+        let mut draw = Draw::sprite(art.centre, art.size, art.uv)
+            .shadow(Shadow::None)
+            .id(id);
+        draw.shape = Shape::rounded(half, radius);
+        self.draws.push(draw);
     }
+}
+
+fn shadow(art: &Shown, d: DropShadow, radius: f32) -> Draw {
+    let centre = [art.centre[0] + d.offset[0], art.centre[1] + d.offset[1]];
+    let colour = Srgba([0.0, 0.0, 0.0, d.alpha]);
+    let draw = Draw::rect(centre, art.size, radius);
+    if d.blur < SHARP {
+        return draw.fill(colour).shadow(Shadow::None);
+    }
+    draw.fill(Srgba([0.0; 4])).shadow(Shadow::Glow(Glow {
+        colour,
+        sigma: d.blur,
+    }))
+}
+
+fn layer<'a>(
+    frame: &FilmFrame<'_, Shown>,
+    size: [f32; 2],
+    draws: &'a [Draw],
+    sprites: Option<&'a FlatSprites>,
+    curve: &'a ShadowCurve,
+    seed: u32,
+) -> FlatScene<'a> {
+    FlatScene {
+        layout: size,
+        clear: None,
+        curve,
+        light: Light::default(),
+        draws,
+        groups: &[],
+        text: &[],
+        icons: None,
+        sprites,
+        environment: None,
+        post: false,
+        frame: frame.index as u32,
+        seed,
+    }
+}
+
+fn pass(
+    gpu: &Gpu,
+    upscale: &mut Upscale,
+    target: &OffscreenTarget,
+    out: [u32; 2],
+    scene: FlatScene<'_>,
+) -> Result<(), String> {
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("pfx film layer"),
+        });
+    upscale.set_view(None);
+    upscale.encode_overlay(
+        &gpu.device,
+        &gpu.queue,
+        &mut encoder,
+        &upscale::Overlay {
+            scene: &scene,
+            look: None,
+            output: &target.view,
+            output_format: FORMAT,
+            output_size: out,
+            content: Rect {
+                x: 0.0,
+                y: 0.0,
+                width: out[0] as f32,
+                height: out[1] as f32,
+            },
+        },
+        None,
+    )?;
+    gpu.queue.submit([encoder.finish()]);
+    Ok(())
 }
 
 fn tick_height(step: u32) -> f32 {
@@ -316,12 +419,17 @@ impl Painter {
         let upscale = Upscale::new(&gpu.device);
         let icons = FlatIcons::new(&gpu.device, &gpu.queue, icons);
         let images = atlas
-            .map(|a| -> Result<FlatSprites, String> {
-                let image = SpriteImage::new(a.size[0], a.size[1], a.rgba, SpriteFilter::Linear)?;
+            .map(|a| a.pages)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|page| -> Result<FlatSprites, String> {
+                let image =
+                    SpriteImage::new(page.size[0], page.size[1], page.rgba, SpriteFilter::Linear)?;
                 Ok(FlatSprites::new(&gpu.device, &gpu.queue, image))
             })
-            .transpose()?;
+            .collect::<Result<Vec<_>, String>>()?;
         Ok(Painter {
+            readers: HashMap::new(),
             gpu,
             renderer,
             target,
@@ -427,6 +535,7 @@ impl Painter {
             placed: HashMap::new(),
             widths: HashMap::new(),
             failed: None,
+            clips: Vec::new(),
         };
         overlay.paint(&mut page, &frame.cut.pieces, &frame.cut.grade, true);
         let Page {
@@ -434,11 +543,16 @@ impl Painter {
             groups,
             runs,
             failed,
+            clips,
             ..
         } = page;
         if let Some(e) = failed {
             return Err(e);
         }
+        let (apart, draws): (Vec<Draw>, Vec<Draw>) =
+            draws.into_iter().partition(|d| d.id & (CLIP | PAGE) != 0);
+        self.pages(frame, size, &apart)?;
+        self.clips(frame, size, &clips, &apart)?;
         if let Some(font) = &mut self.font {
             font.engine.end_frame();
             let changes = font.engine.take_atlas_changes();
@@ -467,7 +581,7 @@ impl Painter {
             groups: &groups,
             text: &texts,
             icons: Some(&self.icons),
-            sprites: self.images.as_ref(),
+            sprites: self.images.first(),
             environment: None,
             post: false,
             frame: frame.index as u32,
@@ -502,6 +616,105 @@ impl Painter {
             None,
         )?;
         self.gpu.queue.submit([encoder.finish()]);
+        Ok(())
+    }
+
+    fn read(&mut self, playing: &Playing) -> Result<Option<&FlatSprites>, String> {
+        let key = (playing.path.clone(), playing.from.to_bits());
+        let stale = self
+            .readers
+            .get(&key)
+            .is_some_and(|r| playing.at + EPSILON < r.last);
+        if stale || !self.readers.contains_key(&key) {
+            let source = super::clip(&playing.path, playing.from, SILENT)?;
+            self.readers.insert(
+                key.clone(),
+                Reader {
+                    source,
+                    last: playing.at,
+                    sprite: None,
+                },
+            );
+        }
+        let Some(reader) = self.readers.get_mut(&key) else {
+            return Ok(None);
+        };
+        reader.last = playing.at;
+        let Some(picture) = reader.source.picture(playing.at)? else {
+            return Ok(None);
+        };
+        if reader
+            .sprite
+            .as_ref()
+            .is_none_or(|(stamp, _)| *stamp != picture.stamp)
+        {
+            let image = SpriteImage::new(
+                picture.size[0],
+                picture.size[1],
+                picture.rgba.clone(),
+                SpriteFilter::Linear,
+            )?;
+            let sprites = FlatSprites::new(&self.gpu.device, &self.gpu.queue, image);
+            reader.sprite = Some((picture.stamp, sprites));
+        }
+        Ok(reader.sprite.as_ref().map(|(_, s)| s))
+    }
+
+    fn clips(
+        &mut self,
+        frame: &FilmFrame<'_, Shown>,
+        size: [f32; 2],
+        clips: &[Playing],
+        played: &[Draw],
+    ) -> Result<(), String> {
+        let keep: Vec<(PathBuf, u64)> = clips
+            .iter()
+            .map(|p| (p.path.clone(), p.from.to_bits()))
+            .collect();
+        self.readers.retain(|key, _| keep.contains(key));
+        for (i, playing) in clips.iter().enumerate() {
+            let id = CLIP | i as u32;
+            let draws: Vec<Draw> = played.iter().filter(|d| d.id == id).copied().collect();
+            if self.read(playing)?.is_none() {
+                continue;
+            }
+            let key = (playing.path.clone(), playing.from.to_bits());
+            let sprites = self
+                .readers
+                .get(&key)
+                .and_then(|r| r.sprite.as_ref())
+                .map(|(_, s)| s);
+            pass(
+                &self.gpu,
+                &mut self.upscale,
+                &self.target,
+                self.size,
+                layer(frame, size, &draws, sprites, &self.curve, self.seed),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn pages(
+        &mut self,
+        frame: &FilmFrame<'_, Shown>,
+        size: [f32; 2],
+        apart: &[Draw],
+    ) -> Result<(), String> {
+        for (p, sprites) in self.images.iter().enumerate().skip(1) {
+            let id = PAGE | p as u32;
+            let draws: Vec<Draw> = apart.iter().filter(|d| d.id == id).copied().collect();
+            if draws.is_empty() {
+                continue;
+            }
+            pass(
+                &self.gpu,
+                &mut self.upscale,
+                &self.target,
+                self.size,
+                layer(frame, size, &draws, Some(sprites), &self.curve, self.seed),
+            )?;
+        }
         Ok(())
     }
 

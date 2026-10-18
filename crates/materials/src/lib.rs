@@ -5,6 +5,7 @@ mod content;
 mod detail;
 mod film;
 pub mod fixtures;
+mod flakes;
 mod kinds;
 mod library;
 mod lobes;
@@ -23,7 +24,7 @@ pub use brdf::{
     GLASS_DISPERSION_BLUE, GLASS_DISPERSION_RED, GLASS_IOR, PI, RGB_WAVELENGTHS_NM, Shaded,
     WATER_IOR, alpha, beer, dielectric_f0, dispersed_ior, eval, film_rgb, fresnel_conductor,
     fresnel_dielectric, ggx_d, ior_from_f0, lambert, liquid_dye, metal_film, refract, sample_vndf,
-    schlick, smith_correlated, smith_g, smith_g1,
+    schlick, smith_correlated, smith_g, smith_g1, thin_dielectric,
 };
 pub use colour::{encode_channel, linear_channel, srgb_hex};
 pub use content::{Blend, ContentLayer, ContentLook, content_uv, emboss};
@@ -32,6 +33,10 @@ pub use film::{
     FILM_EDGE, FILM_NU, FILM_SAMPLES, FILM_STEP, FILM_WEIGHTS, conductor_ior, film_conductor,
     film_dielectric, film_wavelengths,
 };
+pub use flakes::{
+    Cell, FLAKE_RANDOMNESS, Flakes, flake_frame, flake_normal, hash_int3_to_float3, hash_pcg3d_i,
+    voronoi_f1,
+};
 pub use kinds::{CoatWobble, Crack, Crinkle, Fibre, Grime, PlankWood, Scratch, Track, WallMottle};
 pub use library::{FIXTURE, Library};
 pub use lobes::{
@@ -39,9 +44,9 @@ pub use lobes::{
     UvTransform, d_charlie, sheen_albedo, sheen_albedo_exact, sheen_alpha, v_neubelt,
 };
 pub use material::{
-    Ageing, At, Content, Family, GPU_PARAMS, LAYER_CAP, LOBE_ROWS, Maps, Material, NoiseKind,
-    NoiseLayer, Normal, NormalSource, PARAM_ROWS, PARAMS, PackedMaterial, SCRATCH_STRETCH,
-    gpu_params,
+    ALPHA_CUTOFF, Ageing, AlphaMode, At, Content, Family, GPU_PARAMS, LAYER_CAP, LOBE_ROWS, Maps,
+    Material, NoiseKind, NoiseLayer, Normal, NormalSource, PARAM_ROWS, PARAMS, PackedMaterial,
+    SCRATCH_STRETCH, gpu_params,
 };
 pub use noise::{
     Hash, fbm3, fbm3_filtered, flow, hash2, hash3, hash21, noise2, octave_weight, pcg,

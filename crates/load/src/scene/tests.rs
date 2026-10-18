@@ -1625,3 +1625,28 @@ fn an_empty_scene_has_nothing_and_matches_its_default() {
     assert!(empty.files.is_empty() && empty.warnings.is_empty());
     assert_eq!(empty.path, std::path::PathBuf::new());
 }
+
+#[test]
+fn a_scene_library_carries_thin_walls_alpha_and_flakes_to_the_engine_material() {
+    let folder = Folder::new("shade-keys");
+    folder.write(
+        "shade.materials.toml",
+        "format = 1\n\n[materials.lens]\ntransmission = 1.0\nthin_walled = true\n\n[materials.decal]\nalpha_mode = \"mask\"\nalpha_cutoff = 0.3\nalpha = 0.9\n\n[materials.paint]\nclearcoat = 1.0\nflakes = { amount = 0.4, size = 0.001, color = [0.9, 0.8, 0.7] }\n",
+    );
+    let path = folder.write(
+        "shade.scene.toml",
+        "format = 1\nmaterials = [\"shade.materials.toml\"]\n",
+    );
+    let scene = Scene::open(&path).unwrap();
+    assert!(scene.library.get("lens").unwrap().thin_walled);
+    let decal = scene.library.get("decal").unwrap();
+    assert_eq!(decal.alpha_mode, pfx_materials::AlphaMode::Mask);
+    assert!(close(decal.alpha_cutoff, 0.3) && close(decal.alpha, 0.9));
+    let flakes = scene.library.get("paint").unwrap().flakes;
+    assert!(close(flakes.amount, 0.4) && close(flakes.size, 0.001));
+    assert_eq!(flakes.color, [0.9, 0.8, 0.7]);
+    assert!(close(
+        flakes.spread,
+        pfx_materials::Flakes::default().spread
+    ));
+}

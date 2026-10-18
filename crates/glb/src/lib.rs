@@ -177,8 +177,15 @@ pub struct Anisotropy {
     pub rotation: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Coverage {
+    Mask(f32),
+    Blend,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Look {
+    pub coverage: Option<Coverage>,
     pub base_color: Option<[f32; 4]>,
     pub metallic: Option<f32>,
     pub roughness: Option<f32>,
@@ -209,7 +216,10 @@ impl Look {
     }
 
     pub fn carried(&self) -> bool {
-        self.has_maps() || self.sheen.is_some() || self.anisotropy.is_some()
+        self.has_maps()
+            || self.sheen.is_some()
+            || self.anisotropy.is_some()
+            || self.coverage.is_some()
     }
 }
 

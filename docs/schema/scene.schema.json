@@ -3479,6 +3479,10 @@
       },
       "type": "array"
     },
+    "music": {
+      "additionalProperties": true,
+      "type": "object"
+    },
     "object": {
       "items": {
         "$ref": "#/$defs/Object"

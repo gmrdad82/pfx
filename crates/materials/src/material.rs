@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::content::ContentLayer;
+use crate::flakes::Flakes;
 use crate::lobes::{Anisotropy, Fabric, Scatter, Textures, UvTransform};
 use crate::wet::Wet;
 
@@ -116,6 +117,39 @@ impl Content {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlphaMode {
+    #[default]
+    Opaque,
+    Mask,
+    Blend,
+}
+
+impl AlphaMode {
+    pub fn id(self) -> u32 {
+        match self {
+            Self::Opaque => 0,
+            Self::Mask => 1,
+            Self::Blend => 2,
+        }
+    }
+
+    fn from_id(id: u32) -> Self {
+        match id {
+            1 => Self::Mask,
+            2 => Self::Blend,
+            _ => Self::Opaque,
+        }
+    }
+
+    pub fn opaque(&self) -> bool {
+        *self == Self::Opaque
+    }
+}
+
+pub const ALPHA_CUTOFF: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -236,6 +270,14 @@ pub fn gpu_params(layer: &NoiseLayer) -> [f32; GPU_PARAMS] {
         _ => {}
     }
     out
+}
+
+fn unit(value: &f32) -> bool {
+    *value == 1.0
+}
+
+fn half(value: &f32) -> bool {
+    *value == ALPHA_CUTOFF
 }
 
 fn unset(params: &[f32; PARAMS]) -> bool {
@@ -399,6 +441,10 @@ pub struct Material {
     pub thin_film_amount: f32,
     pub emission: [f32; 3],
     pub fresnel_power: f32,
+    pub thin_walled: bool,
+    pub alpha: f32,
+    pub alpha_mode: AlphaMode,
+    pub alpha_cutoff: f32,
     pub normal: Normal,
     pub maps: Maps,
     pub content: Content,
@@ -409,6 +455,7 @@ pub struct Material {
     pub fabric: Fabric,
     pub anisotropy: Anisotropy,
     pub scatter: Scatter,
+    pub flakes: Flakes,
     #[serde(skip)]
     pub textures: Textures,
 }
@@ -436,6 +483,10 @@ impl Default for Material {
             thin_film_amount: 0.0,
             emission: [0.0; 3],
             fresnel_power: 5.0,
+            thin_walled: false,
+            alpha: 1.0,
+            alpha_mode: AlphaMode::Opaque,
+            alpha_cutoff: ALPHA_CUTOFF,
             normal: Normal::default(),
             maps: Maps::default(),
             content: Content::None,
@@ -446,6 +497,7 @@ impl Default for Material {
             fabric: Fabric::default(),
             anisotropy: Anisotropy::default(),
             scatter: Scatter::default(),
+            flakes: Flakes::default(),
             textures: Textures::default(),
         }
     }
@@ -496,6 +548,14 @@ pub(crate) struct Recipe {
     thin_film_amount: f32,
     emission: [f32; 3],
     fresnel_power: f32,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    thin_walled: bool,
+    #[serde(skip_serializing_if = "unit")]
+    alpha: f32,
+    #[serde(skip_serializing_if = "AlphaMode::opaque")]
+    alpha_mode: AlphaMode,
+    #[serde(skip_serializing_if = "half")]
+    alpha_cutoff: f32,
     normal: Normal,
     maps: Maps,
     content: Content,
@@ -510,6 +570,8 @@ pub(crate) struct Recipe {
     anisotropy: Anisotropy,
     #[serde(skip_serializing_if = "Scatter::off")]
     scatter: Scatter,
+    #[serde(skip_serializing_if = "Flakes::off")]
+    flakes: Flakes,
 }
 
 impl Default for Recipe {
@@ -541,6 +603,10 @@ impl From<Material> for Recipe {
             thin_film_amount: m.thin_film_amount,
             emission: m.emission,
             fresnel_power: m.fresnel_power,
+            thin_walled: m.thin_walled,
+            alpha: m.alpha,
+            alpha_mode: m.alpha_mode,
+            alpha_cutoff: m.alpha_cutoff,
             normal: m.normal,
             maps: m.maps,
             content: m.content,
@@ -555,6 +621,7 @@ impl From<Material> for Recipe {
             fabric: m.fabric,
             anisotropy: m.anisotropy,
             scatter: m.scatter,
+            flakes: m.flakes,
         }
     }
 }
@@ -592,6 +659,10 @@ impl Recipe {
             thin_film_amount: self.thin_film_amount,
             emission: self.emission,
             fresnel_power: self.fresnel_power,
+            thin_walled: self.thin_walled,
+            alpha: self.alpha,
+            alpha_mode: self.alpha_mode,
+            alpha_cutoff: self.alpha_cutoff,
             normal: self.normal,
             maps: self.maps,
             content: self.content,
@@ -602,6 +673,7 @@ impl Recipe {
             fabric: self.fabric,
             anisotropy: self.anisotropy,
             scatter: self.scatter,
+            flakes: self.flakes,
             textures: Textures::default(),
         })
     }
@@ -643,10 +715,16 @@ pub struct PackedMaterial {
     pub texture_extra: [f32; 4],
     pub texture_transform: [f32; 4],
     pub detail_transform: [f32; 4],
+    pub normal_transform: [f32; 4],
+    pub orm_transform: [f32; 4],
+    pub map_turns: [f32; 4],
+    pub coverage: [f32; 4],
+    pub flakes: [f32; 4],
+    pub flake_color: [f32; 4],
 }
 
 pub const PARAM_ROWS: usize = LAYER_CAP * GPU_PARAMS / 4;
-pub const LOBE_ROWS: usize = 8;
+pub const LOBE_ROWS: usize = 14;
 
 impl PackedMaterial {
     pub const SIZE: usize = 256 + PARAM_ROWS * 16 + LOBE_ROWS * 16;
@@ -708,7 +786,12 @@ impl PackedMaterial {
             layer1: layer(1),
             layer2: layer(2),
             layer3: layer(3),
-            tail: [f32::from_bits(m.ageing.seed), 0.0, 0.0, 0.0],
+            tail: [
+                f32::from_bits(m.ageing.seed),
+                f32::from(u8::from(m.thin_walled)),
+                0.0,
+                0.0,
+            ],
             params: std::array::from_fn(|row| {
                 let params = gpu_params(&m.layers[row / (GPU_PARAMS / 4)]);
                 let at = row % (GPU_PARAMS / 4) * 4;
@@ -763,6 +846,22 @@ impl PackedMaterial {
                 m.textures.detail_uv.scale[0],
                 m.textures.detail_uv.scale[1],
             ],
+            normal_transform: placed(m.textures.normal_transform()),
+            orm_transform: placed(m.textures.orm_transform()),
+            map_turns: [
+                m.textures.normal_transform().rotation,
+                m.textures.orm_transform().rotation,
+                (m.textures.normal_transform().set + 2 * m.textures.orm_transform().set) as f32,
+                0.0,
+            ],
+            coverage: [m.alpha, m.alpha_cutoff, pack_id(m.alpha_mode.id()), 0.0],
+            flakes: [
+                m.flakes.amount,
+                m.flakes.size,
+                m.flakes.spread,
+                m.flakes.roughness,
+            ],
+            flake_color: [m.flakes.color[0], m.flakes.color[1], m.flakes.color[2], 0.0],
         }
     }
 
@@ -779,7 +878,7 @@ impl PackedMaterial {
                 params,
             }
         };
-        Material {
+        let mut material = Material {
             family: Family::from_id(unpack_id(self.maps_content[3])),
             base: [
                 self.base_roughness[0],
@@ -812,6 +911,10 @@ impl PackedMaterial {
             ],
             thin_film_amount: self.emission_film[3],
             fresnel_power: self.age_b[3],
+            thin_walled: self.tail[1] != 0.0,
+            alpha: self.coverage[0],
+            alpha_mode: AlphaMode::from_id(unpack_id(self.coverage[2])),
+            alpha_cutoff: self.coverage[1],
             normal: Normal {
                 source: NormalSource::from_id(unpack_id(self.normal_maps[0])),
                 strength: self.normal_maps[1],
@@ -859,6 +962,17 @@ impl PackedMaterial {
                 radius: self.lobes[3],
                 amount: self.lobes[2],
             },
+            flakes: Flakes {
+                amount: self.flakes[0],
+                size: self.flakes[1],
+                spread: self.flakes[2],
+                color: [
+                    self.flake_color[0],
+                    self.flake_color[1],
+                    self.flake_color[2],
+                ],
+                roughness: self.flakes[3],
+            },
             textures: Textures {
                 base: self.textures[0] as i32,
                 normal: self.textures[1] as i32,
@@ -880,7 +994,32 @@ impl PackedMaterial {
                     rotation: self.texture_extra[3],
                     scale: [self.detail_transform[2], self.detail_transform[3]],
                 },
+                normal_uv: None,
+                orm_uv: None,
             },
-        }
+        };
+        let main = material.textures.main;
+        let own = |row: [f32; 4], rotation: f32, set: u32| {
+            let found = UvTransform {
+                set,
+                offset: [row[0], row[1]],
+                rotation,
+                scale: [row[2], row[3]],
+            };
+            (found != main).then_some(found)
+        };
+        let sets = self.map_turns[2] as u32;
+        material.textures.normal_uv = own(self.normal_transform, self.map_turns[0], sets % 2);
+        material.textures.orm_uv = own(self.orm_transform, self.map_turns[1], sets / 2);
+        material
     }
+}
+
+fn placed(transform: UvTransform) -> [f32; 4] {
+    [
+        transform.offset[0],
+        transform.offset[1],
+        transform.scale[0],
+        transform.scale[1],
+    ]
 }

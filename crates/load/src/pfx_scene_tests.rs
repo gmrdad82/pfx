@@ -113,3 +113,105 @@ fn an_edit_in_place_rewrites_the_pfx_and_the_watch_reloads_it() {
     assert!(reload.diff.meshes.is_empty());
     assert_eq!(Scene::open(&file).unwrap().objects[0].at, [1.0, 0.0, 0.0]);
 }
+
+const PACKED: &[u8] = include_bytes!("../tests/data/room.pitofx");
+
+const ROOM_EXTRA: &str = "\n[mesh.tri]\nfile = \"meshes/triangle.gltf\"\n\n[[object]]\nname = \"tri\"\nmesh = \"tri\"\nat = [0.0, 0.5, 1.0]\n\n[text.sign]\ntext = \"Open\"\nfont = \"fonts/family.ttf\"\nsize = 0.2\nat = [0.0, 2.0, -1.9]\n";
+
+fn packed_room(folder: &Folder) -> PathBuf {
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    std::fs::create_dir_all(folder.root.join("fonts")).unwrap();
+    for name in [
+        "lights.scene.toml",
+        "materials.toml",
+        "block.gltf",
+        "pillar.gltf",
+        "panel.gltf",
+        "screen.png",
+    ] {
+        std::fs::copy(
+            manifest.join("tests/scenes").join(name),
+            folder.root.join(name),
+        )
+        .unwrap();
+    }
+    for (from, to) in [
+        ("triangle.gltf", "meshes/triangle.gltf"),
+        ("triangle.bin", "meshes/triangle.bin"),
+        ("family.ttf", "fonts/family.ttf"),
+    ] {
+        std::fs::copy(manifest.join("tests/data").join(from), folder.root.join(to)).unwrap();
+    }
+    let mut text = std::fs::read_to_string(manifest.join("tests/scenes/room.scene.toml")).unwrap();
+    text.push_str(ROOM_EXTRA);
+    let path = folder.root.join("room.scene.toml");
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+#[test]
+#[ignore = "rewrites crates/load/tests/data/room.pitofx"]
+fn writes_the_packed_room_fixture() {
+    let source = folder("packed-room-write");
+    let toml = packed_room(&source);
+    let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/room.pitofx");
+    pack(&toml, &out).unwrap();
+}
+
+#[test]
+fn an_embedded_pitofx_loads_its_meshes_images_and_fonts_from_its_own_bytes() {
+    let source = folder("packed-room-source");
+    let expected = Scene::open(packed_room(&source)).unwrap();
+    let scene = crate::scene::from_pfx_bytes("room.pitofx", PACKED).unwrap();
+    assert_eq!(scene.path, Path::new("room.pitofx"));
+    assert_eq!(
+        scene.files.keys().collect::<Vec<_>>(),
+        [Path::new("room.pitofx")]
+    );
+    assert_eq!(scene.files[Path::new("room.pitofx")], crate::sha256(PACKED));
+    assert_eq!(
+        scene.meshes.keys().collect::<Vec<_>>(),
+        expected.meshes.keys().collect::<Vec<_>>()
+    );
+    for (name, mesh) in &expected.meshes {
+        assert_eq!(scene.meshes[name].parts, mesh.parts, "{name}");
+    }
+    assert_eq!(scene.objects, expected.objects);
+    assert_eq!(scene.library, expected.library);
+    assert_eq!(scene.lights, expected.lights);
+    assert_eq!(
+        scene.contents["screen"].rgba,
+        expected.contents["screen"].rgba
+    );
+    assert_eq!(
+        scene.texts["sign"].font_bytes,
+        expected.texts["sign"].font_bytes
+    );
+    assert_eq!(scene.texts["sign"].family, expected.texts["sign"].family);
+}
+
+#[test]
+fn an_embedded_scene_never_reads_a_file_it_does_not_hold() {
+    let scene = "format = 1\n\n[mesh.tri]\nfile = \"tests/data/triangle.glb\"\n\n[[object]]\nname = \"tri\"\nmesh = \"tri\"\n";
+    assert!(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/data/triangle.glb")
+            .is_file()
+    );
+    let bytes = pfx_file::Writer::new()
+        .chunk(
+            pfx_file::SMET,
+            &b"format = 1\nentry = \"main.scene.toml\"\n"[..],
+            pfx_file::Codec::Store,
+        )
+        .named(
+            pfx_file::SCNE,
+            "main.scene.toml",
+            scene.as_bytes(),
+            pfx_file::Codec::Auto,
+        )
+        .to_vec()
+        .unwrap();
+    let refused = String::from(Scene::from_pfx_bytes("main.pitofx", &bytes).unwrap_err());
+    assert!(refused.contains("triangle.glb"), "{refused}");
+}

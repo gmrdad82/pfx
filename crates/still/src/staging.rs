@@ -124,7 +124,13 @@ impl Staging {
                 radius: light.radius,
                 range: light.range,
                 shadow: light.shadow,
-                shape: LightShape::Point,
+                shape: light
+                    .spot
+                    .map_or(LightShape::Point, |spot| LightShape::Spot {
+                        direction: spot.direction,
+                        inner_deg: spot.inner,
+                        outer_deg: spot.outer,
+                    }),
             })
             .collect();
         let count = pieces.len();
@@ -464,6 +470,47 @@ mod tests {
         let eye = eyepiece(&recipe.cameras[0], View::Lens, [8, 8]).unwrap();
         let detail = traced.stage(eye).unwrap().detail;
         assert_eq!((detail.clamp_indirect, detail.filter_glossy), (4.0, 0.25));
+    }
+
+    #[test]
+    fn a_street_of_128_authored_and_generated_lights_reaches_the_tracer_whole() {
+        let mut text = String::from(
+            "recipe = 1\nname = \"street\"\n\n[[route]]\nname = \"main\"\npoints = [[0.0, 0.0, 0.0], [0.0, 0.0, 800.0]]\n\n[[object]]\nname = \"furniture\"\nkind = \"generator\"\ngenerator = \"pfx/furniture\"\nparams = { route = \"main\", spacing = [8.0, 8.0], max_lights = 96, extras = false, seed = 3 }\n\n[[camera]]\nname = \"main\"\nposition = [0.0, 20.0, -10.0]\ntarget = [0.0, 0.0, 40.0]\nfov_y_deg = 60.0\n",
+        );
+        for k in 0..32 {
+            let kind = if k % 2 == 0 {
+                "kind = \"spot\"\ndirection = [0.0, -1.0, 0.0]\ncone = [20.0, 40.0]\n"
+            } else {
+                ""
+            };
+            text.push_str(&format!(
+                "\n[[light]]\nname = \"window{k}\"\n{kind}position = [9.0, 4.0, {}.0]\nintensity = 3.0\nrange = 10.0\n",
+                k * 5
+            ));
+        }
+        let recipe = parse(&text).unwrap();
+        assert!(pfx_recipe::validate(&recipe).is_empty());
+        let built = pfx_build::build(&recipe, Path::new("")).unwrap();
+        assert_eq!(built.lights.len(), 96);
+        let drawn = built.recipe(&recipe);
+        assert_eq!(drawn.lights.len(), 128);
+        let staging = Staging::of(&drawn, &built.parts).unwrap();
+        assert_eq!(staging.lights.len(), 128);
+        let spots = staging
+            .lights
+            .iter()
+            .filter(|light| matches!(light.shape, LightShape::Spot { .. }))
+            .count();
+        assert_eq!(spots, 16 + 96);
+        for (light, generated) in staging.lights[32..].iter().zip(&built.lights) {
+            assert_eq!(light.position, generated.position.map(|v| v as f32));
+            let LightShape::Spot { outer_deg, .. } = light.shape else {
+                panic!("a generated lamp is a spot");
+            };
+            assert_eq!(outer_deg, generated.cone[1] as f32);
+        }
+        let eye = eyepiece(&drawn.cameras[0], View::Lens, [8, 8]).unwrap();
+        assert_eq!(staging.stage(eye).unwrap().detail.lights, staging.lights);
     }
 
     #[test]

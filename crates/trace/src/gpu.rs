@@ -318,6 +318,9 @@ struct Features {
     lobes: bool,
     maps: bool,
     wet: bool,
+    thin: bool,
+    alpha: bool,
+    flakes: bool,
 }
 
 impl Features {
@@ -332,6 +335,9 @@ impl Features {
                 .iter()
                 .any(|m| m.textures.iter().any(|&slot| slot >= 0.0) || m.texture_extra[0] >= 0.0),
             wet: materials.iter().any(|m| m.wet[0] > 0.0 || m.wet[1] > 0.0),
+            thin: materials.iter().any(crate::record::thin_on),
+            alpha: materials.iter().any(crate::record::alpha_on),
+            flakes: materials.iter().any(crate::record::flakes_on),
         }
     }
 
@@ -340,6 +346,9 @@ impl Features {
             ("TRACE_LOBES", self.lobes),
             ("TRACE_MAPS", self.maps),
             ("TRACE_WET", self.wet),
+            ("TRACE_THIN", self.thin),
+            ("TRACE_ALPHA", self.alpha),
+            ("TRACE_FLAKES", self.flakes),
         ]
         .into_iter()
         .filter(|(_, on)| !on)
@@ -351,6 +360,7 @@ struct Placing {
     levels: crate::levels::Levels,
     candidates: Vec<Candidate>,
     lights: usize,
+    tree: usize,
 }
 
 fn pack_triangle(tri: &TriangleDetail, word: u32) -> GpuTriangle {
@@ -476,6 +486,11 @@ impl SceneBuffers {
             .any(|shape| !valid_shape(shape) || shape.material() as usize >= materials.len())
         {
             return Err("invalid trace geometry".into());
+        }
+        for (word, tri) in flags.iter_mut().zip(&detailed) {
+            if !materials[tri.material as usize].alpha_mode.opaque() {
+                *word |= CUTOUT;
+            }
         }
         for (index, shape) in shapes.iter().enumerate() {
             if let Shape::SmoothUnion { left, right, .. } = shape
@@ -708,8 +723,9 @@ impl SceneBuffers {
         if let Some(levels) = &laid.levels {
             rt.place(levels, &solid);
         }
-        let list = build_emitters(&candidates, detail.lights.len());
-        let lights: Vec<_> = detail.lights.iter().map(|light| light.pack()).collect();
+        let laid_lights = crate::tree::lay(&detail.lights);
+        let list = build_emitters(&candidates, laid_lights.looped, laid_lights.tree);
+        let lights = laid_lights.rows;
         Ok(Self {
             triangles: bytemuck::cast_slice(&triangles).to_vec(),
             nodes: bytemuck::cast_slice(&laid.nodes).to_vec(),
@@ -731,7 +747,8 @@ impl SceneBuffers {
             levels: laid.levels.map(|levels| Placing {
                 levels,
                 candidates,
-                lights: detail.lights.len(),
+                lights: laid_lights.looped,
+                tree: laid_lights.tree,
             }),
             bottom_builds: laid.bottom_builds,
             features,
@@ -1850,7 +1867,7 @@ impl Trace {
         gpu.queue
             .write_buffer(&self.node_buffer, 0, bytemuck::cast_slice(&levels.top()));
         if emitters_moved {
-            let list = build_emitters(&placing.candidates, placing.lights);
+            let list = build_emitters(&placing.candidates, placing.lights, placing.tree);
             gpu.queue
                 .write_buffer(&self.emitter_buffer, 0, bytemuck::cast_slice(&list.entries));
             gpu.queue
@@ -2619,7 +2636,17 @@ mod tests {
                 .collect()
         };
         let plain = Material::default();
-        assert_eq!(off(&[plain]), ["TRACE_LOBES", "TRACE_MAPS", "TRACE_WET"]);
+        assert_eq!(
+            off(&[plain]),
+            [
+                "TRACE_LOBES",
+                "TRACE_MAPS",
+                "TRACE_WET",
+                "TRACE_THIN",
+                "TRACE_ALPHA",
+                "TRACE_FLAKES"
+            ]
+        );
         let mut fabric = plain;
         fabric.fabric.color = [0.4, 0.2, 0.1];
         let mut brushed = plain;
@@ -2627,17 +2654,115 @@ mod tests {
         let mut skin = plain;
         skin.scatter.amount = 0.3;
         for lobed in [fabric, brushed, skin] {
-            assert_eq!(off(&[plain, lobed]), ["TRACE_MAPS", "TRACE_WET"]);
+            assert_eq!(
+                off(&[plain, lobed]),
+                [
+                    "TRACE_MAPS",
+                    "TRACE_WET",
+                    "TRACE_THIN",
+                    "TRACE_ALPHA",
+                    "TRACE_FLAKES"
+                ]
+            );
         }
         let mut wet = plain;
         wet.wet.amount = 0.5;
         let mut puddled = plain;
         puddled.wet.puddles = 0.5;
         for soaked in [wet, puddled] {
-            assert_eq!(off(&[soaked, plain]), ["TRACE_LOBES", "TRACE_MAPS"]);
+            assert_eq!(
+                off(&[soaked, plain]),
+                [
+                    "TRACE_LOBES",
+                    "TRACE_MAPS",
+                    "TRACE_THIN",
+                    "TRACE_ALPHA",
+                    "TRACE_FLAKES"
+                ]
+            );
+        }
+        let lens = Material {
+            transmission: 1.0,
+            thin_walled: true,
+            ..plain
+        };
+        let solid = Material {
+            thin_walled: false,
+            ..lens
+        };
+        let opaque = Material {
+            transmission: 0.0,
+            ..lens
+        };
+        assert_eq!(
+            off(&[lens]),
+            [
+                "TRACE_LOBES",
+                "TRACE_MAPS",
+                "TRACE_WET",
+                "TRACE_ALPHA",
+                "TRACE_FLAKES"
+            ]
+        );
+        for mode in [
+            pfx_materials::AlphaMode::Mask,
+            pfx_materials::AlphaMode::Blend,
+        ] {
+            let decal = Material {
+                alpha_mode: mode,
+                ..plain
+            };
+            assert_eq!(
+                off(&[plain, decal]),
+                [
+                    "TRACE_LOBES",
+                    "TRACE_MAPS",
+                    "TRACE_WET",
+                    "TRACE_THIN",
+                    "TRACE_FLAKES"
+                ]
+            );
+        }
+        let paint = Material {
+            clearcoat: 1.0,
+            flakes: pfx_materials::Flakes {
+                amount: 0.3,
+                ..pfx_materials::Flakes::default()
+            },
+            ..plain
+        };
+        assert_eq!(
+            off(&[paint]),
+            [
+                "TRACE_LOBES",
+                "TRACE_MAPS",
+                "TRACE_WET",
+                "TRACE_THIN",
+                "TRACE_ALPHA"
+            ]
+        );
+        for unused in [solid, opaque] {
+            assert_eq!(
+                off(&[unused]),
+                [
+                    "TRACE_LOBES",
+                    "TRACE_MAPS",
+                    "TRACE_WET",
+                    "TRACE_THIN",
+                    "TRACE_ALPHA",
+                    "TRACE_FLAKES"
+                ]
+            );
         }
         let source = include_str!("trace.wgsl");
-        for name in ["TRACE_LOBES", "TRACE_MAPS", "TRACE_WET"] {
+        for name in [
+            "TRACE_LOBES",
+            "TRACE_MAPS",
+            "TRACE_WET",
+            "TRACE_THIN",
+            "TRACE_ALPHA",
+            "TRACE_FLAKES",
+        ] {
             assert!(source.contains(&format!("override {name}: bool = true;")));
         }
     }
@@ -3215,6 +3340,133 @@ mod tests {
         }
         let again = render(&gpu, &scene, &detail, size, 64, 101, true);
         assert_eq!(again, images[0][0]);
+    }
+
+    fn lamp_street(count: usize) -> (Scene, Vec<crate::lights::LocalLight>) {
+        use crate::lights::{LightShape, LocalLight};
+        let floor = Material {
+            base: [0.5, 0.48, 0.45],
+            roughness: 0.7,
+            ..Material::default()
+        };
+        let shapes = (0..8)
+            .map(|k| Shape::Ellipsoid {
+                center: [
+                    if k % 2 == 0 { -2.0 } else { 2.5 },
+                    0.6,
+                    4.0 + k as f32 * 7.5,
+                ],
+                radii: [0.6; 3],
+                material: 0,
+            })
+            .collect();
+        let lights = (0..count)
+            .map(|k| {
+                let side = if k % 2 == 0 { -5.0 } else { 5.0 };
+                let z = (k / 2) as f32 * 64.0 / (count / 2).max(1) as f32;
+                let warm = 0.6 + 0.4 * ((k * 7) % 5) as f32 / 4.0;
+                let mut light = LocalLight {
+                    radius: 0.05,
+                    ..LocalLight::point([side, 3.0, z], [1.0, warm, warm * 0.8], 6.0, 9.0)
+                };
+                if k % 3 == 0 {
+                    light.shape = LightShape::Spot {
+                        direction: [-side * 0.1, -1.0, 0.0],
+                        inner_deg: 30.0,
+                        outer_deg: 55.0,
+                    };
+                }
+                light
+            })
+            .collect();
+        let scene = Scene {
+            triangles: quad(
+                [
+                    [-12.0, 0.0, -6.0],
+                    [12.0, 0.0, -6.0],
+                    [12.0, 0.0, 70.0],
+                    [-12.0, 0.0, 70.0],
+                ],
+                0,
+            )
+            .to_vec(),
+            shapes,
+            materials: vec![floor],
+            sky: dark_sky(),
+            camera: Camera {
+                origin: [0.0, 60.0, 32.0],
+                forward: [0.0, -1.0, 0.0],
+                right: [0.2, 0.0, 0.0],
+                up: [0.0, 0.0, -0.6],
+            },
+            sun: no_sun(),
+        };
+        (scene, lights)
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn many_lights_through_the_tree_match_the_sum_of_their_light_by_light_renders() {
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let (scene, lights) = lamp_street(128);
+        let size = (24, 72);
+        let pixels = (size.0 * size.1) as usize;
+        let mut summed = vec![[0.0_f64; 3]; pixels];
+        for (k, group) in lights.chunks(crate::tree::LOOPED).enumerate() {
+            let detail = Detail {
+                lights: group.to_vec(),
+                ..Detail::default()
+            };
+            let image = render(&gpu, &scene, &detail, size, 1024, 11 + k as u32, true);
+            for (sum, pixel) in summed.iter_mut().zip(&image) {
+                for c in 0..3 {
+                    sum[c] += f64::from(pixel[c]);
+                }
+            }
+        }
+        let detail = Detail {
+            lights,
+            ..Detail::default()
+        };
+        let runs: Vec<Vec<[f32; 4]>> = (0..4)
+            .map(|run| render(&gpu, &scene, &detail, size, 2048, 301 + run, true))
+            .collect();
+        let luma = |c: [f64; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+        let reference: Vec<f64> = summed.iter().map(|c| luma(*c)).collect();
+        let treed: Vec<f64> = (0..pixels)
+            .map(|at| {
+                runs.iter().map(|image| brightness(image[at])).sum::<f64>() / runs.len() as f64
+            })
+            .collect();
+        let means: Vec<f64> = runs
+            .iter()
+            .map(|image| image.iter().map(|p| brightness(*p)).sum::<f64>() / pixels as f64)
+            .collect();
+        let mean = means.iter().sum::<f64>() / means.len() as f64;
+        let sigma = (means.iter().map(|m| (m - mean).powi(2)).sum::<f64>()
+            / ((means.len() - 1) * means.len()) as f64)
+            .sqrt();
+        let reference_mean = reference.iter().sum::<f64>() / pixels as f64;
+        let peak = reference.iter().cloned().fold(0.0, f64::max);
+        let mut gaps: Vec<f64> = treed
+            .iter()
+            .zip(&reference)
+            .map(|(t, r)| (t - r).abs() / peak)
+            .collect();
+        gaps.sort_by(f64::total_cmp);
+        let p95 = gaps[gaps.len() * 95 / 100];
+        eprintln!(
+            "128 lights: tree mean {mean:.5} (sigma {sigma:.5}), light-by-light sum {reference_mean:.5}, \
+             ratio {:.4}; per-pixel gap of the peak {peak:.3}: median {:.4}, p95 {p95:.4}",
+            mean / reference_mean,
+            gaps[gaps.len() / 2]
+        );
+        assert!(reference_mean > 0.0);
+        assert!(
+            (mean / reference_mean - 1.0).abs() < 0.01,
+            "{mean} against {reference_mean}"
+        );
+        assert!(p95 < 0.03);
     }
 
     #[test]

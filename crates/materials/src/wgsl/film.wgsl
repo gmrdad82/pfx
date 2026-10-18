@@ -139,3 +139,13 @@ fn film_conductor(cosine: f32, thickness: f32, film_ior: f32, f0: vec3f) -> vec3
     let blue = film_metal_stack(first.xy, first.z, nf, f0.b);
     return film_sum(12.566370614 * nf * thickness * first.z, red, green, blue);
 }
+
+fn thin_dielectric(reflected: f32) -> vec2f {
+    var r = reflected;
+    var t = 1.0 - r;
+    if (r < 1.0) {
+        r += t * t * r / (1.0 - r * r);
+        t = 1.0 - r;
+    }
+    return vec2f(r, t);
+}

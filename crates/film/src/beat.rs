@@ -1,4 +1,4 @@
-use crate::script::{Kinds, MAX_SECONDS, Scene, frames};
+use crate::script::{Kinds, MAX_SECONDS, Scene, cuts};
 use serde::Deserialize;
 use toml::{Table, Value};
 
@@ -232,7 +232,7 @@ const PLACES: [&str; 2] = ["at", "until"];
 pub const LISTS: [(&str, &[&str]); 7] = [
     ("key", &[]),
     ("text", &["fade", "out"]),
-    ("art", &["fade", "out"]),
+    ("art", &["fade", "out", "from"]),
     ("sound", &["every", "seconds"]),
     ("flash", &["seconds"]),
     ("shake", &[]),
@@ -241,6 +241,9 @@ pub const LISTS: [(&str, &[&str]); 7] = [
 
 pub fn scene(table: &mut Table, grid: Option<&Grid>, start: f64) -> Result<f64, String> {
     convert(table, &SCENE, grid, start)?;
+    if let Some(Value::Table(t)) = table.get_mut("transition") {
+        convert(t, &["seconds"], grid, start).map_err(|e| format!("[scene.transition] {e}"))?;
+    }
     for (list, lengths) in LISTS {
         let Some(Value::Array(items)) = table.get_mut(list) else {
             continue;
@@ -261,6 +264,14 @@ pub fn shown(beats: f64) -> String {
     format!("{}b", (beats * 1e4).round() / 1e4)
 }
 
+fn unit(d: u32) -> String {
+    if d == 1 {
+        "beat".into()
+    } else {
+        format!("1/{d} beat")
+    }
+}
+
 fn grid_name(d: u32) -> String {
     if d == 1 {
         "beat grid".into()
@@ -270,38 +281,60 @@ fn grid_name(d: u32) -> String {
 }
 
 pub fn misses<K: Kinds>(grid: &Grid, scenes: &[Scene<K>], fps: u32) -> Vec<String> {
+    let mut starts = Vec::with_capacity(scenes.len() + 1);
+    let mut start = 0.0;
+    starts.push(start);
+    for s in scenes {
+        start += s.seconds;
+        starts.push(start);
+    }
+    let cuts = cuts(&starts, fps);
     let fps = f64::from(fps.max(1));
     let frame = 1.0 / fps + EARLY;
+    let half = 0.5 / fps + EARLY;
     let lead = |t: f64| t + EARLY < grid.offset;
-    let off = |t: f64, d: u32| {
+    let off = |t: f64, d: u32, most: f64| {
         let by = (t - grid.near(t, d)).abs();
-        (by > frame).then_some(by * fps)
+        (by > most).then_some(by * fps)
     };
     let mut out = Vec::new();
-    let mut cuts = 0u64;
-    let mut start = 0.0;
-    for s in scenes {
+    for (i, s) in scenes.iter().enumerate() {
         let at = |why: String| format!("scene '{}': {why}", s.name);
-        let cut = cuts as f64 / fps;
-        let length = frames(s.seconds, fps as u32);
-        let end = (cuts + length) as f64 / fps;
-        if !lead(cut) {
-            let (b0, b1) = (grid.beat(cut), grid.beat(end));
-            let whole = grid.seconds(b0 + (b1 - b0).round());
+        let start = starts[i];
+        let cut = cuts[i] as f64 / fps;
+        if !lead(start) {
+            let end = start + s.seconds;
+            let (b0, b1) = (grid.beat(start), grid.beat(end));
+            let d = f64::from(grid.snap.unwrap_or(1));
+            let whole = grid.seconds(b0 + ((b1 - b0) * d).round() / d);
             if (whole - end).abs() > frame {
                 out.push(at(format!(
-                    "its length, {}, isn't a whole number of beats",
-                    shown(b1 - b0)
+                    "its length, {}, isn't a whole number of {}s",
+                    shown(b1 - b0),
+                    unit(grid.snap.unwrap_or(1))
                 )));
             }
             if let Some(d) = grid.snap
-                && let Some(by) = off(cut, d)
+                && let Some(by) = off(cut, d, half)
             {
                 out.push(at(format!(
                     "the cut into it lands {} from beat 1, off the {} by {by:.1} frames",
                     shown(grid.beat(cut)),
                     grid_name(d)
                 )));
+            }
+            if let Some(d) = grid.snap
+                && let Some(t) = &s.transition
+            {
+                let end = ((start + t.seconds) * fps).round() / fps;
+                if let Some(by) = off(end, d, half) {
+                    out.push(at(format!(
+                        "the {} into it ends {} from beat 1, off the {} by {by:.1} frames",
+                        t.name(),
+                        shown(grid.beat(end)),
+                        grid_name(d)
+                    )));
+                }
             }
         }
         if let Some(d) = grid.snap {
@@ -311,25 +344,23 @@ pub fn misses<K: Kinds>(grid: &Grid, scenes: &[Scene<K>], fps: u32) -> Vec<Strin
                 .map(|k| ("a key", k.at))
                 .chain(s.flash.iter().map(|f| ("a flash", f.at)))
                 .chain(s.shake.iter().map(|k| ("a shake", k.at)))
-                .chain(s.text.iter().map(|t| ("a text", t.at)))
-                .map(|(what, t)| (what, t, cut + t));
-            let sound = s.sound.iter().map(|c| ("a sound", c.at, start + c.at));
-            for (what, t, film) in picture.chain(sound) {
+                .chain(s.text.iter().map(|t| ("a text", t.at)));
+            let sound = s.sound.iter().map(|c| ("a sound", c.at));
+            for (what, t) in picture.chain(sound) {
+                let film = start + t;
                 if lead(film) {
                     continue;
                 }
-                if let Some(by) = off(film, d) {
+                if let Some(by) = off(film, d, frame) {
                     out.push(at(format!(
                         "{what} at {} is off the {} by {by:.1} frames ({} from beat 1)",
-                        shown(grid.beat(film) - grid.beat(film - t)),
+                        shown(grid.beat(film) - grid.beat(start)),
                         grid_name(d),
                         shown(grid.beat(film))
                     )));
                 }
             }
         }
-        cuts += length;
-        start += s.seconds;
     }
     out
 }

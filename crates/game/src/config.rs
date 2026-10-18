@@ -23,6 +23,7 @@ pub struct Config {
     pub crash: Option<Crash>,
     pub version: String,
     pub scene: Option<PathBuf>,
+    pub packed: Option<&'static [u8]>,
     pub settings: Settings,
     pub screen: ScreenPolicy,
     pub device: Option<Device>,
@@ -62,6 +63,17 @@ impl Config {
         }
     }
 
+    pub fn packed(
+        name: impl Into<String>,
+        version: impl Into<String>,
+        bytes: &'static [u8],
+    ) -> Self {
+        Self {
+            packed: Some(bytes),
+            ..Self::flat(name, version)
+        }
+    }
+
     pub fn flat(name: impl Into<String>, version: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -69,6 +81,7 @@ impl Config {
             crash: None,
             version: version.into(),
             scene: None,
+            packed: None,
             settings: Settings::default(),
             screen: ScreenPolicy::default(),
             device: None,

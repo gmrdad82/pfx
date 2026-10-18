@@ -364,8 +364,10 @@ fn blender_style() -> Vec<u8> {
             },
             {
                 "name": "Rubber",
+                "alphaMode": "MASK",
+                "alphaCutoff": 0.3,
                 "pbrMetallicRoughness": {
-                    "baseColorFactor": [0.02, 0.02, 0.02, 1.0],
+                    "baseColorFactor": [0.02, 0.02, 0.02, 0.75],
                     "metallicFactor": 0.0,
                     "roughnessFactor": 0.9,
                 },
@@ -449,6 +451,9 @@ at = [2.0, 0.0, 0.0]
     assert_eq!(built.materials["Paint"]["family"], "lacquer");
     let rough = built.materials["Rubber"]["roughness"].as_f64().unwrap();
     assert!((rough - 0.9).abs() < 1e-6);
+    assert_eq!(built.materials["Rubber"]["alpha_mode"], "mask");
+    assert_eq!(built.materials["Rubber"]["alpha_cutoff"], 0.3);
+    assert_eq!(built.materials["Rubber"]["alpha"], 0.75);
     let wheel = built
         .tracks
         .iter()
@@ -499,6 +504,18 @@ at = [2.0, 0.0, 0.0]
         .find(|m| m["name"] == "Paint")
         .unwrap();
     assert!(paint["extensions"]["KHR_materials_clearcoat"].is_object());
+    let rubber = json["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "Rubber")
+        .unwrap();
+    assert_eq!(rubber["alphaMode"], "MASK");
+    assert!((rubber["alphaCutoff"].as_f64().unwrap() - 0.3).abs() < 1e-6);
+    let factor = rubber["pbrMetallicRoughness"]["baseColorFactor"][3]
+        .as_f64()
+        .unwrap();
+    assert!((factor - 0.75).abs() < 1e-6, "{factor}");
     let animation = out.animations().next().unwrap();
     assert_eq!(animation.name(), Some("Spin"));
     let channel = animation.channels().next().unwrap();

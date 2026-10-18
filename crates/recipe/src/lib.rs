@@ -56,6 +56,7 @@ pub const CAPPED: &str = "capped";
 pub const CAP_LUMINANCE: f64 = 60.0;
 pub const CAP_MEAN: f64 = 0.3;
 pub const REFERENCE_HOUR: f64 = 16.0;
+pub const MAX_LIGHTS: usize = 4 + 1024;
 pub const SCENE_SUFFIX: &str = ".scene.toml";
 const SENSOR_MM: f64 = 36.0;
 const FOV_Y_DEG: f64 = 45.0;
@@ -205,6 +206,7 @@ pub struct Object {
     pub dynamic: Option<bool>,
     pub proxy: Option<Proxy>,
     pub lod: Vec<Lod>,
+    pub bake_layers: Option<BakeLayers>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -229,6 +231,13 @@ pub struct Lod {
 }
 
 pub const NORMAL_SIZE: u32 = 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BakeLayers {
+    pub size: u32,
+}
+
+pub const LAYER_SIZE: u32 = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Proxy {

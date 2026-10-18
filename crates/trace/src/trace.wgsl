@@ -23,6 +23,9 @@ override SOBOL: bool = false;
 override TRACE_LOBES: bool = true;
 override TRACE_MAPS: bool = true;
 override TRACE_WET: bool = true;
+override TRACE_THIN: bool = true;
+override TRACE_ALPHA: bool = true;
+override TRACE_FLAKES: bool = true;
 override SOBOL_LENGTH: u32 = 256u;
 override STEAM_SPREAD_BASE: f32 = 0.7;
 override STEAM_SPREAD_GROWTH: f32 = 4.0;
@@ -64,7 +67,7 @@ struct Material {
     extension: vec4f,
     wet: vec4f,
 }
-struct MaterialMaps { textures: vec4f, scales: vec4f, extra: vec4f, transform: vec4f, detail: vec4f }
+struct MaterialMaps { textures: vec4f, scales: vec4f, extra: vec4f, transform: vec4f, detail: vec4f, normal: vec4f, orm: vec4f, turns: vec4f }
 struct MaterialLobes { sheen: vec4f, lobes: vec4f, scatter: vec4f }
 struct Hit { t: f32, n: vec3f, geometric: vec3f, material: u32, uv: vec2f, tangent: vec3f, bitangent: vec3f, surface: u32, shape: u32 }
 struct ContentInfo { offset: u32, width: u32, height: u32, kind: u32 }
@@ -93,6 +96,12 @@ const HOT_ROWS: u32 = 8u;
 const EXTENSION_LAYERS: u32 = 7u;
 const EXTENSION_MAPS: u32 = 8u;
 const EXTENSION_LOBES: u32 = 16u;
+const EXTENSION_THIN: u32 = 32u;
+const EXTENSION_ALPHA: u32 = 64u;
+const EXTENSION_FLAKES: u32 = 128u;
+var<private> traced_flaked: bool = false;
+var<private> traced_flake: vec3f = vec3f(0.0, 0.0, 1.0);
+var<private> traced_thin: bool = false;
 fn record_at(at: u32) -> Material {
     return Material(materials[at],materials[at+1u],materials[at+2u],materials[at+3u],
         materials[at+4u],materials[at+5u],materials[at+6u],materials[at+7u]);
@@ -110,14 +119,33 @@ fn extension_flags(m: Material) -> u32 {
     return bitcast<u32>(m.extension.y);
 }
 fn extension_lobes(m: Material) -> u32 {
-    return bitcast<u32>(m.extension.z)+select(0u,5u,(extension_flags(m)&EXTENSION_MAPS)!=0u);
+    return bitcast<u32>(m.extension.z)+select(0u,8u,(extension_flags(m)&EXTENSION_MAPS)!=0u);
 }
 fn extension_layers(m: Material) -> u32 {
     return extension_lobes(m)+select(0u,3u,(extension_flags(m)&EXTENSION_LOBES)!=0u);
 }
+fn extension_alpha(m: Material) -> u32 {
+    return extension_layers(m)+(extension_flags(m)&EXTENSION_LAYERS)*5u;
+}
+fn extension_flakes(m: Material) -> u32 {
+    return extension_alpha(m)+select(0u,1u,(extension_flags(m)&EXTENSION_ALPHA)!=0u);
+}
+fn flake_eval(s: Shaded, wo: vec3f, wi: vec3f) -> vec3f {
+    if (wo.z<=1e-5 || wi.z<=1e-8) { return vec3f(0.0); }
+    let m=traced_flake;
+    let mv=dot(wo,m);
+    let ml=dot(wi,m);
+    var facet=vec3f(0.0);
+    if (mv>1e-5 && ml>1e-8) {
+        let h=normalize(wo+wi);
+        let a=alpha_rough(s.roughness);
+        facet=ggx_spec(mv,ml,max(dot(h,m),0.0),a*a,schlick(s.base,max(dot(wo,h),0.0),5.0))*ml/wi.z;
+    }
+    return flake_coat(s,wo,wi)+facet*flake_under_coat(s,wo.z);
+}
 fn material_maps(m: Material) -> MaterialMaps {
     let at=bitcast<u32>(m.extension.z);
-    return MaterialMaps(materials[at],materials[at+1u],materials[at+2u],materials[at+3u],materials[at+4u]);
+    return MaterialMaps(materials[at],materials[at+1u],materials[at+2u],materials[at+3u],materials[at+4u],materials[at+5u],materials[at+6u],materials[at+7u]);
 }
 fn material_lobes(m: Material) -> MaterialLobes {
     if ((extension_flags(m)&EXTENSION_LOBES)==0u) { return MaterialLobes(vec4f(0.0),vec4f(0.0),vec4f(0.0)); }
@@ -316,9 +344,39 @@ fn hit_layer(i: u32, material: u32) -> ContentLayer {
     if (layer>0u) { return content_layers[layer-1u]; }
     return content_layers[material];
 }
-fn cut_out(i: u32, u: f32, v: f32) -> bool {
+fn alpha_hash(i: u32, o: vec3f, d: vec3f) -> f32 {
+    let a=pcg(i^pcg(bitcast<u32>(o.x)^pcg(bitcast<u32>(o.y)^pcg(bitcast<u32>(o.z)))));
+    let h=pcg(a^pcg(bitcast<u32>(d.x)^pcg(bitcast<u32>(d.y)^pcg(bitcast<u32>(d.z)))));
+    return f32(h>>8u)*(1.0/16777216.0);
+}
+fn alpha_cut(i: u32, u: f32, v: f32, m: Material, o: vec3f, d: vec3f) -> bool {
+    let coverage=materials[extension_alpha(m)];
+    var alpha=coverage.x;
+    if (TRACE_MAPS && (extension_flags(m)&EXTENSION_MAPS)!=0u) {
+        let maps=material_maps(m);
+        if (maps.textures.x>=0.0) {
+            let tri=triangles[i];
+            let uv_v=triangle_uv_v[i];
+            var uv=vec2f(tri.na.w*(1.0-u-v)+tri.nb.w*u+tri.nc.w*v,uv_v.x*(1.0-u-v)+uv_v.y*u+uv_v.z*v);
+            let first=bitcast<u32>(effects().extension.w);
+            if ((u32(round(maps.scales.w))&1u)!=0u && first!=0u) {
+                let r0=content_texels[first-1u+i*2u];
+                let r1=content_texels[first-1u+i*2u+1u];
+                uv=r0.xy*(1.0-u-v)+r0.zw*u+r1.xy*v;
+            }
+            alpha*=traced_map(maps.textures.x,uv_place(uv,maps.transform,maps.extra.z)).a;
+        }
+    }
+    if (coverage.z<1.5) { return alpha<coverage.y; }
+    return alpha<=alpha_hash(i,o,d);
+}
+fn cut_out(i: u32, u: f32, v: f32, o: vec3f, d: vec3f) -> bool {
     let tri = triangles[i];
     if ((u32(tri.b.w)&4u)==0u) { return false; }
+    if (TRACE_ALPHA) {
+        let m=material_at(u32(tri.a.w));
+        if ((extension_flags(m)&EXTENSION_ALPHA)!=0u) { return alpha_cut(i,u,v,m,o,d); }
+    }
     let slot=i32(round(hit_layer(i,u32(tri.a.w)).layer.x));
     if (slot<0) { return true; }
     let uv_v=triangle_uv_v[i];
@@ -354,7 +412,7 @@ fn tri_hit(i: u32, o: vec3f, d: vec3f, shadow_ray: bool, hit: ptr<function,Hit>)
         let point=o+d*t;
         if ((any(surface.clip0.xyz != vec3f(0.0)) && dot(surface.clip0.xyz,point)>surface.clip0.w)
             || (any(surface.clip1.xyz != vec3f(0.0)) && dot(surface.clip1.xyz,point)>surface.clip1.w)) { return; }
-        if (cut_out(i,u,v)) { return; }
+        if (cut_out(i,u,v,o,d)) { return; }
         (*hit).t=t;
         (*hit).surface=i;
         let geometric=normalize(cross(e1,e2));
@@ -650,7 +708,7 @@ fn tri_blocks(i: u32, o: vec3f, d: vec3f, limit: f32) -> bool {
     let point=o+d*t;
     if ((any(surface.clip0.xyz != vec3f(0.0)) && dot(surface.clip0.xyz,point)>surface.clip0.w)
         || (any(surface.clip1.xyz != vec3f(0.0)) && dot(surface.clip1.xyz,point)>surface.clip1.w)) { return false; }
-    return !cut_out(i,u,v);
+    return !cut_out(i,u,v,o,d);
 }
 fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
     if (frame.counts.x>0u) {
@@ -1173,6 +1231,17 @@ fn glossy_share(s: Shaded) -> f32 {
 fn sample_bsdf(s: Shaded, wo: vec3f, entering: bool, carried: u32, state: ptr<function,u32>, u: vec4f) -> LightSample {
     let transmission=clamp(s.transmission,0.0,1.0)*(1.0-clamp(s.metalness,0.0,1.0));
     if (rnd(state,u.w)<transmission) {
+        if (TRACE_THIN && traced_thin) {
+            let ior=max(s.ior,1.01);
+            let live=select(channel_mask(carried),vec3f(1.0),carried>2u);
+            let face=transmissive_fresnel(s,max(wo.z,0.0),ior,true,ior);
+            let slab=vec3f(thin_dielectric(face.x).x,thin_dielectric(face.y).x,thin_dielectric(face.z).x)*live;
+            let chance=dot(slab,vec3f(1.0))/dot(live,vec3f(1.0));
+            if (rnd(state,u.x)<chance) {
+                return LightSample(reflect(-wo,vec3f(0.0,0.0,1.0)),-1.0,carried,slab/chance,1u);
+            }
+            return LightSample(-wo,-2.0,carried,(live-slab)/(1.0-chance),2u);
+        }
         let iors=dispersed_ior(s.ior,s.dispersion);
         var channel=carried;
         var weight=vec3f(1.0);
@@ -1206,6 +1275,7 @@ fn sample_bsdf(s: Shaded, wo: vec3f, entering: bool, carried: u32, state: ptr<fu
         let cos_theta=sqrt((1.0-u2)/(1.0+(alpha*alpha-1.0)*u2));
         var h=vec3f(cos(phi)*sqrt(max(0.0,1.0-cos_theta*cos_theta)),sin(phi)*sqrt(max(0.0,1.0-cos_theta*cos_theta)),cos_theta);
         if (TRACE_LOBES && !coat && lobes_anisotropy_on()) { h=anisotropic_half(s.roughness,u1,u2); }
+        if (TRACE_FLAKES && !coat && traced_flaked) { h=basis(traced_flake)*h; }
         let wi=reflect(-wo,h);
         return LightSample(wi,bsdf_pdf(s,wo,wi),3u,vec3f(1.0),1u);
     }
@@ -1227,6 +1297,7 @@ fn bsdf_pdf(s: Shaded, wo: vec3f, wi: vec3f) -> f32 {
     let denom=max(4.0*abs(dot(wi,h)),1e-8);
     var base_pdf=ggx_d(max(h.z,0.0),a*a)*max(h.z,0.0)/denom;
     if (TRACE_LOBES && lobes_anisotropy_on()) { base_pdf=anisotropic_density(s.roughness,h)*max(h.z,0.0)/denom; }
+    if (TRACE_FLAKES && traced_flaked) { base_pdf=ggx_d(max(dot(h,traced_flake),0.0),a*a)*max(dot(h,traced_flake),0.0)/denom; }
     let coat_pdf=ggx_d(max(h.z,0.0),ca*ca)*max(h.z,0.0)/denom;
     return (1.0-trans)*(coat*coat_pdf+spec*base_pdf+(1.0-coat-spec)*wi.z/PI);
 }
@@ -1348,6 +1419,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         let m=material_at(hit.material);
         var s=surface(m);
         let flags=extension_flags(m);
+        traced_thin=TRACE_THIN && (flags&EXTENSION_THIN)!=0u;
         let layered=flags&EXTENSION_LAYERS;
         if (layered>0u) {
             let first=extension_layers(m);
@@ -1403,6 +1475,22 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             s=soaked.shade;
             n=soaked.normal;
         }
+        traced_flaked=false;
+        if (TRACE_FLAKES && (flags&EXTENSION_FLAKES)!=0u) {
+            let at=extension_flakes(m);
+            let flake=flake_normal(p,n,materials[at]);
+            if (flake.w>0.5) {
+                traced_flaked=true;
+                traced_flake=flake.xyz;
+                let tint=materials[at+1u].xyz;
+                let coat=s.clearcoat;
+                let coat_roughness=s.clearcoat_roughness;
+                s=flake_facet(s,tint);
+                s.roughness=materials[at].w;
+                s.clearcoat=coat;
+                s.clearcoat_roughness=coat_roughness;
+            }
+        }
         s.roughness=max(s.roughness,ROUGHNESS_FLOOR);
         s.clearcoat_roughness=max(s.clearcoat_roughness,ROUGHNESS_FLOOR);
         if (FILTER_GLOSSY>0.0 && diffused) {
@@ -1418,6 +1506,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         result+=indirect_capped(throughput*s.emission,bounce>1u);
         if (last) { break; }
         let transform=basis(n);
+        if (TRACE_FLAKES && traced_flaked) { traced_flake=transpose(transform)*traced_flake; }
         if (TRACE_LOBES) { lobes_traced(material_lobes(m),transform,hit,n); }
         let wo=transpose(transform)*(-d);
         let origin=spawn_point(p,n,o,hit.t);

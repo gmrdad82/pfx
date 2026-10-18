@@ -389,6 +389,11 @@ const ORDER_MATERIAL: &[&str] = &[
     "fabric",
     "anisotropy",
     "scatter",
+    "thin_walled",
+    "alpha",
+    "alpha_mode",
+    "alpha_cutoff",
+    "flakes",
     "authoring",
 ];
 

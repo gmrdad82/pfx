@@ -12,15 +12,16 @@ pub(crate) mod effects;
 mod keys;
 
 use crate::{
-    Along, Bake, Bend, BendForm, Bevel, CAP_LUMINANCE, CAP_MEAN, CAPPED, Camera, CameraPath, Caps,
-    Casters, Collection, Constrained, Cup, Curl, Daylight, DetailUv, Drift, Ease, Error, Follow,
-    Grade, Kind, Lines, Loaded, Lod, LodTarget, Look, Marker, Mover, NO_SIDECAR, NORMAL_SIZE,
-    OLD_HEADER, Object, Orbit, Order, Origin, Ortho, Outline, Output, Owner, PathKey, PathKind,
-    PieceRule, Plate, PlateView, Plates, Play, Problem, Profile, ProfileKind, Projection, Proxy,
-    REFERENCE_HOUR, RELEASE_EASE, RIG_LOOK, RIG_OFFSET, Recipe, Reference, Rig, RigFocus, RigFrame,
-    RigShake, RigTracks, Room, RootMotion, RouteSpec, SCHEMA, Scatter, Shadow, ShadowLook,
-    ShadowQuality, Sky, SkyAmbient, SkyKind, SkyLight, Span, Spring, Stage, Sun, TEXTURE_KEYS,
-    TextSpace, Textures, Timeline, Trace, Use, Uv, Variant, VariantOutput, View, Volume,
+    Along, Bake, BakeLayers, Bend, BendForm, Bevel, CAP_LUMINANCE, CAP_MEAN, CAPPED, Camera,
+    CameraPath, Caps, Casters, Collection, Constrained, Cup, Curl, Daylight, DetailUv, Drift, Ease,
+    Error, Follow, Grade, Kind, LAYER_SIZE, Lines, Loaded, Lod, LodTarget, Look, Marker, Mover,
+    NO_SIDECAR, NORMAL_SIZE, OLD_HEADER, Object, Orbit, Order, Origin, Ortho, Outline, Output,
+    Owner, PathKey, PathKind, PieceRule, Plate, PlateView, Plates, Play, Problem, Profile,
+    ProfileKind, Projection, Proxy, REFERENCE_HOUR, RELEASE_EASE, RIG_LOOK, RIG_OFFSET, Recipe,
+    Reference, Rig, RigFocus, RigFrame, RigShake, RigTracks, Room, RootMotion, RouteSpec, SCHEMA,
+    Scatter, Shadow, ShadowLook, ShadowQuality, Sky, SkyAmbient, SkyKind, SkyLight, Span, Spring,
+    Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline, Trace, Use, Uv, Variant,
+    VariantOutput, View, Volume,
 };
 
 pub(crate) struct Source {
@@ -1868,6 +1869,7 @@ fn read_object(cx: &mut Cx, t: &dyn TableLike, index: usize, line: usize) -> Res
         ));
     }
     let lod = read_lod(cx, &mut tab, &kind_name)?;
+    let bake_layers = read_bake_layers(cx, &mut tab)?;
     let kind = read_kind(cx, &mut tab, &kind_name)?;
     let imported = matches!(kind, Kind::Mesh { .. } | Kind::Library { .. });
     let keep_normals = if imported {
@@ -1915,7 +1917,26 @@ fn read_object(cx: &mut Cx, t: &dyn TableLike, index: usize, line: usize) -> Res
         dynamic,
         proxy,
         lod,
+        bake_layers,
     })
+}
+
+fn read_bake_layers(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<Option<BakeLayers>, Error> {
+    let path = tab.kpath("bake_layers");
+    let Some(mut sub) = tab.sub(cx, "bake_layers")? else {
+        return Ok(None);
+    };
+    let size = sub.or(cx, "size", LAYER_SIZE, UINT)?;
+    let line = sub.line;
+    sub.finish(cx)?;
+    if !(16..=8192).contains(&size) {
+        return Err(Error::new(
+            dotted(&path, "size"),
+            Some(line),
+            "expected a whole number from 16 to 8192",
+        ));
+    }
+    Ok(Some(BakeLayers { size }))
 }
 
 fn read_lod(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Vec<Lod>, Error> {

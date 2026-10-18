@@ -28,6 +28,8 @@ pub mod scene;
 mod sky;
 mod source;
 pub mod surface;
+#[cfg(test)]
+mod surface_tests;
 pub mod uri;
 mod vec3;
 

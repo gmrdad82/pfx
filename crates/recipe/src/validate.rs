@@ -495,6 +495,7 @@ fn objects(out: &mut Out<'_>) {
         }
         uv(out, &at, o);
         detail_uv(out, &at, o);
+        bake_layers(out, &at, o);
         if o.bevel.is_some() && !matches!(o.kind, Kind::Box { .. } | Kind::Cylinder { .. }) {
             out.at(
                 &at,
@@ -582,6 +583,27 @@ fn uv(out: &mut Out<'_>, at: &At, o: &crate::Object) {
             }
         }
         _ => {}
+    }
+}
+
+fn bake_layers(out: &mut Out<'_>, at: &At, o: &crate::Object) {
+    if o.bake_layers.is_none() {
+        return;
+    }
+    let empty = match o.kind {
+        Kind::Pocket { .. } => Some("a pocket cuts into its target, so `bake_layers` goes there"),
+        Kind::Text { .. } => Some("text carries no mesh, so it takes no `bake_layers`"),
+        _ => None,
+    };
+    if let Some(text) = empty {
+        out.at(at, "bake_layers", text);
+    }
+    if o.uv == Some(Uv::None) {
+        out.at(
+            at,
+            "bake_layers",
+            "`bake_layers` writes maps on TEXCOORD_0, so it does not go with uv \"none\"",
+        );
     }
 }
 
@@ -1138,17 +1160,16 @@ fn lights(out: &mut Out<'_>) {
     let r = out.r;
     let names: Vec<&str> = r.lights.iter().map(|l| l.name.as_str()).collect();
     duplicates(out, "light", "name", &names);
-    if r.lights.len() > 4 {
-        for (i, l) in r.lights.iter().enumerate().skip(4) {
-            out.add(
-                format!("light[{}]", l.name),
-                &format!("light#{i}"),
-                format!(
-                    "the engine takes 4 point lights at most, found {}",
-                    r.lights.len()
-                ),
-            );
-        }
+    if let Some(l) = r.lights.get(crate::MAX_LIGHTS) {
+        out.add(
+            format!("light[{}]", l.name),
+            &format!("light#{}", crate::MAX_LIGHTS),
+            format!(
+                "the engine draws {} local lights at most, found {}",
+                crate::MAX_LIGHTS,
+                r.lights.len()
+            ),
+        );
     }
 }
 

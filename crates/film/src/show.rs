@@ -1,6 +1,6 @@
 use crate::camera::{Picture, picture_in};
 use crate::cut::Cut;
-use crate::script::{Kinds, Scene, Scheme, Script, frames};
+use crate::script::{Kinds, Scene, Scheme, Script};
 use pfx_input::InputEvent;
 use pfx_live::flat::Matrix;
 use pfx_live::flat::look::Look;
@@ -83,12 +83,12 @@ pub fn plan<S: Show>(
             script.scenes.len()
         ));
     }
-    Ok(script
-        .scenes
-        .iter()
-        .zip(cues)
-        .map(|(scene, cue)| Take {
-            frames: frames(scene.seconds, fps),
+    let cuts = script.cuts(fps);
+    Ok(cues
+        .into_iter()
+        .zip(cuts.windows(2))
+        .map(|(cue, cut)| Take {
+            frames: cut[1] - cut[0],
             cue,
         })
         .collect())

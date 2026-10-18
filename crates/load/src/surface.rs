@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use pfx_materials::{Material, UvTransform};
+use pfx_materials::{ALPHA_CUTOFF, AlphaMode, Material, UvTransform};
 use serde_json::Value;
 
 use crate::image::{ColorSpace, Image, Pixels};
@@ -161,6 +161,18 @@ fn uv_transform(set: u32, transform: Option<&Value>) -> UvTransform {
     }
 }
 
+fn info_uv(info: &gltf::texture::Info<'_>) -> UvTransform {
+    let Some(typed) = info.texture_transform() else {
+        return uv_transform(info.tex_coord(), transform_of(info.extensions()));
+    };
+    UvTransform {
+        set: typed.tex_coord().unwrap_or(info.tex_coord()).min(1),
+        offset: typed.offset(),
+        rotation: typed.rotation(),
+        scale: typed.scale(),
+    }
+}
+
 fn transform_of(extensions: Option<&serde_json::Map<String, Value>>) -> Option<&Value> {
     extensions?.get(TEXTURE_TRANSFORM)
 }
@@ -215,40 +227,65 @@ where
         roughness: pbr.roughness_factor(),
         metalness: pbr.metallic_factor(),
         emission: material.emissive_factor(),
+        alpha: factor[3],
+        alpha_mode: match material.alpha_mode() {
+            gltf::material::AlphaMode::Opaque => AlphaMode::Opaque,
+            gltf::material::AlphaMode::Mask => AlphaMode::Mask,
+            gltf::material::AlphaMode::Blend => AlphaMode::Blend,
+        },
+        alpha_cutoff: material.alpha_cutoff().unwrap_or(ALPHA_CUTOFF),
         ..Material::default()
     };
     let mut maps = SurfaceMaps::default();
     let mut main: Option<UvTransform> = None;
-    let mut place = |set: u32, extensions: Option<&serde_json::Map<String, Value>>| {
+    let mut place = |set: u32, transform: UvTransform| {
         if set <= 1 {
-            main.get_or_insert(uv_transform(set, transform_of(extensions)));
+            main.get_or_insert(transform);
         }
         set <= 1
     };
     let base_texture = pbr
         .base_color_texture()
-        .filter(|info| place(info.tex_coord(), info.extensions()));
+        .filter(|info| place(info.tex_coord(), info_uv(info)));
     maps.base = images.map(
         base_texture.map(|info| info.texture().index()),
         ColorSpace::Srgb,
     )?;
-    let normal = material
-        .normal_texture()
-        .filter(|info| place(info.tex_coord(), info.extensions()));
+    let normal = material.normal_texture().filter(|info| {
+        place(
+            info.tex_coord(),
+            uv_transform(info.tex_coord(), transform_of(info.extensions())),
+        )
+    });
     if let Some(info) = &normal {
         out.textures.normal_scale = info.scale();
+        out.textures.normal_uv = Some(uv_transform(
+            info.tex_coord(),
+            transform_of(info.extensions()),
+        ));
     }
     maps.normal = images.map(
         normal.map(|info| info.texture().index()),
         ColorSpace::Linear,
     )?;
-    let rough = pbr
+    let rough_info = pbr
         .metallic_roughness_texture()
-        .filter(|info| place(info.tex_coord(), info.extensions()))
-        .map(|info| info.texture().index());
-    let occlusion = material
-        .occlusion_texture()
-        .filter(|info| place(info.tex_coord(), info.extensions()));
+        .filter(|info| place(info.tex_coord(), info_uv(info)));
+    let rough = rough_info.as_ref().map(|info| info.texture().index());
+    let occlusion = material.occlusion_texture().filter(|info| {
+        place(
+            info.tex_coord(),
+            uv_transform(info.tex_coord(), transform_of(info.extensions())),
+        )
+    });
+    out.textures.orm_uv = match (&rough_info, &occlusion) {
+        (Some(info), _) => Some(info_uv(info)),
+        (None, Some(info)) => Some(uv_transform(
+            info.tex_coord(),
+            transform_of(info.extensions()),
+        )),
+        (None, None) => None,
+    };
     let occlusion_index = occlusion.as_ref().map(|info| info.texture().index());
     let rough_image = images.map(rough, ColorSpace::Linear)?;
     let packed = occlusion_index.is_some() && occlusion_index == rough;
@@ -312,7 +349,8 @@ where
         || factor != [1.0; 4]
         || pbr.metallic_factor() != 1.0
         || pbr.roughness_factor() != 1.0
-        || material.emissive_factor() != [0.0; 3];
+        || material.emissive_factor() != [0.0; 3]
+        || !out.alpha_mode.opaque();
     Ok(Surface {
         name: String::new(),
         material: out,

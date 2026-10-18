@@ -10,10 +10,11 @@ authors.workspace = true
 
 [dependencies]
 pfx-core = { path = "../core" }
+pfx-file = { path = "../file", optional = true }
 cpal = "=0.18.1"
 lewton = { version = "=0.10.2", optional = true }
 pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.14.3", default-features = false, features = ["audio", "aac", "ac3", "mp3", "opus", "mp4", "mkv"], optional = true }
-toml = { version = "0.9", optional = true }
+toml = { version = "1.1.6", optional = true }
 
 [features]
 vorbis = ["dep:lewton"]
@@ -21,6 +22,8 @@ media = ["dep:pito-codecs"]
 voicefx = []
 clean = ["voicefx"]
 shot = ["dep:toml", "voicefx"]
+music = ["dep:toml", "dep:pfx-file"]
 
 [dev-dependencies]
-pfx-sound = { path = ".", features = ["vorbis", "voicefx", "shot", "media", "clean"] }
+pfx-sound = { path = ".", features = ["vorbis", "voicefx", "shot", "media", "clean", "music"] }
+ebur128 = "=0.1.10"

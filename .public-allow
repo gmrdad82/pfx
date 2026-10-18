@@ -1,2 +1,3 @@
 crates/text/tests/fonts/BungeeColor-OFL.txt:1 the OFL text must ship verbatim, and the address in it is the font author's own
 crates/generators/LICENSE-MT19937.md:3 NumPy's MT19937 licence text must ship verbatim, and the address in it is its author's own
+crates/sound/LICENSE-ebur128.md:2 ebur128's MIT licence text must ship verbatim, and the address in it is its author's own

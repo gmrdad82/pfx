@@ -88,6 +88,7 @@ pub(crate) struct Doc {
     pub(crate) plates: Option<Plates>,
     pub(crate) physics: Option<Physics>,
     pub(crate) play: Option<Play>,
+    pub(crate) music: Option<toml::Table>,
     pub(crate) library: Vec<(String, Material)>,
     pub(crate) proxy: Vec<(usize, Proxy)>,
     pub(crate) project: Option<ProjectTable>,
@@ -204,6 +205,7 @@ impl Parsed {
                 plates: doc.plates.clone(),
                 physics: doc.physics.clone(),
                 play: doc.play.clone(),
+                music: doc.music.clone(),
                 authoring,
             }),
             FileKind::Prefab => File::Prefab(PrefabFile {
@@ -272,6 +274,7 @@ pub(crate) fn keys(kind: FileKind) -> &'static [&'static str] {
             "plates",
             "physics",
             "play",
+            "music",
             "authoring",
         ],
         FileKind::Prefab => &[
@@ -649,6 +652,7 @@ pub(crate) fn parse(file: &Path, text: &str, kind: FileKind, context: &Context<'
             (_, "plates") => doc.plates = reader.typed(value, &path),
             (_, "physics") => doc.physics = reader.typed(value, &path),
             (FileKind::Scene, "play") => doc.play = reader.typed(value, &path),
+            (FileKind::Scene, "music") => doc.music = reader.typed(value, &path),
             _ => {}
         }
     }

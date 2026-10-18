@@ -3,7 +3,9 @@ pub const FILM: &str = include_str!("wgsl/film.wgsl");
 pub const BRDF: &str = concat!(
     include_str!("wgsl/film.wgsl"),
     "\n",
-    include_str!("wgsl/brdf.wgsl")
+    include_str!("wgsl/brdf.wgsl"),
+    "\n",
+    include_str!("wgsl/flakes.wgsl")
 );
 pub const LOBES: &str = concat!(
     "const SHEEN_TABLE = array<f32, 256>(\n",

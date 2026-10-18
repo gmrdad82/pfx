@@ -4,7 +4,7 @@ use crate::{
     AGEING, At, BRDF, CoatWobble, Content, Family, GLASS_IOR, Material, NOISE, NoiseKind, PI,
     PackedMaterial, PlankWood, RGB_WAVELENGTHS_NM, Scratch, Shaded, Wet, apply, dielectric_f0,
     dispersed_ior, eval, fixtures, fresnel_conductor, fresnel_dielectric, ggx_d, ink_age, library,
-    resolve, schlick, smith_correlated, smith_g,
+    resolve, schlick, smith_correlated, smith_g, thin_dielectric,
 };
 
 fn close(a: f32, b: f32, tol: f32) {
@@ -190,7 +190,7 @@ fn packed_layout() {
         std::mem::align_of::<PackedMaterial>(),
         PackedMaterial::ALIGN
     );
-    assert_eq!(PackedMaterial::SIZE, 640);
+    assert_eq!(PackedMaterial::SIZE, 736);
     assert_eq!(std::mem::offset_of!(PackedMaterial, sheen), 512);
     assert_eq!(PackedMaterial::LOBES_OFFSET, 512);
     assert_eq!(PackedMaterial::ALIGN, 16);
@@ -213,8 +213,12 @@ fn packed_layout() {
     assert_eq!(std::mem::offset_of!(PackedMaterial, wet), 496);
     assert_eq!(
         bytemuck::bytes_of(&PackedMaterial::pack(&Material::default())).len(),
-        640
+        736
     );
+    assert_eq!(std::mem::offset_of!(PackedMaterial, flakes), 704);
+    assert_eq!(std::mem::offset_of!(PackedMaterial, coverage), 688);
+    assert_eq!(std::mem::offset_of!(PackedMaterial, normal_transform), 640);
+    assert_eq!(std::mem::offset_of!(PackedMaterial, map_turns), 672);
     let zero = PackedMaterial::zeroed();
     let unpacked = PackedMaterial::unpack(zero);
     assert_eq!(unpacked.fresnel_power, 0.0);
@@ -451,4 +455,150 @@ fn lobe_keys_round_trip_and_stay_out_of_plain_materials() {
     );
     assert_eq!(PackedMaterial::pack(&lobed).unpack(), lobed);
     assert!(Material::from_toml("fabric = { colour = [1.0, 1.0, 1.0] }").is_err());
+}
+
+#[test]
+fn a_thin_dielectric_slab_reflects_twice_one_face_over_one_plus_it() {
+    for cosine in [1.0, 0.8, 0.5, 0.2, 0.05] {
+        let face = fresnel_dielectric(cosine, 1.5);
+        let [reflected, transmitted] = thin_dielectric(face);
+        close(reflected, 2.0 * face / (1.0 + face), 1e-6);
+        close(reflected + transmitted, 1.0, 1e-6);
+    }
+    close(thin_dielectric(0.04)[0], 0.08 / 1.04, 1e-6);
+    assert_eq!(thin_dielectric(1.0), [1.0, 0.0]);
+    let mut lens = Material {
+        transmission: 1.0,
+        thin_walled: true,
+        ..Material::default()
+    };
+    let packed = PackedMaterial::pack(&lens);
+    assert_eq!(packed.tail[1], 1.0);
+    assert!(packed.unpack().thin_walled);
+    let text = lens.to_toml().unwrap();
+    assert!(text.contains("thin_walled = true"));
+    assert!(Material::from_toml(&text).unwrap().thin_walled);
+    lens.thin_walled = false;
+    assert!(!lens.to_toml().unwrap().contains("thin_walled"));
+    assert_eq!(PackedMaterial::pack(&lens).tail[1], 0.0);
+}
+
+#[test]
+fn a_material_carries_its_alpha_mode_cutoff_and_base_alpha_through_toml_and_packing() {
+    let plain = Material::default();
+    let text = plain.to_toml().unwrap();
+    assert!(!text.contains("alpha"), "{text}");
+    assert_eq!(PackedMaterial::pack(&plain).coverage, [1.0, 0.5, 0.0, 0.0]);
+    let decal =
+        Material::from_toml("alpha_mode = \"mask\"\nalpha_cutoff = 0.3\nalpha = 0.9\n").unwrap();
+    assert_eq!(decal.alpha_mode, crate::AlphaMode::Mask);
+    assert_eq!((decal.alpha_cutoff, decal.alpha), (0.3, 0.9));
+    let packed = PackedMaterial::pack(&decal);
+    assert_eq!(packed.coverage, [0.9, 0.3, 1.0, 0.0]);
+    let back = packed.unpack();
+    assert_eq!(
+        (back.alpha_mode, back.alpha_cutoff, back.alpha),
+        (decal.alpha_mode, 0.3, 0.9)
+    );
+    let again = Material::from_toml(&decal.to_toml().unwrap()).unwrap();
+    assert_eq!(again.alpha_mode, decal.alpha_mode);
+    let veil = Material::from_toml("alpha_mode = \"blend\"\nalpha = 0.25\n").unwrap();
+    assert_eq!(PackedMaterial::pack(&veil).coverage, [0.25, 0.5, 2.0, 0.0]);
+    assert!(Material::from_toml("alpha_mode = \"cutout\"\n").is_err());
+}
+
+#[test]
+fn the_flake_cells_match_cycles_voronoi_f1_and_its_pcg3d_hash() {
+    let cells = [
+        (
+            [0.25, 0.5, 0.75],
+            0.7080755,
+            [0.039057706, 0.33708316, 0.094002746],
+            [0, 0, 0],
+        ),
+        (
+            [-3.7, 12.2, 0.01],
+            0.3503994,
+            [0.64313143, 0.2701547, 0.020900425],
+            [-4, 12, 0],
+        ),
+        (
+            [101.5, -48.25, 7.125],
+            0.45994,
+            [0.26122424, 0.94159, 0.7817447],
+            [101, -49, 6],
+        ),
+        (
+            [-0.001, -0.999, 2.5],
+            0.66532665,
+            [0.63510764, 0.19453403, 0.47609904],
+            [0, -1, 2],
+        ),
+        (
+            [4096.3, 1.7, -2048.9],
+            0.794012,
+            [0.15378158, 0.95167935, 0.87840307],
+            [4096, 0, -2050],
+        ),
+    ];
+    for (coord, distance, color, cell) in cells {
+        let found = crate::voronoi_f1(coord, crate::FLAKE_RANDOMNESS);
+        assert_eq!(found.cell, cell, "{coord:?}");
+        close(found.distance, distance, 1e-6);
+        close3(found.color, color, 1e-7);
+    }
+    let hashes = [
+        ([0, 0, 0], [0.039057706, 0.33708316, 0.094002746]),
+        ([1, 2, 3], [0.92857283, 0.4465318, 0.45792708]),
+        ([-5, 7, -11], [0.9082388, 0.5027812, 0.7260161]),
+        ([2147483, -2147483, 99], [0.43320897, 0.14396527, 0.1807667]),
+    ];
+    for (key, expected) in hashes {
+        close3(crate::hash_int3_to_float3(key), expected, 1e-7);
+    }
+}
+
+#[test]
+fn a_flake_layer_turns_the_amount_of_its_cells_and_tilts_them_by_the_spread() {
+    let mut flakes = crate::Flakes {
+        amount: 0.4,
+        size: 0.001,
+        ..crate::Flakes::default()
+    };
+    let up = [0.0, 0.0, 1.0];
+    let mut flaked = 0;
+    let mut tilt: f32 = 0.0;
+    let count = 4000;
+    for i in 0..count {
+        let at = [(i % 64) as f32 * 0.0037, (i / 64) as f32 * 0.0041, 0.0];
+        if let Some(n) = crate::flake_normal(&flakes, at, up) {
+            flaked += 1;
+            tilt = tilt.max(n[2].acos());
+            close((n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt(), 1.0, 1e-5);
+        }
+    }
+    let share = flaked as f32 / count as f32;
+    assert!((share - 0.4).abs() < 0.05, "{share}");
+    let widest = (flakes.spread * 2.0_f32.sqrt()).atan();
+    assert!(
+        tilt <= widest + 1e-4 && tilt > widest * 0.5,
+        "{tilt} {widest}"
+    );
+    flakes.spread = 0.0;
+    let flat =
+        (0..count).find_map(|i| crate::flake_normal(&flakes, [i as f32 * 0.0037, 0.0, 0.0], up));
+    close3(flat.unwrap(), up, 1e-6);
+    flakes.amount = 0.0;
+    assert!(crate::flake_normal(&flakes, [0.0; 3], up).is_none());
+    let paint = Material::from_toml(
+        "clearcoat = 1.0\nflakes = { amount = 0.3, size = 0.0008, spread = 0.25, color = [0.9, 0.8, 0.6], roughness = 0.2 }\n",
+    )
+    .unwrap();
+    let packed = PackedMaterial::pack(&paint);
+    assert_eq!(packed.flakes, [0.3, 0.0008, 0.25, 0.2]);
+    assert_eq!(packed.flake_color, [0.9, 0.8, 0.6, 0.0]);
+    assert_eq!(packed.unpack().flakes, paint.flakes);
+    assert!(paint.to_toml().unwrap().contains("[flakes]"));
+    assert!(!Material::default().to_toml().unwrap().contains("flakes"));
+    assert_eq!(PackedMaterial::pack(&Material::default()).flakes[0], 0.0);
 }
