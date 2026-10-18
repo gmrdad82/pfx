@@ -75,9 +75,9 @@ impl Widget for Header<'_> {
             Vec2::new((code_width + HEADER_CODE.x).round(), HEADER_CODE.y),
         );
         let (code_fill, code_border, code_text, title_text) = match state {
-            State::Rest => (theme.card, theme.text2, theme.text, theme.text2),
-            State::Hovered => (theme.card, theme.hot, theme.text, theme.text),
-            State::Active => (theme.hot, theme.hot, theme.on_hot, theme.text),
+            State::Rest => (theme.card, theme.text2, theme.text, theme.text),
+            State::Hovered => (theme.card, theme.hot, theme.text, theme.title),
+            State::Active => (theme.hot, theme.hot, theme.on_hot, theme.title),
         };
         painter.rect(
             code_rect,

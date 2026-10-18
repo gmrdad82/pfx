@@ -24,6 +24,9 @@ pub fn theme() -> Theme {
         well: grey(0x08),
         line: grey(0x30),
         track: grey(0x28),
+        grid: grey(0x2C),
+        rule: grey(0xC8),
+        title: grey(0xF8),
         text: grey(0xF0),
         text2: grey(0xC0),
         muted: grey(0x90),
@@ -38,6 +41,14 @@ pub fn theme() -> Theme {
         secondary_soft: Color32::from_rgb(0x80, 0xD0, 0xD0),
         hot: Color32::from_rgb(0xFF, 0xA0, 0x00),
         hot_dim: Color32::from_rgb(0x50, 0x30, 0x00),
+        value: Color32::from_rgb(0xFF, 0xD0, 0x40),
+        ramp: [
+            Color32::from_rgb(0xC0, 0xA0, 0xF0),
+            Color32::from_rgb(0x90, 0x60, 0xE0),
+            Color32::from_rgb(0x60, 0x30, 0xB0),
+            Color32::from_rgb(0x30, 0x18, 0x60),
+            Color32::from_rgb(0x18, 0x0C, 0x30),
+        ],
         ok: Color32::from_rgb(0x00, 0xC0, 0x00),
         ok_tint: Color32::from_rgb(0x00, 0x40, 0x00),
         error: Color32::from_rgb(0xFF, 0x00, 0x00),
@@ -93,6 +104,9 @@ pub fn colours(theme: &Theme) -> Vec<Color32> {
         theme.well,
         theme.line,
         theme.track,
+        theme.grid,
+        theme.rule,
+        theme.title,
         theme.text,
         theme.text2,
         theme.muted,
@@ -107,6 +121,7 @@ pub fn colours(theme: &Theme) -> Vec<Color32> {
         theme.secondary_soft,
         theme.hot,
         theme.hot_dim,
+        theme.value,
         theme.ok,
         theme.ok_tint,
         theme.error,
@@ -125,6 +140,9 @@ pub fn colours(theme: &Theme) -> Vec<Color32> {
         theme.diff.del,
         theme.diff.change,
     ]
+    .into_iter()
+    .chain(theme.ramp)
+    .collect()
 }
 
 fn faces(theme: &Theme) -> Vec<&[u8]> {

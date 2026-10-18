@@ -777,7 +777,7 @@ impl Gizmo {
         let text = painter.layout_no_wrap(
             format!("{} · {}", self.mode.word(), space.word()),
             theme.font(theme.size_small),
-            theme.accent,
+            theme.hot,
         );
         let size = text.size() + Vec2::new(16.0, 8.0);
         let band = Rect::from_min_size(
@@ -788,7 +788,7 @@ impl Gizmo {
             size,
         );
         painter.rect_filled(band, CornerRadius::same(theme.radius), theme.well);
-        painter.galley(band.min + Vec2::new(8.0, 4.0), text, theme.accent);
+        painter.galley(band.min + Vec2::new(8.0, 4.0), text, theme.hot);
     }
 }
 

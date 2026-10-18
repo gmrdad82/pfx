@@ -3,6 +3,8 @@ mod header;
 mod keycap;
 mod number;
 mod pill;
+mod scale;
+mod slider;
 mod tabs;
 
 pub use dotted::Dotted;
@@ -10,6 +12,8 @@ pub use header::Header;
 pub use keycap::KeyCap;
 pub use number::Number;
 pub use pill::{Pill, Tone};
+pub use scale::{ScaleBar, Ticks, ticks};
+pub use slider::{Slider, fraction};
 pub use tabs::Tabs;
 
 use std::sync::Arc;

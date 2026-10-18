@@ -26,21 +26,21 @@ pfx keeps only what is its own: the outliner, the inspector, the log, the toolba
 
 pfx's look lives in one tokens file, `crates/editor-style/src/tokens.rs`: every colour, the fonts, the type sizes, the title and label tracking, the spacing, the radii, the strokes and the widgets' own metrics. `tokens::theme()` builds the `Theme` from them; `pfx-theme` (`pfx_theme::pfx()`, shared with the dev HUD and re-exported by `crates/editor/src/theme.rs`) hands that theme on, and `Session::theme` gives it to the shell, which applies it before the first pass in the window and in the shot harness. Every widget, pfx's own included, reads it back with `Theme::of(ctx)`, and every egui style the editor crates set (`theme::visuals`, `theme::style`) and every widget they draw reads the tokens; nothing in `ui.rs` names a colour. Another editor on the crates can still bring a `Theme` of its own.
 
-It follows one reference: near-black ground, thin wide-tracked uppercase titles, a lime accent for whatever is live (slider fills, the selection, the focused panel's marker, the active tab), violet for hover and pressed fills, white text, inset cards with a hairline edge, and round numbered markers for the panel codes.
+It follows one reference: a black ground (`#0D0E0E`) with no blue anywhere, thin wide-tracked uppercase titles, a lime accent for whatever is live (slider fills and resting knobs, the selection, the focused panel's marker, the active tab, the gizmo's mode), violet for hover, pressed fills and data highlights, inset cards that are the same black with a hairline edge (a light rule on the focused one), and round numbered markers for the panel codes. The viewport's grid is dark grey and its corner carries a scale bar beside the axes.
 
 | Token | Colour | Used for |
 |---|---|---|
-| `BG` | `#0B0B0C` | the window, the panels, inactive tabs and the viewport surround |
-| `SURFACE` | `#1A1822` | buttons, chips and keycaps |
-| `CARD`, `CARD_LINE` | `#060607`, `#3A393F` | inset cards (`widgets::card`), the panel markers, windows, popups and code backgrounds |
-| `STRIPE` | `#141318` | striped rows |
-| `WELL` | `#050505` | number fields and text wells |
-| `LINE`, `TRACK` | `#262529`, `#3B3A3A` | hairlines; slider rails and inactive strokes |
-| `TEXT`, `TEXT2`, `MUTED`, `DIM` | `#F4F3F5`, `#A9A6AD`, `#77747B`, `#524F56` | text by weight; `DIM` is file names and the status lines |
-| `CODE` | `#D9D6DD` | values and a file's text |
-| `HOT`, `HOT_DIM`, `HOT_TINT`, `ON_HOT` | `#CEF03B`, `#ACC33B`, `#22280E`, `#0B0B0C` | the lime: slider fills and knobs under the pointer, the selection, the focused marker, the active tab, the caret; `HOT_DIM` and `HOT_TINT` ok and added; `ON_HOT` text on lime |
-| `ACCENT`, `ACCENT_BRIGHT`, `ACCENT_DEEP`, `ON_ACCENT` | `#5331A8`, `#5B2EE6`, `#2B2145`, `#F4F3F5` | violet: hover borders and the viewport's outlines; pressed fills and lit keycaps; hover backgrounds and the diff's changed lines; text on violet |
-| `SECONDARY`, `SECONDARY_SOFT` | `#9B80C6`, `#B6ABCB` | links, the gizmo's Z axis, TOML keys and tables |
+| `BG`, `CARD`, `WELL` | `#0D0E0E` | the window, the panels, the status bar, inset cards, number fields and the viewport's empty backdrop |
+| `SURFACE` | `#1A1B1B` | buttons, chips and keycaps; the empty viewport's checker |
+| `CARD_LINE`, `RULE` | `#3C3C3C`, `#C6C6C6` | a card's 1 px edge; the focused card's edge, rules and the scale bar |
+| `STRIPE` | `#121313` | striped rows |
+| `LINE`, `GRID`, `TRACK` | `#2A2A2A`, `#3B3A3A`, `#3B3A3A` | hairlines; the viewport's grid; slider rails |
+| `TITLE`, `TEXT`, `TEXT2`, `TICK`, `MUTED`, `DIM`, `SUBTITLE` | `#F6F6F6`, `#C8C8C8`, `#BABABA`, `#9C9C9C`, `#8A8A8A`, `#6C6C6C`, `#5A5A5A` | titles; body; labels and scale labels; ticks; muted and nav; file names and status lines; subtitles |
+| `CODE` | `#C8C8C8` | values and a file's text |
+| `HOT`, `VALUE`, `HOT_DIM`, `HOT_TINT`, `ON_HOT` | `#CCF040`, `#E2FE39`, `#ACC33B`, `#22280E`, `#0D0E0E` | the lime: slider fills and knobs, the selection and its outline, the focused marker, the active tab, the caret; `VALUE` for value readouts; `HOT_DIM` and `HOT_TINT` ok, added and an unfocused selection; `ON_HOT` text on lime |
+| `ACCENT`, `ACCENT_BRIGHT`, `ACCENT_DEEP`, `ON_ACCENT` | `#5228CB`, `#4B26B5`, `#160F27`, `#F6F6F6` | violet: hover borders and the viewport's hover outline and tints; pressed fills, pressed knobs and lit keycaps; hover backgrounds and the diff's changed lines; text on violet |
+| `RAMP` | `#9A7FC6` → `#5228CB` → `#4B26B5` → `#160F27` → `#0F0A1B` | the violet ramp, light to deep, for gauges, legends and heat ramps |
+| `SECONDARY`, `SECONDARY_SOFT` | `#9A7FC6`, `#B6ABCB` | links, the gizmo's Z axis, TOML keys and tables |
 | `ERROR`, `ERROR_TINT`, `WARNING` | `#FF4D6D`, `#3A1820`, `#FF9F43` | refusals and errors, the gizmo's X axis; warnings |
 
 The metrics are the editor crates' usual ones (code 11, small 12, body 13, heading 16, title 20; radius 2, markers fully round, hairline stroke 1, slider rail 4, row 19), so a theme change moves no widget.

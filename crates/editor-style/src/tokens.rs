@@ -8,32 +8,46 @@ const fn rgb(hex: u32) -> Color32 {
     Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
-pub const BG: Color32 = rgb(0x0B0B0C);
-pub const SURFACE: Color32 = rgb(0x1A1822);
-pub const CARD: Color32 = rgb(0x060607);
-pub const CARD_LINE: Color32 = rgb(0x3A393F);
-pub const STRIPE: Color32 = rgb(0x141318);
-pub const WELL: Color32 = rgb(0x050505);
-pub const LINE: Color32 = rgb(0x262529);
+pub const BG: Color32 = rgb(0x0D0E0E);
+pub const SURFACE: Color32 = rgb(0x1A1B1B);
+pub const CARD: Color32 = BG;
+pub const CARD_LINE: Color32 = rgb(0x3C3C3C);
+pub const STRIPE: Color32 = rgb(0x121313);
+pub const WELL: Color32 = BG;
+pub const LINE: Color32 = rgb(0x2A2A2A);
+pub const GRID: Color32 = rgb(0x3B3A3A);
 pub const TRACK: Color32 = rgb(0x3B3A3A);
+pub const RULE: Color32 = rgb(0xC6C6C6);
 
-pub const TEXT: Color32 = rgb(0xF4F3F5);
-pub const TEXT2: Color32 = rgb(0xA9A6AD);
-pub const MUTED: Color32 = rgb(0x77747B);
-pub const DIM: Color32 = rgb(0x524F56);
-pub const CODE: Color32 = rgb(0xD9D6DD);
+pub const TITLE: Color32 = rgb(0xF6F6F6);
+pub const TEXT: Color32 = rgb(0xC8C8C8);
+pub const TEXT2: Color32 = rgb(0xBABABA);
+pub const TICK: Color32 = rgb(0x9C9C9C);
+pub const MUTED: Color32 = rgb(0x8A8A8A);
+pub const DIM: Color32 = rgb(0x6C6C6C);
+pub const SUBTITLE: Color32 = rgb(0x5A5A5A);
+pub const CODE: Color32 = TEXT;
 
-pub const HOT: Color32 = rgb(0xCEF03B);
+pub const HOT: Color32 = rgb(0xCCF040);
+pub const VALUE: Color32 = rgb(0xE2FE39);
 pub const HOT_DIM: Color32 = rgb(0xACC33B);
 pub const HOT_TINT: Color32 = rgb(0x22280E);
-pub const ON_HOT: Color32 = rgb(0x0B0B0C);
+pub const ON_HOT: Color32 = BG;
 
-pub const ACCENT: Color32 = rgb(0x5331A8);
-pub const ACCENT_BRIGHT: Color32 = rgb(0x5B2EE6);
-pub const ACCENT_DEEP: Color32 = rgb(0x2B2145);
-pub const ON_ACCENT: Color32 = TEXT;
-pub const SECONDARY: Color32 = rgb(0x9B80C6);
+pub const ACCENT: Color32 = rgb(0x5228CB);
+pub const ACCENT_BRIGHT: Color32 = rgb(0x4B26B5);
+pub const ACCENT_DEEP: Color32 = rgb(0x160F27);
+pub const ACCENT_DEEPEST: Color32 = rgb(0x0F0A1B);
+pub const ON_ACCENT: Color32 = TITLE;
+pub const SECONDARY: Color32 = rgb(0x9A7FC6);
 pub const SECONDARY_SOFT: Color32 = rgb(0xB6ABCB);
+pub const RAMP: [Color32; 5] = [
+    SECONDARY,
+    ACCENT,
+    ACCENT_BRIGHT,
+    ACCENT_DEEP,
+    ACCENT_DEEPEST,
+];
 
 pub const ERROR: Color32 = rgb(0xFF4D6D);
 pub const ERROR_TINT: Color32 = rgb(0x3A1820);
@@ -99,6 +113,12 @@ pub const NUMBER_WIDTH: f32 = 76.0;
 pub const NUMBER_INSET: f32 = 6.0;
 pub const NUMBER_CARET: f32 = 2.0;
 pub const NUMBER_CARET_GAP: f32 = 3.0;
+pub const KNOB_RADIUS: f32 = 6.5;
+pub const KNOB_RING: f32 = 1.5;
+pub const SCALE_WIDTH: f32 = 160.0;
+pub const SCALE_TICK: f32 = 5.0;
+pub const SCALE_GAP: f32 = 3.0;
+pub const SCALE_STEPS: [f64; 4] = [0.0, 0.2, 0.5, 1.0];
 
 pub fn theme() -> Theme {
     Theme {
@@ -111,6 +131,9 @@ pub fn theme() -> Theme {
         well: WELL,
         line: LINE,
         track: TRACK,
+        grid: GRID,
+        rule: RULE,
+        title: TITLE,
         text: TEXT,
         text2: TEXT2,
         muted: MUTED,
@@ -125,6 +148,8 @@ pub fn theme() -> Theme {
         secondary_soft: SECONDARY_SOFT,
         hot: HOT,
         hot_dim: HOT_DIM,
+        value: VALUE,
+        ramp: RAMP,
         ok: HOT_DIM,
         ok_tint: HOT_TINT,
         error: ERROR,

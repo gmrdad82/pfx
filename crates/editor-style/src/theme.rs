@@ -106,6 +106,9 @@ pub struct Theme {
     pub well: Color32,
     pub line: Color32,
     pub track: Color32,
+    pub grid: Color32,
+    pub rule: Color32,
+    pub title: Color32,
     pub text: Color32,
     pub text2: Color32,
     pub muted: Color32,
@@ -120,6 +123,8 @@ pub struct Theme {
     pub secondary_soft: Color32,
     pub hot: Color32,
     pub hot_dim: Color32,
+    pub value: Color32,
+    pub ramp: [Color32; 5],
     pub ok: Color32,
     pub ok_tint: Color32,
     pub error: Color32,
@@ -286,7 +291,13 @@ pub fn visuals(theme: &Theme) -> Visuals {
     visuals.weak_text_color = Some(theme.muted);
     visuals.widgets = Widgets {
         noninteractive: widget(theme, theme.bg, theme.line, theme.text),
-        inactive: knob(theme, theme.track, theme.surface, theme.line, theme.text),
+        inactive: knob(
+            theme,
+            theme.track,
+            theme.surface,
+            theme.card_line,
+            theme.text,
+        ),
         hovered: knob(
             theme,
             theme.hot,
