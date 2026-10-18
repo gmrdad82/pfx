@@ -5,7 +5,7 @@ mod lod;
 mod timeline;
 
 pub use ball::{BALL_RADIUS, BALL_RINGS, BALL_SEGMENTS, ball, ball_png};
-pub use container::{manf_from_glb, manf_from_gltf};
+pub use container::{pfx_from_glb, pfx_from_gltf};
 pub use head::{
     HEAD_KEYS, HEAD_RINGS, HEAD_SEGMENTS, HEAD_TARGETS, HEAD_TIMES, HEAD_VERTICES, HEAD_WEIGHTS,
     head,

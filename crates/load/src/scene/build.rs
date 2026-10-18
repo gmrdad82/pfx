@@ -245,7 +245,7 @@ pub(super) fn project(root: &Path) -> Result<Project, SceneError> {
 }
 
 pub(super) fn open(path: &Path, hour: Option<f64>) -> Result<Scene, SceneError> {
-    if super::mounted::is_manf_path(path) {
+    if super::mounted::is_pfx_path(path) {
         return super::mounted::open(path, hour);
     }
     let root = project_root(path);

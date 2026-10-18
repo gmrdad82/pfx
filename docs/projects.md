@@ -8,7 +8,7 @@ The crate `pfx-project` (`crates/project`) reads a project and, with its `scaffo
 
 ## A project
 
-A project is a folder with pfx-scene's `project.toml` at its root ([the format](https://github.com/gmrdad82/pfx-scene/blob/v0.1.0/docs/format.md), `project.toml`). Its scenes, libraries, meshes and images are found under that root.
+A project is a folder with pfx-scene's `project.toml` at its root ([the format](scene-format.md#projecttoml), `project.toml`). Its scenes, libraries, meshes and images are found under that root.
 
 ```toml
 format = 1

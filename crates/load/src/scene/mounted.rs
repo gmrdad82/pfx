@@ -7,18 +7,18 @@ use super::build::{self, absolute, diagnostic, project_root, refused};
 use super::{Scene, SceneError};
 use crate::sha256;
 
-pub fn is_manf_path(path: &Path) -> bool {
+pub fn is_pfx_path(path: &Path) -> bool {
     path.extension()
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("manf"))
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pfx"))
 }
 
 pub(super) fn mounted(project: &Project) -> Option<&Project> {
-    project.manf_file().map(|_| project)
+    project.pfx_path().map(|_| project)
 }
 
 pub(super) fn open(path: &Path, hour: Option<f64>) -> Result<Scene, SceneError> {
     let root = project_root(path);
-    let project = Project::open_manf(path).map_err(|found| diagnostic(&root, &found))?;
+    let project = Project::open_pfx(path).map_err(|found| diagnostic(&root, &found))?;
     let resolved = project
         .scene(&absolute(path))
         .map_err(|found| refused(&root, &found))?;
@@ -44,12 +44,12 @@ fn inner(root: &Path, path: &Path) -> Option<String> {
 fn holds(mount: &Project, name: &str) -> bool {
     mount.files().any(|file| file == Path::new(name))
         || mount
-            .manf()
-            .is_some_and(|reader| reader.find_named(pfx_scene::manf::FILE, name).is_some())
+            .pfx()
+            .is_some_and(|reader| reader.find_named(pfx_file::FILE, name).is_some())
 }
 
 pub(super) fn container(mount: &Project, root: &Path) -> Option<PathBuf> {
-    mount.manf_file().map(|file| root.join(file))
+    mount.pfx_path().map(|file| root.join(file))
 }
 
 pub(super) fn read(
@@ -121,7 +121,7 @@ pub(super) fn own_gltf(
     Some(
         mount
             .and_then(|mount| container(mount, root))
-            .ok_or_else(|| format!("{file} names the glTF of a .manf, and this scene is not one")),
+            .ok_or_else(|| format!("{file} names the glTF of a .pfx, and this scene is not one")),
     )
 }
 
@@ -129,7 +129,7 @@ pub fn container_of(path: &Path) -> Option<(PathBuf, String)> {
     let container = path
         .ancestors()
         .skip(1)
-        .find(|ancestor| is_manf_path(ancestor) && ancestor.is_file())?;
+        .find(|ancestor| is_pfx_path(ancestor) && ancestor.is_file())?;
     let name = inner(container, path)?;
     Some((container.to_path_buf(), name))
 }
@@ -138,7 +138,7 @@ pub fn held_text(path: &Path) -> Option<std::io::Result<String>> {
     let (container, name) = container_of(path)?;
     let invalid = |message: String| std::io::Error::new(std::io::ErrorKind::InvalidData, message);
     Some(
-        Project::open_manf(&container)
+        Project::open_pfx(&container)
             .map_err(|found| invalid(found.message))
             .and_then(|project| project.asset(&name).map(|bytes| bytes.into_owned()))
             .and_then(|bytes| {
@@ -152,7 +152,7 @@ pub fn pack(scene: &Path, out: &Path) -> Result<usize, SceneError> {
     let project = build::project(&root)?;
     let bytes =
         pfx_scene::pack(&project, &absolute(scene)).map_err(|found| refused(&root, &found))?;
-    let staged = out.with_extension("manf.tmp");
+    let staged = out.with_extension("pfx.tmp");
     std::fs::write(&staged, &bytes)
         .and_then(|()| std::fs::rename(&staged, out))
         .map_err(|e| SceneError::new(out, None, format!("cannot write: {e}")))?;

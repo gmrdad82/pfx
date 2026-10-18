@@ -1,0 +1,113 @@
+{
+  "$defs": {
+    "ProjectTable": {
+      "additionalProperties": false,
+      "properties": {
+        "ignore": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scene": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Tunable": {
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "$ref": "#/$defs/TunableValue"
+        },
+        "group": {
+          "type": "string"
+        },
+        "max": {
+          "$ref": "#/$defs/TunableValue"
+        },
+        "min": {
+          "$ref": "#/$defs/TunableValue"
+        },
+        "type": {
+          "$ref": "#/$defs/TunableKind"
+        }
+      },
+      "required": [
+        "type",
+        "default"
+      ],
+      "type": "object"
+    },
+    "TunableKind": {
+      "enum": [
+        "float",
+        "int",
+        "bool",
+        "vector"
+      ],
+      "type": "string"
+    },
+    "TunableValue": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "authoring": {
+      "additionalProperties": true,
+      "type": "object"
+    },
+    "format": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "layers": {
+      "additionalProperties": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "type": "object"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectTable"
+    },
+    "tunables": {
+      "additionalProperties": {
+        "$ref": "#/$defs/Tunable"
+      },
+      "type": "object"
+    }
+  },
+  "required": [
+    "project"
+  ],
+  "title": "pfx-scene project file, format 1",
+  "type": "object"
+}

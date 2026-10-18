@@ -27,7 +27,7 @@ fn scene_name(path: &Path) -> String {
         |name| name.to_string_lossy().into_owned(),
     );
     let name = name
-        .strip_suffix(".manf")
+        .strip_suffix(".pfx")
         .or_else(|| name.strip_suffix(".toml"))
         .unwrap_or(&name);
     name.strip_suffix(".scene").unwrap_or(name).to_string()

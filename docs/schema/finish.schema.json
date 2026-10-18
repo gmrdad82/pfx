@@ -1,0 +1,771 @@
+{
+  "$defs": {
+    "Bloom": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/BloomTable"
+        }
+      ]
+    },
+    "BloomKind": {
+      "enum": [
+        "box",
+        "rings",
+        "tent"
+      ],
+      "type": "string"
+    },
+    "BloomTable": {
+      "additionalProperties": false,
+      "properties": {
+        "clamp": {
+          "format": "float",
+          "type": "number"
+        },
+        "down": {
+          "format": "float",
+          "type": "number"
+        },
+        "gains": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/$defs/BloomKind"
+        },
+        "knee": {
+          "format": "float",
+          "type": "number"
+        },
+        "knee_width": {
+          "format": "float",
+          "type": "number"
+        },
+        "linear_taps": {
+          "type": "boolean"
+        },
+        "radii": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 4,
+          "minItems": 4,
+          "type": "array"
+        },
+        "radius": {
+          "format": "float",
+          "type": "number"
+        },
+        "sigma": {
+          "format": "float",
+          "type": "number"
+        },
+        "soft": {
+          "format": "float",
+          "type": "number"
+        },
+        "strength": {
+          "format": "float",
+          "type": "number"
+        },
+        "threshold": {
+          "format": "float",
+          "type": "number"
+        },
+        "unit": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Color": {
+      "anyOf": [
+        {
+          "pattern": "^#[0-9a-fA-F]{6}$",
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        }
+      ]
+    },
+    "Dither": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        }
+      ]
+    },
+    "DitherKind": {
+      "enum": [
+        "blue",
+        "ordered"
+      ],
+      "type": "string"
+    },
+    "Grain": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/GrainTable"
+        }
+      ]
+    },
+    "GrainTable": {
+      "additionalProperties": false,
+      "properties": {
+        "clamp": {
+          "type": "boolean"
+        },
+        "response": {
+          "format": "float",
+          "type": "number"
+        },
+        "strength": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Ink": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/Color"
+        },
+        {
+          "$ref": "#/$defs/Color"
+        }
+      ]
+    },
+    "Lut": {
+      "additionalProperties": false,
+      "properties": {
+        "size": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "values": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "size",
+        "values"
+      ],
+      "type": "object"
+    },
+    "LutKey": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/Lut"
+        }
+      ]
+    },
+    "Outline": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "$ref": "#/$defs/OutlineTable"
+        }
+      ]
+    },
+    "OutlineTable": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": {
+          "format": "float",
+          "type": "number"
+        },
+        "color": {
+          "$ref": "#/$defs/Color"
+        },
+        "crease_angle": {
+          "format": "float",
+          "type": "number"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "local_color": {
+          "type": "boolean"
+        },
+        "thickness": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Scratches": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/ScratchesTable"
+        }
+      ]
+    },
+    "ScratchesTable": {
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "strength": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Style": {
+      "enum": [
+        "cel",
+        "bw",
+        "noir",
+        "vignette",
+        "neon",
+        "rubber_hose",
+        "sepia",
+        "film",
+        "crt",
+        "one_bit",
+        "halftone",
+        "comic",
+        "modern_comic",
+        "watercolor",
+        "paper_grain",
+        "pixel",
+        "duotone",
+        "gradient_map",
+        "posterize",
+        "kuwahara",
+        "tilt_shift"
+      ],
+      "type": "string"
+    },
+    "Tape": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/TapeDirection"
+        },
+        {
+          "$ref": "#/$defs/TapeTable"
+        }
+      ]
+    },
+    "TapeDirection": {
+      "enum": [
+        "forward",
+        "rewind"
+      ],
+      "type": "string"
+    },
+    "TapeTable": {
+      "additionalProperties": false,
+      "properties": {
+        "bands": {
+          "format": "float",
+          "type": "number"
+        },
+        "direction": {
+          "$ref": "#/$defs/TapeDirection"
+        },
+        "echo": {
+          "format": "float",
+          "type": "number"
+        },
+        "grain": {
+          "format": "float",
+          "type": "number"
+        },
+        "smear": {
+          "format": "float",
+          "type": "number"
+        },
+        "split": {
+          "format": "float",
+          "type": "number"
+        },
+        "strength": {
+          "format": "float",
+          "type": "number"
+        },
+        "wash": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Tone": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ToneKind"
+        },
+        {
+          "$ref": "#/$defs/ToneTable"
+        }
+      ]
+    },
+    "ToneKind": {
+      "enum": [
+        "aces",
+        "agx",
+        "neutral"
+      ],
+      "type": "string"
+    },
+    "ToneTable": {
+      "additionalProperties": false,
+      "properties": {
+        "clamp": {
+          "type": "boolean"
+        },
+        "kind": {
+          "$ref": "#/$defs/ToneKind"
+        },
+        "start": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "Vignette": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/VignetteTable"
+        }
+      ]
+    },
+    "VignetteKind": {
+      "enum": [
+        "power",
+        "smoothstep"
+      ],
+      "type": "string"
+    },
+    "VignetteTable": {
+      "additionalProperties": false,
+      "properties": {
+        "aspect": {
+          "format": "float",
+          "type": "number"
+        },
+        "inner": {
+          "format": "float",
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/VignetteKind"
+        },
+        "outer": {
+          "format": "float",
+          "type": "number"
+        },
+        "power": {
+          "format": "float",
+          "type": "number"
+        },
+        "scale": {
+          "format": "float",
+          "type": "number"
+        },
+        "strength": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Warmth": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/WarmthTable"
+        }
+      ]
+    },
+    "WarmthKind": {
+      "enum": [
+        "linear",
+        "luma_curve"
+      ],
+      "type": "string"
+    },
+    "WarmthTable": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "format": "float",
+          "type": "number"
+        },
+        "high": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "highlight": {
+          "format": "float",
+          "type": "number"
+        },
+        "kind": {
+          "$ref": "#/$defs/WarmthKind"
+        },
+        "low": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "shadow": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "aberration": {
+      "format": "float",
+      "type": "number"
+    },
+    "angle": {
+      "format": "float",
+      "type": "number"
+    },
+    "black": {
+      "format": "float",
+      "type": "number"
+    },
+    "black_threshold": {
+      "format": "float",
+      "type": "number"
+    },
+    "bloom": {
+      "$ref": "#/$defs/Bloom"
+    },
+    "cavity": {
+      "format": "float",
+      "type": "number"
+    },
+    "cavity_distance": {
+      "format": "float",
+      "type": "number"
+    },
+    "cel_bands": {
+      "format": "float",
+      "type": "number"
+    },
+    "cel_shadow": {
+      "format": "float",
+      "type": "number"
+    },
+    "cel_softness": {
+      "format": "float",
+      "type": "number"
+    },
+    "cel_spec": {
+      "format": "float",
+      "type": "number"
+    },
+    "cel_spec_roughness": {
+      "format": "float",
+      "type": "number"
+    },
+    "cel_spec_threshold": {
+      "format": "float",
+      "type": "number"
+    },
+    "cel_threshold": {
+      "format": "float",
+      "type": "number"
+    },
+    "contrast": {
+      "format": "float",
+      "type": "number"
+    },
+    "crease_angle": {
+      "format": "float",
+      "type": "number"
+    },
+    "crush": {
+      "format": "float",
+      "type": "number"
+    },
+    "curvature": {
+      "format": "float",
+      "type": "number"
+    },
+    "darkening": {
+      "format": "float",
+      "type": "number"
+    },
+    "distortion": {
+      "format": "float",
+      "type": "number"
+    },
+    "dither": {
+      "$ref": "#/$defs/Dither"
+    },
+    "dither_kind": {
+      "$ref": "#/$defs/DitherKind"
+    },
+    "dot": {
+      "format": "float",
+      "type": "number"
+    },
+    "dust": {
+      "format": "float",
+      "type": "number"
+    },
+    "encode": {
+      "type": "boolean"
+    },
+    "exposure": {
+      "format": "float",
+      "type": "number"
+    },
+    "flicker": {
+      "format": "float",
+      "type": "number"
+    },
+    "focus": {
+      "format": "float",
+      "type": "number"
+    },
+    "frame": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "gain": {
+      "format": "float",
+      "type": "number"
+    },
+    "grain": {
+      "$ref": "#/$defs/Grain"
+    },
+    "halation": {
+      "format": "float",
+      "type": "number"
+    },
+    "highlight": {
+      "$ref": "#/$defs/Color"
+    },
+    "highlight_threshold": {
+      "format": "float",
+      "type": "number"
+    },
+    "ink": {
+      "$ref": "#/$defs/Ink"
+    },
+    "interior_line_strength": {
+      "format": "float",
+      "type": "number"
+    },
+    "keep": {
+      "$ref": "#/$defs/Color"
+    },
+    "keep_range": {
+      "format": "float",
+      "type": "number"
+    },
+    "levels": {
+      "format": "float",
+      "type": "number"
+    },
+    "line_weight": {
+      "format": "float",
+      "type": "number"
+    },
+    "lut": {
+      "$ref": "#/$defs/LutKey"
+    },
+    "lut_amount": {
+      "format": "float",
+      "type": "number"
+    },
+    "mask": {
+      "format": "float",
+      "type": "number"
+    },
+    "outline": {
+      "$ref": "#/$defs/Outline"
+    },
+    "outline_alpha": {
+      "format": "float",
+      "type": "number"
+    },
+    "outline_color": {
+      "$ref": "#/$defs/Color"
+    },
+    "outline_thickness": {
+      "format": "float",
+      "type": "number"
+    },
+    "palette": {
+      "type": "boolean"
+    },
+    "paper_grain": {
+      "format": "float",
+      "type": "number"
+    },
+    "pixel": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "posterize": {
+      "format": "float",
+      "type": "number"
+    },
+    "radius": {
+      "format": "float",
+      "type": "number"
+    },
+    "rim": {
+      "format": "float",
+      "type": "number"
+    },
+    "rim_color": {
+      "$ref": "#/$defs/Color"
+    },
+    "rim_width": {
+      "format": "float",
+      "type": "number"
+    },
+    "saturation": {
+      "format": "float",
+      "type": "number"
+    },
+    "saturation_lift": {
+      "format": "float",
+      "type": "number"
+    },
+    "scale": {
+      "format": "float",
+      "type": "number"
+    },
+    "scanlines": {
+      "format": "float",
+      "type": "number"
+    },
+    "scratches": {
+      "$ref": "#/$defs/Scratches"
+    },
+    "seed": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sepia": {
+      "format": "float",
+      "type": "number"
+    },
+    "shadow": {
+      "$ref": "#/$defs/Color"
+    },
+    "style": {
+      "$ref": "#/$defs/Style"
+    },
+    "tape": {
+      "$ref": "#/$defs/Tape"
+    },
+    "threshold": {
+      "format": "float",
+      "type": "number"
+    },
+    "tilt_range": {
+      "format": "float",
+      "type": "number"
+    },
+    "tone": {
+      "$ref": "#/$defs/Tone"
+    },
+    "tone_steps": {
+      "format": "float",
+      "type": "number"
+    },
+    "vignette": {
+      "$ref": "#/$defs/Vignette"
+    },
+    "warmth": {
+      "$ref": "#/$defs/Warmth"
+    },
+    "weave": {
+      "format": "float",
+      "type": "number"
+    },
+    "weights": {
+      "items": {
+        "format": "float",
+        "type": "number"
+      },
+      "maxItems": 3,
+      "minItems": 3,
+      "type": "array"
+    }
+  },
+  "title": "pfx-scene finish file, format 1",
+  "type": "object"
+}

@@ -62,7 +62,7 @@ pub use keyed::{
 };
 pub use lights::{Attach as LightAttach, SPOT_CONE, SPOT_DIRECTION, Spot};
 pub use lod::{COVERAGE_HEIGHT, GeometryLevel};
-pub use mounted::{container_of, held_text, is_manf_path, pack, unpack};
+pub use mounted::{container_of, held_text, is_pfx_path, pack, unpack};
 pub use particles::{Attach, Node as ParticleNode, Particles};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
