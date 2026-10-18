@@ -37,7 +37,7 @@ Orbit, pan or dolly the viewport, then save what you see.
 
 C3 holds the camera, the size, the samples and a Render button, which runs `pfx render --recipe`, the path tracer. `docs/render.md` has the details.
 
-Render (or `⏎` in C3) runs, on a thread, with the window's own executable:
+Render (or `⏎` in C3, or `t` from any panel, as a key or a script's `key t`) runs, on a thread, with the window's own executable:
 
 ```
 <pfx> render --recipe <recipe> --camera <name> --size WxH --spp N --out tmp/pfx/renders/<recipe>-<camera>-<W>x<H>.png

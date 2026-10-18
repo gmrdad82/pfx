@@ -35,6 +35,12 @@ pub(super) struct Args {
     pub(super) pick: super::Picks,
     #[arg(
         long,
+        value_name = "name",
+        help = "Open on this [[camera]] of the recipe or scene [default: the first]"
+    )]
+    pub(super) camera: Option<String>,
+    #[arg(
+        long,
         value_name = "png",
         help = "Draw one frame offscreen into this PNG"
     )]
@@ -188,7 +194,10 @@ fn blend(text: &str) -> Result<f32, String> {
     }
 }
 
-pub(super) fn shade(args: &Args, shell: &mut Shell) {
+pub(super) fn shade(args: &Args, shell: &mut Shell) -> Result<(), String> {
+    if let Some(camera) = &args.camera {
+        shell.open_on(camera)?;
+    }
     if args.clay {
         shell.set_clay(1.0);
     }
@@ -196,6 +205,7 @@ pub(super) fn shade(args: &Args, shell: &mut Shell) {
         shell.set_wireframe(args.blend.unwrap_or(1.0));
         shell.set_xray(args.xray);
     }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -265,7 +275,9 @@ pub fn run(args: &Args, rest: &[String], registry: &Registry) -> ExitCode {
         Err(error) => return super::refuse("gui", &error),
     };
     shell.set_registry(registry.clone());
-    shade(args, &mut shell);
+    if let Err(error) = shade(args, &mut shell) {
+        return super::refuse("edit", &error);
+    }
     if let Some(module) = &args.play {
         shell.choose_module(module.clone());
     }

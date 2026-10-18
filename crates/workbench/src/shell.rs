@@ -197,6 +197,7 @@ pub struct Shell {
     picker: crate::open::Picker,
     calm: bool,
     first: Option<&'static str>,
+    opening: Option<String>,
     solids: Vec<viewport::Solid>,
     book: crate::open::Book,
     opened: Option<String>,
@@ -517,6 +518,7 @@ impl Shell {
             picker: crate::open::Picker::default(),
             calm: false,
             first: None,
+            opening: None,
             solids: Vec::new(),
             book,
             opened: None,
@@ -559,6 +561,46 @@ impl Shell {
             board: crate::clipboard::Board::default(),
             pasted: None,
         }
+    }
+
+    pub fn open_on(&mut self, camera: &str) -> Result<(), String> {
+        let known: Vec<String> = if self.edit.is_some() || !self.document.cameras.is_empty() {
+            self.document
+                .cameras
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect()
+        } else if self.document.path.is_empty() {
+            return Err("--camera opens a recipe, a .pitofx or a scene; name one".into());
+        } else {
+            let loaded = pfx_recipe::load(Path::new(&self.document.path))
+                .map_err(|error| error.to_string())?;
+            Document::from_recipe(&loaded.recipe, &self.document.path)
+                .cameras
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect()
+        };
+        if !known.iter().any(|name| name == camera) {
+            return Err(match known.is_empty() {
+                true => format!("no camera {camera}: {} has none", self.shown_path()),
+                false => format!(
+                    "no camera {camera} in {}; its cameras: {}",
+                    self.shown_path(),
+                    known.join(", ")
+                ),
+            });
+        }
+        match self
+            .document
+            .cameras
+            .iter()
+            .position(|(name, _)| name == camera)
+        {
+            Some(at) => self.jump(at),
+            None => self.opening = Some(camera.to_string()),
+        }
+        Ok(())
     }
 
     pub fn recipe_path(&self) -> &str {
@@ -1357,7 +1399,12 @@ impl Shell {
         if let Some(object) = again {
             self.select(object);
         }
-        self.camera = camera
+        let opening = self
+            .opening
+            .take_if(|name| self.document.cameras.iter().any(|(known, _)| known == name));
+        let opens = opening.is_some();
+        self.camera = opening
+            .or(camera)
             .and_then(|name| {
                 self.document
                     .cameras
@@ -1378,6 +1425,11 @@ impl Shell {
             });
         if !self.render_chosen {
             self.render_camera = self.camera;
+        }
+        if opens {
+            self.eye = None;
+            self.settle = None;
+            self.through = self.live() && self.document.views.get(self.camera).is_some();
         }
         self.confirm = None;
         self.light = lamp
@@ -1907,6 +1959,7 @@ impl Shell {
                 self.references_on = !self.references_on;
             }
             (_, Key::Home) if self.live() => self.fit_selection(),
+            (_, Key::T) if self.live() => self.render(),
             (_, Key::Z) if self.live() => self.cycle_shading(),
             (_, Key::K) if self.live() && self.has_curves() => self.toggle_curves(),
             (
@@ -2472,6 +2525,7 @@ impl Shell {
                     ("i", "references"),
                     ("home", "frame"),
                     ("0", "to camera"),
+                    ("t", "trace"),
                 ];
             }
             _ => {}
@@ -2586,6 +2640,23 @@ impl Shell {
 
     fn status(&mut self, ui: &mut Ui) {
         let rect = bar(egui::Panel::bottom("D1"), STATUS, BG_DEEP, ui, |ui| {
+            let whole = ui.max_rect();
+            let mut tools = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(whole)
+                    .layout(Layout::right_to_left(Align::Center)),
+            );
+            self.status_tools(&mut tools);
+            let limit = (tools.min_rect().left() - SECTION_GAP).max(whole.left());
+            let mut ui = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(Rect::from_min_max(
+                        whole.min,
+                        Pos2::new(limit, whole.bottom()),
+                    ))
+                    .layout(Layout::left_to_right(Align::Center)),
+            );
+            let ui = &mut ui;
             self.header(ui, Panel::D1, Header::new("D1", "status").width(92.0));
             let kind = self.kind_word();
             item(ui, kind, &self.shown_path(), TEXT_CODE);
@@ -2628,93 +2699,108 @@ impl Shell {
                 divider(ui);
                 item(ui, "render", &job.summary(), phase_colour(&job.phase));
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.label(
-                            code(ui, status_version(), TEXT_MUTED),
-                        );
-                        divider(ui);
-                        let tone = match self.pgpu {
-                            Pgpu::Free => Tone::Ok,
-                            Pgpu::Play => Tone::Busy,
-                            Pgpu::Queued => Tone::Neutral,
-                        };
-                        ui.add(Pill::new(self.pgpu.word(), tone));
-                        ui.label(
-                            code(ui, "pgpu", TEXT_MUTED),
-                        );
-                        divider(ui);
-                        let frame = self
-                            .frame_ms
-                            .map_or_else(|| "—".to_string(), |ms| format!("{ms:.1} ms"));
-                        ui.label(code(ui, frame, TEXT_CODE))
-                            .on_hover_text(GPU_TIME);
-                        ui.label(
-                            code(ui, "GPU frame", TEXT_MUTED),
-                        )
-                        .on_hover_text(GPU_TIME);
-                        if self.timing_drops > 0 {
-                            divider(ui);
-                            ui.label(
-                                code(ui, format!("{} dropped", self.timing_drops), ACCENT),
-                            )
-                            .on_hover_text(format!(
-                                "{} frames' GPU timings never arrived or arrived too late, so the GPU frame time skips them",
-                                self.timing_drops
-                            ));
-                        }
-                    });
         });
         self.panels.push((Panel::D1, rect));
         self.border_over(ui.ctx(), Panel::D1, rect);
     }
 
+    fn status_tools(&mut self, ui: &mut Ui) {
+        ui.label(code(ui, status_version(), TEXT_MUTED));
+        divider(ui);
+        let tone = match self.pgpu {
+            Pgpu::Free => Tone::Ok,
+            Pgpu::Play => Tone::Busy,
+            Pgpu::Queued => Tone::Neutral,
+        };
+        ui.add(Pill::new(self.pgpu.word(), tone));
+        ui.label(code(ui, "pgpu", TEXT_MUTED));
+        divider(ui);
+        let frame = self
+            .frame_ms
+            .map_or_else(|| "—".to_string(), |ms| format!("{ms:.1} ms"));
+        ui.label(code(ui, frame, TEXT_CODE)).on_hover_text(GPU_TIME);
+        ui.label(code(ui, "GPU frame", TEXT_MUTED))
+            .on_hover_text(GPU_TIME);
+        if self.timing_drops > 0 {
+            divider(ui);
+            ui.label(
+                code(ui, format!("{} dropped", self.timing_drops), ACCENT),
+            )
+            .on_hover_text(format!(
+                "{} frames' GPU timings never arrived or arrived too late, so the GPU frame time skips them",
+                self.timing_drops
+            ));
+        }
+    }
+
     fn hints(&mut self, ui: &mut Ui) {
         bar(egui::Panel::bottom("hints"), HINTS, BG_BASE, ui, |ui| {
+            let mut tools = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(ui.max_rect())
+                    .layout(Layout::right_to_left(Align::Center)),
+            );
+            self.hint_tools(&mut tools);
+            let limit = tools.min_rect().left() - SECTION_GAP;
             ui.label(code(ui, self.focus.code(), TEXT_DIM));
             let hints = if self.scene {
                 Shell::viewing_hints(self.focus)
             } else {
                 Shell::hints_for(self.focus, self.live())
             };
-            for (key, word) in hints {
+            let gap = 4.0 + ui.spacing().item_spacing.x;
+            let more = gap + hint_width(ui, None, MORE);
+            for (index, (key, word)) in hints.iter().enumerate() {
+                let tail = if index + 1 < hints.len() { more } else { 0.0 };
+                if ui.cursor().left() + gap + hint_width(ui, Some(key), word) + tail > limit {
+                    let rest: Vec<String> = hints[index..]
+                        .iter()
+                        .map(|(key, word)| format!("{key}  {word}"))
+                        .collect();
+                    ui.add_space(4.0);
+                    ui.label(small(ui, MORE, TEXT_SECONDARY))
+                        .on_hover_text(rest.join("\n"));
+                    break;
+                }
                 ui.add_space(4.0);
                 ui.add(KeyCap::new(key));
                 ui.label(small(ui, *word, TEXT_SECONDARY));
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(small(ui, "panel", TEXT_SECONDARY));
-                ui.add(KeyCap::new("1–3"));
-                let pending = self.keys.pending().map(|letter| letter.to_string());
-                ui.add(KeyCap::new(pending.as_deref().unwrap_or("a–d")).lit(pending.is_some()));
-                ui.add_space(SECTION_GAP);
-                ui.label(small(ui, "open", TEXT_SECONDARY));
-                let closed = !self.picker.showing(self.live());
-                if ui
-                    .add_enabled(closed, KeyCap::new("ctrl o").button())
-                    .clicked()
-                {
-                    self.show_picker(ui.ctx());
-                }
-                let Some((undo, redo)) = self.editor.as_ref().map(Editor::steps) else {
-                    return;
-                };
-                ui.add_space(SECTION_GAP);
-                for (key, word, command, steps) in [
-                    ("ctrl ⇧ z", "redo", Command::Redo, redo),
-                    ("ctrl z", "undo", Command::Undo, undo),
-                ] {
-                    ui.label(small(ui, word, TEXT_SECONDARY));
-                    if ui
-                        .add_enabled(steps > 0, KeyCap::new(key).button())
-                        .clicked()
-                    {
-                        self.full = false;
-                        self.command(ui.ctx(), command);
-                    }
-                    ui.add_space(4.0);
-                }
-            });
         });
+    }
+
+    fn hint_tools(&mut self, ui: &mut Ui) {
+        ui.label(small(ui, "panel", TEXT_SECONDARY));
+        ui.add(KeyCap::new("1–3"));
+        let pending = self.keys.pending().map(|letter| letter.to_string());
+        ui.add(KeyCap::new(pending.as_deref().unwrap_or("a–d")).lit(pending.is_some()));
+        ui.add_space(SECTION_GAP);
+        ui.label(small(ui, "open", TEXT_SECONDARY));
+        let closed = !self.picker.showing(self.live());
+        if ui
+            .add_enabled(closed, KeyCap::new("ctrl o").button())
+            .clicked()
+        {
+            self.show_picker(ui.ctx());
+        }
+        let Some((undo, redo)) = self.editor.as_ref().map(Editor::steps) else {
+            return;
+        };
+        ui.add_space(SECTION_GAP);
+        for (key, word, command, steps) in [
+            ("ctrl ⇧ z", "redo", Command::Redo, redo),
+            ("ctrl z", "undo", Command::Undo, undo),
+        ] {
+            ui.label(small(ui, word, TEXT_SECONDARY));
+            if ui
+                .add_enabled(steps > 0, KeyCap::new(key).button())
+                .clicked()
+            {
+                self.full = false;
+                self.command(ui.ctx(), command);
+            }
+            ui.add_space(4.0);
+        }
     }
 
     fn show_picker(&mut self, ctx: &Context) {
@@ -4099,6 +4185,37 @@ pub(crate) fn list_row(
     )
 }
 
+const ROW_GAP: f32 = 8.0;
+const MORE: &str = "…";
+const ITEM_SHARE: f32 = 0.6;
+
+fn hint_width(ui: &mut Ui, key: Option<&str>, word: &str) -> f32 {
+    let mut probe = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(ui.max_rect())
+            .layout(Layout::left_to_right(Align::Center))
+            .invisible(),
+    );
+    if let Some(key) = key {
+        probe.add(KeyCap::new(key));
+    }
+    probe.label(small(&probe, word, TEXT_SECONDARY));
+    probe.min_rect().width()
+}
+const DETAIL_SHARE: f32 = 0.4;
+
+fn fitted(
+    painter: &egui::Painter,
+    text: &str,
+    font: egui::FontId,
+    colour: Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, colour);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+    painter.layout_job(job)
+}
+
 pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
     let Row {
         focused,
@@ -4130,42 +4247,90 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
         painter.rect_filled(rect, CornerRadius::same(RADIUS), fill);
     }
     let ink = |colour| if lit { ACCENT_TEXT } else { colour };
+    let theme = Theme::of(painter.ctx());
     let x = rect.left() + 4.0 + depth as f32 * SECTION_GAP;
     painter.text(
         Pos2::new(x, rect.center().y),
         Align2::LEFT_CENTER,
         icon.0,
-        Theme::of(painter.ctx()).font(SIZE_BODY),
+        theme.font(SIZE_BODY),
         ink(if dim { TEXT_DIM } else { icon.1 }),
     );
-    painter.text(
-        Pos2::new(x + 20.0, rect.center().y - 0.5),
-        Align2::LEFT_CENTER,
-        label,
-        Theme::of(painter.ctx()).font(SIZE_BODY),
-        ink(if dim { TEXT_MUTED } else { TEXT_PRIMARY }),
-    );
     let mut right = rect.right() - 4.0;
-    if !detail.is_empty() {
-        let placed = painter.text(
-            Pos2::new(right, rect.center().y - 0.5),
-            Align2::RIGHT_CENTER,
-            detail,
-            Theme::of(painter.ctx()).font(SIZE_CODE),
-            ink(TEXT_MUTED),
-        );
-        right = placed.left() - 6.0;
-    }
-    if let Some(mark) = mark {
-        let galley = painter.layout_no_wrap(
-            mark.to_string(),
-            Theme::of(painter.ctx()).font(SIZE_CODE),
-            ink(TEXT_MUTED),
-        );
+    let badge = mark.map(|mark| {
+        let galley =
+            painter.layout_no_wrap(mark.to_string(), theme.font(SIZE_CODE), ink(TEXT_MUTED));
         let badge = Rect::from_center_size(
             Pos2::new(right - galley.size().x / 2.0 - 4.0, rect.center().y),
             galley.size() + Vec2::new(8.0, 2.0),
         );
+        right = badge.left() - 6.0;
+        (badge, galley)
+    });
+    let left = x + 20.0;
+    let room = (right - left).max(0.0);
+    let label = fitted(
+        painter,
+        label,
+        theme.font(SIZE_BODY),
+        ink(if dim { TEXT_MUTED } else { TEXT_PRIMARY }),
+        f32::INFINITY,
+    );
+    let detail = (!detail.is_empty()).then(|| {
+        let whole = fitted(
+            painter,
+            detail,
+            theme.font(SIZE_CODE),
+            ink(TEXT_MUTED),
+            f32::INFINITY,
+        );
+        let wanted = room - label.size().x - ROW_GAP;
+        let width = whole.size().x.min(wanted.max(room * DETAIL_SHARE));
+        if width < whole.size().x {
+            fitted(
+                painter,
+                detail,
+                theme.font(SIZE_CODE),
+                ink(TEXT_MUTED),
+                width,
+            )
+        } else {
+            whole
+        }
+    });
+    let label_room = match &detail {
+        Some(detail) => room - detail.size().x - ROW_GAP,
+        None => room,
+    };
+    let full = label.text().to_string();
+    let label = if label.size().x > label_room {
+        fitted(
+            painter,
+            &full,
+            theme.font(SIZE_BODY),
+            ink(if dim { TEXT_MUTED } else { TEXT_PRIMARY }),
+            label_room.max(0.0),
+        )
+    } else {
+        label
+    };
+    let elided = label.elided || detail.as_ref().is_some_and(|detail| detail.elided);
+    painter.galley(
+        Pos2::new(left, rect.center().y - 0.5 - label.size().y / 2.0),
+        label,
+        TEXT_PRIMARY,
+    );
+    if let Some(detail) = detail {
+        painter.galley(
+            Pos2::new(
+                right - detail.size().x,
+                rect.center().y - 0.5 - detail.size().y / 2.0,
+            ),
+            detail,
+            TEXT_MUTED,
+        );
+    }
+    if let Some((badge, galley)) = badge {
         painter.rect_stroke(
             badge,
             CornerRadius::same(RADIUS),
@@ -4173,6 +4338,12 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
             egui::StrokeKind::Inside,
         );
         painter.galley(badge.center() - galley.size() / 2.0, galley, ACCENT_TEXT);
+    }
+    if elided {
+        return response.on_hover_text(match row.detail {
+            "" => full,
+            detail => format!("{full}  {detail}"),
+        });
     }
     response
 }
@@ -4365,7 +4536,22 @@ fn labelled(ui: &mut Ui, label: &str, body: impl FnOnce(&mut Ui)) {
 
 fn item(ui: &mut Ui, label: &str, value: &str, colour: Color32) {
     ui.label(code(ui, label, TEXT_MUTED));
-    ui.label(code(ui, crate::shown::text(value), colour));
+    let text = code(ui, crate::shown::text(value), colour);
+    let natural = egui::WidgetText::from(text.clone())
+        .into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::FontSelection::Default,
+        )
+        .size()
+        .x;
+    let room = (ui.available_width() * ITEM_SHARE).max(0.0);
+    ui.allocate_ui_with_layout(
+        Vec2::new(natural.min(room).ceil(), ui.available_height()),
+        Layout::left_to_right(Align::Center),
+        |ui| ui.add(egui::Label::new(text).truncate()),
+    );
 }
 
 fn divider(ui: &mut Ui) {
@@ -4911,6 +5097,168 @@ heading = 0.0
         run(&mut shell, SIZE, "drag 700 400 900 300\nkey 0\nframe");
         assert_eq!(shell.camera, 1);
         assert_eq!(shell.eye(), Some(shell.home()));
+    }
+
+    #[test]
+    fn a_window_opens_on_a_named_camera_and_refuses_an_unknown_one() {
+        let path = scratch("shell-open-on");
+        std::fs::write(&path, SCENE).unwrap();
+        let mut shell = Shell::open(&path.display().to_string());
+        let refused = shell.open_on("top").unwrap_err();
+        assert!(refused.starts_with("no camera top in "), "{refused}");
+        assert!(refused.ends_with("its cameras: front, side"), "{refused}");
+        assert!(!refused.contains('\n'));
+        shell.open_on("side").unwrap();
+        let mut viewer = Viewer::new(&path, Mode::Fake);
+        viewer.sync(&mut shell);
+        run(&mut shell, SIZE, "frame");
+        assert_eq!((shell.camera, shell.render_camera), (1, 1));
+        assert_eq!(shell.eye(), Some(shell.home()));
+        assert!(shell.through().is_some());
+        let (mut opened, _, _) = live("shell-open-on-loaded", SCENE);
+        opened.open_on("side").unwrap();
+        assert_eq!(opened.camera, 1);
+        assert_eq!(opened.eye(), Some(opened.home()));
+    }
+
+    #[test]
+    fn a_scripted_t_toggles_the_trace_preview_in_a_scene() {
+        let path = crate::scenes::fixture("shell-scripted-trace");
+        let mut shell = Shell::scene(&path.display().to_string());
+        run(&mut shell, SIZE, "frame");
+        assert_eq!(shell.session_tracing().map(|(on, _)| on), Some(false));
+        run(&mut shell, SIZE, "key t\nframe");
+        assert_eq!(shell.session_tracing().map(|(on, _)| on), Some(true));
+        run(&mut shell, SIZE, "click 700 400\nkey T\nframe");
+        assert_eq!(shell.session_tracing().map(|(on, _)| on), Some(false));
+    }
+
+    const CROWDED: &str = r#"recipe = 1
+name = "crowded"
+
+[[object]]
+name = "a_rather_long_object_name_that_runs_past_the_outliner"
+kind = "box"
+size = [1.0, 0.1, 1.0]
+material = "brushed_aluminium_with_a_long_name"
+
+[[object]]
+name = "cup"
+kind = "box"
+size = [0.1, 0.1, 0.1]
+material = "enamel"
+
+[[camera]]
+name = "a_camera_with_a_rather_long_name_too"
+position = [0.0, 0.5, 2.0]
+target = [0.0, 0.0, 0.0]
+fov_y_deg = 30.0
+"#;
+
+    fn texts_in(shape: &egui::Shape, clip: Rect, texts: &mut Vec<(String, Rect)>) {
+        match shape {
+            egui::Shape::Text(text) => {
+                let rect = text
+                    .galley
+                    .rect
+                    .translate(text.pos.to_vec2())
+                    .intersect(clip)
+                    .shrink(0.5);
+                if rect.is_positive() && !text.galley.text().trim().is_empty() {
+                    let shown = match text.galley.elided {
+                        true => format!("{}…", text.galley.text()),
+                        false => text.galley.text().to_string(),
+                    };
+                    texts.push((shown, rect));
+                }
+            }
+            egui::Shape::Vec(shapes) => {
+                for shape in shapes {
+                    texts_in(shape, clip, texts);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn drawn(shell: &mut Shell, size: [u32; 2], script: &str) -> Vec<(String, Rect)> {
+        let ctx = Context::default();
+        theme::apply_theme(&ctx, &theme::workbench());
+        let output = drive(&ctx, size, &Script::parse(script).unwrap(), |ui| {
+            shell.ui(ui)
+        });
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            texts_in(&clipped.shape, clipped.clip_rect, &mut texts);
+        }
+        texts
+    }
+
+    fn overlapping(texts: &[(String, Rect)], within: Rect) -> Vec<(String, String)> {
+        let inside: Vec<&(String, Rect)> = texts
+            .iter()
+            .filter(|(_, rect)| within.contains_rect(*rect))
+            .collect();
+        let mut found = Vec::new();
+        for (index, (a, first)) in inside.iter().map(|text| (&text.0, text.1)).enumerate() {
+            for (b, second) in inside[index + 1..].iter().map(|text| (&text.0, text.1)) {
+                if first.intersects(second) {
+                    found.push((a.clone(), b.clone()));
+                }
+            }
+        }
+        found
+    }
+
+    fn panel_rect(shell: &Shell, panel: Panel) -> Rect {
+        shell
+            .panels
+            .iter()
+            .find(|(known, _)| *known == panel)
+            .map(|(_, rect)| *rect)
+            .unwrap()
+    }
+
+    #[test]
+    fn long_names_in_the_outliner_and_the_cameras_end_in_an_ellipsis_over_nothing() {
+        let (mut shell, _, _) = live("shell-crowded", CROWDED);
+        let texts = drawn(&mut shell, SIZE, "frame");
+        for panel in [Panel::B1, Panel::B2] {
+            let rect = panel_rect(&shell, panel);
+            assert_eq!(overlapping(&texts, rect), [], "{panel:?}");
+            let shown: Vec<&str> = texts
+                .iter()
+                .filter(|(_, at)| rect.contains_rect(*at))
+                .map(|(text, _)| text.as_str())
+                .collect();
+            assert!(
+                shown.iter().any(|text| text.ends_with('…')),
+                "{panel:?}: {shown:?}"
+            );
+        }
+        let cameras: Vec<&str> = texts
+            .iter()
+            .filter(|(_, at)| panel_rect(&shell, Panel::B2).contains_rect(*at))
+            .map(|(text, _)| text.as_str())
+            .collect();
+        assert!(cameras.contains(&"fov 30.0°"), "{cameras:?}");
+    }
+
+    #[test]
+    fn the_hint_and_status_bars_keep_their_items_apart_in_a_narrow_window() {
+        let (mut shell, _, _) = live("shell-crowded-bars", CROWDED);
+        for (size, script) in [
+            ([900, 700], "frame\nkey c\nkey 1\nframe"),
+            ([1200, 800], "frame\nkey c\nkey 1\nframe"),
+            (SIZE, "frame\nkey c\nkey 1\nframe"),
+        ] {
+            let texts = drawn(&mut shell, size, script);
+            let bars = Rect::from_min_max(
+                Pos2::new(0.0, size[1] as f32 - STATUS - HINTS),
+                Pos2::new(size[0] as f32, size[1] as f32),
+            );
+            assert_eq!(overlapping(&texts, bars), [], "{size:?}");
+        }
     }
 
     #[test]
@@ -6252,6 +6600,17 @@ heading = 0.0
         assert!(!bench.shell.full);
         assert_eq!(bench.shell.render_camera, 0);
         assert!(bench.shell.shot_views.is_some());
+    }
+
+    #[test]
+    fn a_scripted_t_traces_a_recipe_from_any_panel() {
+        let mut bench = bench("shell-render-t");
+        bench.process(vec![]);
+        run(&mut bench.shell, SIZE, "frame\nkey b\nkey 1\nkey t\nframe");
+        assert!(bench.shell.shots.busy());
+        let job = bench.shell.shots.job().unwrap();
+        assert_eq!(job.camera, "front");
+        assert_eq!(job.phase, Phase::Queued);
     }
 
     #[test]

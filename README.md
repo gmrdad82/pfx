@@ -10,7 +10,9 @@ pfx is a game and render engine in Rust, part of [PITO MD](https://pitomd.com). 
 |---|---|---|
 | Live renderer, 4K, neutral room | **4.4 ms** GPU a frame (p50 and p99), 0 dropped in 1,200 | [measured.md](docs/measured.md#live-4k) |
 | 2D pass, 4K, 2,000 shots + 20,301 particles | **0.36 ms** GPU a frame | [measured.md](docs/measured.md#2d-pass) |
-| Path tracer, 4K final, adaptive to 64 samples a pixel | **5,969 ms** | [trace.md](docs/trace.md#the-material-record) |
+| Path tracer, 4K workshop still, adaptive to 64 samples a pixel | **5,969 ms** GPU | [trace.md](docs/trace.md#the-material-record) |
+| Path tracer, 4K, 128 point and spot lights | **4.8 s**, from 9.4 s light by light | [trace-lights.md](docs/trace-lights.md#many-lights-the-light-tree) |
+| Live ambient occlusion and contact shadows, 4K, `high` | **2.72 ms** GPU a frame | [live-renderer.md](docs/live-renderer.md#ambient-occlusion-and-contact-shadows) |
 | Denoiser, 4K, texture to texture | **274 ms** on the GPU | [denoise.md](docs/denoise.md#speed) |
 | `.pitofx` file, car-sized model (159,200 triangles) | **3.4 ms** warm, 7.9 ms cold, at half the GLB's size | [pfx-file.md](docs/pfx-file.md#load-time) |
 | Empty game, stripped release binary (v0.32.0) | **34.7 MB** against Bevy's 106.6 MB | [measured.md](docs/measured.md#size) |
@@ -21,11 +23,13 @@ How and when each was measured is on its page.
 
 | | |
 |---|---|
-| Linux | `cargo install --locked --git https://github.com/gmrdad82/pfx --tag v2.6.0 pfx` |
+| Linux | `cargo install --locked --git https://github.com/gmrdad82/pfx --tag v3.0.0 pfx` |
 | Windows | the `pfx` tool is Linux-only; a game's crates build on Windows (below) |
 | macOS | the `pfx` tool is Linux-only; a game's crates build on macOS (below) |
 
-The `pfx` tool needs Rust 1.97 or newer and a Vulkan GPU. On Debian or Ubuntu, first `sudo apt install libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev`.
+The `pfx` tool builds from source: a release publishes its docs, not binaries. It needs Rust 1.97 or newer and a Vulkan GPU. On Debian or Ubuntu, first `sudo apt install libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev`.
+
+`pfx` alone opens the window, `pfx <file.pitofx>` opens that document in it, and any command or flag runs on the command line without one.
 
 Make a game, play it and open it in the editor:
 
@@ -42,7 +46,7 @@ cargo run --release -- edit
 A game links the crates it uses by the same tag, on Linux, Windows and macOS:
 
 ```toml
-pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v2.6.0" }
+pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.0" }
 ```
 
 Its crates build and pass their tests on Linux and Windows in CI, build for macOS on Apple Silicon in CI, and a Windows build runs on Linux and the Steam Deck through Proton ([docs/windows.md](docs/windows.md)). [Your first game](docs/first-game.md) walks through it, and [your first recipe](docs/recipe-first-scene.md) builds a scene.
@@ -53,7 +57,7 @@ A `.pitofx` is pfx's own file for scenes, recipes and models: TOML inside, in pf
 
 People edit a `.pitofx` in the editor's inspector or its built-in TOML editor, with syntax highlighting; scripts and agents edit it through the CLI verbs (`set` and `get` by dotted key, `key`, `add`, `remove` and the rest), which write the edit and a fresh build back into the `.pitofx` in one atomic replace. Other tools exchange glTF with pfx (`pfx import`, `pfx export`), never `.pitofx`.
 
-Older releases named the file `.pfx`; `pfx scene migrate <x.pfx>`, or opening it in the editor, checks its `PFXFILE` magic and writes `<x>.pitofx` beside it once.
+`pfx scene print <file.pitofx>` shows a document's TOML, and `pfx scene write` replaces it from stdin. A plain `.toml` recipe or scene, or a `.pfx` from an older release (magic `PFXFILE`), is imported once into a `.pitofx` beside it with `pfx scene migrate`, or by opening it in the window; every other command refuses it and names that command.
 
 ## The renderers
 
@@ -67,9 +71,9 @@ Older releases named the file `.pfx`; `pfx scene migrate <x.pfx>`, or opening it
 
 ## The editor
 
-<p align="center"><img src="docs/images/editor.png" width="800" alt="pfx gui on a new game made by pfx new: the outliner on the left lists the scene's objects, lights and materials; the viewport in the middle shows the pfx mark and wordmark standing on a grid with the move gizmo on them; the inspector on the right shows the selected group's position, rotation and scale; the log at the bottom says the scene opened with 4 objects, 10 materials and 1 light."></p>
+<p align="center"><img src="docs/images/editor.png" width="800" alt="pfx gui on a new game made by pfx new: the outliner on the left lists the scene's objects, lights and materials; the viewport in the middle shows the pfx mark and wordmark standing on a grid with the move gizmo on them; the inspector on the right shows the selected group's position, rotation and scale; a scale bar sits beside the axes; the log at the bottom says the scene opened with 4 objects, 10 materials and 1 light."></p>
 
-`pfx gui` opens a scene, a scene `.pitofx` or a project folder in pfx's editor: an outliner, the live viewport with gizmos and picking, an inspector, a TOML panel with highlighting and checks at line and column, a log and a traced preview, on one undo history ([docs/editor.md](docs/editor.md)). Its theme is black with thin, wide-tracked uppercase titles, a lime accent for what is live, violet for hover and highlights, inset cards and numbered panel markers.
+`pfx gui` opens a `.pitofx` document, a scene or a project folder in pfx's editor: an outliner, the live viewport with gizmos and picking, an inspector, a TOML panel with highlighting and checks at line and column, a log and a traced preview, on one undo history ([docs/editor.md](docs/editor.md)). Its theme is black with thin, wide-tracked uppercase titles, a lime accent for what is live, violet for hover and highlights, inset cards and numbered panel markers.
 
 **Play** (F5) runs the open scene as a game in the viewport, and Stop (F8) puts the editor back exactly where it was. With a game's WebAssembly module (`--play <module.wasm>`, the scene's `[play] module`, or a `.wasm` dropped on the window) the game's logic runs in pfx-mod's sandbox, metered and deterministic; the logic stays in the game's own repository ([docs/play-modules.md](docs/play-modules.md)).
 
@@ -78,14 +82,15 @@ Older releases named the file `.pfx`; `pfx scene migrate <x.pfx>`, or opening it
 | | |
 |---|---|
 | `pfx new <game>` | scaffold a game; `pfx new <out> --from <template>` writes a starter recipe |
-| `pfx gui <scene \| .pitofx \| folder>` | the editor, with `--play <module.wasm>` |
+| `pfx`, `pfx <file.pitofx>`, `pfx gui [<path>]` | the editor, with `--play <module.wasm>` |
 | `pfx build`, `check`, `timeline` | build a recipe headless into a GLB and a scene, the same bytes on every OS ([docs/recipes.md](docs/recipes.md)) |
 | `pfx set`, `get`, `key`, `unkey`, `curve`, `route`, `add`, `remove`, `duplicate` | edit a recipe or a `.pitofx`: values by dotted key, keys, curves, routes and objects |
-| `pfx scene list`, `save`, `unpack`, `fold`, `migrate`, `fix` | inspect, pack and unpack documents and scenes |
-| `pfx import`, `export`, `diff`, `library` | glTF in and out, GLB diffs, the object library |
+| `pfx scene list`, `print`, `write`, `save`, `fold`, `migrate`, `fix` | read and write a document's TOML, import `.toml` and legacy `.pfx` files |
+| `pfx asset search`, `get`, `list`; `pfx credits <scene>` | find and fetch CC0 and account assets with their licences checked, and list a scene's credits ([docs/asset-sources.md](docs/asset-sources.md)) |
+| `pfx import`, `export`, `diff`, `library`, `align` | glTF in and out, GLB diffs, the object library, aligning objects |
 | `pfx render --recipe <recipe>`, `pfx shot <recipe> --still` | a path-traced still; a live still |
 | `pfx shot <scene>`, `pfx clip`, `pfx shoot` | a scene's frames at a fixed clock on the live renderer, a recipe's camera moves and timeline ([docs/render-a-scene.md](docs/render-a-scene.md), [docs/recipe-clips.md](docs/recipe-clips.md)) |
-| `pfx film <script>` | a film of clips, frame folders and cards ([docs/film.md](docs/film.md)) |
+| `pfx film <script>` | a film of clips, frame folders and cards, with transitions and a true-peak ceiling on the master ([docs/film.md](docs/film.md)) |
 | `pfx sound clean <in.wav> <out.wav>` | clean a field recording ([docs/sound.md](docs/sound.md)) |
 | `pfx bench <scene> --seconds N` | a repeatable headless load with frame stats ([docs/benchmark-a-scene.md](docs/benchmark-a-scene.md)) |
 | `pfx bake --scene <dir>` | path-traced probes, lightmaps and plates |
@@ -95,7 +100,13 @@ Older releases named the file `.pfx`; `pfx scene migrate <x.pfx>`, or opening it
 
 ## The rest of a game
 
-Rigid bodies, characters and world queries ([docs/physics.md](docs/physics.md)); mixing, streams and music ([docs/sound.md](docs/sound.md)); keyboard, mouse and controllers behind one action map ([docs/input.md](docs/input.md)); shots, emitters, a spawn director and input journals ([docs/shots.md](docs/shots.md), [docs/director.md](docs/director.md), [docs/journal.md](docs/journal.md)); sandboxed WASM mods ([docs/mods.md](docs/mods.md)); films rendered offline from a game ([docs/film.md](docs/film.md)); and Steam ([docs/steam.md](docs/steam.md)). The same scene, inputs and seed give the same frames on the same GPU and driver ([docs/sim.md](docs/sim.md)). The domain code pfx needs (the denoiser, the Sobol sampler, LZ4, JPEG, the resampler) is ported into it rather than linked ([INSPIRATION.md](INSPIRATION.md)).
+Rigid bodies, characters and world queries ([docs/physics.md](docs/physics.md)); mixing, streams and music ([docs/sound.md](docs/sound.md)); keyboard, mouse and controllers behind one action map ([docs/input.md](docs/input.md)); shots, emitters, a spawn director and input journals ([docs/shots.md](docs/shots.md), [docs/director.md](docs/director.md), [docs/journal.md](docs/journal.md)); sandboxed WASM mods ([docs/mods.md](docs/mods.md)); films rendered offline from a game ([docs/film.md](docs/film.md)); and Steam ([docs/steam.md](docs/steam.md)).
+
+- **Asset sources and credits:** `pfx asset` fetches HDRIs, textures and models from CC0 sources and your accounts, refuses licences you have not allowed, and `pfx credits` lists what a scene uses ([docs/asset-sources.md](docs/asset-sources.md)).
+- **Play with a game module:** the window plays the open scene with a game's `.wasm` logic in the sandbox ([docs/play-modules.md](docs/play-modules.md)).
+- **Steam Workshop mods:** subscribed Workshop items load as mods beside the local ones ([docs/steam.md](docs/steam.md#workshop-items-as-mods)).
+- **Adaptive music:** stems of one tempo follow a live intensity and move between sections on the bar or the beat ([docs/sound.md](docs/sound.md#adaptive-music)).
+- **Film transitions and mastering:** `pfx film` cuts between scenes with a dissolve, push or whip, and holds the master under a true-peak ceiling measured as ITU-R BS.1770-4 defines it ([docs/film.md](docs/film.md#transitions), [docs/sound.md](docs/sound.md#true-peak-and-the-limiter)). The same scene, inputs and seed give the same frames on the same GPU and driver ([docs/sim.md](docs/sim.md)). The domain code pfx needs (the denoiser, the Sobol sampler, LZ4, JPEG, the resampler) is ported into it rather than linked ([INSPIRATION.md](INSPIRATION.md)).
 
 ## The crates
 
@@ -128,7 +139,8 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-game` | the game runtime and its launcher |
 | `pfx-project` | a game's project, scenes and content folders, and `pfx new`'s scaffold |
 | `pfx-mod` | the mod host: sandboxed, deterministic WASM components, metered by fuel and capped in memory |
-| `pfx-editor` | `pfx gui` and `<game> edit` |
+| `pfx-editor`, `pfx-workbench` | the scene editor and `<game> edit`; `pfx gui`'s window of recipes, documents and scenes in one layout of coded panels |
+| `pfx-source` | asset sources: search and fetch over HTTPS, licence checks, licence facts in a `.pitofx`, and a scene's credits |
 | `pfx-editor-style`, `-shell`, `-doc`, `-toml`, `-viewport` | the editor's egui crates: the theme and widgets, the window host with an offscreen shot harness, one undo history, the TOML panel and the 3D viewport ([docs/editor-crates.md](docs/editor-crates.md)) |
 | `pfx-theme` | the editor's tokens as the theme the editor and the dev HUD paint with |
 | `pfx-bench`, `pfx-assets`, `pfx-run` | `pfx bench`, path-traced logos and icons, and the `pfx` tool's process plumbing |

@@ -1,6 +1,6 @@
 # Measured
 
-The numbers the README quotes that have no page of their own, and how each was taken. The path tracer's are in [trace.md](trace.md#the-material-record), the denoiser's in [denoise.md](denoise.md#speed) and the `.pitofx` file's load times in [pfx-file.md](pfx-file.md#load-time).
+The numbers the README quotes that have no page of their own, and how each was taken. The path tracer's are in [trace.md](trace.md#the-material-record) and [trace-lights.md](trace-lights.md#many-lights-the-light-tree), the live ambient occlusion's in [live-renderer.md](live-renderer.md#ambient-occlusion-and-contact-shadows), the denoiser's in [denoise.md](denoise.md#speed) and the `.pitofx` file's load times in [pfx-file.md](pfx-file.md#load-time).
 
 All were measured on an AMD Radeon RX 9060 XT with an AMD Ryzen 9 9950X (32 threads) under Linux, each GPU run through the machine's GPU queue, which other jobs shared. The live and 2D numbers were measured on 2026-10-15 as an A/B against the commit before them (9e7514a): both release builds alternated run by run, five runs each, at a load average of 13 to 35, and each number is the median of the five. The rest were measured once on 2026-10-14 at commit 637c352 (v0.32.0).
 
@@ -40,4 +40,4 @@ pfx v0.32.0's scaffold and Bevy 0.20.0 with `DefaultPlugins`, cargo's default re
 
 ## Lines of Rust
 
-About 406,000 lines in 41 crates, counted on 2026-10-18 with `wc -l` over every `.rs` file under `crates/*/src` and `src`.
+About 463,000 lines in 43 crates, counted on 2026-10-18 after the fold with `wc -l` over every `.rs` file under `crates/*/src` and `src`.

@@ -50,10 +50,10 @@ fn options(args: &Args) -> Result<Options, String> {
 
 pub fn run(args: &Args, registry: &Registry) -> ExitCode {
     let shade = |shell: &mut Shell| {
-        super::gui::shade(args, shell);
         if let Some(module) = &args.play {
             shell.choose_module(module.clone());
         }
+        super::gui::shade(args, shell)
     };
     let mut options = match options(args) {
         Ok(options) => options,
@@ -91,7 +91,9 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
         let size = options.size.unwrap_or(SIZE);
         let mut shell = Shell::browse(folder).without_recent();
         shell.set_registry(registry.clone());
-        shade(&mut shell);
+        if let Err(error) = shade(&mut shell) {
+            return super::refuse("edit --shot", &error);
+        }
         pfx_workbench::shot(&mut Workbench::new(&mut shell, None), size, &script)
             .map(|png| (png, size))
     } else if let Some(place) =
@@ -117,7 +119,9 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
                 if options.bare {
                     shell = shell.bare().strip(args.strip);
                 }
-                shade(&mut shell);
+                if let Err(error) = shade(&mut shell) {
+                    return super::refuse("edit --shot", &error);
+                }
                 pfx_workbench::shot(&mut Workbench::new(&mut shell, None), size, &script)
                     .map(|png| (png, size))
             }
@@ -144,7 +148,9 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
                 if options.bare {
                     shell = shell.bare().strip(args.strip);
                 }
-                shade(&mut shell);
+                if let Err(error) = shade(&mut shell) {
+                    return super::refuse("edit --shot", &error);
+                }
                 let size = options.size.unwrap_or(SIZE);
                 pfx_workbench::shot(&mut Workbench::lent(&mut shell, &mut viewer), size, &script)
                     .map(|png| (png, size))
