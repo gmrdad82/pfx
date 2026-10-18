@@ -131,6 +131,18 @@ pfx-load reads it (`crates/load/src/scene/lod.rs`):
 - A level draws with its base part's material (the library entry its glTF material names, or the object's override), so the same material applies at every level. Levels take their own POSITION, NORMAL, TANGENT and UVs; the baked tangent-space `normalTexture` Manfred writes is not read, since pfx-load takes no textures from glTF (materials come from the scene's library).
 - A file without `MSFT_lod` loads as before, and its objects draw byte-identical.
 
+**Level groups.** The separate parts of one character (hair, beard, brows, glasses, hat, hands), each with its own levels, switch together with their head, so a coarse face never draws with a dense beard. A level node names its group's root, the head's base node, in `extras.lod.group`:
+
+```json
+{ "name": "beard.lod1", "mesh": 4,
+  "extras": { "lod": { "of": "beard", "level": 1, "error": 0.0015, "group": "head" } } }
+```
+
+- pfx-load carries the name as `Geometry::group` (part of the geometry's hash only when set, so ungrouped geometry hashes as before). The levels of one node must agree on it. pfx-load refuses the file, naming the GLB, when the group names a node that isn't in the file, a node with no `MSFT_lod` levels of its own, or a root that itself follows another group; a root's levels may name the root itself. Parts without levels carry no group and just draw.
+- The staged path (`Renderer::stage`, `Staged::apply`, and so play and the editor) links each member's instance to its root: the first leveled part of the same object whose node is the group name. It registers the links with `LodSet::set_groups(&[(member, root)])`, by instance index, and `Staged::release` clears them. `set_groups` refuses a member that follows itself or two roots, and a root that is itself a member.
+- In the per-frame swap, the first pass picks every level that follows no group, roots included, by its own projected error (the half-pixel rule and 20% band above, applied to the root). The second pass gives each member its root's level, capped at the member's deepest. A member whose root isn't swapped that frame (hidden, glass, baked into a plate) picks by its own error. Weights stay per instance, so a morphed member keeps its weights across a switch, as any morphed level does.
+- With no groups, the first pass only adds one lookup into an empty list and the second pass loops over nothing, so ungrouped scenes take the old path. Measured once in a release build, 1,000 leveled instances at 3840 pixels high: 44.0 µs ungrouped, 31.1 µs as 500 head and beard groups, cheaper because a member reads its root's level instead of projecting its own error.
+
 The selection is the run-time chain's, kept rather than three.js's (whose `MSFT_lod` loader switches at a distance of `1 / coverage`) or Babylon's (screen coverage of the bounding sphere): a projected error in pixels holds the 4K silhouette budget at any resolution and field of view, where a coverage threshold holds only at the resolution it was picked for. Measured: picking levels for 1,000 leveled instances at 3840 pixels high costs 72 µs on the CPU per frame, 0.07 µs an instance with the copy of the instance list (`selection_of_a_thousand_leveled_instances_is_measured`, release build); the GPU pass list gains no pass, and a coarser level only removes triangles.
 
 ## Shared materials and ageing

@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use crate::fixture::{LOD_RINGS, LOD_TARGETS, lod_error, lod_glb, lod_morph_glb, lod_sphere};
+use crate::fixture::{
+    LOD_RINGS, LOD_TARGETS, lod_error, lod_glb, lod_group_glb, lod_morph_glb, lod_sphere,
+};
 use crate::scene::{COVERAGE_HEIGHT, Scene};
 
 struct Folder {
@@ -122,5 +124,52 @@ fn a_level_whose_targets_differ_from_its_node_is_refused() {
     ] {
         let error = open(name, &lod_morph_glb("ball", targets)).unwrap_err();
         assert!(error.contains("morph targets"), "{error}");
+    }
+}
+
+#[test]
+fn a_beard_level_naming_its_head_carries_the_group_and_the_rest_carry_none() {
+    let scene = open("grouped", &lod_group_glb(Some("head"))).unwrap();
+    let groups: Vec<(&str, Option<&str>, usize)> = scene.meshes["ball"]
+        .parts
+        .iter()
+        .map(|part| {
+            (
+                part.node.as_str(),
+                part.geometry.group.as_deref(),
+                part.geometry.levels.len(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            ("head", None, 2),
+            ("beard", Some("head"), 1),
+            ("brow", None, 0)
+        ]
+    );
+    let plain = open("ungrouped", &lod_group_glb(None)).unwrap();
+    assert!(
+        plain.meshes["ball"]
+            .parts
+            .iter()
+            .all(|part| part.geometry.group.is_none())
+    );
+}
+
+#[test]
+fn a_group_naming_a_missing_node_or_one_without_levels_is_refused_with_the_file() {
+    for (group, wanted) in [
+        ("nose", "which is not in the file"),
+        ("brow", "which has no MSFT_lod levels"),
+    ] {
+        let error = open(group, &lod_group_glb(Some(group))).unwrap_err();
+        assert!(error.contains(wanted), "{error}");
+        assert!(error.contains("ball.glb"), "{error}");
+        assert!(
+            error.contains(&format!("node beard: extras.lod.group names node {group}")),
+            "{error}"
+        );
     }
 }

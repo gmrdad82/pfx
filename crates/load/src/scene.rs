@@ -187,6 +187,7 @@ pub struct Geometry {
     pub skin: Option<Arc<GeometrySkin>>,
     pub morph: Option<Arc<GeometryMorph>>,
     pub levels: Vec<GeometryLevel>,
+    pub group: Option<String>,
     pub hash: [u8; 32],
 }
 

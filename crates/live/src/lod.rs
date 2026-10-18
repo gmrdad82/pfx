@@ -28,6 +28,7 @@ fn lod_keep(pixel: vec2u, object_id: u32, coverage: f32) -> bool {
 const FIRST_BUCKET: i32 = -40;
 const LAST_BUCKET: i32 = 40;
 const ERROR_SAFETY: f32 = 1.25;
+const NO_ROOT: u32 = u32::MAX;
 
 pub trait MeshUploader {
     fn upload_mesh(&mut self, data: MeshData<'_>) -> Result<MeshHandle, String>;
@@ -91,6 +92,8 @@ pub struct LodSet {
     prebuilt: HashMap<MeshHandle, Prebuilt>,
     chosen: Vec<Option<(MeshHandle, usize)>>,
     errors: Vec<f32>,
+    follows: Vec<u32>,
+    members: Vec<(usize, usize)>,
 }
 
 fn field_of_view(camera: Camera) -> f32 {
@@ -220,6 +223,8 @@ impl LodSet {
             prebuilt: HashMap::new(),
             chosen: Vec::new(),
             errors: Vec::new(),
+            follows: Vec::new(),
+            members: Vec::new(),
         }
     }
 
@@ -270,6 +275,34 @@ impl LodSet {
         self.prebuilt.remove(&base).is_some()
     }
 
+    pub fn set_groups(&mut self, links: &[(usize, usize)]) -> Result<(), String> {
+        let mut follows = vec![
+            NO_ROOT;
+            links
+                .iter()
+                .map(|(member, _)| member + 1)
+                .max()
+                .unwrap_or(0)
+        ];
+        for &(member, root) in links {
+            if member == root || follows[member] != NO_ROOT {
+                return Err(format!(
+                    "LOD group: instance {member} follows one root, never itself"
+                ));
+            }
+            follows[member] = u32::try_from(root).map_err(|_| "LOD group: root index too large")?;
+        }
+        if links
+            .iter()
+            .any(|&(_, root)| follows.get(root).is_some_and(|&next| next != NO_ROOT))
+        {
+            return Err("LOD group: a group's root follows no other".into());
+        }
+        self.follows = follows;
+        self.members = links.to_vec();
+        Ok(())
+    }
+
     pub fn has_levels(&self) -> bool {
         !self.prebuilt.is_empty()
     }
@@ -300,6 +333,9 @@ impl LodSet {
                 self.chosen[index] = None;
                 continue;
             };
+            if self.follows.get(index).is_some_and(|&root| root != NO_ROOT) {
+                continue;
+            }
             let previous = self.chosen[index]
                 .filter(|(base, _)| *base == instance.mesh)
                 .map(|(_, level)| level);
@@ -314,6 +350,36 @@ impl LodSet {
                 previous,
             );
             self.chosen[index] = Some((instance.mesh, level));
+            instance.mesh = prebuilt.levels[level].0;
+        }
+        for &(member, root) in &self.members {
+            let Some(instance) = swapped.get_mut(member) else {
+                continue;
+            };
+            let Some(prebuilt) = self.prebuilt.get(&instance.mesh) else {
+                continue;
+            };
+            let deepest = prebuilt.levels.len() - 1;
+            let level = match self.chosen.get(root).copied().flatten() {
+                Some((_, level)) => level.min(deepest),
+                None => {
+                    let previous = self.chosen[member]
+                        .filter(|(base, _)| *base == instance.mesh)
+                        .map(|(_, level)| level);
+                    level_for(
+                        prebuilt.bounds,
+                        instance.model,
+                        prebuilt.levels.iter().map(|(_, error)| *error),
+                        &mut self.errors,
+                        camera.position,
+                        fov_y,
+                        viewport_height as f32,
+                        previous,
+                    )
+                    .0
+                }
+            };
+            self.chosen[member] = Some((instance.mesh, level));
             instance.mesh = prebuilt.levels[level].0;
         }
         Some(swapped)

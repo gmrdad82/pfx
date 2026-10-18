@@ -53,3 +53,36 @@ pub(crate) fn register(
     }
     Ok(leveled)
 }
+
+pub(crate) fn groups(
+    draws: &Draws,
+    instance: impl Fn(usize) -> Option<usize>,
+) -> Vec<(usize, usize)> {
+    if !draws.items.iter().any(|draw| draw.geometry.group.is_some()) {
+        return Vec::new();
+    }
+    let mut roots: HashMap<(Option<usize>, &str), usize> = HashMap::new();
+    for (index, draw) in draws.items.iter().enumerate() {
+        if !draw.geometry.levels.is_empty() {
+            roots
+                .entry((draw.owner, draw.node.as_str()))
+                .or_insert(index);
+        }
+    }
+    let mut links = Vec::new();
+    for (index, draw) in draws.items.iter().enumerate() {
+        let Some(group) = draw.geometry.group.as_deref() else {
+            continue;
+        };
+        let Some(&root) = roots.get(&(draw.owner, group)) else {
+            continue;
+        };
+        if root == index {
+            continue;
+        }
+        if let (Some(member), Some(root)) = (instance(index), instance(root)) {
+            links.push((member, root));
+        }
+    }
+    links
+}
