@@ -215,7 +215,12 @@ impl Session {
             Some(project) => project.name().to_string(),
             None => self.editor.name(),
         };
-        Config::flat(name, env!("CARGO_PKG_VERSION")).screen(policy_of(self.project()))
+        let mut config =
+            Config::flat(name, env!("CARGO_PKG_VERSION")).screen(policy_of(self.project()));
+        if self.editor.module.module().is_some() {
+            config.fonts.push(crate::play::FONT.to_vec());
+        }
+        config
     }
 
     pub fn project(&self) -> Option<&Project> {
@@ -238,6 +243,10 @@ impl Session {
         editor.sound = self.editor.sound.take();
         editor.sound_available = self.editor.sound_available;
         editor.screen = self.editor.screen;
+        if self.editor.module.from() != crate::play::From::Scene {
+            let module = self.editor.module.module().map(Path::to_path_buf);
+            editor.module.set_module(module, self.editor.module.from());
+        }
         if let Some(wake) = &self.wake {
             editor.viewport.set_wake(wake.clone());
         }
@@ -390,6 +399,10 @@ impl Session {
             return;
         }
         let flat = self.flat();
+        if requests.contains(&Request::Play) {
+            let Editor { module, edit, .. } = &mut self.editor;
+            module.follow(edit.scene());
+        }
         let fallback = (self.config.is_none() && requests.contains(&Request::Play))
             .then(|| self.scene_config());
         let Some(view) = &mut self.view else {
@@ -408,15 +421,38 @@ impl Session {
                     let Some(config) = self.config.as_ref().or(fallback.as_ref()) else {
                         continue;
                     };
-                    let game = self.factory.as_ref().map(|factory| factory());
+                    let game = match &self.factory {
+                        Some(factory) => Some(factory()),
+                        None => match self.editor.module.game(Some(crate::play::FONT_FAMILY)) {
+                            Ok(game) => game,
+                            Err(error) => {
+                                self.editor
+                                    .log
+                                    .error(format!("play: {error}; play did not start"));
+                                continue;
+                            }
+                        },
+                    };
+                    let module = self
+                        .factory
+                        .is_none()
+                        .then(|| self.editor.module.name())
+                        .flatten();
                     let stage = Stage {
                         config,
                         flat,
                         layout: self.layout.clone(),
                         labels: self.labels.clone(),
                     };
-                    if let Err(error) = view.start_play(&mut self.editor, game, stage) {
-                        self.editor.log.error(error);
+                    match view.start_play(&mut self.editor, game, stage) {
+                        Ok(()) => {
+                            if let Some(module) = module {
+                                self.editor.log.info(format!(
+                                    "play: module `{module}` runs the game, under pfx-mod's limits"
+                                ));
+                            }
+                        }
+                        Err(error) => self.editor.log.error(error),
                     }
                 }
                 Request::Pause => view.pause(&mut self.editor),

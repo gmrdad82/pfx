@@ -29,6 +29,8 @@ mod tests_flat;
 mod tests_host;
 #[cfg(test)]
 mod tests_input;
+#[cfg(feature = "modules")]
+pub mod wasm;
 
 pub use config::{Config, Crash, EnvironmentTexels, Pads, WARM_BUDGET};
 pub use driver::{Driver, Event, present_preference};

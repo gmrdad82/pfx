@@ -18,7 +18,7 @@ pfx-editor-style = { path = "../editor-style" }
 pfx-editor-toml = { path = "../editor-toml" }
 pfx-editor-viewport = { path = "../editor-viewport" }
 pfx-scene = { path = "../scene" }
-pfx-game = { path = "../game" }
+pfx-game = { path = "../game", features = ["modules"] }
 pfx-gpu = { path = "../gpu", features = ["window"] }
 pfx-input = { path = "../input", default-features = false }
 pfx-live = { path = "../live" }

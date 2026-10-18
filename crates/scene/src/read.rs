@@ -11,7 +11,7 @@ use crate::migrate::{self, Migration};
 use crate::spans::{KeyPath, Part, Spans};
 use crate::types::{
     Camera, Content, Emitter, FORMAT, File, FileKind, Finish, FinishKeys, Flare, Haze, Light,
-    Material, MaterialsFile, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates,
+    Material, MaterialsFile, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates, Play,
     PrefabFile, ProjectFile, ProjectTable, ProxiesFile, Proxy, Rig, SceneFile, Sky, Sound, Sounds,
     Sun, Text, Tiles, Trace, Tunable,
 };
@@ -86,6 +86,7 @@ pub(crate) struct Doc {
     pub(crate) trace: Option<Trace>,
     pub(crate) plates: Option<Plates>,
     pub(crate) physics: Option<Physics>,
+    pub(crate) play: Option<Play>,
     pub(crate) library: Vec<(String, Material)>,
     pub(crate) proxy: Vec<(usize, Proxy)>,
     pub(crate) project: Option<ProjectTable>,
@@ -200,6 +201,7 @@ impl Parsed {
                 trace: doc.trace,
                 plates: doc.plates.clone(),
                 physics: doc.physics.clone(),
+                play: doc.play.clone(),
                 authoring,
             }),
             FileKind::Prefab => File::Prefab(PrefabFile {
@@ -266,6 +268,7 @@ pub(crate) fn keys(kind: FileKind) -> &'static [&'static str] {
             "trace",
             "plates",
             "physics",
+            "play",
             "authoring",
         ],
         FileKind::Prefab => &[
@@ -641,6 +644,7 @@ pub(crate) fn parse(file: &Path, text: &str, kind: FileKind, context: &Context<'
             (_, "trace") => doc.trace = reader.typed(value, &path),
             (_, "plates") => doc.plates = reader.typed(value, &path),
             (_, "physics") => doc.physics = reader.typed(value, &path),
+            (FileKind::Scene, "play") => doc.play = reader.typed(value, &path),
             _ => {}
         }
     }

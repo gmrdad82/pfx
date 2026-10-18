@@ -227,7 +227,7 @@ A body, a character and a trigger take a layer by its name (`layer`), and a trig
 | `[[rig]]` | tables | none | camera rigs a game drives. |
 | `[[tiles]]` | tables | none | tile layers: grids of prefab placements. |
 | `[[particles]]` | tables | none | particle systems. |
-| `[sun]`, `[sky]`, `[haze]`, `[camera]`, `[finish]`, `[flare]`, `[motion_blur]`, `[trace]`, `[plates]`, `[physics]` | table | none | each held by one file of a scene and its includes at most. |
+| `[sun]`, `[sky]`, `[haze]`, `[camera]`, `[finish]`, `[flare]`, `[motion_blur]`, `[trace]`, `[plates]`, `[physics]`, `[play]` | table | none | each held by one file of a scene and its includes at most. |
 | `[authoring]` | table | none | the authoring tool's. |
 
 A glTF material resolves to the library entry of its name, else of its name before the first `.` (`.001` suffixes), else `fallback`.
@@ -980,6 +980,14 @@ Play mode's rigid world; renderers ignore it.
 | `rate` | number, 1 to 1000 | `60` | the play clock's ticks per second and the rigid world's steps per second. |
 | `substeps` | integer, 1 to 16 | `1` | solver steps per step. |
 | `iterations` | integer, 1 to 64 | `4` | solver iterations per substep. |
+
+### `[play]`
+
+What the editor's Play runs; renderers ignore it ([play-modules.md](play-modules.md)).
+
+| key | type | default | notes |
+|---|---|---|---|
+| `module` | path | none | a game's WebAssembly module, `*.wasm`, from the project's root; it need not exist until Play starts. |
 
 ### A material library
 

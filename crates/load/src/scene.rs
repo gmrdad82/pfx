@@ -692,6 +692,7 @@ pub struct Scene {
     pub triggers: BTreeMap<String, Trigger>,
     pub layers: BTreeMap<String, Vec<String>>,
     pub sounds: BTreeMap<String, Sound>,
+    pub play: Option<PathBuf>,
     pub keys: SceneKeys,
     pub warnings: Vec<SceneError>,
 }

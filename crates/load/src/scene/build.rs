@@ -471,6 +471,10 @@ pub(super) fn build_with(
         triggers,
         layers: resolved.layers.clone(),
         sounds,
+        play: resolved
+            .play_module
+            .as_ref()
+            .map(|module| root.join(module)),
         warnings: resolved
             .warnings
             .iter()

@@ -2274,6 +2274,15 @@
       ],
       "type": "object"
     },
+    "Play": {
+      "additionalProperties": false,
+      "properties": {
+        "module": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "Prepare": {
       "additionalProperties": false,
       "properties": {
@@ -3437,6 +3446,9 @@
     },
     "plates": {
       "$ref": "#/$defs/Plates"
+    },
+    "play": {
+      "$ref": "#/$defs/Play"
     },
     "rig": {
       "items": {

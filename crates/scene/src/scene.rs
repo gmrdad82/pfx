@@ -45,6 +45,7 @@ pub struct Scene {
     pub plates: Option<Plates>,
     pub proxies: Vec<Entry<Proxy>>,
     pub physics: Option<Physics>,
+    pub play_module: Option<PathBuf>,
     pub layers: BTreeMap<String, Vec<String>>,
     pub warnings: Vec<Diagnostic>,
 }

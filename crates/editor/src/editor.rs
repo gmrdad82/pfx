@@ -119,6 +119,7 @@ pub struct Editor {
     pub tunables: Tunables,
     pub live: BTreeMap<String, Value>,
     pub level: Level,
+    pub module: crate::play::Play,
     tunables_error: Option<String>,
     held: Option<Held>,
     requests: Vec<Request>,
@@ -187,6 +188,7 @@ impl Editor {
             tunables: Tunables::default(),
             live: BTreeMap::new(),
             level: Level::new(),
+            module: crate::play::Play::default(),
             tunables_error: None,
             held: None,
             requests: Vec::new(),
@@ -194,6 +196,9 @@ impl Editor {
         editor.sync_files();
         editor.refresh();
         editor.revision = 0;
+        editor.module = crate::play::Play::of(editor.scene());
+        let root = editor.project_root().to_path_buf();
+        editor.module.look(&root);
         let name = editor.name();
         editor.log.info(format!(
             "opened {name}: {} objects, {} materials, {} lights",
@@ -787,6 +792,34 @@ impl Editor {
     pub fn step_selection(&mut self, by: isize) {
         let next = self.outline.step(self.selection.as_ref(), by);
         self.select(next);
+    }
+
+    pub fn pick_module(&mut self) {
+        if self.play != Play::Stopped {
+            return;
+        }
+        self.module.next();
+        self.log_module();
+    }
+
+    pub fn use_module(&mut self, module: PathBuf) {
+        if self.play != Play::Stopped {
+            return;
+        }
+        self.module
+            .set_module(Some(module), crate::play::From::Picked);
+        self.log_module();
+    }
+
+    fn log_module(&mut self) {
+        let line = match self.module.module() {
+            Some(module) => {
+                let shown = module.strip_prefix(self.project_root()).unwrap_or(module);
+                format!("play: F5 plays the scene with module {}", shown.display())
+            }
+            None => "play: F5 plays the scene with no module".to_string(),
+        };
+        self.log.info(line);
     }
 
     pub fn play_pressed(&mut self) {

@@ -16,8 +16,8 @@ use crate::scene::{Entry, Scene};
 use crate::spans::{KeyPath, Part};
 use crate::types::{
     Camera, Content, Emitter, File, FileKind, Finish, FinishKeys, Flare, Haze, Light, LutKey,
-    Material, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates, Proxy, Rig, Sky, Sound,
-    Sun, Text, Tiles, Trace,
+    Material, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates, Play, Proxy, Rig, Sky,
+    Sound, Sun, Text, Tiles, Trace,
 };
 use crate::{Diagnostic, EditError, FORMAT, Id, Patch, PatchGroup, Severity};
 
@@ -733,6 +733,7 @@ struct Scope {
     trace: Option<Single<Trace>>,
     plates: Option<Single<Plates>>,
     physics: Option<Single<Physics>>,
+    play: Option<Single<Play>>,
 }
 
 enum Lookup {
@@ -1455,6 +1456,9 @@ impl<'p> Checker<'p> {
         if let Some(raw) = &doc.sound_file {
             self.asset(file, &key(&["sound"]), raw, &[".sound.toml"]);
         }
+        if let Some(raw) = doc.play.as_ref().and_then(|play| play.module.as_ref()) {
+            self.located(file, &key(&["play", "module"]), raw, &[".wasm"], false);
+        }
         if let Some(sun) = &doc.sun {
             self.issues(file, &key(&["sun"]), rules::sun(sun));
         }
@@ -1827,6 +1831,7 @@ impl<'p> Checker<'p> {
             self.single(&mut scope.trace, member, "trace", doc.trace);
             self.single(&mut scope.plates, member, "plates", doc.plates);
             self.single(&mut scope.physics, member, "physics", doc.physics);
+            self.single(&mut scope.play, member, "play", doc.play);
         }
         for kind in Kind::ALL {
             let names: Vec<(String, PathBuf, KeyPath)> = scope
@@ -2786,6 +2791,12 @@ impl<'p> Checker<'p> {
         scene.trace = scope.trace.as_ref().map(|single| single.value);
         scene.plates = scope.plates.as_ref().map(|single| single.value.clone());
         scene.physics = scope.physics.as_ref().map(|single| single.value.clone());
+        scene.play_module = scope
+            .play
+            .as_ref()
+            .and_then(|single| single.value.module.as_deref())
+            .and_then(|raw| rooted(raw).ok())
+            .map(PathBuf::from);
         scene.files = placed.files.clone();
         scene.tiles = self.tile_layers(&scope, &chain, &mut scene.files);
         if let Some(finish) = &scope.finish {

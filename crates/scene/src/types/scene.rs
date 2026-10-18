@@ -805,6 +805,14 @@ pub struct Physics {
     pub iterations: Option<u32>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Play {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+}
+
 impl Physics {
     pub const GRAVITY: [f32; 3] = [0.0, -9.81, 0.0];
     pub const RATE: f32 = 60.0;

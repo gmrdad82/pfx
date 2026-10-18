@@ -34,8 +34,8 @@ const USAGE: &str = "usage:
   pfx cache --json
   pfx cache prune --json [--dry-run]
   pfx font subset --font <ttf> --out <ttf> [--chars <file>]... [--base gb2312-1|none] [--no-closure]
-  pfx edit <scene.toml>
-  pfx edit <project folder>
+  pfx edit <scene.toml> [--play <module.wasm>]
+  pfx edit <project folder> [--play <module.wasm>]
   pfx new <game> [--path <dir>] [--with-module]
   pfx bench <scene.toml> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
   pfx shot <scene.toml|scene.pfx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr] [--audio <out.wav>] [--sound <script>] [--shutter S] [--seed S] [--json]
@@ -335,7 +335,7 @@ fn shape(command: &str) -> &'static str {
         "steam" => "pfx steam <COMMAND>",
         "cache" => "pfx cache [OPTIONS] [COMMAND]",
         "font" => "pfx font <COMMAND>",
-        "edit" => "pfx edit <PATH>",
+        "edit" => "pfx edit [OPTIONS] <PATH>",
         "new" => "pfx new [OPTIONS] <GAME>",
         "bench" => "pfx bench [OPTIONS] --seconds <SECONDS> <SCENE>",
         "shot" => "pfx shot [OPTIONS] <--seconds <SECONDS>|--frames <FRAMES>> <SCENE>",
@@ -920,11 +920,24 @@ fn plan_archive(args: &[String]) -> Result<Plan, String> {
 }
 
 fn plan_edit(args: &[String]) -> Result<Plan, String> {
-    match args {
-        [] => Err(cli::required(&["<PATH>"])),
-        [first, ..] if first.starts_with('-') => Err(cli::unexpected(first)),
-        [_, extra, ..] => Err(cli::unexpected(extra)),
-        [_] => Ok(Plan::Edit(args.to_vec())),
+    let mut path = None;
+    let mut module = None;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--play" if module.is_some() => return Err(cli::repeated(&cli::with_value("--play"))),
+            "--play" => match rest.next() {
+                Some(value) if !value.starts_with('-') => module = Some(value),
+                _ => return Err(cli::missing_value("--play")),
+            },
+            flag if flag.starts_with('-') => return Err(cli::unexpected(flag)),
+            _ if path.is_none() => path = Some(arg),
+            extra => return Err(cli::unexpected(extra)),
+        }
+    }
+    match path {
+        Some(_) => Ok(Plan::Edit(args.to_vec())),
+        None => Err(cli::required(&["<PATH>"])),
     }
 }
 
@@ -1260,7 +1273,16 @@ mod tests {
             plan(&words("edit content/room.scene.toml")).unwrap(),
             Plan::Edit(args) if args == words("content/room.scene.toml")
         ));
+        assert!(matches!(
+            plan(&words("edit --play game.wasm content/room.scene.toml")).unwrap(),
+            Plan::Edit(args) if args == words("--play game.wasm content/room.scene.toml")
+        ));
         assert!(refused("edit").contains("<PATH>"));
+        assert!(
+            refused("edit room.scene.toml --play")
+                .contains("a value is required for '--play <PLAY>'")
+        );
+        assert!(refused("edit a b").contains("unexpected argument 'b' found"));
         assert!(USAGE.contains("pfx edit <scene.toml>"));
     }
 

@@ -1,0 +1,32 @@
+package pfx:play@0.1.0;
+
+interface scene {
+  find: func(name: string) -> option<u32>;
+  position: func(object: u32) -> tuple<f32, f32, f32>;
+  move-to: func(object: u32, x: f32, y: f32, z: f32);
+  set-hidden: func(object: u32, hidden: bool);
+}
+
+interface input {
+  held: func(key: string) -> bool;
+}
+
+interface clock {
+  ticks: func() -> u64;
+  step: func() -> f32;
+}
+
+interface hud {
+  text: func(line: u32, text: string);
+}
+
+world game {
+  import scene;
+  import input;
+  import clock;
+  import hud;
+  import pfx:mods/log@0.1.0;
+
+  export start: func();
+  export tick: func();
+}

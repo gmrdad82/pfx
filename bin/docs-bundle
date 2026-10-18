@@ -140,6 +140,7 @@ GUIDES = [
     ("alpha-master", 322, None),
     ("editor", 401, None),
     ("editor-crates", 402, None),
+    ("play-modules", 403, None),
     ("windows", 501, "Games on pfx build for Windows: the one build Steam ships, which Linux and the Steam Deck run through Proton."),
     ("steam", 502, None),
     ("wgpu30", 503, None),

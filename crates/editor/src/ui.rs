@@ -59,6 +59,17 @@ impl Editor {
     }
 
     fn keys(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|input| {
+            input
+                .raw
+                .dropped_files
+                .iter()
+                .map(|file| file.path().to_path_buf())
+                .rfind(|path| path.extension().is_some_and(|end| end == "wasm"))
+        });
+        if let Some(module) = dropped {
+            self.use_module(module);
+        }
         let viewport = self.viewport.id();
         let typing = ctx.memory(|memory| memory.focused().is_some_and(|id| id != viewport));
         if typing {
@@ -130,6 +141,9 @@ impl Editor {
             && let Some(Item::Scene(scene)) = self.selection.clone()
         {
             self.open_scene(scene);
+        }
+        if pressed(Key::F4) {
+            self.pick_module();
         }
         if pressed(Key::F5) {
             self.play_pressed();
@@ -226,6 +240,13 @@ impl Editor {
             }
             if self.button(ui, "stop", "F8", "stop", false) && self.play != Play::Stopped {
                 self.request(Request::Stop);
+            }
+            if self.module.offered() {
+                let name = self.module.name();
+                let label = format!("module {}", name.as_deref().unwrap_or("none"));
+                if self.button(ui, "module", "F4", &label, name.is_some()) {
+                    self.pick_module();
+                }
             }
             if self.sound_available {
                 let mute = if self.muted { "muted" } else { "mute" };

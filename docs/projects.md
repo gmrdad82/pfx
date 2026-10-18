@@ -154,7 +154,7 @@ modules: modules/turns.wasm was rebuilt; it swaps in at the next tick
 modules: module `turns` swapped at tick 12 and kept its state (4 bytes through save and restore)
 ```
 
-A build that does not load (cut short mid-write, or wrong) leaves the running module and logs a warning; a module that fails is stopped with its error in the log, and the game plays on. While play is paused, a rebuilt module swaps in at the next step or once play resumes. The window's file watcher also wakes the editor when a module changes. `pfx edit <folder>` plays the scene without the game's logic, so it has no modules to reload. No Rust is hot-patched: rebuilding the game itself still means stopping and running it again.
+A build that does not load (cut short mid-write, or wrong) leaves the running module and logs a warning; a module that fails is stopped with its error in the log, and the game plays on. While play is paused, a rebuilt module swaps in at the next step or once play resumes. The window's file watcher also wakes the editor when a module changes. `pfx edit <folder>` plays the scene without the game's logic, so it has no modules to reload, unless it plays a module of its own ([play-modules.md](play-modules.md)), which reloads the same way. No Rust is hot-patched: rebuilding the game itself still means stopping and running it again.
 
 ## pfx edit <project folder>
 
