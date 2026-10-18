@@ -17,6 +17,10 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 - `crates/load/tests/data/`, `crates/load/tests/level/` and `crates/load/tests/scenes/`: minimal neutral meshes, images, skies and a sine tone.
 - `crates/scene/tests/fixtures/` and `crates/scene/examples/demo/`: the scene format's neutral test meshes and image, and the demo project built from copies of them. The scene format, its checks, writer and tests began as pfx's own scene loader and were kept in the separate crate pfx-scene until v1.6.0 (commit `4b5e12d`), which moved back into this tree as `crates/scene` and `crates/file`.
 - `docs/schema/`: the scene format's JSON Schemas, generated from `pfx-scene`'s types by `cargo run -p pfx-scene --features schema --example scene-schema -- docs/schema`.
+- `library/`: the object library's models, `object.toml` files and thumbnails, original, baked by pfx's own generators from `library/sources.toml`, no third-party models or marks.
+- `samples/`: pfx's own made-up sample recipes, their LUT and the chase-film sample's tapes.
+- `tests/golden/` and `tests/fixtures/`: the recipe builder's golden scenes (cards, flatslab, table, toybox) with their GLBs and sidecars, built by `pfx build` from the recipes beside them, and the recipes' test sky `window.hdr`, made by pfx's tests (`tests/fixtures/sky/SOURCE`).
+- `crates/glb/tests/golden/`, `crates/recipe-scene/tests/fixtures/`, `crates/build/tests/` and `crates/runtime/tests/`: the recipe crates' test meshes, images and skies, written by their own code. The recipe crates, their tests and these files began in a separate scene tool and moved into this tree at its commit `598059d`.
 - `crates/play/tests/characters/`: blocks for the character tests.
 - `crates/sound/tests/fixtures/`: sine tones made with ffmpeg.
 - `crates/project/src/templates/grid.glb`: the floor grid of the scaffold's first scene.
@@ -266,6 +270,106 @@ The outdoor height fog's density and its closed-form optical path in `crates/liv
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+## Godot Engine, under the MIT licence
+
+The route spline's arc-length table in `crates/motion/src/route.rs` (in the package `pfx-motion`) ports the arc-length baking of Godot Engine's Curve3D (https://github.com/godotengine/godot, `scene/resources/curve.cpp`, tag `4.5-stable`, commit `876b290332ec6f2e6d173d08162a02aa7e6ca46d`): the even-length subdivision of each segment, the distance table searched by bisection, and the nearest distance by projection onto the baked polyline, altered, under the MIT licence:
+
+> Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md).
+> Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## meshoptimizer, under the MIT licence
+
+`crates/mesh/src/simplify.rs` (in the package `pfx-mesh`) is a port of the edge-collapse simplifier of meshoptimizer 0.25 (https://github.com/zeux/meshoptimizer, `src/simplifier.cpp`, as vendored by the meshopt 0.6.2 crate), altered, under the MIT licence:
+
+> Copyright (c) 2016-2025 Arseny Kapoulkine
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## bevy_mikktspace and MikkTSpace, under the MIT and zlib licences
+
+`crates/mesh/src/tangents.rs` (in the package `pfx-mesh`) is a port, for triangles only, of bevy_mikktspace 1.0.0 (https://github.com/bevyengine/bevy_mikktspace), Copyright (c) 2017 The mikktspace Library Developers, licensed MIT OR Apache-2.0 and used here under the MIT licence above, itself a reimplementation of MikkTSpace (https://github.com/mmikk/MikkTSpace), altered here, under the zlib licence:
+
+> Copyright (C) 2011 by Morten S. Mikkelsen
+>
+> This software is provided 'as-is', without any express or implied warranty. In no event will the authors be held liable for any damages arising from the use of this software.
+>
+> Permission is granted to anyone to use this software for any purpose, including commercial applications, and to alter it and redistribute it freely, subject to the following restrictions:
+>
+> 1. The origin of this software must not be misrepresented; you must not claim that you wrote the original software. If you use this software in a product, an acknowledgment in the product documentation would be appreciated but is not required.
+> 2. Altered source versions must be plainly marked as such, and must not be misrepresented as being the original software.
+> 3. This notice may not be removed or altered from any source distribution.
+
+## curvo, under the MIT licence
+
+The loft in `crates/build/src/builtin/loft.rs` (in the package `pfx-build`) ports the loft of curvo (https://github.com/mattatz/curvo, version 0.3.2, commit `6f6a51847a50092507936e9fd5735feedfecb69c`): `NurbsSurface::try_loft`, the curve interpolation by knot averaging and the B-spline basis, altered, under the MIT licence:
+
+> MIT License
+>
+> Copyright (c) 2024 mattatz
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## OpenSubdiv, under the Tomorrow Open Source Technology License 1.0
+
+The same file ports OpenSubdiv's Catmull-Clark subdivision with semi-sharp creases (https://github.com/PixarAnimationStudios/OpenSubdiv, tag `v3_7_0`, commit `9dab8a47bfbb1388ec8388fe61f5f916e6123f38`): the masks of `opensubdiv/sdc/catmarkScheme.h` and `scheme.h` and the sharpness rules of `opensubdiv/sdc/crease.cpp`, changed from C++ into Rust by pfx's authors. `crease.cpp` is Copyright 2014 DreamWorks Animation LLC. OpenSubdiv is under the Tomorrow Open Source Technology License 1.0, which is the Apache License 2.0 (its text ships in [crates/build/LICENSE-APACHE](crates/build/LICENSE-APACHE)) with Section 6 replaced by:
+
+> 6. Trademarks. This License does not grant permission to use the trade names, trademarks, service marks, or product names of the Licensor and its affiliates, except as required to comply with Section 4(c) of the License and to reproduce the content of the NOTICE file.
+
+Its NOTICE:
+
+> OpenSubdiv
+> Copyright 2013 Pixar
+> All rights reserved.
+>
+> This product includes software developed at:
+> Pixar (http://www.pixar.com/).
+> Dreamworks Animation (http://www.dreamworksanimation.com/)
+> Autodesk, Inc. (http://www.autodesk.com/).
+> Google, Inc. (http://www.google.com/).
+> DigitalFish (http://digitalfish.com/).
+
+## The Mersenne Twister, CPython's random and NumPy's RandomState, under BSD and PSF licences
+
+`crates/generators/src/pyrandom.rs` and `crates/generators/src/numpy_random.rs` (in the package `pfx-generators`) reproduce, byte for byte, the streams of CPython's `random` module (https://github.com/python/cpython, `Modules/_randommodule.c` and `Lib/random.py`) and NumPy's legacy `RandomState` (https://github.com/numpy/numpy, `numpy/random/mtrand.pyx` and its MT19937 core), so a generator first written in Python gives the same shapes in pfx. Both rest on MT19937, by Makoto Matsumoto and Takuji Nishimura, under this licence:
+
+> Copyright (c) 1997 - 2002, Makoto Matsumoto and Takuji Nishimura
+> All rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+> 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+> 3. The names of its contributors may not be used to endorse or promote products derived from this software without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+CPython is Copyright (c) 2001 Python Software Foundation, under the Python Software Foundation License Version 2. NumPy is under the BSD 3-Clause licence:
+
+> Copyright (c) 2005-2025, NumPy Developers
+> All rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+>
+> 1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+> 2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+> 3. The names of its contributors may not be used to endorse or promote products derived from this software without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
 ## Fonts, under the SIL Open Font License 1.1
 
 Each font keeps its licence beside it:
@@ -274,4 +378,5 @@ Each font keeps its licence beside it:
 - `crates/text/tests/fonts/`: Bungee Color, DM Sans, IBM Plex Mono and a Noto Sans SC subset.
 - `crates/theme/fonts/`: Exo 2 and JetBrains Mono, each with its `SOURCE.md`.
 - `crates/editor-style/fixture/`: Inconsolata, the editor crates' test font, with its `OFL.txt` and `SOURCE`.
+- `assets/fonts/`: JetBrains Mono (by JetBrains) patched with the Nerd Fonts icon glyphs (Nerd Fonts 3.5.1, OFL-1.1-no-RFN), the recipes' text family, which `pfx-build` and `pfx-recipe-scene` embed, with its `OFL.txt` and `SOURCE`.
 - `crates/project/src/templates/IBMPlexMono-Regular.ttf`: IBM Plex Mono, with `IBMPlexMono-OFL.txt`; `pfx new` ships it unmodified into a new game.

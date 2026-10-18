@@ -1,0 +1,1015 @@
+use pfx_mesh::math::Real;
+use std::fmt::Write as _;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use pfx_generators::pyrandom::Random;
+use serde_json::json;
+
+use super::refuse;
+
+#[derive(clap::Args)]
+pub(super) struct Args {
+    #[arg(
+        value_name = "out",
+        help = "The recipe to write; an existing file is refused"
+    )]
+    out: PathBuf,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "template",
+        help = "The starter to write"
+    )]
+    from: Template,
+    #[arg(
+        long,
+        value_name = "N",
+        default_value_t = 1,
+        help = "The seed of the route, the cars and the street"
+    )]
+    seed: u64,
+    #[arg(long, help = "Print one JSON object")]
+    json: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
+enum Template {
+    #[value(
+        help = "A starter chase shot: a 9:16 timeline, a street along a route, a hero car, traffic and a chase camera"
+    )]
+    Street,
+}
+
+pub(super) const POINTS: usize = 8;
+const LANE_WIDTH: f64 = 3.5;
+const SIDEWALK: f64 = 4.0;
+const SETBACK: f64 = 12.0;
+const KERB_INSET: f64 = 1.8;
+const INNER: f64 = LANE_WIDTH * 0.5;
+const OUTER: f64 = LANE_WIDTH * 1.5;
+const SECONDS: f64 = 10.0;
+const HERO_SPEED: [f64; 2] = [18.0, 32.0];
+const DAY: u32 = 172;
+const LATITUDE: f64 = 44.4;
+const SUN_ELEVATION_DEG: f64 = 5.0;
+const EYE: f64 = 0.75;
+const FOV_Y_DEG: f64 = 80.0;
+const TOP_HEIGHT: f64 = 400.0;
+const ASPECT: f64 = 1080.0 / 1920.0;
+const CAR_SHARE: f64 = 0.375;
+const CAR_DOWN: f64 = 0.6;
+const LOOK_AT_M: f64 = 8.0;
+const LAG_S: f64 = 0.25;
+const DRIFT: [f64; 3] = [1.2, 2.5, 26.0];
+const SHUTTER: f64 = 1.0;
+const OPEN_GAP: f64 = 1.1;
+const ENDING: [f64; 2] = [1.5, 3.5];
+const ENDING_FALLBACK: f64 = 2.2;
+const PAST_CROSSWALK: f64 = 6.0;
+const RELEASE_EASE: f64 = 1.5;
+const LUT: &str = "lilac.cube";
+const LUT_SIZE: usize = 33;
+const TRAFFIC: [&str; 3] = ["sedan", "hatch", "van"];
+const HERO_PAINTS: [&str; 4] = ["#5b0f1a", "#0e2a4f", "#14361f", "#2a0f3d"];
+
+pub(super) struct Made {
+    pub(super) text: String,
+    pub(super) route: Vec<[f64; 3]>,
+    pub(super) objects: Vec<String>,
+}
+
+fn round(value: f64, places: i32) -> f64 {
+    let scale = 10f64.powi(places);
+    let rounded = (value * scale).round() / scale;
+    if rounded == 0.0 { 0.0 } else { rounded }
+}
+
+fn num(value: f64) -> String {
+    let text = format!("{value}");
+    if text.contains('.') || text.contains('e') {
+        text
+    } else {
+        format!("{text}.0")
+    }
+}
+
+fn point(p: [f64; 3]) -> String {
+    format!("[{}, {}, {}]", num(p[0]), num(p[1]), num(p[2]))
+}
+
+pub(super) fn route(seed: u64) -> Vec<[f64; 3]> {
+    let mut random = Random::new(seed as i64);
+    let length = random.uniform(560.0, 640.0);
+    let amplitude = random.uniform(10.0, 22.0);
+    let phase = random.uniform(-0.4, 0.4);
+    let last = (POINTS - 1) as f64;
+    (0..POINTS)
+        .map(|i| {
+            let t = i as f64 / last;
+            let wobble = if i == 0 || i == POINTS - 1 {
+                0.0
+            } else {
+                random.uniform(-2.0, 2.0)
+            };
+            let x = amplitude * ((std::f64::consts::TAU * t + phase).sin_of() - phase.sin_of())
+                + wobble;
+            [round(x, 1), 0.0, round(length * t, 1)]
+        })
+        .collect()
+}
+
+pub(super) struct Sun {
+    pub(super) hour: f64,
+    pub(super) heading: f64,
+    pub(super) elevation: f64,
+    pub(super) azimuth: f64,
+}
+
+fn daylight(hour: f64, heading: f64) -> pfx_core::daylight::Sun {
+    pfx_core::daylight::Daylight {
+        hour,
+        day: f64::from(DAY),
+        latitude: LATITUDE,
+        heading,
+    }
+    .sun()
+}
+
+fn travel() -> f64 {
+    (HERO_SPEED[0] + HERO_SPEED[1]) * 0.5 * SECONDS
+}
+
+pub(super) fn stretch(route: &[[f64; 3]]) -> [f64; 2] {
+    let line = pfx_motion::Route::new(route, false).ok();
+    let (from, to) = match &line {
+        Some(line) => {
+            let (a, b) = (line.at(0.0).position, line.at(travel()).position);
+            ([a.x, a.z], [b.x, b.z])
+        }
+        None => ([route[0][0], route[0][2]], [route[1][0], route[1][2]]),
+    };
+    let (dx, dz) = (to[0] - from[0], to[1] - from[1]);
+    let length = dx.hypot_of(dz).max(1e-9);
+    [dx / length, dz / length]
+}
+
+pub(super) fn sun(route: &[[f64; 3]]) -> Sun {
+    let (mut low, mut high) = (12.0, 22.0);
+    for _ in 0..60 {
+        let mid = 0.5 * (low + high);
+        if daylight(mid, 180.0).elevation > SUN_ELEVATION_DEG {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    let hour = round(0.5 * (low + high), 2);
+    let ahead = stretch(route);
+    let across = (-ahead[0]).atan2_of(ahead[1]).to_degrees();
+    let heading = round(
+        (daylight(hour, 180.0).azimuth - across).rem_euclid(360.0),
+        1,
+    );
+    let placed = daylight(hour, heading);
+    Sun {
+        hour,
+        heading,
+        elevation: placed.elevation,
+        azimuth: placed.azimuth,
+    }
+}
+
+pub(super) struct Hero {
+    half_track: f64,
+    rear: f64,
+    length: f64,
+    width: f64,
+    height: f64,
+}
+
+fn chase(hero: &Hero) -> ([f64; 3], [f64; 3]) {
+    let half = (FOV_Y_DEG.to_radians() * 0.5).tan_of();
+    let distance = hero.width / (CAR_SHARE * 2.0 * half * ASPECT);
+    let back = -(hero.length * 0.5 + distance);
+    let below = ((EYE - hero.height * 0.5) / distance).atan_of();
+    let wanted = ((2.0 * CAR_DOWN - 1.0) * half).atan_of();
+    let look = EYE + (LOOK_AT_M - back) * (wanted - below).tan_of();
+    ([0.0, EYE, round(back, 2)], [0.0, round(look, 2), LOOK_AT_M])
+}
+
+fn hero_at(t: f64) -> f64 {
+    HERO_SPEED[0] * t + 0.5 * (HERO_SPEED[1] - HERO_SPEED[0]) / SECONDS * t * t
+}
+
+fn hero_speed(t: f64) -> f64 {
+    HERO_SPEED[0] + (HERO_SPEED[1] - HERO_SPEED[0]) * t / SECONDS
+}
+
+fn share(hero: &Hero, share: f64) -> f64 {
+    let half = (FOV_Y_DEG.to_radians() * 0.5).tan();
+    hero.length * 0.5 + hero.width / (share * 2.0 * half * ASPECT)
+}
+
+fn release(close: f64, crosswalks: &[f64]) -> f64 {
+    let rest = |r: f64| hero_at(r) - close + hero_speed(r) * RELEASE_EASE * 0.5;
+    let window = [SECONDS - ENDING[1], SECONDS - ENDING[0]];
+    crosswalks
+        .iter()
+        .rev()
+        .find_map(|c| {
+            let goal = c + PAST_CROSSWALK;
+            let (mut low, mut high) = (0.0, SECONDS);
+            for _ in 0..60 {
+                let mid = 0.5 * (low + high);
+                if rest(mid) < goal {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            let r = 0.5 * (low + high);
+            (r >= window[0] && r <= window[1]).then_some(r)
+        })
+        .unwrap_or(SECONDS - ENDING_FALLBACK)
+}
+
+fn keys(w: &mut String, name: &str, keys: &[(f64, f64)]) {
+    let list: Vec<String> = keys
+        .iter()
+        .map(|(t, v)| format!("[{}, {}]", num(round(*t, 2)), num(round(*v, 2))))
+        .collect();
+    let _ = writeln!(w, "{name} = [{}]", list.join(", "));
+}
+
+fn cinematic(w: &mut String, hero: &Hero, crosswalks: &[f64]) {
+    let near = share(hero, 0.35);
+    let r = round(release(near, crosswalks), 2);
+    let settle = r - 0.3;
+    let _ = writeln!(w, "bank_spring = {{ frequency = 1.2, damping = 0.3 }}");
+    let _ = writeln!(w, "release = {}", num(r));
+    let _ = writeln!(w, "release_ease = {}", num(RELEASE_EASE));
+    let _ = writeln!(w);
+    let _ = writeln!(w, "[camera.rig.tracks]");
+    keys(
+        w,
+        "distance",
+        &[
+            (0.0, hero.length * 0.5 + OPEN_GAP),
+            (0.65, near),
+            (2.2, share(hero, 0.2)),
+            (4.0, share(hero, 0.26)),
+            (5.6, share(hero, 0.15)),
+            (6.8, share(hero, 0.15)),
+            (settle, near),
+        ],
+    );
+    keys(
+        w,
+        "lateral",
+        &[
+            (0.0, 0.0),
+            (0.65, -1.8),
+            (2.2, -2.6),
+            (4.0, 0.8),
+            (5.6, 3.0),
+            (6.8, 2.4),
+            (settle, 0.3),
+        ],
+    );
+    keys(
+        w,
+        "height",
+        &[
+            (0.0, 0.42),
+            (0.65, 0.6),
+            (2.2, 0.8),
+            (5.6, 0.95),
+            (settle, 0.55),
+        ],
+    );
+    keys(
+        w,
+        "lag",
+        &[(0.0, 0.15), (2.2, 0.25), (4.0, 0.4), (6.8, 0.35), (r, 0.25)],
+    );
+    keys(
+        w,
+        "bank",
+        &[(0.0, 6.0), (2.2, 12.0), (4.0, 14.0), (r, 10.0)],
+    );
+    keys(
+        w,
+        "shake",
+        &[
+            (0.0, 0.6),
+            (0.65, 1.4),
+            (2.2, 1.0),
+            (4.0, 1.5),
+            (r, 1.0),
+            (r + RELEASE_EASE, 0.5),
+        ],
+    );
+    keys(
+        w,
+        "look_ahead",
+        &[(0.0, 0.1), (2.2, 0.2), (4.0, 0.35), (6.8, 0.3), (r, 0.2)],
+    );
+}
+
+fn grade(input: [f64; 3]) -> [f64; 3] {
+    let luma = 0.2126 * input[0] + 0.7152 * input[1] + 0.0722 * input[2];
+    let curve = luma + 0.5 * luma * (1.0 - luma) * (luma - 0.5);
+    let scale = if luma > 1e-6 { curve / luma } else { 1.0 };
+    let t = ((luma - 0.2) / 0.6).clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t);
+    let shadow = [0.93, 1.04, 1.32];
+    let high = [1.02, 1.02, 1.1];
+    [0, 1, 2].map(|k| {
+        let gain = shadow[k] + (high[k] - shadow[k]) * t;
+        (input[k] * scale * gain).clamp(0.0, 1.0)
+    })
+}
+
+pub(super) fn lilac() -> String {
+    let mut text = String::new();
+    let _ = writeln!(text, "TITLE \"lilac\"");
+    let _ = writeln!(text, "LUT_3D_SIZE {LUT_SIZE}");
+    let _ = writeln!(text, "DOMAIN_MIN 0.0 0.0 0.0");
+    let _ = writeln!(text, "DOMAIN_MAX 1.0 1.0 1.0");
+    let last = (LUT_SIZE - 1) as f64;
+    for b in 0..LUT_SIZE {
+        for g in 0..LUT_SIZE {
+            for r in 0..LUT_SIZE {
+                let out = grade([r as f64 / last, g as f64 / last, b as f64 / last]);
+                let _ = writeln!(text, "{:.6} {:.6} {:.6}", out[0], out[1], out[2]);
+            }
+        }
+    }
+    text
+}
+
+fn follow_hero(w: &mut String) {
+    let _ = writeln!(w, "[[follow]]");
+    let _ = writeln!(w, "object = \"hero\"");
+    let _ = writeln!(w, "route = \"main\"");
+    let _ = writeln!(w, "lane = {}", num(INNER));
+    let _ = writeln!(w, "start = 0.0");
+    let _ = writeln!(
+        w,
+        "speed = [[0.0, {}], [{}, {}]]",
+        num(HERO_SPEED[0]),
+        num(SECONDS),
+        num(HERO_SPEED[1])
+    );
+    let _ = writeln!(
+        w,
+        "drift = {{ amount = {}, period = {}, slip_deg = {} }}",
+        num(DRIFT[0]),
+        num(DRIFT[1]),
+        num(DRIFT[2])
+    );
+    let _ = writeln!(w);
+}
+
+fn top_camera(w: &mut String, route: &[[f64; 3]]) {
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for p in route {
+        lo = [lo[0].min(p[0]), lo[1].min(p[2])];
+        hi = [hi[0].max(p[0]), hi[1].max(p[2])];
+    }
+    let margin = 2.0 * (SETBACK + 20.0);
+    let centre = [
+        round(0.5 * (lo[0] + hi[0]), 2),
+        round(0.5 * (lo[1] + hi[1]), 2),
+    ];
+    let tall = (hi[1] - lo[1] + margin).max((hi[0] - lo[0] + margin) / ASPECT);
+    let _ = writeln!(w, "[[camera]]");
+    let _ = writeln!(w, "name = \"top\"");
+    let _ = writeln!(w, "kind = \"orthographic\"");
+    let _ = writeln!(
+        w,
+        "position = {}",
+        point([centre[0], round(TOP_HEIGHT, 1), centre[1]])
+    );
+    let _ = writeln!(w, "target = {}", point([centre[0], 0.0, centre[1]]));
+    let _ = writeln!(w, "up = [0.0, 0.0, 1.0]");
+    let _ = writeln!(w, "ortho_height = {}", num(round(tall, 1)));
+    let _ = writeln!(w);
+}
+
+fn stages(w: &mut String, traffic: &[(String, f64, f64)]) {
+    let city: Vec<String> = ["buildings", "furniture"]
+        .iter()
+        .map(|name| name.to_string())
+        .chain(traffic.iter().map(|(name, _, _)| name.clone()))
+        .collect();
+    let list = |names: &[String]| {
+        names
+            .iter()
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    for (name, objects, camera) in [
+        ("street", list(&["road".to_string()]), Some("top")),
+        ("car", list(&["hero".to_string()]), Some("top")),
+        ("city", list(&city), Some("top")),
+        ("camera", String::new(), Some("chase")),
+        ("look", list(&["*".to_string()]), Some("chase")),
+    ] {
+        let _ = writeln!(w, "[[stage]]");
+        let _ = writeln!(w, "name = \"{name}\"");
+        let _ = writeln!(w, "objects = [{objects}]");
+        if let Some(camera) = camera {
+            let _ = writeln!(w, "camera = \"{camera}\"");
+        }
+        let _ = writeln!(w);
+    }
+}
+
+pub(super) fn street(seed: u64) -> Made {
+    let route = route(seed);
+    let mut random = Random::new(seed.wrapping_add(0x5eed) as i64);
+    let paint = HERO_PAINTS[random.randbelow(HERO_PAINTS.len() as u64) as usize];
+    let crossings = [90.0, 260.0, 430.0]
+        .map(|at: f64| num(round(at + random.uniform(-20.0, 20.0), 1)))
+        .join(", ");
+    let mut t = String::new();
+    let w = &mut t;
+    let _ = writeln!(w, "recipe = 1");
+    let _ = writeln!(w, "name = \"street\"");
+    let _ = writeln!(w, "seed = {seed}");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "[output]");
+    let _ = writeln!(w, "glb = \"out/street.glb\"");
+    let _ = writeln!(w, "scene = \"out/street.scene.toml\"");
+    let _ = writeln!(w, "scene_camera = \"chase\"");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "[timeline]");
+    let _ = writeln!(w, "fps = 60");
+    let _ = writeln!(w, "seconds = {}", num(SECONDS));
+    let _ = writeln!(w, "size = [1080, 1920]");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "[[route]]");
+    let _ = writeln!(w, "name = \"main\"");
+    let _ = writeln!(w, "points = [");
+    for p in &route {
+        let _ = writeln!(w, "  {},", point(*p));
+    }
+    let _ = writeln!(w, "]");
+    let _ = writeln!(w);
+    let mut objects = Vec::new();
+    let mut object = |w: &mut String, name: &str, generator: &str, params: String| {
+        objects.push(name.to_string());
+        let _ = writeln!(w, "[[object]]");
+        let _ = writeln!(w, "name = \"{name}\"");
+        let _ = writeln!(w, "kind = \"generator\"");
+        let _ = writeln!(w, "generator = \"{generator}\"");
+        let _ = writeln!(w, "params = {{ {params} }}");
+        let _ = writeln!(w);
+    };
+    object(
+        w,
+        "road",
+        "pfx/road",
+        format!(
+            "route = \"main\", lanes = 2, lane_width = {}, sidewalk = {}, crosswalks = [{crossings}], seed = {seed}",
+            num(LANE_WIDTH),
+            num(SIDEWALK)
+        ),
+    );
+    object(
+        w,
+        "buildings",
+        "pfx/buildings",
+        format!(
+            "route = \"main\", style = \"lowrise\", setback = {}, seed = {}",
+            num(SETBACK),
+            seed.wrapping_add(1)
+        ),
+    );
+    object(
+        w,
+        "furniture",
+        "pfx/furniture",
+        format!(
+            "route = \"main\", offset = {}, crosswalks = [{crossings}], seed = {}",
+            num(round(2.0 * LANE_WIDTH + KERB_INSET, 2)),
+            seed.wrapping_add(2)
+        ),
+    );
+    let hero = format!("style = \"sports\", paint = \"{paint}\", seed = {seed}");
+    let car = hero_car(&hero);
+    object(w, "hero", "pfx/car", hero);
+    let mut traffic = Vec::new();
+    for (index, style) in TRAFFIC.iter().enumerate() {
+        let name = format!("traffic{}", index + 1);
+        let car_seed = seed.wrapping_add(10 + index as u64);
+        object(
+            w,
+            &name,
+            "pfx/car",
+            format!("style = \"{style}\", seed = {car_seed}"),
+        );
+        let start = round(35.0 + 62.0 * index as f64 + random.uniform(0.0, 12.0), 1);
+        let speed = round(random.uniform(11.0, 15.0), 1);
+        traffic.push((name, start, speed));
+    }
+    follow_hero(w);
+    for (name, start, speed) in &traffic {
+        let _ = writeln!(w, "[[follow]]");
+        let _ = writeln!(w, "object = \"{name}\"");
+        let _ = writeln!(w, "route = \"main\"");
+        let _ = writeln!(w, "lane = {}", num(OUTER));
+        let _ = writeln!(w, "start = {}", num(*start));
+        let _ = writeln!(w, "speed = [[0.0, {}]]", num(*speed));
+        let _ = writeln!(w);
+    }
+    let start = route[0];
+    let (offset, look) = chase(&car);
+    let _ = writeln!(w, "[[camera]]");
+    let _ = writeln!(w, "name = \"chase\"");
+    let _ = writeln!(w, "kind = \"perspective\"");
+    let _ = writeln!(
+        w,
+        "position = {}",
+        point([
+            round(start[0] + INNER, 2),
+            offset[1],
+            round(start[2] + offset[2], 2)
+        ])
+    );
+    let _ = writeln!(
+        w,
+        "target = {}",
+        point([
+            round(start[0] + INNER, 2),
+            look[1],
+            round(start[2] + look[2], 2)
+        ])
+    );
+    let _ = writeln!(w, "fov_y_deg = {}", num(FOV_Y_DEG));
+    let _ = writeln!(w, "fstop = 5.6");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "[camera.rig]");
+    let _ = writeln!(w, "follow = \"hero\"");
+    let _ = writeln!(w, "offset = {}", point(offset));
+    let _ = writeln!(w, "look = {}", point(look));
+    let _ = writeln!(w, "lag = {}", num(LAG_S));
+    let _ = writeln!(w, "look_ahead = 0.2");
+    let _ = writeln!(w, "bank = 4.0");
+    let _ = writeln!(w, "yaw_lag = 0.4");
+    let _ = writeln!(
+        w,
+        "shake = {{ translation = 0.02, roll = 0.4, frequency = 7.0, seed = {seed} }}"
+    );
+    let _ = writeln!(w, "focus = \"follow\"");
+    let crosswalks: Vec<f64> = crossings
+        .split(", ")
+        .filter_map(|c| c.parse().ok())
+        .collect();
+    cinematic(w, &car, &crosswalks);
+    let _ = writeln!(w);
+    top_camera(w, &route);
+    stages(w, &traffic);
+    let low = sun(&route);
+    let _ = writeln!(w, "[sun]");
+    let _ = writeln!(w, "model = \"daylight\"");
+    let _ = writeln!(w, "hour = {}", num(low.hour));
+    let _ = writeln!(w, "day = {DAY}");
+    let _ = writeln!(w, "latitude = {}", num(LATITUDE));
+    let _ = writeln!(w, "heading = {}", num(low.heading));
+    let _ = writeln!(w);
+    let _ = writeln!(w, "[sky]");
+    let _ = writeln!(w, "kind = \"analytic\"");
+    let _ = writeln!(w, "intensity = 1.5");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "[look]");
+    let _ = writeln!(w, "view = \"graded\"");
+    let _ = writeln!(w, "exposure = 0.6");
+    let _ = writeln!(
+        w,
+        "grade = {{ vignette = 0.25, saturation = 1.0, warmth = 0.05, bloom = 0.15, haze = 0.0 }}"
+    );
+    let _ = writeln!(w, "lut = \"{LUT}\"");
+    let _ = writeln!(w, "lut_amount = 0.8");
+    let _ = writeln!(w);
+    for (wheel, side) in [("rl", 1.0), ("rr", -1.0)] {
+        let _ = writeln!(w, "[[particles]]");
+        let _ = writeln!(w, "name = \"spray_{wheel}\"");
+        let _ = writeln!(w, "parent = \"hero.body\"");
+        let _ = writeln!(
+            w,
+            "at = {}",
+            point([
+                round(side * car.half_track, 3),
+                0.05,
+                round(car.rear - 0.3, 3)
+            ])
+        );
+        let _ = writeln!(w, "rate = 300.0");
+        let _ = writeln!(w, "rate_keys = [[0.0, 300.0], [{}, 1500.0]]", num(SECONDS));
+        let _ = writeln!(w, "max = 2000");
+        let _ = writeln!(w, "lifetime = [0.25, 0.7]");
+        let _ = writeln!(w, "speed = [2.0, 5.0]");
+        let _ = writeln!(w, "direction = [0.0, 0.6, -1.0]");
+        let _ = writeln!(w, "cone = 25.0");
+        let _ = writeln!(w, "inherit = 0.7");
+        let _ = writeln!(w, "gravity = [0.0, -9.8, 0.0]");
+        let _ = writeln!(w, "drag = 3.0");
+        let _ = writeln!(w, "size = [0.01, 0.06]");
+        let _ = writeln!(w, "alpha = [[0.0, 0.0], [0.1, 0.25], [1.0, 0.0]]");
+        let _ = writeln!(w, "color = \"#c9d3dc\"");
+        let _ = writeln!(w, "stretch = 3.0");
+        let _ = writeln!(w, "blend = \"alpha\"");
+        let _ = writeln!(w, "lit = true");
+        let _ = writeln!(w, "seed = {seed}");
+        let _ = writeln!(w);
+    }
+    let _ = writeln!(w, "[motion_blur]");
+    let _ = writeln!(w, "shutter = {}", num(SHUTTER));
+    let _ = writeln!(w, "max_px = 48.0");
+    let _ = writeln!(w, "samples = 12");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "[haze]");
+    let _ = writeln!(w, "amount = 0.03");
+    let _ = writeln!(w, "height = 0.0");
+    let _ = writeln!(w, "falloff = 0.08");
+    let _ = writeln!(w, "shafts = 0.75");
+    let _ = writeln!(w, "steps = 32");
+    let _ = writeln!(w, "color = \"#f0c8f0\"");
+    let _ = writeln!(w, "phase = 0.8");
+    let _ = writeln!(w, "fog = 0.05");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "[flare]");
+    let _ = writeln!(w, "amount = 0.4");
+    let _ = writeln!(w, "ghosts = 4");
+    let _ = writeln!(w, "ghost_spacing = 0.3");
+    let _ = writeln!(w, "halo = 0.1");
+    let _ = writeln!(w, "halo_radius = 0.3");
+    let _ = writeln!(w, "starburst = 0.3");
+    let _ = writeln!(w, "threshold = 8.0");
+    let _ = writeln!(w);
+    let _ = writeln!(w, "[materials.road_asphalt.wet]");
+    let _ = writeln!(w, "amount = 0.6");
+    let _ = writeln!(w, "puddles = 0.25");
+    let _ = writeln!(w, "puddle_scale = 3.0");
+    Made {
+        text: t,
+        route,
+        objects,
+    }
+}
+
+fn hero_car(params: &str) -> Hero {
+    let text = format!(
+        "recipe = 1\nname = \"hero\"\n\n[[object]]\nname = \"hero\"\nkind = \"generator\"\ngenerator = \"pfx/car\"\nparams = {{ {params} }}\n"
+    );
+    let built = pfx_recipe::parse(&text)
+        .ok()
+        .and_then(|recipe| pfx_build::build(&recipe, Path::new(".")).ok());
+    let car = built.as_ref().map(|built| &built.facts.extra);
+    let fact = |key: &str, fallback: f64| {
+        car.and_then(|car| car.get(key))
+            .and_then(serde_json::Value::as_f64)
+            .unwrap_or(fallback)
+    };
+    let rear = car
+        .and_then(|car| car.get("wheels"))
+        .and_then(|wheels| wheels.pointer("/rl/centre/2"))
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(-1.3);
+    Hero {
+        half_track: fact("track", 1.6) * 0.5,
+        rear,
+        length: fact("length", 4.4),
+        width: fact("width", 1.9),
+        height: fact("height", 1.2),
+    }
+}
+
+fn length(route: &[[f64; 3]]) -> f64 {
+    route
+        .windows(2)
+        .map(|pair| {
+            let d = [0, 1, 2].map(|i| pair[1][i] - pair[0][i]);
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+        })
+        .sum()
+}
+
+fn run_street(args: &Args, out: &mut dyn Write) -> Result<(), String> {
+    let path: &Path = &args.out;
+    if path.exists() {
+        return Err(format!(
+            "{} already exists; pick another <out>",
+            path.display()
+        ));
+    }
+    let lut = path.parent().unwrap_or(Path::new("")).join(LUT);
+    let cube = lilac();
+    if lut.exists() && std::fs::read_to_string(&lut).ok().as_deref() != Some(cube.as_str()) {
+        return Err(format!(
+            "{} already exists and is not the starter's LUT; pick another <out> folder",
+            lut.display()
+        ));
+    }
+    let starter = street(args.seed);
+    for dir in [path.parent(), lut.parent()]
+        .into_iter()
+        .flatten()
+        .filter(|dir| !dir.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    }
+    std::fs::write(&lut, &cube).map_err(|e| format!("cannot write {}: {e}", lut.display()))?;
+    std::fs::write(path, &starter.text)
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    let low = sun(&starter.route);
+    if args.json {
+        let line = json!({
+            "recipe": path.display().to_string(),
+            "seed": args.seed,
+            "route": {
+                "name": "main",
+                "points": starter.route.len(),
+                "chord_m": round(length(&starter.route), 1),
+            },
+            "objects": starter.objects,
+            "camera": "chase",
+            "timeline": { "fps": 60, "seconds": SECONDS, "size": [1080, 1920] },
+            "sun": {
+                "hour": low.hour,
+                "heading": low.heading,
+                "elevation_deg": round(low.elevation, 2),
+                "azimuth_deg": round(low.azimuth, 2),
+            },
+            "lut": lut.display().to_string(),
+        });
+        let _ = writeln!(out, "{line}");
+    } else {
+        let _ = writeln!(out, "{}", path.display());
+    }
+    Ok(())
+}
+
+pub fn run(args: &Args) -> ExitCode {
+    match args.from {
+        Template::Street => match run_street(args, &mut std::io::stdout()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(message) => refuse("new", &message),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pfx_recipe::toml_edit::{DocumentMut, Item};
+
+    fn parsed(words: &[&str]) -> Result<Args, String> {
+        match super::super::parsed(&[&["new"], words].concat())? {
+            super::super::Verb::New(args) => Ok(args),
+            _ => Err("not new".into()),
+        }
+    }
+
+    #[test]
+    fn new_takes_an_out_a_template_a_seed_and_json() {
+        let args = parsed(&["a/b.toml", "--from", "street", "--seed", "9", "--json"]).unwrap();
+        assert_eq!(
+            (args.from, args.seed, args.out.as_path(), args.json),
+            (Template::Street, 9, Path::new("a/b.toml"), true)
+        );
+        let plain = parsed(&["street.toml", "--from", "street"]).unwrap();
+        assert_eq!(
+            (plain.seed, plain.out.as_path(), plain.json),
+            (1, Path::new("street.toml"), false)
+        );
+        for bad in [
+            &["a.toml", "--from", "street", "--seed", "x"][..],
+            &["a.toml", "--from", "avenue"],
+            &["a.toml"],
+            &[],
+        ] {
+            assert!(parsed(bad).is_err(), "{}", bad.join(" "));
+        }
+    }
+
+    #[test]
+    fn the_street_is_the_same_for_a_seed_and_another_for_another() {
+        let one = street(4);
+        assert_eq!(one.text, street(4).text);
+        assert_ne!(one.text, street(5).text);
+        assert_eq!(one.route.len(), POINTS);
+        let span = one.route[POINTS - 1][2] - one.route[0][2];
+        assert!((560.0..=640.0).contains(&span), "{span}");
+        assert!(one.route.iter().all(|p| p[1] == 0.0));
+    }
+
+    #[test]
+    fn the_street_breaks_into_five_stages_from_the_road_to_the_look() {
+        let recipe = pfx_recipe::parse(&street(1).text).unwrap();
+        let names: Vec<&str> = recipe.stages.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["street", "car", "city", "camera", "look"]);
+        let road = pfx_recipe::apply_stage(&recipe, "1").unwrap();
+        let kept: Vec<&str> = road.objects.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(kept, ["road"]);
+        assert_eq!(pfx_recipe::validate(&road), []);
+        assert_eq!(
+            pfx_recipe::apply_stage(&recipe, "city").unwrap(),
+            pfx_recipe::apply_stage(&recipe, "3").unwrap()
+        );
+        let look = pfx_recipe::apply_stage(&recipe, "look").unwrap();
+        assert_eq!(look.objects.len(), recipe.objects.len());
+    }
+
+    #[test]
+    fn the_street_loads_checks_clean_and_sprays_from_the_body_behind_the_rear_wheels() {
+        let recipe = pfx_recipe::parse(&street(1).text).unwrap();
+        assert_eq!(pfx_recipe::validate(&recipe), []);
+        let car = hero_car("style = \"sports\", seed = 1");
+        let rear = car.rear;
+        assert!(
+            car.half_track > 0.5 && rear < 0.0,
+            "{} {rear}",
+            car.half_track
+        );
+        let doc: DocumentMut = street(1).text.parse().unwrap();
+        let sprays = doc["particles"].as_array_of_tables().unwrap();
+        for (spray, side) in sprays.iter().zip([1.0, -1.0]) {
+            assert_eq!(spray["parent"].as_str(), Some("hero.body"));
+            let at: Vec<f64> = spray["at"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v.as_float().unwrap())
+                .collect();
+            assert_eq!(at[0].signum(), side);
+            assert!(at[2] < rear, "{at:?}");
+        }
+    }
+
+    #[test]
+    fn the_sun_sits_low_down_the_main_stretch() {
+        for seed in [1, 2, 7] {
+            let made = street(seed);
+            let recipe = pfx_recipe::parse(&made.text).unwrap();
+            let day = recipe.daylight.unwrap();
+            let at = pfx_core::daylight::Daylight {
+                hour: day.hour,
+                day: f64::from(day.day),
+                latitude: day.latitude,
+                heading: day.heading,
+            }
+            .sun();
+            assert!((4.0..=6.0).contains(&at.elevation), "{}", at.elevation);
+            let ahead = stretch(&made.route);
+            let flat = at.y_up[0].hypot_of(at.y_up[2]);
+            let cos = (at.y_up[0] * ahead[0] + at.y_up[2] * ahead[1]) / flat;
+            let off = cos.clamp(-1.0, 1.0).acos_of().to_degrees();
+            assert!(off < 10.0, "seed {seed}: {off} degrees off the stretch");
+        }
+    }
+
+    #[test]
+    fn the_hero_drifts_15_to_30_degrees_off_the_road() {
+        let made = street(1);
+        let mut text = String::from("recipe = 1\nname = \"drift\"\nseed = 1\n\n");
+        let _ = writeln!(text, "[timeline]\nfps = 60\nseconds = {}\n", num(SECONDS));
+        let _ = writeln!(text, "[[route]]\nname = \"main\"\npoints = [");
+        for p in &made.route {
+            let _ = writeln!(text, "  {},", point(*p));
+        }
+        let _ = writeln!(text, "]\n");
+        let _ = writeln!(
+            text,
+            "[[object]]\nname = \"hero\"\nkind = \"generator\"\ngenerator = \"pfx/car\"\nparams = {{ style = \"sports\", seed = 1 }}\n"
+        );
+        follow_hero(&mut text);
+        let recipe = pfx_recipe::parse(&text).unwrap();
+        let built = pfx_build::build(&recipe, Path::new(".")).unwrap();
+        let body = built
+            .tracks
+            .iter()
+            .find(|track| track.node == "hero.body" || track.node == "hero")
+            .unwrap();
+        let route = pfx_motion::Route::new(&made.route, false).unwrap();
+        let samples = route.sample(0.25);
+        let mut most: f64 = 0.0;
+        for key in &body.keys {
+            let [x, y, z, w] = key.rotation;
+            let forward = [
+                2.0 * (x * z + w * y),
+                2.0 * (y * z - w * x),
+                1.0 - 2.0 * (x * x + y * y),
+            ];
+            let [px, _, pz] = key.translation;
+            let near = samples
+                .iter()
+                .min_by(|a, b| {
+                    let da = (a.1.position.x - px).hypot_of(a.1.position.z - pz);
+                    let db = (b.1.position.x - px).hypot_of(b.1.position.z - pz);
+                    da.total_cmp(&db)
+                })
+                .unwrap();
+            let tangent = near.1.tangent;
+            let yaw = (forward[0] * tangent.z - forward[2] * tangent.x)
+                .atan2_of(forward[0] * tangent.x + forward[2] * tangent.z)
+                .to_degrees();
+            most = most.max(yaw.abs());
+        }
+        assert!((15.0..=30.0).contains(&most), "{most}");
+    }
+
+    #[test]
+    fn the_street_is_a_toml_recipe_with_every_table_the_chase_needs() {
+        let doc: DocumentMut = street(7).text.parse().unwrap();
+        assert_eq!(doc["recipe"].as_integer(), Some(1));
+        assert_eq!(doc["timeline"]["fps"].as_integer(), Some(60));
+        assert_eq!(doc["timeline"]["seconds"].as_float(), Some(10.0));
+        let size = doc["timeline"]["size"].as_array().unwrap();
+        assert_eq!(
+            size.iter()
+                .filter_map(|v| v.as_integer())
+                .collect::<Vec<_>>(),
+            [1080, 1920]
+        );
+        let tables = |key: &str| match &doc[key] {
+            Item::ArrayOfTables(list) => list.len(),
+            _ => 0,
+        };
+        assert_eq!(
+            (
+                tables("route"),
+                tables("object"),
+                tables("follow"),
+                tables("camera"),
+                tables("particles")
+            ),
+            (1, 7, 4, 2, 2)
+        );
+        let points = doc["route"][0]["points"].as_array().unwrap();
+        assert_eq!(points.len(), POINTS);
+        let generators: Vec<&str> = match &doc["object"] {
+            Item::ArrayOfTables(list) => list
+                .iter()
+                .filter_map(|o| o.get("generator").and_then(Item::as_str))
+                .collect(),
+            _ => Vec::new(),
+        };
+        assert_eq!(
+            generators,
+            [
+                "pfx/road",
+                "pfx/buildings",
+                "pfx/furniture",
+                "pfx/car",
+                "pfx/car",
+                "pfx/car",
+                "pfx/car"
+            ]
+        );
+        let rig = &doc["camera"][0]["rig"];
+        assert_eq!(rig["follow"].as_str(), Some("hero"));
+        assert_eq!(rig["lag"].as_float(), Some(LAG_S));
+        for table in [
+            "sun",
+            "sky",
+            "look",
+            "motion_blur",
+            "haze",
+            "flare",
+            "output",
+        ] {
+            assert!(doc[table].is_table(), "{table}");
+        }
+        assert_eq!(doc["motion_blur"]["shutter"].as_float(), Some(SHUTTER));
+    }
+
+    #[test]
+    fn an_existing_file_is_refused() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp/new-street");
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join("street.toml");
+        let args = Args {
+            out: file.clone(),
+            from: Template::Street,
+            seed: 3,
+            json: true,
+        };
+        let mut out = Vec::new();
+        run_street(&args, &mut out).unwrap();
+        let line: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(line["seed"], 3);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), street(3).text);
+        let again = run_street(&args, &mut Vec::new()).unwrap_err();
+        assert!(
+            again.ends_with("already exists; pick another <out>"),
+            "{again}"
+        );
+    }
+}

@@ -10,6 +10,7 @@ mod cache_report;
 mod film;
 mod progress;
 mod project;
+mod recipe;
 mod scene;
 #[cfg(feature = "bench")]
 mod shot;
@@ -45,6 +46,20 @@ const USAGE: &str = "usage:
   pfx scene fix <scene.toml> [--dry-run]
   pfx film <script.film.toml> --out <dir> [--json] [--plan]
   pfx sound clean <in.wav> <out.wav> [--keep harmonic [--f0 LOW,HIGH]] [--remove transients] [--gate [--noise START,END] [--reduce DB]] [--mask <png>] [--json]
+  pfx render --recipe <recipe> --camera <name> --out <png|exr|hdr> [flags]
+  pfx shot <recipe> --still --camera <name> --size WxH --out <png> [flags]
+  pfx new <out> --from street [--seed N] [--json]
+  pfx build|check|timeline <recipe> [flags]
+  pfx clip|shoot <recipe> [flags]
+  pfx route|set|get|curve|key|unkey|add|remove|duplicate <recipe> ...
+  pfx diff <a.glb> <b.glb> [flags]
+  pfx library list|index|check|bake|add [flags]
+  pfx import <file.glb> (--as <kind/name> | --out <file.pfx>) [flags]
+  pfx export <file.pfx|recipe> --glb <out.glb> [flags]
+  pfx scene list <recipe> [table] [--json]
+  pfx scene save <recipe> --pfx <out.pfx> [--thumb] [--json]
+  pfx scene unpack <file.pfx> <dir> [--json]
+  pfx scene fold <file.pfx> [--apply | --keep] [--json]
   pfx --version
   pfx --help
 clip masters are H.264 (pito-codecs) at 60 fps; pcod (pito-codecs) makes video deliveries
@@ -59,6 +74,7 @@ shot renders a scene file offline on the live renderer at a fixed clock (frame n
 scene migrate rewrites a scene's format 0 files as format 1, keeping comments; --pfx packs a scene and every file it reads into one .pfx, --unpack writes a .pfx scene's files back out; scene fix writes the ids its entries lack; both refuse to write when the check fails
 film assembles a script of clips, rendered frame folders and cards into PNG frames, a WAV and a manifest.json naming the pcod command that encodes them, under the caller's tmp/ (docs/film.md, Footage films); --plan prints the scenes without rendering
 sound clean cleans a field recording offline and keeps its length: --keep harmonic tracks a moving fundamental (default 40..400 Hz) and keeps only its harmonic series, --remove transients finds short events that stand out of the background (barks, slams, voices, clicks) and inpaints them from the frames around them, --gate gates the noise under a print taken from --noise or the quietest second (fully, or by --reduce dB); it reports what it removed and --mask writes a time by frequency PNG, kept grey and removed red (docs/sound.md, Cleaning recordings)
+a recipe is a TOML scene recipe (it starts `recipe = 1`) that pfx builds into a GLB and a scene headless, draws live (shot --still) or path-traces (render --recipe); each recipe verb prints its own flags with --help (docs/recipes.md)
 new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)";
 
 const SWITCHES: &[&str] = &[
@@ -314,8 +330,40 @@ const BAKE_FLAGS: &[&str] = &[
 const STEAM_FLAGS: &[&str] = &["--manifest", "--out"];
 
 const COMMANDS: &[&str] = &[
-    "render", "encode", "archive", "list", "bake", "steam", "cache", "font", "edit", "new",
-    "bench", "shot", "scene", "film", "sound", "help",
+    "render",
+    "encode",
+    "archive",
+    "list",
+    "bake",
+    "steam",
+    "cache",
+    "font",
+    "edit",
+    "new",
+    "bench",
+    "shot",
+    "scene",
+    "film",
+    "sound",
+    "build",
+    "check",
+    "diff",
+    "clip",
+    "route",
+    "set",
+    "get",
+    "curve",
+    "key",
+    "unkey",
+    "timeline",
+    "shoot",
+    "library",
+    "add",
+    "remove",
+    "duplicate",
+    "import",
+    "export",
+    "help",
 ];
 
 const TOP: &str = "pfx <COMMAND>";
@@ -1186,13 +1234,16 @@ fn quiet_mesa() {
     }
 }
 
-fn main() {
+fn main() -> std::process::ExitCode {
     quiet_mesa();
     if let Err(error) = pfx_run::ending::install() {
         eprintln!("pfx: {error}");
         std::process::exit(1);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if recipe::claims(&args) {
+        return recipe::main(&args);
+    }
     if matches!(
         args.first().map(String::as_str),
         Some("render" | "encode" | "list" | "bake")
@@ -1214,6 +1265,7 @@ fn main() {
         eprintln!("pfx: {error}");
         std::process::exit(1);
     }
+    std::process::ExitCode::SUCCESS
 }
 
 #[cfg(test)]
@@ -1584,7 +1636,7 @@ mod tests {
         for (line, message, usage) in [
             (
                 "",
-                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, shot, scene, film, sound, help]",
+                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, edit, new, bench, shot, scene, film, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, help]",
                 TOP,
             ),
             ("tui", "unrecognized subcommand 'tui'", TOP),

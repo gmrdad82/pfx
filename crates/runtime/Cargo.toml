@@ -1,0 +1,28 @@
+[package]
+name = "pfx-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "pfx's shared runtime: a GLB and its sidecar into a scene, and that scene into the engine's live instances, lights and content"
+
+[dependencies]
+pfx-load = { path = "../load" }
+pfx-live = { path = "../live" }
+pfx-gpu = { path = "../gpu" }
+pfx-geom = { path = "../geom" }
+pfx-materials = { path = "../materials" }
+pfx-post = { path = "../post" }
+pfx-bake = { path = "../bake" }
+half = "2"
+serde_json = "1"
+
+[dev-dependencies]
+pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }
+pfx-recipe-scene = { path = "../recipe-scene" }
+pfx-glb = { path = "../glb" }
+pfx-build = { path = "../build" }
+pfx-recipe = { path = "../recipe" }
+png = "0.18"

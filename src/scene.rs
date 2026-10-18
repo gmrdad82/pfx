@@ -20,7 +20,13 @@ pub struct Command {
 
 pub fn plan(args: &[String]) -> Result<Command, Refusal> {
     let action = match args.first().map(String::as_str) {
-        None => return Err(cli::no_command("pfx scene", &["migrate", "fix"]).into()),
+        None => {
+            return Err(cli::no_command(
+                "pfx scene",
+                &["migrate", "fix", "list", "save", "unpack", "fold"],
+            )
+            .into());
+        }
         Some("migrate") => Action::Migrate,
         Some("fix") => Action::Fix,
         Some(flag) if flag.starts_with('-') => return Err(cli::unexpected(flag).into()),

@@ -1,0 +1,18 @@
+[package]
+name = "pfx-generators"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "pfx's kit for an app's generators: gradient noise, ports of CPython's random and numpy's RandomState, params helpers, and Blender's normal and export-order rules for face lists"
+
+[dependencies]
+pfx-build = { path = "../build" }
+pfx-mesh = { path = "../mesh" }
+serde_json = "1"
+glam = { version = "0.33", features = ["libm"] }
+
+[dev-dependencies]
+png = "0.18"

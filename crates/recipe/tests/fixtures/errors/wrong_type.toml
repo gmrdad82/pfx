@@ -1,0 +1,7 @@
+recipe = 1
+name = "t"
+
+[[object]]
+name = "a"
+kind = "sphere"
+radius = "big"

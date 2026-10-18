@@ -1,0 +1,17 @@
+[package]
+name = "pfx-mesh"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "pfx's geometry: outlines, 2D booleans, profiled extrusion, pockets, lathe, sweep and primitives"
+
+[dependencies]
+glam = { version = "0.33", features = ["libm"] }
+libm = "0.2"
+i_overlay = { version = "=9.0.0" }
+
+[dev-dependencies]
+gltf = "1.4"
