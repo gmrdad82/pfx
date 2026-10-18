@@ -1,12 +1,15 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use egui::style::{Selection, WidgetVisuals, Widgets};
+use egui::epaint::text::{FontTweak, VariationCoords};
+use egui::style::{HandleShape, Selection, WidgetVisuals, Widgets};
 use egui::text::LayoutJob;
 use egui::{
     Color32, Context, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Id, Margin,
     Shadow, Stroke, Style, TextStyle, ThemePreference, Vec2, Visuals,
 };
+
+use crate::tokens;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Face {
@@ -25,23 +28,30 @@ impl Face {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Display {
     pub name: Cow<'static, str>,
     pub bytes: Cow<'static, [u8]>,
     pub licence: Cow<'static, str>,
+    pub weight: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Caps {
     pub upper: bool,
     pub tracking: f32,
+    pub weight: Option<f32>,
+}
+
+fn weight(weight: f32) -> VariationCoords {
+    VariationCoords::new([(b"wght", weight)])
 }
 
 impl Caps {
     pub const PLAIN: Caps = Caps {
         upper: false,
         tracking: 0.0,
+        weight: None,
     };
 
     pub fn text<'a>(self, text: &'a str) -> Cow<'a, str> {
@@ -57,6 +67,9 @@ impl Caps {
         let mut job = LayoutJob::simple(self.text(text).into_owned(), font, colour, f32::INFINITY);
         for section in &mut job.sections {
             section.format.extra_letter_spacing = spacing;
+            if let Some(value) = self.weight {
+                section.format.coords = weight(value);
+            }
         }
         job
     }
@@ -87,6 +100,9 @@ pub struct Theme {
     pub name: Cow<'static, str>,
     pub bg: Color32,
     pub surface: Color32,
+    pub card: Color32,
+    pub card_line: Color32,
+    pub stripe: Color32,
     pub well: Color32,
     pub line: Color32,
     pub track: Color32,
@@ -96,6 +112,7 @@ pub struct Theme {
     pub dim: Color32,
     pub code: Color32,
     pub on_accent: Color32,
+    pub on_hot: Color32,
     pub accent: Color32,
     pub accent_bright: Color32,
     pub accent_deep: Color32,
@@ -124,6 +141,7 @@ pub struct Theme {
     pub row_height: f32,
     pub body: Face,
     pub display: Option<Display>,
+    pub icons: Option<Display>,
     pub titles: Caps,
     pub labels: Caps,
 }
@@ -143,6 +161,13 @@ impl Theme {
     }
 
     pub fn title_font(&self, size: f32) -> FontId {
+        match self.display {
+            Some(_) => FontId::new(size, display()),
+            None => self.font(size),
+        }
+    }
+
+    pub fn label_font(&self, size: f32) -> FontId {
         match self.display {
             Some(_) => FontId::new(size, display()),
             None => self.font(size),
@@ -186,6 +211,17 @@ fn data(bytes: Cow<'static, [u8]>) -> Arc<FontData> {
     })
 }
 
+fn face(face: &Display) -> Arc<FontData> {
+    let mut font = data(face.bytes.clone());
+    if let Some(value) = face.weight {
+        Arc::make_mut(&mut font).tweak = FontTweak {
+            coords: weight(value),
+            ..FontTweak::default()
+        };
+    }
+    font
+}
+
 pub fn fonts(theme: &Theme) -> FontDefinitions {
     let regular = theme.body.regular_name();
     let bold_name = theme.body.bold_name();
@@ -205,21 +241,36 @@ pub fn fonts(theme: &Theme) -> FontDefinitions {
     fonts
         .families
         .insert(bold(), vec![bold_name.clone(), regular.clone()]);
-    if let Some(face) = &theme.display {
-        let name = face.name.to_string();
-        fonts
-            .font_data
-            .insert(name.clone(), data(face.bytes.clone()));
+    if let Some(display_face) = &theme.display {
+        let name = display_face.name.to_string();
+        fonts.font_data.insert(name.clone(), face(display_face));
         fonts
             .families
             .insert(display(), vec![name, bold_name, regular]);
+    }
+    if let Some(icons) = &theme.icons {
+        let name = icons.name.to_string();
+        fonts.font_data.insert(name.clone(), face(icons));
+        for family in fonts.families.values_mut() {
+            family.push(name.clone());
+        }
     }
     fonts
 }
 
 fn widget(theme: &Theme, fill: Color32, border: Color32, text: Color32) -> WidgetVisuals {
+    knob(theme, fill, fill, border, text)
+}
+
+fn knob(
+    theme: &Theme,
+    knob: Color32,
+    fill: Color32,
+    border: Color32,
+    text: Color32,
+) -> WidgetVisuals {
     WidgetVisuals {
-        bg_fill: fill,
+        bg_fill: knob,
         weak_bg_fill: fill,
         bg_stroke: Stroke::new(theme.stroke, border),
         corner_radius: CornerRadius::same(theme.radius),
@@ -235,41 +286,49 @@ pub fn visuals(theme: &Theme) -> Visuals {
     visuals.weak_text_color = Some(theme.muted);
     visuals.widgets = Widgets {
         noninteractive: widget(theme, theme.bg, theme.line, theme.text),
-        inactive: widget(theme, theme.surface, theme.line, theme.text),
-        hovered: widget(theme, theme.accent_deep, theme.accent, theme.text),
-        active: widget(
+        inactive: knob(theme, theme.track, theme.surface, theme.line, theme.text),
+        hovered: knob(
             theme,
+            theme.hot,
+            theme.accent_deep,
+            theme.accent,
+            theme.text,
+        ),
+        active: knob(
+            theme,
+            theme.hot,
             theme.accent_bright,
-            theme.accent_bright,
+            theme.hot,
             theme.on_accent,
         ),
         open: widget(theme, theme.accent_deep, theme.accent, theme.text),
     };
     visuals.selection = Selection {
-        bg_fill: theme.accent_bright,
-        stroke: Stroke::new(theme.stroke, theme.on_accent),
+        bg_fill: theme.hot,
+        stroke: Stroke::new(theme.stroke, theme.on_hot),
     };
     visuals.hyperlink_color = theme.secondary;
-    visuals.faint_bg_color = theme.accent_deep;
+    visuals.faint_bg_color = theme.stripe;
     visuals.extreme_bg_color = theme.well;
     visuals.text_edit_bg_color = None;
-    visuals.code_bg_color = theme.surface;
+    visuals.code_bg_color = theme.card;
     visuals.warn_fg_color = theme.warning;
     visuals.error_fg_color = theme.error;
     visuals.window_corner_radius = CornerRadius::same(theme.radius);
     visuals.window_shadow = Shadow::NONE;
-    visuals.window_fill = theme.bg;
-    visuals.window_stroke = Stroke::new(theme.stroke, theme.line);
+    visuals.window_fill = theme.card;
+    visuals.window_stroke = Stroke::new(theme.stroke, theme.card_line);
     visuals.window_highlight_topmost = false;
     visuals.menu_corner_radius = CornerRadius::same(theme.radius);
     visuals.panel_fill = theme.bg;
     visuals.popup_shadow = Shadow::NONE;
-    visuals.text_cursor.stroke = Stroke::new(2.0_f32, theme.hot);
+    visuals.text_cursor.stroke = Stroke::new(tokens::CURSOR, theme.hot);
     visuals.text_cursor.blink = false;
     visuals.collapsing_header_frame = false;
     visuals.indent_has_left_vline = true;
     visuals.striped = true;
     visuals.slider_trailing_fill = true;
+    visuals.handle_shape = HandleShape::Circle;
     visuals
 }
 
@@ -291,10 +350,11 @@ pub fn style(theme: &Theme) -> Style {
     style.spacing.item_spacing = Vec2::splat(theme.item_spacing);
     style.spacing.window_margin = Margin::same(theme.panel_padding);
     style.spacing.menu_margin = Margin::same(theme.item_spacing as i8);
-    style.spacing.button_padding = Vec2::new(8.0, 3.0);
-    style.spacing.interact_size = Vec2::new(40.0, theme.row_height);
+    style.spacing.button_padding = tokens::BUTTON_PADDING;
+    style.spacing.interact_size = Vec2::new(tokens::INTERACT_WIDTH, theme.row_height);
     style.spacing.indent = theme.section_gap;
-    style.spacing.combo_height = 240.0;
+    style.spacing.combo_height = tokens::COMBO_HEIGHT;
+    style.spacing.slider_rail_height = tokens::RAIL;
     style.interaction.selectable_labels = false;
     style.animation_time = 0.0;
     style
@@ -337,7 +397,12 @@ mod tests {
         let style = ctx.global_style();
         assert_eq!(style.visuals.panel_fill, theme.bg);
         assert_eq!(style.visuals.extreme_bg_color, theme.well);
-        assert_eq!(style.visuals.widgets.active.bg_fill, theme.accent_bright);
+        assert_eq!(
+            style.visuals.widgets.active.weak_bg_fill,
+            theme.accent_bright
+        );
+        assert_eq!(style.visuals.widgets.inactive.bg_fill, theme.track);
+        assert_eq!(style.visuals.selection.bg_fill, theme.hot);
         assert_eq!(style.visuals.window_shadow, Shadow::NONE);
         assert_eq!(style.text_styles[&TextStyle::Body].size, theme.size_body);
         assert_eq!(style.text_styles[&title()].family, bold());
@@ -375,8 +440,8 @@ mod tests {
         for mode in [egui::Theme::Dark, egui::Theme::Light] {
             let style = ctx.style_of(mode);
             assert_eq!(style.visuals.panel_fill, theme.bg);
-            assert_eq!(style.visuals.widgets.inactive.bg_fill, theme.surface);
-            assert_eq!(style.visuals.selection.bg_fill, theme.accent_bright);
+            assert_eq!(style.visuals.widgets.inactive.weak_bg_fill, theme.surface);
+            assert_eq!(style.visuals.selection.bg_fill, theme.hot);
         }
         assert_eq!(
             ctx.options(|options| options.theme_preference),
@@ -420,6 +485,7 @@ mod tests {
                 name: Cow::Borrowed("Display"),
                 bytes: Cow::Borrowed(BOLD),
                 licence: Cow::Borrowed(fixture::LICENCE),
+                weight: None,
             }),
             ..fixture::theme()
         };
@@ -451,10 +517,12 @@ mod tests {
         let caps = Caps {
             upper: true,
             tracking: 0.3,
+            weight: Some(300.0),
         };
         let job = caps.job("outliner", theme.font(10.0), Color32::WHITE);
         assert_eq!(job.text, "OUTLINER");
         assert_eq!(job.sections[0].format.extra_letter_spacing, 3.0);
+        assert_eq!(job.sections[0].format.coords, weight(300.0));
         let plain = Caps::PLAIN.job("outliner", theme.font(10.0), Color32::WHITE);
         assert_eq!(
             plain,

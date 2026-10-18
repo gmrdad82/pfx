@@ -18,6 +18,9 @@ pub fn theme() -> Theme {
         name: Cow::Borrowed("fixture"),
         bg: grey(0x10),
         surface: grey(0x20),
+        card: grey(0x04),
+        card_line: grey(0x38),
+        stripe: grey(0x18),
         well: grey(0x08),
         line: grey(0x30),
         track: grey(0x28),
@@ -27,6 +30,7 @@ pub fn theme() -> Theme {
         dim: grey(0x70),
         code: grey(0xD0),
         on_accent: grey(0x00),
+        on_hot: grey(0x02),
         accent: Color32::from_rgb(0x40, 0x40, 0xA0),
         accent_bright: Color32::from_rgb(0x80, 0x80, 0xFF),
         accent_deep: Color32::from_rgb(0x20, 0x20, 0x50),
@@ -73,6 +77,7 @@ pub fn theme() -> Theme {
             bold: Cow::Borrowed(BOLD),
         },
         display: None,
+        icons: None,
         titles: Caps::PLAIN,
         labels: Caps::PLAIN,
     }
@@ -82,6 +87,9 @@ pub fn colours(theme: &Theme) -> Vec<Color32> {
     vec![
         theme.bg,
         theme.surface,
+        theme.card,
+        theme.card_line,
+        theme.stripe,
         theme.well,
         theme.line,
         theme.track,
@@ -91,6 +99,7 @@ pub fn colours(theme: &Theme) -> Vec<Color32> {
         theme.dim,
         theme.code,
         theme.on_accent,
+        theme.on_hot,
         theme.accent,
         theme.accent_bright,
         theme.accent_deep,
@@ -120,8 +129,8 @@ pub fn colours(theme: &Theme) -> Vec<Color32> {
 
 fn faces(theme: &Theme) -> Vec<&[u8]> {
     let mut faces = vec![theme.body.regular.as_ref(), theme.body.bold.as_ref()];
-    if let Some(display) = &theme.display {
-        faces.push(display.bytes.as_ref());
+    for face in [&theme.display, &theme.icons].into_iter().flatten() {
+        faces.push(face.bytes.as_ref());
     }
     faces
 }

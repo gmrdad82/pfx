@@ -164,7 +164,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-mod` | the mod host: sandboxed, deterministic WASM components, metered by fuel and capped in memory |
 | `pfx-editor` | `pfx edit` and `<game> edit`: the scene editor, with play in the viewport and live gameplay modules |
 | `pfx-editor-style`, `-shell`, `-doc`, `-toml`, `-viewport` | the egui crates editors on pfx share: a theme and its widgets, a window host with an offscreen shot harness, document edits on one undo history, a TOML source panel and a 3D scene viewport with picking and a gizmo |
-| `pfx-theme` | the colours, fonts and type the editor and the dev HUD paint with |
+| `pfx-theme` | the editor-style tokens as the theme the editor and the dev HUD paint with |
 | `pfx-bench` | `pfx bench` |
 | `pfx-assets` | path-traced renders of logos, icons and scenes from SVG masters and small specs |
 | `pfx-run` | the `pfx` tool's process plumbing: GPU queueing, ending children cleanly, the clip master's H.264 and AAC encode through pito-codecs ([docs/render-a-still.md](docs/render-a-still.md#clip-masters)) and the alpha master ([docs/alpha-master.md](docs/alpha-master.md)) |

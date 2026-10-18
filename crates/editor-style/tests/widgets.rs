@@ -164,6 +164,9 @@ fn loud() -> Theme {
         name: Cow::Borrowed("loud"),
         bg: colour(),
         surface: colour(),
+        card: colour(),
+        card_line: colour(),
+        stripe: colour(),
         well: colour(),
         line: colour(),
         track: colour(),
@@ -173,6 +176,7 @@ fn loud() -> Theme {
         dim: colour(),
         code: colour(),
         on_accent: colour(),
+        on_hot: colour(),
         accent: colour(),
         accent_bright: colour(),
         accent_deep: colour(),
@@ -307,13 +311,14 @@ fn each_state_paints_its_own_roles() {
     };
     let has = |seen: &BTreeSet<[u8; 4]>, colour: Color32| seen.contains(&colour.to_array());
     assert!(has(&roles(Board::Dotted, "rest"), theme.track));
-    assert!(has(&roles(Board::Dotted, "rest"), theme.accent_bright));
+    assert!(has(&roles(Board::Dotted, "rest"), theme.hot));
     assert!(has(&roles(Board::Header, "rest"), theme.hot));
+    assert!(has(&roles(Board::Header, "rest"), theme.on_hot));
+    assert!(has(&roles(Board::Header, "rest"), theme.card));
     assert!(!has(&roles(Board::Header, "rest"), theme.accent));
-    assert!(has(&roles(Board::Header, "hover"), theme.accent));
     assert!(has(&roles(Board::KeyCap, "hover"), theme.accent_deep));
     assert!(has(&roles(Board::KeyCap, "rest"), theme.accent_bright));
-    assert!(has(&roles(Board::Tabs, "rest"), theme.accent_bright));
+    assert!(has(&roles(Board::Tabs, "rest"), theme.hot));
     assert!(has(&roles(Board::Tabs, "hover"), theme.accent_deep));
     assert!(has(&roles(Board::Number, "rest"), theme.well));
     assert!(has(&roles(Board::Number, "rest"), theme.code));
@@ -362,6 +367,7 @@ fn titles_upper_and_track_when_the_theme_says_so() {
         titles: Caps {
             upper: true,
             tracking: 0.3,
+            weight: None,
         },
         ..fixture::theme()
     };
@@ -372,6 +378,7 @@ fn titles_upper_and_track_when_the_theme_says_so() {
         titles: Caps {
             upper: true,
             tracking: 0.0,
+            weight: None,
         },
         ..fixture::theme()
     };
@@ -396,13 +403,14 @@ fn data_labels_upper_and_track_when_the_theme_says_so() {
         labels: Caps {
             upper: true,
             tracking: 0.2,
+            weight: None,
         },
         ..fixture::theme()
     };
     let (_, spacing, _) = find(&texts(&labels, Board::Header), "12 ITEMS").clone();
     assert_eq!(spacing, 0.2 * labels.size_code);
     find(&texts(&labels, Board::Pill), "READY");
-    find(&texts(&labels, Board::Number), "M");
+    find(&texts(&labels, Board::Number), "m");
     find(&texts(&fixture::theme(), Board::Pill), "ready");
     find(&texts(&fixture::theme(), Board::Number), "m");
 }
