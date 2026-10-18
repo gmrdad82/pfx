@@ -263,7 +263,7 @@ impl Work {
         self.mat = mat;
     }
 
-    pub fn cut(&mut self, removed: &[bool], lip: f64) {
+    pub fn cut(&mut self, removed: &[bool], lip: f64) -> BTreeMap<Key, DVec3> {
         let mut gone = BTreeSet::new();
         let mut uses: BTreeMap<Edge, usize> = BTreeMap::new();
         for (t, &gone_here) in removed.iter().enumerate() {
@@ -279,7 +279,7 @@ impl Work {
         let keep: Vec<bool> = removed.iter().map(|r| !r).collect();
         self.retain(&keep);
         if lip <= 0.0 {
-            return;
+            return BTreeMap::new();
         }
         let mut rim = Vec::new();
         for t in 0..self.tris.len() {
@@ -297,6 +297,14 @@ impl Work {
             }
         }
         let below = |p: DVec3, k: &Key| p - normal[k].normalize_or_zero() * lip;
+        let mut lowered = BTreeMap::new();
+        for &(a, b, _) in &rim {
+            for v in [a, b] {
+                let p = self.pos[v as usize];
+                let k = key(p);
+                lowered.insert(k, below(p, &k));
+            }
+        }
         let mut wall: BTreeMap<Key, DVec3> = BTreeMap::new();
         for &(a, b, _) in &rim {
             let (pa, pb) = (self.pos[a as usize], self.pos[b as usize]);
@@ -324,6 +332,7 @@ impl Work {
             self.tris.push([tb, ba, bb]);
             self.mat.extend([m, m]);
         }
+        lowered
     }
 
     fn edges(&self, t: usize) -> [(u32, u32); 3] {

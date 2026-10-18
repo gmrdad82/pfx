@@ -342,6 +342,11 @@ impl Builder<'_> {
             emissive_factor: json::material::EmissiveFactor(look.emission.unwrap_or([0.0; 3])),
             extensions: self.lobes(look),
             extras,
+            alpha_mode: Checked::Valid(match look.alpha_cutoff {
+                Some(_) => json::material::AlphaMode::Mask,
+                None => json::material::AlphaMode::Opaque,
+            }),
+            alpha_cutoff: look.alpha_cutoff.map(json::material::AlphaCutoff),
             ..Default::default()
         }
     }

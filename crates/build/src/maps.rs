@@ -184,6 +184,8 @@ pub(crate) fn look(
             None => None,
         },
         detail_normal: None,
+        alpha_cutoff: (material.alpha_mode() == gltf::material::AlphaMode::Mask)
+            .then(|| material.alpha_cutoff().unwrap_or(0.5)),
     })
 }
 

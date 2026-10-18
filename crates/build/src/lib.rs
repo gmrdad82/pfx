@@ -9,11 +9,13 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub mod align;
+mod art;
 mod bake;
 pub mod builtin;
 pub mod carve;
 pub mod detail_uv;
 pub mod document;
+mod edit;
 mod extras;
 mod facts;
 pub mod gltf_io;
@@ -106,6 +108,7 @@ pub struct Generated {
     pub materials: BTreeMap<String, serde_json::Value>,
     pub lights: Vec<GeneratedLight>,
     pub pivots: BTreeMap<String, [f64; 3]>,
+    pub notes: Vec<String>,
 }
 
 pub type FactsGenerator = fn(&Call) -> Result<Generated, String>;
@@ -276,9 +279,14 @@ pub struct Built {
     pub lods: Vec<Lod>,
     nest: Vec<Option<(usize, DMat4)>>,
     wet: BTreeMap<String, (String, pfx_scene::types::Wet)>,
+    art: BTreeMap<usize, art::Art>,
 }
 
 impl Built {
+    pub fn wet(&self) -> impl Iterator<Item = (&str, &pfx_scene::types::Wet)> {
+        self.wet.iter().map(|(name, (_, wet))| (name.as_str(), wet))
+    }
+
     pub fn skinned(&self) -> bool {
         !self.players.is_empty()
     }
@@ -333,6 +341,15 @@ impl Built {
         &self.provenance_by_object
     }
 
+    pub(crate) fn dressed(&self, at: usize, looks: &mut Option<Looks>) -> Node {
+        let mut node = self.parts[at].node.clone();
+        if let Some(art) = self.art.get(&self.parts[at].object) {
+            let looks = looks.get_or_insert_with(|| (*self.looks).clone());
+            art::dress(&mut node, art, looks);
+        }
+        node
+    }
+
     pub fn try_glb(&self) -> Result<Vec<u8>, Error> {
         let visible: Vec<usize> = (0..self.parts.len())
             .filter(|&at| !self.parts[at].hidden)
@@ -352,8 +369,9 @@ impl Built {
         };
         let mut nodes = Vec::with_capacity(visible.len());
         let mut parents = Vec::with_capacity(visible.len());
+        let mut dressed = None;
         for &at in &visible {
-            let mut node = self.parts[at].node.clone();
+            let mut node = self.dressed(at, &mut dressed);
             let nested = self
                 .nest
                 .get(at)
@@ -402,7 +420,7 @@ impl Built {
             &parents,
             &extras,
             pfx_glb::Content {
-                looks: &self.looks,
+                looks: dressed.as_ref().unwrap_or(&self.looks),
                 lods: &lods,
             },
             self.order,
@@ -925,6 +943,7 @@ struct Made {
     looks: Looks,
     tree: Option<library::Tree>,
     clips: Vec<(String, Vec<pfx_motion::Trs>)>,
+    notes: Vec<String>,
     skins: Vec<(String, skin::Skin)>,
     player: Option<skin::Player>,
     hidden: std::collections::BTreeSet<String>,
@@ -1007,6 +1026,7 @@ fn make(
     let mut clips = Vec::new();
     let mut offered = BTreeMap::new();
     let mut hidden = std::collections::BTreeSet::new();
+    let mut found_pieces = pieces::Found::default();
     let generated = if matches!(object.kind, Kind::Generator { .. }) {
         generate(recipe, index, base, registry, routes)?
     } else if matches!(object.kind, Kind::Library { .. }) {
@@ -1018,6 +1038,7 @@ fn make(
         tree = Some(imported.tree);
         clips = imported.clips;
         hidden = imported.hidden;
+        found_pieces = imported.pieces;
         imported.generated
     } else {
         let mesh = match &object.kind {
@@ -1027,6 +1048,7 @@ fn make(
                 morphs = vec![(!found.morph.is_empty()).then_some(found.morph)];
                 looks = found.looks;
                 offered = found.materials;
+                found_pieces = found.pieces;
                 if let Some((made, rig)) = found.skin {
                     player = skin::player(recipe, object, Arc::new(rig.rig), true)?;
                     skins = vec![Some(made)];
@@ -1044,12 +1066,39 @@ fn make(
             ..Generated::default()
         }
     };
+    let edit::Edited {
+        generated,
+        morphs: edited_morphs,
+        paints,
+        from,
+        kept,
+    } = edit::apply(
+        object,
+        generated,
+        morphs,
+        &skins.iter().map(Option::is_some).collect::<Vec<_>>(),
+        &found_pieces,
+        &mut hidden,
+    )?;
+    morphs = edited_morphs;
+    skins = kept
+        .iter()
+        .map(|at| at.and_then(|at| skins.get(at).cloned().flatten()))
+        .collect();
+    for (piece, source) in generated.pieces.iter().zip(&from) {
+        if piece.name != *source
+            && let Some(clip) = clips.iter().find(|(name, _)| name == source).cloned()
+        {
+            clips.push((piece.name.clone(), clip.1));
+        }
+    }
     let Generated {
         pieces,
         facts,
         materials,
         lights,
         pivots,
+        notes,
     } = generated;
     let mut made = Made {
         nodes: Vec::with_capacity(pieces.len()),
@@ -1060,6 +1109,7 @@ fn make(
         looks,
         tree,
         clips: Vec::new(),
+        notes,
         skins: Vec::new(),
         player: None,
         hidden,
@@ -1113,6 +1163,9 @@ fn make(
         let sources = detail_uv::apply(object, matrix, &mut mesh)?;
         follow(&mut morph, &mut skin, sources);
         shape::materials(object, &mut mesh)?;
+        if let Some(paint) = &paints[at] {
+            mesh.set_material(paint);
+        }
         let transform = if object.keep_transform {
             matrix
         } else {
@@ -1238,6 +1291,7 @@ fn assemble(
     let mut lods = Vec::new();
     let mut trees = BTreeMap::new();
     let mut clips = Vec::new();
+    let mut notes = Vec::new();
     let mut skins = Vec::new();
     let mut players = BTreeMap::new();
     for (index, object) in recipe.objects.iter().enumerate() {
@@ -1300,6 +1354,11 @@ fn assemble(
                 quiet.extend(made.materials.keys().cloned());
             }
         }
+        notes.extend(
+            made.notes
+                .iter()
+                .map(|note| format!("object[{}].{note}", object.name)),
+        );
         if !object.hidden {
             lights.extend(made.lights);
         }
@@ -1365,7 +1424,7 @@ fn assemble(
     let sidecar = sidecar(recipe, registry, &facts)?;
     let mut materials = BTreeMap::new();
     let mut wet = BTreeMap::new();
-    let mut notes = renamed;
+    let mut notes = renamed.into_iter().chain(notes).collect::<Vec<_>>();
     for (name, (owner, mut value)) in offered {
         match recipe.materials.get(&name) {
             Some(own) if *own != value && !quiet.contains(&name) => notes.push(format!(
@@ -1398,6 +1457,7 @@ fn assemble(
     for part in &mut parts {
         part.looks = looks.clone();
     }
+    let art = art::read(recipe, base, &parts, &mut notes);
     notes.extend(scene::left_out(recipe));
     notes.extend(scene::lights_left_out(recipe, &lights));
     Ok(Built {
@@ -1410,6 +1470,7 @@ fn assemble(
         extras: extras::of(recipe, &parts, &facts.movers),
         nest: nested,
         wet,
+        art,
         timeline: recipe.timeline,
         markers: recipe
             .markers

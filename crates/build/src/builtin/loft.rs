@@ -1,4 +1,4 @@
-use crate::carve::{Frame, grooves, hinged, regions};
+use crate::carve::{Carve, Carved, Frame};
 use crate::{Call, Generated, Piece};
 use glam::{DVec2, DVec3};
 use pfx_mesh::math::Real;
@@ -9,14 +9,17 @@ use std::f64::consts::{PI, TAU};
 
 pub const NAME: &str = "pfx/loft";
 
-const PARAMS: [&str; 9] = [
+const PARAMS: [&str; 12] = [
     "axis",
     "stations",
     "silhouettes",
     "subdivide",
     "samples",
+    "interpolate",
+    "spacing",
     "seed",
     "regions",
+    "decals",
     "grooves",
     "hinged",
 ];
@@ -25,6 +28,7 @@ const VIEWS: [&str; 4] = ["side", "top", "front", "rear"];
 const MATERIAL: &str = "loft";
 const INFINITE: f64 = 10.0;
 const FRONT_BINS: usize = 48;
+const HULL: f64 = 0.02;
 
 pub struct Station {
     pub at: f64,
@@ -71,6 +75,19 @@ impl Axis {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Interpolate {
+    Cubic,
+    Pchip,
+    CatmullRom,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Spacing {
+    Even,
+    Stations,
+}
+
 pub struct Loft {
     pub axis: Axis,
     pub stations: Vec<Station>,
@@ -78,43 +95,31 @@ pub struct Loft {
     pub subdivide: u32,
     pub around: usize,
     pub along: usize,
+    pub interpolate: Interpolate,
+    pub spacing: Spacing,
+}
+
+pub struct Lofted {
+    pub mesh: Mesh,
+    pub notes: Vec<String>,
 }
 
 pub fn generate(call: &Call) -> Result<Generated, String> {
     let loft = parse(call.params)?;
-    let cut_regions = regions::parse(call.params.get("regions"), "params.regions")?;
-    let cut_grooves = grooves::parse(call.params.get("grooves"), "params.grooves")?;
-    let panels = hinged::parse(call.params.get("hinged"), "params.hinged", &cut_grooves)?;
-    let mut surface = loft.build()?;
+    let carve = Carve::parse(call.params, "params")?;
+    let Lofted {
+        mesh: mut surface,
+        notes,
+    } = loft.lofted()?;
     let name = &call.object.name;
     let [lo, hi] = bounds(&surface);
     loft.axis.place(&mut surface);
     let frame = Frame::along(loft.axis.vector()).unwrap_or(Frame::WORLD);
-    let mut pieces = Vec::new();
-    for piece in regions::apply(&mut surface, &cut_regions, frame) {
-        pieces.push(Piece {
-            name: format!("{name}.{}", piece.name),
-            mesh: piece.mesh,
-        });
-    }
-    grooves::apply(&mut surface, &cut_grooves, frame);
-    let mut pivots = BTreeMap::new();
-    let mut opened = serde_json::Map::new();
-    for ((piece, pivot), panel) in hinged::split(&mut surface, &panels, &cut_grooves, frame)?
-        .into_iter()
-        .zip(&panels)
-    {
-        let node = format!("{name}.{}", piece.name);
-        pivots.insert(node.clone(), pivot.to_array());
-        opened.insert(
-            panel.name.clone(),
-            json!({ "pivot": pivot.to_array(), "axis": panel.axis().to_array() }),
-        );
-        pieces.push(Piece {
-            name: node,
-            mesh: piece.mesh,
-        });
-    }
+    let Carved {
+        mut pieces,
+        pivots,
+        opened,
+    } = carve.apply(&mut surface, name, frame)?;
     pieces.insert(
         0,
         Piece {
@@ -139,6 +144,7 @@ pub fn generate(call: &Call) -> Result<Generated, String> {
         facts,
         materials: materials(),
         pivots,
+        notes,
         ..Generated::default()
     })
 }
@@ -195,6 +201,21 @@ pub fn parse(params: &BTreeMap<String, Value>) -> Result<Loft, String> {
     {
         return Err("params.seed: expected a whole number from 0".into());
     }
+    let interpolate = match params.get("interpolate").map(|v| v.as_str()) {
+        None | Some(Some("cubic")) => Interpolate::Cubic,
+        Some(Some("pchip")) => Interpolate::Pchip,
+        Some(Some("catmull-rom")) => Interpolate::CatmullRom,
+        Some(_) => {
+            return Err(
+                "params.interpolate: expected \"cubic\", \"pchip\" or \"catmull-rom\"".into(),
+            );
+        }
+    };
+    let spacing = match params.get("spacing").map(|v| v.as_str()) {
+        None | Some(Some("even")) => Spacing::Even,
+        Some(Some("stations")) => Spacing::Stations,
+        Some(_) => return Err("params.spacing: expected \"even\" or \"stations\"".into()),
+    };
     let n = stations[0].points.len();
     let mut around = n.max(24);
     let mut along = stations.len().max(16);
@@ -229,6 +250,8 @@ pub fn parse(params: &BTreeMap<String, Value>) -> Result<Loft, String> {
         subdivide,
         around,
         along,
+        interpolate,
+        spacing,
     })
 }
 
@@ -388,19 +411,42 @@ fn silhouettes(value: Option<&Value>) -> Result<Silhouettes, String> {
 
 impl Loft {
     pub fn build(&self) -> Result<Mesh, String> {
-        let mut cage = self.cage();
-        let z0 = self.stations[0].at;
-        let z1 = self.stations[self.stations.len() - 1].at;
-        fit(&mut cage.points, z0, z1, self.along, &self.silhouettes);
+        self.lofted().map(|lofted| lofted.mesh)
+    }
+
+    pub fn lofted(&self) -> Result<Lofted, String> {
+        let ruler = self.ruler();
+        let (mut cage, notes) = self.cage(&ruler);
+        fit(&mut cage.points, &ruler, self.along, &self.silhouettes);
         for _ in 0..self.subdivide {
             cage = subdivide(&cage)?;
         }
         let rings = (self.along - 1) * (1 << self.subdivide) + 1;
-        fit(&mut cage.points, z0, z1, rings, &self.silhouettes);
-        finish(&cage, z0, z1, rings)
+        fit(&mut cage.points, &ruler, rings, &self.silhouettes);
+        let mesh = finish(&cage, &ruler, rings)?;
+        Ok(Lofted { mesh, notes })
     }
 
-    fn cage(&self) -> Cage {
+    fn ruler(&self) -> Ruler {
+        let k = self.stations.len();
+        let z0 = self.stations[0].at;
+        let z1 = self.stations[k - 1].at;
+        let warp = match self.spacing {
+            Spacing::Even => None,
+            Spacing::Stations => {
+                let xs: Vec<f64> = (0..k).map(|i| i as f64 / (k - 1) as f64).collect();
+                let ys: Vec<f64> = self
+                    .stations
+                    .iter()
+                    .map(|s| (s.at - z0) / (z1 - z0))
+                    .collect();
+                Some(Pchip::new(xs, ys))
+            }
+        };
+        Ruler { z0, z1, warp }
+    }
+
+    fn cage(&self, ruler: &Ruler) -> (Cage, Vec<String>) {
         let n = self.stations[0].points.len();
         let k = self.stations.len();
         let lengths: Vec<f64> = (0..n)
@@ -430,44 +476,19 @@ impl Loft {
             .iter()
             .map(|s| (s.at - self.stations[0].at) / span)
             .collect();
-        let degree = 3.min(k - 1);
-        let knots = averaged_knots(&params, degree);
-        let matrix: Vec<Vec<f64>> = params
-            .iter()
-            .map(|&v| {
-                let span = find_span(k - 1, degree, v, &knots);
-                let basis = basis(span, v, degree, &knots);
-                let mut row = vec![0.0; k];
-                for (a, b) in basis.iter().enumerate() {
-                    row[span - degree + a] = *b;
-                }
-                row
-            })
-            .collect();
-        let lu = Lu::new(matrix);
-        let columns: Vec<Vec<DVec2>> = (0..m)
-            .map(|j| {
-                let xs = lu.solve(rings.iter().map(|r| r.0[j].x).collect());
-                let ys = lu.solve(rings.iter().map(|r| r.0[j].y).collect());
-                xs.into_iter()
-                    .zip(ys)
-                    .map(|(x, y)| DVec2::new(x, y))
-                    .collect()
-            })
-            .collect();
+        let columns = Columns::new(self.interpolate, &rings, &params, &self.stations);
         let r = self.along;
         let mut points = Vec::with_capacity(r * m);
         let mut sharp_rows = Vec::with_capacity(r);
+        let mut hull = Hull::new(&rings);
         for row in 0..r {
-            let v = row as f64 / (r - 1) as f64;
-            let z = self.stations[0].at + span * v;
-            let s = find_span(k - 1, degree, v, &knots);
-            let b = basis(s, v, degree, &knots);
-            for column in &columns {
-                let mut p = DVec2::ZERO;
-                for (a, w) in b.iter().enumerate() {
-                    p += column[s - degree + a] * *w;
-                }
+            let u = row as f64 / (r - 1) as f64;
+            let z = self.stations[0].at + span * u;
+            let v = ruler.param(u);
+            let at = self.stations[0].at + span * v;
+            let seg = params.windows(2).position(|w| v <= w[1]).unwrap_or(k - 2);
+            for (j, p) in columns.row(v, at, seg).into_iter().enumerate() {
+                hull.check(&rings, seg, j, p);
                 points.push(DVec3::new(p.x, p.y, z));
             }
             let seg = params.windows(2).position(|w| v <= w[1]).unwrap_or(k - 2);
@@ -514,7 +535,295 @@ impl Loft {
         if cage.volume() < 0.0 {
             cage.flip();
         }
-        cage
+        (cage, hull.notes(&self.stations))
+    }
+}
+
+struct Ruler {
+    z0: f64,
+    z1: f64,
+    warp: Option<Pchip>,
+}
+
+impl Ruler {
+    fn param(&self, u: f64) -> f64 {
+        match &self.warp {
+            None => u,
+            Some(_) if u <= 0.0 => 0.0,
+            Some(_) if u >= 1.0 => 1.0,
+            Some(warp) => warp.at(u).clamp(0.0, 1.0),
+        }
+    }
+
+    fn z(&self, z: f64) -> f64 {
+        match &self.warp {
+            None => z,
+            Some(_) => {
+                let span = self.z1 - self.z0;
+                self.z0 + span * self.param((z - self.z0) / span)
+            }
+        }
+    }
+}
+
+enum Columns {
+    Cubic {
+        degree: usize,
+        knots: Vec<f64>,
+        controls: Vec<Vec<DVec2>>,
+    },
+    Pchip(Vec<[Pchip; 2]>),
+    CatmullRom(Vec<Vec<DVec3>>),
+}
+
+impl Columns {
+    fn new(
+        how: Interpolate,
+        rings: &[(Vec<DVec2>, Vec<f64>)],
+        params: &[f64],
+        stations: &[Station],
+    ) -> Columns {
+        let k = rings.len();
+        let m = rings[0].0.len();
+        match how {
+            Interpolate::Cubic => {
+                let degree = 3.min(k - 1);
+                let knots = averaged_knots(params, degree);
+                let matrix: Vec<Vec<f64>> = params
+                    .iter()
+                    .map(|&v| {
+                        let span = find_span(k - 1, degree, v, &knots);
+                        let basis = basis(span, v, degree, &knots);
+                        let mut row = vec![0.0; k];
+                        for (a, b) in basis.iter().enumerate() {
+                            row[span - degree + a] = *b;
+                        }
+                        row
+                    })
+                    .collect();
+                let lu = Lu::new(matrix);
+                let controls = (0..m)
+                    .map(|j| {
+                        let xs = lu.solve(rings.iter().map(|r| r.0[j].x).collect());
+                        let ys = lu.solve(rings.iter().map(|r| r.0[j].y).collect());
+                        xs.into_iter()
+                            .zip(ys)
+                            .map(|(x, y)| DVec2::new(x, y))
+                            .collect()
+                    })
+                    .collect();
+                Columns::Cubic {
+                    degree,
+                    knots,
+                    controls,
+                }
+            }
+            Interpolate::Pchip => Columns::Pchip(
+                (0..m)
+                    .map(|j| {
+                        [0, 1].map(|c| {
+                            Pchip::new(params.to_vec(), rings.iter().map(|r| r.0[j][c]).collect())
+                        })
+                    })
+                    .collect(),
+            ),
+            Interpolate::CatmullRom => Columns::CatmullRom(
+                (0..m)
+                    .map(|j| {
+                        rings
+                            .iter()
+                            .zip(stations)
+                            .map(|(r, s)| r.0[j].extend(s.at))
+                            .collect()
+                    })
+                    .collect(),
+            ),
+        }
+    }
+
+    fn row(&self, v: f64, at: f64, seg: usize) -> Vec<DVec2> {
+        match self {
+            Columns::Cubic {
+                degree,
+                knots,
+                controls,
+            } => {
+                let degree = *degree;
+                let s = find_span(controls[0].len() - 1, degree, v, knots);
+                let b = basis(s, v, degree, knots);
+                controls
+                    .iter()
+                    .map(|column| {
+                        let mut p = DVec2::ZERO;
+                        for (a, w) in b.iter().enumerate() {
+                            p += column[s - degree + a] * *w;
+                        }
+                        p
+                    })
+                    .collect()
+            }
+            Columns::Pchip(columns) => columns
+                .iter()
+                .map(|[x, y]| DVec2::new(x.at(v), y.at(v)))
+                .collect(),
+            Columns::CatmullRom(columns) => columns
+                .iter()
+                .map(|column| along_column(column, seg, at))
+                .collect(),
+        }
+    }
+}
+
+fn along_column(column: &[DVec3], seg: usize, at: f64) -> DVec2 {
+    let k = column.len();
+    let p1 = column[seg];
+    let p2 = column[seg + 1];
+    let p0 = if seg == 0 {
+        p1 * 2.0 - p2
+    } else {
+        column[seg - 1]
+    };
+    let p3 = if seg + 2 < k {
+        column[seg + 2]
+    } else {
+        p2 * 2.0 - p1
+    };
+    let (mut lo, mut hi) = (0.0, 1.0);
+    for _ in 0..60 {
+        let mid = (lo + hi) * 0.5;
+        if centripetal(p0, p1, p2, p3, mid).z < at {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    centripetal(p0, p1, p2, p3, (lo + hi) * 0.5).truncate()
+}
+
+struct Hull {
+    tolerance: f64,
+    worst: f64,
+    segment: usize,
+}
+
+impl Hull {
+    fn new(rings: &[(Vec<DVec2>, Vec<f64>)]) -> Hull {
+        let size = rings
+            .iter()
+            .map(|r| {
+                let (lo, hi) =
+                    r.0.iter()
+                        .fold((DVec2::INFINITY, DVec2::NEG_INFINITY), |(lo, hi), p| {
+                            (lo.min(*p), hi.max(*p))
+                        });
+                (hi - lo).max_element()
+            })
+            .fold(0.0, f64::max);
+        Hull {
+            tolerance: size * HULL,
+            worst: 0.0,
+            segment: 0,
+        }
+    }
+
+    fn check(&mut self, rings: &[(Vec<DVec2>, Vec<f64>)], seg: usize, j: usize, p: DVec2) {
+        let (a, b) = (rings[seg].0[j], rings[seg + 1].0[j]);
+        let out = (p - a.max(b)).max(a.min(b) - p).max_element();
+        if out > self.worst {
+            self.worst = out;
+            self.segment = seg;
+        }
+    }
+
+    fn notes(&self, stations: &[Station]) -> Vec<String> {
+        if self.worst <= self.tolerance {
+            return Vec::new();
+        }
+        let s = self.segment;
+        vec![format!(
+            "params.stations: the cage leaves the stations' hull by up to {:.4} m between stations {s} and {} (at {} and {}); interpolate = \"pchip\" keeps it inside",
+            self.worst,
+            s + 1,
+            stations[s].at,
+            stations[s + 1].at
+        )]
+    }
+}
+
+pub struct Pchip {
+    x: Vec<f64>,
+    y: Vec<f64>,
+    d: Vec<f64>,
+}
+
+fn sign(v: f64) -> i8 {
+    if v > 0.0 {
+        1
+    } else if v < 0.0 {
+        -1
+    } else {
+        0
+    }
+}
+
+fn edge_case(h0: f64, h1: f64, m0: f64, m1: f64) -> f64 {
+    let d = ((2.0 * h0 + h1) * m0 - h0 * m1) / (h0 + h1);
+    if sign(d) != sign(m0) {
+        0.0
+    } else if sign(m0) != sign(m1) && d.abs() > 3.0 * m0.abs() {
+        3.0 * m0
+    } else {
+        d
+    }
+}
+
+impl Pchip {
+    pub fn new(x: Vec<f64>, y: Vec<f64>) -> Pchip {
+        let n = x.len();
+        let h: Vec<f64> = x.windows(2).map(|w| w[1] - w[0]).collect();
+        let m: Vec<f64> = (0..n - 1).map(|k| (y[k + 1] - y[k]) / h[k]).collect();
+        let d = if n == 2 {
+            vec![m[0], m[0]]
+        } else {
+            let mut d = vec![0.0; n];
+            for k in 1..n - 1 {
+                let (m0, m1) = (m[k - 1], m[k]);
+                if sign(m1) != sign(m0) || m1 == 0.0 || m0 == 0.0 {
+                    continue;
+                }
+                let w1 = 2.0 * h[k] + h[k - 1];
+                let w2 = h[k] + 2.0 * h[k - 1];
+                let whmean = (w1 / m0 + w2 / m1) / (w1 + w2);
+                d[k] = 1.0 / whmean;
+            }
+            d[0] = edge_case(h[0], h[1], m[0], m[1]);
+            d[n - 1] = edge_case(h[n - 2], h[n - 3], m[n - 2], m[n - 3]);
+            d
+        };
+        Pchip { x, y, d }
+    }
+
+    pub fn at(&self, x: f64) -> f64 {
+        let n = self.x.len();
+        let i = if x >= self.x[n - 1] {
+            n - 2
+        } else {
+            self.x[1..n - 1].partition_point(|&k| k <= x)
+        };
+        let dx = self.x[i + 1] - self.x[i];
+        let slope = (self.y[i + 1] - self.y[i]) / dx;
+        let t = (self.d[i] + self.d[i + 1] - 2.0 * slope) / dx;
+        let c = [t / dx, (slope - self.d[i]) / dx - t, self.d[i], self.y[i]];
+        let s = x - self.x[i];
+        let mut res = 0.0;
+        let mut z = 1.0;
+        for (kp, c) in c.iter().rev().enumerate() {
+            res += c * z;
+            if kp < 3 {
+                z *= s;
+            }
+        }
+        res
     }
 }
 
@@ -546,8 +855,24 @@ fn refine(points: &[DVec2], sharp: &[f64], counts: &[usize]) -> (Vec<DVec2>, Vec
     (out, flags)
 }
 
-fn centripetal(p0: DVec2, p1: DVec2, p2: DVec2, p3: DVec2, s: f64) -> DVec2 {
-    let knot = |a: DVec2, b: DVec2| a.distance(b).sqrt().max(1e-9);
+trait Point: Copy + std::ops::Add<Output = Self> + std::ops::Mul<f64, Output = Self> {
+    fn gap(self, other: Self) -> f64;
+}
+
+impl Point for DVec2 {
+    fn gap(self, other: Self) -> f64 {
+        self.distance(other)
+    }
+}
+
+impl Point for DVec3 {
+    fn gap(self, other: Self) -> f64 {
+        self.distance(other)
+    }
+}
+
+fn centripetal<P: Point>(p0: P, p1: P, p2: P, p3: P, s: f64) -> P {
+    let knot = |a: P, b: P| a.gap(b).sqrt().max(1e-9);
     let t0 = 0.0;
     let t1 = t0 + knot(p0, p1);
     let t2 = t1 + knot(p1, p2);
@@ -1053,14 +1378,18 @@ fn mix3(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
     [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t)
 }
 
-fn fit(points: &mut [DVec3], z0: f64, z1: f64, count: usize, s: &Silhouettes) {
-    let bins = Bins { z0, z1, count };
+fn fit(points: &mut [DVec3], ruler: &Ruler, count: usize, s: &Silhouettes) {
+    let bins = Bins {
+        z0: ruler.z0,
+        z1: ruler.z1,
+        count,
+    };
     if let Some(side) = &s.side {
         let side = Branches::new(side);
         let ex = bins.extremes(points);
         let table: Vec<[f64; 3]> = (0..count)
             .map(|b| {
-                let (lo, hi) = side.at(bins.centre(b));
+                let (lo, hi) = side.at(ruler.z(bins.centre(b)));
                 let target = if side.looped() {
                     (lo, hi)
                 } else {
@@ -1075,14 +1404,14 @@ fn fit(points: &mut [DVec3], z0: f64, z1: f64, count: usize, s: &Silhouettes) {
         }
     }
     if s.front.is_some() || s.rear.is_some() {
-        front_rear(points, z0, z1, s);
+        front_rear(points, ruler, s);
     }
     if let Some(top) = &s.top {
         let top = Branches::new(top);
         let ex = bins.extremes(points);
         let table: Vec<[f64; 3]> = (0..count)
             .map(|b| {
-                let (lo, hi) = top.at(bins.centre(b));
+                let (lo, hi) = top.at(ruler.z(bins.centre(b)));
                 if top.looped() {
                     range_map(ex[b][0], ex[b][1], (lo, hi))
                 } else {
@@ -1103,7 +1432,7 @@ fn fit(points: &mut [DVec3], z0: f64, z1: f64, count: usize, s: &Silhouettes) {
     }
 }
 
-fn front_rear(points: &mut [DVec3], z0: f64, z1: f64, s: &Silhouettes) {
+fn front_rear(points: &mut [DVec3], ruler: &Ruler, s: &Silhouettes) {
     let (ylo, yhi) = points
         .iter()
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| {
@@ -1115,7 +1444,7 @@ fn front_rear(points: &mut [DVec3], z0: f64, z1: f64, s: &Silhouettes) {
     let bin = |y: f64| {
         (((y - ylo) / (yhi - ylo)) * (FRONT_BINS - 1) as f64).clamp(0.0, (FRONT_BINS - 1) as f64)
     };
-    let weight = |z: f64| smoothstep(z0, z1, z);
+    let weight = |z: f64| smoothstep(ruler.z0, ruler.z1, ruler.z(z));
     let mut envelope = [[0.0f64; FRONT_BINS]; 2];
     for p in points.iter() {
         let side = usize::from(weight(p.z) >= 0.5);
@@ -1191,7 +1520,12 @@ fn union(parent: &mut [u32], a: u32, b: u32) {
     }
 }
 
-fn finish(cage: &Cage, z0: f64, z1: f64, rings: usize) -> Result<Mesh, String> {
+fn finish(cage: &Cage, ruler: &Ruler, rings: usize) -> Result<Mesh, String> {
+    let placed: Vec<DVec3> = cage
+        .points
+        .iter()
+        .map(|p| DVec3::new(p.x, p.y, ruler.z(p.z)))
+        .collect();
     let topo = topology(cage)?;
     let corners = cage.verts.len();
     let corner = |f: u32, k: u32| {
@@ -1214,8 +1548,8 @@ fn finish(cage: &Cage, z0: f64, z1: f64, rings: usize) -> Result<Mesh, String> {
             let n = face.len();
             let mut sum = DVec3::ZERO;
             for k in 0..n {
-                let a = cage.points[face[k] as usize];
-                let b = cage.points[face[(k + 1) % n] as usize];
+                let a = placed[face[k] as usize];
+                let b = placed[face[(k + 1) % n] as usize];
                 sum += a.cross(b);
             }
             sum * 0.5
@@ -1229,8 +1563,8 @@ fn finish(cage: &Cage, z0: f64, z1: f64, rings: usize) -> Result<Mesh, String> {
         }
     }
     let bins = Bins {
-        z0,
-        z1,
+        z0: ruler.z0,
+        z1: ruler.z1,
         count: rings,
     };
     let ex = bins.extremes(&cage.points);
@@ -1291,15 +1625,15 @@ fn finish(cage: &Cage, z0: f64, z1: f64, rings: usize) -> Result<Mesh, String> {
             let group = find(&mut parent, c as u32);
             let next = out.positions.len() as u32;
             let index = *made.entry((vi, group, wrap)).or_insert_with(|| {
-                let p = cage.points[vi as usize];
+                let p = placed[vi as usize];
                 out.positions.push([p.x as f32, p.y as f32, p.z as f32]);
                 let n = groups[group as usize].normalize_or_zero();
                 out.normals.push([n.x as f32, n.y as f32, n.z as f32]);
                 let mut v = along[vi as usize];
                 if wrap {
-                    v += girth[bins.of(p.z)];
+                    v += girth[bins.of(cage.points[vi as usize].z)];
                 }
-                uvs.push([(p.z - z0) as f32, v as f32]);
+                uvs.push([(p.z - ruler.z0) as f32, v as f32]);
                 next
             });
             corner_index[c] = index;
@@ -1443,5 +1777,202 @@ mod tests {
         assert!(m.positions.iter().all(|p| near(q(-p[0], p[1], p[2]))));
         let [lo, hi] = bounds(&m);
         assert!((lo[0] + hi[0]).abs() < 1e-4);
+    }
+
+    fn digest(m: &Mesh) -> u64 {
+        let mut h = 0xcbf2_9ce4_8422_2325u64;
+        let mut eat = |v: u32| {
+            for b in v.to_le_bytes() {
+                h = (h ^ b as u64).wrapping_mul(0x0100_0000_01b3);
+            }
+        };
+        for p in m.positions.iter().chain(&m.normals) {
+            p.iter().for_each(|c| eat(c.to_bits()));
+        }
+        for t in m.uvs.iter().flatten() {
+            t.iter().for_each(|c| eat(c.to_bits()));
+        }
+        m.indices.iter().for_each(|&i| eat(i));
+        h
+    }
+
+    #[test]
+    fn the_default_interpolation_builds_the_bytes_it_always_has() {
+        let m = surface(shape(json!([2])));
+        assert_eq!(digest(&m), 0xfbc0_f248_4460_76fb, "{:#018x}", digest(&m));
+    }
+
+    #[test]
+    fn pchip_matches_scipys_pchip_interpolator() {
+        let cases: [(&[f64], &[f64], [u64; 12]); 4] = [
+            (
+                &[0.0, 0.1, 0.15, 0.2, 0.6, 1.0],
+                &[0.4, 0.42, 0.9, 0.95, 0.95, 0.3],
+                [
+                    0x3fda62dd89971adf,
+                    0x3fd999999999999a,
+                    0x3fd9b31bf090d680,
+                    0x3fe2ab679b44b926,
+                    0x3fedf656f1826a43,
+                    0x3fee666666666666,
+                    0x3fee666666666666,
+                    0x3fee666666666666,
+                    0x3fe99017c1bda511,
+                    0x3fd4c27a0f9096bc,
+                    0x3fd3333333333332,
+                    0x3fc6e1999999999a,
+                ],
+            ),
+            (
+                &[0.0, 0.3, 1.0],
+                &[1.0, -0.5, 2.0],
+                [
+                    0x3ffbc23c23c23c23,
+                    0x3ff0000000000000,
+                    0x3fe8c4b99b78f2f4,
+                    0x3fc28c8d22eedafa,
+                    0xbfc538e38e38e38c,
+                    0xbfdffd3e6d75bdd3,
+                    0xbfd94865811e99bf,
+                    0xbfd790acbe64bf4b,
+                    0x3fd803bb0791e0ee,
+                    0x3ffe7cddabd5238e,
+                    0x4000000000000000,
+                    0x4004130835bcd3f8,
+                ],
+            ),
+            (
+                &[0.0, 1.0],
+                &[0.25, 0.75],
+                [
+                    0x3fc999999999999a,
+                    0x3fd0000000000000,
+                    0x3fd0f5c28f5c28f6,
+                    0x3fd3d70a3d70a3d7,
+                    0x3fd599999999999a,
+                    0x3fd9eb851eb851ec,
+                    0x3fe0000000000000,
+                    0x3fe051eb851eb852,
+                    0x3fe451eb851eb852,
+                    0x3fe7d70a3d70a3d7,
+                    0x3fe8000000000000,
+                    0x3fe8cccccccccccd,
+                ],
+            ),
+            (
+                &[0.0, 0.05, 0.5, 0.55, 1.0],
+                &[0.0, 0.0, 1.0, 1.2, 1.1],
+                [
+                    0x0000000000000000,
+                    0x0000000000000000,
+                    0x0000000000000000,
+                    0x3fa2c0a9361168ca,
+                    0x3fbc6e2fbca2517f,
+                    0x3fdada0ebab97c4f,
+                    0x3ff0000000000000,
+                    0x3ff17b917be7f6ea,
+                    0x3ff303568a024037,
+                    0x3ff1b44de9ab9b4f,
+                    0x3ff199999999999a,
+                    0x3ff101559d408b58,
+                ],
+            ),
+        ];
+        let at = [
+            -0.1, 0.0, 0.03, 0.12, 0.175, 0.31, 0.5, 0.52, 0.77, 0.99, 1.0, 1.05,
+        ];
+        for (x, y, want) in cases {
+            let p = Pchip::new(x.to_vec(), y.to_vec());
+            for (a, w) in at.iter().zip(want) {
+                let got = p.at(*a);
+                let w = f64::from_bits(w);
+                assert!(
+                    (got - w).abs() <= 4.0 * f64::EPSILON * w.abs().max(1.0),
+                    "{a}: {got} != {w}"
+                );
+            }
+        }
+    }
+
+    fn uneven(how: &str, spacing: &str) -> Value {
+        let ring = |r: f64| -> Vec<[f64; 2]> {
+            (0..8)
+                .map(|i| {
+                    let a = i as f64 / 8.0 * TAU;
+                    [r * a.cos(), r * a.sin()]
+                })
+                .collect()
+        };
+        let stations: Vec<Value> = [
+            (0.0, 0.5),
+            (0.1, 0.5),
+            (0.2, 0.5),
+            (0.25, 1.0),
+            (2.0, 1.0),
+            (2.1, 1.0),
+        ]
+        .iter()
+        .map(|&(at, r)| json!({ "at": at, "curve": ring(r) }))
+        .collect();
+        json!({
+            "stations": stations,
+            "samples": { "around": 16, "along": 22 },
+            "subdivide": 1,
+            "interpolate": how,
+            "spacing": spacing,
+        })
+    }
+
+    fn lofted(params: Value) -> Lofted {
+        let Value::Object(map) = params else {
+            unreachable!()
+        };
+        parse(&map.into_iter().collect()).unwrap().lofted().unwrap()
+    }
+
+    fn widest(m: &Mesh) -> f64 {
+        m.positions
+            .iter()
+            .map(|p| (p[0] as f64).hypot(p[1] as f64))
+            .fold(0.0, f64::max)
+    }
+
+    #[test]
+    fn pchip_keeps_uneven_stations_from_ringing_where_the_cubic_warns() {
+        let cubic = lofted(uneven("cubic", "even"));
+        assert_eq!(cubic.notes.len(), 1, "{:?}", cubic.notes);
+        assert!(cubic.notes[0].starts_with("params.stations: the cage leaves the stations' hull"));
+        assert!(widest(&cubic.mesh) > 1.05, "{}", widest(&cubic.mesh));
+        let pchip = lofted(uneven("pchip", "even"));
+        assert!(pchip.notes.is_empty(), "{:?}", pchip.notes);
+        assert!(widest(&pchip.mesh) <= 1.0 + 1e-6, "{}", widest(&pchip.mesh));
+        let rom = lofted(uneven("catmull-rom", "even"));
+        assert!(widest(&rom.mesh) < widest(&cubic.mesh));
+        for m in [&cubic.mesh, &pchip.mesh, &rom.mesh] {
+            assert!(welded_edges(m).values().all(|&c| c == 2));
+        }
+    }
+
+    #[test]
+    fn station_spacing_puts_rings_where_the_stations_are_dense() {
+        let rings = |m: &Mesh| {
+            m.positions
+                .iter()
+                .filter(|p| p[2] < 0.3)
+                .map(|p| (p[2] * 1e4).round() as i64)
+                .collect::<BTreeSet<_>>()
+                .len()
+        };
+        let even = lofted(uneven("pchip", "even")).mesh;
+        let dense = lofted(uneven("pchip", "stations")).mesh;
+        assert!(
+            rings(&dense) >= 2 * rings(&even),
+            "{} {}",
+            rings(&dense),
+            rings(&even)
+        );
+        let [lo, hi] = bounds(&dense);
+        assert!(lo[2].abs() < 1e-6 && (hi[2] - 2.1).abs() < 1e-5);
+        assert!(welded_edges(&dense).values().all(|&c| c == 2));
     }
 }

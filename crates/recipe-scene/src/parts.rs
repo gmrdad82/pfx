@@ -3,9 +3,9 @@ use crate::vector::single::{cross, dot, sub, unit};
 use pfx_build::{Look, Part};
 use pfx_geom::mesh::Mesh as Geometry;
 use pfx_glb::{DMat4, Node};
-use pfx_materials::{Blend, Family, Material};
+use pfx_materials::{Blend, Family, Material, Wet};
 use pfx_mesh::{Mesh, Slot};
-use pfx_recipe::{Recipe, Shadow};
+use pfx_recipe::{Recipe, Setting, Settings, Shadow};
 
 const DEFAULT_MATERIAL: &str = "default";
 const DEGENERATE: f32 = 1e-14;
@@ -163,6 +163,28 @@ pub fn material(recipe: &Recipe, name: &str) -> Result<Option<Material>, Error> 
                 .map_err(|e| Error(format!("materials.{name}: {e}")))
         })
         .transpose()
+        .map(|found| {
+            found.map(|mut material| {
+                if let Some(settings) = recipe.effects.wet.get(name) {
+                    material.wet = wet(settings);
+                }
+                material
+            })
+        })
+}
+
+pub fn wet(settings: &Settings) -> Wet {
+    let mut wet = Wet::default();
+    for (key, value) in settings {
+        match (*key, value) {
+            ("amount", Setting::Number(v)) => wet.amount = *v as f32,
+            ("puddles", Setting::Number(v)) => wet.puddles = *v as f32,
+            ("puddle_scale", Setting::Number(v)) => wet.puddle_scale = *v as f32,
+            ("seed", Setting::Whole(v)) => wet.seed = *v,
+            _ => {}
+        }
+    }
+    wet
 }
 
 fn missing(recipe: &Recipe, piece: &Piece) -> Error {
@@ -443,6 +465,14 @@ mod tests {
         }
         let mine = material(&recipe, "mine").unwrap().unwrap();
         assert_eq!(mine.base, [0.1, 0.2, 0.3]);
+        assert!(mine.wet.inactive());
+        let wet = parse(
+            "recipe = 1\nname = \"t\"\n[materials.mine]\nbase = [0.1, 0.2, 0.3]\n[materials.mine.wet]\namount = 0.6\npuddles = 0.25\n",
+        )
+        .unwrap();
+        let soaked = material(&wet, "mine").unwrap().unwrap().wet;
+        assert_eq!((soaked.amount, soaked.puddles), (0.6, 0.25));
+        assert_eq!(soaked.puddle_scale, Wet::default().puddle_scale);
         assert_eq!(material(&recipe, "no_such_material").unwrap(), None);
     }
 

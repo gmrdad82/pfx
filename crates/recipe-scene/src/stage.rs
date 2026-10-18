@@ -15,8 +15,10 @@ use pfx_live::frame::{
 };
 use pfx_live::glass;
 use pfx_live::renderer::{Effects, Exposure, Finish, Renderer, RendererError, Text};
+use pfx_live::screen_shadows::{look_quality, look_screen};
 use pfx_live::shadow::{Quality, ReceiverBox};
 use pfx_live::textured;
+use pfx_load::scene::{ShadowQuality, Shadows};
 use pfx_materials::Material;
 use pfx_recipe::{Camera as Shot, Daylight, Recipe, Shadow, Sky, Sun as Lamp};
 use std::collections::BTreeMap;
@@ -108,6 +110,29 @@ pub struct Prepared {
     dress: Vec<Dress>,
     atlas: Option<Atlas>,
     maps: Option<maps::Set>,
+    shadows: Shadows,
+}
+
+fn shadows_of(recipe: &Recipe) -> Shadows {
+    let Some(look) = recipe.shadows else {
+        return Shadows::default();
+    };
+    Shadows {
+        quality: look.quality.map(|quality| match quality {
+            pfx_recipe::ShadowQuality::Low => ShadowQuality::Low,
+            pfx_recipe::ShadowQuality::Medium => ShadowQuality::Medium,
+            pfx_recipe::ShadowQuality::High => ShadowQuality::High,
+            pfx_recipe::ShadowQuality::Ultra => ShadowQuality::Ultra,
+        }),
+        cascades: look.cascades,
+        resolution: look.resolution,
+        softness: look.softness.map(|v| v as f32),
+        bias: look.bias.map(|v| v as f32),
+        occlusion: look.occlusion,
+        occlusion_radius: look.occlusion_radius.map(|v| v as f32),
+        contact: look.contact,
+        contact_length: look.contact_length.map(|v| v as f32),
+    }
 }
 
 impl Prepared {
@@ -164,6 +189,7 @@ impl Prepared {
             dress: dressed.dress,
             atlas: dressed.atlas,
             maps,
+            shadows: shadows_of(recipe),
         })
     }
 
@@ -219,6 +245,7 @@ pub struct Stage {
     pacer: Pacer,
     faced: Vec<Instance>,
     through: Option<Shot>,
+    blurs: bool,
     posed: BTreeMap<String, Matrix>,
     pieces: Vec<Piece>,
     opaque: Vec<usize>,
@@ -305,6 +332,7 @@ impl Stage {
             pacer: Pacer::default(),
             faced: Vec::new(),
             through: None,
+            blurs: false,
             posed: BTreeMap::new(),
             pieces: Vec::new(),
             opaque: Vec::new(),
@@ -344,6 +372,7 @@ impl Stage {
             dress,
             atlas,
             maps,
+            shadows,
         } = prepared;
         let opaque = opaque_at(&glass);
         let opaque_marks: Vec<Mark> = opaque.iter().map(|&at| marks[at].clone()).collect();
@@ -415,6 +444,15 @@ impl Stage {
         self.renderer.set_finish(lighting.finish.clone());
         self.renderer.set_lights(&lighting.lights).map_err(Error)?;
         self.renderer.set_haze(lighting.haze);
+        let quality = look_quality(&shadows, self.renderer.shadows().quality());
+        if quality != self.renderer.shadows().quality() {
+            self.renderer.set_shadow_quality(quality);
+        }
+        self.renderer
+            .set_screen_shadows(look_screen(&shadows))
+            .map_err(Error)?;
+        self.renderer
+            .set_motion_blur(lighting.motion_blur.filter(|_| self.blurs));
         let lighting = Arc::new(lighting);
         let asked = self.hours.busy();
         self.hours = Hours::new(lighting.clone());
@@ -471,6 +509,16 @@ impl Stage {
 
     pub fn look_through(&mut self, camera: Option<&Shot>) {
         self.through = camera.cloned();
+    }
+
+    pub fn blur_motion(&mut self, on: bool) {
+        self.blurs = on;
+        self.renderer
+            .set_motion_blur(self.lighting.motion_blur.filter(|_| on));
+    }
+
+    pub fn blurs_motion(&self) -> bool {
+        self.renderer.motion_blur().is_some()
     }
 
     pub fn mesh_stats(&self) -> MeshStats {

@@ -266,10 +266,16 @@ pub fn export(
     let prefix = format!("{object}.");
     let mut gathered: Vec<Gathered> = Vec::new();
     let mut kept = false;
-    for part in built.parts.iter().filter(|p| p.object == index) {
+    let mut dressed = None;
+    for (at, part) in built
+        .parts
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p.object == index)
+    {
         kept |= part.node.keep_transform;
         let local = inverse * part.node.transform;
-        let mut mesh = part.node.mesh.clone();
+        let mut mesh = built.dressed(at, &mut dressed).mesh;
         pfx_mesh::transform(&mut mesh, local);
         let targets = part.node.targets.as_ref().map(|t| {
             let mut base = t.base.clone();
@@ -320,7 +326,8 @@ pub fn export(
             (nodes, parents, 0)
         }
     };
-    let glb = pfx_glb::write_looks(&nodes, &parents, &[], &built.looks, Order::File, GENERATOR)
+    let looks = dressed.as_ref().unwrap_or(&built.looks);
+    let glb = pfx_glb::write_looks(&nodes, &parents, &[], looks, Order::File, GENERATOR)
         .map_err(|e| Error::new("", e.0))?;
     let merged = built.recipe(recipe);
     let glb = pbr(&glb, &merged.materials).map_err(|t| Error::new("", t))?;
@@ -1006,6 +1013,7 @@ pub(crate) struct Imported {
     pub tree: Tree,
     pub clips: Vec<(String, Vec<DMat4>)>,
     pub hidden: BTreeSet<String>,
+    pub pieces: crate::pieces::Found,
 }
 
 fn clips_of(
@@ -1421,6 +1429,7 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             if choice.hidden {
                 hidden.insert(full.clone());
             }
+            rules.source(&steps, steps.len() - 1, &full);
             piece = Some(full.clone());
             pieces.push(Piece { name: full, mesh });
             morphs.push((!morph.is_empty()).then_some(morph));
@@ -1440,7 +1449,7 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             stack.push((child, Some(me)));
         }
     }
-    rules.finish(&label, &steps)?;
+    let found_pieces = rules.finish(&label, &steps)?;
     tree.clips = clips_of(document, &buffers, &at);
     let clips = sampled(recipe, object, &tree)?;
     let player = match rig {
@@ -1469,6 +1478,7 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
         tree,
         clips,
         hidden,
+        pieces: found_pieces,
     })
 }
 

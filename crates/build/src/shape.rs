@@ -363,6 +363,7 @@ pub(crate) struct Imported {
     pub looks: pfx_glb::Looks,
     pub materials: std::collections::BTreeMap<String, serde_json::Value>,
     pub skin: Option<(Skin, pfx_load::SkinRig)>,
+    pub pieces: pieces::Found,
 }
 
 pub(crate) fn imported(
@@ -480,7 +481,7 @@ pub(crate) fn imported(
             stack.push((child, matrix, chosen, Some(at)));
         }
     }
-    rules.finish(path, &steps)?;
+    let found_pieces = rules.finish(path, &steps)?;
     match node {
         Some(want) if !found => Err(fail(
             object,
@@ -502,6 +503,7 @@ pub(crate) fn imported(
                 looks,
                 materials,
                 skin,
+                pieces: found_pieces,
             })
         }
     }

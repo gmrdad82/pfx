@@ -2628,6 +2628,56 @@
       ],
       "type": "string"
     },
+    "ShadowQuality": {
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "ultra"
+      ],
+      "type": "string"
+    },
+    "Shadows": {
+      "additionalProperties": false,
+      "properties": {
+        "bias": {
+          "format": "float",
+          "type": "number"
+        },
+        "cascades": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "contact": {
+          "type": "boolean"
+        },
+        "contact_length": {
+          "format": "float",
+          "type": "number"
+        },
+        "occlusion": {
+          "type": "boolean"
+        },
+        "occlusion_radius": {
+          "format": "float",
+          "type": "number"
+        },
+        "quality": {
+          "$ref": "#/$defs/ShadowQuality"
+        },
+        "resolution": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "softness": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "Sky": {
       "additionalProperties": false,
       "properties": {
@@ -3455,6 +3505,9 @@
         "$ref": "#/$defs/Rig"
       },
       "type": "array"
+    },
+    "shadows": {
+      "$ref": "#/$defs/Shadows"
     },
     "sky": {
       "$ref": "#/$defs/Sky"

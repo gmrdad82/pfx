@@ -90,6 +90,7 @@ pub struct Recipe {
     pub variants: BTreeMap<String, Variant>,
     pub sidecar: serde_json::Map<String, serde_json::Value>,
     pub look: Option<Look>,
+    pub shadows: Option<ShadowLook>,
     pub trace: Trace,
     pub bake: Option<Bake>,
     pub timeline: Option<Timeline>,
@@ -258,6 +259,20 @@ pub struct Span {
     pub color: [f64; 3],
 }
 
+pub const CARVE: [&str; 4] = ["regions", "decals", "grooves", "hinged"];
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MeshEdit {
+    pub carve: BTreeMap<String, serde_json::Value>,
+    pub split: bool,
+}
+
+impl MeshEdit {
+    pub fn is_empty(&self) -> bool {
+        self.carve.is_empty() && !self.split
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     Box {
@@ -330,6 +345,7 @@ pub enum Kind {
         clip: Option<String>,
         looped: bool,
         play: Play,
+        edit: MeshEdit,
     },
     Generator {
         generator: String,
@@ -340,6 +356,7 @@ pub enum Kind {
         clip: Option<String>,
         looped: bool,
         play: Play,
+        edit: MeshEdit,
     },
     Card {
         size: [f64; 2],
@@ -1071,6 +1088,44 @@ pub struct Look {
     pub grade: Grade,
     pub lut: Option<String>,
     pub lut_amount: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShadowQuality {
+    Low,
+    #[default]
+    Medium,
+    High,
+    Ultra,
+}
+
+impl ShadowQuality {
+    pub const NAMES: [(&'static str, Self); 4] = [
+        ("low", Self::Low),
+        ("medium", Self::Medium),
+        ("high", Self::High),
+        ("ultra", Self::Ultra),
+    ];
+
+    pub fn name(self) -> &'static str {
+        Self::NAMES
+            .iter()
+            .find(|(_, quality)| *quality == self)
+            .map_or("medium", |(name, _)| name)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ShadowLook {
+    pub quality: Option<ShadowQuality>,
+    pub cascades: Option<u32>,
+    pub resolution: Option<u32>,
+    pub softness: Option<f64>,
+    pub bias: Option<f64>,
+    pub occlusion: Option<bool>,
+    pub occlusion_radius: Option<f64>,
+    pub contact: Option<bool>,
+    pub contact_length: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

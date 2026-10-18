@@ -141,7 +141,25 @@ pub fn load_at(
     let recipe = pick.apply(&recipe).map_err(failed)?;
     let base = path.parent().unwrap_or(Path::new(""));
     let built = pfx_build::build_with(&recipe, base, registry).map_err(|e| Error(e.to_string()))?;
-    let recipe = built.recipe(&recipe);
+    let mut recipe = built.recipe(&recipe);
+    for (name, wet) in built.wet() {
+        if recipe.effects.wet.contains_key(name) {
+            continue;
+        }
+        let settings = [
+            ("amount", wet.amount),
+            ("puddles", wet.puddles),
+            ("puddle_scale", wet.puddle_scale),
+        ]
+        .into_iter()
+        .filter_map(|(key, v)| v.map(|v| (key, pfx_recipe::Setting::Number(f64::from(v)))))
+        .chain(
+            wet.seed
+                .map(|seed| ("seed", pfx_recipe::Setting::Whole(seed))),
+        )
+        .collect();
+        recipe.effects.wet.insert(name.to_string(), settings);
+    }
     match time {
         Some(time) => posed(&recipe, &built, time),
         None => Ok((recipe, built)),
@@ -183,8 +201,66 @@ pub fn shoot(
 ) -> Result<Vec<u8>, Error> {
     let lens = camera(recipe, camera_name)?;
     let mut reel = Reel::new(gpu, recipe, parts, size)?;
-    reel.stage.look_through(Some(lens));
-    reel.shoot(&reel.eye(lens)).map(|(rgba, _)| rgba)
+    let eye = reel.through(lens);
+    reel.shoot(&eye).map(|(rgba, _)| rgba)
+}
+
+pub fn unapplied(recipe: &Recipe, traced: bool) -> Vec<&'static str> {
+    let graded = recipe
+        .look
+        .as_ref()
+        .is_some_and(|look| look.view != pfx_recipe::View::Standard && look.grade.haze > 0.0);
+    let blurred = recipe
+        .effects
+        .motion_blur
+        .as_ref()
+        .is_some_and(|settings| light::motion_blur(settings).active());
+    [
+        ("motion_blur", traced && blurred),
+        ("look.grade.haze", traced && graded),
+        ("haze", recipe.effects.haze.is_some()),
+        ("particles", !recipe.effects.particles.is_empty()),
+    ]
+    .into_iter()
+    .filter_map(|(key, left)| left.then_some(key))
+    .collect()
+}
+
+pub fn unapplied_line(verb: &str, recipe: &Recipe, traced: bool) -> Option<String> {
+    let keys = unapplied(recipe, traced);
+    (!keys.is_empty()).then(|| {
+        format!(
+            "pfx {verb}: the {} renderer leaves out {}",
+            if traced { "traced" } else { "live" },
+            keys.join(", ")
+        )
+    })
+}
+
+pub fn shoot_posed(
+    gpu: &Gpu,
+    (recipe, built): (&Recipe, &Built),
+    camera_name: &str,
+    size: [u32; 2],
+    time: Option<f64>,
+) -> Result<Vec<u8>, Error> {
+    let lens = camera(recipe, camera_name)?;
+    let mut reel = Reel::new(gpu, recipe, &built.parts, size)?;
+    if let (Some(time), Some(timeline)) = (time, recipe.timeline)
+        && reel.blurs()
+    {
+        let before = time - 1.0 / f64::from(timeline.fps.max(1));
+        reel.set_poses(poses(built, timeline.fps, before));
+        let early =
+            pfx_build::pose_cameras(recipe, built, before).map_err(|e| Error(e.to_string()))?;
+        let eye = reel.through(camera(&early, camera_name)?);
+        reel.settle(&eye)?;
+        reel.set_poses(std::collections::BTreeMap::new());
+        let eye = reel.through(lens);
+        return reel.develop(&eye).map(|(rgba, _)| rgba);
+    }
+    let eye = reel.through(lens);
+    reel.shoot(&eye).map(|(rgba, _)| rgba)
 }
 
 pub struct Reel {
@@ -199,7 +275,8 @@ impl Reel {
         if size[0] == 0 || size[1] == 0 {
             return Err(Error(format!("the size {}x{} is empty", size[0], size[1])));
         }
-        let stage = Stage::with_parts(gpu.clone(), recipe, parts, size)?;
+        let mut stage = Stage::with_parts(gpu.clone(), recipe, parts, size)?;
+        stage.blur_motion(true);
         let target = gpu
             .offscreen(size[0], size[1], wgpu::TextureFormat::Rgba8UnormSrgb)
             .map_err(Error)?;
@@ -235,15 +312,42 @@ impl Reel {
         Eye::from_camera(camera, f64::from(self.size[0]) / f64::from(self.size[1]))
     }
 
-    pub fn shoot(&mut self, eye: &Eye) -> Result<(Vec<u8>, f64), Error> {
+    pub fn through(&mut self, camera: &Camera) -> Eye {
+        self.stage.look_through(Some(camera));
+        self.eye(camera)
+    }
+
+    pub fn blurs(&self) -> bool {
+        self.stage.blurs_motion()
+    }
+
+    pub fn settle(&mut self, eye: &Eye) -> Result<f64, Error> {
         let mut gpu_ms = 0.0;
         for frame in 0..SETTLE_FRAMES {
-            let measured =
-                self.stage
-                    .render_measured(eye, frame as f32 / FRAME_RATE, &self.target.view)?;
-            gpu_ms += measured.unwrap_or(0.0);
-            turn_soon(&mut self.turns, measured.unwrap_or(UNMEASURED_MS));
+            gpu_ms += self.once(eye, frame)?;
         }
+        Ok(gpu_ms)
+    }
+
+    pub fn shoot(&mut self, eye: &Eye) -> Result<(Vec<u8>, f64), Error> {
+        let gpu_ms = self.settle(eye)?;
+        self.read(gpu_ms)
+    }
+
+    pub fn develop(&mut self, eye: &Eye) -> Result<(Vec<u8>, f64), Error> {
+        let gpu_ms = self.once(eye, SETTLE_FRAMES)?;
+        self.read(gpu_ms)
+    }
+
+    fn once(&mut self, eye: &Eye, frame: u32) -> Result<f64, Error> {
+        let measured =
+            self.stage
+                .render_measured(eye, frame as f32 / FRAME_RATE, &self.target.view)?;
+        turn_soon(&mut self.turns, measured.unwrap_or(UNMEASURED_MS));
+        Ok(measured.unwrap_or(0.0))
+    }
+
+    fn read(&mut self, gpu_ms: f64) -> Result<(Vec<u8>, f64), Error> {
         let rgba = self
             .stage
             .gpu()

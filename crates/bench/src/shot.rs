@@ -54,6 +54,7 @@ pub struct Shot<'a> {
     pub quality: Quality,
     pub seed: u64,
     pub shutter: Option<f32>,
+    pub fixed_exposure: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -281,6 +282,9 @@ pub fn play(
     let output = target(&gpu, width, height);
     let mut renderer =
         Renderer::new(gpu.clone(), width, height).map_err(|error| error.to_string())?;
+    if shot.fixed_exposure {
+        renderer.set_exposure(Exposure::Fixed(1.0))?;
+    }
     let staged = renderer.stage(&scene)?;
     renderer.wait_sky()?;
     let shadows = match shot.quality {

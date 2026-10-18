@@ -4,6 +4,7 @@ use pfx_core::cli;
 
 pub const SWITCHES: &[&str] = &["--draft", "--final", "--json"];
 pub const FORMATS: &[&str] = &["png", "exr"];
+pub const EXPOSURES: &[&str] = &["auto", "fixed"];
 pub const DEFAULT_SIZE: (u32, u32) = (1920, 1080);
 pub const DEFAULT_FPS: u32 = 60;
 pub const MAX_SIDE: u32 = 16_384;
@@ -48,6 +49,7 @@ pub struct Plan {
     pub json: bool,
     pub seed: u64,
     pub shutter: Option<f32>,
+    pub fixed_exposure: bool,
 }
 
 fn size(text: &str) -> Result<(u32, u32), String> {
@@ -210,6 +212,11 @@ pub fn parse(args: &[String], flags: &[&str]) -> Result<Plan, String> {
         Some("exr") => Format::Exr,
         Some(other) => return Err(cli::invalid_choice(other, "--format", FORMATS)),
     };
+    let fixed_exposure = match value("--exposure") {
+        Some("auto") | None => false,
+        Some("fixed") => true,
+        Some(other) => return Err(cli::invalid_choice(other, "--exposure", EXPOSURES)),
+    };
     Ok(Plan {
         scene,
         size: value("--size")
@@ -251,5 +258,6 @@ pub fn parse(args: &[String], flags: &[&str]) -> Result<Plan, String> {
         shutter: value("--shutter")
             .map(|text| real(text, "--shutter", 0.0, 1.0, true).map(|open| open as f32))
             .transpose()?,
+        fixed_exposure,
     })
 }

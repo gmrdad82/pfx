@@ -242,6 +242,22 @@ The round bloom in `crates/post/src/bloom.rs` (`round_glow`, `blend_factor`, `ro
 
 The outdoor height fog's density and its closed-form optical path in `crates/live/src/height_fog.rs` (in the package `pfx-live`) are ported from Filament's fog (https://github.com/google/filament, `shaders/src/surface_fog.fs` and `filament/src/ds/ColorPassDescriptorSet.cpp`, tag `v1.56.0`, commit `003e5005713cba55cbd3f3a423c472000b96b868`), Copyright The Android Open Source Project, licensed under the Apache License 2.0. Its text ships in [crates/live/LICENSE-APACHE](crates/live/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Filament. The port is a translation into WGSL, changed by pfx's authors: the density is sampled inside a ray march instead of applied once per surface, and the optical path is taken along each light's chord.
 
+The screen-space contact shadows in `crates/live/src/screen_shadows.rs` (in the package `pfx-live`) are ported from Filament's `screenSpaceContactShadow` and `initScreenSpaceRay` (`shaders/src/surface_shadowing.fs`) with its `interleavedGradientNoise` (`shaders/src/common_math.glsl`) and its default of 8 steps over 0.3 m (`filament/include/filament/LightManager.h`), and the specular occlusion beside them from `computeSpecularAO` (`shaders/src/surface_ambient_occlusion.fs`, after Lagarde and de Rousiers, "Moving Frostbite to Physically Based Rendering"), at commit `9680e59f3fae866ef8f801524e77dd6fbbf760d3`, Copyright The Android Open Source Project, licensed under the Apache License 2.0, whose text ships in [crates/live/LICENSE-APACHE](crates/live/LICENSE-APACHE). The port is a translation into WGSL compute, changed by pfx's authors: the depth test is turned for a depth buffer whose near plane is 0, the ray runs once per pixel in a compute pass toward the sun only, and its result is filtered by the ambient occlusion's denoiser.
+
+## XeGTAO, under the MIT licence
+
+The screen-space ambient occlusion in `crates/live/src/screen_shadows.rs` (in the package `pfx-live`) is ported from Intel's XeGTAO (https://github.com/GameTechDev/XeGTAO, v1.30, commit `a5b1686c7ea37788eeb3576b5be47f7c03db532c`, `Source/Rendering/Shaders/XeGTAO.hlsli`, `XeGTAO.h` and `vaGTAO.hlsl`): the depth prefilter into five MIPs with its weighted filter, the main pass with in-place normals, the edges and their packing, the R2 noise over a Hilbert curve, the edge-aware denoiser, the quality levels and the tuned constants, translated to WGSL by pfx's authors. Copyright (C) 2016-2021, Intel Corporation, licensed under the MIT licence:
+
+> MIT License
+>
+> Copyright (C) 2016-2021, Intel Corporation
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 ## lz4_flex, under the MIT licence
 
 `crates/file/src/lz4.rs` (in the package `pfx-file`) is a port of the LZ4 block encoder and decoder of lz4_flex 0.14.0 (https://github.com/pseitz/lz4_flex, commit `1bffdcbbf906a234b913937cb2f57c0245915038`), altered, under the MIT licence, as its `LICENSE` file at that commit reads:
@@ -508,6 +524,41 @@ The loft in `crates/build/src/builtin/loft.rs` (in the package `pfx-build`) port
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
+
+## SciPy, under the BSD 3-Clause licence
+
+The same file ports SciPy's PCHIP interpolation (https://github.com/scipy/scipy, tag `v1.16.3`, commit `b9105ccc2237f57acb1060202cd77f6dd264fb34`): `PchipInterpolator._find_derivatives` and `_edge_case` and `CubicHermiteSpline`'s coefficients from `scipy/interpolate/_cubic.py`, changed from Python into Rust by pfx's authors. SciPy is under the BSD 3-Clause licence, as its `LICENSE.txt` at that tag reads:
+
+> Copyright (c) 2001-2002 Enthought, Inc. 2003, SciPy Developers.
+> All rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions
+> are met:
+>
+> 1. Redistributions of source code must retain the above copyright
+>    notice, this list of conditions and the following disclaimer.
+>
+> 2. Redistributions in binary form must reproduce the above
+>    copyright notice, this list of conditions and the following
+>    disclaimer in the documentation and/or other materials provided
+>    with the distribution.
+>
+> 3. Neither the name of the copyright holder nor the names of its
+>    contributors may be used to endorse or promote products derived
+>    from this software without specific prior written permission.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+> "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+> LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+> A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+> OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+> SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+> LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+> DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+> THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+> (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+> OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## OpenSubdiv, under the Tomorrow Open Source Technology License 1.0
 

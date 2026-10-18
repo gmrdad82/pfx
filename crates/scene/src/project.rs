@@ -16,8 +16,8 @@ use crate::scene::{Entry, Scene};
 use crate::spans::{KeyPath, Part};
 use crate::types::{
     Camera, Content, Emitter, File, FileKind, Finish, FinishKeys, Flare, Haze, Light, LutKey,
-    Material, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates, Play, Proxy, Rig, Sky,
-    Sound, Sun, Text, Tiles, Trace,
+    Material, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates, Play, Proxy, Rig,
+    Shadows, Sky, Sound, Sun, Text, Tiles, Trace,
 };
 use crate::{Diagnostic, EditError, FORMAT, Id, Patch, PatchGroup, Severity};
 
@@ -729,6 +729,7 @@ struct Scope {
     flare: Option<Single<Flare>>,
     motion_blur: Option<Single<MotionBlur>>,
     trace: Option<Single<Trace>>,
+    shadows: Option<Single<Shadows>>,
     plates: Option<Single<Plates>>,
     physics: Option<Single<Physics>>,
     play: Option<Single<Play>>,
@@ -1507,6 +1508,9 @@ impl<'p> Checker<'p> {
         if let Some(trace) = &doc.trace {
             self.issues(file, &key(&["trace"]), rules::trace(trace));
         }
+        if let Some(shadows) = &doc.shadows {
+            self.issues(file, &key(&["shadows"]), rules::shadows(shadows));
+        }
         if let Some(plates) = &doc.plates {
             self.issues(file, &key(&["plates"]), rules::plates(plates));
             self.located(file, &key(&["plates", "dir"]), &plates.dir, &[], false);
@@ -1827,6 +1831,7 @@ impl<'p> Checker<'p> {
                 doc.motion_blur,
             );
             self.single(&mut scope.trace, member, "trace", doc.trace);
+            self.single(&mut scope.shadows, member, "shadows", doc.shadows);
             self.single(&mut scope.plates, member, "plates", doc.plates);
             self.single(&mut scope.physics, member, "physics", doc.physics);
             self.single(&mut scope.play, member, "play", doc.play);
@@ -2787,6 +2792,7 @@ impl<'p> Checker<'p> {
             .map(PathBuf::from);
         scene.camera = scope.camera.as_ref().map(|single| single.value.clone());
         scene.trace = scope.trace.as_ref().map(|single| single.value);
+        scene.shadows = scope.shadows.as_ref().map(|single| single.value);
         scene.plates = scope.plates.as_ref().map(|single| single.value.clone());
         scene.physics = scope.physics.as_ref().map(|single| single.value.clone());
         scene.play_module = scope
