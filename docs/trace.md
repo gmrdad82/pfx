@@ -117,11 +117,11 @@ The tracer's shader carries the sheen, anisotropy and scatter lobes, the materia
 
 | constant | off when no material has | reads |
 |---|---|---|
-| `TRACE_LOBES` | a fabric colour above 0, an anisotropy strength other than 0, or a scatter amount above 0 | `PackedMaterial::sheen`, `lobes` |
-| `TRACE_MAPS` | a texture slot (`textures`, `texture_extra.x`) at 0 or above, after the trace's texture slots are placed | `PackedMaterial::textures`, `texture_extra` |
-| `TRACE_WET` | a wet amount or puddles above 0 | `PackedMaterial::wet` |
+| `TRACE_LOBES` | a fabric colour above 0, an anisotropy strength other than 0, or a scatter amount above 0 | the lobe extension rows (`sheen`, `lobes`, `scatter`) |
+| `TRACE_MAPS` | a texture slot (`textures`, `texture_extra.x`) at 0 or above, after the trace's texture slots are placed | the map extension rows |
+| `TRACE_WET` | a wet amount or puddles above 0 | the hot record's `wet` row |
 
-Each test is the shader's own test of that material (`lobes_sheen_on`, `lobes_anisotropy_on`, `lobes_scatter_on`, `traced_textured`, `wet_active`), so with the feature off every hit takes the branch it took before and the frame keeps its bytes. The constants default to on, so another pipeline that compiles the tracer's shader without them (the probe) keeps the full shader. `a_scene_skips_only_the_material_features_none_of_its_materials_use` checks which constants a scene sets.
+Each test is the shader's own test of that material (`lobes_sheen_on`, `lobes_anisotropy_on`, `lobes_scatter_on`, the record's map flag, `wet_active`), so with the feature off every hit takes the branch it took before and the frame keeps its bytes. The constants default to on, so another pipeline that compiles the tracer's shader without them (the probe) keeps the full shader. `a_scene_skips_only_the_material_features_none_of_its_materials_use` checks which constants a scene sets.
 
 Measured against v2.6.0 at 3840×2160 with ray queries (RX 9060 XT, release builds, each render its own `pgpu run --class bench` job, interleaved A B A B, 5 runs each, medians, the GPU shared with one other bench job and a load average of 17 to 35 on 32 threads). The workshop is a 19-object still life rendered through an engine consumer, staged once and sampled, with none of the three features in use:
 
@@ -134,6 +134,28 @@ Measured against v2.6.0 at 3840×2160 with ray queries (RX 9060 XT, release buil
 | workshop clip, 8 frames at 1920×1080, 16 samples, one object turning (`set_instance_transforms` each frame) | 3,958 ms | 3,891 ms | −1.7% |
 
 Every output was byte for byte the same as v2.6.0's: the desk's colour floats, the final's and the draft's PNG, the crop's EXR and the clip's frames.
+
+## The material record
+
+Every hit reads its material, so the record's size is paid on every bounce. `PackedMaterial` (pfx-materials, which the live renderer reads as it is) is 640 bytes: the BSDF inputs, four noise layers and their 16 rows of parameters, the ageing, the wet layer, the lobes and the texture maps. The tracer reads only part of it, and only a few materials use the optional parts. As Cycles lays out its shaders (a small fixed-stride `KernelShader` with the flags and constant emission, and the node program in a side array the kernel reads from an offset), `Trace` splits each material into a hot record and extension rows (`crates/trace/src/record.rs`), in the one materials buffer (binding 4, an `array<vec4f>`, so the trace floor keeps its storage buffer count):
+
+- **The hot record,** 128 bytes, one cache line, what every hit reads: base colour and roughness, metalness, specular and the clear coat, sheen, transmission, IOR and dispersion, thickness, subsurface and the thin film, the subsurface tint and absorption, emission and the film amount, an extension row (Fresnel power, the flags, the first extension row) and the wet row, which `TRACE_WET` already gates.
+- **The extension rows,** after every hot record, only for a material that has them, in this order: the maps (5 rows) when a texture slot is at 0 or above, the lobes (3 rows) when the sheen, lobe or scatter rows hold any bit, and each active noise layer (amplitude other than 0 and a kind above 0) with its 4 parameter rows (5 rows each); the flags carry the map and lobe bits and the active layer count. The shader reads them only behind those flags, and a material without lobes hands the lobe code zero rows, as its record held before.
+- **The scene's effects** (the leaf canopy, the steam volume, the second UV set's offset) take the first hot record, and material `i` sits at row `(i + 1) * 8`.
+
+The shader now reads a layer's rows straight from the buffer instead of copying the whole material into registers and indexing its layers there, and the ageing, the normal and map sources, the content kind and the family, which the tracer never read, stay out.
+
+Measured against the integration branch with the gates above (532b979), at 3840×2160 with ray queries (RX 9060 XT, release builds, each render its own `pgpu run --class bench` job, interleaved A B A B, 5 runs each, medians, a load average of 6 to 13 on 32 threads). The workshop is `samples/workshop.toml` through `pfx render --recipe`, camera `hero`; the desk is the neutral desk through `rt_bench still`, whose figure is the wall time of its samples and read-back:
+
+| still | 532b979 | split record | change |
+|---|---|---|---|
+| desk, 32 samples | 3,570 ms | 3,250 ms | −9.0% |
+| workshop final, adaptive to 64 samples (59.9 a pixel) | 6,409 ms | 5,969 ms | −6.9% |
+| workshop draft, adaptive to 12 samples (11.5 a pixel) | 1,556 ms | 1,464 ms | −5.9% |
+| workshop crop, 1920×1080 of the 4K frame, adaptive to 64 | 2,560 ms | 2,286 ms | −10.7% |
+| workshop clip, 8 frames at 1920×1080, 16 samples, the vase turning (`--spin`) | 3,433 ms | 3,253 ms | −5.2% |
+
+Every output was byte for byte the same as 532b979's in all five rounds: the desk's colour floats, the final's and the draft's PNG, the crop's EXR and the clip's frames; so were two renders of the workshop with noise layers (an inactive slot between two active ones), wet, scatter, anisotropy, sheen and base, normal and roughness maps turned on.
 
 ## Transmissive shadows
 

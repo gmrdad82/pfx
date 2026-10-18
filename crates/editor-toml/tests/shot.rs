@@ -120,12 +120,8 @@ fn loud() -> Theme {
     theme.name = "loud".into();
     let mut next = 0u8;
     let mut take = || {
-        next += 7;
-        Color32::from_rgb(
-            next.wrapping_mul(3),
-            255 - next,
-            next.wrapping_mul(5) ^ 0x5A,
-        )
+        next += 1;
+        Color32::from_rgb(0xFE, next * 5, 0x01)
     };
     theme.bg = take();
     theme.surface = take();
@@ -150,6 +146,15 @@ fn loud() -> Theme {
     theme.error = take();
     theme.error_tint = take();
     theme.warning = take();
+    theme.card = take();
+    theme.card_line = take();
+    theme.stripe = take();
+    theme.grid = take();
+    theme.rule = take();
+    theme.title = take();
+    theme.on_hot = take();
+    theme.value = take();
+    theme.ramp = [take(), take(), take(), take(), take()];
     theme.syntax.key = take();
     theme.syntax.table = take();
     theme.syntax.string = take();

@@ -571,6 +571,47 @@ mod tests {
     }
 
     #[test]
+    fn a_figurine_render_is_planned_at_the_default_samples_and_as_a_draft() {
+        let planned = |text: &str| {
+            let words = strings(text);
+            assert!(super::super::claims(
+                &[strings("render --recipe"), words.clone()].concat()
+            ));
+            let args = parse(&words).unwrap();
+            let trace = precheck(&args).unwrap();
+            args.with(trace)
+        };
+        let full = planned("samples/figurine.toml --camera hero --size 800x500 --out tmp/f.png");
+        assert_eq!(full.size(), [800, 500]);
+        assert_eq!(full.view(), View::Lens);
+        assert_eq!(full.samples(), 64);
+        assert_eq!(
+            full.noise(),
+            Some(Noise {
+                threshold: 0.01,
+                min_samples: 16
+            })
+        );
+        assert!(full.denoising());
+        let draft = planned(
+            "samples/figurine.toml --camera orbit --size 640x400 --draft --variant dusk --set object.head.morph.smile=0.6 --set object.body.rotate=[0,30,0] --out tmp/f.png",
+        );
+        assert_eq!(draft.samples(), 12);
+        assert_eq!(
+            draft.noise(),
+            Some(Noise {
+                threshold: 0.05,
+                min_samples: 6
+            })
+        );
+        let wrong = parse(&strings(
+            "samples/figurine.toml --camera hero --set object.body.spin=[0,30,0] --out tmp/f.png",
+        ))
+        .unwrap();
+        assert!(precheck(&wrong).is_err());
+    }
+
+    #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
             "table.toml --camera main --spp 64 --threshold 0.02 --min-samples 16 --seed 9 --size 320x200 --ortho --crop 10,20,30,40 --variant bare --set sky.intensity=0.4 --set object.a.params.b=/x/y --time 1.5 --denoise off --out tmp/a.exr --master tmp/a.master.png --progress json",

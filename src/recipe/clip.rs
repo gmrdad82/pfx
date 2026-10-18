@@ -626,6 +626,69 @@ mod tests {
     }
 
     #[test]
+    fn a_figurine_orbit_is_planned_live_and_traced() {
+        let dir = scratch("figurine");
+        let planned = |text: &str| {
+            let words = strings(text);
+            assert!(super::super::claims(
+                &[strings("clip"), words.clone()].concat()
+            ));
+            let args = parse(&words).unwrap();
+            precheck(&args).unwrap();
+            resolved(&args).unwrap()
+        };
+        let live = planned(
+            "samples/figurine.toml --camera orbit --frames 24 --fps 24 --size 480x300 --out tmp/f",
+        );
+        let text = manifest(&live);
+        assert!(
+            text.contains("camera orbit\nframes 24\nsize 480x300\nrenderer live\n"),
+            "{text}"
+        );
+        assert_eq!(
+            pending(&dir, live.count(), live.size),
+            (0..24).collect::<Vec<_>>()
+        );
+        assert_eq!(live.rate(), 24);
+        let traced = planned(
+            "samples/figurine.toml --camera orbit --frames 8 --fps 8 --size 320x200 --trace --spp 16 --variant grin --set object.head.morph.smile=0.6 --out tmp/f",
+        );
+        let text = manifest(&traced);
+        assert!(
+            text.contains(
+                "renderer traced, 16 spp\nvariant grin\nset object.head.morph.smile=0.6\n"
+            ),
+            "{text}"
+        );
+        let camera = pfx_recipe_scene::camera(&chosen(&traced).unwrap(), "orbit")
+            .unwrap()
+            .clone();
+        let path = path_of(&camera).unwrap();
+        assert_eq!(
+            *path,
+            pfx_recipe::CameraPath {
+                kind: pfx_recipe::PathKind::Orbit(pfx_recipe::Orbit {
+                    target: [0.0, 0.95, 0.0],
+                    turns: 1.0,
+                    rise_deg: 10.0,
+                    radius_scale: 1.0,
+                }),
+                ease: pfx_recipe::Ease::Linear,
+            }
+        );
+        assert_eq!(path.time(4, traced.count()), 0.5);
+        let still = parse(&strings(
+            "samples/figurine.toml --camera hero --frames 8 --fps 8 --size 320x200 --out tmp/f",
+        ))
+        .unwrap();
+        assert!(
+            precheck(&still)
+                .unwrap_err()
+                .contains("camera.hero: the camera has no path")
+        );
+    }
+
+    #[test]
     fn mistakes_are_refused() {
         let base = "a.toml --camera main --frames 3 --fps 24 --size 8x8 --out d";
         assert!(parse(&strings(base)).is_ok());

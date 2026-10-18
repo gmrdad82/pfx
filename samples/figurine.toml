@@ -1,0 +1,94 @@
+# A figurine from an imported GLB: a head with morph targets and a hat child node on a capsule body, with two variants, a hero camera and an orbit camera.
+recipe = 1
+name = "figurine"
+seed = 3
+
+[[object]]
+name = "floor"
+kind = "box"
+at = [0.0, -0.02, 0.0]
+size = [8.0, 0.04, 8.0]
+material = "floor"
+
+[[object]]
+name = "body"
+kind = "capsule"
+at = [0.0, 0.55, 0.0]
+rotate = [0.0, 0.0, 0.0]
+radius = 0.32
+length = 0.5
+material = "clay"
+smooth = true
+
+[[object]]
+name = "head"
+kind = "mesh"
+path = "figurine.glb"
+at = [0.0, 1.4, 0.0]
+scale = [0.45, 0.45, 0.45]
+smooth = true
+morph = { smile = 0.3 }
+
+[[camera]]
+name = "hero"
+position = [1.1, 1.6, 3.4]
+target = [0.0, 0.95, 0.0]
+fov_y_deg = 32.0
+
+[[camera]]
+name = "orbit"
+position = [0.0, 1.5, 3.6]
+target = [0.0, 0.95, 0.0]
+fov_y_deg = 35.0
+
+[camera.path]
+kind = "orbit"
+target = [0.0, 0.95, 0.0]
+turns = 1.0
+rise_deg = 10.0
+ease = "linear"
+
+[sun]
+model = "authored"
+toward = [-0.5, 0.7, 0.5]
+radius_deg = 3.0
+color = [1.0, 0.9, 0.78]
+irradiance = 4.0
+
+[sky]
+kind = "analytic"
+intensity = 0.8
+
+[[light]]
+name = "rim"
+position = [-1.2, 2.2, -1.4]
+color = [0.7, 0.8, 1.0]
+intensity = 2.0
+radius = 0.05
+
+[look]
+exposure = 1.0
+grade = { vignette = 0.2, saturation = 1.05, warmth = 0.04, bloom = 0.05, haze = 0.0 }
+
+[variant.grin]
+set = { "object.head.morph.smile" = 1.0, "object.head.morph.brow raise" = 0.8 }
+
+[variant.dusk]
+set = { "sun.irradiance" = 1.5, "sun.color" = [1.0, 0.55, 0.3], "sky.intensity" = 0.3 }
+remove = ["light.rim"]
+
+[materials.floor]
+base = [0.32, 0.33, 0.36]
+roughness = 0.85
+
+[materials.clay]
+base = [0.62, 0.36, 0.24]
+roughness = 0.6
+
+[materials.face]
+base = [0.86, 0.7, 0.58]
+roughness = 0.5
+
+[materials.felt]
+base = [0.1, 0.16, 0.34]
+roughness = 0.9
