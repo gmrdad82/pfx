@@ -163,6 +163,67 @@ mod tests {
         assert!(bare.contains("--still"), "{bare}");
     }
 
+    const FIGURINE: &str = "samples/figurine.toml";
+
+    fn morph(recipe: &pfx_recipe::Recipe, target: &str) -> Option<f64> {
+        recipe.objects.iter().find_map(|object| match &object.kind {
+            pfx_recipe::Kind::Mesh { morph, .. } if object.name == "head" => {
+                morph.get(target).copied()
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_figurine_shot_is_planned_with_its_variant_and_sets() {
+        let words = [
+            "shot",
+            FIGURINE,
+            "--still",
+            "--camera",
+            "hero",
+            "--size",
+            "640x400",
+            "--variant",
+            "grin",
+            "--set",
+            "object.head.morph.smile=0.6",
+            "--set",
+            "object.body.rotate=[0,30,0]",
+            "--out",
+            "tmp/figurine.png",
+        ];
+        assert!(super::super::claims(&words.map(String::from)));
+        let Ok(super::super::Verb::Shot(args)) = super::super::parsed(&words) else {
+            panic!("not a recipe shot");
+        };
+        assert_eq!(args.size, [640, 400]);
+        let (camera, _) = super::super::precheck_picked(
+            &args.recipe,
+            args.variant.as_deref(),
+            &args.set,
+            &args.pick.pick(),
+            &args.camera,
+            args.time,
+        )
+        .unwrap();
+        assert_eq!(camera.name, "hero");
+        let (recipe, built) = pfx_recipe_scene::load_at(
+            &args.recipe,
+            args.variant.as_deref(),
+            &args.set,
+            &args.pick.pick(),
+            &Registry::new(),
+            args.time,
+        )
+        .unwrap();
+        assert_eq!(morph(&recipe, "smile"), Some(0.6));
+        assert_eq!(morph(&recipe, "brow raise"), Some(0.8));
+        let body = recipe.objects.iter().find(|o| o.name == "body").unwrap();
+        assert_eq!(body.rotate, [0.0, 30.0, 0.0]);
+        assert!(built.parts.len() >= 3, "{}", built.parts.len());
+    }
+
     #[test]
     fn a_recipe_it_cannot_read_exits_1() {
         let args = line(&[

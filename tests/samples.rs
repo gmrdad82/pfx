@@ -26,7 +26,7 @@ fn name(path: &Path) -> String {
 #[test]
 fn the_sample_folder_holds_the_scenes() {
     let names: Vec<String> = recipes().iter().map(|path| name(path)).collect();
-    for scene in ["gallery.toml", "workshop.toml"] {
+    for scene in ["figurine.toml", "gallery.toml", "workshop.toml"] {
         assert!(
             names.iter().any(|found| found == scene),
             "{scene}: {names:?}"
