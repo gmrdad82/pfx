@@ -273,6 +273,31 @@ fn set(map: &mut Option<Map>, scale: Option<f64>) {
     }
 }
 
+fn place(look: &mut Look, textures: &Textures) {
+    if textures.uv_scale.is_none() && textures.uv_offset.is_none() && textures.uv_rotation.is_none()
+    {
+        return;
+    }
+    let [sx, sy] = textures.uv_scale.unwrap_or([1.0, 1.0]);
+    let [ox, oy] = textures.uv_offset.unwrap_or([0.0, 0.0]);
+    for map in [
+        &mut look.base,
+        &mut look.normal,
+        &mut look.metal_roughness,
+        &mut look.occlusion,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        map.transform = Some(UvTransform {
+            offset: [ox as f32, oy as f32],
+            rotation: textures.uv_rotation.unwrap_or(0.0) as f32,
+            scale: [sx as f32, sy as f32],
+            tex_coord: map.transform.and_then(|t| t.tex_coord),
+        });
+    }
+}
+
 fn coverage(material: &Material) -> Option<Coverage> {
     match material.alpha_mode {
         AlphaMode::Opaque => None,
@@ -349,6 +374,7 @@ pub(crate) fn resolve(
         set(&mut look.normal, textures.normal_scale);
         set(&mut look.occlusion, textures.occlusion_strength);
         set(&mut look.detail_normal, textures.detail_normal_scale);
+        place(look, textures);
     }
     for (name, value) in materials {
         let Ok(material) = serde_json::from_value::<Material>(value.clone()) else {

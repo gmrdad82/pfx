@@ -322,14 +322,22 @@ fn banks(
     if gain.iter().all(|g| *g == 0.0) {
         return Vec::new();
     }
-    let Some(route) = route else {
-        return Vec::new();
-    };
     let places: Vec<DVec3> = frames.iter().map(|(_, at)| *at).collect();
+    let last = places.len().saturating_sub(1);
     let wanted: Vec<f64> = (0..places.len())
         .map(|n| {
-            let speed = velocity(&places, n, dt).length();
-            let lateral = route.curvature(route.nearest(places[n]).0) * speed * speed;
+            let lateral = match route {
+                Some(route) => {
+                    let speed = velocity(&places, n, dt).length();
+                    route.curvature(route.nearest(places[n]).0) * speed * speed
+                }
+                None if last >= 2 => {
+                    let at = n.clamp(1, last - 1);
+                    let accel = (places[at + 1] - 2.0 * places[at] + places[at - 1]) / (dt * dt);
+                    accel.dot(frames[n].0 * DVec3::NEG_X)
+                }
+                None => 0.0,
+            };
             (gain[n] * lateral).clamp(-MAX_BANK_DEG, MAX_BANK_DEG) * calm[n]
         })
         .collect();
@@ -463,6 +471,7 @@ mod tests {
                 start: 0.0,
                 speed: vec![[0.0, 20.0]],
                 drift: None,
+                dynamics: None,
                 ride: 0.0,
                 root_motion: pfx_recipe::RootMotion::Ignore,
             });
@@ -475,6 +484,7 @@ mod tests {
             camera: None,
             focus: None,
             fov: None,
+            between: Vec::new(),
         }];
         let facts = serde_json::Map::new();
         let b = Bake {
@@ -611,6 +621,29 @@ mod tests {
         let dip = (DQuat::from_array(bent.keys[n].rotation) * DVec3::X).y;
         assert!(dip.abs() > 0.01);
         assert_eq!(dip < 0.0, turning > 0.0);
+    }
+
+    #[test]
+    fn bank_rolls_into_the_bends_of_a_target_without_a_route() {
+        let routed = moved(Rig { bank: 5.0, ..rig() }, bending, Some(bend()));
+        let free = moved(Rig { bank: 5.0, ..rig() }, bending, None);
+        let dip = |t: &Track, n: usize| (DQuat::from_array(t.keys[n].rotation) * DVec3::X).y;
+        let n = 40;
+        assert!(dip(&routed, n).abs() > 0.01);
+        assert_eq!(dip(&free, n) < 0.0, dip(&routed, n) < 0.0);
+        assert!(
+            (dip(&free, n) - dip(&routed, n)).abs() < 0.25 * dip(&routed, n).abs(),
+            "{} {}",
+            dip(&free, n),
+            dip(&routed, n)
+        );
+        let level = moved(rig(), straight, None);
+        let banked = moved(Rig { bank: 5.0, ..rig() }, straight, None);
+        for (a, b) in level.keys.iter().zip(&banked.keys) {
+            assert!(
+                DQuat::from_array(a.rotation).angle_between(DQuat::from_array(b.rotation)) < 1e-9
+            );
+        }
     }
 
     #[test]

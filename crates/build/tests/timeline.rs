@@ -42,6 +42,7 @@ fn drive(baking: &Bake) -> Result<Vec<Track>, String> {
             camera: None,
             focus: None,
             fov: None,
+            between: Vec::new(),
         },
         camera_track(camera, baking.timeline, lens),
     ])

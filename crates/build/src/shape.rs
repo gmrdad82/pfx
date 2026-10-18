@@ -685,7 +685,7 @@ pub(crate) fn local(
             ));
         }
         Kind::Card { size, .. } => card(*size),
-        Kind::Text { .. } => Mesh::default(),
+        Kind::Text { .. } | Kind::Empty => Mesh::default(),
     })
 }
 

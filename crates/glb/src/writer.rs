@@ -952,24 +952,34 @@ fn animate(
                 track.node
             )));
         };
-        let translations: Vec<[f32; 3]> = track
-            .keys
+        let keyed = (!track.between.is_empty()).then(|| track.keyed(animation.fps));
+        let keys: Vec<Trs> = match &keyed {
+            Some(keyed) => keyed.iter().map(|(_, k)| *k).collect(),
+            None => track.keys.clone(),
+        };
+        let own = match &keyed {
+            Some(keyed) => {
+                let times: Vec<[f32; 1]> = keyed.iter().map(|(t, _)| [*t as f32]).collect();
+                Some(builder.keyed(&times))
+            }
+            None => None,
+        };
+        let translations: Vec<[f32; 3]> = keys
             .iter()
             .map(|k| k.translation.map(|v| v as f32))
             .collect();
-        let turns = rotations(&track.keys);
-        let scales: Vec<[f32; 3]> = track
-            .keys
-            .iter()
-            .map(|k| k.scale.map(|v| v as f32))
-            .collect();
+        let turns = rotations(&keys);
+        let scales: Vec<[f32; 3]> = keys.iter().map(|k| k.scale.map(|v| v as f32)).collect();
         let mut channel = |builder: &mut Builder, output, path| {
-            let times = *input.get_or_insert_with(|| {
-                let times: Vec<[f32; 1]> = (0..count)
-                    .map(|n| [(n as f64 / f64::from(animation.fps)) as f32])
-                    .collect();
-                builder.keyed(&times)
-            });
+            let times = match own {
+                Some(times) => times,
+                None => *input.get_or_insert_with(|| {
+                    let times: Vec<[f32; 1]> = (0..count)
+                        .map(|n| [(n as f64 / f64::from(animation.fps)) as f32])
+                        .collect();
+                    builder.keyed(&times)
+                }),
+            };
             samplers.push(json::animation::Sampler {
                 extensions: None,
                 extras: Default::default(),

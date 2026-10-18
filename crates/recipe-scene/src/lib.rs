@@ -22,6 +22,7 @@ pub use cards::{
     premultiplied,
 };
 pub use light::{Lighting, Lit, Shine};
+pub use maps::Set as MapSet;
 pub use memory::Memory;
 pub use parts::{Palette, Piece, glb_parts, material, palette, palette_with, pieces};
 use pfx_live::frame::Matrix;

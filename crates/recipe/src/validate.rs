@@ -527,7 +527,11 @@ fn plate_keys(out: &mut Out<'_>, at: &At, o: &crate::Object, index: usize) {
         .as_ref()
         .and_then(|bake| bake.plates.as_ref())
         .is_some_and(|plates| plates.dir.is_some());
-    if matches!(o.kind, Kind::Pocket { .. } | Kind::Text { .. }) || o.hidden {
+    if matches!(
+        o.kind,
+        Kind::Pocket { .. } | Kind::Text { .. } | Kind::Empty
+    ) || o.hidden
+    {
         out.at(
             at,
             "proxy",
@@ -625,6 +629,7 @@ fn detail_uv(out: &mut Out<'_>, at: &At, o: &crate::Object) {
     let empty = match o.kind {
         Kind::Pocket { .. } => Some("a pocket cuts into its target, so `detail_uv` goes there"),
         Kind::Text { .. } => Some("text carries no mesh, so it takes no `detail_uv`"),
+        Kind::Empty => Some("an empty draws nothing, so it takes no `detail_uv`"),
         _ => None,
     };
     if let Some(text) = empty {
@@ -1449,6 +1454,40 @@ fn follow_keys(out: &mut Out<'_>, at: &At, f: &Follow) {
         }
         if d.period <= 0.0 {
             out.at(&at, "period", "expected seconds above 0");
+        }
+    }
+    if let Some(d) = &f.dynamics {
+        let at = at.child("dynamics", "dynamics");
+        for (key, value, text) in [
+            ("mass", d.mass, "expected kilograms above 0"),
+            (
+                "wheelbase",
+                d.wheelbase.unwrap_or(1.0),
+                "expected metres above 0",
+            ),
+            ("track", d.track.unwrap_or(1.0), "expected metres above 0"),
+            ("cg_height", d.cg_height, "expected metres above 0"),
+            (
+                "stiffness",
+                d.stiffness,
+                "expected newtons a metre above 0, per wheel",
+            ),
+        ] {
+            if !(value > 0.0 && value.is_finite()) {
+                out.at(&at, key, text);
+            }
+        }
+        for (key, value, text) in [
+            (
+                "damping",
+                d.damping,
+                "expected newton-seconds a metre from 0 up, per wheel",
+            ),
+            ("grip", d.grip, "expected a friction coefficient from 0 up"),
+        ] {
+            if !(value >= 0.0 && value.is_finite()) {
+                out.at(&at, key, text);
+            }
         }
     }
 }

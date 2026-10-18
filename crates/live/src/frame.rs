@@ -1140,6 +1140,35 @@ pub fn velocity_pixels(current: [f32; 4], previous: [f32; 4], size: [f32; 2]) ->
     [uv[0] * size[0], uv[1] * size[1]]
 }
 
+pub const SWEEP_STEPS: f32 = 16.0;
+
+const SWEPT_TURN: f32 = std::f32::consts::FRAC_PI_4;
+
+pub fn swept(model: Matrix, near: Matrix, previous: Matrix, steps: f32) -> Matrix {
+    let unit = |m: &Matrix, c: usize| {
+        let v = [m[c][0], m[c][1], m[c][2]];
+        let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if length > 0.0 {
+            v.map(|x| x / length)
+        } else {
+            [0.0; 3]
+        }
+    };
+    let trace: f32 = (0..3)
+        .map(|c| {
+            let (a, b) = (unit(&model, c), unit(&near, c));
+            a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+        })
+        .sum();
+    let turned = ((trace - 1.0) * 0.5).clamp(-1.0, 1.0).acos();
+    if turned * steps <= SWEPT_TURN {
+        return previous;
+    }
+    std::array::from_fn(|c| {
+        std::array::from_fn(|r| model[c][r] + (near[c][r] - model[c][r]) * steps)
+    })
+}
+
 pub fn jitter_matrix(jitter: [f32; 2]) -> Matrix {
     let mut shift = [[0.0; 4]; 4];
     for (i, column) in shift.iter_mut().enumerate() {
@@ -5278,6 +5307,54 @@ mod tests {
             [0.0, -1.0, 0.0, 0.0],
             [0.0, 0.0, -height, 1.0],
         ]
+    }
+
+    fn spun(angle: f32) -> Matrix {
+        let (s, c) = angle.sin_cos();
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, c, s, 0.0],
+            [0.0, -s, c, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]
+    }
+
+    #[test]
+    fn a_fast_spin_blurs_forward_along_its_tangent() {
+        let rate = 300.0f32.to_radians();
+        let at = 1.0;
+        let model = spun(at);
+        let previous = spun(at - rate);
+        let near = spun(at - rate / SWEEP_STEPS);
+        let rim = [0.0, 0.0, 0.34, 1.0];
+        let now = transform(model, rim);
+        let tangent = [0.0, -0.34 * at.cos(), -0.34 * at.sin()];
+        let along = |before: [f32; 4]| {
+            (0..3)
+                .map(|i| (now[i] - before[i]) * tangent[i])
+                .sum::<f32>()
+        };
+        assert!(along(transform(previous, rim)) < 0.0);
+        let fixed = swept(model, near, previous, SWEEP_STEPS);
+        let moved = transform(fixed, rim);
+        assert!(along(moved) > 0.0);
+        let length = (0..3)
+            .map(|i| (now[i] - moved[i]).powi(2))
+            .sum::<f32>()
+            .sqrt();
+        assert!(
+            (length - 0.34 * rate).abs() < 0.02 * 0.34 * rate,
+            "{length}"
+        );
+        let slow = spun(at - 0.1);
+        assert_eq!(
+            swept(model, spun(at - 0.1 / SWEEP_STEPS), slow, SWEEP_STEPS),
+            slow
+        );
+        assert_eq!(
+            swept(identity(), identity(), identity(), SWEEP_STEPS),
+            identity()
+        );
     }
 
     #[test]

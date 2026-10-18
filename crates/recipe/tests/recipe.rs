@@ -278,11 +278,11 @@ fn parse_errors_name_the_key_the_line_and_what_was_expected() {
     let cases: &[(&str, &str)] = &[
         (
             "unknown_key",
-            "line 8: object[a].colour: unknown key `colour` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lod, size, size_px, keys, interp, constraint",
+            "line 8: object[a].colour: unknown key `colour` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lod, bake_layers, size, size_px, keys, interp, constraint",
         ),
         (
             "wrong_kind_key",
-            "line 8: object[a].radius: unknown key `radius` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lod, size, size_px, keys, interp, constraint",
+            "line 8: object[a].radius: unknown key `radius` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lod, bake_layers, size, size_px, keys, interp, constraint",
         ),
         (
             "unknown_top",
@@ -314,7 +314,7 @@ fn parse_errors_name_the_key_the_line_and_what_was_expected() {
         ),
         (
             "unknown_kind",
-            "line 6: object[a].kind: expected one of \"box\", \"cylinder\", \"sphere\", \"plane\", \"disc\", \"torus\", \"capsule\", \"outline\", \"pocket\", \"lathe\", \"sweep\", \"mesh\", \"generator\", \"library\", \"card\", \"text\", found \"cube\"",
+            "line 6: object[a].kind: expected one of \"box\", \"cylinder\", \"sphere\", \"plane\", \"disc\", \"torus\", \"capsule\", \"outline\", \"pocket\", \"lathe\", \"sweep\", \"mesh\", \"generator\", \"library\", \"card\", \"text\", \"empty\", found \"cube\"",
         ),
         (
             "bad_choice",

@@ -46,9 +46,46 @@ pub struct Track {
     pub camera: Option<Lens>,
     pub focus: Option<Vec<f64>>,
     pub fov: Option<Vec<f64>>,
+    pub between: Vec<(f64, Trs)>,
 }
 
 impl Track {
+    pub fn keyed(&self, fps: u32) -> Vec<(f64, Trs)> {
+        let step = 1.0 / f64::from(fps.max(1));
+        let mut out: Vec<(f64, Trs)> = self
+            .keys
+            .iter()
+            .enumerate()
+            .map(|(n, key)| (n as f64 * step, *key))
+            .collect();
+        if !self.between.is_empty() {
+            out.extend(self.between.iter().copied());
+            out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        }
+        out
+    }
+
+    pub fn sample(&self, fps: u32, time: f64) -> Trs {
+        if self.between.is_empty() {
+            return pfx_motion::sample(&self.keys, fps, time);
+        }
+        let keyed = self.keyed(fps);
+        let at = keyed.partition_point(|(t, _)| *t <= time);
+        match (at.checked_sub(1), keyed.get(at)) {
+            (None, _) => keyed[0].1,
+            (Some(low), None) => keyed[low].1,
+            (Some(low), Some((t1, b))) => {
+                let (t0, a) = keyed[low];
+                let s = if *t1 > t0 {
+                    (time - t0) / (t1 - t0)
+                } else {
+                    0.0
+                };
+                pfx_motion::sample(&[a, *b], 1, s)
+            }
+        }
+    }
+
     pub fn camera_name(&self) -> Option<&str> {
         self.camera?;
         self.node.strip_prefix(CAMERA_PREFIX)

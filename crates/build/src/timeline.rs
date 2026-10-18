@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DMat4, DQuat, DVec3};
 use pfx_glb::{CAMERA_PREFIX, Lens, Node, Track, ZNEAR};
-use pfx_motion::{Route, Timeline, Trs, matrix, sample, trs_from_matrix};
+use pfx_motion::{Route, Timeline, Trs, matrix, trs_from_matrix};
 use pfx_recipe::{Camera, Recipe};
 
 use crate::{Built, Error, Registry};
@@ -36,6 +36,7 @@ pub fn camera_track(camera: &Camera, timeline: &Timeline, keys: Vec<Trs>) -> Tra
         camera: Some(lens(camera, timeline)),
         focus: None,
         fov: None,
+        between: Vec::new(),
     }
 }
 
@@ -99,6 +100,7 @@ pub(crate) fn bake(
             camera: None,
             focus: None,
             fov: None,
+            between: Vec::new(),
         })
         .collect();
     if registry.bakers.is_empty() {
@@ -108,6 +110,7 @@ pub(crate) fn bake(
             camera: None,
             focus: None,
             fov: None,
+            between: Vec::new(),
         }));
         return Ok(tracks);
     }
@@ -164,6 +167,7 @@ pub(crate) fn bake(
                 camera: None,
                 focus: None,
                 fov: None,
+                between: Vec::new(),
             });
             continue;
         };
@@ -240,7 +244,7 @@ pub fn pose_cameras(recipe: &Recipe, built: &Built, time: f64) -> Result<Recipe,
             && !built.parts.iter().any(|p| p.node.name == track.node)
             && let Some(light) = recipe.lights.iter_mut().find(|l| l.name == name)
         {
-            let trs = sample(&track.keys, fps, time);
+            let trs = track.sample(fps, time);
             let turn = DQuat::from_array(trs.rotation).normalize();
             light.position = trs.translation;
             if let Some(direction) = &mut light.direction {
@@ -252,7 +256,7 @@ pub fn pose_cameras(recipe: &Recipe, built: &Built, time: f64) -> Result<Recipe,
             continue;
         };
         if let Some(camera) = recipe.cameras.iter_mut().find(|c| c.name == name) {
-            posed_camera(camera, &sample(&track.keys, fps, time));
+            posed_camera(camera, &track.sample(fps, time));
             if let Some(focus) = track.focus.as_deref().and_then(|f| lerp(f, fps, time)) {
                 camera.focus_m = Some(focus);
             }
@@ -270,7 +274,7 @@ pub fn pose(recipe: &Recipe, built: &Built, time: f64) -> Result<(Recipe, Built)
     let fps = recipe.timeline.map_or(1, |t| t.fps);
     let mut built = built.clone();
     for track in built.tracks.iter().filter(|t| t.camera_name().is_none()) {
-        let trs = sample(&track.keys, fps, time);
+        let trs = track.sample(fps, time);
         for part in built.parts.iter_mut().filter(|p| p.node.name == track.node) {
             part.node.transform = matrix(&trs);
             part.node.keep_transform = true;

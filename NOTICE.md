@@ -756,6 +756,10 @@ CPython is under the Python Software Foundation License Version 2, as section B 
 > agrees to be bound by the terms and conditions of this License
 > Agreement.
 
+## Rapier, under the Apache License 2.0
+
+The sprung vehicle body in `crates/motion/src/vehicle.rs` (in the package `pfx-motion`) follows the structure of Rapier's `DynamicRayCastVehicleController` (https://github.com/dimforge/rapier, 0.36.0, commit `b716d375efc0201003f0cd9ef7168eee0b62c177`, `src/control/ray_cast_vehicle_controller.rs`, after Bullet's `btRaycastVehicle`), licensed under the Apache License 2.0: a spring and a damper at each wheel whose force on the chassis is never below 0. No code is copied: the body, its units and its constants are pfx's own, so no licence text of Rapier ships with it.
+
 ## fast_poisson and Rand, under the MIT licence
 
 The Poisson-disk sampler in `crates/build/src/poisson.rs` (in the package `pfx-build`) is a port of fast_poisson 1.0.2 by Travis Veazey (https://github.com/Kromey/fast_poisson, tag `v1.0.2`, commit `5c8273cb790c600219fc32121f70458220ac9dfe`): Bridson's algorithm with its active list, 30 tries per point in the annulus from the radius to twice it, and its first point near the middle, with a background grid in place of its k-d tree; licensed MIT OR Apache-2.0 and used here under the MIT licence. Its `COPYRIGHT` file reads "Copyright 2021 Travis Veazey" and its `LICENSE-MIT` file at that version reads:

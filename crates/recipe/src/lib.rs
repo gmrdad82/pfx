@@ -107,7 +107,7 @@ pub struct Recipe {
     pub twins: Vec<Problem>,
 }
 
-pub const TEXTURE_KEYS: [&str; 8] = [
+pub const TEXTURE_KEYS: [&str; 11] = [
     "base_map",
     "normal_map",
     "normal_scale",
@@ -116,6 +116,9 @@ pub const TEXTURE_KEYS: [&str; 8] = [
     "occlusion_strength",
     "detail_normal_map",
     "detail_normal_scale",
+    "uv_scale",
+    "uv_offset",
+    "uv_rotation",
 ];
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -128,6 +131,9 @@ pub struct Textures {
     pub occlusion_strength: Option<f64>,
     pub detail_normal_map: Option<String>,
     pub detail_normal_scale: Option<f64>,
+    pub uv_scale: Option<[f64; 2]>,
+    pub uv_offset: Option<[f64; 2]>,
+    pub uv_rotation: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -381,6 +387,7 @@ pub enum Kind {
         space: TextSpace,
         on: Option<String>,
     },
+    Empty,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -854,6 +861,7 @@ pub struct Follow {
     pub start: f64,
     pub speed: Vec<[f64; 2]>,
     pub drift: Option<Drift>,
+    pub dynamics: Option<Dynamics>,
     pub ride: f64,
     pub root_motion: RootMotion,
 }
@@ -1057,6 +1065,31 @@ pub struct Drift {
     pub amount: f64,
     pub period: f64,
     pub slip_deg: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Dynamics {
+    pub mass: f64,
+    pub wheelbase: Option<f64>,
+    pub track: Option<f64>,
+    pub cg_height: f64,
+    pub stiffness: f64,
+    pub damping: f64,
+    pub grip: f64,
+}
+
+impl Default for Dynamics {
+    fn default() -> Self {
+        Dynamics {
+            mass: 1400.0,
+            wheelbase: None,
+            track: None,
+            cg_height: 0.5,
+            stiffness: 30_000.0,
+            damping: 3_000.0,
+            grip: 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1331,6 +1364,7 @@ impl Kind {
             Kind::Library { .. } => "library",
             Kind::Card { .. } => "card",
             Kind::Text { .. } => "text",
+            Kind::Empty => "empty",
         }
     }
 }

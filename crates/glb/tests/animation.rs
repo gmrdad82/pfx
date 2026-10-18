@@ -42,6 +42,7 @@ fn a_track_writes_the_timeline_animation_and_a_camera_track_its_camera_node() {
             camera: None,
             focus: None,
             fov: None,
+            between: Vec::new(),
         },
         Track {
             node: "camera.chase".into(),
@@ -53,6 +54,7 @@ fn a_track_writes_the_timeline_animation_and_a_camera_track_its_camera_node() {
             }),
             focus: None,
             fov: None,
+            between: Vec::new(),
         },
     ];
     let bytes = write_animated(
@@ -184,6 +186,7 @@ fn a_track_naming_no_node_is_refused() {
         camera: None,
         focus: None,
         fov: None,
+        between: Vec::new(),
     }];
     let error = write_animated(
         &[node("a")],
@@ -210,6 +213,7 @@ fn markers_ride_in_the_timeline_animation_s_extras() {
         camera: None,
         focus: None,
         fov: None,
+        between: Vec::new(),
     }];
     let markers = vec![("launch".to_string(), 0.5), ("jump".to_string(), 1.0)];
     let bytes = write_animated(

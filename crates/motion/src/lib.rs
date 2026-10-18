@@ -3,6 +3,7 @@ mod noise;
 mod pose;
 mod route;
 mod timeline;
+pub mod vehicle;
 
 pub use keys::{Channel, Interp, sample_keys};
 pub use noise::{noise1, noise1_slope};

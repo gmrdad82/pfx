@@ -10,8 +10,8 @@ use pfx_post::dof;
 
 use crate::effects::RoomHaze;
 use crate::frame::{
-    Camera, Instance, InstanceSurface, Matrix, MeshData, MeshHandle, Scene as FrameScene,
-    SceneWind, Sun, multiply,
+    Camera, Instance, InstanceSurface, Matrix, MeshData, MeshHandle, SWEEP_STEPS,
+    Scene as FrameScene, SceneWind, Sun, multiply, swept,
 };
 use crate::glass;
 use crate::height_fog::HeightFog;
@@ -899,6 +899,16 @@ impl Staged {
         {
             self.previous = posed_models(&self.draws, &before, &before_palettes);
             self.models = posed_models(&self.draws, &posed, &palettes);
+            if interval > 0.0
+                && let Some((near, near_palettes)) = self.posed_at(time - interval / SWEEP_STEPS)
+            {
+                let near = posed_models(&self.draws, &near, &near_palettes);
+                for ((previous, model), near) in
+                    self.previous.iter_mut().zip(&self.models).zip(near)
+                {
+                    *previous = swept(*model, near, *previous, SWEEP_STEPS);
+                }
+            }
             self.place_lights(&posed, &palettes);
             self.repose();
         }

@@ -12,6 +12,8 @@ pub(crate) mod constraint;
 pub(crate) mod follow;
 pub(crate) mod keys;
 pub(crate) mod rig;
+#[cfg(test)]
+mod vehicle_tests;
 
 pub(crate) const BAKERS: &[(&str, crate::Baker)] =
     &[("keys", keys::bake), ("constraints", constraint::bake)];

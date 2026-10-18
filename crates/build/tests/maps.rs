@@ -290,3 +290,61 @@ fn normal_and_occlusion_maps_keep_their_own_texture_transforms_through_a_build()
             .any(|name| name == "KHR_texture_transform")
     );
 }
+
+#[test]
+fn a_material_uv_transform_reaches_every_map_as_khr_texture_transform() {
+    let dir = common::scratch("maps-uv");
+    head(&dir);
+    let r = recipe(
+        "base_map = \"tex/other.png\"\nroughness_map = \"tex/bumps.png\"\nuv_scale = [0.5, 0.5]\nuv_offset = [0.25, 0.0]\nuv_rotation = 0.5\n",
+    );
+    let glb = build(&r, &dir).unwrap().glb();
+    assert!(glb == build(&r, &dir).unwrap().glb());
+    let parsed = gltf::Gltf::from_slice(&glb).unwrap();
+    assert!(
+        parsed
+            .document
+            .extensions_used()
+            .any(|e| e == "KHR_texture_transform")
+    );
+    let skin = parsed.document.materials().next().unwrap();
+    let pbr = skin.pbr_metallic_roughness();
+    let same = |info: gltf::texture::Info| {
+        let t = info.texture_transform().unwrap();
+        assert_eq!(t.scale(), [0.5, 0.5]);
+        assert_eq!(t.offset(), [0.25, 0.0]);
+        assert_eq!(t.rotation(), 0.5);
+    };
+    same(pbr.base_color_texture().unwrap());
+    same(pbr.metallic_roughness_texture().unwrap());
+    let normal = skin.normal_texture().unwrap();
+    let raw = normal.extensions().unwrap();
+    assert_eq!(
+        raw["KHR_texture_transform"]["scale"],
+        serde_json::json!([0.5, 0.5])
+    );
+    assert_eq!(raw["KHR_texture_transform"]["rotation"], 0.5);
+}
+
+#[test]
+fn a_recipe_without_uv_keys_writes_no_texture_transform() {
+    let dir = common::scratch("maps-uv-none");
+    head(&dir);
+    let glb = build(&recipe("base_map = \"tex/other.png\"\n"), &dir)
+        .unwrap()
+        .glb();
+    let parsed = gltf::Gltf::from_slice(&glb).unwrap();
+    assert!(
+        !parsed
+            .document
+            .extensions_used()
+            .any(|e| e == "KHR_texture_transform")
+    );
+}
+
+#[test]
+fn a_malformed_uv_key_is_refused_at_the_key() {
+    let text = "recipe = 1\nname = \"t\"\n\n[materials.skin]\nuv_scale = [1.0]\n";
+    let e = parse(text).unwrap_err();
+    assert_eq!(e.path, "materials.skin.uv_scale");
+}

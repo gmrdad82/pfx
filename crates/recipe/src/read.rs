@@ -13,14 +13,14 @@ mod keys;
 
 use crate::{
     Along, Bake, BakeLayers, Bend, BendForm, Bevel, CAP_LUMINANCE, CAP_MEAN, CAPPED, Camera,
-    CameraPath, Caps, Casters, Collection, Constrained, Cup, Curl, Daylight, DetailUv, Drift, Ease,
-    Error, Follow, Grade, Kind, LAYER_SIZE, Lines, Loaded, Lod, LodTarget, Look, Marker, Mover,
-    NO_SIDECAR, NORMAL_SIZE, OLD_HEADER, Object, Orbit, Order, Origin, Ortho, Outline, Output,
-    Owner, PathKey, PathKind, PieceRule, Plate, PlateView, Plates, Play, Problem, Profile,
-    ProfileKind, Projection, Proxy, REFERENCE_HOUR, RELEASE_EASE, RIG_LOOK, RIG_OFFSET, Recipe,
-    Reference, Rig, RigFocus, RigFrame, RigShake, RigTracks, Room, RootMotion, RouteSpec, SCHEMA,
-    Scatter, Shadow, ShadowLook, ShadowQuality, Sky, SkyAmbient, SkyKind, SkyLight, Span, Spring,
-    Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline, Trace, Use, Uv, Variant,
+    CameraPath, Caps, Casters, Collection, Constrained, Cup, Curl, Daylight, DetailUv, Drift,
+    Dynamics, Ease, Error, Follow, Grade, Kind, LAYER_SIZE, Lines, Loaded, Lod, LodTarget, Look,
+    Marker, Mover, NO_SIDECAR, NORMAL_SIZE, OLD_HEADER, Object, Orbit, Order, Origin, Ortho,
+    Outline, Output, Owner, PathKey, PathKind, PieceRule, Plate, PlateView, Plates, Play, Problem,
+    Profile, ProfileKind, Projection, Proxy, REFERENCE_HOUR, RELEASE_EASE, RIG_LOOK, RIG_OFFSET,
+    Recipe, Reference, Rig, RigFocus, RigFrame, RigShake, RigTracks, Room, RootMotion, RouteSpec,
+    SCHEMA, Scatter, Shadow, ShadowLook, ShadowQuality, Sky, SkyAmbient, SkyKind, SkyLight, Span,
+    Spring, Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline, Trace, Use, Uv, Variant,
     VariantOutput, View, Volume,
 };
 
@@ -662,6 +662,28 @@ fn read_textures(cx: &Cx, name: &str, keys: &dyn TableLike) -> Result<Option<Tex
             (None, None) => Err(bad_item(cx, &path(key), item, "a number")),
         }
     };
+    let pair = |key: &str| -> Result<Option<[f64; 2]>, Error> {
+        let Some(item) = keys.get(key) else {
+            return Ok(None);
+        };
+        let what = "an array of two numbers";
+        let Some(list) = item.as_array() else {
+            return Err(bad_item(cx, &path(key), item, what));
+        };
+        let value = |v: &Value| {
+            v.as_float()
+                .or_else(|| v.as_integer().map(|n| n as f64))
+                .filter(|n| n.is_finite())
+        };
+        match (
+            list.len(),
+            list.get(0).and_then(value),
+            list.get(1).and_then(value),
+        ) {
+            (2, Some(x), Some(y)) => Ok(Some([x, y])),
+            _ => Err(bad_item(cx, &path(key), item, what)),
+        }
+    };
     let found = Textures {
         base_map: file("base_map")?,
         normal_map: file("normal_map")?,
@@ -671,6 +693,9 @@ fn read_textures(cx: &Cx, name: &str, keys: &dyn TableLike) -> Result<Option<Tex
         occlusion_strength: number("occlusion_strength", Some([0.0, 1.0]))?,
         detail_normal_map: file("detail_normal_map")?,
         detail_normal_scale: number("detail_normal_scale", None)?,
+        uv_scale: pair("uv_scale")?,
+        uv_offset: pair("uv_offset")?,
+        uv_rotation: number("uv_rotation", None)?,
     };
     Ok((found != Textures::default()).then_some(found))
 }
@@ -1335,6 +1360,7 @@ const KINDS: &[&str] = &[
     "library",
     "card",
     "text",
+    "empty",
 ];
 
 fn kinds() -> String {
@@ -1544,6 +1570,7 @@ fn read_kind(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Kind, Error> 
             alpha_cutoff: tab.or(cx, "alpha_cutoff", 0.5, NUM)?,
         },
         "text" => read_text(cx, tab)?,
+        "empty" => Kind::Empty,
         other => {
             return Err(Error::new(
                 tab.kpath("kind"),
@@ -3047,6 +3074,23 @@ fn follow_keys(cx: &mut Cx, tab: &mut Tab<'_>, object: String) -> Result<Follow,
         }
         None => None,
     };
+    let dynamics = match tab.sub(cx, "dynamics")? {
+        Some(mut sub) => {
+            let base = Dynamics::default();
+            let dynamics = Dynamics {
+                mass: sub.or(cx, "mass", base.mass, NUM)?,
+                wheelbase: sub.opt(cx, "wheelbase", NUM)?,
+                track: sub.opt(cx, "track", NUM)?,
+                cg_height: sub.or(cx, "cg_height", base.cg_height, NUM)?,
+                stiffness: sub.or(cx, "stiffness", base.stiffness, NUM)?,
+                damping: sub.or(cx, "damping", base.damping, NUM)?,
+                grip: sub.or(cx, "grip", base.grip, NUM)?,
+            };
+            sub.finish(cx)?;
+            Some(dynamics)
+        }
+        None => None,
+    };
     let ride = tab.or(cx, "ride", 0.0, NUM)?;
     let path = tab.kpath("root_motion");
     let root_motion = match tab.peek(cx, "root_motion") {
@@ -3062,6 +3106,7 @@ fn follow_keys(cx: &mut Cx, tab: &mut Tab<'_>, object: String) -> Result<Follow,
         start,
         speed,
         drift,
+        dynamics,
         ride,
         root_motion,
     })
