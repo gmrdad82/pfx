@@ -1,0 +1,1292 @@
+use pfx_mesh::math::Real;
+use std::collections::BTreeMap;
+use std::fmt;
+use std::path::PathBuf;
+
+mod constraint;
+mod curve;
+mod entries;
+pub mod files;
+mod include;
+mod keyframes;
+mod patch;
+mod path;
+mod read;
+mod route;
+mod set;
+mod stage;
+mod text;
+mod validate;
+mod variant;
+
+pub use curve::{CurveEdit, CurveParam, curve_keys, curve_patch, curve_points, curves_of};
+pub use entries::{
+    Entry, TABLES, add_patch, duplicate_patch, entries, label_key, referrers, remove_patch,
+    write_checked,
+};
+pub use include::Files;
+pub use keyframes::{
+    Channel, Goes, Interp, KeyEdit, Keyable, Keyed, Place, Property, Rule, SAME_TIME, SECTIONS,
+    Table, key_patches, place, properties, property,
+};
+pub use patch::{
+    apply, apply_all, edit, flag, number, numbers, params_in, path_text, reread, save, save_to,
+    string, value_at, write,
+};
+pub use path::{CameraPath, Ease, Orbit, PathKey, PathKind};
+pub use read::effects::{Colour, Effects, Particles, Setting, Settings};
+pub use read::{load, materials, parse};
+pub use route::{PointEdit, route_patch};
+pub use set::{Change, apply_set, json_of, set_values, tidy, value_of};
+pub use stage::{Pick, apply_only, apply_stage, stage_index};
+pub use text::{ANCHORS, MONO, anchor_names, anchor_point, default_anchor};
+pub use validate::{bake_product, missing_material_text, slug, validate};
+pub use variant::apply_variant;
+
+pub use pfx_motion::Timeline;
+pub use toml_edit;
+
+pub const SCHEMA: u32 = 1;
+pub const OLD_HEADER: &str = "`manfred = 1` is the old header; recipes start with `recipe = 1`";
+pub const NO_SIDECAR: &str = "none";
+pub const CAPPED: &str = "capped";
+pub const CAP_LUMINANCE: f64 = 60.0;
+pub const CAP_MEAN: f64 = 0.3;
+pub const REFERENCE_HOUR: f64 = 16.0;
+pub const SCENE_SUFFIX: &str = ".scene.toml";
+const SENSOR_MM: f64 = 36.0;
+const FOV_Y_DEG: f64 = 45.0;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Recipe {
+    pub schema: u32,
+    pub name: String,
+    pub seed: u64,
+    pub params: Option<String>,
+    pub library: Option<String>,
+    pub plate: Option<Plate>,
+    pub output: Output,
+    pub objects: Vec<Object>,
+    pub cameras: Vec<Camera>,
+    pub sun: Option<Sun>,
+    pub daylight: Option<Daylight>,
+    pub sky: Option<Sky>,
+    pub lights: Vec<Light>,
+    pub movers: Vec<Mover>,
+    pub routes: Vec<RouteSpec>,
+    pub references: Vec<Reference>,
+    pub follows: Vec<Follow>,
+    pub stages: Vec<Stage>,
+    pub keep: Vec<Vec<String>>,
+    pub markers: Vec<Marker>,
+    pub constraints: Vec<Constrained>,
+    pub variants: BTreeMap<String, Variant>,
+    pub sidecar: serde_json::Map<String, serde_json::Value>,
+    pub look: Option<Look>,
+    pub trace: Trace,
+    pub bake: Option<Bake>,
+    pub timeline: Option<Timeline>,
+    pub materials: BTreeMap<String, serde_json::Value>,
+    pub effects: Effects,
+    pub textures: BTreeMap<String, Textures>,
+    pub uses: Vec<Use>,
+    pub keyed: BTreeMap<String, Keyed>,
+    pub files: Files,
+    pub source: String,
+    pub base: Option<PathBuf>,
+    pub lines: Lines,
+    pub twins: Vec<Problem>,
+}
+
+pub const TEXTURE_KEYS: [&str; 8] = [
+    "base_map",
+    "normal_map",
+    "normal_scale",
+    "roughness_map",
+    "occlusion_map",
+    "occlusion_strength",
+    "detail_normal_map",
+    "detail_normal_scale",
+];
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Textures {
+    pub base_map: Option<String>,
+    pub normal_map: Option<String>,
+    pub normal_scale: Option<f64>,
+    pub roughness_map: Option<String>,
+    pub occlusion_map: Option<String>,
+    pub occlusion_strength: Option<f64>,
+    pub detail_normal_map: Option<String>,
+    pub detail_normal_scale: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Lines(pub BTreeMap<String, usize>);
+
+impl PartialEq for Lines {
+    fn eq(&self, _: &Lines) -> bool {
+        true
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Origin {
+    Centre,
+    TopLeft,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Plate {
+    pub width: f64,
+    pub height: f64,
+    pub metres_per_pixel: f64,
+    pub origin: Origin,
+    pub camera: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Order {
+    File,
+    Natural,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Output {
+    pub glb: Option<String>,
+    pub sidecar: Option<String>,
+    pub sidecar_dialect: String,
+    pub order: Order,
+    pub bake: Option<String>,
+    pub hierarchy: bool,
+    pub scene: Option<String>,
+    pub scene_camera: Option<String>,
+    pub scene_format: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shadow {
+    Cast,
+    Only,
+    None,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Object {
+    pub name: String,
+    pub id: Option<String>,
+    pub kind: Kind,
+    pub at: [f64; 3],
+    pub rotate: [f64; 3],
+    pub scale: [f64; 3],
+    pub keep_transform: bool,
+    pub parent: Option<String>,
+    pub material: Option<String>,
+    pub materials: Vec<String>,
+    pub smooth_angle: Option<f64>,
+    pub smooth: bool,
+    pub flat_faces: bool,
+    pub bevel: Option<Bevel>,
+    pub uv: Option<Uv>,
+    pub detail_uv: Option<DetailUv>,
+    pub shadow: Shadow,
+    pub two_sided: bool,
+    pub hidden: bool,
+    pub dynamic: Option<bool>,
+    pub proxy: Option<Proxy>,
+    pub lod: Vec<Lod>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LodTarget {
+    Triangles(u32),
+    Ratio(f64),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lod {
+    pub target: LodTarget,
+    pub bake_normals: bool,
+    pub normal_size: u32,
+    pub bake_distance: Option<f64>,
+}
+
+pub const NORMAL_SIZE: u32 = 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Proxy {
+    Box,
+    Hull,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Caps {
+    Ngon,
+    None,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextSpace {
+    Surface,
+    Overlay,
+    Lit,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Span {
+    pub text: String,
+    pub family: Option<String>,
+    pub size: f64,
+    pub weight: Option<u32>,
+    pub italic: bool,
+    pub color: [f64; 3],
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Kind {
+    Box {
+        size: [f64; 3],
+    },
+    Cylinder {
+        radius: f64,
+        depth: f64,
+        segments: u32,
+        caps: Caps,
+    },
+    Sphere {
+        radius: f64,
+        segments: u32,
+        rings: u32,
+    },
+    Plane {
+        size: [f64; 2],
+        grid: Option<[u32; 2]>,
+        bend: Option<Bend>,
+        curl: Option<Curl>,
+        cup: Option<Cup>,
+        jag: Vec<f64>,
+    },
+    Disc {
+        radius: f64,
+        segments: u32,
+    },
+    Torus {
+        major: f64,
+        minor: f64,
+        segments: u32,
+        rings: u32,
+    },
+    Capsule {
+        radius: f64,
+        length: f64,
+    },
+    Outline {
+        outline: Outline,
+        holes: Vec<Outline>,
+        front: f64,
+        back: f64,
+        profile: Profile,
+    },
+    Pocket {
+        into: String,
+        outline: Outline,
+        depth: f64,
+        rim: Option<Profile>,
+        floor: Option<Profile>,
+    },
+    Lathe {
+        profile: Vec<[f64; 2]>,
+        segments: u32,
+        weld: f64,
+    },
+    Sweep {
+        path: Vec<[f64; 3]>,
+        radii: Vec<f64>,
+        ring: u32,
+        closed: bool,
+        caps: bool,
+        along: Option<Along>,
+    },
+    Mesh {
+        path: String,
+        node: Option<String>,
+        morph: BTreeMap<String, f64>,
+    },
+    Generator {
+        generator: String,
+        params: BTreeMap<String, serde_json::Value>,
+    },
+    Library {
+        object: String,
+        clip: Option<String>,
+        looped: bool,
+    },
+    Card {
+        size: [f64; 2],
+        image: Option<String>,
+        slot: Option<String>,
+        face_camera: bool,
+        alpha_cutoff: f64,
+    },
+    Text {
+        spans: Vec<Span>,
+        wrap: Option<f64>,
+        anchor: Option<String>,
+        space: TextSpace,
+        on: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BendForm {
+    Wrap,
+    Lift,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bend {
+    pub radius: f64,
+    pub form: BendForm,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Curl {
+    pub width: f64,
+    pub depth: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cup {
+    pub from: f64,
+    pub depth: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Along {
+    pub outline: Outline,
+    pub offset: f64,
+    pub depth: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outline {
+    Rect {
+        rect: [f64; 4],
+        radius: f64,
+        turned: f64,
+        segments: u32,
+    },
+    Circle {
+        centre: [f64; 2],
+        radius: f64,
+        segments: u32,
+    },
+    Points {
+        points: Vec<[f64; 3]>,
+        segments: u32,
+    },
+    Union(Vec<Outline>),
+    Difference(Box<Outline>, Box<Outline>),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileKind {
+    Round,
+    Chamfer,
+    None,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profile {
+    pub kind: ProfileKind,
+    pub width: f64,
+    pub segments: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DetailUv {
+    pub texels_per_m: f64,
+    pub gutter: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bevel {
+    pub width: f64,
+    pub segments: u32,
+    pub angle: f64,
+    pub clamp: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Uv {
+    Plate,
+    Local,
+    None,
+    Cylinder {
+        degrees: f64,
+        atlas: [f64; 4],
+        band: Option<[f64; 2]>,
+        wall: Option<[f64; 2]>,
+        away: [f64; 2],
+    },
+    Rect {
+        rect: [f64; 4],
+        atlas: [f64; 4],
+        facing: f64,
+        clamp: bool,
+        away: [f64; 2],
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Projection {
+    Perspective,
+    Orthographic,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Camera {
+    pub name: String,
+    pub kind: Projection,
+    pub position: [f64; 3],
+    pub target: [f64; 3],
+    pub up: [f64; 3],
+    pub fov_y_deg: Option<f64>,
+    pub focal_mm: Option<f64>,
+    pub sensor_mm: Option<f64>,
+    pub shift: [f64; 2],
+    pub focus_m: Option<f64>,
+    pub fstop: f64,
+    pub ortho_height: Option<f64>,
+    pub path: Option<CameraPath>,
+    pub rig: Option<Rig>,
+}
+
+pub const RIG_OFFSET: [f64; 3] = [0.0, 1.1, -5.5];
+pub const RIG_LOOK: [f64; 3] = [0.0, 0.6, 0.0];
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rig {
+    pub follow: String,
+    pub offset: [f64; 3],
+    pub look: [f64; 3],
+    pub lag: f64,
+    pub look_ahead: f64,
+    pub yaw_lag: f64,
+    pub bank: f64,
+    pub shake: Option<RigShake>,
+    pub focus: Option<RigFocus>,
+    pub tracks: RigTracks,
+    pub bank_spring: Option<Spring>,
+    pub release: Option<f64>,
+    pub release_ease: f64,
+    pub smooth: BTreeMap<String, f64>,
+    pub frame: RigFrame,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RigFrame {
+    #[default]
+    Target,
+    World,
+}
+
+pub const RELEASE_EASE: f64 = 1.5;
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RigTracks {
+    pub distance: Option<Vec<[f64; 2]>>,
+    pub lateral: Option<Vec<[f64; 2]>>,
+    pub height: Option<Vec<[f64; 2]>>,
+    pub bank: Option<Vec<[f64; 2]>>,
+    pub lag: Option<Vec<[f64; 2]>>,
+    pub shake: Option<Vec<[f64; 2]>>,
+    pub look_ahead: Option<Vec<[f64; 2]>>,
+    pub orbit: Option<Vec<[f64; 2]>>,
+    pub pitch: Option<Vec<[f64; 2]>>,
+    pub roll: Option<Vec<[f64; 2]>>,
+    pub focal: Option<Vec<[f64; 2]>>,
+    pub fov: Option<Vec<[f64; 2]>>,
+    pub look_offset: Option<Vec<(f64, [f64; 3])>>,
+}
+
+impl RigTracks {
+    pub const NAMES: [&'static str; 12] = [
+        "distance",
+        "lateral",
+        "height",
+        "bank",
+        "lag",
+        "shake",
+        "look_ahead",
+        "orbit",
+        "pitch",
+        "roll",
+        "focal",
+        "fov",
+    ];
+
+    pub const LOOK_OFFSET: &'static str = "look_offset";
+
+    pub fn get(&self, name: &str) -> Option<&Vec<[f64; 2]>> {
+        match name {
+            "distance" => self.distance.as_ref(),
+            "lateral" => self.lateral.as_ref(),
+            "height" => self.height.as_ref(),
+            "bank" => self.bank.as_ref(),
+            "lag" => self.lag.as_ref(),
+            "shake" => self.shake.as_ref(),
+            "look_ahead" => self.look_ahead.as_ref(),
+            "orbit" => self.orbit.as_ref(),
+            "pitch" => self.pitch.as_ref(),
+            "roll" => self.roll.as_ref(),
+            "focal" => self.focal.as_ref(),
+            "fov" => self.fov.as_ref(),
+            _ => None,
+        }
+    }
+
+    pub fn spherical(&self) -> bool {
+        self.orbit.is_some() || self.pitch.is_some()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spring {
+    pub frequency: f64,
+    pub damping: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RigShake {
+    pub translation: f64,
+    pub roll: f64,
+    pub frequency: f64,
+    pub seed: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RigFocus {
+    Follow,
+    Distance(f64),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sun {
+    pub toward: [f64; 3],
+    pub radius_deg: f64,
+    pub color: [f64; 3],
+    pub irradiance: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Daylight {
+    pub hour: f64,
+    pub day: u32,
+    pub latitude: f64,
+    pub heading: f64,
+    pub reference_hour: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkyKind {
+    Hdr,
+    Analytic,
+    Room,
+    Mix,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkyAmbient {
+    Authored,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SkyLight {
+    pub name: String,
+    pub az: f64,
+    pub el: f64,
+    pub power: f64,
+    pub color: [f64; 3],
+    pub width: f64,
+    pub height: f64,
+    pub soft: f64,
+    pub slats: f64,
+    pub open: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Room {
+    pub width: u32,
+    pub floor: [f64; 3],
+    pub wall: [f64; 3],
+    pub ceiling: [f64; 3],
+    pub lights: Vec<SkyLight>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sky {
+    pub kind: SkyKind,
+    pub path: Option<String>,
+    pub source: Option<String>,
+    pub prepare: Option<String>,
+    pub rotation_deg: f64,
+    pub intensity: f64,
+    pub balance: Option<[f64; 3]>,
+    pub fill: Option<f64>,
+    pub ambient: Option<SkyAmbient>,
+    pub shade: BTreeMap<u32, [f64; 3]>,
+    pub room: Option<Room>,
+    pub turbidity: Option<f64>,
+    pub ground_albedo: Option<[f64; 3]>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Light {
+    pub name: String,
+    pub kind: LightKind,
+    pub position: [f64; 3],
+    pub parent: Option<(String, [f64; 3])>,
+    pub direction: Option<[f64; 3]>,
+    pub cone: Option<[f64; 2]>,
+    pub color: [f64; 3],
+    pub intensity: f64,
+    pub radius: f64,
+    pub range: f64,
+    pub shadow: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LightKind {
+    Point,
+    Spot,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mover {
+    pub group: String,
+    pub pivot: [f64; 3],
+    pub axis: [f64; 3],
+    pub travel: f64,
+    pub clip: Option<[f64; 4]>,
+    pub clip2: Option<[f64; 4]>,
+    pub parts: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RouteSpec {
+    pub name: String,
+    pub points: Vec<[f64; 3]>,
+    pub closed: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Ortho {
+    Top,
+    Front,
+    Side,
+    Rear,
+}
+
+impl Ortho {
+    pub const ALL: [Ortho; 4] = [Ortho::Top, Ortho::Front, Ortho::Side, Ortho::Rear];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Ortho::Top => "top",
+            Ortho::Front => "front",
+            Ortho::Side => "side",
+            Ortho::Rear => "rear",
+        }
+    }
+
+    pub fn named(word: &str) -> Option<Ortho> {
+        Ortho::ALL.into_iter().find(|view| view.word() == word)
+    }
+
+    pub fn axes(self) -> [[f64; 3]; 2] {
+        match self {
+            Ortho::Top => [[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]],
+            Ortho::Side => [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
+            Ortho::Front | Ortho::Rear => [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        }
+    }
+
+    pub fn forward(self) -> [f64; 3] {
+        match self {
+            Ortho::Top => [0.0, -1.0, 0.0],
+            Ortho::Front => [0.0, 0.0, -1.0],
+            Ortho::Side => [1.0, 0.0, 0.0],
+            Ortho::Rear => [0.0, 0.0, 1.0],
+        }
+    }
+
+    pub fn up(self) -> [f64; 3] {
+        match self {
+            Ortho::Top => [1.0, 0.0, 0.0],
+            Ortho::Front | Ortho::Side | Ortho::Rear => [0.0, 1.0, 0.0],
+        }
+    }
+
+    pub fn depth(self) -> [f64; 3] {
+        match self {
+            Ortho::Top => [0.0, 1.0, 0.0],
+            Ortho::Side => [1.0, 0.0, 0.0],
+            Ortho::Front | Ortho::Rear => [0.0, 0.0, 1.0],
+        }
+    }
+
+    pub fn place(self, [a, b]: [f64; 2], depth: f64) -> [f64; 3] {
+        let [u, v] = self.axes();
+        let d = self.depth();
+        std::array::from_fn(|k| u[k] * a + v[k] * b + d[k] * depth)
+    }
+
+    pub fn flatten(self, point: [f64; 3]) -> [f64; 2] {
+        let [u, v] = self.axes();
+        let dot = |axis: [f64; 3]| axis.iter().zip(point).map(|(a, p)| a * p).sum::<f64>();
+        [dot(u), dot(v)]
+    }
+
+    pub fn shares_plane(self, other: Ortho) -> bool {
+        self.axes() == other.axes()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reference {
+    pub name: String,
+    pub image: String,
+    pub view: Ortho,
+    pub from: [[f64; 2]; 2],
+    pub metres: f64,
+    pub offset: [f64; 2],
+    pub opacity: f64,
+}
+
+impl Reference {
+    pub fn metres_per_pixel(&self) -> f64 {
+        let [a, b] = self.from;
+        let pixels = (b[0] - a[0]).hypot_of(b[1] - a[1]);
+        if pixels > 0.0 {
+            self.metres / pixels
+        } else {
+            0.0
+        }
+    }
+
+    pub fn corners(&self, size: [u32; 2]) -> [[f64; 3]; 4] {
+        let k = self.metres_per_pixel();
+        let origin = self.view.place(self.offset, 0.0);
+        let right = right_of(self.view);
+        let up = self.view.up();
+        let [p0x, p0y] = self.from[0];
+        let [w, h] = size.map(f64::from);
+        [[0.0, 0.0], [w, 0.0], [0.0, h], [w, h]].map(|[px, py]| {
+            let u = (px - p0x) * k;
+            let v = -(py - p0y) * k;
+            std::array::from_fn(|i| origin[i] + right[i] * u + up[i] * v)
+        })
+    }
+}
+
+fn right_of(view: Ortho) -> [f64; 3] {
+    let f = view.forward();
+    let u = view.up();
+    [
+        f[1] * u[2] - f[2] * u[1],
+        f[2] * u[0] - f[0] * u[2],
+        f[0] * u[1] - f[1] * u[0],
+    ]
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Follow {
+    pub object: String,
+    pub route: String,
+    pub lane: f64,
+    pub start: f64,
+    pub speed: Vec<[f64; 2]>,
+    pub drift: Option<Drift>,
+    pub ride: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stage {
+    pub name: String,
+    pub objects: Vec<String>,
+    pub camera: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Marker {
+    pub name: String,
+    pub t: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Owner {
+    Object(String),
+    Camera(String),
+    Light(String),
+}
+
+impl Owner {
+    pub fn name(&self) -> &str {
+        match self {
+            Owner::Object(name) | Owner::Camera(name) | Owner::Light(name) => name,
+        }
+    }
+
+    pub fn node(&self) -> String {
+        match self {
+            Owner::Object(name) => name.clone(),
+            Owner::Camera(name) => format!("camera.{name}"),
+            Owner::Light(name) => format!("light.{name}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Constrained {
+    pub owner: Owner,
+    pub list: Vec<Constraint>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Constraint {
+    pub name: Option<String>,
+    pub path: String,
+    pub ipath: String,
+    pub kind: ConstraintKind,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ConstraintKind {
+    FollowPath(Follow),
+    LookAt(LookAt),
+    Copy(CopyOf),
+    Rig(Box<Rig>),
+}
+
+impl ConstraintKind {
+    pub fn target(&self) -> Option<(&'static str, &str)> {
+        match self {
+            ConstraintKind::FollowPath(_) => None,
+            ConstraintKind::LookAt(l) => Some(("target", &l.target)),
+            ConstraintKind::Copy(c) => Some(("target", &c.target)),
+            ConstraintKind::Rig(r) => Some(("follow", &r.follow)),
+        }
+    }
+
+    pub fn verb(&self) -> &'static str {
+        match self {
+            ConstraintKind::FollowPath(_) => "follows a path",
+            ConstraintKind::LookAt(_) => "looks at",
+            ConstraintKind::Copy(_) => "copies",
+            ConstraintKind::Rig(_) => "rigs on",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Axis {
+    X,
+    NegX,
+    Y,
+    NegY,
+    Z,
+    NegZ,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LookAt {
+    pub target: String,
+    pub up: [f64; 3],
+    pub offset: [f64; 3],
+    pub axis: Option<Axis>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CopyOf {
+    pub target: String,
+    pub offset: [f64; 3],
+    pub rotate: [f64; 3],
+    pub translation: bool,
+    pub rotation: bool,
+    pub scale: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Cycle {
+    pub path: String,
+    pub ipath: String,
+    pub text: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Drift {
+    pub amount: f64,
+    pub period: f64,
+    pub slip_deg: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Variant {
+    pub drop: Vec<String>,
+    pub set: BTreeMap<String, serde_json::Value>,
+    pub remove: Vec<String>,
+    pub output: VariantOutput,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct VariantOutput {
+    pub glb: Option<String>,
+    pub sidecar: Option<String>,
+    pub bake: Option<String>,
+    pub scene: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Grade {
+    pub vignette: f64,
+    pub saturation: f64,
+    pub warmth: f64,
+    pub bloom: f64,
+    pub haze: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Graded,
+    Standard,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Look {
+    pub view: View,
+    pub exposure: f64,
+    pub grade: Grade,
+    pub lut: Option<String>,
+    pub lut_amount: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Trace {
+    pub transmissive_shadows: bool,
+    pub clamp_indirect: f64,
+    pub filter_glossy: f64,
+    pub spp: Option<u32>,
+    pub threshold: Option<f64>,
+    pub min_samples: Option<u32>,
+}
+
+impl Trace {
+    pub const CLAMP_INDIRECT_MAX: f64 = 10_000.0;
+    pub const FILTER_GLOSSY_MAX: f64 = 1.0;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Volume {
+    pub name: String,
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+    pub spacing: f64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bake {
+    pub product: Option<String>,
+    pub anchors: Vec<f64>,
+    pub samples: u32,
+    pub volumes: Vec<Volume>,
+    pub plates: Option<Plates>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Casters {
+    Meshes,
+    Proxies,
+    None,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Plates {
+    pub size: [u32; 2],
+    pub overscan: f64,
+    pub scale: f64,
+    pub anchors: Option<Vec<f64>>,
+    pub layers: Vec<String>,
+    pub threshold: f64,
+    pub min_samples: u32,
+    pub max_samples: u32,
+    pub growth: f64,
+    pub seed: Option<u32>,
+    pub key: Option<String>,
+    pub dir: Option<String>,
+    pub casters: Casters,
+    pub clamp_indirect: Option<f64>,
+    pub filter_glossy: Option<f64>,
+    pub views: Vec<PlateView>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlateView {
+    pub name: String,
+    pub camera: Option<String>,
+    pub at: Option<[f64; 3]>,
+    pub look_at: Option<[f64; 3]>,
+    pub up: Option<[f64; 3]>,
+    pub fov: Option<f64>,
+    pub focal: Option<f64>,
+    pub sensor: Option<f64>,
+    pub shift: Option<[f64; 2]>,
+    pub near: Option<f64>,
+    pub far: Option<f64>,
+}
+
+impl Plates {
+    pub const OVERSCAN: f64 = 0.1;
+    pub const SCALE: f64 = 1.0;
+    pub const LAYERS: [&str; 6] = ["color", "depth", "normal", "id", "sun", "transfer"];
+    pub const THRESHOLD: f64 = 0.01;
+    pub const MIN_SAMPLES: u32 = 16;
+    pub const MAX_SAMPLES: u32 = 1024;
+    pub const GROWTH: f64 = 2.0;
+    pub const SAMPLES_CAP: u32 = 65536;
+    pub const SIDE: [u32; 2] = [16, 16384];
+    pub const DEFAULT_VIEW: &str = "main";
+
+    pub fn all_layers(&self) -> bool {
+        self.layers.len() == Plates::LAYERS.len()
+            && Plates::LAYERS
+                .iter()
+                .all(|name| self.layers.iter().any(|layer| layer == name))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Use {
+    pub prefix: String,
+    pub file: String,
+    pub at: [f64; 3],
+    pub rotate: [f64; 3],
+    pub scale: [f64; 3],
+    pub parent: Option<String>,
+    pub objects: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Loaded {
+    pub recipe: Recipe,
+    pub doc: toml_edit::DocumentMut,
+    pub path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Key {
+    Table(String),
+    Object(String),
+    Index(usize),
+}
+
+#[derive(Clone, Debug)]
+pub struct Patch {
+    pub path: Vec<Key>,
+    pub value: Option<toml_edit::Item>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Problem {
+    pub path: String,
+    pub line: Option<usize>,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Error {
+    pub path: String,
+    pub line: Option<usize>,
+    pub text: String,
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (self.line, self.path.is_empty()) {
+            (Some(line), false) => write!(f, "line {line}: {}: {}", self.path, self.text),
+            (Some(line), true) => write!(f, "line {line}: {}", self.text),
+            (None, false) => write!(f, "{}: {}", self.path, self.text),
+            (None, true) => write!(f, "{}", self.text),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl fmt::Display for Problem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.line {
+            Some(line) => write!(f, "line {line}: {}: {}", self.path, self.text),
+            None => write!(f, "{}: {}", self.path, self.text),
+        }
+    }
+}
+
+impl Error {
+    pub(crate) fn new(
+        path: impl Into<String>,
+        line: Option<usize>,
+        text: impl Into<String>,
+    ) -> Error {
+        Error {
+            path: path.into(),
+            line,
+            text: text.into(),
+        }
+    }
+}
+
+impl Kind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Kind::Box { .. } => "box",
+            Kind::Cylinder { .. } => "cylinder",
+            Kind::Sphere { .. } => "sphere",
+            Kind::Plane { .. } => "plane",
+            Kind::Disc { .. } => "disc",
+            Kind::Torus { .. } => "torus",
+            Kind::Capsule { .. } => "capsule",
+            Kind::Outline { .. } => "outline",
+            Kind::Pocket { .. } => "pocket",
+            Kind::Lathe { .. } => "lathe",
+            Kind::Sweep { .. } => "sweep",
+            Kind::Mesh { .. } => "mesh",
+            Kind::Generator { .. } => "generator",
+            Kind::Library { .. } => "library",
+            Kind::Card { .. } => "card",
+            Kind::Text { .. } => "text",
+        }
+    }
+}
+
+impl Camera {
+    pub fn fov_y_deg(&self, aspect: f64) -> f64 {
+        match (self.fov_y_deg, self.focal_mm) {
+            (Some(fov), _) => fov,
+            (None, Some(focal)) if focal > 0.0 => {
+                let longest = self.sensor_mm.unwrap_or(SENSOR_MM) / (2.0 * focal);
+                2.0 * (longest / aspect.max(1.0)).atan_of().to_degrees()
+            }
+            _ => FOV_Y_DEG,
+        }
+    }
+}
+
+impl Plate {
+    fn zero(&self) -> [f64; 2] {
+        match self.origin {
+            Origin::Centre => [0.0, 0.0],
+            Origin::TopLeft => [self.width / 2.0, self.height / 2.0],
+        }
+    }
+
+    pub fn to_pixels(&self, at: [f64; 2]) -> [f64; 2] {
+        let [ox, oy] = self.zero();
+        [
+            at[0] / self.metres_per_pixel + ox,
+            -at[1] / self.metres_per_pixel + oy,
+        ]
+    }
+
+    pub fn to_metres(&self, px: [f64; 2]) -> [f64; 2] {
+        let [ox, oy] = self.zero();
+        [
+            (px[0] - ox) * self.metres_per_pixel,
+            -(px[1] - oy) * self.metres_per_pixel,
+        ]
+    }
+}
+
+impl Mover {
+    pub fn owns(&self, object: &str) -> bool {
+        object
+            .strip_prefix("mv_")
+            .and_then(|rest| rest.strip_prefix(self.group.as_str()))
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with("__"))
+            || self.parts.iter().any(|part| part == object)
+    }
+}
+
+impl Output {
+    pub fn writes_sidecar(&self) -> bool {
+        self.sidecar_dialect != NO_SIDECAR
+    }
+}
+
+impl Recipe {
+    pub fn dynamic(&self, index: usize) -> bool {
+        let mut at = index;
+        for _ in 0..=self.objects.len() {
+            let Some(object) = self.objects.get(at) else {
+                return false;
+            };
+            if let Some(dynamic) = object.dynamic {
+                return dynamic;
+            }
+            let turns = matches!(
+                object.kind,
+                Kind::Card {
+                    face_camera: true,
+                    ..
+                }
+            );
+            if turns
+                || self.movers.iter().any(|mover| mover.owns(&object.name))
+                || self
+                    .follows
+                    .iter()
+                    .any(|follow| follow.object == object.name)
+                || self.keyed.contains_key(&format!("object.{}", object.name))
+                || self
+                    .constraints
+                    .iter()
+                    .any(|c| c.owner == Owner::Object(object.name.clone()))
+            {
+                return true;
+            }
+            let carrier = match (&object.parent, &object.kind) {
+                (Some(parent), _) => Some(parent),
+                (None, Kind::Text { on, .. }) => on.as_ref(),
+                _ => None,
+            };
+            match carrier.and_then(|name| self.objects.iter().position(|o| &o.name == name)) {
+                Some(next) => at = next,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    pub fn keeps(&self, object: &str, node: &str) -> bool {
+        self.keep.iter().all(|globs| {
+            globs
+                .iter()
+                .any(|g| variant::glob_matches(g, object) || variant::glob_matches(g, node))
+        })
+    }
+
+    pub fn route(&self, name: &str) -> Option<&RouteSpec> {
+        self.routes.iter().find(|route| route.name == name)
+    }
+
+    pub fn line_of(&self, index_path: &str) -> Option<usize> {
+        let mut key = index_path;
+        loop {
+            if let Some(line) = self.lines.0.get(key) {
+                return Some(*line);
+            }
+            let cut = key.rfind('.')?;
+            key = &key[..cut];
+        }
+    }
+}

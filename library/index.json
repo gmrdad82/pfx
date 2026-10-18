@@ -1,0 +1,371 @@
+[
+  {
+    "files": {
+      "model": "buildings/lowrise-a/model.glb",
+      "sidecar": "buildings/lowrise-a/object.toml",
+      "thumb": "buildings/lowrise-a/thumb.png"
+    },
+    "kind": "buildings",
+    "name": "lowrise-a",
+    "sha256": {
+      "model": "8620b1ee84d4e9eafc1669676157143cdd9f7c310c3daf26ae2d70cf9a2b316e",
+      "sidecar": "d531a629c4067f1fb95c4f8cdb473f1e8b8fd87c48cb382d3bf373451114a673",
+      "thumb": "ce170aba454e80f4e41e93ba3395f9b96d6cfa2488e6541c0ff743422be05c09"
+    },
+    "size_m": [
+      12.7171,
+      18.3708,
+      15.9028
+    ],
+    "tags": [
+      "building",
+      "lowrise",
+      "brick"
+    ],
+    "triangles": 774
+  },
+  {
+    "files": {
+      "model": "buildings/lowrise-b/model.glb",
+      "sidecar": "buildings/lowrise-b/object.toml",
+      "thumb": "buildings/lowrise-b/thumb.png"
+    },
+    "kind": "buildings",
+    "name": "lowrise-b",
+    "sha256": {
+      "model": "f3bf235ee5ea9b4b16f56515840dcdb32978d2cca3c861a9352bfde316e41828",
+      "sidecar": "6801d28711a35bdcbc1b8d80cb1c7d7290c5fa49fba005734072898a76633e4d",
+      "thumb": "c304880d26ce1642d85e73ad4696f15a839a2ca38b846486863ed6739d9d00ae"
+    },
+    "size_m": [
+      13.1495,
+      19.0352,
+      20.0
+    ],
+    "tags": [
+      "building",
+      "lowrise",
+      "brick"
+    ],
+    "triangles": 592
+  },
+  {
+    "files": {
+      "model": "buildings/lowrise-c/model.glb",
+      "sidecar": "buildings/lowrise-c/object.toml",
+      "thumb": "buildings/lowrise-c/thumb.png"
+    },
+    "kind": "buildings",
+    "name": "lowrise-c",
+    "sha256": {
+      "model": "b74090d8e196a9b0fcab13c1263b98fbb3af81402d41436f1127438e3dbe7d16",
+      "sidecar": "780e592834dfccfc1262da8b6af68d7286136ff7b33d12955f7f38b32ade6ba2",
+      "thumb": "c137ef6f54b8fe45f73fb8690c903cbe54fd1ef9cffe2afbc852fe6b43609374"
+    },
+    "size_m": [
+      11.5617,
+      18.3756,
+      13.7351
+    ],
+    "tags": [
+      "building",
+      "lowrise",
+      "brick"
+    ],
+    "triangles": 532
+  },
+  {
+    "files": {
+      "model": "buildings/tower-a/model.glb",
+      "sidecar": "buildings/tower-a/object.toml",
+      "thumb": "buildings/tower-a/thumb.png"
+    },
+    "kind": "buildings",
+    "name": "tower-a",
+    "sha256": {
+      "model": "4691436545f974eaaef26859b0d5fdba52329d51b59e341a22d3d78a6737c5ab",
+      "sidecar": "522509e4d4442c0906cb70ed5e2f9f893c73a3fcdf84a174c63b7a26db57ccb9",
+      "thumb": "d4e763a35b367452a9c477d901ee5ebd10b3e2470b53ab4dbb1002fdea7d3656"
+    },
+    "size_m": [
+      13.4773,
+      59.9243,
+      15.5596
+    ],
+    "tags": [
+      "building",
+      "tower"
+    ],
+    "triangles": 482
+  },
+  {
+    "files": {
+      "model": "cars/coupe/model.glb",
+      "sidecar": "cars/coupe/object.toml",
+      "thumb": "cars/coupe/thumb.png"
+    },
+    "kind": "cars",
+    "name": "coupe",
+    "sha256": {
+      "model": "77ea87d69b1e7a110eada8d3a4e32338acca88e940fe95573b02d4d5fe8b17b3",
+      "sidecar": "79db6ed0befd58c67e213cab5884d22a80fabf86c5d7fda9dc77a8cf56c525c1",
+      "thumb": "83258b2134b4b5d2e459b32b7e6023d1b9e5473f3cdc5971668c189f017b1ddf"
+    },
+    "size_m": [
+      1.9315,
+      1.155,
+      4.454
+    ],
+    "tags": [
+      "car",
+      "coupe",
+      "dark"
+    ],
+    "triangles": 15504
+  },
+  {
+    "files": {
+      "model": "cars/hatch/model.glb",
+      "sidecar": "cars/hatch/object.toml",
+      "thumb": "cars/hatch/thumb.png"
+    },
+    "kind": "cars",
+    "name": "hatch",
+    "sha256": {
+      "model": "07651957e83c6f2a86899a6f3a6408173d25b564b98e62305cc2910d3148f229",
+      "sidecar": "f1a92a91891af8dafe4633de0eec668c94abb9da98d4b1c69edb84caa358d7ea",
+      "thumb": "96f3911ee7b16becabc2b7790a3ae06276092921e95d5f985ef884ab28eb20cb"
+    },
+    "size_m": [
+      1.8715,
+      1.535,
+      4.134
+    ],
+    "tags": [
+      "car",
+      "hatch",
+      "dark"
+    ],
+    "triangles": 6572
+  },
+  {
+    "files": {
+      "model": "cars/sedan/model.glb",
+      "sidecar": "cars/sedan/object.toml",
+      "thumb": "cars/sedan/thumb.png"
+    },
+    "kind": "cars",
+    "name": "sedan",
+    "sha256": {
+      "model": "b6e3df68c67591093f6dff8cc62dc55f1683ce201ed345a777a35c9ec9595d15",
+      "sidecar": "57cd6bc017df91868166f7bd7c40990b6ba22ba3df2a07a96c34188d186a3077",
+      "thumb": "6bc457e6506906c81013ffda34c8782739d95f2a31472ff114cb1d3df4a8edbe"
+    },
+    "size_m": [
+      1.9215,
+      1.485,
+      4.734
+    ],
+    "tags": [
+      "car",
+      "sedan",
+      "neutral"
+    ],
+    "triangles": 6828
+  },
+  {
+    "files": {
+      "model": "cars/van/model.glb",
+      "sidecar": "cars/van/object.toml",
+      "thumb": "cars/van/thumb.png"
+    },
+    "kind": "cars",
+    "name": "van",
+    "sha256": {
+      "model": "2c568ce3bcf00cb7dc982771cc4afcd2d1d0f0016bb0c5c565d9983f7d76522e",
+      "sidecar": "d327a5e152f94b251d8cedbb3d913f8ae9f64cae32896b9a92ce21784a3eeb92",
+      "thumb": "54708afe561627f0338ab32918cea1aa247647eaf4164476da3eefceb809c01e"
+    },
+    "size_m": [
+      2.0815,
+      1.985,
+      4.934
+    ],
+    "tags": [
+      "car",
+      "van",
+      "neutral"
+    ],
+    "triangles": 6892
+  },
+  {
+    "files": {
+      "model": "furniture/bollard/model.glb",
+      "sidecar": "furniture/bollard/object.toml",
+      "thumb": "furniture/bollard/thumb.png"
+    },
+    "kind": "furniture",
+    "name": "bollard",
+    "sha256": {
+      "model": "7010f03516af3c4bf362c6f31df5ce03702149a3b2a3e4003fb7d177f19e83b2",
+      "sidecar": "b7221d4e635db84ccaf986fc26f46aaee9fe6b4711015c4e3b2df5c70497ad34",
+      "thumb": "95738315a5fbe5781491b5400b924f246783204c394b6e1dbdb02626d7d437c0"
+    },
+    "size_m": [
+      0.1902,
+      0.95,
+      0.2
+    ],
+    "tags": [
+      "street",
+      "bollard"
+    ],
+    "triangles": 116
+  },
+  {
+    "files": {
+      "model": "furniture/lamp-pole/model.glb",
+      "sidecar": "furniture/lamp-pole/object.toml",
+      "thumb": "furniture/lamp-pole/thumb.png"
+    },
+    "kind": "furniture",
+    "name": "lamp-pole",
+    "sha256": {
+      "model": "792770a14bef894d3f95ee1d379fff4545a112226c886d8a776bb8cdbc0f1fb3",
+      "sidecar": "ac6e1e0f5f0db8d9696a1e64892b448633fd459d8d1c7d2532828768a802d6bd",
+      "thumb": "e831157acbd87009b2a92363121c718d0c052ca82aba2f280d914d57aa66cce0"
+    },
+    "size_m": [
+      2.28,
+      8.0448,
+      0.34
+    ],
+    "tags": [
+      "street",
+      "lamp",
+      "pole"
+    ],
+    "triangles": 320
+  },
+  {
+    "files": {
+      "model": "furniture/sign/model.glb",
+      "sidecar": "furniture/sign/object.toml",
+      "thumb": "furniture/sign/thumb.png"
+    },
+    "kind": "furniture",
+    "name": "sign",
+    "sha256": {
+      "model": "520bfc4bd5b8501fd43038b1e8c41b0cdff20ce11c643af4f90674e072b3088b",
+      "sidecar": "ae9aa0f9f00a5e5fa81f4188de016b5e6099ff86273cbc5a87c0ac04fbe0a858",
+      "thumb": "6c3ec953195befbc8f2ec398a1945105a9c23f2b087e2e4fbc2d2c2b6dbb759e"
+    },
+    "size_m": [
+      0.62,
+      2.6,
+      0.105
+    ],
+    "tags": [
+      "street",
+      "sign"
+    ],
+    "triangles": 112
+  },
+  {
+    "files": {
+      "model": "furniture/traffic-light/model.glb",
+      "sidecar": "furniture/traffic-light/object.toml",
+      "thumb": "furniture/traffic-light/thumb.png"
+    },
+    "kind": "furniture",
+    "name": "traffic-light",
+    "sha256": {
+      "model": "6702358899012fd5941462e8de19a02efdfad07b385c3e63035e7c401a2619b8",
+      "sidecar": "ef61651bae267ab9769c10a65791dade637ce51ce48fb717546e5dedf5178041",
+      "thumb": "eb61646ac13103b7609870713d754176922922f715bbd923abffcce4656e95cc"
+    },
+    "size_m": [
+      0.57,
+      4.2,
+      0.3856
+    ],
+    "tags": [
+      "street",
+      "signal"
+    ],
+    "triangles": 384
+  },
+  {
+    "files": {
+      "model": "furniture/wires-span/model.glb",
+      "sidecar": "furniture/wires-span/object.toml",
+      "thumb": "furniture/wires-span/thumb.png"
+    },
+    "kind": "furniture",
+    "name": "wires-span",
+    "sha256": {
+      "model": "62fe07b5f9fcfa295a43e2e3c69767caff301e114732e638aed80353aadaa825",
+      "sidecar": "45b7d76bb83b2b49c6c1c9b1d1e7569580c649591bfb158902af56f67f547e0e",
+      "thumb": "d1b80b0ec87bafeb884222883f7a2ec28cb3918a218f4fed90d4c688f3d830c8"
+    },
+    "size_m": [
+      2.28,
+      8.0448,
+      24.34
+    ],
+    "tags": [
+      "street",
+      "wires",
+      "pole"
+    ],
+    "triangles": 736
+  },
+  {
+    "files": {
+      "model": "road/crosswalk-10m/model.glb",
+      "sidecar": "road/crosswalk-10m/object.toml",
+      "thumb": "road/crosswalk-10m/thumb.png"
+    },
+    "kind": "road",
+    "name": "crosswalk-10m",
+    "sha256": {
+      "model": "4fbbb3a238f789762a9681da8dce169e775944b83428b7ea3f088ac0d14e9d77",
+      "sidecar": "a4c41245eba3cd6838b474b58ceb7b422440470458a305bcb18c1262a172e251",
+      "thumb": "9a9b16aa2552f84ac41eab70140d2d1ea10ed68cb9d962c16cd514cf55d67030"
+    },
+    "size_m": [
+      18.8,
+      0.15,
+      10.0
+    ],
+    "tags": [
+      "road",
+      "crosswalk"
+    ],
+    "triangles": 332
+  },
+  {
+    "files": {
+      "model": "road/straight-10m/model.glb",
+      "sidecar": "road/straight-10m/object.toml",
+      "thumb": "road/straight-10m/thumb.png"
+    },
+    "kind": "road",
+    "name": "straight-10m",
+    "sha256": {
+      "model": "74c8328b1ca839cf304296724ef28510c871e715eeac82a68358074545d3fc2a",
+      "sidecar": "f20227f4fbfdbca92ba51fcf40110b2a7fd19bf19e56dd1cce5378f8be96cf35",
+      "thumb": "312aaaca9f69992462d9f87fb6d10d62cf6ea472680aa16966986e42b7fc405a"
+    },
+    "size_m": [
+      18.8,
+      0.15,
+      10.0
+    ],
+    "tags": [
+      "road",
+      "straight"
+    ],
+    "triangles": 280
+  }
+]
