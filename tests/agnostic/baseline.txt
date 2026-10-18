@@ -19,7 +19,9 @@ crates/text/src/print.rs	paper=6
 crates/trace/src/gpu.rs	dispatch=3
 docs/bake.md	dispatch=1
 docs/live-renderer.md	dispatch=2 paper=5
+docs/recipe-render.md	dispatch=1
 docs/scene-format.md	paper=3
 docs/schema/materials.schema.json	paper=1
 docs/trace-lights.md	dispatch=1
 docs/trace.md	dispatch=6
+samples/hero.toml	paper=2
