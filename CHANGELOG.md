@@ -24,6 +24,7 @@
 - Traced motion blur on a timeline renders its first and last frames instead of failing.
 - `<game> edit --help` prints its usage.
 - The README's install line and game snippet pin the current version.
+- Two documents a program keeps open on separate threads no longer read or write each other's packed files.
 
 ## v3.0.1 — 2026-10-19
 
