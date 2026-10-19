@@ -2,7 +2,9 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread::ThreadId;
 
 type Shared = Arc<Mutex<Layer>>;
 
@@ -49,11 +51,32 @@ fn fetch(layer: &Shared, key: &Path) -> Option<io::Result<Arc<[u8]>>> {
     }
 }
 
+struct Mounted {
+    id: u64,
+    owner: ThreadId,
+    layer: Shared,
+}
+
 #[derive(Default)]
 struct Table {
-    mounts: Vec<(u64, Shared)>,
+    mounts: Vec<Mounted>,
     next: u64,
 }
+
+impl Table {
+    fn find<T>(&self, mut pick: impl FnMut(&Layer) -> Option<T>) -> Option<(T, Shared)> {
+        let here = std::thread::current().id();
+        let mut take = |m: &Mounted| pick(&lock(&m.layer)).map(|found| (found, m.layer.clone()));
+        self.mounts
+            .iter()
+            .rev()
+            .filter(|m| m.owner == here)
+            .find_map(&mut take)
+            .or_else(|| self.mounts.iter().rev().find_map(&mut take))
+    }
+}
+
+static TEMPS: AtomicU64 = AtomicU64::new(0);
 
 static TABLE: Mutex<Table> = Mutex::new(Table {
     mounts: Vec::new(),
@@ -112,7 +135,7 @@ impl Mount {
 
 impl Drop for Mount {
     fn drop(&mut self) {
-        table().mounts.retain(|(id, _)| *id != self.id);
+        table().mounts.retain(|m| m.id != self.id);
     }
 }
 
@@ -148,7 +171,11 @@ pub fn mount_named(files: BTreeMap<PathBuf, Content>, names: BTreeMap<PathBuf, S
     let mut table = table();
     table.next += 1;
     let id = table.next;
-    table.mounts.push((id, layer.clone()));
+    table.mounts.push(Mounted {
+        id,
+        owner: std::thread::current().id(),
+        layer: layer.clone(),
+    });
     Mount { id, layer }
 }
 
@@ -182,11 +209,8 @@ fn layer_of(path: &Path) -> Option<(Shared, PathBuf)> {
     }
     let key = clean(path);
     table
-        .mounts
-        .iter()
-        .rev()
-        .find(|(_, layer)| lock(layer).files.contains_key(&key))
-        .map(|(_, layer)| (layer.clone(), key))
+        .find(|layer| layer.files.contains_key(&key).then_some(()))
+        .map(|((), layer)| (layer, key))
 }
 
 pub fn shown(path: &str) -> String {
@@ -196,11 +220,8 @@ pub fn shown(path: &str) -> String {
     }
     let key = clean(Path::new(path));
     table
-        .mounts
-        .iter()
-        .rev()
-        .find_map(|(_, layer)| lock(layer).names.get(&key).cloned())
-        .unwrap_or_else(|| path.to_string())
+        .find(|layer| layer.names.get(&key).cloned())
+        .map_or_else(|| path.to_string(), |(name, _)| name)
 }
 
 fn noted(path: &Path) {
@@ -249,9 +270,48 @@ pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let name = path
         .file_name()
         .map_or_else(|| "file".to_string(), |n| n.to_string_lossy().into_owned());
-    let temp = path.with_file_name(format!(".{name}.pitofx-tmp"));
+    let temp = path.with_file_name(format!(
+        ".{name}.{}.{}.pitofx-tmp",
+        std::process::id(),
+        TEMPS.fetch_add(1, Ordering::Relaxed)
+    ));
     std::fs::write(&temp, bytes)?;
     std::fs::rename(&temp, path).inspect_err(|_| {
         let _ = std::fs::remove_file(&temp);
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn a_thread_reads_and_writes_its_own_mount_while_a_newer_one_holds_the_same_path() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tmp/no-disk/shared/rig.toml");
+        let mine = mount(BTreeMap::from([(path.clone(), b"mine".to_vec())]));
+        let (mounted, ready) = channel();
+        let (release, done) = channel::<()>();
+        let theirs = path.clone();
+        let holder = std::thread::spawn(move || {
+            let held = mount(BTreeMap::from([(theirs.clone(), b"theirs".to_vec())]));
+            mounted.send(()).unwrap();
+            let _ = done.recv();
+            let seen = read(&theirs).unwrap();
+            (held.changed(), seen)
+        });
+        ready.recv().unwrap();
+        let read_here = read(&path).unwrap();
+        replace(&path, b"folded").unwrap();
+        release.send(()).unwrap();
+        let (their_changes, their_read) = holder.join().unwrap();
+        assert_eq!(read_here, b"mine");
+        assert_eq!(
+            mine.changed(),
+            BTreeMap::from([(clean(&path), b"folded".to_vec())])
+        );
+        assert!(their_changes.is_empty());
+        assert_eq!(their_read, b"theirs");
+        assert!(!path.exists());
+    }
 }

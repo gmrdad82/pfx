@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::read::layout;
 use crate::{
@@ -11,6 +12,8 @@ use crate::{
 };
 
 const THREADED: usize = 1 << 20;
+
+static TEMPS: AtomicU64 = AtomicU64::new(0);
 
 enum Item<'a> {
     Encode {
@@ -369,9 +372,10 @@ impl<'a> Writer<'a> {
             .file_name()
             .ok_or_else(|| Error::Invalid(format!("{} names no file", path.display())))?;
         let temp = path.with_file_name(format!(
-            ".{}.{}.tmp",
+            ".{}.{}.{}.tmp",
             name.to_string_lossy(),
-            std::process::id()
+            std::process::id(),
+            TEMPS.fetch_add(1, Ordering::Relaxed)
         ));
         let written = (|| -> Result<()> {
             let mut file = io::BufWriter::with_capacity(1 << 20, File::create(&temp)?);
