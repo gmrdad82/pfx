@@ -21,9 +21,9 @@ The game pins the engine's crates at the tag the `pfx` tool was built from:
 
 ```toml
 [dependencies]
-pfx-game = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.0" }
-pfx-project = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.0" }
-pfx-editor = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.0", optional = true }
+pfx-game = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.1" }
+pfx-project = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.1" }
+pfx-editor = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.1", optional = true }
 ```
 
 The files it writes:

@@ -1,5 +1,35 @@
 # Changelog
 
+## v3.1.1 — 2026-10-19
+
+### Added
+
+- `pfx job` runs a long clip, film, render or bake detached under a name: list, status, pause, resume, stop, log and clean, each with `--json`. Pause and stop land between frames, a frame that fails three times fails the job, and `pfx job resume` carries on after a crash or a reboot.
+- `pfx clip --range A..B` renders part of a clip with the same frames, names and seeds as a whole run, so parts made on several machines go in one folder.
+- `--checkpoint` saves a long traced frame as it goes, so a stop loses minutes, not the frame; resumed clips keep a frame ledger and re-render the frame before the resume point to prove nothing drifted.
+- Frame rates take exact fractions: `24000/1001`, and `23.976`, `23.98`, `29.97`, `47.952`, `47.95`, `59.94` and `119.88` read as the exact NTSC rates, in clips, shots, films and recipes.
+- The path tracer draws particles, lit and soft, from the same simulation as the live view; `prewarm` on `[[particles]]` opens a shot with the effect already formed.
+- `--memory-limit` plans a run's memory before it loads, refuses one past the limit in one line, and reports the peak beside the plan.
+- A scene's `[live]` table can turn off the thin-lens spread, reversed depth and coat reflections, so a scene renders exactly as it did before them.
+- SVG marks and art take blur, offset, merge, flood, composite, colour-matrix and drop-shadow filters, sharp at any frame size.
+- `pfx new <game> --mark <png>` puts the game's mark on its starter scene and in its editor; `Config::wordmark` puts a wordmark in the header.
+
+### Changed
+
+- A new game's starter scene shows the game's own name and mark, and its editor names and brands only the game.
+- Every output a render writes lands whole, through a temporary file and a rename.
+- The editor camera takes over from a scene camera without a jump, and a drag eases in from its first frame.
+- `pfx clip --video` writes `.webm` at NTSC rates too.
+- pito-codecs v1.16.2.
+
+### Fixed
+
+- Resumed traced clips are byte-identical to an uninterrupted run, including under a zoom with an HDR sky.
+- A timeline scene's last frame streaks like its neighbours instead of jumping back to its first pose.
+- A recipe that imports a baked GLB keeps the layered material's specular, sheen, subsurface and clear coat.
+- Every material layer kind draws the same live, traced and baked.
+- Wine test runs no longer add menu entries or file types to the desktop.
+
 ## v3.1.0 — 2026-10-19
 
 ### Added
