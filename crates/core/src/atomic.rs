@@ -47,7 +47,7 @@ pub fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 pub fn commit(temp: &Path, path: &Path) -> Result<(), String> {
-    let synced = File::open(temp).and_then(|file| file.sync_all());
+    let synced = sync_file(temp);
     if let Err(error) = synced.and_then(|()| std::fs::rename(temp, path)) {
         let _ = std::fs::remove_file(temp);
         return Err(shown(path, error));
@@ -56,6 +56,13 @@ pub fn commit(temp: &Path, path: &Path) -> Result<(), String> {
         Some(parent) => sync_dir(parent),
         None => sync_dir(Path::new(".")),
     }
+}
+
+fn sync_file(path: &Path) -> io::Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)
+        .and_then(|file| file.sync_all())
 }
 
 #[cfg(unix)]
@@ -79,9 +86,7 @@ pub fn sync_tree(dir: &Path) -> Result<(), String> {
         if kind.is_dir() {
             sync_tree(&path)?;
         } else if kind.is_file() {
-            File::open(&path)
-                .and_then(|file| file.sync_all())
-                .map_err(|e| shown(&path, e))?;
+            sync_file(&path).map_err(|e| shown(&path, e))?;
         }
     }
     sync_dir(dir)
