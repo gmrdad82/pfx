@@ -90,7 +90,12 @@ fn save(path: &Path, bytes: &[u8]) {
 }
 
 fn engine_recording() -> PathBuf {
-    let path = scratch("engine.wav");
+    static MADE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    MADE.get_or_init(record_engine).clone()
+}
+
+fn record_engine() -> PathBuf {
+    let path = scratch(&format!("engine-{}.wav", std::process::id()));
     let rpm_at = |t: f32| match t {
         t if t < 2.0 => 900.0,
         t if t < 2.5 => 900.0 + (t - 2.0) / 0.5 * 2100.0,
