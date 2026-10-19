@@ -31,7 +31,7 @@ const REDO: KeyboardShortcut =
 #[derive(Parser)]
 #[command(about = "A small scene editor built from pfx's editor crates")]
 struct Args {
-    #[arg(help = "The scene.toml to edit [default: a copy of the sample scene]")]
+    #[arg(help = "A scene file of a loose project to edit [default: a copy of the sample scene]")]
     scene: Option<PathBuf>,
     #[arg(
         long,

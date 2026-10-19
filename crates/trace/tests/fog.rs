@@ -1,0 +1,394 @@
+#[path = "support/spinning.rs"]
+mod spinning;
+#[path = "support/street.rs"]
+mod street;
+
+use std::path::Path;
+
+use pfx_gpu::Gpu;
+use pfx_gpu::pace::{Pacer, Turns};
+use pfx_load::scene::Scene;
+use pfx_trace::Trace;
+use pfx_trace::fog::Fog;
+use pfx_trace::gpu::Output;
+use street::{Haze, Street, fnv};
+
+const PIN_SIZE: [u32; 2] = [320, 180];
+const PIN_SAMPLES: u32 = 8;
+const PIN_SEED: u32 = 3;
+const NO_FOG_BYTES: [u64; 3] = [0xea2d73c26aaabe19, 0x6a8c884d6196274a, 0xcdd0c6a021c95aa7];
+const NO_FOG_BYTES_RAY_QUERIES: [u64; 3] =
+    [0xea2d73c26aaabe19, 0x6a8c884d6196274a, 0xffe10e179962895e];
+
+static ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn staged(gpu: &Gpu, scene: &Scene, size: [u32; 2], hardware: bool) -> Trace {
+    let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let before = std::env::var_os("PFX_TRACE_RT");
+    unsafe { std::env::set_var("PFX_TRACE_RT", if hardware { "1" } else { "0" }) };
+    let staged = pfx_trace::stage::scene(scene, size[0] as f32 / size[1] as f32).unwrap();
+    let trace = staged.trace(gpu, size[0], size[1]);
+    match before {
+        Some(value) => unsafe { std::env::set_var("PFX_TRACE_RT", value) },
+        None => unsafe { std::env::remove_var("PFX_TRACE_RT") },
+    }
+    trace.unwrap()
+}
+
+fn traced(gpu: &Gpu, trace: &mut Trace, samples: u32, seed: u32) -> Output {
+    let mut pacer = Pacer::default();
+    let mut turns = Turns::default();
+    for pass in 0..samples {
+        trace
+            .sample_paced(gpu, 1, seed.wrapping_add(pass), &mut pacer, |ms| {
+                turns.add(ms)
+            })
+            .unwrap();
+    }
+    turns.turn();
+    trace.readback(gpu).unwrap()
+}
+
+fn hashes(output: &Output) -> [u64; 3] {
+    [fnv(&output.color), fnv(&output.albedo), fnv(&output.normal)]
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_street_without_haze_traces_the_bytes_it_traced_before_fog() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let scene = street::scene(base(), "pin", Street::default());
+    let mut all = Vec::new();
+    for hardware in [false, true] {
+        let mut trace = staged(&gpu, &scene, PIN_SIZE, hardware);
+        if hardware && !trace.hardware_rays() {
+            println!("no ray queries on this adapter; the hardware path is skipped");
+            continue;
+        }
+        let found = hashes(&traced(&gpu, &mut trace, PIN_SAMPLES, PIN_SEED));
+        println!("hardware {hardware}: {found:#x?}");
+        let pinned = if hardware {
+            NO_FOG_BYTES_RAY_QUERIES
+        } else {
+            NO_FOG_BYTES
+        };
+        all.push((hardware, found, pinned));
+    }
+    for (hardware, found, pinned) in all {
+        assert_eq!(found, pinned, "hardware {hardware}");
+    }
+}
+
+fn base() -> &'static Path {
+    Path::new(env!("CARGO_TARGET_TMPDIR"))
+}
+
+fn fogged(lamp: bool) -> Street {
+    Street {
+        haze: Some(Haze::STREET),
+        lamp,
+        sun: street::SIDE_SUN,
+        dark: false,
+    }
+}
+
+#[test]
+fn the_tracer_reads_the_haze_the_live_path_marches() {
+    assert_eq!(
+        (pfx_trace::fog::ABSORPTION, pfx_trace::fog::SCATTERING),
+        (
+            pfx_live::height_fog::FOG_ABSORPTION,
+            pfx_live::height_fog::FOG_SCATTERING
+        )
+    );
+    let scene = street::scene(base(), "keys", fogged(false));
+    let fog = pfx_trace::stage::scene_fog(&scene, 0.0).unwrap();
+    let haze = Haze::STREET;
+    assert_eq!(
+        (fog.density, fog.falloff, fog.reach, fog.phase, fog.color),
+        (haze.fog, haze.falloff, haze.reach, haze.phase, haze.color)
+    );
+    let clear = street::scene(base(), "clear keys", Street::default());
+    assert_eq!(pfx_trace::stage::scene_fog(&clear, 0.0), None);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_fogged_street_traces_the_same_bytes_twice_and_hands_the_denoiser_its_fog() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let scene = street::scene(base(), "twice", fogged(true));
+    let clear = street::scene(base(), "twice clear", fogged(true).cleared());
+    for hardware in [false, true] {
+        let mut first = staged(&gpu, &scene, PIN_SIZE, hardware);
+        if hardware && !first.hardware_rays() {
+            println!("no ray queries on this adapter; the hardware path is skipped");
+            continue;
+        }
+        let a = traced(&gpu, &mut first, 4, 9);
+        let mut second = staged(&gpu, &scene, PIN_SIZE, hardware);
+        let b = traced(&gpu, &mut second, 4, 9);
+        assert_eq!(hashes(&a), hashes(&b), "hardware {hardware}");
+        let mut plain = staged(&gpu, &clear, PIN_SIZE, hardware);
+        let c = traced(&gpu, &mut plain, 4, 9);
+        let sky = |output: &Output| street::pixels(&output.albedo)[0];
+        println!(
+            "hardware {hardware}: the sky's albedo {:?} in fog, {:?} clear",
+            sky(&a),
+            sky(&c)
+        );
+        assert!(sky(&a)[..3].iter().all(|&v| v > 0.05 && v < 0.5));
+        assert_eq!(sky(&c)[..3], [0.0; 3]);
+    }
+}
+
+fn smear(image: &[f32], size: [u32; 2]) -> usize {
+    let right = spinning::BODY[0] + spinning::BODY_SIZE[0] * 0.5;
+    let y = spinning::BODY[1] - 0.3;
+    let a = spinning::pixel(size[0], size[1], [right - 0.6, y, 0.0]);
+    let b = spinning::pixel(size[0], size[1], [right + 0.8, y, 0.0]);
+    let row = a[1].round() as u32;
+    let profile: Vec<f32> = (a[0].round() as u32..=b[0].round() as u32)
+        .map(|x| {
+            (row - 8..=row + 8)
+                .map(|y| image[(y * size[0] + x) as usize])
+                .sum::<f32>()
+                / 17.0
+        })
+        .collect();
+    let plateau = |values: &[f32]| values.iter().sum::<f32>() / values.len() as f32;
+    let (inside, outside) = (
+        plateau(&profile[..6]),
+        plateau(&profile[profile.len() - 6..]),
+    );
+    let (low, span) = (inside.min(outside), (inside - outside).abs());
+    profile
+        .iter()
+        .filter(|&&v| {
+            let f = (v - low) / span;
+            f > 0.1 && f < 0.9
+        })
+        .count()
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_moving_body_still_smears_inside_fog() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let size = [960, 540];
+    let fog = Fog {
+        height: 0.0,
+        falloff: 0.0,
+        density: 0.05,
+        reach: 40.0,
+        shafts: 1.0,
+        color: [1.0; 3],
+        phase: 0.3,
+        bounces: 0,
+    };
+    let moving = spinning::Moves {
+        steps: 3,
+        travel: 0.8,
+        spin: 1.6,
+        ..spinning::Moves::default()
+    };
+    let mut widths = Vec::new();
+    for (moves, fog) in [
+        (spinning::Moves::default(), Some(fog)),
+        (moving, None),
+        (moving, Some(fog)),
+    ] {
+        let mut trace = spinning::stage_fogged(&gpu, moves, false, size, 32, fog).unwrap();
+        trace.sample(&gpu, 32, 7).unwrap();
+        let image = spinning::luminance(&trace.readback_color(&gpu).unwrap());
+        widths.push(smear(&image, size));
+    }
+    println!(
+        "body edge: {} px sharp in fog, {} px blurred clear, {} px blurred in fog",
+        widths[0], widths[1], widths[2]
+    );
+    assert!(widths[0] <= 3, "the still body blurs in fog");
+    assert!(
+        widths[2].abs_diff(widths[1]) <= widths[1] / 5 + 2,
+        "fog changes the smear"
+    );
+}
+
+const EMPTY_SIZE: [u32; 2] = [160, 96];
+const EMPTY_TAN: f32 = 0.5;
+const EMPTY_REACH: f32 = 20.0;
+const EMPTY_SUN: [f32; 3] = [0.3, 0.4, -1.0];
+const EMPTY_LAMP: [f32; 3] = [1.0, 0.5, -4.0];
+
+fn unit(v: [f32; 3]) -> [f32; 3] {
+    let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    v.map(|x| x / l)
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn henyey_greenstein(cosine: f32, g: f32) -> f32 {
+    let fac = 1.0 + g * g - 2.0 * g * cosine;
+    (1.0 - g * g) / (4.0 * std::f32::consts::PI * fac * fac.sqrt())
+}
+
+fn empty_ray(x: f32, y: f32) -> [f32; 3] {
+    let aspect = EMPTY_SIZE[0] as f32 / EMPTY_SIZE[1] as f32;
+    let ndc = [
+        x / EMPTY_SIZE[0] as f32 * 2.0 - 1.0,
+        y / EMPTY_SIZE[1] as f32 * 2.0 - 1.0,
+    ];
+    unit([ndc[0] * EMPTY_TAN * aspect, -ndc[1] * EMPTY_TAN, -1.0])
+}
+
+fn integral(fog: &Fog, lamp: &pfx_trace::lights::LocalLight, sun: f32, d: [f32; 3]) -> f32 {
+    let extinction = fog.extinction();
+    let scattering = fog.albedo()[0] * extinction;
+    let s = unit(EMPTY_SUN);
+    let steps = 2000;
+    let dt = EMPTY_REACH / steps as f32;
+    let mut total = 0.0;
+    for k in 0..steps {
+        let t = (k as f32 + 0.5) * dt;
+        let p = d.map(|v| v * t);
+        let b = dot(p, s);
+        let exit = -b + (b * b - (t * t - EMPTY_REACH * EMPTY_REACH)).sqrt();
+        let lit_sun = sun * henyey_greenstein(dot(d, s), fog.phase) * (-extinction * exit).exp();
+        let to: [f32; 3] = std::array::from_fn(|axis| EMPTY_LAMP[axis] - p[axis]);
+        let r = dot(to, to).sqrt();
+        let lit_lamp = lamp.falloff(r)
+            * henyey_greenstein(dot(d, to.map(|v| v / r)), fog.phase)
+            * (-extinction * r).exp();
+        total += (-extinction * t).exp() * scattering * (lit_sun + lit_lamp) * dt;
+    }
+    total
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn the_fog_scatters_the_sun_and_a_lamp_as_their_integral_says() {
+    use pfx_trace::lights::LocalLight;
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let fog = Fog {
+        height: 0.0,
+        falloff: 0.0,
+        density: 0.05,
+        reach: EMPTY_REACH,
+        shafts: 1.0,
+        color: [0.2; 3],
+        phase: 0.5,
+        bounces: 0,
+    };
+    let lamp = LocalLight::point(EMPTY_LAMP, [1.0; 3], 20.0, 1.0e4);
+    let sun = 3.0;
+    let aspect = EMPTY_SIZE[0] as f32 / EMPTY_SIZE[1] as f32;
+    let scene = pfx_trace::Scene {
+        triangles: vec![pfx_trace::bvh::Triangle {
+            vertices: [
+                [0.0, -500.0, 50.0],
+                [1.0, -500.0, 50.0],
+                [0.0, -500.0, 51.0],
+            ],
+            material: 0,
+        }],
+        shapes: Vec::new(),
+        materials: vec![pfx_materials::Material {
+            base: [0.0; 3],
+            specular: 0.0,
+            ..pfx_materials::Material::default()
+        }],
+        sky: pfx_load::Sky {
+            width: 1,
+            height: 1,
+            texels: vec![[0.0; 4]],
+        },
+        camera: pfx_trace::Camera {
+            origin: [0.0; 3],
+            forward: [0.0, 0.0, -1.0],
+            right: [EMPTY_TAN * aspect, 0.0, 0.0],
+            up: [0.0, EMPTY_TAN, 0.0],
+        },
+        sun: pfx_trace::Sun {
+            direction: unit(EMPTY_SUN),
+            color: [1.0; 3],
+            intensity: sun,
+        },
+    };
+    let detail = pfx_trace::detail::Detail {
+        lights: vec![lamp],
+        fog: Some(fog),
+        ..pfx_trace::detail::Detail::default()
+    };
+    let mut trace =
+        Trace::new_detailed(&gpu, &scene, &detail, EMPTY_SIZE[0], EMPTY_SIZE[1]).unwrap();
+    let pixels = street::pixels(&traced(&gpu, &mut trace, 512, 3).color);
+    let lamp_pixel = [
+        (EMPTY_LAMP[0] / -EMPTY_LAMP[2] / (EMPTY_TAN * aspect) + 1.0) * 0.5 * EMPTY_SIZE[0] as f32,
+        (1.0 - EMPTY_LAMP[1] / -EMPTY_LAMP[2] / EMPTY_TAN) * 0.5 * EMPTY_SIZE[1] as f32,
+    ];
+    let lamp_block = [lamp_pixel[0] as u32 / 16, lamp_pixel[1] as u32 / 16];
+    let (mut worst, mut beside) = (0.0_f32, 0.0_f32);
+    for by in 0..EMPTY_SIZE[1] / 16 {
+        for bx in 0..EMPTY_SIZE[0] / 16 {
+            let (mut found, mut wanted) = (0.0, 0.0);
+            for y in by * 16..by * 16 + 16 {
+                for x in bx * 16..bx * 16 + 16 {
+                    found += pixels[(y * EMPTY_SIZE[0] + x) as usize][0];
+                    wanted += integral(&fog, &lamp, sun, empty_ray(x as f32 + 0.5, y as f32 + 0.5));
+                }
+            }
+            let off = (found / wanted - 1.0).abs();
+            if [bx, by] == lamp_block {
+                beside = off;
+            } else {
+                worst = worst.max(off);
+            }
+        }
+    }
+    println!(
+        "the traced fog is within {:.2}% of the integral in every 16 px block, {:.2}% in the lamp's",
+        worst * 100.0,
+        beside * 100.0
+    );
+    assert!(
+        worst < 0.005,
+        "the fog strays {:.2}% from its integral",
+        worst * 100.0
+    );
+    assert!(
+        beside < 0.05,
+        "the lamp's glow strays {:.2}%",
+        beside * 100.0
+    );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn the_traced_fog_looks_like_the_live_fog() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let size = [640, 360];
+    let street = Street {
+        dark: true,
+        ..fogged(false)
+    };
+    let scene = street::scene(base(), "live", street);
+    let live: Vec<[f32; 4]> = street::live(&gpu, &scene, size)
+        .into_iter()
+        .map(|p| [p[0], p[1], p[2], 1.0])
+        .collect();
+    let mut trace = staged(&gpu, &scene, size, false);
+    let traced = street::pixels(&traced(&gpu, &mut trace, 128, 5).color);
+    let (live, traced) = (street::levels(&live), street::levels(&traced));
+    let (pixels, blocks) = (
+        street::apart(&live, &traced),
+        street::apart(
+            &street::blocks(&live, size, 8),
+            &street::blocks(&traced, size, 8),
+        ),
+    );
+    println!(
+        "the fog alone: live and traced {pixels:.1} levels apart a pixel, {blocks:.1} an 8 px block"
+    );
+    assert!(blocks < 8.0, "the fog differs by {blocks:.1} levels");
+}

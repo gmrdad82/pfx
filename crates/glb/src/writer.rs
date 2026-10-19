@@ -19,6 +19,7 @@ const ROUGHNESS: f32 = 0.5;
 const DEFAULT_MATERIAL: &str = "default";
 const TRANSFORM: &str = "KHR_texture_transform";
 const DETAIL_NORMAL: &str = "detailNormalTexture";
+pub const ENGINE_MATERIAL: &str = "pfxMaterial";
 const MSFT_LOD: &str = "MSFT_lod";
 const SHEEN: &str = "KHR_materials_sheen";
 const ANISOTROPY: &str = "KHR_materials_anisotropy";
@@ -340,12 +341,19 @@ impl Builder<'_> {
                 }),
                 extras: Default::default(),
             });
-        let extras = look.detail_normal.as_ref().and_then(|m| {
+        let mut carried = serde_json::Map::new();
+        if let Some(m) = look.detail_normal.as_ref() {
             let index = self.texture(m).value();
-            raw(Some(&serde_json::json!({
-                DETAIL_NORMAL: { "index": index, "texCoord": m.tex_coord, "scale": short(m.scale) }
-            })))
-        });
+            carried.insert(
+                DETAIL_NORMAL.to_string(),
+                serde_json::json!({ "index": index, "texCoord": m.tex_coord, "scale": short(m.scale) }),
+            );
+        }
+        if let Some(material) = &look.material {
+            carried.insert(ENGINE_MATERIAL.to_string(), material.clone());
+        }
+        let extras = (!carried.is_empty()).then_some(Value::Object(carried));
+        let extras = raw(extras.as_ref());
         let mapped = metal_roughness.is_some();
         let base_color =
             look.base_color
@@ -608,7 +616,8 @@ impl Builder<'_> {
         }
         let mut out = Vec::new();
         let mut next = 0;
-        for slot in &whole.slots {
+        let paired = mesh.slots.len() == whole.slots.len();
+        for (index, slot) in whole.slots.iter().enumerate() {
             let vertices = whole.positions.len();
             let full = slice(whole, slot);
             if !full
@@ -617,19 +626,27 @@ impl Builder<'_> {
             {
                 continue;
             }
-            let own = mesh.slots[next.min(mesh.slots.len())..]
-                .iter()
-                .position(|s| s.material == slot.material)
-                .map(|at| next + at);
+            let own = if paired {
+                Some(index)
+            } else {
+                mesh.slots[next.min(mesh.slots.len())..]
+                    .iter()
+                    .position(|s| s.material == slot.material)
+                    .map(|at| next + at)
+            };
             let made = own.and_then(|at| {
                 next = at + 1;
-                self.primitive(
-                    mesh,
-                    morph,
-                    &slot.material,
-                    slice(mesh, &mesh.slots[at]),
-                    surface,
-                )
+                let named = &mesh.slots[at].material;
+                let kept = Surface {
+                    tangents: surface.tangents,
+                    normal: None,
+                };
+                let surface = if *named == slot.material {
+                    surface
+                } else {
+                    &kept
+                };
+                self.primitive(mesh, morph, named, slice(mesh, &mesh.slots[at]), surface)
             });
             let made = made.or_else(|| {
                 let piece = smallest(whole, full)?;

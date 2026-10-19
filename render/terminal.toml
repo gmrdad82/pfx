@@ -1,6 +1,6 @@
 app = "pfx"
 bin = "pfx"
-grid = [96, 24]
+grid = [90, 24]
 frame = "bare"
 
 [env]
@@ -8,6 +8,6 @@ HOME = "home"
 
 [shots.start]
 kind = "clip"
-line = "pfx new scaffolds a game and pfx bench measures its first scene headless"
+line = "pfx new scaffolds a game and pfx bench measures its first .pitofx scene headless"
 tape = "render/terminal/start.tape"
 settle = "1s"

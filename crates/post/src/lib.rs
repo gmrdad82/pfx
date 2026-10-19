@@ -46,7 +46,7 @@ pub use grade::{
 pub use hash::{BLUE_NOISE, BLUE_NOISE_SIZE, bayer, grain_hash};
 pub use image::{Image, ImageError};
 pub use lines::{Edge, Gbuffer, Lines};
-pub use motion_blur::{GpuMotionBlur, MotionBlur};
+pub use motion_blur::{GpuMotionBlur, MotionBlur, Position as ShutterPosition};
 pub use parse::{KEYS, ParseError, Reader, parse, parse_str, parse_str_with, parse_with, put_lut};
 pub use preset::{Style, names};
 pub use tape::{Direction, Tape};

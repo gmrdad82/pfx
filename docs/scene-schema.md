@@ -1,6 +1,6 @@
 # Validate in a TOML editor
 
-Each tag of pfx carries a JSON Schema (draft 2020-12) for every kind of file in `docs/schema/`, generated from the crate's types:
+Each tag of pfx carries a JSON Schema (draft 2020-12) for every kind of file in `docs/schema/`, generated from the crate's types. In pfx a user's scene is a `.pitofx`, whose TOML the window's TOML panel edits; the schemas serve the files of a loose project, such as the crate's demo, in an outside TOML editor:
 
 | File | Schema |
 |---|---|

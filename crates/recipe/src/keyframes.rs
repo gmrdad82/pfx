@@ -669,11 +669,23 @@ impl Recipe {
             daylight.hour = one(v);
         }
         if let Some(haze) = r.effects.haze.as_mut() {
-            for (key, setting) in haze.iter_mut() {
-                match (*key, at("haze", key)) {
-                    ("amount", Some(v)) => *setting = Setting::Number(one(v)),
-                    ("color", Some(v)) => *setting = Setting::Colour(Colour::Rgb(three(v))),
-                    _ => {}
+            let keyed = [
+                (
+                    "amount",
+                    at("haze", "amount").map(|v| Setting::Number(one(v))),
+                ),
+                (
+                    "color",
+                    at("haze", "color").map(|v| Setting::Colour(Colour::Rgb(three(v)))),
+                ),
+            ];
+            for (key, value) in keyed {
+                let Some(value) = value else {
+                    continue;
+                };
+                match haze.iter_mut().find(|(k, _)| *k == key) {
+                    Some((_, setting)) => *setting = value,
+                    None => haze.push((key, value)),
                 }
             }
         }

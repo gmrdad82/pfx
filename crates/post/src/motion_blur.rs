@@ -8,11 +8,56 @@ pub const SAMPLES_RANGE: std::ops::RangeInclusive<u32> = 2..=64;
 pub const SHUTTER_MAX: f32 = 4.0;
 pub const SAMPLES_CAP: u32 = 128;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Position {
+    Start,
+    #[default]
+    Centre,
+    End,
+}
+
+impl Position {
+    pub const WORDS: [&str; 3] = ["start", "centre", "end"];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Position::Start => "start",
+            Position::Centre => "centre",
+            Position::End => "end",
+        }
+    }
+
+    pub fn from_word(word: &str) -> Option<Self> {
+        match word {
+            "start" => Some(Position::Start),
+            "centre" => Some(Position::Centre),
+            "end" => Some(Position::End),
+            _ => None,
+        }
+    }
+
+    pub fn gather(self) -> f32 {
+        match self {
+            Position::Start => 1.0,
+            Position::Centre => 0.0,
+            Position::End => -1.0,
+        }
+    }
+
+    fn reach(self) -> u32 {
+        match self {
+            Position::Centre => 1,
+            Position::Start | Position::End => 2,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MotionBlur {
     pub shutter: f32,
     pub max_px: f32,
     pub samples: u32,
+    pub position: Position,
 }
 
 impl Default for MotionBlur {
@@ -21,6 +66,7 @@ impl Default for MotionBlur {
             shutter: SHUTTER,
             max_px: MAX_PX,
             samples: SAMPLES,
+            position: Position::Centre,
         }
     }
 }
@@ -52,7 +98,9 @@ impl MotionBlur {
     }
 
     pub fn neighbour_reach(self) -> u32 {
-        self.max_blur().div_ceil(self.tile()).max(1)
+        (self.max_blur() * self.position.reach())
+            .div_ceil(self.tile())
+            .max(1)
     }
 
     pub fn sample_count(self) -> u32 {
@@ -81,7 +129,7 @@ impl MotionBlur {
             tile as f32,
             time.rem_euclid(64.0),
             (self.neighbour_reach() - 1) as f32,
-            0.0,
+            self.position.gather(),
         ]
     }
 
@@ -240,8 +288,8 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         if (!(t > dt / 4.0)) { break; }
         let v_s = select(v_max, v_alt, interval(count, 4.0));
         let t_s = select(t, -t, interval(count, 2.0)) + t_offs;
-        let l_t = l_v_max * abs(t_s);
-        let at = centre + v_s * t_s;
+        let l_t = l_v_max * abs(t_s + params.extra.w) / (1.0 + abs(params.extra.w));
+        let at = centre + v_s * (t_s + params.extra.w);
         let c = textureLoad(source, texel(at), 0).rgb;
         let vd = textureLoad(packed, texel(at), 0).xyz;
         let fg = saturate((vd_p.z - vd.z) * 20.0 * rcp_d_p);
@@ -623,6 +671,7 @@ mod tests {
                     shutter,
                     max_px,
                     samples,
+                    position: Position::Centre,
                 };
                 let max_blur = max_px.clamp(1.0, 256.0).floor();
                 let tile = (max_blur as u32 - 1) / 8 * 8 + 8;
@@ -678,6 +727,7 @@ mod tests {
             shutter: 4.0,
             max_px: 256.0,
             samples: 64,
+            position: Position::Centre,
         };
         assert_eq!(
             (
@@ -688,6 +738,31 @@ mod tests {
             (1024, SAMPLES_CAP, 4)
         );
         assert!(dense.tile() * dense.neighbour_reach() >= dense.max_blur());
+    }
+
+    #[test]
+    fn an_open_or_closing_shutter_gathers_to_one_side_and_reaches_twice_as_far() {
+        let at = |position: Position| MotionBlur {
+            position,
+            ..MotionBlur::default()
+        };
+        assert_eq!(
+            Position::WORDS.map(|word| Position::from_word(word).map(Position::word)),
+            Position::WORDS.map(Some)
+        );
+        assert_eq!(Position::from_word("center"), None);
+        assert_eq!(MotionBlur::default().position, Position::Centre);
+        assert_eq!(
+            [Position::Start, Position::Centre, Position::End].map(|position| (
+                at(position).params((64, 64), false, 0.0)[11],
+                at(position).neighbour_reach()
+            )),
+            [(1.0, 2), (0.0, 1), (-1.0, 2)]
+        );
+        for position in [Position::Start, Position::End] {
+            let blur = at(position);
+            assert!(blur.tile() * blur.neighbour_reach() >= 2 * blur.max_blur());
+        }
     }
 
     #[test]
@@ -739,6 +814,7 @@ mod tests {
         shutter: 1.0,
         max_px: 32.0,
         samples: 16,
+        position: Position::Centre,
     };
 
     fn red(gpu: &pfx_gpu::Gpu, blur: &mut GpuMotionBlur, speed: f32) -> Vec<f32> {
@@ -885,6 +961,44 @@ mod tests {
                 "the streak leaked across its motion at row {y}"
             );
         }
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn a_closing_shutter_trails_its_streak_and_an_opening_one_leads_it() {
+        let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
+        let mut blur = GpuMotionBlur::new(&gpu.device, SIZE.0, SIZE.1);
+        let sides = |position: Position| {
+            let image = red_with(
+                &gpu,
+                &mut blur,
+                24.0,
+                MotionBlur {
+                    position,
+                    ..TEST_BLUR
+                },
+            );
+            let sum = |range: std::ops::Range<u32>| {
+                range
+                    .map(|x| image[(48 * SIZE.0 + x) as usize])
+                    .sum::<f32>()
+            };
+            (sum(16..40), sum(56..80))
+        };
+        let runs = [Position::Start, Position::Centre, Position::End].map(sides);
+        println!("light behind and ahead of the square at start, centre and end: {runs:?}");
+        let [
+            (start_behind, start_ahead),
+            (centre_behind, centre_ahead),
+            (end_behind, end_ahead),
+        ] = runs;
+        assert!(end_behind > 4.0 * end_ahead, "{runs:?}");
+        assert!(start_ahead > 4.0 * start_behind, "{runs:?}");
+        assert!(centre_behind > 0.5 && centre_ahead > 0.5, "{runs:?}");
+        assert!(
+            (centre_behind - centre_ahead).abs() < 0.5 * centre_behind.max(centre_ahead),
+            "{runs:?}"
+        );
     }
 
     #[test]

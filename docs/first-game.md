@@ -2,7 +2,7 @@
 
 A game on pfx is its own repository and one binary. `pfx new` scaffolds it, `cargo run` plays it and `<game> edit` opens it in the editor. This page walks that path with the `pfx` tool installed ([Install and first use](../README.md#install-and-first-use)).
 
-![A terminal: pfx --version prints the version; git init and pfx new demo scaffold a game of 18 files; ls shows Cargo.toml, content, project.toml and src, and content holds first.scene.toml; pfx bench plays the first scene headless for 3 seconds at 1920x1080 and prints 180 frames and the GPU frame times.](images/new.gif)
+![A terminal: pfx --version prints the version; git init and pfx new demo scaffold a game of 15 files; ls shows AGENTS.md, CLAUDE.md, Cargo.toml, content, project.toml, prompts, src and tests, and content holds first.pitofx, fonts and meshes; pfx bench plays content/first.pitofx headless for 3 seconds at 1920x1080 and prints 180 frames, 0 dropped and GPU frame times under a millisecond.](images/new.gif)
 
 ## Scaffold it
 
@@ -19,9 +19,9 @@ The game pins the engine's crates at the tag the `pfx` tool was built from:
 
 ```toml
 [dependencies]
-pfx-game = { git = "https://github.com/gmrdad82/pfx.git", tag = "v1.0.0" }
-pfx-project = { git = "https://github.com/gmrdad82/pfx.git", tag = "v1.0.0" }
-pfx-editor = { git = "https://github.com/gmrdad82/pfx.git", tag = "v1.0.0", optional = true }
+pfx-game = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.0.1" }
+pfx-project = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.0.1" }
+pfx-editor = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.0.1", optional = true }
 ```
 
 The files it writes:
@@ -32,7 +32,7 @@ project.toml               the project: its first scene and what the editor sele
 src/lib.rs                 the game: MyGame implements pfx_game::Game, doing nothing yet
 src/main.rs                hands the game to the launcher, with `edit` opening the editor
 tests/first.rs             a GPU test of the first frame, ignored by default
-content/first.pitofx          the empty world: a grid, pfx's mark, a light and a camera; inside it,
+content/first.pitofx       the empty world: a grid, pfx's mark, a light and a camera; inside it,
                            the mark and wordmark's prefab and the grid's, the axes' and the mark's materials
 content/meshes/            badge.glb, wordmark.glb and grid.glb
 content/fonts/             IBM Plex Mono and its licence

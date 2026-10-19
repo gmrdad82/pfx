@@ -8,6 +8,7 @@ use std::path::PathBuf;
 mod bake;
 mod cache_report;
 mod film;
+mod help;
 mod progress;
 mod project;
 mod recipe;
@@ -37,7 +38,7 @@ const USAGE: &str = "usage:
   pfx font subset --font <ttf> --out <ttf> [--chars <file>]... [--base gb2312-1|none] [--no-closure]
   pfx
   pfx <file.pitofx>
-  pfx gui [<recipe|scene.toml|file.pitofx|project folder|folder>] [--play <module.wasm>] [flags]
+  pfx gui [<file.pitofx|file.glb|project folder|folder>] [--play <module.wasm>] [flags]
   pfx new <game> [--path <dir>] [--with-module]
   pfx bench <scene.pitofx> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
   pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|png16|exr] [--dither on|off] [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
@@ -457,6 +458,7 @@ enum CachePlan {
 
 enum Plan {
     Help,
+    VerbHelp(String),
     Version,
     App(Box<AppRender>),
     Assets(Vec<String>),
@@ -1014,9 +1016,39 @@ fn plan_sound(_args: &[String]) -> Result<Plan, Refusal> {
     ))
 }
 
+fn help_flags(verb: &str) -> Vec<&'static str> {
+    let tables: &[&[&str]] = match verb {
+        "render" => &[APP_FLAGS, ASSET_FLAGS, ICONS_FLAGS, SCENE_FLAGS],
+        "list" => &[SHOTS_FLAGS, PRESETS_FLAGS, SCENES_FLAGS],
+        "encode" => &[ENCODE_FLAGS],
+        "cache" => &[CACHE_FLAGS],
+        "bake" => &[BAKE_FLAGS],
+        "steam" => &[STEAM_FLAGS],
+        "shot" => &[SHOT_FLAGS],
+        _ => &[],
+    };
+    let mut flags: Vec<&str> = tables
+        .iter()
+        .flat_map(|table| table.iter().copied())
+        .collect();
+    flags.sort_unstable();
+    flags.dedup();
+    flags
+}
+
 fn plan(args: &[String]) -> Result<Plan, Refusal> {
-    if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        return Ok(Plan::Help);
+    if help::wants(args) {
+        match args.first() {
+            Some(word) if COMMANDS.contains(&word.as_str()) && word != "help" => {
+                if let Some(text) = help::verb(USAGE, args, &help_flags(word)) {
+                    return Ok(Plan::VerbHelp(text));
+                }
+            }
+            Some(word) if word != "help" && !word.starts_with('-') => {
+                return Err(Refusal::new(cli::unrecognized(word)).under(TOP));
+            }
+            _ => return Ok(Plan::Help),
+        }
     }
     let Some((command, rest)) = args.split_first() else {
         return Err(Refusal::new(cli::no_command("pfx", COMMANDS)).under(TOP));
@@ -1096,6 +1128,10 @@ fn perform(plan: Plan) -> Result<(), String> {
     match plan {
         Plan::Help => {
             println!("{ABOUT}\n\n{USAGE}");
+            Ok(())
+        }
+        Plan::VerbHelp(text) => {
+            println!("{text}");
             Ok(())
         }
         Plan::Version => {
@@ -1223,7 +1259,7 @@ fn render_shot(_args: &[String]) -> Result<(), String> {
 }
 
 fn pfx(work: Plan, args: &[String]) -> Result<(), String> {
-    if args.first().is_some_and(|a| a == "render") {
+    if args.first().is_some_and(|a| a == "render") && !help::wants(args) {
         let _ = pfx_run::archive::retry_at_startup();
     }
     perform(work)
@@ -1318,14 +1354,15 @@ fn main() -> std::process::ExitCode {
     if let Some(code) = os_launch(exe.as_deref(), &given) {
         return code;
     }
-    let args = window_args(given);
+    let args = help::asked(&window_args(given));
     if recipe::claims(&args) {
         return recipe::main(&args);
     }
     if matches!(
         args.first().map(String::as_str),
         Some("render" | "encode" | "list" | "bake")
-    ) && let Some(code) = pfx_run::pin::reenter_if_needed(&args)
+    ) && !help::wants(&args)
+        && let Some(code) = pfx_run::pin::reenter_if_needed(&args)
     {
         std::process::exit(code);
     }
@@ -1376,6 +1413,50 @@ mod tests {
     }
 
     #[test]
+    fn every_verb_prints_its_own_help_and_only_the_top_prints_all() {
+        let whole = format!("{ABOUT}\n\n{USAGE}");
+        for verb in COMMANDS.iter().filter(|verb| **verb != "help") {
+            for line in [
+                format!("{verb} --help"),
+                format!("{verb} -h"),
+                format!("help {verb}"),
+            ] {
+                let args = help::asked(&words(&line));
+                let text = if recipe::claims(&args) {
+                    recipe::help_text(&args)
+                } else {
+                    match plan(&args) {
+                        Ok(Plan::VerbHelp(text)) => Some(text),
+                        _ => None,
+                    }
+                }
+                .unwrap_or_else(|| panic!("{line} prints no help of its own"));
+                assert!(
+                    text.contains(&format!("Usage: pfx {verb}")),
+                    "{line}:\n{text}"
+                );
+                assert!(text.contains("-h, --help"), "{line}:\n{text}");
+                assert!(!text.contains(ABOUT) && text != whole, "{line}");
+            }
+        }
+        for line in ["--help", "-h", "help", "help --help"] {
+            assert!(
+                matches!(plan(&help::asked(&words(line))), Ok(Plan::Help)),
+                "{line}"
+            );
+        }
+        assert!(refused("tui --help").contains("unrecognized subcommand 'tui'"));
+        match plan(&words("scene migrate --help")).unwrap() {
+            Plan::VerbHelp(text) => {
+                assert!(text.contains("Usage: pfx scene migrate"), "{text}");
+                assert!(!text.contains("pfx scene fix"), "{text}");
+                assert!(text.contains("--dry-run"), "{text}");
+            }
+            _ => panic!("scene migrate --help prints its own help"),
+        }
+    }
+
+    #[test]
     fn font_subset_parses() {
         assert!(matches!(
             plan(&words("font subset --font a.ttf --out b.ttf --base gb2312-1")).unwrap(),
@@ -1388,10 +1469,10 @@ mod tests {
     #[test]
     fn gui_belongs_to_the_window_and_the_usage_names_its_forms() {
         assert!(recipe::claims(&words(
-            "gui content/room.scene.toml --play game.wasm"
+            "gui content/room.pitofx --play game.wasm"
         )));
         assert!(recipe::claims(&words("gui")));
-        assert!(USAGE.contains("pfx gui [<recipe|scene.toml|file.pitofx|project folder|folder>]"));
+        assert!(USAGE.contains("pfx gui [<file.pitofx|file.glb|project folder|folder>]"));
     }
 
     #[cfg(feature = "editor")]
@@ -1445,8 +1526,8 @@ mod tests {
     #[test]
     fn bench_hands_its_words_to_the_bench_and_the_usage_names_it() {
         assert!(matches!(
-            plan(&words("bench room.scene.toml --seconds 2 --seed 4")).unwrap(),
-            Plan::Bench(args) if args == words("room.scene.toml --seconds 2 --seed 4")
+            plan(&words("bench room.pitofx --seconds 2 --seed 4")).unwrap(),
+            Plan::Bench(args) if args == words("room.pitofx --seconds 2 --seed 4")
         ));
         assert!(USAGE.contains("pfx bench <scene.pitofx> --seconds N"));
     }
@@ -1645,7 +1726,10 @@ mod tests {
         assert!(USAGE.contains("--samples N overrides a shot's samples"));
         assert!(USAGE.contains("--class interactive|clip|truth|search"));
         assert!(matches!(plan(&words("--help")).unwrap(), Plan::Help));
-        assert!(matches!(plan(&words("render --help")).unwrap(), Plan::Help));
+        assert!(matches!(
+            plan(&words("render --help")).unwrap(),
+            Plan::VerbHelp(_)
+        ));
         match plan(&words("bake --scene scene --detail")).unwrap() {
             Plan::Bake(args) => {
                 assert!(args.iter().any(|arg| arg == "--detail"), "{args:?}");
@@ -1800,7 +1884,7 @@ mod tests {
         );
         for (line, message) in [
             (
-                "shot room.scene.toml",
+                "shot room.pitofx",
                 "the following required arguments were not provided:\n  <--seconds <SECONDS>|--frames <FRAMES>>",
             ),
             (
@@ -1808,36 +1892,36 @@ mod tests {
                 "the following required arguments were not provided:\n  <SCENE>",
             ),
             (
-                "shot room.scene.toml --frames 3 --seconds 1",
+                "shot room.pitofx --frames 3 --seconds 1",
                 "the argument '--frames <FRAMES>' cannot be used with '--seconds <SECONDS>'",
             ),
             (
-                "shot room.scene.toml --frames 3 --draft --final",
+                "shot room.pitofx --frames 3 --draft --final",
                 "the argument '--final' cannot be used with '--draft'",
             ),
             (
-                "shot room.scene.toml --frames 3 --size 2161x3840",
+                "shot room.pitofx --frames 3 --size 2161x3840",
                 "invalid value '2161x3840' for '--size <SIZE>': expected an even WxH between 2 and 16384",
             ),
             (
-                "shot room.scene.toml --frames 3 --format tiff",
+                "shot room.pitofx --frames 3 --format tiff",
                 "invalid value 'tiff' for '--format <FORMAT>'\n  [possible values: png, png16, exr]",
             ),
             (
-                "shot room.scene.toml --frames 3 --set haze",
+                "shot room.pitofx --frames 3 --set haze",
                 "invalid value 'haze' for '--set <SET>': expected dotted.key=value",
             ),
             (
-                "shot room.scene.toml --frames 3 --shutter 1.5",
+                "shot room.pitofx --frames 3 --shutter 1.5",
                 "invalid value '1.5' for '--shutter <SHUTTER>': expected a number above 0 to 1",
             ),
             (
-                "shot room.scene.toml --frames 3 --stats x",
+                "shot room.pitofx --frames 3 --stats x",
                 "unexpected argument '--stats' found",
             ),
             (
-                "shot room.scene.toml other.scene.toml --frames 3",
-                "unexpected argument 'other.scene.toml' found",
+                "shot room.pitofx other.pitofx --frames 3",
+                "unexpected argument 'other.pitofx' found",
             ),
         ] {
             let refusal = refused(line);
@@ -1847,7 +1931,7 @@ mod tests {
             );
         }
         assert!(matches!(
-            plan(&words("shot room.scene.toml --frames 3 --size 2160x3840 --set haze.shafts=0.4 --set finish.lut_amount=1 --final --json")).unwrap(),
+            plan(&words("shot room.pitofx --frames 3 --size 2160x3840 --set haze.shafts=0.4 --set finish.lut_amount=1 --final --json")).unwrap(),
             Plan::Shot(_)
         ));
         for command in [

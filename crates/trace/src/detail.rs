@@ -369,6 +369,7 @@ pub struct Detail {
     pub sky_look: pfx_load::scene::SkyLook,
     pub fit_textures: Option<[u32; 2]>,
     pub motion: Option<crate::motion::Motion>,
+    pub fog: Option<crate::fog::Fog>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

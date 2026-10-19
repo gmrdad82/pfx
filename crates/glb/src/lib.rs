@@ -8,7 +8,9 @@ pub use reader::summary;
 pub use sidecars::{
     FACTS, SidecarWriter, facts, grade_json, merge, mover_json, room_json, sidecar_text,
 };
-pub use writer::{Content, write, write_animated, write_looks, write_tree, write_with_extras};
+pub use writer::{
+    Content, ENGINE_MATERIAL, write, write_animated, write_looks, write_tree, write_with_extras,
+};
 
 pub use glam::DMat4;
 use pfx_mesh::{Mesh, Morph};
@@ -236,6 +238,7 @@ pub struct Look {
     pub detail_normal: Option<Map>,
     pub alpha_cutoff: Option<f32>,
     pub double_sided: Option<bool>,
+    pub material: Option<serde_json::Value>,
 }
 
 impl Look {
@@ -259,6 +262,7 @@ impl Look {
             || self.anisotropy.is_some()
             || self.coverage.is_some()
             || self.double_sided == Some(false)
+            || self.material.is_some()
     }
 }
 

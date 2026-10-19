@@ -261,9 +261,10 @@ fn with_module(relative: &str, text: String, name: &str, version: &str) -> Strin
                 version,
             );
             let modules = game.replacen(" }", ", features = [\"modules\"] }", 1);
-            format!(
-                "[workspace]\nmembers = [\".\", \"module\"]\ndefault-members = [\".\"]\n\n{}",
-                text.replacen(&game, &modules, 1)
+            text.replacen(&game, &modules, 1).replacen(
+                "[workspace]\n",
+                "[workspace]\nmembers = [\".\", \"module\"]\ndefault-members = [\".\"]\n",
+                1,
             )
         }
         "src/lib.rs" => fill(MODULE_LIB, name, version),

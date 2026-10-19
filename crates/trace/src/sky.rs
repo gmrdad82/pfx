@@ -183,7 +183,7 @@ pub struct SkyCdfUniform {
     pub width: u32,
     pub height: u32,
     pub sun_probability: f32,
-    pub unused: f32,
+    pub energy: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -205,7 +205,7 @@ impl SkyCdf {
             width: self.width,
             height: self.height,
             sun_probability: self.sun_probability,
-            unused: 0.0,
+            energy: self.total * (TAU / self.width as f32) * (PI / self.height as f32),
         }
     }
 
@@ -408,7 +408,7 @@ struct SkyCdfInfo {
     width: u32,
     height: u32,
     sun_probability: f32,
-    unused: f32,
+    energy: f32,
 };
 @group(1) @binding(3) var<storage, read> sky_rows: array<f32>;
 @group(1) @binding(4) var<storage, read> sky_columns: array<f32>;

@@ -97,14 +97,14 @@ mod tests {
 
     #[test]
     fn the_status_line_names_the_load_the_queue_and_a_game() {
-        let json = r#"{"v":1,"paused":false,"gpu_busy":42,"play":{"pid":7,"name":"pfx gui: room.scene.toml"},
+        let json = r#"{"v":1,"paused":false,"gpu_busy":42,"play":{"pid":7,"name":"pfx gui: room.pitofx"},
             "jobs":[{"pid":1,"state":"running","as":"pfx","label":"cargo test"},{"pid":2,"state":"yielded","as":"manf","label":"x"}]}"#;
         let status = Status::parse(json).unwrap();
         assert_eq!(status.busy, Some(42));
         assert_eq!(status.jobs, 2);
         assert_eq!(
             status.line(),
-            "gpu 42% · 2 queued · playing pfx gui: room.scene.toml · pfx: cargo test"
+            "gpu 42% · 2 queued · playing pfx gui: room.pitofx · pfx: cargo test"
         );
         let idle = Status::parse(r#"{"v":1,"paused":true,"play":null,"jobs":[]}"#).unwrap();
         assert_eq!(idle.line(), "0 queued · queue paused");

@@ -6,6 +6,7 @@ pub const OUTDOOR_REACH: f32 = 300.0;
 pub const OUTDOOR_PHASE: f32 = 0.5;
 pub const OUTDOOR_STEPS: u32 = 64;
 pub const OUTDOOR_SHAFTS: f32 = 1.0;
+pub const OUTDOOR_BOUNCES: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OutdoorHaze {
@@ -15,6 +16,7 @@ pub struct OutdoorHaze {
     pub reach: f32,
     pub shafts: f32,
     pub steps: u32,
+    pub bounces: u32,
     pub color: [f32; 3],
     pub phase: f32,
     pub ambient: Option<[f32; 3]>,
@@ -29,6 +31,7 @@ impl Default for OutdoorHaze {
             reach: OUTDOOR_REACH,
             shafts: OUTDOOR_SHAFTS,
             steps: OUTDOOR_STEPS,
+            bounces: OUTDOOR_BOUNCES,
             color: [1.0; 3],
             phase: OUTDOOR_PHASE,
             ambient: None,
@@ -52,6 +55,7 @@ pub(super) fn outdoor(haze: &file::Haze) -> Option<OutdoorHaze> {
         reach: haze.reach.unwrap_or(neutral.reach).max(0.0),
         shafts: haze.shafts.unwrap_or(neutral.shafts).clamp(0.0, 1.0),
         steps: haze.steps.unwrap_or(neutral.steps).clamp(1, 256),
+        bounces: haze.bounces.unwrap_or(neutral.bounces).min(8),
         color: haze
             .color
             .as_ref()

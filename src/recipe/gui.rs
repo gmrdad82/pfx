@@ -22,7 +22,7 @@ fn rates() -> impl TypedValueParser<Value = u32> {
 pub(super) struct Args {
     #[arg(
         value_name = "file|folder",
-        help = "A recipe, a scene (a .scene.toml or a scene's .pitofx), a .pitofx document, a .glb (opened as an imported document), a game's project folder, or a folder to pick one from [default: the start scene]"
+        help = "A recipe or scene .pitofx, a .glb (opened as an imported document), a game's project folder, or a folder to pick one from; an old recipe .toml or .scene.toml is imported once into a .pitofx beside it [default: the start scene]"
     )]
     pub(super) target: Option<String>,
     #[arg(

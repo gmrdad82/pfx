@@ -229,7 +229,8 @@ fn selection_of_a_thousand_leveled_instances_is_measured() {
         (MeshHandle(1), lod_error(LOD_RINGS[1])),
         (MeshHandle(2), lod_error(LOD_RINGS[2])),
     ];
-    set.set_levels(bounds, &chain).unwrap();
+    set.set_levels_with(bounds, &chain, &[None, Some(5), Some(6)])
+        .unwrap();
     let instances: Vec<Instance> = (0..1000)
         .map(|index| {
             let mut model = IDENTITY;
@@ -248,6 +249,9 @@ fn selection_of_a_thousand_leveled_instances_is_measured() {
             .iter()
             .filter(|instance| instance.mesh != MeshHandle(0))
             .count();
+        for instance in &swapped {
+            assert_eq!(instance.material, [0, 5, 6][instance.mesh.0 as usize]);
+        }
     }
     let each = started.elapsed().as_secs_f64() * 1e6 / rounds as f64;
     println!("LOD level selection: {each:.1} us per frame for 1000 instances");

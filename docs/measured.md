@@ -8,7 +8,7 @@ All were measured on an AMD Radeon RX 9060 XT with an AMD Ryzen 9 9950X (32 thre
 
 <p align="center"><img src="images/live-frames.png" width="540" alt="Bar chart, live frame time at 4K on the neutral room, lower is better: GPU p50 4.4 ms, p99 4.4 ms; CPU p50 0.9 ms, p99 1.7 ms; the 60 fps budget 16.7 ms."></p>
 
-`pfx bench crates/load/tests/scenes/room.scene.toml --seconds 20 --size 3840x2160`, the neutral room, 1,200 frames a run: GPU 4.4 ms a frame at p50 and p99, about a quarter of the 16.7 ms a 60 fps frame allows; the CPU's simulate-and-submit 0.85 ms at p50 and 1.7 ms at p99; no dropped frames. The same frame before: GPU 4.39 ms p50 and 4.41 ms p99, CPU 0.86 ms p50 and 1.84 ms p99; the room is GPU-bound with few instances, so the CPU savings in the frame's uploads and bind groups barely show here. The A/B ran twice, because its first CPU p99 (1.65 ms before, 1.83 ms after) was within the noise; these are the second run's.
+The neutral room (`crates/load/tests/scenes/room.scene.toml`, imported once with `pfx scene migrate` into `room.pitofx`), `pfx bench room.pitofx --seconds 20 --size 3840x2160`, 1,200 frames a run: GPU 4.4 ms a frame at p50 and p99, about a quarter of the 16.7 ms a 60 fps frame allows; the CPU's simulate-and-submit 0.85 ms at p50 and 1.7 ms at p99; no dropped frames. The same frame before: GPU 4.39 ms p50 and 4.41 ms p99, CPU 0.86 ms p50 and 1.84 ms p99; the room is GPU-bound with few instances, so the CPU savings in the frame's uploads and bind groups barely show here. The A/B ran twice, because its first CPU p99 (1.65 ms before, 1.83 ms after) was within the noise; these are the second run's.
 
 ## Frames on demand
 

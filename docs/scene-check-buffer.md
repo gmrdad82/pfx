@@ -2,6 +2,8 @@
 
 A text editor holds a file the person hasn't saved yet. `check` checks that text in every context it takes part in, against the project on disk for references, and returns only the diagnostics located in that file, so the editor can mark them as someone types.
 
+The file is a scene entry, named by its path from the project root (`scenes/room.scene.toml`): in a scene `.pitofx`, which `Project::open_pfx` opens, the entry inside it, as pfx's TOML panel checks it; in the examples below, `my-game` is a loose project laid out as the crate's demo.
+
 ```rust
 use std::path::Path;
 

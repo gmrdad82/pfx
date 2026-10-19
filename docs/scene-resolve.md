@@ -4,7 +4,7 @@
 
 ## From the command line
 
-The `scene-tree` example prints a resolved scene. On the demo project:
+The crate's `scene-tree` example prints a resolved scene of a project folder. On the crate's demo project, a loose folder whose scene entry is `scenes/room.scene.toml`:
 
 ```sh
 cargo run --release -p pfx-scene --example scene-tree -- crates/scene/examples/demo
@@ -27,7 +27,7 @@ scenes/room.scene.toml resolved from 3 files
   bulb             light at [0, 2.2, 0], intensity 40
 ```
 
-A second argument names another scene file of the project.
+A second argument names another scene entry of the project. In pfx, `pfx scene print <scene.pitofx>` shows a user's scene as its TOML.
 
 ## Keys and ids of placed entries
 

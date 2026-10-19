@@ -1973,7 +1973,16 @@ fn read_bake_layers(cx: &mut Cx, tab: &mut Tab<'_>) -> Result<Option<BakeLayers>
 fn read_lod(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Vec<Lod>, Error> {
     let path = tab.kpath("lod");
     let ipath = tab.kipath("lod");
+    let locked = tab.opt(cx, "lock_borders", BOOL)?;
     let Some(item) = tab.peek(cx, "lod") else {
+        if locked.is_some() {
+            let line = cx.lines.get(&tab.kipath("lock_borders")).copied();
+            return Err(Error::new(
+                tab.kpath("lock_borders"),
+                line,
+                "goes with `lod`, the levels it simplifies",
+            ));
+        }
         return Ok(Vec::new());
     };
     if matches!(kind, "pocket" | "text") {
@@ -1997,33 +2006,63 @@ fn read_lod(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Vec<Lod>, Erro
         let mut sub = Tab::new(cx, table, at.clone(), format!("{ipath}#{i}"), line);
         let triangles = sub.opt(cx, "triangles", UINT)?;
         let ratio = sub.opt(cx, "ratio", NUM)?;
+        let file = sub.opt(cx, "path", STR)?;
+        let lock_borders = sub.opt(cx, "lock_borders", BOOL)?;
         let bake_normals = sub.or(cx, "bake_normals", false, BOOL)?;
         let size = sub.opt(cx, "normal_size", UINT)?;
         let bake_distance = sub.opt(cx, "bake_distance", NUM)?;
         sub.finish(cx)?;
         let fail =
             |key: &str, text: &str| Error::new(dotted(&at, key), Some(line), text.to_string());
-        let target = match (triangles, ratio) {
-            (Some(n), None) if n > 0 => LodTarget::Triangles(n),
-            (Some(_), None) => return Err(fail("triangles", "expected a whole number from 1 up")),
-            (None, Some(r)) if r > 0.0 && r < 1.0 => LodTarget::Ratio(r),
-            (None, Some(_)) => {
+        let target = match (triangles, ratio, file) {
+            (Some(n), None, None) if n > 0 => LodTarget::Triangles(n),
+            (Some(_), None, None) => {
+                return Err(fail("triangles", "expected a whole number from 1 up"));
+            }
+            (None, Some(r), None) if r > 0.0 && r < 1.0 => LodTarget::Ratio(r),
+            (None, Some(_), None) => {
                 return Err(fail("ratio", "expected a number above 0 and below 1"));
             }
-            (Some(_), Some(_)) => {
+            (None, None, Some(_)) if kind != "mesh" => {
+                return Err(fail(
+                    "path",
+                    &format!(
+                        "a level read from a file goes with kind = \"mesh\", found \"{kind}\""
+                    ),
+                ));
+            }
+            (None, None, Some(file)) if file.trim().is_empty() => {
+                return Err(fail("path", "expected a glTF file"));
+            }
+            (None, None, Some(file)) => LodTarget::File(file),
+            (None, None, None) => {
+                return Err(Error::new(
+                    at,
+                    Some(line),
+                    "missing, expected `triangles` (a count), `ratio` (of the object's triangles) or `path` (a glTF file)",
+                ));
+            }
+            (_, _, Some(_)) => {
+                return Err(fail(
+                    "path",
+                    "a level takes `triangles`, `ratio` or `path`, one of the three",
+                ));
+            }
+            (Some(_), Some(_), None) => {
                 return Err(fail(
                     "ratio",
                     "a level takes `triangles` or `ratio`, not both",
                 ));
             }
-            (None, None) => {
-                return Err(Error::new(
-                    at,
-                    Some(line),
-                    "missing, expected `triangles` (a count) or `ratio` (of the object's triangles)",
-                ));
-            }
         };
+        if matches!(target, LodTarget::File(_)) && lock_borders.is_some() {
+            return Err(fail(
+                "lock_borders",
+                "goes with a simplified level, and this one is read from `path`",
+            ));
+        }
+        let lock_borders =
+            matches!(target, LodTarget::File(_)) || lock_borders.or(locked).unwrap_or(true);
         if !bake_normals && (size.is_some() || bake_distance.is_some()) {
             let key = if size.is_some() {
                 "normal_size"
@@ -2049,6 +2088,7 @@ fn read_lod(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Vec<Lod>, Erro
             bake_normals,
             normal_size,
             bake_distance,
+            lock_borders,
         });
     }
     Ok(levels)
@@ -2246,6 +2286,11 @@ fn relocated(cx: &Cx, key: &str, path: &mut String) {
 
 fn relocate(cx: &Cx, objects: &mut [Object], sky: &mut Option<Sky>) {
     for (i, object) in objects.iter_mut().enumerate() {
+        for (k, level) in object.lod.iter_mut().enumerate() {
+            if let LodTarget::File(path) = &mut level.target {
+                relocated(cx, &format!("object#{i}.lod#{k}.path"), path);
+            }
+        }
         match &mut object.kind {
             Kind::Card {
                 image: Some(image), ..

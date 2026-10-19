@@ -63,6 +63,59 @@ fn unbaked(bake: &Path) -> String {
     )
 }
 
+fn scene_stem(name: &str) -> &str {
+    name.strip_suffix(pfx_recipe::SCENE_SUFFIX)
+        .filter(|stem| !stem.is_empty())
+        .or_else(|| name.strip_suffix(".toml"))
+        .unwrap_or(name)
+}
+
+fn packed_name(scene: &Path, stem: &str, doc: &Path) -> PathBuf {
+    let target = scene.with_file_name(format!("{stem}.{}", pfx_file::EXTENSION));
+    let same = std::path::absolute(&target).ok() == std::path::absolute(doc).ok();
+    if same {
+        return scene.with_file_name(format!("{stem}.scene.{}", pfx_file::EXTENSION));
+    }
+    target
+}
+
+fn pack_scene(written: Vec<PathBuf>, recipe: &Recipe, doc: &Path) -> Result<Vec<PathBuf>, String> {
+    let Some(name) = recipe
+        .output
+        .scene
+        .as_deref()
+        .and_then(|scene| Path::new(scene).file_name())
+    else {
+        return Ok(written);
+    };
+    let Some(scene) = written
+        .iter()
+        .find(|path| path.file_name() == Some(name))
+        .cloned()
+    else {
+        return Ok(written);
+    };
+    let stem = scene_stem(&name.to_string_lossy()).to_string();
+    let target = packed_name(&scene, &stem, doc);
+    pfx_load::scene::pack(&scene, &target).map_err(|e| e.to_string())?;
+    let loose = [
+        scene.clone(),
+        scene.with_file_name(format!("{stem}.materials.toml")),
+        scene.with_file_name(format!("{stem}.proxies.toml")),
+    ];
+    for path in &loose {
+        if written.contains(path) {
+            std::fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+    }
+    let mut paths: Vec<PathBuf> = written
+        .into_iter()
+        .filter(|path| !loose.contains(path))
+        .collect();
+    paths.push(target);
+    Ok(paths)
+}
+
 fn run_with(
     args: &Args,
     registry: &Registry,
@@ -74,6 +127,18 @@ fn run_with(
     if pfx_build::document::is_pfx(Path::new(file)) {
         return document(args, registry, out, err);
     }
+    built(args, registry, pfx, None, out, err)
+}
+
+fn built(
+    args: &Args,
+    registry: &Registry,
+    pfx: bool,
+    doc: Option<&Path>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> u8 {
+    let file = args.recipe.as_str();
     let recipes = match load(Path::new(file)).and_then(|loaded| recipes(loaded, args)) {
         Ok(recipes) => recipes,
         Err(e) => {
@@ -99,6 +164,10 @@ fn run_with(
             }
             write(&built, recipe, base, args.out.as_deref())
         });
+        let written = match (written, doc) {
+            (Ok(paths), Some(doc)) => pack_scene(paths, recipe, doc),
+            (written, _) => written.map_err(|e| e.to_string()),
+        };
         match written {
             Ok(paths) => {
                 for path in paths {
@@ -140,7 +209,7 @@ fn document(args: &Args, registry: &Registry, out: &mut dyn Write, err: &mut dyn
             out: args.out.clone(),
             pick: args.pick.clone(),
         };
-        return run_with(&inner, registry, true, out, err);
+        return built(&inner, registry, true, Some(pfx), out, err);
     }
     let loaded = match load(&opened.recipe) {
         Ok(loaded) => loaded,

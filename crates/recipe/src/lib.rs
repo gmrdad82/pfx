@@ -222,10 +222,11 @@ pub struct PieceRule {
     pub hidden: Option<bool>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LodTarget {
     Triangles(u32),
     Ratio(f64),
+    File(String),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -234,6 +235,7 @@ pub struct Lod {
     pub bake_normals: bool,
     pub normal_size: u32,
     pub bake_distance: Option<f64>,
+    pub lock_borders: bool,
 }
 
 pub const NORMAL_SIZE: u32 = 1024;

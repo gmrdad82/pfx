@@ -154,6 +154,7 @@ pub(crate) struct Frame {
     lens: [f32; 4],
     window: [u32; 4],
     columns: [u32; 4],
+    fog: [[f32; 4]; 3],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -320,6 +321,7 @@ pub struct Trace {
     gpu_bytes: u64,
     half_sky: bool,
     moving: Option<MovingState>,
+    fogged: bool,
 }
 
 struct MovingState {
@@ -1012,6 +1014,9 @@ fn pipeline_constants(
     let mut constants = bounce_limits(detail.bounces).to_vec();
     if moving {
         constants.push(("TRACE_MOTION", 1.0));
+    }
+    if detail.fog.is_some() {
+        constants.push(("TRACE_FOG", 1.0));
     }
     constants.extend(features.constants());
     constants.push((
@@ -1740,6 +1745,7 @@ impl Trace {
             || !(0.0..90.0).contains(&detail.sun_radius_deg)
             || detail.leaf.is_some_and(|leaf| !leaf.valid())
             || detail.steam.is_some_and(|steam| !steam.valid())
+            || detail.fog.is_some_and(|fog| !fog.valid())
             || detail.content.iter().flatten().any(|image| !image.valid())
             || detail.content.len() > scene.materials.len()
             || detail
@@ -2071,6 +2077,7 @@ impl Trace {
             ],
             window: [width, height, 0, 0],
             columns: [0, motion_at[0], motion_at[1], motion_at[2]],
+            fog: detail.fog.map_or([[0.0; 4]; 3], |fog| fog.rows()),
         };
         let mut base = base;
         detail.projection.place(&mut base);
@@ -2108,6 +2115,7 @@ impl Trace {
             gpu_bytes,
             half_sky: detail.fit_textures.is_some(),
             moving,
+            fogged: detail.fog.is_some(),
         })
     }
 
@@ -2424,6 +2432,18 @@ impl Trace {
         }
         projection.place(&mut self.base);
         self.projection = projection;
+        self.samples = 0;
+        Ok(())
+    }
+
+    pub fn set_fog(&mut self, fog: crate::fog::Fog) -> Result<(), String> {
+        if !self.fogged {
+            return Err("the trace was built without fog".into());
+        }
+        if !fog.valid() {
+            return Err("invalid trace fog".into());
+        }
+        self.base.fog = fog.rows();
         self.samples = 0;
         Ok(())
     }

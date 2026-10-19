@@ -272,6 +272,8 @@ fn a_flat_game_plays_its_ui_and_its_own_paint_in_the_play_view_one_game_per_play
     let root = flat_project("board");
     let (mut session, seen) = board(&root, Faults::default());
     assert!(session.flat() && session.plays_a_game());
+    let world = root.join("tmp/pfx/flat.pitofx");
+    let written = fs::read(&world).unwrap();
     let script = format!(
         "{}key F5\n{}key F8\nframe\nkey F5\n{}",
         frames(10),
@@ -317,11 +319,7 @@ fn a_flat_game_plays_its_ui_and_its_own_paint_in_the_play_view_one_game_per_play
     ));
     drop(session);
     assert_eq!(seen.stopped.get(), 2, "closing the editor stops the game");
-    assert_eq!(
-        fs::read_to_string(root.join("tmp/pfx/flat.scene.toml")).unwrap(),
-        "format = 1\n",
-        "play writes no file"
-    );
+    assert_eq!(fs::read(&world).unwrap(), written, "play writes no file");
     let _ = fs::remove_dir_all(&root);
 }
 

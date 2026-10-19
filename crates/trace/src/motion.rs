@@ -424,12 +424,7 @@ pub fn step_times(steps: usize) -> Vec<f32> {
         .collect()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Position {
-    Start,
-    Center,
-    End,
-}
+pub use pfx_post::ShutterPosition as Position;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shutter {
@@ -442,7 +437,7 @@ impl Shutter {
         let span = frame_seconds * shutter;
         let open = match position {
             Position::Start => time,
-            Position::Center => time - span * 0.5,
+            Position::Centre => time - span * 0.5,
             Position::End => time - span,
         };
         Self {
@@ -455,6 +450,13 @@ impl Shutter {
         step_times(steps)
             .into_iter()
             .map(|t| self.open + (self.close - self.open) * f64::from(t))
+            .collect()
+    }
+
+    pub fn times_held(self, steps: usize, start: f64, end: f64) -> Vec<f64> {
+        self.times(steps)
+            .into_iter()
+            .map(|time| time.clamp(start, end))
             .collect()
     }
 }
@@ -571,12 +573,36 @@ mod tests {
 
     #[test]
     fn the_shutter_opens_around_its_frame() {
-        let shutter = Shutter::around(1.0, 0.04, 0.5, Position::Center);
+        let shutter = Shutter::around(1.0, 0.04, 0.5, Position::Centre);
         let times = shutter.times(3);
         assert!((times[0] - 0.99).abs() < 1e-12);
         assert!((times[1] - 1.0).abs() < 1e-12);
         assert!((times[2] - 1.01).abs() < 1e-12);
         assert_eq!((steps_of(0), steps_of(1), steps_of(3)), (0, 3, 9));
+    }
+
+    #[test]
+    fn the_shutter_opens_at_or_closes_at_its_frame_and_holds_the_timeline_ends() {
+        let opens = Shutter::around(1.0, 0.04, 0.5, Position::Start).times(3);
+        let closes = Shutter::around(1.0, 0.04, 0.5, Position::End).times(3);
+        for (got, want) in opens.iter().zip([1.0, 1.01, 1.02]) {
+            assert!((got - want).abs() < 1e-12, "{opens:?}");
+        }
+        for (got, want) in closes.iter().zip([0.98, 0.99, 1.0]) {
+            assert!((got - want).abs() < 1e-12, "{closes:?}");
+        }
+        let fps = 60.0;
+        let end = 3.0 / fps;
+        let first = Shutter::around(0.0, 1.0 / fps, 0.5, Position::Centre).times_held(5, 0.0, end);
+        assert_eq!(first[..3], [0.0, 0.0, 0.0]);
+        assert!(first[3] > 0.0 && first[4] <= end);
+        let last = Shutter::around(end, 1.0 / fps, 0.5, Position::Centre).times_held(5, 0.0, end);
+        assert_eq!(last[2..], [end, end, end]);
+        assert!(last[0] < end && last[0] >= 0.0);
+        let opened = Shutter::around(end, 1.0 / fps, 0.5, Position::Start).times_held(3, 0.0, end);
+        assert_eq!(opened, [end, end, end]);
+        let closed = Shutter::around(0.0, 1.0 / fps, 0.5, Position::End).times_held(3, 0.0, end);
+        assert_eq!(closed, [0.0, 0.0, 0.0]);
     }
 
     #[test]

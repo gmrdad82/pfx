@@ -672,6 +672,11 @@ fn the_engines_refusals_are_kept() {
             "outside 0 to 1",
         ),
         (
+            "haze-bounces",
+            "format = 1\n\n[haze]\nheight = 0.0\nbounces = 9\n",
+            "haze bounces = 9 is outside 0 to 8",
+        ),
+        (
             "mix-one",
             "format = 1\n\n[sky]\nkind = \"mix\"\n[[sky.layer]]\nkind = \"analytic\"\n",
             "two or more",

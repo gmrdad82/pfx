@@ -916,7 +916,7 @@ fn a_folder_without_scenes_is_refused_and_a_bare_fixture_folder_opens() {
     let error = crate::session::Session::open_project(&empty, quiet(), None)
         .err()
         .unwrap();
-    assert!(error.contains("no *.scene.toml"), "{error}");
+    assert!(error.contains("no scene .pitofx"), "{error}");
     let fixtures = scene_copy("project-bare");
     let folder = fixtures.parent().unwrap();
     let session = crate::session::Session::open_project(folder, quiet(), None).unwrap();
@@ -962,7 +962,12 @@ fn a_flat_project_with_no_scene_opens_on_an_empty_world() {
         session.editor.log.entries
     );
     drop(session);
-    assert_eq!(fs::read_to_string(&world).unwrap(), "format = 1\n");
+    assert!(
+        pfx_load::scene::Scene::open(&world)
+            .unwrap()
+            .objects
+            .is_empty()
+    );
     let again = crate::session::Session::open_project(&root, quiet(), None).unwrap();
     assert!(again.flat());
     drop(again);
@@ -976,7 +981,7 @@ fn a_flat_project_with_no_scene_opens_on_an_empty_world() {
     let error = crate::session::Session::open_project(&root, quiet(), None)
         .err()
         .unwrap();
-    assert!(error.contains("no *.scene.toml"), "{error}");
+    assert!(error.contains("no scene .pitofx"), "{error}");
     let game = crate::factory(|| pfx_play::SceneGame);
     let config = pfx_game::Config::flat("flat-game", "0.0.0");
     let session = crate::session::Session::open_game(&root, quiet(), game, config).unwrap();

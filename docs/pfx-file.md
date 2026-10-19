@@ -58,6 +58,21 @@ A reader checks the last 24 bytes first. A trailer whose magic and CRC-32 hold i
 
 The replaced entries stay behind as dead bytes. When an edit would leave more than 1 MiB of dead bytes and more than a quarter of the live bytes (the payloads and the table), it writes the whole file again instead, through a temporary file beside it, synced, then renamed, copying each kept chunk's stored bytes without decoding them. `pfx scene compact <x.pitofx>` does that on demand, and the window's save as always writes a compact file.
 
+An edit reads only the table, the recipe, `SMET` and `SCNE`, and the check after it reads no packed file: the material check builds the recipe only when a material name is still undefined, and then without its texture maps, layer bakes, levels of detail and card images ([Recipe format](recipe-format.md), the material check). So an edit costs the same tens of milliseconds whatever the document packs. Measured with release builds, alternated, 5 runs each on a fresh reflink copy, medians, the machine at a load of 20 to 38 with other builds running:
+
+| Document | Command | before | after |
+| --- | --- | ---: | ---: |
+| 1.15 GB: four 72 MB GLBs and their 864 MB build | `pfx set s.pitofx sun.irradiance=1.6` | 24,717 ms (3.0.0) | 43 ms (3.0.1) |
+| the same | `pfx add s.pitofx object c kind=box size=[1,1,1]` | 24,432 ms (3.0.0) | 43 ms (3.0.1) |
+| 1.24 GB: a 16384×8192 HDR sky, an 8192² and three 4096² PNG maps, a generator object | `pfx set --brief s.pitofx sun.irradiance=1.6` | 872 ms (3.0.1) | 43 ms |
+| the same | `pfx add s.pitofx object c kind=box size=[1,1,1]` | 45 ms (3.0.1) | 38 ms |
+| the same | `pfx align s.pitofx slab --ground` | 1,278 ms (3.0.1) | 60 ms |
+| the same | `pfx check s.pitofx` | 702 ms (3.0.1) | 8 ms |
+| the same, an object drawing the generator's material | `pfx set --brief s.pitofx sun.irradiance=1.6` | 692 ms (3.0.1) | 47 ms |
+| the same maps and sky, no generator | `pfx set --brief s.pitofx sun.irradiance=1.6` | 33 ms (3.0.1) | 32 ms |
+
+On 3.0.1 the check built the whole recipe whenever it held a generator, a library object or a piece rule, which read every packed map and baked every layer, so its cost grew with the maps.
+
 ## Compression
 
 Each chunk is compressed on its own, so a reader decodes only what it asks for. `Codec::Auto` stores PNG, JPEG, RIFF, gzip, zip, zstd, Ogg and FLAC data as it is, compresses everything else with LZ4 and keeps the raw bytes when that saves nothing. `Codec::Store`, `Codec::Deflate` (level 6) and `Codec::Lz4` force one. Chunks of 1 MiB or more are encoded on their own threads.
@@ -131,7 +146,7 @@ The parsed glTF goes through the same code as a `.glb` (`Mesh::parse_with`, whic
 
 ## As a scene
 
-A `.pitofx` with an `SMET` chunk is a scene ([scene-format.md](scene-format.md#scenes-in-a-pfx-file)): `SCNE` chunks hold its TOML files and `FILE` chunks every other file it names, each by its path from the project root. `Scene::open`, `SceneWatch`, `SceneEdit`, the game runtime and `Staged` take one where they take a `.scene.toml`. On the command line, `pfx shot <scene.pitofx>` and `pfx bench <scene.pitofx>` take the `.pitofx` and refuse a `.scene.toml` with one line naming `pfx scene migrate`, and `pfx gui` imports a `.scene.toml` into a `.pitofx` beside it once.
+A `.pitofx` with an `SMET` chunk is a scene ([scene-format.md](scene-format.md#scenes-in-a-pfx-file)): `SCNE` chunks hold its TOML files and `FILE` chunks every other file it names, each by its path from the project root. `Scene::open`, `SceneWatch`, `SceneEdit`, the game runtime and `Staged` take one, as they take a loose project's `.scene.toml`. On the command line, `pfx shot <scene.pitofx>` and `pfx bench <scene.pitofx>` take the `.pitofx` and refuse a `.scene.toml` with one line naming `pfx scene migrate`, and `pfx gui` imports a `.scene.toml` into a `.pitofx` beside it once.
 
 - **Files.** Every file the scene reads (its TOML, meshes and their buffers, images, fonts, sounds, LUTs, tile prefabs) resolves to the container's chunk of that name first, then to the file in the project on disk, as `pfx_scene::Project::asset` does. A mesh `file = "@gltf"` (with `node`) is the container's own `GLTF` and `GBIN`; in a scene that is not a `.pitofx` it is refused.
 - **Errors** name a file inside the container as `<the .pitofx>/<its name>`, with line and column (`scenes/room.pitofx/materials.toml:4:13`). A cut or corrupt container, one without `SMET` or naming an entry it doesn't hold, is refused.

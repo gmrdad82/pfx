@@ -188,3 +188,27 @@ fn a_timeline_scene_keeps_the_cutoff_of_its_cards_and_its_mask_materials() {
     );
     assert_mask(&material, "the timeline GLB");
 }
+
+#[test]
+fn a_written_scene_draws_an_imported_mask_card_with_its_own_texture() {
+    for materials in ["", "\n[materials.leaf]\nbase = [0.3, 0.6, 0.2]\n"] {
+        let dir = common::scratch(&format!("alpha-scene-{}", materials.len()));
+        std::fs::write(dir.join("card.glb"), leaf_card(true)).unwrap();
+        let r = recipe(materials);
+        let b = build(&r, &dir).unwrap();
+        write(&b, &r, &dir, None).unwrap();
+        let scene = pfx_load::scene::Scene::open(dir.join("leaves.scene.toml")).unwrap();
+        let draws = scene.draws();
+        let leaf = draws
+            .items
+            .iter()
+            .map(|draw| draws.names[draw.material as usize].as_str())
+            .find(|name| name.ends_with("leaf"))
+            .unwrap_or_else(|| panic!("{materials:?}: no leaf draw in {:?}", draws.names));
+        assert!(
+            leaf.starts_with("gltf "),
+            "{materials:?}: the card draws {leaf}, not the file's textured material"
+        );
+        assert!(!draws.textures.is_empty(), "{materials:?}");
+    }
+}

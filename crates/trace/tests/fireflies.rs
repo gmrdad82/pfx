@@ -21,9 +21,9 @@ const OUTLIER_FLOOR: f32 = 0.01;
 const CLAMP_INDIRECT: f32 = 4.0;
 const FILTER_GLOSSY: f32 = 0.25;
 const OFF_BYTES: [u64; 3] = [
-    0x9b10_5b8d_f4be_3ed9,
+    0xc2ad_da13_c62d_7bb3,
     0xa381_2026_00e7_9695,
-    0x8dfd_8091_2445_7c6f,
+    0x55c2_38dc_9eda_eb82,
 ];
 
 fn normalize(v: [f32; 3]) -> [f32; 3] {

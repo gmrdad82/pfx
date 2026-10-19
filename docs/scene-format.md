@@ -8,13 +8,13 @@ In pfx these files reach a user inside a scene's `.pitofx`, compressed in one fi
 
 | file | holds |
 |---|---|
-| `project.toml` | the project root's marker: `format`, `[project]` (`name`; `scene`, the scene an editor opens first; and `ignore`, the folders not to look in), `[tunables.<name>]` (the game's tunables), `[layers]` (the collision layers) and `[authoring]`. It lists no files: editors find the scenes as the `*.scene.toml` files under the root, outside the folders skipped (see `Project::open`). |
-| `*.scene.toml` | a scene: its includes, material libraries, meshes, objects, lights, emitters, movers, content, text, sounds, camera rigs, tile layers, sun, sky, haze, camera, finish, trace, plates and physics. |
+| `project.toml` | the project root's marker: `format`, `[project]` (`name`; `scene`, the scene an editor opens first; and `ignore`, the folders not to look in), `[tunables.<name>]` (the game's tunables), `[layers]` (the collision layers) and `[authoring]`. It lists no files: editors find the scenes as the scene `.pitofx` files under the root (and any old `*.scene.toml`, imported once), outside the folders skipped (see `Project::open`). |
+| `*.scene.toml` | a scene entry: its includes, material libraries, meshes, objects, lights, emitters, movers, content, text, sounds, camera rigs, tile layers, sun, sky, haze, camera, finish, trace, plates and physics. |
 | `*.prefab.toml` | a reusable piece: the entry tables a scene has (meshes, objects, lights, emitters, movers, content, text, sounds, rigs) and its own `materials` and `include`, with no `[[tiles]]`, `fallback`, `[sun]`, `[sky]`, `[haze]`, `[camera]`, `[finish]`, `[trace]`, `[plates]` or `[physics]`. |
 | `*.materials.toml` | a material library: `[materials.<name>]` tables. |
 | `*.proxies.toml` | a plate's invisible stand-ins: `[[proxy]]` entries. |
 
-The kind of a file comes from its name: `project.toml`, `*.scene.toml` (and a format 0 `scene.toml`), `*.prefab.toml`, `*.materials.toml` and `*.proxies.toml`. A format 0 material library may keep any name (`materials.toml`); it is read as a library because a scene's `materials` names it.
+The kind of a file comes from its name: `project.toml`, `*.scene.toml` (and a format 0 `scene.toml`), `*.prefab.toml`, `*.materials.toml` and `*.proxies.toml`. A format 0 material library may keep any name (`materials.toml`); it is read as a library because a scene's `materials` names it. Inside a `.pitofx` each TOML entry keeps such a name (`scenes/room.scene.toml`), and that is how its kind is told; a user opens and shares the `.pitofx`, never a loose entry.
 
 Every file starts with `format = 1`. A file without `format` is format 0 and is read through the migration below.
 
@@ -93,7 +93,7 @@ parent = "desk"
 
 ## Includes
 
-`include = ["…", …]` merges other files in: an include's entries come before the including file's own, includes in order, depth first. Includes nest at most 64 deep (`MAX_DEPTH`), counting from the scene or prefab being read: an include past that depth is refused at its key (`include-depth`), and so is a cycle, a file that includes itself through any chain of includes (`include-cycle`). Both diagnostics name the chain of files in their message and list each include of it in `related`. A scene's `include` names `*.scene.toml` files; a prefab's `include` names `*.prefab.toml` files. At most one file of a scene and its includes holds `fallback`, `[sun]`, `[sky]`, `[haze]`, `[camera]`, `[finish]`, `[trace]`, `[plates]` and `[physics]`; a second is refused, naming the first (`held-twice`). A prefab is not an include: it is placed, transformed and namespaced.
+`include = ["…", …]` merges other files in: an include's entries come before the including file's own, includes in order, depth first. Includes nest at most 64 deep (`MAX_DEPTH`), counting from the scene or prefab being read: an include past that depth is refused at its key (`include-depth`), and so is a cycle, a file that includes itself through any chain of includes (`include-cycle`). Both diagnostics name the chain of files in their message and list each include of it in `related`. A scene's `include` names `*.scene.toml` entries; a prefab's `include` names `*.prefab.toml` entries. At most one file of a scene and its includes holds `fallback`, `[sun]`, `[sky]`, `[haze]`, `[camera]`, `[finish]`, `[trace]`, `[plates]` and `[physics]`; a second is refused, naming the first (`held-twice`). A prefab is not an include: it is placed, transformed and namespaced.
 
 ## Unknown keys and `[authoring]`
 
@@ -156,7 +156,7 @@ The crate checks structure, values, references, ids, and that each asset path ex
 | key | type | default | notes |
 |---|---|---|---|
 | `name` | string | needed | the project's name. |
-| `scene` | path | none | the scene an editor opens first: a `.scene.toml`, or a scene's `.pitofx`. |
+| `scene` | path | none | the scene an editor opens first: a scene's `.pitofx` (an old `.scene.toml` is imported once into one beside it). |
 | `ignore` | array of paths | `[]` | folders (or files) `Project::open` skips, besides `target` and `tmp`; each relative to the root, so `"builds"` is the root's `builds` folder. |
 
 `[tunables.<name>]` is one value the game reads at run time and a person tunes while it runs, such as a jump height or the gravity. The table's key is its name, which the game reads it by: it follows the name rules (`bad-name`), and a name with a space or a `.` is quoted (`[tunables."god mode"]`). A tunable takes no `id`: the game's code names it, so renaming one changes that code too.
@@ -214,7 +214,7 @@ A body, a character and a trigger take a layer by its name (`layer`), and a trig
 | key | type | default | notes |
 |---|---|---|---|
 | `format` | integer | 0 | `1`. |
-| `include` | array of paths | `[]` | `*.scene.toml` files merged in (Includes). |
+| `include` | array of paths | `[]` | `*.scene.toml` entries merged in (Includes). |
 | `materials` | array of paths | `[]` | material libraries. A material name in two libraries is refused, naming both files (`duplicate-name`). |
 | `fallback` | reference | none | the material for a glTF material no library names; without it the loader's default material. At most one file of a scene and its includes holds it. |
 | `[mesh.<name>]` | tables | none | meshes. |
@@ -751,6 +751,7 @@ A haze fills a box (a room haze, with `lo` and `hi`) or the open air (an outdoor
 | `falloff` | number ≥ 0 | none | an outdoor haze: how fast its density thins with height. |
 | `shafts` | number, 0 to 1 | none | the strength of light shafts through the haze. |
 | `steps` | integer ≥ 1 | none | march steps. |
+| `bounces` | integer, 0 to 8 | `2` | an outdoor haze: the path tracer's scattering bounces inside the fog; `0` lights the fog by the sun, the sky and the lamps once and scatters no further. The live renderer ignores it. |
 | `color` | colour | none | the haze's colour; `colour` reads the same. |
 | `amount` | number, 0 to 1 | `0` | sets the four densities below; without it the haze is clear. |
 | `fog` | number ≥ 0 | `amount / 6` | |
@@ -963,6 +964,7 @@ Every key is optional; a key left out takes the renderer's default.
 | `shutter` | number, 0 to 4 | up to 1, the share of a frame the shutter stays open; above 1, a stylised streak of that many frames' motion. |
 | `max_px` | number ≥ 0 | the longest streak at a shutter of 1, in pixels; a shutter above 1 multiplies it. |
 | `samples` | integer ≥ 1 | |
+| `position` | `"start"`, `"centre"` or `"end"` | where the shutter sits against the frame's time: it opens at the frame, is centred on it (the default) or closes at it, as Cycles' motion position. The live renderer and the tracer read it alike. |
 
 ### `[trace]`
 
@@ -1198,10 +1200,10 @@ A newer `format` than the reader knows is refused, naming the version it knows (
 - Editors group patches into undo steps. Each edit returns a patch group: a label and one patch per file it touched, with that file's exact text before and after, so undo and redo bring the bytes back exactly. A group can span many edits (a drag), keeping the first text before and the last text after per file; a group whose net text is unchanged is no step. Patches and groups are plain values with their inverse, so an editor with its own history can apply them itself.
 - Ids are written only when an entry is made, or when a file is fixed or migrated; the first write of a file through the writer fills its missing ids.
 
-The writer is `SceneEdit`, opened on a scene or a prefab file of format 1:
+The writer is `SceneEdit`, opened on a scene `.pitofx` (or a scene or prefab file of format 1 in a loose project):
 
 ```rust
-let mut edit = SceneEdit::open("scenes/room.scene.toml")?;
+let mut edit = SceneEdit::open("scenes/room.pitofx")?;
 edit.set_at("crate", [-0.9, 0.35, 1.5])?;
 edit.set(&Target::Light("7k2m9q4xzr".into()), &["intensity"], 9.5f32)?;
 edit.add(Kind::Object, Id::from_bits(random), "ball", &[("mesh", "block".into())], None)?;

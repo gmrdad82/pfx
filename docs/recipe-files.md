@@ -54,7 +54,7 @@ With `[output] bake`, `pfx build` writes a `pfx bake` recipe in the engine's `ba
 
 ## The scene file
 
-With `[output] scene`, `pfx build` writes the engine's runtime scene ([its format](scene-format.md)): into the `.pitofx` as its scene, and as a `*.scene.toml` beside it only for a build with `--set`, a variant or a pick, which leaves the document as it is. `pfx shot <x.pitofx>` draws the document's scene.
+With `[output] scene`, `pfx build` writes the engine's runtime scene ([its format](scene-format.md)): into the `.pitofx` as its scene. A build with `--set`, a variant or a pick leaves the document as it is and packs its scene, with the material library, proxies and meshes it reads, into a `.pitofx` beside it, named after the `[output] scene` entry (`x-bare.pitofx` for the variant `bare`; `x.scene.pitofx` when the name would be the document's own); no loose `.scene.toml` is left. `pfx shot <x.pitofx>` draws the document's scene, and `pfx shot` the packed one the same way.
 
 A recipe's shot effects (spot and parented lights, particle systems, flare, motion blur, haze, wet materials, a LUT and a sound file) and the analytic sky's `turbidity` and `ground_albedo` pass into the scene under pfx-scene 1.1.0's keys; [the recipe](recipe-format.md) lists them under "Shot effects".
 

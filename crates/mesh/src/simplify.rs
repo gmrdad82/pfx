@@ -40,7 +40,26 @@ pub struct Simplified {
     pub error: f32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimplifySettings {
+    pub lock_borders: bool,
+}
+
+impl Default for SimplifySettings {
+    fn default() -> SimplifySettings {
+        SimplifySettings { lock_borders: true }
+    }
+}
+
 pub fn simplify(mesh: &Mesh, target_triangles: usize) -> Simplified {
+    simplify_with(mesh, target_triangles, SimplifySettings::default())
+}
+
+pub fn simplify_with(
+    mesh: &Mesh,
+    target_triangles: usize,
+    settings: SimplifySettings,
+) -> Simplified {
     let n = mesh.positions.len();
     let normals = (mesh.normals.len() == n).then_some(&mesh.normals);
     let uvs = mesh.uvs.as_ref().filter(|u| u.len() == n);
@@ -108,6 +127,7 @@ pub fn simplify(mesh: &Mesh, target_triangles: usize) -> Simplified {
         &mut indices,
         &mut tris,
         target_triangles.saturating_mul(3),
+        settings,
     );
     let mut order: Vec<usize> = (0..tris.len()).collect();
     order.sort_by_key(|&t| tris[t]);
@@ -232,7 +252,12 @@ fn position_remap(positions: &[[f32; 3]]) -> (Vec<u32>, Vec<u32>) {
     (remap, wedge)
 }
 
-fn classify(adjacency: &Adjacency, remap: &[u32], wedge: &[u32]) -> (Vec<u8>, Vec<u32>, Vec<u32>) {
+fn classify(
+    adjacency: &Adjacency,
+    remap: &[u32],
+    wedge: &[u32],
+    settings: SimplifySettings,
+) -> (Vec<u8>, Vec<u32>, Vec<u32>) {
     let n = remap.len();
     let mut out = vec![NONE; n];
     let mut inc = vec![NONE; n];
@@ -296,9 +321,11 @@ fn classify(adjacency: &Adjacency, remap: &[u32], wedge: &[u32]) -> (Vec<u8>, Ve
             LOCKED
         };
     }
-    for k in &mut kind {
-        if *k == BORDER {
-            *k = LOCKED;
+    if settings.lock_borders {
+        for k in &mut kind {
+            if *k == BORDER {
+                *k = LOCKED;
+            }
         }
     }
     (kind, out, inc)
@@ -1027,6 +1054,7 @@ fn reduce(
     indices: &mut Vec<u32>,
     tris: &mut Vec<u32>,
     target_index_count: usize,
+    settings: SimplifySettings,
 ) -> f32 {
     let n = positions.len();
     if indices.len() <= target_index_count || n == 0 {
@@ -1035,7 +1063,7 @@ fn reduce(
     let mut adjacency = Adjacency::new(n, indices.len());
     adjacency.update(indices, None);
     let (remap, wedge) = position_remap(positions);
-    let (kind, mut lp, mut lb) = classify(&adjacency, &remap, &wedge);
+    let (kind, mut lp, mut lb) = classify(&adjacency, &remap, &wedge, settings);
     let (points, scale) = rescale(positions);
     let mut q = Quadrics {
         vertex: vec![Quadric::default(); n],
@@ -1193,6 +1221,40 @@ mod tests {
         assert_eq!(morph.positions[0].len(), s.mesh.positions.len());
         for (p, d) in s.mesh.positions.iter().zip(&morph.positions[0]) {
             assert_eq!(d[2], p[0] * 2.0);
+        }
+    }
+
+    #[test]
+    fn unlocked_borders_take_loose_tufts_down_to_their_count_without_a_uv_fold() {
+        let mut tufts = Mesh::default();
+        for k in 0..60 {
+            let (x, y) = ((k % 10) as f64 * 0.3, (k / 10) as f64 * 0.3);
+            let mut tuft = surface([6, 6], |u, v| {
+                [x + u * 0.2, y + v * 0.2, (u * 4.0 + k as f64).sin() * 0.03]
+            });
+            for uv in tuft.uvs.as_mut().unwrap() {
+                *uv = [
+                    ((k % 10) as f32 + uv[0] * 0.9) / 10.0,
+                    ((k / 10) as f32 + uv[1] * 0.9) / 10.0,
+                ];
+            }
+            tufts.append(&tuft);
+        }
+        let target = tufts.triangle_count() / 20;
+        let locked = simplify(&tufts, target).mesh.triangle_count();
+        let open = simplify_with(
+            &tufts,
+            target,
+            SimplifySettings {
+                lock_borders: false,
+            },
+        );
+        let landed = open.mesh.triangle_count();
+        assert!(locked > target * 4, "{locked} for {target}");
+        assert!(landed <= target + target / 10, "{landed} for {target}");
+        assert_eq!(flipped(&open.mesh, 1.0), 0);
+        for (v, &source) in open.sources.iter().enumerate() {
+            assert_eq!(open.mesh.positions[v], tufts.positions[source as usize]);
         }
     }
 

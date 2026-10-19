@@ -141,9 +141,15 @@ stop_recorded() {
 }
 
 check_scene() {
-  local scene=$1
-  [[ -n $scene ]] || die "usage: bin/rig up <scene.toml|neutral> <name>"
-  [[ $scene == neutral ]] && scene=$NEUTRAL
+  local scene=$1 rig=$2 binary=$3
+  [[ -n $scene ]] || die "usage: bin/rig up <scene.pitofx|neutral> <name>"
+  if [[ $scene == neutral ]]; then
+    rm -rf "$rig/neutral"
+    mkdir -p "$rig/neutral"
+    cp "$(dirname "$NEUTRAL")"/* "$rig/neutral/"
+    "$binary" scene migrate "$rig/neutral/$(basename "$NEUTRAL")" >/dev/null || die "cannot import the neutral scene into $rig/neutral"
+    scene=$rig/neutral/$(basename "$NEUTRAL" .scene.toml).pitofx
+  fi
   [[ -f $scene ]] || die "no scene at [$scene]"
   realpath "$scene"
 }
@@ -157,14 +163,14 @@ check_binary() {
 
 up() {
   local scene=${1-}
-  local name=${2:?usage: bin/rig up <scene.toml|neutral> <name>}
+  local name=${2:?usage: bin/rig up <scene.pitofx|neutral> <name>}
   local binary="$PWD/target/release/$APP"
   local compositor=${RIG_COMPOSITOR:-cage}
   local app_pid="" socket="" comp_pid="" launcher_pid="" attempt rig live
 
   rig=$(rig_path "$name")
-  scene=$(check_scene "$scene")
   check_binary "$binary"
+  scene=$(check_scene "$scene" "$rig" "$binary")
   [[ $compositor == cage || $compositor == labwc ]] || die "RIG_COMPOSITOR must be cage or labwc, got [$compositor]"
 
   if [[ -f $rig/app.pid ]]; then
@@ -333,5 +339,5 @@ case ${1-} in
   pointer) shift; pointer "$@" ;;
   down) shift; down "$@" ;;
   ls) ls_rigs ;;
-  *) die "usage: bin/rig {up <scene.toml|neutral> <name>|shot <name> <file>|keys <name> <wtype args>|pointer <name> <wlrctl pointer args>|down <name>|ls}" ;;
+  *) die "usage: bin/rig {up <scene.pitofx|neutral> <name>|shot <name> <file>|keys <name> <wtype args>|pointer <name> <wlrctl pointer args>|down <name>|ls}" ;;
 esac

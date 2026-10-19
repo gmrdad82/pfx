@@ -29,7 +29,7 @@ impl Game for Empty {
 fn main() -> ExitCode {
     let world = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/examples/empty/world/empty.scene.toml"
+        "/examples/empty/world/empty.pitofx"
     );
     let config = Config::new("empty", env!("CARGO_PKG_VERSION"), world).font(FONT);
     pfx_game::launch(

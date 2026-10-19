@@ -1,6 +1,6 @@
 # Recipes
 
-A recipe is TOML that describes a scene to build, kept inside a `.pitofx` document: objects from generic kinds (boxes, lathes, sweeps, extrusions, text, cards, imported glTF) and from generators, materials, cameras, lights, the sun and the sky, routes, keys and a timeline. It starts with `recipe = 1`. pfx builds a recipe headless into a GLB, its sidecar and a `scene.toml`, the same bytes on Linux, Windows and macOS; draws it live with `pfx shot <file.pitofx> --still`; and path-traces it with `pfx render --recipe <file.pitofx>`.
+A recipe is TOML that describes a scene to build, kept inside a `.pitofx` document: objects from generic kinds (boxes, lathes, sweeps, extrusions, text, cards, imported glTF) and from generators, materials, cameras, lights, the sun and the sky, routes, keys and a timeline. It starts with `recipe = 1`. pfx builds a recipe headless into a GLB, its sidecar and a scene, the same bytes on Linux, Windows and macOS; draws it live with `pfx shot <file.pitofx> --still`; and path-traces it with `pfx render --recipe <file.pitofx>`.
 
 The crates behind it are libraries an app or a game links on its own: `pfx-recipe` (parse, validate, patch), `pfx-mesh` (geometry), `pfx-generators` (a kit for an app's own generators), `pfx-build` (recipe to GLB, sidecar and bake recipe), `pfx-glb` (the deterministic GLB writer and reader), `pfx-motion` (routes, noise, the timeline), `pfx-recipe-scene` (recipe to engine scene and the headless still), `pfx-runtime` (a GLB and its sidecar into live instances) and `pfx-still` (path-traced stills).
 

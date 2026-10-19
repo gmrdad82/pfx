@@ -10,6 +10,9 @@ struct Frame {
     lens: vec4f,
     window: vec4u,
     columns: vec4u,
+    fog: vec4f,
+    fog_tint: vec4f,
+    fog_light: vec4f,
 }
 override TOTAL_BOUNCES: u32 = 16u;
 override DIFFUSE_BOUNCES: u32 = 4u;
@@ -27,6 +30,7 @@ override TRACE_THIN: bool = true;
 override TRACE_ALPHA: bool = true;
 override TRACE_FLAKES: bool = true;
 override TRACE_MOTION: bool = false;
+override TRACE_FOG: bool = false;
 override SOBOL_LENGTH: u32 = 256u;
 override STEAM_SPREAD_BASE: f32 = 0.7;
 override STEAM_SPREAD_GROWTH: f32 = 4.0;
@@ -103,6 +107,7 @@ const EXTENSION_FLAKES: u32 = 128u;
 var<private> traced_flaked: bool = false;
 var<private> traced_flake: vec3f = vec3f(0.0, 0.0, 1.0);
 var<private> traced_thin: bool = false;
+var<private> volume_vertex: bool = false;
 fn record_at(at: u32) -> Material {
     return Material(materials[at],materials[at+1u],materials[at+2u],materials[at+3u],
         materials[at+4u],materials[at+5u],materials[at+6u],materials[at+7u]);
@@ -1630,6 +1635,12 @@ fn emitter_weight(hit: Hit, p: vec3f, previous_point: vec3f, previous_pdf: f32) 
 fn light_hits(o: vec3f, d: vec3f, limit: f32, previous_point: vec3f, previous_pdf: f32) -> vec3f {
     return vec3f(0.0);
 }
+fn emitters_looped() -> u32 {
+    return 0u;
+}
+fn light_position(i: u32) -> vec3f {
+    return vec3f(0.0);
+}
 fn light_slots() -> u32 {
     return 0u;
 }
@@ -1705,6 +1716,199 @@ fn indirect_capped(value: vec3f, deep: bool) -> vec3f {
     if (!(luma>CLAMP_INDIRECT)) { return value; }
     return value*(CLAMP_INDIRECT/luma);
 }
+const FOG_DIM: u32 = 0x100000u;
+const FOG_PDF_CUTOFF: f32 = 1e-8;
+fn fog_density(y: f32) -> f32 {
+    return frame.fog.z*exp(min(-frame.fog.y*(y-frame.fog.x),30.0));
+}
+fn fog_span(o: vec3f, d: vec3f, limit: f32) -> vec2f {
+    let q=o-frame.origin.xyz;
+    let b=dot(q,d);
+    let h=b*b-(dot(q,q)-frame.fog.w*frame.fog.w);
+    if (!(h>0.0) || !(frame.fog.z>0.0)) { return vec2f(1.0,0.0); }
+    let s=sqrt(h);
+    return vec2f(max(-b-s,0.0),min(-b+s,limit));
+}
+fn fog_depth(o: vec3f, d: vec3f, lo: f32, hi: f32) -> f32 {
+    let length=hi-lo;
+    if (!(length>0.0)) { return 0.0; }
+    let density=fog_density(o.y+d.y*lo);
+    let x=frame.fog.y*d.y*length;
+    if (abs(x)>1e-3) { return density*length*(1.0-exp(-x))/x; }
+    return density*length*(1.0-x*(0.5-x/6.0));
+}
+fn fog_transmit(o: vec3f, d: vec3f, limit: f32) -> f32 {
+    let span=fog_span(o,d,limit);
+    if (span.y<=span.x) { return 1.0; }
+    return exp(-fog_depth(o,d,span.x,span.y));
+}
+fn fog_distance(o: vec3f, d: vec3f, lo: f32, hi: f32, depth: f32) -> f32 {
+    let density=fog_density(o.y+d.y*lo);
+    if (!(density>0.0)) { return hi; }
+    let c=frame.fog.y*d.y;
+    let x=depth*c/density;
+    var s=depth/density;
+    if (abs(x)>1e-3) { s=-log(max(1.0-x,1e-30))/c; } else { s*=1.0+x*(0.5+x/3.0); }
+    return clamp(lo+s,lo,hi);
+}
+fn fog_distance_pdf(o: vec3f, d: vec3f, span: vec2f, attenuation: f32, t: f32) -> f32 {
+    return fog_density(o.y+d.y*t)*exp(-fog_depth(o,d,span.x,t))/attenuation;
+}
+fn fog_equiangular(o: vec3f, d: vec3f, light: vec3f, span: vec2f, u: f32) -> vec2f {
+    let delta=dot(light-o,d);
+    let D=length(light-o-d*delta);
+    if (D==0.0) { return vec2f(0.0); }
+    let theta_a=atan2(span.x-delta,D);
+    let theta_b=atan2(span.y-delta,D);
+    let theta_d=theta_b-theta_a;
+    if (theta_d<1e-6) { return vec2f(mix(span.x,span.y,u),1.0/max(span.y-span.x,1e-30)); }
+    let t=D*tan(u*theta_b+(1.0-u)*theta_a);
+    return vec2f(clamp(delta+t,span.x,span.y),D/(theta_d*(D*D+t*t)));
+}
+fn fog_equiangular_pdf(o: vec3f, d: vec3f, light: vec3f, span: vec2f, t: f32) -> f32 {
+    let delta=dot(light-o,d);
+    let D=length(light-o-d*delta);
+    if (D==0.0) { return 0.0; }
+    let theta_d=atan2(span.y-delta,D)-atan2(span.x-delta,D);
+    if (theta_d<1e-6) { return 1.0/max(span.y-span.x,1e-30); }
+    let s=t-delta;
+    return D/(theta_d*(D*D+s*s));
+}
+fn fog_phase(cosine: f32, g: f32) -> f32 {
+    if (abs(g)<1e-3) { return 1.0/(4.0*PI); }
+    let fac=1.0+g*(g-2.0*cosine);
+    return (1.0-g*g)/(4.0*PI*fac*sqrt(max(fac,0.0)));
+}
+fn fog_phase_sample(d: vec3f, g: f32, u: vec2f) -> vec4f {
+    var cosine=1.0-2.0*u.x;
+    if (abs(g)>=1e-3) {
+        let k=(1.0-g*g)/(1.0-g*cosine);
+        cosine=(1.0+g*g-k*k)/(2.0*g);
+    }
+    cosine=clamp(cosine,-1.0,1.0);
+    let sine=sqrt(max(1.0-cosine*cosine,0.0));
+    let phi=2.0*PI*u.y;
+    return vec4f(normalize(basis(d)*vec3f(sine*cos(phi),sine*sin(phi),cosine)),fog_phase(cosine,g));
+}
+fn fog_light_at(k: u32) -> vec4f {
+    if (k<3u) { return vec4f(0.0); }
+    let slot=k-2u;
+    if (slot>u32(emitters_looped())) { return vec4f(0.0); }
+    return vec4f(light_position(slot-1u),1.0);
+}
+fn fog_lit(k: u32, x: vec3f, d: vec3f, mis: bool, state: ptr<function,u32>, u: vec4f) -> vec3f {
+    let g=frame.fog_tint.w;
+    var direction=vec3f(0.0,0.0,1.0);
+    var strength=vec3f(0.0);
+    var limit=1e19;
+    var pdf=0.0;
+    var shape=0u;
+    if (k==0u) {
+        if (frame.sun_color.w<=0.0) { return vec3f(0.0); }
+        direction=normalize(frame.sun_dir.xyz);
+        if (frame.sun_dir.w<1.0) {
+            let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
+            let radius=sqrt(max(0.0,1.0-height*height));
+            let phi=2.0*PI*rnd(state,u.y);
+            direction=normalize(basis(direction)*vec3f(radius*cos(phi),radius*sin(phi),height));
+        }
+        strength=frame.sun_color.xyz*frame.sun_color.w;
+    } else if (k==1u) {
+        if (sky_cdf.width==0u) { return vec3f(0.0); }
+        let light=sky_sample(vec2f(rnd(state,u.x),rnd(state,u.y)));
+        direction=light.direction;
+        strength=sky_surface_radiance(direction);
+        pdf=light.pdf;
+        if (!(pdf>0.0)) { return vec3f(0.0); }
+    } else {
+        let transform=basis(d);
+        volume_vertex=true;
+        let picked=direct_light(k-2u,transform,x,x,d,state,u);
+        volume_vertex=false;
+        if (picked.limit<0.0) { return vec3f(0.0); }
+        direction=normalize(transform*picked.wi);
+        strength=picked.scale;
+        pdf=picked.pdf;
+        limit=picked.limit;
+        shape=picked.shape;
+    }
+    let phase=fog_phase(dot(d,direction),g);
+    if (pdf>0.0 && !mis) {
+        strength/=pdf;
+    } else if (pdf>0.0) {
+        if (k==1u) {
+            strength/=pdf+phase;
+        } else {
+            let ratio=phase/pdf;
+            strength/=pdf*(1.0+ratio*ratio);
+        }
+    }
+    if (shape>0u) {
+        let i=shape-1u;
+        var t=1e20;
+        if (u32(shapes[i].a.w)==5u) { t=union_hit(i,x,direction,1e20); } else { t=primitive_hit(i,x,direction,1e20); }
+        if (t<=0.0001 || t>=1e19) { return vec3f(0.0); }
+        limit=t*0.9999-0.0002;
+    }
+    var seen=vec3f(1.0);
+    if (limit>0.0) {
+        if (TRANSMISSIVE_SHADOWS) { seen=shadow_passed(x,direction,limit); } else if (occluded(x,direction,limit)) { seen=vec3f(0.0); }
+        seen*=fog_transmit(x,direction,limit);
+    }
+    if (k==0u) { seen=mix(vec3f(1.0),seen,frame.fog_light.x); }
+    return strength*phase*seen;
+}
+fn fog_direct(o: vec3f, d: vec3f, span: vec2f, attenuation: f32, mis: bool, state: ptr<function,u32>) -> vec3f {
+    var total=vec3f(0.0);
+    let albedo=frame.fog_tint.xyz;
+    let sun=dot(frame.sun_color.xyz,INDIRECT_LUMA)*max(frame.sun_color.w,0.0);
+    let sky=select(0.0,max(sky_cdf.energy,0.0),sky_cdf.width>0u);
+    var pick=select(0.0,1.0,sun>0.0);
+    if (sun>0.0 && sky>0.0) { pick=clamp(sun/(sun+sky),0.1,0.9); }
+    let sun_picked=rnd(state,sobol(FOG_DIM).y)<pick;
+    for (var k=0u;k<2u+light_slots();k++) {
+        var chance=1.0;
+        if (k==0u) {
+            if (!sun_picked) { continue; }
+            chance=pick;
+        } else if (k==1u) {
+            if (sun_picked) { continue; }
+            chance=1.0-pick;
+        }
+        let u=sobol(FOG_DIM+2u+2u*k);
+        var r=rnd(state,u.x);
+        let light=fog_light_at(k);
+        var t=0.0;
+        var weight=0.0;
+        let equiangular=light.w>0.5;
+        var chose_equiangular=false;
+        if (equiangular) {
+            if (r<0.5) { r*=2.0; } else { r=(r-0.5)*2.0; chose_equiangular=true; }
+        }
+        if (chose_equiangular) {
+            let sample=fog_equiangular(o,d,light.xyz,span,r);
+            if (!(sample.y>FOG_PDF_CUTOFF)) { continue; }
+            t=sample.x;
+            let density=fog_density(o.y+d.y*t);
+            let transmit=exp(-fog_depth(o,d,span.x,t));
+            let distance=fog_distance_pdf(o,d,span,attenuation,t);
+            let ratio=distance/sample.y;
+            weight=density*transmit/sample.y*2.0/(1.0+ratio*ratio);
+        } else {
+            let depth=-log(max(1.0-r*attenuation,1e-30));
+            t=fog_distance(o,d,span.x,span.y,depth);
+            weight=attenuation;
+            if (equiangular) {
+                let distance=fog_density(o.y+d.y*t)*exp(-depth)/attenuation;
+                let ratio=fog_equiangular_pdf(o,d,light.xyz,span,t)/max(distance,1e-30);
+                weight*=2.0/(1.0+ratio*ratio);
+            }
+        }
+        if (!(weight>0.0)) { continue; }
+        total+=albedo*(weight/chance)*fog_lit(k,o+d*t,d,mis,state,sobol(FOG_DIM+3u+2u*k));
+    }
+    return total;
+}
 fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<function,vec4f>, first_normal: ptr<function,vec4f>) -> vec3f {
     var o=o0;
     var d=d0;
@@ -1717,12 +1921,65 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
     var lit_vertex=false;
     var through=false;
     var diffused=false;
+    var fog_albedo=vec3f(0.0);
+    var medium=false;
+    var scatters=0u;
     for (var bounce=0u;bounce<=TOTAL_BOUNCES+1u;bounce++) {
         if (SOBOL) { rng.z=16u*(bounce+1u); }
         let hit=scene(o,d,1e20,false);
         let seen=TRANSMISSIVE_SHADOWS && through;
-        if (!seen) { result+=indirect_capped(throughput*light_hits(o,d,hit.t,spawn_point(o,-d,o,0.0),previous_pdf),bounce>1u); }
+        var reach=hit.t;
+        var scatter=-1.0;
+        var ends=false;
+        if (TRACE_FOG) {
+            let span=fog_span(o,d,hit.t);
+            if (span.y>span.x) {
+                let transmit=exp(-fog_depth(o,d,span.x,span.y));
+                let attenuation=1.0-transmit;
+                if (bounce==0u) { fog_albedo=frame.fog_tint.xyz*attenuation; }
+                if (last) {
+                    throughput*=transmit;
+                } else if (attenuation>0.0) {
+                    ends=scatters+1u>=u32(frame.fog_light.y);
+                    result+=indirect_capped(throughput*fog_direct(o,d,span,attenuation,!ends,state),bounce>0u);
+                    let r=rnd(state,sobol(FOG_DIM).x);
+                    if (r<attenuation) {
+                        scatter=fog_distance(o,d,span.x,span.y,-log(max(1.0-r,1e-30)));
+                        reach=scatter;
+                    }
+                }
+            }
+        }
+        let origin_point=select(spawn_point(o,-d,o,0.0),o,medium);
+        if (!seen) { result+=indirect_capped(throughput*light_hits(o,d,reach,origin_point,previous_pdf),bounce>1u); }
+        if (scatter>=0.0) {
+            let p=o+d*scatter;
+            if (bounce==0u) {
+                *first_albedo=vec4f(fog_albedo,1.0);
+                *first_normal=vec4f(-d,1.0);
+            }
+            if (ends) { break; }
+            throughput*=frame.fog_tint.xyz;
+            let sample=fog_phase_sample(d,frame.fog_tint.w,vec2f(rnd(state,sobol(FOG_DIM+1u).x),rnd(state,sobol(FOG_DIM+1u).y)));
+            diffused=true;
+            lobes.x+=1u;
+            scatters+=1u;
+            last=bounce>=TOTAL_BOUNCES || lobes.x>DIFFUSE_BOUNCES || scatters>=u32(frame.fog_light.y);
+            through=false;
+            lit_vertex=true;
+            medium=true;
+            d=sample.xyz;
+            previous_pdf=sample.w;
+            o=p;
+            if (bounce>=3u) {
+                let keep=clamp(max(throughput.r,max(throughput.g,throughput.b)),0.05,0.95);
+                if (rnd(state,sobol(0u).x)>keep) { break; }
+                throughput/=keep;
+            }
+            continue;
+        }
         if (hit.t>=1e19) {
+            if (TRACE_FOG && bounce==0u) { *first_albedo=vec4f(fog_albedo,0.0); }
             if (bounce==0u && frame.forward.w>0.0) { break; }
             if (seen && sky_cdf.width>0u) { break; }
             let pdf=sky_pdf(d);
@@ -1821,10 +2078,10 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             s.clearcoat_roughness=max(s.clearcoat_roughness,FILTER_GLOSSY);
         }
         if (bounce==0u) {
-            *first_albedo=vec4f(s.base,1.0);
+            *first_albedo=vec4f(select(s.base,s.base+fog_albedo,TRACE_FOG),1.0);
             *first_normal=vec4f(n,1.0);
         }
-        s.emission*=emitter_weight(hit,p,spawn_point(o,-d,o,0.0),previous_pdf);
+        s.emission*=emitter_weight(hit,p,origin_point,previous_pdf);
         if (seen && sampled_emitter(hit)) { s.emission=vec3f(0.0); }
         result+=indirect_capped(throughput*s.emission,bounce>1u);
         if (last) { break; }
@@ -1895,6 +2152,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                 if (t<=0.0001 || t>=1e19) { continue; }
                 limit=t*0.9999-0.0002;
             }
+            if (TRACE_FOG && limit>0.0) { strength*=fog_transmit(origin,direction,limit); }
             if (limit>0.0) {
                 if (TRANSMISSIVE_SHADOWS) {
                     var unshadowed=throughput*traced_eval(lit,wo,local)*select(1.0,glossy_share(s),pdf>0.0)*local.z*strength;
@@ -1932,6 +2190,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             previous_pdf=sample.pdf;
         }
         o=spawn_point(p,d,o,hit.t);
+        medium=false;
         if (bounce>=3u) {
             let keep=clamp(max(throughput.r,max(throughput.g,throughput.b)),0.05,0.95);
             if (rnd(state,sobol(0u).x)>keep) { break; }

@@ -1,9 +1,9 @@
 use crate::normal_map::{dilate, raster, rgb_png};
-use crate::{Error, Part, fail, maps};
+use crate::{Error, Part, fail, lod, maps, normal_map};
 use glam::{DMat3, DMat4, DVec3};
 use pfx_bake::detail::{Input, sample};
-use pfx_glb::{Look, Looks, Map, Node};
-use pfx_materials::{Material, NoiseLayer, encode_channel};
+use pfx_glb::{Lod, Look, Looks, Map, Node};
+use pfx_materials::{At, Material, NoiseLayer, encode_channel, resolve};
 use pfx_mesh::{Mesh, Slot};
 use pfx_recipe::Recipe;
 use std::collections::BTreeMap;
@@ -70,12 +70,17 @@ fn unit(normal: V3, positions: &[V3], triangle: &[u32]) -> V3 {
 }
 
 fn piece(mesh: &Mesh, slots: &[Slot]) -> Option<Mesh> {
+    cut(mesh, slots).map(|(piece, _)| piece)
+}
+
+fn cut(mesh: &Mesh, slots: &[Slot]) -> Option<(Mesh, Vec<u32>)> {
     let vertices = mesh.positions.len();
     let uvs = mesh.uvs.as_ref().filter(|uvs| uvs.len() == vertices)?;
     if mesh.normals.len() != vertices {
         return None;
     }
     let mut remap = vec![u32::MAX; vertices];
+    let mut sources = Vec::new();
     let mut out = Mesh {
         uvs: Some(Vec::new()),
         ..Mesh::default()
@@ -92,6 +97,7 @@ fn piece(mesh: &Mesh, slots: &[Slot]) -> Option<Mesh> {
             let at = &mut remap[old as usize];
             if *at == u32::MAX {
                 *at = out.positions.len() as u32;
+                sources.push(old);
                 out.positions.push(mesh.positions[old as usize]);
                 out.normals
                     .push(unit(mesh.normals[old as usize], &mesh.positions, triangle));
@@ -102,7 +108,7 @@ fn piece(mesh: &Mesh, slots: &[Slot]) -> Option<Mesh> {
             out.indices.push(*at);
         }
     }
-    (!out.indices.is_empty()).then_some(out)
+    (!out.indices.is_empty()).then_some((out, sources))
 }
 
 pub(crate) fn layered(material: &Material) -> bool {
@@ -245,6 +251,157 @@ pub(crate) fn texels(
     })
 }
 
+pub(crate) struct Transfer<'a> {
+    pub(crate) master: &'a Mesh,
+    pub(crate) level: &'a Mesh,
+    pub(crate) tangents: Option<&'a [[f32; 4]]>,
+    pub(crate) distance: f32,
+    pub(crate) along_master: bool,
+}
+
+fn framed(target: V3, n: V3, t: V3, b: V3) -> V3 {
+    let det = dot(t, cross(b, n));
+    let local = if det.abs() > 1e-12 {
+        [
+            dot(cross(b, n), target) / det,
+            dot(cross(n, t), target) / det,
+            dot(cross(t, b), target) / det,
+        ]
+    } else {
+        [
+            dot(normalize(t), target),
+            dot(normalize(b), target),
+            dot(n, target),
+        ]
+    };
+    normalize(local)
+}
+
+pub(crate) fn transferred(
+    transfer: &Transfer,
+    matrix: DMat4,
+    material: &Material,
+    size: u32,
+) -> Result<Texels, String> {
+    let low = transfer.level;
+    let uvs = low.uvs.as_deref().ok_or("the level has no TEXCOORD_0")?;
+    let master_uvs = transfer
+        .master
+        .uvs
+        .as_deref()
+        .ok_or("the object has no TEXCOORD_0")?;
+    let side = size as usize;
+    let raster = raster(low, uvs, side, "layer maps")?;
+    let mut placed = world(low, matrix);
+    if let Some(tangents) = transfer.tangents {
+        let frame = Frame::new(matrix);
+        placed.tangents = tangents.iter().map(|&t| frame.tangent(t)).collect();
+    }
+    let seen = world(transfer.master, matrix);
+    let hit_mesh = Mesh {
+        positions: seen.positions,
+        normals: seen.normals,
+        indices: transfer.master.indices.clone(),
+        ..Mesh::default()
+    };
+    let caster = normal_map::Master::new(&hit_mesh);
+    let mut base = vec![0u8; side * side * 3];
+    let mut surface = vec![0u8; side * side * 3];
+    let mut normal = vec![0u8; side * side * 3];
+    let mut filled = vec![false; side * side];
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .clamp(1, THREADS);
+    let rows = side.div_ceil(threads);
+    std::thread::scope(|scope| {
+        for (chunk, (((bs, ss), ns), fl)) in base
+            .chunks_mut(rows * side * 3)
+            .zip(surface.chunks_mut(rows * side * 3))
+            .zip(normal.chunks_mut(rows * side * 3))
+            .zip(filled.chunks_mut(rows * side))
+            .enumerate()
+        {
+            let (raster, placed, caster) = (&raster, &placed, &caster);
+            let corners = &transfer.master.indices;
+            scope.spawn(move || {
+                let first = chunk * rows * side;
+                for (i, done) in fl.iter_mut().enumerate() {
+                    let at = first + i;
+                    let owner = raster.owner[at];
+                    if owner == NOBODY {
+                        continue;
+                    }
+                    let w = raster.weights[at];
+                    let ids = [0, 1, 2].map(|k| low.indices[owner as usize * 3 + k] as usize);
+                    let mix = |list: [V3; 3]| {
+                        [0, 1, 2].map(|c| list[0][c] * w[0] + list[1][c] * w[1] + list[2][c] * w[2])
+                    };
+                    let p = mix(ids.map(|id| placed.positions[id]));
+                    let n = normalize(mix(ids.map(|id| placed.normals[id])));
+                    let tv = mix(ids.map(|id| {
+                        let t = placed.tangents[id];
+                        [t[0], t[1], t[2]]
+                    }));
+                    let sign: f32 = (0..3).map(|k| placed.tangents[ids[k]][3] * w[k]).sum();
+                    let b = scale(cross(n, tv), if sign < 0.0 { -1.0 } else { 1.0 });
+                    let own = || {
+                        let u = ids.map(|id| uvs[id]);
+                        [0, 1].map(|c| u[0][c] * w[0] + u[1][c] * w[1] + u[2][c] * w[2])
+                    };
+                    let (position, uv, surface_normal) = match caster.cast(p, n, transfer.distance)
+                    {
+                        Some(hit) => {
+                            let tri = &corners[hit.index * 3..hit.index * 3 + 3];
+                            let u = [0, 1, 2].map(|k| master_uvs[tri[k] as usize]);
+                            let hw = hit.weights;
+                            let uv =
+                                [0, 1].map(|c| u[0][c] * hw[0] + u[1][c] * hw[1] + u[2][c] * hw[2]);
+                            let towards = if transfer.along_master {
+                                caster.normal(hit.index, hit.point, n)
+                            } else {
+                                n
+                            };
+                            (hit.point, uv, towards)
+                        }
+                        None => (p, own(), n),
+                    };
+                    let resolved = resolve(
+                        material,
+                        0.0,
+                        &At {
+                            position,
+                            uv,
+                            normal: surface_normal,
+                            edge: 0.0,
+                            time: 0.0,
+                        },
+                    );
+                    bs[i * 3..i * 3 + 3]
+                        .copy_from_slice(&resolved.material.base.map(|c| byte(encode_channel(c))));
+                    ss[i * 3..i * 3 + 3].copy_from_slice(&[
+                        255,
+                        byte(resolved.material.roughness),
+                        255,
+                    ]);
+                    let local = framed(resolved.normal, n, tv, b);
+                    ns[i * 3..i * 3 + 3].copy_from_slice(&local.map(|c| byte(c * 0.5 + 0.5)));
+                    *done = true;
+                }
+            });
+        }
+    });
+    let mut again = filled.clone();
+    dilate(&mut base, &mut again, side, &BARE);
+    let mut again = filled.clone();
+    dilate(&mut surface, &mut again, side, &SMOOTH);
+    dilate(&mut normal, &mut filled, side, &FLAT);
+    Ok(Texels {
+        base,
+        surface,
+        normal,
+    })
+}
+
 fn image(pixels: &[u8], size: u32) -> Result<Map, String> {
     Ok(Map::new(maps::image(rgb_png(pixels, size)?)?))
 }
@@ -259,9 +416,10 @@ pub(crate) fn look(
     plain.layers = [NoiseLayer::default(); pfx_materials::LAYER_CAP];
     let mut look = imported.cloned().unwrap_or_default();
     maps::factors(&mut look, &plain);
-    look.base_color = Some([1.0; 4]);
+    look.base_color = Some([1.0, 1.0, 1.0, plain.alpha]);
     look.roughness = Some(1.0);
     look.metallic = Some(plain.metalness);
+    look.material = Some(serde_json::to_value(plain).map_err(|e| e.to_string())?);
     look.base = Some(image(&texels.base, size)?);
     look.metal_roughness = Some(image(&texels.surface, size)?);
     look.normal = Some(image(&texels.normal, size)?);
@@ -361,6 +519,93 @@ pub(crate) fn bake(
                 "object[{}].bake_layers: no material of the object has a procedural layer, so nothing was baked",
                 recipe.objects[object].name
             ));
+        }
+    }
+    Ok(out)
+}
+
+pub(crate) fn bake_levels(
+    recipe: &Recipe,
+    parts: &[Part],
+    lods: &[Lod],
+    baked: &BTreeMap<usize, Vec<Baked>>,
+    (materials, looks): (&BTreeMap<String, serde_json::Value>, &Looks),
+) -> Result<BTreeMap<usize, Vec<Baked>>, Error> {
+    let mut out = BTreeMap::new();
+    for (at, level) in lods.iter().enumerate() {
+        let (Some(list), Some(part)) = (baked.get(&level.of), parts.get(level.of)) else {
+            continue;
+        };
+        if !lod::authored(level) {
+            continue;
+        }
+        let object = &recipe.objects[part.object];
+        let Some(wanted) = object.bake_layers else {
+            continue;
+        };
+        let facts = &level.extras["lod"];
+        let k = facts["level"].as_u64().unwrap_or(1).saturating_sub(1) as usize;
+        let Some(asked) = object.lod.get(k) else {
+            continue;
+        };
+        let key = format!("lod[{k}].path");
+        let base = part
+            .node
+            .targets
+            .as_ref()
+            .map_or(&part.node.mesh, |t| &t.base);
+        let error = facts["error"].as_f64().unwrap_or(0.0) as f32;
+        let distance = asked
+            .bake_distance
+            .unwrap_or_else(|| lod::default_distance(base, error)) as f32;
+        let matrix = if part.node.keep_transform {
+            part.node.transform
+        } else {
+            DMat4::IDENTITY
+        };
+        let mut done = Vec::new();
+        for item in list {
+            let Some(material) = materials
+                .get(&item.material)
+                .and_then(|value| serde_json::from_value::<Material>(value.clone()).ok())
+            else {
+                continue;
+            };
+            let slots = |mesh: &Mesh| -> Vec<Slot> {
+                mesh.slots
+                    .iter()
+                    .filter(|slot| slot.material == item.material)
+                    .cloned()
+                    .collect()
+            };
+            let (Some(master), Some((low, sources))) = (
+                piece(&part.node.mesh, &slots(&part.node.mesh)),
+                cut(&level.node.mesh, &slots(&level.node.mesh)),
+            ) else {
+                continue;
+            };
+            let tangents: Option<Vec<[f32; 4]>> = level
+                .tangents
+                .as_ref()
+                .map(|list| sources.iter().map(|&s| list[s as usize]).collect());
+            let transfer = Transfer {
+                master: &master,
+                level: &low,
+                tangents: tangents.as_deref(),
+                distance,
+                along_master: asked.bake_normals,
+            };
+            let texels = transferred(&transfer, matrix, &material, wanted.size)
+                .map_err(|text| fail(object, &key, format!("{}: {text}", level.node.name)))?;
+            let look = look(&material, &texels, wanted.size, looks.get(&item.material))
+                .map_err(|text| fail(object, &key, text))?;
+            done.push(Baked {
+                material: item.material.clone(),
+                look,
+            });
+        }
+        if !done.is_empty() {
+            out.insert(at, done);
         }
     }
     Ok(out)

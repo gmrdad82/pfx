@@ -1861,7 +1861,17 @@ hours = { 6 = [0.6, 0.6, 0.7], 12 = [1.0, 1.0, 1.0] }
             was.contains(&("top".to_string(), top.clone()))
                 && was.contains(&("leg".to_string(), leg.clone()))
         );
-        assert_eq!(saved.to_string().replace("0.75", "0.5"), before.to_string());
+        let unplaced = |scene: String| {
+            scene
+                .lines()
+                .filter(|line| !line.starts_with("at = "))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_eq!(
+            unplaced(saved.to_string().replace("0.75", "0.5")),
+            unplaced(before.to_string())
+        );
 
         let patches = rename(loaded(&editor), "top", "board").unwrap();
         editor.gesture(&gesture("rename", patches));

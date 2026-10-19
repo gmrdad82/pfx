@@ -4,6 +4,7 @@ use pfx_gpu::Gpu;
 use pfx_load::Sky;
 use pfx_materials::Material;
 use pfx_trace::detail::{Lens, Transform};
+use pfx_trace::fog::Fog;
 use pfx_trace::motion::Motion;
 use pfx_trace::sobol::Sampler;
 use pfx_trace::stage::{Mesh, Placement, PlacementMotion, Stage};
@@ -306,6 +307,17 @@ pub fn stage(
     size: [u32; 2],
     samples: u32,
 ) -> Result<Trace, String> {
+    stage_fogged(gpu, moves, lit, size, samples, None)
+}
+
+pub fn stage_fogged(
+    gpu: &Gpu,
+    moves: Moves,
+    lit: bool,
+    size: [u32; 2],
+    samples: u32,
+    fog: Option<Fog>,
+) -> Result<Trace, String> {
     let rig = Rig::new(moves);
     let meshes: Vec<Mesh<'_>> = rig.arrays.iter().map(Arrays::mesh).collect();
     let posed = posed(moves, size[0], size[1]);
@@ -352,6 +364,7 @@ pub fn stage(
     }
     .build()?;
     staged.detail.sampler = Sampler::Sobol { samples };
+    staged.detail.fog = fog;
     if moves.steps > 0 {
         staged.detail.motion = Some(Motion {
             steps: moves.steps,

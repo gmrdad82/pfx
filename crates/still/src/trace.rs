@@ -584,6 +584,7 @@ impl Reel {
         self.staging.steps = None;
         self.moving_cameras.clear();
         self.posed_at(time)?;
+        self.staging.refog(&self.recipe);
         if self.built.skinned() {
             for piece in pfx_recipe_scene::pieces(&self.built.skinned_parts(time)) {
                 if let Some(found) = self
@@ -619,23 +620,23 @@ impl Reel {
     }
 
     pub fn pose_moving(&mut self, time: f64, camera: &str) -> Result<Camera, Fault> {
-        let shutter = self
-            .staging
-            .motion_blur
-            .map(|blur| f64::from(blur.shutter))
-            .filter(|_| self.motion_steps > 0);
-        let Some(shutter) = shutter else {
+        let blur = self.staging.motion_blur.filter(|_| self.motion_steps > 0);
+        let Some(blur) = blur else {
             self.pose(time)?;
             return Ok(pfx_recipe_scene::camera(&self.recipe, camera)?.clone());
         };
         let fps = f64::from(self.base.timeline.map_or(1, |t| t.fps));
-        let times = pfx_trace::motion::Shutter::around(
+        let shutter = pfx_trace::motion::Shutter::around(
             time,
             1.0 / fps,
-            shutter,
-            pfx_trace::motion::Position::Center,
-        )
-        .times(pfx_trace::motion::steps_of(self.motion_steps));
+            f64::from(blur.shutter),
+            blur.position,
+        );
+        let steps = pfx_trace::motion::steps_of(self.motion_steps);
+        let times = match self.base.timeline {
+            Some(timeline) => shutter.times_held(steps, 0.0, timeline.seconds()),
+            None => shutter.times(steps),
+        };
         let mut posed = Vec::with_capacity(times.len());
         let mut cameras = Vec::with_capacity(times.len());
         let mut shapes: Vec<(usize, Vec<pfx_recipe_scene::Piece>)> = Vec::new();
@@ -722,6 +723,9 @@ impl Reel {
                 kept.trace.set_projection(lens.projection).map_err(failed)?;
                 kept.trace.set_lens(lens.lens).map_err(failed)?;
                 kept.trace.set_camera(lens.camera).map_err(failed)?;
+                if let Some(fog) = self.staging.fog {
+                    kept.trace.set_fog(fog).map_err(failed)?;
+                }
                 match self.staging.steps.as_ref().filter(|_| moves) {
                     Some(steps) => {
                         let per_step: Vec<Vec<Matrix>> = steps

@@ -3,6 +3,7 @@ pub mod bvh;
 pub mod denoise;
 pub mod detail;
 pub mod film;
+pub mod fog;
 pub mod gpu;
 mod levels;
 pub mod lights;

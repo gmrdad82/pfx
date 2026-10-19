@@ -4,7 +4,7 @@
 
 ## From the command line
 
-The `scene-check` example runs it on a folder. On a copy of the demo with two mistakes, a mesh path written `assets/Ball.gltf` and the lamp's material written `bras`:
+The crate's `scene-check` example runs it on a folder: a game's folder of scene `.pitofx` files, each checked with the files inside it, or a loose project such as the crate's demo, whose scene entry is `scenes/room.scene.toml`. On a copy of the demo with two mistakes, a mesh path written `assets/Ball.gltf` and the lamp's material written `bras`:
 
 ```sh
 cargo run --release -p pfx-scene --example scene-check -- my-copy

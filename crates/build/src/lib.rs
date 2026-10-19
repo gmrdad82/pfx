@@ -2,7 +2,7 @@ use glam::{DMat4, DVec3};
 use pfx_glb::{Lod, Node, Order, Targets, sidecar_text};
 use pfx_mesh::Morph;
 use pfx_mesh::math::Real;
-use pfx_recipe::{self as recipe, Kind, Object, Recipe, Shadow};
+use pfx_recipe::{self as recipe, Kind, LodTarget, Object, Recipe, Shadow};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -304,6 +304,7 @@ pub struct Built {
     wet: BTreeMap<String, (String, pfx_scene::types::Wet)>,
     art: BTreeMap<usize, art::Art>,
     layers: BTreeMap<usize, Vec<layers::Baked>>,
+    level_layers: BTreeMap<usize, Vec<layers::Baked>>,
 }
 
 impl Built {
@@ -371,6 +372,12 @@ impl Built {
         &self.provenance_by_object
     }
 
+    pub(crate) fn baked(&self, at: usize, material: &str) -> bool {
+        self.layers
+            .get(&at)
+            .is_some_and(|list| list.iter().any(|baked| baked.material == material))
+    }
+
     pub(crate) fn dressed(&self, at: usize, looks: &mut Option<Looks>) -> Node {
         let mut node = self.parts[at].node.clone();
         if let Some(baked) = self.layers.get(&at) {
@@ -384,13 +391,9 @@ impl Built {
         node
     }
 
-    pub fn try_glb(&self) -> Result<Vec<u8>, Error> {
+    fn glb_nodes(&self) -> GlbNodes {
         let visible: Vec<usize> = (0..self.parts.len())
             .filter(|&at| !self.parts[at].hidden)
-            .collect();
-        let extras: Vec<Option<serde_json::Value>> = visible
-            .iter()
-            .map(|&at| self.extras.get(at).cloned().flatten())
             .collect();
         let mut placed = vec![None; self.parts.len()];
         for (position, &at) in visible.iter().enumerate() {
@@ -423,19 +426,64 @@ impl Built {
             nodes.push(node);
             parents.push(parent);
         }
-        let leveled: Vec<usize> = self
-            .lods
+        let mut alone = vec![false; nodes.len()];
+        for lod in &self.lods {
+            if let Some(at) = placed.get(lod.of).copied().flatten() {
+                alone[at] = true;
+            }
+        }
+        for (at, &visible_at) in visible.iter().enumerate() {
+            alone[at] |= tracked(visible_at);
+        }
+        for parent in parents.iter().copied().flatten() {
+            alone[parent] = true;
+        }
+        let shared = shared_meshes(&mut nodes, &alone);
+        GlbNodes {
+            visible,
+            nodes,
+            parents,
+            placed,
+            dressed,
+            shared,
+        }
+    }
+
+    pub(crate) fn shared_placements(&self) -> Vec<Option<DMat4>> {
+        let prepared = self.glb_nodes();
+        let mut out = vec![None; self.parts.len()];
+        for (position, &at) in prepared.visible.iter().enumerate() {
+            if prepared.shared[position].is_some() {
+                out[at] = Some(prepared.nodes[position].transform);
+            }
+        }
+        out
+    }
+
+    pub fn try_glb(&self) -> Result<Vec<u8>, Error> {
+        let GlbNodes {
+            visible,
+            nodes,
+            parents,
+            placed,
+            mut dressed,
+            shared,
+        } = self.glb_nodes();
+        let extras: Vec<Option<serde_json::Value>> = visible
             .iter()
-            .filter_map(|lod| placed.get(lod.of).copied().flatten())
+            .map(|&at| self.extras.get(at).cloned().flatten())
             .collect();
-        let shared = shared_meshes(&mut nodes, &leveled);
         let lods: Vec<Lod> = self
             .lods
             .iter()
-            .filter_map(|lod| {
+            .enumerate()
+            .filter_map(|(at, lod)| {
                 let of = placed.get(lod.of).copied().flatten()?;
                 let mut level = Lod { of, ..lod.clone() };
-                if let Some(baked) = self.layers.get(&lod.of) {
+                if let Some(own) = self.level_layers.get(&at) {
+                    let looks = dressed.get_or_insert_with(|| (*self.looks).clone());
+                    layers::dress(&mut level.node, own, looks);
+                } else if let Some(baked) = self.layers.get(&lod.of) {
                     layers::rename(&mut level.node, &self.parts[lod.of].node, baked);
                 }
                 Some(level)
@@ -583,13 +631,24 @@ fn rigid_shape(mesh: &pfx_mesh::Mesh) -> pfx_mesh::rigid::Shape<'_> {
 
 type Lead = (usize, Option<Option<pfx_mesh::rigid::Anchors>>);
 
-fn shared_meshes(nodes: &mut [Node], leveled: &[usize]) -> Vec<Option<usize>> {
+const SNAP: f64 = 1e-6;
+
+struct GlbNodes {
+    visible: Vec<usize>,
+    nodes: Vec<Node>,
+    parents: Vec<Option<usize>>,
+    placed: Vec<Option<usize>>,
+    dressed: Option<Looks>,
+    shared: Vec<Option<usize>>,
+}
+
+fn shared_meshes(nodes: &mut [Node], alone: &[bool]) -> Vec<Option<usize>> {
     use pfx_mesh::rigid;
     let mut shared = vec![None; nodes.len()];
     let mut leads: BTreeMap<u64, Vec<Lead>> = BTreeMap::new();
     for at in 0..nodes.len() {
         let node = &nodes[at];
-        if node.keep_transform || node.targets.is_some() || leveled.contains(&at) {
+        if node.keep_transform || node.targets.is_some() || alone[at] {
             continue;
         }
         let mesh = &node.mesh;
@@ -609,19 +668,24 @@ fn shared_meshes(nodes: &mut [Node], leveled: &[usize]) -> Vec<Option<usize>> {
             else {
                 continue;
             };
-            if let Some(rows) = rigid::register(rigid_shape(known), &anchors, rigid_shape(mesh)) {
-                found = Some((*lead, rows));
+            let placement = rigid::register(rigid_shape(known), &anchors, rigid_shape(mesh))
+                .map(|rows| {
+                    DMat4::from_cols_array(&[
+                        rows[0][0], rows[1][0], rows[2][0], 0.0, rows[0][1], rows[1][1],
+                        rows[2][1], 0.0, rows[0][2], rows[1][2], rows[2][2], 0.0, rows[0][3],
+                        rows[1][3], rows[2][3], 1.0,
+                    ])
+                })
+                .and_then(|matrix| scene::snapped(matrix, SNAP));
+            if let Some(matrix) = placement {
+                found = Some((*lead, matrix));
                 break;
             }
         }
         match found {
-            Some((lead, rows)) => {
+            Some((lead, matrix)) => {
                 let node = &mut nodes[at];
-                node.transform = DMat4::from_cols_array(&[
-                    rows[0][0], rows[1][0], rows[2][0], 0.0, rows[0][1], rows[1][1], rows[2][1],
-                    0.0, rows[0][2], rows[1][2], rows[2][2], 0.0, rows[0][3], rows[1][3],
-                    rows[2][3], 1.0,
-                ]);
+                node.transform = matrix;
                 node.keep_transform = true;
                 node.mesh = pfx_mesh::Mesh::default();
                 shared[at] = Some(lead);
@@ -793,6 +857,19 @@ pub fn outlines(recipe: &Recipe) -> Vec<recipe::Problem> {
         .collect()
 }
 
+pub fn sketch(recipe: &Recipe) -> Recipe {
+    let mut out = recipe.clone();
+    out.textures.clear();
+    for object in &mut out.objects {
+        object.lod.clear();
+        object.bake_layers = None;
+        if let Kind::Card { image, .. } = &mut object.kind {
+            *image = None;
+        }
+    }
+    out
+}
+
 pub fn missing_materials(
     recipe: &Recipe,
     base: &Path,
@@ -804,14 +881,26 @@ pub fn missing_materials(
         .cloned()
         .chain(registry.material_names().map(str::to_string))
         .collect();
+    let out = undefined_materials(recipe, &defined);
     let generated = recipe.objects.iter().any(|object| {
         matches!(&object.kind, Kind::Generator { generator, .. } if registry.generators.contains_key(generator))
             || matches!(object.kind, Kind::Library { .. })
             || pieces::Rules::overrides(object)
     });
-    if generated && let Ok(built) = build_with(recipe, base, registry) {
-        defined.extend(built.materials.keys().cloned());
+    if out.is_empty() || !generated {
+        return out;
     }
+    let Ok(built) = build_with(&sketch(recipe), base, registry) else {
+        return out;
+    };
+    defined.extend(built.materials.keys().cloned());
+    undefined_materials(recipe, &defined)
+}
+
+fn undefined_materials(
+    recipe: &Recipe,
+    defined: &std::collections::BTreeSet<String>,
+) -> Vec<recipe::Problem> {
     let mut out = Vec::new();
     for (i, object) in recipe.objects.iter().enumerate() {
         if object.hidden || matches!(object.kind, Kind::Pocket { .. } | Kind::Text { .. }) {
@@ -866,17 +955,35 @@ pub fn missing_files(recipe: &Recipe, base: &Path) -> Vec<recipe::Problem> {
         .objects
         .iter()
         .enumerate()
-        .filter_map(|(i, object)| match &object.kind {
-            Kind::Mesh { path, .. } if recipe::library_reference(path).is_none() => {
-                recipe.asset(base, path).err().map(|text| {
-                    recipe.problem(
-                        format!("object[{}].path", object.name),
-                        &format!("object#{i}.path"),
-                        text,
-                    )
-                })
-            }
-            _ => None,
+        .flat_map(|(i, object)| {
+            let own = match &object.kind {
+                Kind::Mesh { path, .. } if recipe::library_reference(path).is_none() => Some((
+                    format!("object[{}].path", object.name),
+                    format!("object#{i}.path"),
+                    path,
+                )),
+                _ => None,
+            };
+            let levels =
+                object
+                    .lod
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(k, level)| match &level.target {
+                        LodTarget::File(path) => Some((
+                            format!("object[{}].lod[{k}].path", object.name),
+                            format!("object#{i}.lod#{k}.path"),
+                            path,
+                        )),
+                        _ => None,
+                    });
+            own.into_iter().chain(levels)
+        })
+        .filter_map(|(key, ikey, path)| {
+            recipe
+                .asset(base, path)
+                .err()
+                .map(|text| recipe.problem(key, &ikey, text))
         })
         .collect()
 }
@@ -1263,6 +1370,15 @@ fn make(
         &made,
     )?;
     let matrix = matrix?;
+    let files = authored(recipe, index, (base, routes), registry, cuts, matrix)?;
+    let read: Vec<Option<lod::Authored>> = files
+        .iter()
+        .map(|found| {
+            found
+                .as_ref()
+                .map(|(file, nodes)| lod::Authored { file, nodes })
+        })
+        .collect();
     let inverse = matrix.inverse();
     made.clips = clips
         .into_iter()
@@ -1364,7 +1480,7 @@ fn make(
         };
         let of = made.nodes.len();
         made.lods.extend(
-            lod::levels(object, &node)?
+            lod::levels(object, &node, &read)?
                 .into_iter()
                 .map(|lod| Lod { of, ..lod }),
         );
@@ -1380,6 +1496,46 @@ fn make(
         });
     }
     Ok(made)
+}
+
+type Read = Vec<Option<(String, Vec<Node>)>>;
+
+fn authored(
+    recipe: &Recipe,
+    index: usize,
+    (base, routes): (&Path, &BTreeMap<String, Route>),
+    registry: &Registry,
+    cuts: &[&Object],
+    matrix: DMat4,
+) -> Result<Read, Error> {
+    let object = &recipe.objects[index];
+    let mut out = Vec::with_capacity(object.lod.len());
+    for (k, level) in object.lod.iter().enumerate() {
+        let LodTarget::File(file) = &level.target else {
+            out.push(None);
+            continue;
+        };
+        let mut copy = recipe.clone();
+        let own = &mut copy.objects[index];
+        if let Kind::Mesh { path, morph, .. } = &mut own.kind {
+            *path = file.clone();
+            morph.clear();
+        }
+        own.lod.clear();
+        own.bake_layers = None;
+        let made = make(
+            &copy,
+            index,
+            (base, routes),
+            registry,
+            cuts,
+            Ok(matrix),
+            |_, _| Ok(()),
+        )
+        .map_err(|e| fail(object, &format!("lod[{k}].path"), format!("{file}: {e}")))?;
+        out.push(Some((file.clone(), made.nodes)));
+    }
+    Ok(out)
 }
 
 pub fn build_cached(
@@ -1613,6 +1769,7 @@ fn assemble(
         &looks,
         &mut notes,
     )?;
+    let level_layers = layers::bake_levels(recipe, &parts, &lods, &layers, (&merged, &looks))?;
     notes.extend(scene::left_out(recipe));
     notes.extend(scene::lights_left_out(recipe, &lights));
     Ok(Built {
@@ -1627,6 +1784,7 @@ fn assemble(
         wet,
         art,
         layers,
+        level_layers,
         timeline: recipe.timeline,
         markers: recipe
             .markers

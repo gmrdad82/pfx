@@ -18,7 +18,7 @@ pub(crate) const WINDOW: Size = Size {
 };
 
 pub(crate) fn world() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/empty/world/empty.scene.toml")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/empty/world/empty.pitofx")
 }
 
 #[derive(Default)]
@@ -232,11 +232,7 @@ impl Folder {
             .join(name);
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        let source = world();
-        for entry in std::fs::read_dir(source.parent().unwrap()).unwrap() {
-            let entry = entry.unwrap();
-            std::fs::copy(entry.path(), root.join(entry.file_name())).unwrap();
-        }
+        pfx_load::scene::unpack(&world(), &root).unwrap();
         std::fs::write(root.join("tone.wav"), tone().to_wav()).unwrap();
         let scene = root.join("empty.scene.toml");
         let text = std::fs::read_to_string(&scene).unwrap() + extra;
@@ -711,6 +707,46 @@ mod launcher {
         assert_eq!(code, ExitCode::SUCCESS);
         assert_eq!(made.get(), 3, "one game for each play");
         assert_eq!(stopped.get(), 1 + 2 + 3, "each play stopped its own game");
+    }
+
+    #[cfg(feature = "tools")]
+    #[test]
+    fn edit_help_prints_the_edit_usage_and_never_reaches_the_hook() {
+        for (list, shape) in [
+            (&["edit", "--help"][..], "[--shot <png>]"),
+            (&["edit", "-h"][..], "[--shot <png>]"),
+            (&["edit", "--shot", "a.png", "--help"][..], "[--shot <png>]"),
+            (&["edit", "--help"][..], ""),
+        ] {
+            let (decision, out, err) = decided(list, |commands| {
+                commands
+                    .edit("edits", |_, _| Err::<(), _>("the hook ran"))
+                    .usage("edit", shape);
+            });
+            assert!(done(&decision, 0), "{list:?}: {decision:?}");
+            assert_eq!(
+                out,
+                format!(
+                    "edits\n\nUsage: {}\n\nOptions:\n  -h, --help  Print help\n",
+                    format!("game edit {shape}").trim_end()
+                ),
+                "{list:?}"
+            );
+            assert!(err.is_empty(), "{err}");
+        }
+        let (decision, _, err) = decided(&["edit", "--x"], |commands| {
+            commands
+                .edit("edits", |_, _| Ok::<(), String>(()))
+                .usage("edit", "");
+        });
+        assert!(done(&decision, 2));
+        assert_eq!(
+            err,
+            "error: unexpected argument '--x' found\n\nUsage: game edit\n\nFor more information, try '--help'.\n"
+        );
+        let (decision, _, err) = decided(&["edit", "--help"], |_| {});
+        assert!(done(&decision, 2));
+        assert!(err.contains("unrecognized subcommand 'edit'"), "{err}");
     }
 
     #[cfg(feature = "tools")]

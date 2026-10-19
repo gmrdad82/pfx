@@ -123,7 +123,7 @@ fn emitter_candidate(transform: mat3x3f, p: vec3f, origin: vec3f, state: ptr<fun
             direction=normalize(basis(to/sqrt(distance2))*vec3f(cos(2.0*PI*u2)*sin_theta,sin(2.0*PI*u2)*sin_theta,cos_theta));
         }
         let local=transpose(transform)*direction;
-        if (local.z<=0.0) { return out; }
+        if (local.z<=0.0 && !volume_vertex) { return out; }
         return Candidate(local,e.emission.xyz,e.emission.w*cone_pdf(p,e.a.xyz,e.c.x),0.0,direction,0.0,u32(e.b.w)+1u);
     }
     let r1=sqrt(rnd(state,u.x));
@@ -134,7 +134,7 @@ fn emitter_candidate(transform: mat3x3f, p: vec3f, origin: vec3f, state: ptr<fun
     let distance2=dot(to,to);
     let direction=to/sqrt(max(distance2,1e-30));
     let local=transpose(transform)*direction;
-    if (local.z<=0.0) { return out; }
+    if (local.z<=0.0 && !volume_vertex) { return out; }
     let normal=normalize(cross(e.b.xyz-e.a.xyz,e.c.xyz-e.a.xyz));
     if (abs(dot(normal,p-e.a.xyz))<=1e-5) { return out; }
     let cosine=abs(dot(normal,direction));
@@ -161,7 +161,7 @@ fn light_candidate(light: Light, transform: mat3x3f, p: vec3f, origin: vec3f, ge
         let distance2=dot(to,to);
         let direction=to/sqrt(max(distance2,1e-30));
         let local=transpose(transform)*direction;
-        if (local.z<=0.0) { return out; }
+        if (local.z<=0.0 && !volume_vertex) { return out; }
         let facing=-dot(plane.xyz,direction);
         let cosine=select(facing,abs(facing),light.c.w>0.5);
         if (cosine<=1e-7) { return out; }
@@ -176,7 +176,7 @@ fn light_candidate(light: Light, transform: mat3x3f, p: vec3f, origin: vec3f, ge
     if (distance>=range || distance<=1e-6) { return out; }
     let l=to/distance;
     let local=transpose(transform)*l;
-    if (local.z<=0.0 || dot(geometric,l)<=0.0) { return out; }
+    if (!volume_vertex && (local.z<=0.0 || dot(geometric,l)<=0.0)) { return out; }
     var cone=1.0;
     if (u32(light.a.w)==1u) {
         let along=clamp(dot(-l,light.c.xyz)*light.d.x+light.d.y,0.0,1.0);
@@ -205,9 +205,13 @@ fn tree_importance(n: vec3f, to: vec3f, cos_u: f32, axis: vec3f, theta_o: f32, t
     let sin_u=sin_from_cos(cos_u);
     let cos_i=dot(to,n);
     let sin_i=sin_from_cos(cos_i);
-    let cos_min_i=select(cos_i*cos_u+sin_i*sin_u,1.0,cos_i>=cos_u);
-    if (cos_min_i<0.0) { return vec2f(0.0); }
-    let cos_max_i=max(cos_i*cos_u-sin_i*sin_u,0.0);
+    var cos_min_i=select(cos_i*cos_u+sin_i*sin_u,1.0,cos_i>=cos_u);
+    if (cos_min_i<0.0 && !volume_vertex) { return vec2f(0.0); }
+    var cos_max_i=max(cos_i*cos_u-sin_i*sin_u,0.0);
+    if (volume_vertex) {
+        cos_min_i=1.0;
+        cos_max_i=1.0;
+    }
     var cos_t=1.0;
     var sin_t=0.0;
     if (any(axis!=-to)) {
@@ -234,7 +238,7 @@ fn tree_importance(n: vec3f, to: vec3f, cos_u: f32, axis: vec3f, theta_o: f32, t
 fn node_importance(node: Light, p: vec3f, n: vec3f) -> vec2f {
     let centroid=0.5*(node.a.xyz+node.b.xyz);
     let extent=node.b.xyz-centroid;
-    if (dot(n,centroid-p)+dot(abs(n),abs(extent))<=0.0) { return vec2f(0.0); }
+    if (!volume_vertex && dot(n,centroid-p)+dot(abs(n),abs(extent))<=0.0) { return vec2f(0.0); }
     if (length(p-clamp(p,node.a.xyz,node.b.xyz))>=node.b.w) { return vec2f(0.0); }
     let to=centroid-p;
     let reach=length(to);
@@ -386,6 +390,12 @@ fn tree_light(transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, sta
     var candidate=light_candidate(lights[u32(picked.x)],transform,p,origin,geometric,state,u);
     candidate.scale/=picked.y;
     return candidate;
+}
+fn emitters_looped() -> u32 {
+    return u32(emitters[0].a.y);
+}
+fn light_position(i: u32) -> vec3f {
+    return lights[i].a.xyz;
 }
 fn light_slots() -> u32 {
     return 1u+u32(emitters[0].a.y)+select(0u,1u,emitters[0].a.w>0.5);

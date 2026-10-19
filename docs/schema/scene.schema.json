@@ -1383,6 +1383,12 @@
           "format": "float",
           "type": "number"
         },
+        "bounces": {
+          "format": "uint32",
+          "maximum": 8,
+          "minimum": 0,
+          "type": "integer"
+        },
         "color": {
           "$ref": "#/$defs/Color"
         },
@@ -1773,6 +1779,9 @@
         "max_px": {
           "format": "float",
           "type": "number"
+        },
+        "position": {
+          "$ref": "#/$defs/ShutterPosition"
         },
         "samples": {
           "format": "uint32",
@@ -2737,6 +2746,14 @@
         }
       },
       "type": "object"
+    },
+    "ShutterPosition": {
+      "enum": [
+        "start",
+        "centre",
+        "end"
+      ],
+      "type": "string"
     },
     "Sky": {
       "additionalProperties": false,

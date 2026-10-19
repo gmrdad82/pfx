@@ -405,6 +405,17 @@ pub fn main(args: &[String]) -> ExitCode {
     main_with(args, &Registry::new())
 }
 
+#[cfg(test)]
+pub fn help_text(args: &[String]) -> Option<String> {
+    let words = std::iter::once("pfx").chain(args.iter().map(String::as_str));
+    match Line::try_parse_from(words) {
+        Err(error) if error.kind() == clap::error::ErrorKind::DisplayHelp => {
+            Some(error.render().to_string())
+        }
+        _ => None,
+    }
+}
+
 pub fn main_with(args: &[String], registry: &Registry) -> ExitCode {
     let words = std::iter::once("pfx").chain(args.iter().map(String::as_str));
     let mut verb = match Line::try_parse_from(words) {
@@ -511,7 +522,7 @@ mod tests {
             "scene fold a.pitofx",
             "gui a.toml",
             "gui",
-            "gui content/room.scene.toml --play game.wasm",
+            "gui content/room.pitofx --play game.wasm",
         ] {
             assert!(
                 claims(&strings(&line.split(' ').collect::<Vec<_>>())),
@@ -520,7 +531,7 @@ mod tests {
         }
         for line in [
             "render --scene s --product p --still",
-            "shot room.scene.toml --seconds 1",
+            "shot room.pitofx --seconds 1",
             "new my-game --with-module",
             "scene migrate a.toml",
             "scene",

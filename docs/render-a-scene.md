@@ -102,7 +102,7 @@ Frames are read back one at a time and written by up to 8 threads while the GPU 
 
 ## What it costs
 
-`crates/load/tests/scenes/room.scene.toml` at 2160x3840, 60 fps, 120 frames, PNG, release build, on an AMD Radeon RX 9060 XT under Linux, under `pgpu run --class bench` beside two other jobs:
+The neutral room (`crates/load/tests/scenes/room.scene.toml`, imported once into `room.pitofx`) at 2160x3840, 60 fps, 120 frames, PNG, release build, on an AMD Radeon RX 9060 XT under Linux, under `pgpu run --class bench` beside two other jobs:
 
 | | GPU ms per frame, p50 / p99 | wall ms per frame | shadow map |
 |---|---|---|---|

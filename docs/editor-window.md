@@ -1,14 +1,14 @@
 # Arrange a scene in the window
 
-`pfx gui` opens a recipe in a window drawn by the engine's live renderer. Every edit you make goes straight back into the recipe file, keeping its comments and formatting; there is nothing to save, and Ctrl+Z puts an edit back. A `.pitofx` document keeps its edits until you save it.
+`pfx gui` opens a recipe, a `.pitofx` document, in a window drawn by the engine's live renderer. Every edit you make is kept aside, keeping the recipe's comments and formatting, until Ctrl+S writes it into the `.pitofx`; Ctrl+Z puts an edit back. An old `.toml` recipe is imported once into a `.pitofx` beside it, which then opens.
 
 ## Open a recipe
 
 ```sh
-pfx gui desk.toml          # that recipe
-pfx gui samples/          # the picker, on the recipes of that folder
-pfx gui                    # the start scene, the window's own mark on a floor grid
-pfx gui desk.toml --camera top    # that recipe, looking through its camera top
+pfx gui desk.pitofx                 # that recipe
+pfx gui samples/                    # the picker, on the recipes of that folder
+pfx gui                             # the start scene, the window's own mark on a floor grid
+pfx gui desk.pitofx --camera top    # that recipe, looking through its camera top
 ```
 
 The window opens on the first `[[camera]]`; `--camera <name>` opens on that one instead, in the window, a `--shot` or a `--clip`, and refuses a name the recipe or scene doesn't have in one line that lists the ones it has.
@@ -19,8 +19,8 @@ Ctrl+O opens the picker over the viewport at any time; Esc closes it. The window
 
 The File menu in the top bar opens, saves, imports and exports, through the window's own file picker:
 
-- **Open** (Ctrl+O) takes a recipe, a scene, a `.pitofx` document or a `.glb`, which opens as a new document holding that model.
-- **Save** (Ctrl+S) writes the open `.pitofx`. A `.toml` recipe needs no save: every edit is written as you make it. A `.pitofx` keeps its edits aside until you save, and shows ● after its name, in the top bar and the window's title, until then.
+- **Open** (Ctrl+O) takes a `.pitofx` document (a recipe or a scene) or a `.glb`, which opens as a new document holding that model; an old `.toml` recipe or `.scene.toml` is imported once into a `.pitofx` beside it.
+- **Save** (Ctrl+S) writes the open `.pitofx`. A recipe `.pitofx` keeps its edits aside until you save, and shows ● after its name, in the top bar and the window's title, until then.
 - **Save As .pitofx** (Ctrl+Shift+S) packs the recipe and the files it uses into one `.pitofx`.
 - **Import glTF** adds a `.glb` to the scene as a new mesh object at the origin; in a `.pitofx` the file goes inside the document.
 - **Export glTF** writes the scene, or the selected object, as a standalone `.glb` for other tools.

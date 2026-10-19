@@ -5,7 +5,7 @@ use pfx_build::{Built, build};
 use pfx_recipe::{parse, validate};
 use std::path::Path;
 
-const RECIPE: &str = "recipe = 1\nname = \"t\"\n\n[materials.plaster]\nbase = [0.7, 0.66, 0.6]\nroughness = 0.6\n\nlayers = [\n  { kind = \"fbm\", frequency = 4.0, amplitude = 0.6, seed = 0 },\n  { kind = \"value\", frequency = 9.0, amplitude = 0.3, seed = 2 },\n  { kind = \"none\", frequency = 0.0, amplitude = 0.0, seed = 0 },\n  { kind = \"none\", frequency = 0.0, amplitude = 0.0, seed = 0 },\n]\n\n[[object]]\nname = \"wall\"\nkind = \"plane\"\nsize = [2.0, 1.0]\nat = [0.0, 0.5, -1.0]\nrotate = [90.0, 0.0, 0.0]\nmaterial = \"plaster\"\nbake_layers = { size = 32 }\n\n[[object]]\nname = \"floor\"\nkind = \"plane\"\nsize = [2.0, 2.0]\nmaterial = \"plaster\"\n";
+const RECIPE: &str = "recipe = 1\nname = \"t\"\n\n[materials.plaster]\nbase = [0.7, 0.66, 0.6]\nroughness = 0.6\nspecular = 0.3\nsubsurface = 0.2\n\nlayers = [\n  { kind = \"fbm\", frequency = 4.0, amplitude = 0.6, seed = 0 },\n  { kind = \"value\", frequency = 9.0, amplitude = 0.3, seed = 2 },\n  { kind = \"none\", frequency = 0.0, amplitude = 0.0, seed = 0 },\n  { kind = \"none\", frequency = 0.0, amplitude = 0.0, seed = 0 },\n]\n\n[[object]]\nname = \"wall\"\nkind = \"plane\"\nsize = [2.0, 1.0]\nat = [0.0, 0.5, -1.0]\nrotate = [90.0, 0.0, 0.0]\nmaterial = \"plaster\"\nbake_layers = { size = 32 }\n\n[[object]]\nname = \"floor\"\nkind = \"plane\"\nsize = [2.0, 2.0]\nmaterial = \"plaster\"\n";
 
 #[test]
 fn baked_layers_land_in_the_glb_as_the_objects_own_maps_and_leave_the_others_layered() {
@@ -42,6 +42,16 @@ fn baked_layers_land_in_the_glb_as_the_objects_own_maps_and_leave_the_others_lay
         let image = &images[texture.source().index()];
         assert_eq!((image.width, image.height), (32, 32));
     }
+    let loaded = pfx_load::Mesh::parse(&bytes).unwrap();
+    let baked = loaded
+        .surfaces
+        .iter()
+        .find(|s| s.name == "plaster+wall")
+        .unwrap();
+    assert_eq!(baked.material.specular, 0.3);
+    assert_eq!(baked.material.subsurface, 0.2);
+    assert_eq!(baked.material.base, [1.0; 3]);
+    assert!(baked.material.layers.iter().all(|layer| !layer.active()));
     let floor = material_of("floor");
     assert_eq!(floor.name(), Some("plaster"));
     assert!(
@@ -167,4 +177,96 @@ fn an_imported_mesh_bakes_a_morphed_slot_and_one_map_over_every_slot_of_a_materi
             "the slot at {x},{y} is baked: {texel:?}"
         );
     }
+}
+
+fn torus_file(dir: &Path, file: &str, segments: u32, rings: u32, turned: bool) {
+    let mut mesh = pfx_mesh::torus(1.0, 0.4, segments, rings);
+    if turned {
+        for uv in mesh.uvs.as_mut().unwrap() {
+            *uv = [uv[1], 1.0 - uv[0]];
+        }
+    }
+    mesh.set_material("plaster");
+    let node = pfx_glb::Node {
+        name: "ring".into(),
+        mesh,
+        transform: glam::DMat4::IDENTITY,
+        keep_transform: false,
+        targets: None,
+    };
+    std::fs::write(
+        dir.join(file),
+        pfx_glb::write(&[node], pfx_glb::Order::File, "t"),
+    )
+    .unwrap();
+}
+
+fn base_image(bytes: &[u8], material: &str) -> (u32, Vec<u8>) {
+    let (document, _, images) = gltf::import_slice(bytes).unwrap();
+    let found = document
+        .materials()
+        .find(|m| m.name() == Some(material))
+        .unwrap_or_else(|| panic!("no material `{material}`"));
+    let texture = found.pbr_metallic_roughness().base_color_texture().unwrap();
+    let image = &images[texture.texture().source().index()];
+    assert_eq!(image.format, gltf::image::Format::R8G8B8);
+    (image.width, image.pixels.clone())
+}
+
+#[test]
+fn an_authored_level_bakes_the_layers_on_its_own_uvs_in_the_objects_colours() {
+    let dir = common::scratch("layers-authored-level");
+    torus_file(&dir, "ring.glb", 96, 48, false);
+    torus_file(&dir, "ring-live.glb", 32, 16, true);
+    let object = format!(
+        "{LAYERED}[[object]]\nname = \"ring\"\nkind = \"mesh\"\npath = \"ring.glb\"\nbake_layers = {{ size = 256 }}\nlod = [{{ path = \"ring-live.glb\", bake_normals = true, normal_size = 64 }}]\n"
+    );
+    let made = built(&object, &dir);
+    let bytes = made.try_glb().unwrap();
+    let mut r = parse(&format!("recipe = 1\nname = \"t\"\n\n{object}")).unwrap();
+    r.output.scene = Some("ring.scene.toml".into());
+    pfx_build::write(&made, &r, &dir, Some(&dir)).unwrap();
+    let draws = pfx_load::scene::Scene::open(dir.join("ring.scene.toml"))
+        .unwrap()
+        .draws();
+    let draw = &draws.items[0];
+    assert_eq!(
+        draws.names[draw.material as usize],
+        "gltf ring/plaster+ring"
+    );
+    assert_eq!(
+        draw.levels
+            .iter()
+            .map(|&at| draws.names[at as usize].as_str())
+            .collect::<Vec<_>>(),
+        ["gltf ring/plaster+ring.lod1"]
+    );
+    let (side, base) = base_image(&bytes, "plaster+ring");
+    let (level_side, level) = base_image(&bytes, "plaster+ring.lod1");
+    assert_eq!((side, level_side), (256, 256));
+    let at = |image: &[u8], uv: [f32; 2]| {
+        let x = ((uv[0] * side as f32) as usize).min(side as usize - 1);
+        let y = ((uv[1] * side as f32) as usize).min(side as usize - 1);
+        let i = (y * side as usize + x) * 3;
+        [0, 1, 2].map(|c| f64::from(image[i + c]))
+    };
+    let (mut matched, mut foreign, mut count) = (0.0, 0.0, 0.0);
+    for i in 0..40 {
+        for j in 0..40 {
+            let own = [0.06 + 0.88 * i as f32 / 39.0, 0.06 + 0.88 * j as f32 / 39.0];
+            let there = [1.0 - own[1], own[0]];
+            let (l, b, f) = (at(&level, own), at(&base, there), at(&base, own));
+            for c in 0..3 {
+                matched += (l[c] - b[c]).abs();
+                foreign += (l[c] - f[c]).abs();
+                count += 1.0;
+            }
+        }
+    }
+    let (matched, foreign) = (matched / count, foreign / count);
+    assert!(matched <= 2.0, "level against the object: {matched}");
+    assert!(
+        foreign > matched * 4.0,
+        "through foreign UVs: {foreign}, matched {matched}"
+    );
 }

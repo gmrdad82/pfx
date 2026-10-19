@@ -43,9 +43,16 @@ pub(crate) fn register(
                 .ok_or("a staged LOD level was not uploaded")?;
             chain.push((*handle, level.error));
         }
+        let materials: Vec<Option<u32>> = std::iter::once(None)
+            .chain(
+                draw.levels
+                    .iter()
+                    .map(|&material| (material != draw.material).then_some(material)),
+            )
+            .collect();
         renderer
             .lod_mut()
-            .set_levels(bounds(&draw.geometry), &chain)?;
+            .set_levels_with(bounds(&draw.geometry), &chain, &materials)?;
         leveled.push(base);
     }
     for stale in old.iter().filter(|handle| !leveled.contains(handle)) {

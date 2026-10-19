@@ -224,6 +224,11 @@ pub(crate) fn look(
         alpha_cutoff: (material.alpha_mode() == gltf::material::AlphaMode::Mask)
             .then(|| material.alpha_cutoff().unwrap_or(0.5)),
         double_sided: None,
+        material: material
+            .extras()
+            .as_ref()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok())
+            .and_then(|extras| extras.get(pfx_glb::ENGINE_MATERIAL).cloned()),
     })
 }
 

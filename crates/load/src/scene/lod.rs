@@ -4,6 +4,7 @@ use std::sync::Arc;
 use sha2::{Digest, Sha256};
 
 use super::{Geometry, GeometryMorph};
+use crate::surface::Surface;
 use crate::{Group, Mesh, Node};
 
 pub const COVERAGE_HEIGHT: f32 = 2160.0;
@@ -12,6 +13,21 @@ pub const COVERAGE_HEIGHT: f32 = 2160.0;
 pub struct GeometryLevel {
     pub geometry: Arc<Geometry>,
     pub error: f32,
+    pub surface: Option<Arc<Surface>>,
+}
+
+fn own_surface(mesh: &Mesh, base: Option<u32>, level: Option<u32>) -> Option<Arc<Surface>> {
+    let name = |at: Option<u32>| {
+        at.and_then(|at| mesh.materials.get(at as usize))
+            .map(|m| &m.name)
+    };
+    if name(level).is_none() || name(level) == name(base) {
+        return None;
+    }
+    mesh.surfaces
+        .get(level? as usize)
+        .filter(|surface| surface.declared)
+        .map(|surface| Arc::new(surface.clone()))
 }
 
 pub(super) fn level_nodes(mesh: &Mesh) -> BTreeSet<u32> {
@@ -190,6 +206,7 @@ pub(super) fn levels(
         levels.push(GeometryLevel {
             geometry: Arc::new(geometry),
             error,
+            surface: own_surface(mesh, owner.primitives[slot].material, primitive.material),
         });
     }
     Ok(levels)

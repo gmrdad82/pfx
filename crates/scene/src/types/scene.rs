@@ -321,6 +321,18 @@ pub struct MotionBlur {
     pub max_px: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub samples: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<ShutterPosition>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ShutterPosition {
+    Start,
+    #[default]
+    Centre,
+    End,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -548,6 +560,9 @@ pub struct Haze {
     pub shafts: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub steps: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(max = 8)))]
+    pub bounces: Option<u32>,
     #[serde(default, alias = "colour", skip_serializing_if = "Option::is_none")]
     pub color: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

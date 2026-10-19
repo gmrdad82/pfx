@@ -1478,6 +1478,14 @@ pub(crate) fn haze(haze: &Haze) -> Issues {
     if haze.steps == Some(0) {
         issues.at(&["steps"], "haze steps is at least 1");
     }
+    if let Some(bounces) = haze.bounces
+        && bounces > 8
+    {
+        issues.at(
+            &["bounces"],
+            format!("haze bounces = {bounces} is outside 0 to 8"),
+        );
+    }
     color(&mut issues, "color", &haze.color);
     keys(
         &mut issues,

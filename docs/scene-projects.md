@@ -19,7 +19,7 @@ crates/scene/examples/demo
 | File | Holds |
 |---|---|
 | `project.toml` | the root's marker: the project's name, the scene an editor opens first, folders to ignore, the game's tunables and the collision layers |
-| `*.scene.toml` | a scene: includes, material libraries, meshes, objects, lights, sounds, camera rigs, tile layers, sun, sky, camera and render settings |
+| `*.scene.toml` | a scene entry: includes, material libraries, meshes, objects, lights, sounds, camera rigs, tile layers, sun, sky, camera and render settings |
 | `*.prefab.toml` | a reusable piece: the entries a scene has, without the scene-wide sections |
 | `*.materials.toml` | a material library |
 | `*.proxies.toml` | a plate's invisible stand-ins |

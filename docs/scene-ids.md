@@ -1,6 +1,6 @@
 # Fill missing ids
 
-A hand-written entry may leave `id` out. The checker warns about it as `missing-id`, the scene still loads, and references to it go by name. `Project::fix` fills the missing ids of every file a scene or prefab reads: the file, its includes, its libraries, the prefabs it places and its proxies file.
+A hand-written entry may leave `id` out. The checker warns about it as `missing-id`, the scene still loads, and references to it go by name. `Project::fix` fills the missing ids of every file a scene or prefab reads: the file, its includes, its libraries, the prefabs it places and its proxies file. On the command line, `pfx scene fix <scene.pitofx>` writes them inside a scene's `.pitofx`; from code, the path names the scene entry in the project (`scenes/room.scene.toml`).
 
 ```rust
 use std::path::Path;

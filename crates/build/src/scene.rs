@@ -381,6 +381,9 @@ fn in_glb(material: &Material) -> bool {
         emission: plain.emission,
         fabric: plain.fabric,
         anisotropy: plain.anisotropy,
+        alpha: plain.alpha,
+        alpha_mode: plain.alpha_mode,
+        alpha_cutoff: plain.alpha_cutoff,
         ..*material
     };
     rest == plain && material.emission.iter().all(|v| (0.0..=1.0).contains(v))
@@ -1318,6 +1321,7 @@ fn objects(
     pick: &str,
 ) -> Result<(), Error> {
     let below = descendants(built);
+    let shared = built.shared_placements();
     for (at, part) in built.parts.iter().enumerate() {
         if !shown(part) {
             continue;
@@ -1339,6 +1343,10 @@ fn objects(
         s.put(pick, &(part.object + 1).to_string());
         if part.node.keep_transform {
             placement(&mut s, recipe, part.object, part.node.transform)?;
+        } else if let Some((at, rotate, scale)) = shared[at].and_then(decompose) {
+            s.list("at", &at)?;
+            s.list("rotate", &rotate)?;
+            s.list("scale", &scale)?;
         }
         let names: BTreeSet<&str> = part
             .node
@@ -1351,7 +1359,7 @@ fn objects(
         if let (1, Some(one)) = (names.len(), names.first()) {
             match cards.slots.iter().position(|(n, _)| Some(n) == content) {
                 Some(slot) => s.put("material", &string(&layered(one, slot))),
-                None if cards.glb.contains(*one) => {}
+                None if cards.glb.contains(*one) || built.baked(at, one) => {}
                 None => s.put("material", &string(one)),
             }
         }
@@ -1408,7 +1416,12 @@ fn animated(
     let mesh = format!("mesh.{}", key(name));
     let mut s = Section::new(out, &format!("[{mesh}]"), &ip);
     s.put("file", &string(glb));
-    for part in built.parts.iter().filter(|part| !part.hidden) {
+    for (at, part) in built
+        .parts
+        .iter()
+        .enumerate()
+        .filter(|(_, part)| !part.hidden)
+    {
         let names: BTreeSet<&str> = part
             .node
             .mesh
@@ -1417,7 +1430,7 @@ fn animated(
             .map(|slot| slot.material.as_str())
             .collect();
         let material = match (names.len(), names.first()) {
-            (1, Some(one)) if !carried.contains(*one) => Some(*one),
+            (1, Some(one)) if !carried.contains(*one) && !built.baked(at, one) => Some(*one),
             _ => None,
         };
         let shadow = match part.shadow {
@@ -1505,7 +1518,19 @@ fn placement(
     s.list("scale", &scale)
 }
 
-fn decompose(matrix: DMat4) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
+pub(crate) fn decompose(matrix: DMat4) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
+    let (parts, rebuilt) = trs(matrix)?;
+    close(rebuilt, matrix, 1e-9).then_some(parts)
+}
+
+pub(crate) fn snapped(matrix: DMat4, relative: f64) -> Option<DMat4> {
+    let (_, rebuilt) = trs(matrix)?;
+    close(rebuilt, matrix, relative).then_some(rebuilt)
+}
+
+type Trs = ([f64; 3], [f64; 3], [f64; 3]);
+
+fn trs(matrix: DMat4) -> Option<(Trs, DMat4)> {
     let columns = [matrix.x_axis, matrix.y_axis, matrix.z_axis].map(|c| c.truncate());
     let mut scale = columns.map(|c| c.length());
     if scale.iter().any(|s| *s <= 1e-12 || !s.is_finite()) {
@@ -1527,14 +1552,17 @@ fn decompose(matrix: DMat4) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
     let rebuilt = DMat4::from_translation(DVec3::from(at))
         * crate::rotation(rotate)
         * DMat4::from_scale(DVec3::from(scale));
+    Some(((at, rotate, scale), rebuilt))
+}
+
+fn close(rebuilt: DMat4, matrix: DMat4, relative: f64) -> bool {
     let wanted = matrix.to_cols_array();
-    let tolerance = 1e-9 * (1.0 + wanted.iter().fold(0.0_f64, |m, v| m.max(v.abs())));
-    let close = rebuilt
+    let tolerance = relative * (1.0 + wanted.iter().fold(0.0_f64, |m, v| m.max(v.abs())));
+    rebuilt
         .to_cols_array()
         .iter()
         .zip(wanted)
-        .all(|(a, b)| (a - b).abs() <= tolerance);
-    close.then_some((at, rotate, scale))
+        .all(|(a, b)| (a - b).abs() <= tolerance)
 }
 
 fn clips(recipe: &Recipe, name: &str) -> Vec<[f64; 4]> {

@@ -126,7 +126,7 @@ A script drives it like any other key: `key ctrl+o`, then `text` for a path, the
 
 ## Opening a scene file
 
-A scene (a `.pitofx` holding a scene, or an old `*.scene.toml`, imported once into a `.pitofx` beside it) is the engine's runtime scene (`docs/scenes.md`). `pfx gui room.pitofx`, `pfx gui --shot <png> room.scene.toml` and the picker open one; the picker lists scene files beside the recipes, marked `scene` in front of their folder. A scene is edited through pfx-editor's data layer (`SceneEdit`, the inspect patch, one undo history), shown in the window's own panels: `docs/editor.md`, "Scenes in the window", says how.
+A scene (a `.pitofx` holding a scene, or an old `*.scene.toml`, imported once into a `.pitofx` beside it) is the engine's runtime scene (`docs/scenes.md`). `pfx gui room.pitofx`, `pfx gui --shot <png> room.pitofx` and the picker open one; the picker lists scene files beside the recipes, marked `scene` in front of their folder. A scene is edited through pfx-editor's data layer (`SceneEdit`, the inspect patch, one undo history), shown in the window's own panels: `docs/editor.md`, "Scenes in the window", says how.
 
 ## Files
 

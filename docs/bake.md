@@ -267,7 +267,7 @@ A recipe can assemble its scene from more than one file and place parts and ligh
 
 ## Plates
 
-A plate is the static part of a scene traced once at the camera's rest pose, at each light anchor, so the live renderer can composite it and draw only what moves over it (`docs/plates.md`). `pfx bake` traces one when `bake.toml` holds a `[plates]` table; Manfred's `[bake.plates]` is written into the bake recipe as this table. The plate is traced from a `scene.toml` (`docs/scenes.md`), the same file the live renderer stages, so live and traced read one description: its static objects, static text, emitters, lights, sky and sun are traced, and every dynamic object and dynamic text is left out (with its shadow and its bounce).
+A plate is the static part of a scene traced once at the camera's rest pose, at each light anchor, so the live renderer can composite it and draw only what moves over it (`docs/plates.md`). `pfx bake` traces one when `bake.toml` holds a `[plates]` table; Manfred's `[bake.plates]` is written into the bake recipe as this table. The plate is traced from the scene that `[plates] scene` names, the scene file a build writes beside the bake recipe (`docs/scenes.md`), the same one the live renderer stages, so live and traced read one description: its static objects, static text, emitters, lights, sky and sun are traced, and every dynamic object and dynamic text is left out (with its shadow and its bounce).
 
 ```toml
 [plates]
@@ -292,7 +292,7 @@ shift = [0.0, -0.1]
 
 | key | value |
 |---|---|
-| `scene` | the `scene.toml` whose static subset is traced, relative to the recipe's folder (or inside the assets folder with `--assets` or `assets_env`, under the same rules: nothing escapes it). Required. |
+| `scene` | the scene file whose static subset is traced, relative to the recipe's folder (or inside the assets folder with `--assets` or `assets_env`, under the same rules: nothing escapes it). Required. |
 | `size` | `[width, height]` in pixels: the frame the plate is drawn at live. Required, each 16 to 16,384. |
 | `overscan` | `0` to `1`? `0.1`: the plate covers `1 + overscan` times the view's width and height (half of it on each side), for drift and small pushes. |
 | `scale` | `0.25` to `4`? `1`: plate texels per live pixel, so a plate stays sharp up to a zoom of `scale` (`1.25` for a 1.25× push). |

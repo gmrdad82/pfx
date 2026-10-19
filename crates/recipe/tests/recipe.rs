@@ -278,11 +278,11 @@ fn parse_errors_name_the_key_the_line_and_what_was_expected() {
     let cases: &[(&str, &str)] = &[
         (
             "unknown_key",
-            "line 8: object[a].colour: unknown key `colour` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lod, bake_layers, size, size_px, keys, interp, constraint",
+            "line 8: object[a].colour: unknown key `colour` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lock_borders, lod, bake_layers, size, size_px, keys, interp, constraint",
         ),
         (
             "wrong_kind_key",
-            "line 8: object[a].radius: unknown key `radius` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lod, bake_layers, size, size_px, keys, interp, constraint",
+            "line 8: object[a].radius: unknown key `radius` in `object[a]`, expected one of: name, id, kind, at, at_px, rotate, scale, keep_transform, parent, material, materials, smooth_angle, smooth, flat_faces, bevel, uv, detail_uv, shadow, two_sided, hidden, dynamic, proxy, lock_borders, lod, bake_layers, size, size_px, keys, interp, constraint",
         ),
         (
             "unknown_top",
@@ -979,4 +979,49 @@ fn a_recipe_knows_the_line_of_every_key_it_read() {
     assert_eq!(r.line_of("object#0.at"), Some(19));
     assert_eq!(r.line_of("object#0.nothing"), Some(15));
     assert_eq!(r.line_of("camera#0.fov_y_deg"), Some(42));
+}
+
+#[test]
+fn a_level_reads_a_file_or_simplifies_with_its_borders_locked_or_open() {
+    let object = |kind: &str, keys: &str| {
+        parse(&format!(
+            "recipe = 1\nname = \"t\"\n\n[[object]]\nname = \"a\"\n{kind}\n{keys}\n"
+        ))
+    };
+    let mesh = "kind = \"mesh\"\npath = \"a.glb\"";
+    let r = object(
+        mesh,
+        "lock_borders = false\nlod = [{ ratio = 0.5 }, { ratio = 0.2, lock_borders = true }, { path = \"a-live.glb\" }]",
+    )
+    .unwrap();
+    let levels = &r.objects[0].lod;
+    assert_eq!(
+        levels.iter().map(|l| l.lock_borders).collect::<Vec<_>>(),
+        [false, true, true]
+    );
+    assert_eq!(
+        levels[2].target,
+        pfx_recipe::LodTarget::File("a-live.glb".into())
+    );
+    for (kind, keys, path) in [
+        (mesh, "lock_borders = false", "object[a].lock_borders"),
+        (
+            mesh,
+            "lod = [{ path = \"b.glb\", triangles = 9 }]",
+            "object[a].lod[0].path",
+        ),
+        (
+            mesh,
+            "lod = [{ path = \"b.glb\", lock_borders = false }]",
+            "object[a].lod[0].lock_borders",
+        ),
+        (
+            "kind = \"box\"",
+            "lod = [{ path = \"b.glb\" }]",
+            "object[a].lod[0].path",
+        ),
+    ] {
+        let e = object(kind, keys).unwrap_err().to_string();
+        assert!(e.contains(&format!("{path}: ")), "{e}");
+    }
 }

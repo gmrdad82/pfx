@@ -4,7 +4,7 @@ pfx 3.0.0 holds what used to sit in separate repositories: the scene format (pfx
 
 ## The crates
 
-Every crate is a package in pfx's workspace, taken by pfx's tag (`{ git = "https://github.com/gmrdad82/pfx", tag = "v3.0.0" }`) or by path inside a checkout. The ones a game uses most are first.
+Every crate is a package in pfx's workspace, taken by pfx's tag (`{ git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1" }`) or by path inside a checkout. The ones a game uses most are first.
 
 | Package | Holds |
 |---|---|
@@ -60,10 +60,10 @@ Every crate is a package in pfx's workspace, taken by pfx's tag (`{ git = "https
 A game's `Cargo.toml` drops the pfx-scene git line and, if it named pfx-scene directly, takes it from pfx's tag like the rest:
 
 ```toml
-pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.0" }
-pfx-project = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.0" }
-pfx-scene = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.0" }
-pfx-workbench = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.0", optional = true }
+pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1" }
+pfx-project = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1" }
+pfx-scene = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1" }
+pfx-workbench = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1", optional = true }
 ```
 
 The `tools` feature that used to turn on `dep:pfx-editor` turns on `dep:pfx-workbench` instead: `tools = ["pfx-game/tools", "dep:pfx-workbench"]`.
@@ -92,20 +92,19 @@ A scene folder (a `.scene.toml` with its includes, `.materials.toml` files, pref
 
 ```sh
 pfx scene migrate content/room.scene.toml
-pfx scene migrate --pfx content/room.scene.toml content/room.pitofx
 ```
 
-The first line rewrites any format 0 file as format 1, keeping its comments; the second packs the scene and every file it reads into one file. A split glTF's `.bin` buffers and image files go in with it. `pfx scene migrate --unpack content/room.pitofx <dir>` writes the files back out. The packed scene opens from its file alone: `Scene::open("content/room.pitofx")`, `pfx gui content/room.pitofx`, `pfx shot content/room.pitofx`.
+It imports the scene and every file it reads into `content/room.pitofx` beside it, once, and rewrites any format 0 file as format 1 inside it, keeping its comments; the `.toml` is never written again. `pfx scene print content/room.pitofx [file]` shows each TOML file inside it. The packed scene opens from its file alone: `Scene::open("content/room.pitofx")`, `pfx gui content/room.pitofx`, `pfx shot content/room.pitofx`.
 
 ## Converting a recipe
 
 A recipe (a TOML file that starts `recipe = 1`) becomes a `.pitofx` document with:
 
 ```sh
-pfx scene save render/room.toml --pfx render/room.pitofx
+pfx scene migrate render/room.toml
 ```
 
-`pfx scene unpack <file> <dir>` writes its files back out, and `pfx scene fold <file> --apply` folds the edits made in the window back into its recipe (`--keep` keeps them as overrides on later builds). `pfx build`, `pfx align` and `pfx export --glb` take the document as well as the recipe.
+It writes `render/room.pitofx` beside the recipe, once. `pfx scene print <file> [file]` shows the recipe or any file it holds, and `pfx scene fold <file> --apply` folds the edits made in the window back into its recipe (`--keep` keeps them as overrides on later builds). `pfx build`, `pfx align` and `pfx export --glb` take the document; given the old `.toml` they refuse with one line naming `pfx scene migrate`.
 
 ## Shipping one binary
 

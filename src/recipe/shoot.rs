@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn pfx_shot_gets_the_scene_the_range_and_the_camera_node() {
         let plan = Plan {
-            scene: Path::new("out/street.scene.toml"),
+            scene: Path::new("out/scene.pitofx"),
             camera: "camera.chase",
             fps: 60,
             size: [1080, 1920],
@@ -544,7 +544,7 @@ mod tests {
         };
         assert_eq!(
             pfx_line(&plan, true).join(" "),
-            "pgpu run --class clip --as pfx -- pfx shot out/street.scene.toml --from 30 --frames 12 --fps 60 --size 1080x1920 --camera camera.chase --final --out shots/.stage-00030 --audio shots/sound.wav --json"
+            "pgpu run --class clip --as pfx -- pfx shot out/scene.pitofx --from 30 --frames 12 --fps 60 --size 1080x1920 --camera camera.chase --final --out shots/.stage-00030 --audio shots/sound.wav --json"
         );
         let direct = pfx_line(
             &Plan {

@@ -18,7 +18,9 @@ use outline::{Outline, Shape};
 pub use prim::{
     bead, capsule, cylinder, disc, lathe, rounded_box, sheet, sphere, surface, sweep, torus,
 };
-pub use simplify::{NORMAL_WEIGHT, Simplified, UV_WEIGHT, simplify};
+pub use simplify::{
+    NORMAL_WEIGHT, Simplified, SimplifySettings, UV_WEIGHT, simplify, simplify_with,
+};
 use std::cmp::Ordering;
 pub use tangents::{Tangents, tangents};
 

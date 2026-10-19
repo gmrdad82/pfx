@@ -39,7 +39,7 @@ ok rename object lamp to ceiling lamp: wrote scenes/room.scene.toml
 use pfx_scene::{SceneEdit, Target};
 
 fn main() {
-    let mut edit = SceneEdit::open("my-game/scenes/room.scene.toml").unwrap();
+    let mut edit = SceneEdit::open("my-game/scenes/room.pitofx").unwrap();
 
     edit.set_at("right crate", [1.5, 0.5, 0.3]).unwrap();
     edit.set(&Target::Light("bulb".into()), &["intensity"], 60.0f32).unwrap();

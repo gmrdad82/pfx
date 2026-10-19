@@ -501,6 +501,7 @@ mod scaffold {
         assert!(cargo.starts_with(
             "[workspace]\nmembers = [\".\", \"module\"]\ndefault-members = [\".\"]\n"
         ));
+        assert_eq!(cargo.matches("[workspace]").count(), 1);
         assert!(cargo.contains(
             "pfx-game = { git = \"https://github.com/gmrdad82/pfx.git\", tag = \"v9.8.7\", features = [\"modules\"] }"
         ));
@@ -540,10 +541,8 @@ mod scaffold {
         scaffold("my-game", &plain, "9.8.7").unwrap();
         assert!(!plain.join("module").exists() && !plain.join("wit").exists());
         assert!(Project::open(&plain).unwrap().modules().is_empty());
-        assert!(
-            !std::fs::read_to_string(plain.join("Cargo.toml"))
-                .unwrap()
-                .contains("[workspace]")
-        );
+        let plain = std::fs::read_to_string(plain.join("Cargo.toml")).unwrap();
+        assert!(plain.starts_with("[workspace]\n\n[package]\n"), "{plain}");
+        assert_eq!(plain.matches("[workspace]").count(), 1);
     }
 }

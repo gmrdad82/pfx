@@ -128,6 +128,7 @@ const MOTION_BLUR: &[(&str, Shape)] = &[
     ("shutter", Shape::Num(Rule::Within(0.0, 4.0))),
     ("max_px", Shape::Num(Rule::AtLeast(0.0))),
     ("samples", Shape::Whole(1, WHOLE)),
+    ("position", Shape::Word(&["start", "centre", "end"])),
 ];
 
 const HAZE: &[(&str, Shape)] = &[
@@ -139,6 +140,7 @@ const HAZE: &[(&str, Shape)] = &[
     ("reach", Shape::Num(Rule::AtLeast(0.0))),
     ("shafts", Shape::Num(Rule::Within(0.0, 1.0))),
     ("steps", Shape::Whole(1, WHOLE)),
+    ("bounces", Shape::Whole(0, 8)),
     ("color", Shape::Colour),
     ("fog", Shape::Num(Rule::AtLeast(0.0))),
     ("smoke", Shape::Num(Rule::AtLeast(0.0))),

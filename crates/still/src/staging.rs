@@ -5,9 +5,11 @@ use pfx_live::sky::SkySource;
 use pfx_materials::{Blend, Material};
 use pfx_mesh::rigid;
 use pfx_post::Chain;
+use pfx_recipe::{Colour, Setting};
 use pfx_recipe::{Recipe, Shadow};
 use pfx_recipe_scene::{Card, Cards, Error, Eye, Laid, Lighting, MapSet, Palette, Picture, Piece};
 use pfx_trace::detail::{Lens, Textures};
+use pfx_trace::fog::Fog;
 use pfx_trace::lights::{LightShape, LocalLight};
 use pfx_trace::motion::Motion;
 use pfx_trace::sky::Environment;
@@ -55,6 +57,7 @@ pub struct Staging {
     pub shared: Vec<Shared>,
     pub motion_blur: Option<pfx_post::MotionBlur>,
     pub steps: Option<Steps>,
+    pub fog: Option<Fog>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -165,7 +168,12 @@ impl Staging {
             shared,
             motion_blur: lighting.motion_blur.filter(|blur| blur.shutter > 0.0),
             steps: None,
+            fog: fog(recipe),
         })
+    }
+
+    pub fn refog(&mut self, recipe: &Recipe) {
+        self.fog = fog(recipe);
     }
 
     pub fn share(&mut self) {
@@ -345,6 +353,7 @@ impl Staging {
         staged.detail.transmissive_shadows = self.transmissive_shadows;
         staged.detail.clamp_indirect = self.clamp_indirect;
         staged.detail.filter_glossy = self.filter_glossy;
+        staged.detail.fog = self.fog;
         if let Some(steps) = steps {
             staged.detail.motion = Some(Motion {
                 steps: steps.posed.len(),
@@ -354,6 +363,45 @@ impl Staging {
         }
         Ok(staged)
     }
+}
+
+fn fog(recipe: &Recipe) -> Option<Fog> {
+    let haze = recipe
+        .effects
+        .haze
+        .as_ref()
+        .filter(|haze| pfx_recipe_scene::outdoor(haze))?;
+    let get = |key: &str| haze.iter().find(|(k, _)| *k == key).map(|(_, v)| v);
+    let number = |key: &str| match get(key) {
+        Some(Setting::Number(value)) => Some(*value as f32),
+        _ => None,
+    };
+    let neutral = Fog::default();
+    let color = match get("color") {
+        Some(Setting::Colour(Colour::Rgb(rgb))) => Some(rgb.map(|v| v as f32)),
+        Some(Setting::Colour(Colour::Hex(hex))) => {
+            u32::from_str_radix(hex.trim_start_matches('#'), 16)
+                .ok()
+                .map(pfx_materials::srgb_hex)
+        }
+        _ => None,
+    };
+    Some(Fog {
+        height: number("height").unwrap_or(neutral.height),
+        falloff: number("falloff").unwrap_or(neutral.falloff).max(0.0),
+        density: number("fog")
+            .or(number("amount").map(|amount| amount / 6.0))
+            .unwrap_or(neutral.density)
+            .max(0.0),
+        reach: number("reach").unwrap_or(neutral.reach).max(0.0),
+        shafts: number("shafts").unwrap_or(neutral.shafts).clamp(0.0, 1.0),
+        color: color.unwrap_or(neutral.color),
+        phase: number("phase").unwrap_or(neutral.phase).clamp(-0.9, 0.9),
+        bounces: match get("bounces") {
+            Some(Setting::Whole(bounces)) => (*bounces).min(8) as u32,
+            _ => neutral.bounces,
+        },
+    })
 }
 
 struct Lead {
@@ -643,6 +691,67 @@ mod tests {
         let eye = eyepiece(&recipe.cameras[0], View::Lens, [8, 8]).unwrap();
         assert!(traced.transmissive_shadows);
         assert!(traced.stage(eye).unwrap().detail.transmissive_shadows);
+    }
+
+    #[test]
+    fn an_outdoor_haze_reaches_the_tracer_as_fog_and_a_room_haze_stays_left_out() {
+        let (recipe, outdoor) = staging(&format!(
+            "{SCENE}\n[haze]\nheight = 1.0\nfalloff = 0.2\nfog = 0.04\nreach = 60.0\nphase = 0.6\ncolor = [1.0, 0.8, 0.6]\n"
+        ));
+        let eye = eyepiece(&recipe.cameras[0], View::Lens, [8, 8]).unwrap();
+        let fog = outdoor.stage(eye).unwrap().detail.fog.unwrap();
+        assert_eq!(
+            (
+                fog.height,
+                fog.falloff,
+                fog.density,
+                fog.reach,
+                fog.phase,
+                fog.color
+            ),
+            (1.0, 0.2, 0.04, 60.0, 0.6, [1.0, 0.8, 0.6])
+        );
+        assert!(!pfx_recipe_scene::unapplied(&recipe, true).contains(&"haze"));
+        assert!(pfx_recipe_scene::unapplied(&recipe, false).contains(&"haze"));
+        let (recipe, room) = staging(&format!(
+            "{SCENE}\n[haze]\nlo = [-1.0, 0.0, -1.0]\nhi = [1.0, 2.0, 1.0]\namount = 0.3\n"
+        ));
+        assert_eq!(room.fog, None);
+        assert!(pfx_recipe_scene::unapplied(&recipe, true).contains(&"haze"));
+    }
+
+    #[test]
+    fn a_keyed_haze_reaches_the_tracer_at_each_frames_time() {
+        let recipe = parse(&format!(
+            "{SCENE}\n[timeline]\nfps = 4\nseconds = 2.0\n\n[haze]\nheight = 1.0\nbounces = 4\ncolor = [1.0, 1.0, 1.0]\nkeys = {{ amount = [[0.0, 0.0], [2.0, 0.6]], color = [[0.0, [1.0, 1.0, 1.0]], [2.0, [1.0, 0.5, 0.0]]] }}\n"
+        ))
+        .unwrap();
+        let built = pfx_build::build(&recipe, Path::new("")).unwrap();
+        let mut staging = Staging::of(&recipe, &built.parts).unwrap();
+        let frames: Vec<(f32, [f32; 3], u32)> = [0.0, 0.5, 1.0, 2.0]
+            .into_iter()
+            .map(|time| {
+                let posed = pfx_build::pose_cameras(&recipe, &built, time).unwrap();
+                staging.refog(&posed);
+                let fog = staging.fog.unwrap();
+                (fog.density, fog.color, fog.bounces)
+            })
+            .collect();
+        let want = [
+            (0.0, [1.0, 1.0, 1.0]),
+            (0.025, [1.0, 0.875, 0.75]),
+            (0.05, [1.0, 0.75, 0.5]),
+            (0.1, [1.0, 0.5, 0.0]),
+        ];
+        for ((density, color, bounces), (want_density, want_color)) in frames.into_iter().zip(want)
+        {
+            assert!(
+                (density - want_density).abs() < 1e-6,
+                "{density} {want_density}"
+            );
+            assert!(close(color, want_color), "{color:?} {want_color:?}");
+            assert_eq!(bounces, 4);
+        }
     }
 
     #[test]

@@ -172,7 +172,7 @@ A recording is made against these actions (`pfx_bench::actions()` is the list). 
 When the run ends, the last thing on stdout is one JSON line (a measured run of the neutral room at 320×180) (keys sorted, no promised order):
 
 ```json
-{"bench":true,"camera":{"at":[0.0,1.4,4.2],"look_at":[0.0,0.7,0.0]},"dropped":0,"frames":120,"gpu_ms":{"max":0.756,"p50":0.217,"p95":0.223,"p99":0.754},"inputs":0,"over_16_67":0,"scene":"bench.scene.toml","schema_version":1,"seed":5,"size":[320,180],"sim_ms":{"max":1.197,"p50":0.438,"p95":0.69,"p99":0.965},"stats":"tmp/pfx/bench/bench-1791307762.jsonl","submit_ms":{"max":6.919,"p50":2.989,"p95":3.895,"p99":6.391},"ticks":120}
+{"bench":true,"camera":{"at":[0.0,1.4,4.2],"look_at":[0.0,0.7,0.0]},"dropped":0,"frames":120,"gpu_ms":{"max":0.756,"p50":0.217,"p95":0.223,"p99":0.754},"inputs":0,"over_16_67":0,"scene":"bench.pitofx","schema_version":1,"seed":5,"size":[320,180],"sim_ms":{"max":1.197,"p50":0.438,"p95":0.69,"p99":0.965},"stats":"tmp/pfx/bench/bench-1791307762.jsonl","submit_ms":{"max":6.919,"p50":2.989,"p95":3.895,"p99":6.391},"ticks":120}
 ```
 
 | Key | Meaning |

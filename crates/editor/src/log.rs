@@ -140,17 +140,14 @@ mod tests {
             column: 12,
         };
         log.edit_error(&EditError {
-            file: PathBuf::from("/game/content/other.scene.toml"),
+            file: PathBuf::from("/game/content/other.pitofx"),
             key: "include".to_string(),
             line: Some(3),
             code: pfx_scene::code::INCLUDE_CYCLE,
             message: "the scene includes itself".to_string(),
             diagnostics: vec![diagnostic(
-                "content/other.scene.toml",
-                vec![
-                    place("content/main.scene.toml"),
-                    place("content/other.scene.toml"),
-                ],
+                "content/other.pitofx",
+                vec![place("content/main.pitofx"), place("content/other.pitofx")],
             )],
         });
         let seen: Vec<(Option<PathBuf>, Option<usize>, &str)> = log
@@ -162,19 +159,13 @@ mod tests {
         assert_eq!(seen[0].2, "include: the scene includes itself");
         assert_eq!(seen[1].2, "see here");
         assert_eq!(seen[1].1, Some(3));
-        assert!(
-            seen[1]
-                .0
-                .as_ref()
-                .unwrap()
-                .ends_with("content/main.scene.toml")
-        );
+        assert!(seen[1].0.as_ref().unwrap().ends_with("content/main.pitofx"));
         assert!(
             seen[2]
                 .0
                 .as_ref()
                 .unwrap()
-                .ends_with("content/other.scene.toml")
+                .ends_with("content/other.pitofx")
         );
     }
 
@@ -182,14 +173,14 @@ mod tests {
     fn errors_keep_their_file_and_line_and_the_log_keeps_its_last_entries() {
         let mut log = Log::default();
         log.scene_error(&SceneError::new(
-            Path::new("/scenes/room.scene.toml"),
+            Path::new("/scenes/room.pitofx"),
             Some(14),
             "unknown field 'colour'",
         ));
         let entry = log.last().unwrap();
         assert_eq!(
-            entry.place(Path::new("/scenes/room.scene.toml")).unwrap(),
-            "room.scene.toml:14"
+            entry.place(Path::new("/scenes/room.pitofx")).unwrap(),
+            "room.pitofx:14"
         );
         for index in 0..KEEP + 3 {
             log.info(format!("line {index}"));

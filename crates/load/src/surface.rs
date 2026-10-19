@@ -10,6 +10,7 @@ pub const ANISOTROPY: &str = "KHR_materials_anisotropy";
 pub const CLEARCOAT: &str = "KHR_materials_clearcoat";
 pub const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
 pub const DETAIL_NORMAL: &str = "detailNormalTexture";
+pub const ENGINE_MATERIAL: &str = "pfxMaterial";
 pub const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
 pub const TRANSMISSION: &str = "KHR_materials_transmission";
 pub const VOLUME: &str = "KHR_materials_volume";
@@ -225,6 +226,14 @@ where
 {
     let pbr = material.pbr_metallic_roughness();
     let factor = pbr.base_color_factor();
+    let extras = material
+        .extras()
+        .as_ref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok());
+    let carried = extras
+        .as_ref()
+        .and_then(|extras| extras.get(ENGINE_MATERIAL))
+        .and_then(|value| serde_json::from_value::<Material>(value.clone()).ok());
     let mut out = Material {
         base: [factor[0], factor[1], factor[2]],
         roughness: pbr.roughness_factor(),
@@ -237,7 +246,7 @@ where
             gltf::material::AlphaMode::Blend => AlphaMode::Blend,
         },
         alpha_cutoff: material.alpha_cutoff().unwrap_or(ALPHA_CUTOFF),
-        ..Material::default()
+        ..carried.unwrap_or_default()
     };
     let mut maps = SurfaceMaps::default();
     let mut main: Option<UvTransform> = None;
@@ -341,10 +350,8 @@ where
         let strength = number(strength.get("emissiveStrength"), 1.0);
         out.emission = out.emission.map(|e| e * strength);
     }
-    if let Some(detail) = material
-        .extras()
+    if let Some(detail) = extras
         .as_ref()
-        .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok())
         .and_then(|extras| extras.get(DETAIL_NORMAL).cloned())
     {
         maps.detail = images.map(texture_index(Some(&detail)), ColorSpace::Linear)?;
@@ -363,6 +370,7 @@ where
     out.textures.main = main.unwrap_or_default();
     let declared = maps.any()
         || extended
+        || carried.is_some()
         || factor != [1.0; 4]
         || pbr.metallic_factor() != 1.0
         || pbr.roughness_factor() != 1.0

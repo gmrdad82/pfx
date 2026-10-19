@@ -7,14 +7,19 @@ use pfx_mesh::{Morph, torus};
 use pfx_recipe::parse;
 use std::path::Path;
 
-fn head(dir: &Path) {
-    let mesh = torus(1.0, 0.4, 64, 32);
+fn torus_node(segments: u32, rings: u32, turned: bool, morph: &str) -> Node {
+    let mut mesh = torus(1.0, 0.4, segments, rings);
+    if turned {
+        for uv in mesh.uvs.as_mut().unwrap() {
+            *uv = [uv[1], 1.0 - uv[0]];
+        }
+    }
     let bulge = mesh
         .positions
         .iter()
         .map(|p| [p[0] * 0.1, 0.0, p[2] * 0.1])
         .collect();
-    let node = Node {
+    Node {
         name: "head".into(),
         mesh: mesh.clone(),
         transform: DMat4::IDENTITY,
@@ -22,18 +27,21 @@ fn head(dir: &Path) {
         targets: Some(Box::new(Targets {
             base: mesh,
             morph: Morph {
-                names: vec!["bulge".into()],
+                names: vec![morph.into()],
                 weights: vec![0.0],
                 positions: vec![bulge],
                 normals: Vec::new(),
             },
         })),
-    };
-    std::fs::write(
-        dir.join("head.glb"),
-        pfx_glb::write(&[node], Order::File, "t"),
-    )
-    .unwrap();
+    }
+}
+
+fn save(dir: &Path, file: &str, node: Node) {
+    std::fs::write(dir.join(file), pfx_glb::write(&[node], Order::File, "t")).unwrap();
+}
+
+fn head(dir: &Path) {
+    save(dir, "head.glb", torus_node(64, 32, false, "bulge"));
 }
 
 fn recipe(lod: &str) -> pfx_recipe::Recipe {
@@ -119,4 +127,36 @@ fn a_level_must_have_fewer_triangles_than_its_object() {
     head(&dir);
     let e = build(&recipe("lod = [{ triangles = 1000000 }]\n"), &dir).unwrap_err();
     assert_eq!(e.path, "object[head].lod[0].triangles");
+}
+
+#[test]
+fn an_authored_level_takes_its_mesh_from_a_file_with_the_objects_morphs_and_a_baked_normal_map() {
+    let dir = common::scratch("lod-file");
+    head(&dir);
+    save(&dir, "head-live.glb", torus_node(16, 8, true, "bulge"));
+    save(&dir, "head-odd.glb", torus_node(16, 8, true, "swell"));
+    let r = recipe(
+        "lod = [{ ratio = 0.5 }, { path = \"head-live.glb\", bake_normals = true, normal_size = 64 }]\n",
+    );
+    let b = build(&r, &dir).unwrap();
+    let level = &b.lods[1];
+    let targets = level.node.targets.as_ref().unwrap();
+    assert_eq!(targets.base.triangle_count(), 16 * 8 * 2);
+    assert_eq!(targets.morph.names, ["bulge"]);
+    for (p, d) in targets
+        .base
+        .positions
+        .iter()
+        .zip(&targets.morph.positions[0])
+    {
+        assert!((d[0] - p[0] * 0.1).abs() < 1e-6 && (d[2] - p[2] * 0.1).abs() < 1e-6);
+    }
+    assert!(level.normal_map.is_some() && level.tangents.is_some());
+    let error = |at: usize| b.lods[at].extras["lod"]["error"].as_f64().unwrap();
+    assert!(error(1) > error(0), "{} after {}", error(1), error(0));
+    assert_eq!(level.extras["lod"]["path"], "head-live.glb");
+    pfx_load::Mesh::parse(&b.glb()).unwrap();
+    let e = build(&recipe("lod = [{ path = \"head-odd.glb\" }]\n"), &dir).unwrap_err();
+    assert_eq!(e.path, "object[head].lod[0].path");
+    assert!(e.text.contains("morph targets [swell]"), "{}", e.text);
 }

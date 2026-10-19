@@ -23,7 +23,7 @@ How and when each was measured is on its page.
 
 | | |
 |---|---|
-| Linux, Windows, macOS | `cargo install --locked --git https://github.com/gmrdad82/pfx --tag v3.0.0 pfx` |
+| Linux, Windows, macOS | `cargo install --locked --git https://github.com/gmrdad82/pfx --tag v3.0.1 pfx` |
 
 The `pfx` tool builds from source on Linux, Windows and macOS (Apple Silicon); [docs/install.md](docs/install.md) also covers a release's prebuilt archives, their checksums and the `.pitofx` file type each one registers. It needs Rust 1.97 or newer and a GPU wgpu can open: Vulkan on Linux, Vulkan or DX12 on Windows, Metal on macOS. On Debian or Ubuntu, first `sudo apt install libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev`.
 
@@ -39,12 +39,12 @@ cargo run --release
 cargo run --release -- edit
 ```
 
-<p align="center"><img src="docs/images/new.gif" width="800" alt="A terminal: pfx --version prints pfx 0.32.0; git init and pfx new demo scaffold a game of 18 files; ls shows Cargo.toml, content, project.toml and src, and content holds first.scene.toml; pfx bench plays the first scene headless for 3 seconds at 1920x1080 and prints 180 frames and the GPU frame times."></p>
+<p align="center"><img src="docs/images/new.gif" width="800" alt="A terminal: pfx --version prints pfx 3.0.1; git init and pfx new demo scaffold a game of 15 files; ls shows AGENTS.md, CLAUDE.md, Cargo.toml, content, project.toml, prompts, src and tests, and content holds first.pitofx, fonts and meshes; pfx bench plays content/first.pitofx headless for 3 seconds at 1920x1080 and prints 180 frames, 0 dropped and GPU frame times under a millisecond."></p>
 
 A game links the crates it uses by the same tag, on Linux, Windows and macOS:
 
 ```toml
-pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.0" }
+pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1" }
 ```
 
 pfx and its crates build and pass their unit tests on Linux, Windows and macOS (Apple Silicon), and a game's Windows build runs on Linux and the Steam Deck through Proton ([docs/windows.md](docs/windows.md)). [Your first game](docs/first-game.md) walks through it, and [your first recipe](docs/recipe-first-scene.md) builds a scene.
@@ -69,9 +69,9 @@ People edit a `.pitofx` in the editor's inspector or its built-in TOML editor, w
 
 ## The editor
 
-<p align="center"><img src="docs/images/editor.png" width="800" alt="pfx gui on a new game made by pfx new: the outliner on the left lists the scene's objects, lights and materials; the viewport in the middle shows the pfx mark and wordmark standing on a grid with the move gizmo on them; the inspector on the right shows the selected group's position, rotation and scale; a scale bar sits beside the axes; the log at the bottom says the scene opened with 4 objects, 10 materials and 1 light."></p>
+<p align="center"><img src="docs/images/editor.png" width="800" alt="pfx gui on the workshop sample, samples/workshop.pitofx, with the vase selected: the outliner on the left lists its 19 objects with their materials, over the cameras and the lights and sky with an hour slider; the viewport in the middle shows a teal case with the pfx mark, a peach vase under the move gizmo, a glass jar, a chrome ball, a brass ring, a pill and a cable on a tiled bench, with the axes and a scale bar in the corner; the properties panel on the right shows the vase's name, location, rotation, scale, material and smoothing, and the render panel its camera, size and samples; Play, Stop and the module chip sit under the viewport, the key hints and the status line along the bottom."></p>
 
-`pfx gui` opens a `.pitofx` document, a scene or a project folder in pfx's editor: an outliner, the live viewport with gizmos and picking, an inspector, a TOML panel with highlighting and checks at line and column, a log and a traced preview, on one undo history ([docs/editor.md](docs/editor.md)). Its theme is black with thin, wide-tracked uppercase titles, a lime accent for what is live, violet for hover and highlights, inset cards and numbered panel markers.
+`pfx gui` opens a `.pitofx` document, a scene or a project folder in pfx's editor: an outliner, the live viewport with gizmos and picking, the cameras, the lights and sky, a properties inspector, a render panel, a TOML panel with highlighting and checks at line and column, a log and a traced preview, on one undo history ([docs/editor.md](docs/editor.md)). Its theme is black with thin, wide-tracked uppercase titles, a lime accent for what is live, violet for hover and highlights, inset cards and numbered panel markers.
 
 **Play** (F5) runs the open scene as a game in the viewport, and Stop (F8) puts the editor back exactly where it was. With a game's WebAssembly module (`--play <module.wasm>`, the scene's `[play] module`, or a `.wasm` dropped on the window) the game's logic runs in pfx-mod's sandbox, metered and deterministic; the logic stays in the game's own repository ([docs/play-modules.md](docs/play-modules.md)).
 
@@ -79,7 +79,7 @@ People edit a `.pitofx` in the editor's inspector or its built-in TOML editor, w
 
 | | |
 |---|---|
-| `pfx new <game>` | scaffold a game; `pfx new <out> --from <template>` writes a starter recipe |
+| `pfx new <game>` | scaffold a game, its first scene in `content/first.pitofx`; `pfx new <out.pitofx> --from street` writes a starter recipe |
 | `pfx`, `pfx <file.pitofx>`, `pfx gui [<path>]` | the editor, with `--play <module.wasm>` |
 | `pfx build`, `check`, `timeline` | build a recipe headless into a GLB and a scene, the same bytes on every OS ([docs/recipes.md](docs/recipes.md)) |
 | `pfx set`, `get`, `key`, `unkey`, `curve`, `route`, `add`, `remove`, `duplicate` | edit a recipe or a `.pitofx`: values by dotted key, keys, curves, routes and objects |
@@ -87,10 +87,10 @@ People edit a `.pitofx` in the editor's inspector or its built-in TOML editor, w
 | `pfx asset search`, `get`, `list`; `pfx credits <scene>` | find and fetch CC0 and account assets with their licences checked, and list a scene's credits ([docs/asset-sources.md](docs/asset-sources.md)) |
 | `pfx import`, `export`, `diff`, `library`, `align` | glTF in and out, GLB diffs, the object library, aligning objects |
 | `pfx render --recipe <recipe>`, `pfx shot <recipe> --still` | a path-traced still; a live still |
-| `pfx shot <scene>`, `pfx clip`, `pfx shoot` | a scene's frames at a fixed clock on the live renderer, a recipe's camera moves and timeline ([docs/render-a-scene.md](docs/render-a-scene.md), [docs/recipe-clips.md](docs/recipe-clips.md)) |
+| `pfx shot <scene.pitofx>`, `pfx clip`, `pfx shoot` | a scene's frames at a fixed clock on the live renderer, a recipe's camera moves and timeline ([docs/render-a-scene.md](docs/render-a-scene.md), [docs/recipe-clips.md](docs/recipe-clips.md)) |
 | `pfx film <script>` | a film of clips, frame folders and cards, with transitions and a true-peak ceiling on the master ([docs/film.md](docs/film.md)) |
-| `pfx sound clean <in.wav> <out.wav>` | clean a field recording ([docs/sound.md](docs/sound.md)) |
-| `pfx bench <scene> --seconds N` | a repeatable headless load with frame stats ([docs/benchmark-a-scene.md](docs/benchmark-a-scene.md)) |
+| `pfx sound clean <in.wav> <out.wav>`, `pfx sound mix <script>` | clean a field recording; render a shot's mix script to a WAV ([docs/sound.md](docs/sound.md)) |
+| `pfx bench <scene.pitofx> --seconds N` | a repeatable headless load with frame stats ([docs/benchmark-a-scene.md](docs/benchmark-a-scene.md)) |
 | `pfx bake --scene <dir>` | path-traced probes, lightmaps and plates |
 | `pfx steam stage --manifest <steam.toml>` | Steam build scripts and depots ([docs/steam.md](docs/steam.md)) |
 

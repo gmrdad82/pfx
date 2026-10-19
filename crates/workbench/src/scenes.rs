@@ -148,8 +148,10 @@ pub fn document(scene: &Scene, path: &str) -> Document {
         name: Path::new(path)
             .file_name()
             .map(|name| {
-                name.to_string_lossy()
-                    .trim_end_matches(".scene.toml")
+                let name = name.to_string_lossy();
+                name.strip_suffix(".scene.toml")
+                    .or_else(|| name.strip_suffix(".pitofx"))
+                    .unwrap_or(&name)
                     .to_string()
             })
             .unwrap_or_default(),

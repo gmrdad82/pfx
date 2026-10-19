@@ -83,6 +83,7 @@ pub struct LodStats {
 struct Prebuilt {
     bounds: Bounds,
     levels: Vec<(MeshHandle, f32)>,
+    materials: Vec<Option<u32>>,
 }
 
 pub struct LodSet {
@@ -260,12 +261,22 @@ impl LodSet {
         bounds: Bounds,
         chain: &[(MeshHandle, f32)],
     ) -> Result<(), String> {
+        self.set_levels_with(bounds, chain, &[])
+    }
+
+    pub fn set_levels_with(
+        &mut self,
+        bounds: Bounds,
+        chain: &[(MeshHandle, f32)],
+        materials: &[Option<u32>],
+    ) -> Result<(), String> {
         check_chain(chain.iter().map(|(_, error)| *error))?;
         self.prebuilt.insert(
             chain[0].0,
             Prebuilt {
                 bounds,
                 levels: chain.to_vec(),
+                materials: materials.to_vec(),
             },
         );
         Ok(())
@@ -351,6 +362,9 @@ impl LodSet {
             );
             self.chosen[index] = Some((instance.mesh, level));
             instance.mesh = prebuilt.levels[level].0;
+            if let Some(&Some(material)) = prebuilt.materials.get(level) {
+                instance.material = material;
+            }
         }
         for &(member, root) in &self.members {
             let Some(instance) = swapped.get_mut(member) else {
@@ -381,6 +395,9 @@ impl LodSet {
             };
             self.chosen[member] = Some((instance.mesh, level));
             instance.mesh = prebuilt.levels[level].0;
+            if let Some(&Some(material)) = prebuilt.materials.get(level) {
+                instance.material = material;
+            }
         }
         Some(swapped)
     }

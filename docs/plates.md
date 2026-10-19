@@ -4,7 +4,7 @@ A plate is the static part of a scene traced offline at the camera's rest pose, 
 
 The pieces, each documented where its keys live:
 
-- **What is static.** `scene.toml` marks each object and text `dynamic` or static (`docs/scenes.md`, `dynamic`): movers, camera-facing cards and their children are dynamic unless forced; everything else is static. `Scene::static_subset()` is what a plate traces.
+- **What is static.** The scene marks each object and text `dynamic` or static (`docs/scenes.md`, `dynamic`): movers, camera-facing cards and their children are dynamic unless forced; everything else is static. `Scene::static_subset()` is what a plate traces.
 - **The bake.** `pfx bake` with a `[plates]` table in `bake.toml` traces the static subset into colour, sun, transfer, depth, normal and id layers per view (`docs/bake.md`, Plates), keyed by a hash of the static subset alone.
 - **The composite.** `Renderer::set_plates` (and `Renderer::stage` on a scene with `[plates]`) draws the plate behind the dynamic objects, below.
 

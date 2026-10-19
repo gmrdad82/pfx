@@ -27,8 +27,8 @@ pub use scene::{
     CharacterKind, ClipEvent, Content, Cue, Depth, Emitter, Flare, Haze, Hush, Light, LightKind,
     LiveSettings, Look, Mesh, Motion, MotionBlur, Mover, MoverKind, Node, Nudge, Object, Orbit,
     ParticleBlend, Particles, Physics, Plane, Plates, Play, Preset, Projection, Proxy, ProxyKind,
-    Repeat, Rig, RigKind, Scale, Shadow, ShadowQuality, Shadows, Sound, Sounds, SpriteClip, Sun,
-    SunModel, Text, TileCell, TilePlane, Tiles, Trace, Trigger, Wander, Zoom,
+    Repeat, Rig, RigKind, Scale, Shadow, ShadowQuality, Shadows, ShutterPosition, Sound, Sounds,
+    SpriteClip, Sun, SunModel, Text, TileCell, TilePlane, Tiles, Trace, Trigger, Wander, Zoom,
 };
 pub use sky::{Prepare, Room, RoomLamp, Sky, SkyKind};
 pub use tunable::{Tunable, TunableKind, TunableValue};

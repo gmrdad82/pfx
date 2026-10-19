@@ -646,6 +646,9 @@ pub fn motion_blur(settings: &Settings) -> MotionBlur {
             ("shutter", Setting::Number(v)) => blur.shutter = *v as f32,
             ("max_px", Setting::Number(v)) => blur.max_px = *v as f32,
             ("samples", Setting::Whole(v)) => blur.samples = (*v).min(u64::from(u32::MAX)) as u32,
+            ("position", Setting::Word(word)) => {
+                blur.position = pfx_post::ShutterPosition::from_word(word).unwrap_or_default()
+            }
             _ => {}
         }
     }
@@ -754,7 +757,7 @@ mod tests {
             swap.into_bytes(),
         )]));
         let mut r = recipe(
-            "[look]\nexposure = 1.0\nlut = \"swap.cube\"\nlut_amount = 0.5\n[flare]\namount = 0.4\nghosts = 3\n[motion_blur]\nshutter = 0.5\nsamples = 6\n",
+            "[look]\nexposure = 1.0\nlut = \"swap.cube\"\nlut_amount = 0.5\n[flare]\namount = 0.4\nghosts = 3\n[motion_blur]\nshutter = 0.5\nsamples = 6\nposition = \"end\"\n",
         );
         r.base = Some(PathBuf::from("/look"));
         let lit = Lighting::of(&r).unwrap();
@@ -767,7 +770,10 @@ mod tests {
         assert_eq!(flare, bloom + 1);
         assert_eq!(lut + 1, tone);
         let blur = lit.motion_blur.unwrap();
-        assert_eq!((blur.shutter, blur.samples), (0.5, 6));
+        assert_eq!(
+            (blur.shutter, blur.samples, blur.position),
+            (0.5, 6, pfx_post::ShutterPosition::End)
+        );
         assert_eq!(blur.max_px, MotionBlur::default().max_px);
         assert_eq!(crate::unapplied(&r, true), ["motion_blur"]);
         assert!(crate::unapplied(&r, false).is_empty());

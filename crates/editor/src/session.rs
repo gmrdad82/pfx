@@ -23,7 +23,9 @@ pub const MAX_SECONDS: f32 = 0.25;
 
 pub type Factory = pfx_game::Factory;
 
-pub const FLAT_SCENE: &str = "tmp/pfx/flat.scene.toml";
+pub const FLAT_SCENE: &str = "tmp/pfx/flat.pitofx";
+
+const FLAT_ENTRY: &str = "flat.scene.toml";
 
 pub fn free_policy() -> ScreenPolicy {
     ScreenPolicy {
@@ -46,8 +48,12 @@ pub fn empty_world(project: &Project) -> Result<PathBuf, String> {
         let folder = path.parent().unwrap_or(project.root());
         std::fs::create_dir_all(folder)
             .map_err(|error| format!("{}: {error}", folder.display()))?;
-        std::fs::write(&path, "format = 1\n")
-            .map_err(|error| format!("{}: {error}", path.display()))?;
+        let entry = folder.join(FLAT_ENTRY);
+        std::fs::write(&entry, "format = 1\n")
+            .map_err(|error| format!("{}: {error}", entry.display()))?;
+        let packed = pfx_load::scene::pack(&entry, &path).map_err(|error| error.to_string());
+        let _ = std::fs::remove_file(&entry);
+        packed?;
     }
     Ok(path)
 }
@@ -182,7 +188,7 @@ impl Session {
             None if flat => (empty_world(&project)?, true),
             None => {
                 return Err(format!(
-                    "{}: no *.scene.toml in this project to open",
+                    "{}: no scene .pitofx in this project to open",
                     project.root().display()
                 ));
             }

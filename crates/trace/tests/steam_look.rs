@@ -73,9 +73,12 @@ fn traced(steam: Steam) -> Vec<u8> {
     let gpu = pollster::block_on(Gpu::headless()).unwrap();
     let detail = Detail {
         steam: Some(steam),
+        sampler: pfx_trace::sobol::Sampler::Pcg,
         ..Detail::default()
     };
+    unsafe { std::env::set_var("PFX_TRACE_RT", "0") };
     let mut trace = Trace::new_detailed(&gpu, &wall(), &detail, SIDE, SIDE).unwrap();
+    unsafe { std::env::remove_var("PFX_TRACE_RT") };
     trace.sample(&gpu, SAMPLES, 7).unwrap();
     trace.readback(&gpu).unwrap().color
 }

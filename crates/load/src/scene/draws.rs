@@ -31,6 +31,7 @@ pub struct Draw {
     pub face_camera: bool,
     pub owner: Option<usize>,
     pub part: Matrix,
+    pub levels: Vec<u32>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -207,8 +208,32 @@ pub(super) fn draws(scene: &Scene) -> Draws {
                     .entry(name.clone())
                     .or_insert_with(|| surface.clone());
             }
+            let mut levels = Vec::new();
+            if let Some(surface) = &part.surface
+                && name == super::textures::surface_name(&object.mesh, surface)
+                && part
+                    .geometry
+                    .levels
+                    .iter()
+                    .any(|level| level.surface.is_some())
+            {
+                for level in &part.geometry.levels {
+                    let own = match &level.surface {
+                        Some(surface) => {
+                            let own = super::textures::surface_name(&object.mesh, surface);
+                            if !scene.library.contains(&own) {
+                                surfaces.insert(own.clone(), surface.clone());
+                            }
+                            used.insert(own.clone());
+                            own
+                        }
+                        None => name.clone(),
+                    };
+                    levels.push(own);
+                }
+            }
             used.insert(name.clone());
-            picked.push((owner, object, part, name));
+            picked.push((owner, object, part, name, levels));
         }
     }
     for name in scene.emitters.keys() {
@@ -252,7 +277,7 @@ pub(super) fn draws(scene: &Scene) -> Draws {
             .unwrap_or(0) as u32
     };
     let mut items = Vec::new();
-    for (owner, object, part, name) in picked {
+    for (owner, object, part, name, levels) in picked {
         let mut clip = [[0.0; 4]; 2];
         for (slot, plane) in clip.iter_mut().zip(pose::clips(scene, owner)) {
             *slot = plane;
@@ -273,6 +298,7 @@ pub(super) fn draws(scene: &Scene) -> Draws {
             face_camera: object.face_camera,
             owner: Some(owner),
             part: part.transform,
+            levels: levels.iter().map(|level| index(level)).collect(),
         });
     }
     let first_id = scene
@@ -309,6 +335,7 @@ pub(super) fn draws(scene: &Scene) -> Draws {
             face_camera: false,
             owner: None,
             part: IDENTITY,
+            levels: Vec::new(),
         });
     }
     Draws {

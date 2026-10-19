@@ -15,6 +15,7 @@ pfx-core = { path = "../core" }
 pfx-gpu = { path = "../gpu" }
 pfx-load = { path = "../load" }
 pfx-materials = { path = "../materials" }
+pfx-post = { path = "../post" }
 pfx-text = { path = "../text" }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
@@ -29,7 +30,6 @@ pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }
 pfx-text = { path = "../text", features = ["fixture"] }
 pfx-geom = { path = "../geom" }
 pfx-live = { path = "../live" }
-pfx-post = { path = "../post" }
 naga = { version = "30", features = ["wgsl-in"] }
 pollster = "0.4"
 png = "0.17"

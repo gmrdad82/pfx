@@ -632,7 +632,13 @@ pub fn scene_posed(
     if let Some(sky) = &scene.sky {
         staged.detail.sky_look = sky.look;
     }
+    staged.detail.fog = scene_fog(scene, posed.time);
     Ok(staged)
+}
+
+pub fn scene_fog(scene: &LoadedScene, time: f32) -> Option<crate::fog::Fog> {
+    let haze = scene.keys.haze(time).or(scene.haze)?;
+    haze.outdoor.as_ref().map(crate::fog::Fog::outdoor)
 }
 
 pub fn posed_transforms(scene: &LoadedScene, posed: &Posed) -> Result<Vec<Transform>, String> {

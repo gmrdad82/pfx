@@ -222,12 +222,24 @@ pub fn unapplied(recipe: &Recipe, traced: bool) -> Vec<&'static str> {
     [
         ("motion_blur", traced && blurred),
         ("look.grade.haze", traced && graded),
-        ("haze", recipe.effects.haze.is_some()),
+        (
+            "haze",
+            recipe
+                .effects
+                .haze
+                .as_ref()
+                .is_some_and(|haze| !traced || !outdoor(haze)),
+        ),
         ("particles", !recipe.effects.particles.is_empty()),
     ]
     .into_iter()
     .filter_map(|(key, left)| left.then_some(key))
     .collect()
+}
+
+pub fn outdoor(haze: &pfx_recipe::Settings) -> bool {
+    haze.iter()
+        .any(|(key, _)| *key == "height" || *key == "falloff")
 }
 
 pub fn unapplied_line(verb: &str, recipe: &Recipe, traced: bool) -> Option<String> {

@@ -672,7 +672,7 @@ roughness = 0.6
     }
 
     #[test]
-    fn a_document_two_folders_down_a_project_writes_its_scene_beside_itself() {
+    fn a_document_two_folders_down_a_project_packs_its_scene_beside_itself() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tmp")
             .join("pfx-project-paths");
@@ -688,7 +688,7 @@ roughness = 0.6
         let recipe = RECIPE.replace(
             "[output]\nglb = \"out/doc.glb\"",
             "[output]\nglb = \"x.glb\"\nscene = \"x.scene.toml\"",
-        );
+        ) + "\n[variant.bare]\nset = { \"seed\" = 5 }\n";
         std::fs::write(dir.join("car/drive/x.toml"), recipe).unwrap();
         crate::scene::run(&crate::scene::Command {
             action: crate::scene::Action::Migrate,
@@ -705,11 +705,23 @@ roughness = 0.6
             ExitCode::SUCCESS
         );
         assert!(!dir.join("car/drive/car").exists() && !dir.join("car/drive/drive").exists());
-        let scene = std::fs::read_to_string(dir.join("car/drive/x.scene.toml")).unwrap();
+        assert!(!dir.join("car/drive/x.scene.toml").exists());
+        assert!(!dir.join("car/drive/x.materials.toml").exists());
+        let packed = dir.join("car/drive/x.scene.pitofx");
+        let scene = pfx_load::scene::held_text(&packed.join("car/drive/x.scene.toml"))
+            .unwrap()
+            .unwrap();
         assert!(scene.contains("file = \"x.glb\""), "{scene}");
         assert!(scene.contains("\"x.materials.toml\""), "{scene}");
-        pfx_load::scene::Scene::open(dir.join("car/drive/x.scene.toml"))
+        pfx_load::scene::Scene::open(&packed).unwrap_or_else(|e| panic!("{e}"));
+        assert!(Document::open(&pfx).is_ok());
+        assert_eq!(
+            run(&words(&["build", path, "--variant", "bare"])),
+            ExitCode::SUCCESS
+        );
+        pfx_load::scene::Scene::open(dir.join("car/drive/x-bare.pitofx"))
             .unwrap_or_else(|e| panic!("{e}"));
+        assert!(!dir.join("car/drive/x-bare.scene.toml").exists());
     }
 
     #[test]

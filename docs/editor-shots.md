@@ -19,7 +19,7 @@ pfx gui samples/chase.pitofx --shot wire.png --wireframe
 pfx gui samples/chase.pitofx --shot half.png --wireframe --blend 0.5
 ```
 
-A scene, a `.pitofx` scene or a project folder shoots the same way, in the window's scene panels (`docs/editor.md`, "Scenes in the window"):
+A scene `.pitofx` or a project folder shoots the same way, in the window's scene panels (`docs/editor.md`, "Scenes in the window"). A shot reads an old `.scene.toml` where it is and writes nothing beside it, so the engine's neutral test room, a tracked TOML fixture, shoots as it is:
 
 ```sh
 pfx gui crates/editor/tests/scenes/room.scene.toml --shot room.png

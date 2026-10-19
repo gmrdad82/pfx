@@ -509,6 +509,7 @@ fn the_stylised_shutter_cost_at_1080p_and_4k() {
                     shutter: *shutter,
                     max_px: 64.0,
                     samples: 8,
+                    ..pfx_post::MotionBlur::default()
                 }));
                 for number in 0..30u32 {
                     turns.poll();

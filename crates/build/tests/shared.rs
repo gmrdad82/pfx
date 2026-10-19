@@ -188,3 +188,72 @@ fn copies_of_a_model_whose_materials_clash_with_another_share_one_renamed_materi
     assert_eq!(materials, ["paint", "b0.paint"]);
     assert_eq!(json["meshes"].as_array().unwrap().len(), 2);
 }
+
+fn part_bounds(positions: &[[f32; 3]], model: [[f32; 4]; 4]) -> [[f64; 3]; 2] {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for p in positions {
+        for k in 0..3 {
+            let v = (0..3)
+                .map(|c| f64::from(model[c][k]) * f64::from(p[c]))
+                .sum::<f64>()
+                + f64::from(model[3][k]);
+            lo[k] = lo[k].min(v);
+            hi[k] = hi[k].max(v);
+        }
+    }
+    [lo, hi]
+}
+
+#[test]
+fn a_written_scene_draws_every_copy_of_a_shared_mesh_where_its_part_is() {
+    let dir = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tmp/shared-scene"
+    ));
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("red.glb"), model([0.8, 0.1, 0.1], 2.0)).unwrap();
+    let mut text = String::from(
+        "recipe = 1\nname = \"copies\"\n\n[output]\nglb = \"copies.glb\"\nscene = \"copies.scene.toml\"\n",
+    );
+    for (name, at, rotate, scale) in [
+        ("near", [0.0, 0.0, -2.0], [0.0, 0.0, 0.0], 1.0),
+        ("mid", [-0.3, 0.0, -10.0], [0.0, 0.0, 0.0], 1.0),
+        ("far", [6.8, 0.0, -30.0], [0.0, 35.0, 0.0], 1.0),
+        ("tall", [38.8, 0.0, -80.0], [10.0, -60.0, 5.0], 2.5),
+    ] {
+        text.push_str(&format!(
+            "\n[[object]]\nname = \"{name}\"\nkind = \"mesh\"\npath = \"red.glb\"\nat = {at:?}\nrotate = {rotate:?}\nscale = {scale:?}\n"
+        ));
+    }
+    let recipe = parse(&text).unwrap();
+    let built = build(&recipe, dir).unwrap();
+    let (json, _) = split_glb(&built.try_glb().unwrap()).unwrap();
+    assert_eq!(json["meshes"].as_array().unwrap().len(), 1, "{json}");
+    pfx_build::write(&built, &recipe, dir, None).unwrap();
+    let scene = pfx_load::scene::Scene::open(dir.join("copies.scene.toml")).unwrap();
+    let draws = scene.draws();
+    for part in &built.parts {
+        let draw = draws
+            .items
+            .iter()
+            .find(|draw| draw.object == part.node.name)
+            .unwrap_or_else(|| panic!("no draw for {}", part.node.name));
+        let identity = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let want = part_bounds(&part.node.mesh.positions, identity);
+        let got = part_bounds(&draw.geometry.positions, draw.model);
+        for k in 0..3 {
+            assert!(
+                (got[0][k] - want[0][k]).abs() < 1e-3 && (got[1][k] - want[1][k]).abs() < 1e-3,
+                "{} is drawn at {got:?}, its part is at {want:?}",
+                part.node.name
+            );
+        }
+    }
+}

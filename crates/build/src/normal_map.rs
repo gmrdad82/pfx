@@ -113,15 +113,85 @@ pub(crate) fn raster(
     Ok(Raster { owner, weights })
 }
 
-struct Master<'a> {
-    mesh: &'a Mesh,
+pub(crate) struct Master<'a> {
+    pub(crate) mesh: &'a Mesh,
     triangles: Vec<Triangle>,
     bvh: Bvh,
     smooth: bool,
 }
 
-impl Master<'_> {
-    fn normal(&self, index: usize, point: V3, fallback: V3) -> V3 {
+pub(crate) struct Found {
+    pub(crate) index: usize,
+    pub(crate) point: V3,
+    pub(crate) weights: [f32; 3],
+}
+
+impl<'a> Master<'a> {
+    pub(crate) fn new(mesh: &'a Mesh) -> Master<'a> {
+        let triangles: Vec<Triangle> = mesh
+            .indices
+            .chunks_exact(3)
+            .map(|t| Triangle {
+                vertices: [0, 1, 2].map(|k| mesh.positions[t[k] as usize]),
+                material: 0,
+            })
+            .collect();
+        let bvh = Bvh::build(&triangles);
+        Master {
+            mesh,
+            triangles,
+            bvh,
+            smooth: mesh.normals.len() == mesh.positions.len(),
+        }
+    }
+
+    pub(crate) fn cast(&self, point: V3, normal: V3, distance: f32) -> Option<Found> {
+        let ray = Ray {
+            origin: add(point, scale(normal, distance)),
+            direction: scale(normal, -1.0),
+        };
+        let hit = self.bvh.intersect(&self.triangles, ray, distance * 2.0)?;
+        let at = add(ray.origin, scale(ray.direction, hit.distance));
+        Some(Found {
+            index: hit.index as usize,
+            point: at,
+            weights: self.weights(hit.index as usize, at),
+        })
+    }
+
+    fn nearest(&self, point: V3, normal: V3, reach: f32) -> Option<f32> {
+        let way = |direction: V3| {
+            self.bvh
+                .intersect(
+                    &self.triangles,
+                    Ray {
+                        origin: point,
+                        direction,
+                    },
+                    reach,
+                )
+                .map(|hit| hit.distance)
+        };
+        match (way(normal), way(scale(normal, -1.0))) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    pub(crate) fn weights(&self, index: usize, point: V3) -> [f32; 3] {
+        let tri = &self.mesh.indices[index * 3..index * 3 + 3];
+        let p = [0, 1, 2].map(|k| self.mesh.positions[tri[k] as usize]);
+        let face = cross(sub(p[1], p[0]), sub(p[2], p[0]));
+        let whole = dot(face, face);
+        if whole <= 0.0 {
+            return [1.0 / 3.0; 3];
+        }
+        let w1 = dot(cross(sub(point, p[0]), sub(p[2], p[0])), face) / whole;
+        let w2 = dot(cross(sub(p[1], p[0]), sub(point, p[0])), face) / whole;
+        [1.0 - w1 - w2, w1, w2]
+    }
+
+    pub(crate) fn normal(&self, index: usize, point: V3, fallback: V3) -> V3 {
         let tri = &self.mesh.indices[index * 3..index * 3 + 3];
         let p = [0, 1, 2].map(|k| self.mesh.positions[tri[k] as usize]);
         let face = cross(sub(p[1], p[0]), sub(p[2], p[0]));
@@ -133,16 +203,12 @@ impl Master<'_> {
                 n
             };
         }
-        let whole = dot(face, face);
-        if whole <= 0.0 {
+        if dot(face, face) <= 0.0 {
             return fallback;
         }
-        let w1 = dot(cross(sub(point, p[0]), sub(p[2], p[0])), face) / whole;
-        let w2 = dot(cross(sub(p[1], p[0]), sub(point, p[0])), face) / whole;
-        let w = [1.0 - w1 - w2, w1, w2];
         normalize(blend(
             [0, 1, 2].map(|k| self.mesh.normals[tri[k] as usize]),
-            w,
+            self.weights(index, point),
         ))
     }
 }
@@ -173,15 +239,10 @@ fn texel(
     };
     let n = normalize(vn);
     let vb = scale(cross(vn, vt), sign);
-    let ray = Ray {
-        origin: add(p, scale(n, distance)),
-        direction: scale(n, -1.0),
-    };
-    let Some(hit) = master.bvh.intersect(&master.triangles, ray, distance * 2.0) else {
+    let Some(hit) = master.cast(p, n, distance) else {
         return FLAT;
     };
-    let point = add(ray.origin, scale(ray.direction, hit.distance));
-    let target = master.normal(hit.index as usize, point, n);
+    let target = master.normal(hit.index, hit.point, n);
     let det = dot(vt, cross(vb, vn));
     let local = if det.abs() > 1e-12 {
         [
@@ -266,21 +327,7 @@ pub(crate) fn bake(
     }
     let side = size as usize;
     let raster = raster(low, uvs, side, "normal map")?;
-    let triangles: Vec<Triangle> = master
-        .indices
-        .chunks_exact(3)
-        .map(|t| Triangle {
-            vertices: [0, 1, 2].map(|k| master.positions[t[k] as usize]),
-            material: 0,
-        })
-        .collect();
-    let bvh = Bvh::build(&triangles);
-    let master = Master {
-        mesh: master,
-        triangles,
-        bvh,
-        smooth: master.normals.len() == master.positions.len(),
-    };
+    let master = Master::new(master);
     let mut pixels = vec![0u8; side * side * 3];
     let mut filled = vec![false; side * side];
     let threads = std::thread::available_parallelism()
@@ -319,6 +366,33 @@ pub(crate) fn bake(
     });
     dilate(&mut pixels, &mut filled, side, &FLAT);
     rgb_png(&pixels, size)
+}
+
+pub(crate) fn deviation(master: &Mesh, low: &Mesh, reach: f32) -> f64 {
+    if master.indices.is_empty() || low.normals.len() != low.positions.len() {
+        return 0.0;
+    }
+    let master = Master::new(master);
+    let mut worst = 0.0f32;
+    for tri in low.indices.chunks_exact(3) {
+        let at = |k: usize| tri[k] as usize;
+        let p = [0, 1, 2].map(|k| low.positions[at(k)]);
+        let face = normalize(cross(sub(p[1], p[0]), sub(p[2], p[0])));
+        let centre = scale(add(add(p[0], p[1]), p[2]), 1.0 / 3.0);
+        let samples = [0, 1, 2]
+            .map(|k| (p[k], normalize(low.normals[at(k)])))
+            .into_iter()
+            .chain([(centre, face)]);
+        for (point, normal) in samples {
+            if dot(normal, normal) == 0.0 {
+                continue;
+            }
+            if let Some(d) = master.nearest(point, normal, reach) {
+                worst = worst.max(d);
+            }
+        }
+    }
+    f64::from(worst)
 }
 
 pub(crate) fn rgb_png(pixels: &[u8], size: u32) -> Result<Vec<u8>, String> {

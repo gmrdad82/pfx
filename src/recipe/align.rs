@@ -172,7 +172,7 @@ pub(super) fn plan(args: &Args, registry: &Registry) -> Result<Vec<String>, Stri
     let loaded = load(Path::new(file)).map_err(|e| read_failure(file, &e))?;
     let recipe = &loaded.recipe;
     let chosen = picked(recipe, &args.objects)?;
-    let built = pfx_build::build_with(recipe, base(file), registry)
+    let built = pfx_build::build_with(&pfx_build::sketch(recipe), base(file), registry)
         .map_err(|e| format!("{}: {e}", pfx_recipe::files::shown(file)))?;
     let bounds_of = |at: usize| -> Result<Bounds, String> {
         align::bounds(&built.parts, at)

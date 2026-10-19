@@ -154,6 +154,14 @@ impl Commands {
     }
 
     #[cfg(feature = "tools")]
+    fn command_help(&self, name: &str, command: &str, about: &str) -> String {
+        format!(
+            "{about}\n\nUsage: {}\n\nOptions:\n  -h, --help  Print help\n",
+            self.usage_line(name, command)
+        )
+    }
+
+    #[cfg(feature = "tools")]
     fn takes_nothing(&self, command: &str, args: &[String]) -> Option<String> {
         match (self.shape(command), args.first()) {
             (Some(""), Some(extra)) => Some(cli::unexpected(extra)),
@@ -335,6 +343,13 @@ impl<O: std::io::Write, E: std::io::Write> Talk<'_, O, E> {
 }
 
 #[cfg(feature = "tools")]
+fn asks_help(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| arg == "--help" || arg == "-h")
+}
+
+#[cfg(feature = "tools")]
 fn route<O: std::io::Write, E: std::io::Write>(
     commands: &mut Commands,
     args: &[String],
@@ -355,6 +370,10 @@ fn route<O: std::io::Write, E: std::io::Write>(
         }
         "edit" => match (commands.takes_nothing("edit", rest), commands.edit.take()) {
             (_, None) => talk.refuse(cli::unrecognized("edit"), talk.top()),
+            (_, Some((about, _))) if asks_help(rest) => {
+                let _ = write!(talk.out, "{}", commands.command_help(name, "edit", &about));
+                Decision::Done(ExitCode::SUCCESS)
+            }
             (Some(message), Some(_)) => talk.refuse(message, commands.usage_line(name, "edit")),
             (None, Some((_, hook))) => {
                 let usage = commands.usage_line(name, "edit");

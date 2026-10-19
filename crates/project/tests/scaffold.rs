@@ -33,9 +33,6 @@ fn packages() -> Vec<(String, PathBuf)> {
 
 fn patched(manifest: &str) -> String {
     let mut text = manifest.to_string();
-    if !text.contains("[workspace]") {
-        text.push_str("\n[workspace]\n");
-    }
     text.push_str(&format!(
         "\n[patch.\"{}\"]\n",
         pfx_project::scaffold::SOURCE
@@ -103,7 +100,6 @@ fn carries(binary: &[u8], needle: &str) -> bool {
 #[test]
 fn the_test_patch_points_every_pfx_crate_at_this_workspace() {
     let text = patched("[package]\nname = \"x\"\n");
-    assert!(text.contains("[workspace]\n"));
     assert!(text.contains(&format!("[patch.\"{}\"]", pfx_project::scaffold::SOURCE)));
     for name in [
         "pfx-game",
@@ -122,6 +118,35 @@ fn the_test_patch_points_every_pfx_crate_at_this_workspace() {
             "{name}"
         );
     }
+}
+
+#[test]
+fn a_game_scaffolded_inside_another_workspace_is_its_own_workspace() {
+    let root = workspace().join("tmp/scaffold/nested");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    pfx_project::scaffold::scaffold(&game("nested"), &root, env!("CARGO_PKG_VERSION")).unwrap();
+    assert!(workspace().join("Cargo.toml").is_file());
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "locate-project",
+            "--workspace",
+            "--message-format",
+            "plain",
+            "--offline",
+        ])
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        std::fs::canonicalize(String::from_utf8(output.stdout).unwrap().trim()).unwrap(),
+        std::fs::canonicalize(root.join("Cargo.toml")).unwrap()
+    );
 }
 
 #[test]
@@ -161,9 +186,22 @@ fn the_scaffold_builds_with_and_without_tools_and_only_tools_links_the_editor() 
     let help = String::from_utf8(help.stdout).unwrap();
     assert!(help.starts_with(&format!("{game} 0.1.0\n")), "{help}");
     assert!(
-        help.contains("  edit     opens the game in pfx's editor; F5 plays it\n"),
+        help.contains("  edit     opens the game in pfx's editor; F5 plays it; --shot and --clip draw it offscreen\n"),
         "{help}"
     );
+    for flag in ["--help", "-h"] {
+        let edit = Command::new(binary("build"))
+            .args(["edit", flag])
+            .output()
+            .unwrap();
+        assert!(edit.status.success(), "{flag}");
+        assert!(
+            String::from_utf8(edit.stdout)
+                .unwrap()
+                .contains(&format!("\n\nUsage: {game} edit [--shot <png>")),
+            "{flag}"
+        );
+    }
     let version = Command::new(binary("build"))
         .arg("version")
         .output()
@@ -180,7 +218,7 @@ fn the_scaffold_builds_with_and_without_tools_and_only_tools_links_the_editor() 
     assert_eq!(
         String::from_utf8_lossy(&refused.stderr),
         format!(
-            "error: unexpected argument 'extra' found\n\nUsage: {game} edit\n\nFor more information, try '--help'.\n"
+            "error: unexpected argument 'extra' found\n\nUsage: {game} edit [--shot <png> | --clip <dir> --tape <file>] [--size <WxH>] [--scale <S>] [--fps <30|60|120>]\n\nFor more information, try '--help'.\n"
         )
     );
 }

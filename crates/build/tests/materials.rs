@@ -124,3 +124,45 @@ fn the_pieces_keep_their_material_names_in_the_glb() {
     let summary = pfx_glb::summary(&b.glb()).unwrap();
     assert_eq!(summary.materials, ["glow"]);
 }
+
+#[test]
+fn the_material_check_reads_no_texture_map() {
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = reads.clone();
+    let load: pfx_build::files::Load = std::sync::Arc::new(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(std::io::Error::other("the map was read"))
+    });
+    let map = "tmp/check-maps/big.png";
+    let _mount = pfx_build::files::mount_named(
+        BTreeMap::from([(
+            Path::new(map).to_path_buf(),
+            pfx_build::files::Content::Lazy(load),
+        )]),
+        BTreeMap::new(),
+    );
+    let tiles = format!(
+        "[materials.tiles]\nbase = [0.5, 0.5, 0.5]\nbase_map = \"{map}\"\nnormal_map = \"{map}\"\n"
+    );
+    let slab = |material: &str| {
+        format!(
+            "[[object]]\nname = \"slab\"\nkind = \"box\"\nsize = [1.0, 0.1, 1.0]\nmaterial = \"{material}\"\n"
+        )
+    };
+    let check = |material: &str| {
+        let r = recipe(&format!(
+            "{}{}{}",
+            object("lamp", "test/red", ""),
+            slab(material),
+            tiles
+        ));
+        pfx_build::missing_materials(&r, Path::new("."), &registry())
+    };
+    assert!(check("tiles").is_empty());
+    assert!(check("glow").is_empty());
+    let missing = check("nothing");
+    assert_eq!(missing.len(), 1);
+    assert_eq!(missing[0].path, "object[slab].material");
+    assert!(missing[0].text.contains("glow"), "{}", missing[0].text);
+    assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
