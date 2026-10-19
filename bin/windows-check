@@ -30,10 +30,13 @@ if [ "$mode" != test ]; then
   exit 0
 fi
 prefix="$top/tmp/wine"
-mkdir -p "$prefix"
+run_dir="$top/tmp/wine-run"
+mkdir -p "$prefix" "$run_dir"
+chmod 700 "$run_dir"
 mingw_bin=/usr/x86_64-w64-mingw32/bin
 echo "windows-check: wine prefix $prefix"
 env -u DISPLAY -u WAYLAND_DISPLAY \
+  XDG_RUNTIME_DIR="$run_dir" \
   WINEPREFIX="$prefix" \
   WINEDEBUG=-all \
   WINEDLLOVERRIDES='mscoree,mshtml=;winemenubuilder.exe=d' \
@@ -48,6 +51,7 @@ if [ -n "$steam_dll" ]; then
 fi
 echo "windows-check: cargo test under wine"
 env -u DISPLAY -u WAYLAND_DISPLAY \
+  XDG_RUNTIME_DIR="$run_dir" \
   WINEPREFIX="$prefix" \
   WINEDEBUG=-all \
   WINEDLLOVERRIDES='mscoree,mshtml=;winemenubuilder.exe=d' \
