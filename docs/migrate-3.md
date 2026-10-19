@@ -4,7 +4,7 @@ pfx 3.0.0 holds what used to sit in separate repositories: the scene format (pfx
 
 ## The crates
 
-Every crate is a package in pfx's workspace, taken by pfx's tag (`{ git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1" }`) or by path inside a checkout. The ones a game uses most are first.
+Every crate is a package in pfx's workspace, taken by pfx's tag (`{ git = "https://github.com/gmrdad82/pfx", tag = "v3.1.0" }`) or by path inside a checkout. The ones a game uses most are first.
 
 | Package | Holds |
 |---|---|
@@ -60,10 +60,10 @@ Every crate is a package in pfx's workspace, taken by pfx's tag (`{ git = "https
 A game's `Cargo.toml` drops the pfx-scene git line and, if it named pfx-scene directly, takes it from pfx's tag like the rest:
 
 ```toml
-pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1" }
-pfx-project = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1" }
-pfx-scene = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1" }
-pfx-workbench = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1", optional = true }
+pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.1.0" }
+pfx-project = { git = "https://github.com/gmrdad82/pfx", tag = "v3.1.0" }
+pfx-scene = { git = "https://github.com/gmrdad82/pfx", tag = "v3.1.0" }
+pfx-workbench = { git = "https://github.com/gmrdad82/pfx", tag = "v3.1.0", optional = true }
 ```
 
 The `tools` feature that used to turn on `dep:pfx-editor` turns on `dep:pfx-workbench` instead: `tools = ["pfx-game/tools", "dep:pfx-workbench"]`.

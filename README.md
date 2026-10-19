@@ -23,7 +23,7 @@ How and when each was measured is on its page.
 
 | | |
 |---|---|
-| Linux, Windows, macOS | `cargo install --locked --git https://github.com/gmrdad82/pfx --tag v3.0.1 pfx` |
+| Linux, Windows, macOS | `cargo install --locked --git https://github.com/gmrdad82/pfx --tag v3.1.0 pfx` |
 
 The `pfx` tool builds from source on Linux, Windows and macOS (Apple Silicon); [docs/install.md](docs/install.md) also covers a release's prebuilt archives, their checksums and the `.pitofx` file type each one registers. It needs Rust 1.97 or newer and a GPU wgpu can open: Vulkan on Linux, Vulkan or DX12 on Windows, Metal on macOS. On Debian or Ubuntu, first `sudo apt install libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev`.
 
@@ -44,7 +44,7 @@ cargo run --release -- edit
 A game links the crates it uses by the same tag, on Linux, Windows and macOS:
 
 ```toml
-pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.1" }
+pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.1.0" }
 ```
 
 pfx and its crates build and pass their unit tests on Linux, Windows and macOS (Apple Silicon), and a game's Windows build runs on Linux and the Steam Deck through Proton ([docs/windows.md](docs/windows.md)). [Your first game](docs/first-game.md) walks through it, and [your first recipe](docs/recipe-first-scene.md) builds a scene.

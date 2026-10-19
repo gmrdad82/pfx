@@ -1,5 +1,30 @@
 # Changelog
 
+## v3.1.0 — 2026-10-19
+
+### Added
+
+- The path tracer draws an outdoor haze as height fog, with the sun and lights scattered through it and crisp sun shafts; `[haze] bounces` sets how many times light scatters in it, and traced clips follow a keyed haze.
+- `[motion_blur] position` opens the shutter at the frame, centres it or closes it there, live and traced.
+- A level of detail can come from your own glTF file, with its own baked normal, colour and roughness maps on its own UVs.
+- `lock_borders = false` lets the simplifier collapse along open borders.
+
+### Changed
+
+- Scenes and recipes you see are `.pitofx` documents everywhere: a build with `--set`, a variant or a pick packs its scene into a `.pitofx`, and the docs, help and messages say `.pitofx`.
+- `pfx <command> --help` prints that command's own help.
+- `pfx set`, `add`, `check` and `align` on a document with a large HDR sky and texture maps take milliseconds instead of about a second.
+- New games made with `pfx new` are their own cargo workspace, so they build inside another project's folder.
+- A layer bake keeps the material's specular, sheen, subsurface and clear coat, so the baked look matches the layered one.
+
+### Fixed
+
+- In a built scene, every copy of a repeated model draws where it belongs again: since 3.0.1 the copies drew at the first one's place, so rows of trees lost their leaves.
+- Imported leaf cards with alpha mask keep their texture and cutout in a built scene.
+- Traced motion blur on a timeline renders its first and last frames instead of failing.
+- `<game> edit --help` prints its usage.
+- The README's install line and game snippet pin the current version.
+
 ## v3.0.1 — 2026-10-19
 
 ### Added
