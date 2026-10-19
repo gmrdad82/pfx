@@ -1,5 +1,43 @@
 # Changelog
 
+## v3.0.1 — 2026-10-19
+
+### Added
+
+- Motion blur in the path tracer: moving objects, deforming meshes and the camera blur over the shutter, as in Cycles.
+- Traced clips can sample adaptively with `pfx clip --trace --threshold`, keeping a locked seed so frames don't flicker.
+- Film grain with a size and seed, and a radial chromatic aberration, from a recipe's `[look]`, alike live and traced.
+- Every 8-bit frame is dithered with blue noise so skies and road gradients no longer band (`--dither off` turns it off); `--format png16` writes 16-bit masters.
+- `pfx sound mix` renders a sound script to a WAV on its own; film scores play recorded samples on the beat grid, and a film can carry a WAV bed under the ducking and limiter.
+- A scene's `[live]` table turns off stochastic reflections, still-frame settling and the scene reflection cube, for the older look.
+- `<game> edit --shot` and `--clip` draw the editor offscreen on a copy of the project; `Config::mark` gives a game's window its own mark.
+- `--brief` on the edit verbs, `pfx scene compact`, `pfx gui --clean` and `h` to hide every viewport overlay, and timed `move`, `drag` and `scroll` steps in tapes.
+- Windows ships `pfx.com` (the tool) and `pfx.exe` (the window, with its icon); `.pitofx` files open pfx on Linux, Windows and macOS.
+- `bin/gate --fast` and `bin/build-release` gate and build every release locally.
+
+### Changed
+
+- `pfx set`, `pfx add` and the other edit verbs on a `.pitofx` write only their entry: milliseconds on a gigabyte document instead of 20 to 40 seconds.
+- A relative path resolves from the document's own folder first, then the project root, and built scenes write their paths the same way.
+- The path tracer keeps one copy of each distinct mesh, fits textures to the frame and holds the sky in half floats: a 30-car city at 4K went from about 10 GB to 2 GB of memory and from 24.8 s to 13.4 s.
+- Built GLBs share repeated meshes: a street of 300 cars went from 1.57 GB to 17 MB.
+- Live sun shadows fit their near cascades to the camera with steady texels: crisp, still shadows at street scale.
+- A game's edit window paints every panel, header and hint in the game theme; pfx's window shows pfx's mark in its header.
+- Big plate bakes build one tracer per layer: a 10 M-triangle plate bakes in about 23 s instead of stalling.
+- Metallic glass draws as metal in both renderers, as glTF defines it, and imported glass without a volume reads as thin-walled.
+
+### Fixed
+
+- Live clear coats honour `fresnel_power` and keep dark paint dark at grazing angles; glossy paint and chrome reflections settle with far less noise.
+- Screen-space reflections no longer mirror the sky backdrop as a surface.
+- `pfx export --glb` writes the recipe's real materials: colours, maps, emission, glass and clear coat.
+- `bake_layers` bakes the layered materials of imported meshes, and a skipped bake is reported.
+- Level-of-detail meshes no longer fold their UVs, so normal bakes on levels pass.
+- A failed Play keeps its error on screen until the next action.
+- `pfx gui --clip` takes a document of any size.
+- `pfx set` echoes the stored value exactly and names the document.
+- A plate that would not fit its job's memory is refused in one line instead of stalling, and bakes report progress under every setting.
+
 ## v3.0.0 — 2026-10-18
 
 pfx takes in the scene builder, its window and the scene format: one engine, one binary, one file.
