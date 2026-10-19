@@ -82,7 +82,9 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn save(path: &Path, bytes: &[u8]) {
-    let part = path.with_extension(format!("{:?}.part", std::thread::current().id()));
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let part = path.with_extension(format!("{}-{n}.part", std::process::id()));
     std::fs::write(&part, bytes).unwrap();
     std::fs::rename(&part, path).unwrap();
 }
