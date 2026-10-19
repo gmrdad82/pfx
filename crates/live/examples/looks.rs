@@ -516,11 +516,7 @@ fn main() {
         });
     }
     let geometry = renderer.readback_geometry().unwrap();
-    let covered = geometry
-        .depth
-        .iter()
-        .filter(|value| **value < 0.999)
-        .count();
+    let covered = geometry.depth.iter().filter(|value| **value > 0.0).count();
     let oriented = geometry
         .normals
         .iter()

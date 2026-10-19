@@ -1436,7 +1436,14 @@ pub(crate) fn flare(flare: &Flare) -> Issues {
 
 pub(crate) fn motion_blur(motion_blur: &MotionBlur) -> Issues {
     let mut issues = Issues::default();
-    unit(&mut issues, &["shutter"], motion_blur.shutter);
+    if let Some(shutter) = motion_blur.shutter
+        && !(0.0..=4.0).contains(&shutter)
+    {
+        issues.at(
+            &["shutter"],
+            format!("shutter = {shutter} is outside 0 to 4"),
+        );
+    }
     at_least(&mut issues, "max_px", motion_blur.max_px, 0.0);
     if motion_blur.samples == Some(0) {
         issues.at(&["samples"], "motion_blur samples is at least 1");
@@ -2249,6 +2256,33 @@ pub(crate) fn finish_keys(keys: &FinishKeys) -> Issues {
         && bands < 0.0
     {
         issues.at(&["cel_bands"], "cel_bands is a positive number");
+    }
+    if let Some(crate::types::Grain::Table(grain)) = &keys.grain {
+        if grain.amount.is_some() && grain.strength.is_some() {
+            issues.at(
+                &["grain"],
+                "grain.amount and grain.strength are one key; give one",
+            );
+        }
+        if grain.size.is_some_and(|size| !(size > 0.0 && size <= 64.0)) {
+            issues.at(&["grain", "size"], "grain.size is above 0, up to 64 pixels");
+        }
+    }
+    let chromatic = match &keys.chromatic {
+        Some(crate::types::Chromatic::Amount(amount)) => [Some(*amount), None],
+        Some(crate::types::Chromatic::Table(table)) => [table.amount, table.falloff],
+        None => [None, None],
+    };
+    for (key, value, most) in [
+        ("amount", chromatic[0], 0.25),
+        ("falloff", chromatic[1], 8.0),
+    ] {
+        if value.is_some_and(|value| !(0.0..=most).contains(&value)) {
+            issues.at(
+                &["chromatic"],
+                format!("chromatic.{key} is from 0 to {most}"),
+            );
+        }
     }
     if let Some(Tone::Table(table)) = &keys.tone
         && table.kind != ToneKind::Neutral

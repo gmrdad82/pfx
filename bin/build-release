@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF2'
+Usage: bin/build-release <tag> <platform> [<out dir>]
+
+Builds the release binaries of pfx for <platform> from this checkout and packages
+them with bin/package into <out dir> (default tmp/release/<tag>):
+  linux-x86_64     on Linux x86_64: target x86_64-unknown-linux-gnu
+  windows-x86_64   on Linux x86_64 with mingw-w64: target x86_64-pc-windows-gnu,
+                   linked statically, pfx.com and pfx.exe
+  macos-arm64      on a Mac with Apple Silicon: target aarch64-apple-darwin
+<tag> must be v<the workspace version>. bin/checksums writes SHA256SUMS once every
+platform's assets are in one folder.
+EOF2
+}
+
+refuse() {
+  printf "error: %s\n\nUsage: bin/build-release <tag> <platform> [<out dir>]\n\nFor more information, try '--help'.\n" "$1" >&2
+  exit 2
+}
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+args=()
+for arg in "$@"; do
+  case $arg in
+    -h|--help) usage; exit 0 ;;
+    -*) refuse "unexpected argument '$arg' found" ;;
+    *) args+=("$arg") ;;
+  esac
+done
+case ${#args[@]} in
+  2 | 3) ;;
+  [0-1]) refuse "the following required arguments were not provided: <tag> <platform>" ;;
+  *) refuse "unexpected argument '${args[3]}' found" ;;
+esac
+tag=${args[0]}
+platform=${args[1]}
+out=${args[2]:-$root/tmp/release/$tag}
+
+version=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' "$root/Cargo.toml" | head -n 1)
+if [ "$tag" != "v$version" ]; then
+  echo "build-release: $tag is not this checkout's version, v$version" >&2
+  exit 1
+fi
+
+case $platform in
+  linux-x86_64)
+    target=x86_64-unknown-linux-gnu
+    bins=(-p pfx --bin pfx)
+    ;;
+  windows-x86_64)
+    target=x86_64-pc-windows-gnu
+    bins=(-p pfx --bin pfx -p pfx-launcher --bin pfx-launcher)
+    export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="-C link-arg=-static"
+    ;;
+  macos-arm64)
+    target=aarch64-apple-darwin
+    bins=(-p pfx --bin pfx)
+    ;;
+  *) refuse "invalid value '$platform' for '<platform>' [possible values: linux-x86_64, macos-arm64, windows-x86_64]" ;;
+esac
+
+cd "$root"
+cargo build --release --locked "${bins[@]}" --target "$target"
+built=$root/target/$target/release
+if [ "$platform" = windows-x86_64 ]; then
+  bin/package "$tag" "$platform" "$built/pfx.exe" "$out" "$built/pfx-launcher.exe"
+else
+  bin/package "$tag" "$platform" "$built/pfx" "$out"
+fi

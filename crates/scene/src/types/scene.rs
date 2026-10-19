@@ -315,6 +315,7 @@ pub struct Flare {
 #[serde(deny_unknown_fields)]
 pub struct MotionBlur {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(range(min = 0.0, max = 4.0)))]
     pub shutter: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_px: Option<f32>,
@@ -812,6 +813,18 @@ impl Shadows {
     pub const BIAS: [f32; 2] = [0.0, 16.0];
     pub const OCCLUSION_RADIUS: [f32; 2] = [0.0, 100.0];
     pub const CONTACT_LENGTH: [f32; 2] = [0.0, 10.0];
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct LiveSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stochastic_reflections: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settle: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_reflections: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

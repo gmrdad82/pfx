@@ -149,6 +149,7 @@ pub struct Setup {
     pub background: Option<String>,
     pub check: Option<String>,
     pub check_colour: Option<String>,
+    pub dither: bool,
 }
 
 impl Default for Setup {
@@ -161,6 +162,7 @@ impl Default for Setup {
             background: None,
             check: None,
             check_colour: None,
+            dither: true,
         }
     }
 }
@@ -478,6 +480,7 @@ pub struct Roll {
     images: Vec<(String, [u32; 2], Vec<u8>)>,
     clips: Vec<(String, [u32; 2])>,
     score: String,
+    score_dir: PathBuf,
     font: Option<Vec<u8>>,
 }
 
@@ -541,9 +544,15 @@ impl Roll {
             .into_iter()
             .map(|name| Ok((name.clone(), read_text(&base.join(&name))?)))
             .collect::<Result<Vec<_>, String>>()?;
-        let score = match film_path(&raw, "score") {
-            Some(p) => read_text(&base.join(p))?,
-            None => SILENT_SCORE.to_string(),
+        let (score, score_dir) = match film_path(&raw, "score") {
+            Some(p) => {
+                let file = base.join(p);
+                let dir = file
+                    .parent()
+                    .map_or_else(|| base.clone(), Path::to_path_buf);
+                (read_text(&file)?, dir)
+            }
+            None => (SILENT_SCORE.to_string(), base.clone()),
         };
         let font = match film_path(&raw, "font") {
             Some(p) => {
@@ -552,14 +561,15 @@ impl Roll {
             }
             None => None,
         };
-        let known_score = Score::new(&score, &[], 1, RATE).map_err(at)?;
+        let known_score = Score::in_dir(&score, &[], 1, RATE, &score_dir).map_err(at)?;
         let sounds = |name: &str| known_score.knows(name);
         let names: Vec<&str> = marks.iter().map(|(n, _)| n.as_str()).collect();
         let known = Known {
             sounds: &sounds,
             marks: &names,
         };
-        let script: Script<Reel> = Script::parse(&text, &known).map_err(at)?;
+        let mut script: Script<Reel> = Script::parse(&text, &known).map_err(at)?;
+        script.read_bed(&base).map_err(at)?;
         if let Some(font) = &font {
             family(font).map_err(at)?;
         }
@@ -571,6 +581,7 @@ impl Roll {
             images,
             clips,
             score,
+            score_dir,
             font,
         };
         roll.check_sources().map_err(at)?;
@@ -681,7 +692,10 @@ impl Roll {
                 .map(|(name, size)| (name.clone(), (self.base.join(name), *size)))
                 .collect(),
         };
-        let painter = Painter::new(gpu, self.size(), icons, font, tick, seed, atlas)?;
+        let mut painter = Painter::new(gpu, self.size(), icons, font, tick, seed, atlas)?;
+        if !self.script.film.app.dither {
+            painter.set_dither(None);
+        }
         let mut player = Player {
             roll: self,
             painter,
@@ -697,7 +711,13 @@ impl Roll {
             heard: Vec::new(),
             frame: Vec::new(),
         };
-        let mut score = Score::new(&self.score, &[], self.script.film.seed, RATE)?;
+        let mut score = Score::in_dir(
+            &self.score,
+            &[],
+            self.script.film.seed,
+            RATE,
+            &self.score_dir,
+        )?;
         let crew = Crew {
             show: &mut player,
             cast: &words,

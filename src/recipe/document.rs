@@ -2,14 +2,13 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use pfx_build::document::{SceneChange, is_pfx};
-use pfx_build::{Document, Registry, files};
+use pfx_build::document::{Draft, SceneChange, is_pfx};
+use pfx_build::{Document, Registry, files, pfx_file};
 use serde_json::json;
 
 use super::{SceneArgs, SceneVerb, Verb, refuse};
 
 pub(super) struct Opened {
-    pub pfx: PathBuf,
     pub doc: Document,
     pub recipe: PathBuf,
     pub mount: files::Mount,
@@ -29,27 +28,47 @@ pub(super) fn open(pfx: &Path) -> Result<Opened, String> {
         return Err(edited_refusal(pfx));
     }
     let (recipe, mount) = doc.mount(pfx)?;
-    Ok(Opened {
-        pfx: pfx.to_path_buf(),
-        doc,
-        recipe,
-        mount,
-    })
+    Ok(Opened { doc, recipe, mount })
 }
 
-impl Opened {
-    pub fn finish(mut self, registry: &Registry) -> Result<bool, String> {
-        if !self.doc.take_changes(&self.pfx, &self.mount) {
+pub(super) struct Drafted {
+    pfx: PathBuf,
+    draft: Draft,
+    mount: files::Mount,
+}
+
+impl Drafted {
+    pub fn path_of(&self, name: &str) -> Result<PathBuf, String> {
+        self.draft.path_of(&self.pfx, name)
+    }
+
+    pub fn finish(mut self) -> Result<bool, String> {
+        if !self.draft.take_changes(&self.pfx, &self.mount) {
             return Ok(false);
         }
         drop(self.mount);
-        self.doc.rebuild(&self.pfx, registry)?;
-        self.doc.write(&self.pfx)?;
+        self.draft.write(&self.pfx)?;
         Ok(true)
     }
 }
 
-fn swapped(text: &mut String) -> Result<Option<Opened>, String> {
+pub(super) fn drafted(pfx: &Path) -> Result<(Drafted, PathBuf), String> {
+    let draft = Draft::open(pfx)?;
+    if draft.edited() {
+        return Err(edited_refusal(pfx));
+    }
+    let (recipe, mount) = draft.mount(pfx, &pfx.display().to_string())?;
+    Ok((
+        Drafted {
+            pfx: pfx.to_path_buf(),
+            draft,
+            mount,
+        },
+        recipe,
+    ))
+}
+
+fn swapped(text: &mut String) -> Result<Option<Drafted>, String> {
     let mut path = PathBuf::from(text.as_str());
     let opened = swapped_path(&mut path)?;
     if opened.is_some() {
@@ -58,23 +77,23 @@ fn swapped(text: &mut String) -> Result<Option<Opened>, String> {
     Ok(opened)
 }
 
-fn swapped_path(path: &mut PathBuf) -> Result<Option<Opened>, String> {
+fn swapped_path(path: &mut PathBuf) -> Result<Option<Drafted>, String> {
     if let Some(refusal) = crate::scene::legacy(path) {
         return Err(refusal);
     }
     if !is_pfx(path) {
         return Ok(None);
     }
-    let opened = open(path)?;
-    path.clone_from(&opened.recipe);
-    Ok(Some(opened))
+    let (drafted, recipe) = drafted(path)?;
+    *path = recipe;
+    Ok(Some(drafted))
 }
 
-fn refused(path: &Path) -> Result<Option<Opened>, String> {
+fn refused(path: &Path) -> Result<Option<Drafted>, String> {
     crate::scene::legacy(path).map_or(Ok(None), Err)
 }
 
-pub(super) fn swap(verb: &mut Verb) -> Result<Option<Opened>, (&'static str, String)> {
+pub(super) fn swap(verb: &mut Verb) -> Result<Option<Drafted>, (&'static str, String)> {
     let (name, result) = match verb {
         Verb::Build(a) => ("build", refused(Path::new(&a.recipe))),
         Verb::Check(a) => ("check", swapped(&mut a.recipe)),
@@ -131,6 +150,38 @@ pub(super) struct FoldArgs {
     keep: bool,
     #[arg(long, help = "Print one JSON object")]
     json: bool,
+}
+
+#[derive(clap::Args)]
+pub(super) struct CompactArgs {
+    #[arg(value_name = "file.pitofx", help = "The document to rewrite")]
+    pfx: PathBuf,
+    #[arg(long, help = "Print one JSON object")]
+    json: bool,
+}
+
+pub(super) fn compact(args: &CompactArgs) -> ExitCode {
+    if !is_pfx(&args.pfx) {
+        let refusal = crate::scene::legacy(&args.pfx)
+            .unwrap_or_else(|| format!("{}: not a .pitofx document", args.pfx.display()));
+        return refuse("scene compact", &refusal);
+    }
+    let (before, after) = match pfx_file::compact(&args.pfx) {
+        Ok(sizes) => sizes,
+        Err(e) => return refuse("scene compact", &format!("{}: {e}", args.pfx.display())),
+    };
+    if args.json {
+        println!(
+            "{}",
+            json!({ "pfx": args.pfx.display().to_string(), "before": before, "after": after })
+        );
+    } else {
+        println!(
+            "{}: {before} bytes, {after} after compaction",
+            args.pfx.display()
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 fn thumb(recipe: &Path, pfx: &Path, registry: &Registry) -> Result<Vec<u8>, String> {
@@ -471,7 +522,7 @@ roughness = 0.6
             "{}",
             doc.recipe_text
         );
-        assert!(doc.fresh());
+        assert!(!doc.fresh());
         assert_eq!(
             run(&words(&["set", path, "object.desk.material=\"nothing\""])),
             ExitCode::FAILURE
@@ -493,7 +544,7 @@ roughness = 0.6
         let before = std::fs::read(&pfx).unwrap();
         assert_eq!(run(&words(&["build", path])), ExitCode::SUCCESS);
         assert_eq!(std::fs::read(&pfx).unwrap(), before);
-        let glb = dir.join("scenes/out/doc.glb");
+        let glb = dir.join("out/doc.glb");
         assert_eq!(
             std::fs::read(&glb).unwrap(),
             Document::open(&pfx).unwrap().glb()
@@ -511,8 +562,11 @@ roughness = 0.6
             "{}",
             edited.recipe_text
         );
-        assert!(edited.fresh());
+        assert!(!edited.fresh());
         assert!(!dir.join("scenes/doc.toml").exists());
+        assert_eq!(run(&words(&["build", path])), ExitCode::SUCCESS);
+        let edited = Document::open(&pfx).unwrap();
+        assert!(edited.fresh());
         assert_eq!(
             run(&words(&[
                 "build",
@@ -530,7 +584,8 @@ roughness = 0.6
     }
 
     fn edit_scene(pfx: &Path, from: &str, to: &str) {
-        let reader = pfx_file::Reader::open(pfx).unwrap();
+        let bytes = std::fs::read(pfx).unwrap();
+        let reader = pfx_file::Reader::from_bytes(&bytes).unwrap();
         let mut writer = pfx_file::Writer::new();
         for (i, entry) in reader.entries().iter().enumerate() {
             if entry.tag == pfx_file::SCNE && entry.name == "main.toml" {
@@ -589,7 +644,101 @@ roughness = 0.6
                 ])),
                 ExitCode::SUCCESS
             );
-            assert_eq!(lamp(&Document::open(&pfx).unwrap()), 12.0);
+            assert_eq!(run(&words(&["build", path])), ExitCode::SUCCESS);
+            let rebuilt = Document::open(&pfx).unwrap();
+            assert!(rebuilt.fresh());
+            assert_eq!(lamp(&rebuilt), 12.0);
         }
+    }
+
+    #[test]
+    fn an_edit_writes_the_recipe_alone_and_leaves_every_packed_file_where_it_was() {
+        let (_, pfx) = saved("pfx-entry-write");
+        let path = pfx.to_str().unwrap();
+        let before = pfx_file::Reader::open(&pfx).unwrap().entries().to_vec();
+        let len = std::fs::metadata(&pfx).unwrap().len();
+        assert_eq!(run(&words(&["set", path, "seed=11"])), ExitCode::SUCCESS);
+        let after = pfx_file::Reader::open(&pfx).unwrap().entries().to_vec();
+        for entry in &before {
+            if entry.tag != pfx_file::RCPE && entry.tag != pfx_file::SMET {
+                assert!(after.contains(entry), "{entry:?} moved or changed");
+            }
+        }
+        assert!(std::fs::metadata(&pfx).unwrap().len() < len + 4096);
+        let doc = Document::open(&pfx).unwrap();
+        assert!(doc.recipe_text.contains("seed = 11") && !doc.fresh());
+        assert_eq!(run(&words(&["build", path])), ExitCode::SUCCESS);
+        assert!(Document::open(&pfx).unwrap().fresh());
+    }
+
+    #[test]
+    fn a_document_two_folders_down_a_project_writes_its_scene_beside_itself() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tmp")
+            .join("pfx-project-paths");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("car/drive")).unwrap();
+        std::fs::create_dir_all(dir.join("car/shared")).unwrap();
+        std::fs::write(
+            dir.join("project.toml"),
+            "format = 1\n\n[project]\nname = \"paths\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("car/shared/rig.toml"), RIG).unwrap();
+        let recipe = RECIPE.replace(
+            "[output]\nglb = \"out/doc.glb\"",
+            "[output]\nglb = \"x.glb\"\nscene = \"x.scene.toml\"",
+        );
+        std::fs::write(dir.join("car/drive/x.toml"), recipe).unwrap();
+        crate::scene::run(&crate::scene::Command {
+            action: crate::scene::Action::Migrate,
+            path: dir.join("car/drive/x.toml"),
+            dry_run: false,
+            bare: false,
+        })
+        .unwrap();
+        std::fs::remove_file(dir.join("car/drive/x.toml")).unwrap();
+        let pfx = dir.join("car/drive/x.pitofx");
+        let path = pfx.to_str().unwrap();
+        assert_eq!(
+            run(&words(&["build", path, "--set", "seed=4"])),
+            ExitCode::SUCCESS
+        );
+        assert!(!dir.join("car/drive/car").exists() && !dir.join("car/drive/drive").exists());
+        let scene = std::fs::read_to_string(dir.join("car/drive/x.scene.toml")).unwrap();
+        assert!(scene.contains("file = \"x.glb\""), "{scene}");
+        assert!(scene.contains("\"x.materials.toml\""), "{scene}");
+        pfx_load::scene::Scene::open(dir.join("car/drive/x.scene.toml"))
+            .unwrap_or_else(|e| panic!("{e}"));
+    }
+
+    #[test]
+    fn edits_name_the_document_and_echo_the_value_it_held() {
+        let (_, pfx) = saved("pfx-names");
+        let (drafted, recipe) = drafted(&pfx).unwrap();
+        let shown = pfx.display().to_string();
+        assert_eq!(files::shown(&recipe.display().to_string()), shown);
+        let rig = recipe.parent().unwrap().join("../shared/rig.toml");
+        assert_eq!(
+            files::shown(&rig.display().to_string()),
+            format!("{shown}:shared/rig.toml")
+        );
+        let file = recipe.display().to_string();
+        let mut loaded = pfx_recipe::load(&recipe).unwrap();
+        pfx_recipe::set_values(&mut loaded, &["sky.intensity=0.34".to_string()]).unwrap();
+        pfx_recipe::save(&loaded).unwrap();
+        let mut loaded = pfx_recipe::load(&recipe).unwrap();
+        let changes =
+            pfx_recipe::set_values(&mut loaded, &["sky.intensity=1.6".to_string()]).unwrap();
+        assert_eq!(super::super::set::was(changes[0].old.as_ref()), "0.34");
+        assert_eq!(super::super::set::file_of(&file, &changes[0].file), shown);
+        drop(loaded);
+        drafted.finish().unwrap();
+        let doc = Document::open(&pfx).unwrap();
+        assert!(
+            doc.recipe_text.contains("intensity = 0.34"),
+            "{}",
+            doc.recipe_text
+        );
     }
 }

@@ -40,11 +40,12 @@ const USAGE: &str = "usage:
   pfx gui [<recipe|scene.toml|file.pitofx|project folder|folder>] [--play <module.wasm>] [flags]
   pfx new <game> [--path <dir>] [--with-module]
   pfx bench <scene.pitofx> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
-  pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr] [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
+  pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|png16|exr] [--dither on|off] [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
   pfx scene migrate <file.toml|file.pfx|folder|scene.pitofx> [--dry-run]
   pfx scene fix <scene.pitofx> [--dry-run]
   pfx film <script.film.toml> --out <dir> [--json] [--plan]
   pfx sound clean <in.wav> <out.wav> [--keep harmonic [--f0 LOW,HIGH]] [--remove transients] [--gate [--noise START,END] [--reduce DB]] [--mask <png>] [--json]
+  pfx sound mix <script.sound.toml> --frames N [--fps N] --out <out.wav> [--json]
   pfx render --recipe <file.pitofx> --camera <name> --out <png|exr|hdr> [flags]
   pfx shot <file.pitofx> --still --camera <name> --size WxH --out <png> [flags]
   pfx new <out.pitofx> --from street [--seed N] [--json]
@@ -81,6 +82,7 @@ shot renders a scene file offline on the live renderer at a fixed clock (frame n
 scene migrate imports a plain TOML recipe or scene, or a legacy .pfx with the PFXFILE magic (or every one in a folder), once into a .pitofx beside it, its format 0 files rewritten as format 1; given a scene's .pitofx it migrates the files inside; scene fix writes the ids a .pitofx scene's entries lack; both refuse to write when the check fails; every other verb refuses a .toml or a .pfx and names the migrate command, and a .pfx without the magic is not a pfx document
 film assembles a script of clips, rendered frame folders and cards into PNG frames, a WAV and a manifest.json naming the pcod command that encodes them, under the caller's tmp/ (docs/film.md, Footage films); --plan prints the scenes without rendering
 sound clean cleans a field recording offline and keeps its length: --keep harmonic tracks a moving fundamental (default 40..400 Hz) and keeps only its harmonic series, --remove transients finds short events that stand out of the background (barks, slams, voices, clicks) and inpaints them from the frames around them, --gate gates the noise under a print taken from --noise or the quietest second (fully, or by --reduce dB); it reports what it removed and --mask writes a time by frequency PNG, kept grey and removed red (docs/sound.md, Cleaning recordings)
+sound mix renders a *.sound.toml shot mix script to a 48 kHz stereo float WAV, N frames at --fps (default 60) long, with no scene and no GPU: the same mixer and the same bytes as pfx shot --audio for that script (docs/sound.md, Shot mix)
 a recipe is a TOML scene recipe (it starts `recipe = 1`), kept inside a .pitofx, that pfx builds into a GLB and a scene headless, draws live (shot --still) or path-traces (render --recipe); each recipe verb prints its own flags with --help (docs/recipes.md)
 new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)";
 
@@ -289,6 +291,7 @@ const SCENE_FLAGS: &[&str] = &[
 const SHOT_FLAGS: &[&str] = &[
     "--audio",
     "--camera",
+    "--dither",
     "--draft",
     "--exposure",
     "--final",
@@ -1263,18 +1266,44 @@ fn window_args(args: Vec<String>) -> Vec<String> {
     args
 }
 
-#[cfg(target_os = "macos")]
-fn os_launch(_args: &[String]) -> Option<std::process::ExitCode> {
+#[cfg(all(any(target_os = "macos", windows), feature = "editor"))]
+fn hand_off(exe: Option<&std::path::Path>, args: &[String]) -> Option<std::process::ExitCode> {
+    let window_call = match args {
+        [] => true,
+        [path] => is_document(path),
+        _ => false,
+    };
+    if !window_call {
+        return None;
+    }
+    let plan = pfx::launch::window(pfx::launch::Os::HOST, exe?, args);
+    match pfx::launch::start(&plan) {
+        Ok(true) => Some(std::process::ExitCode::SUCCESS),
+        Ok(false) => None,
+        Err(error) => {
+            eprintln!("pfx: {error}; opening the window here");
+            None
+        }
+    }
+}
+
+#[cfg(all(any(target_os = "macos", windows), not(feature = "editor")))]
+fn hand_off(_exe: Option<&std::path::Path>, _args: &[String]) -> Option<std::process::ExitCode> {
     None
+}
+
+#[cfg(target_os = "macos")]
+fn os_launch(exe: Option<&std::path::Path>, args: &[String]) -> Option<std::process::ExitCode> {
+    hand_off(exe, args)
 }
 
 #[cfg(windows)]
-fn os_launch(_args: &[String]) -> Option<std::process::ExitCode> {
-    None
+fn os_launch(exe: Option<&std::path::Path>, args: &[String]) -> Option<std::process::ExitCode> {
+    hand_off(exe, args)
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-fn os_launch(_args: &[String]) -> Option<std::process::ExitCode> {
+fn os_launch(_exe: Option<&std::path::Path>, _args: &[String]) -> Option<std::process::ExitCode> {
     None
 }
 
@@ -1284,10 +1313,12 @@ fn main() -> std::process::ExitCode {
         eprintln!("pfx: {error}");
         std::process::exit(1);
     }
-    let args = window_args(std::env::args().skip(1).collect());
-    if let Some(code) = os_launch(&args) {
+    let exe = std::env::current_exe().ok();
+    let given = pfx::launch::args(exe.as_deref(), std::env::args().skip(1).collect());
+    if let Some(code) = os_launch(exe.as_deref(), &given) {
         return code;
     }
+    let args = window_args(given);
     if recipe::claims(&args) {
         return recipe::main(&args);
     }
@@ -1790,7 +1821,7 @@ mod tests {
             ),
             (
                 "shot room.scene.toml --frames 3 --format tiff",
-                "invalid value 'tiff' for '--format <FORMAT>'\n  [possible values: png, exr]",
+                "invalid value 'tiff' for '--format <FORMAT>'\n  [possible values: png, png16, exr]",
             ),
             (
                 "shot room.scene.toml --frames 3 --set haze",

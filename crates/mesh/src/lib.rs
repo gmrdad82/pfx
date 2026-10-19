@@ -5,6 +5,7 @@ mod nets;
 mod normals;
 pub mod outline;
 mod prim;
+pub mod rigid;
 mod simplify;
 mod slab;
 mod tangents;

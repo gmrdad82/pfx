@@ -6,7 +6,7 @@ use pfx_recipe::toml_edit::Value as Toml;
 use pfx_recipe::{Change, Loaded, json_of, load, save, set_values_with, tidy, value_of};
 use serde_json::{Value, json};
 
-use super::{check, pair, read_failure, refuse};
+use super::{check, lines, pair, read_failure, refuse};
 
 #[derive(clap::Args)]
 pub(super) struct SetArgs {
@@ -27,6 +27,12 @@ pub(super) struct SetArgs {
     through: bool,
     #[arg(long, help = "One JSON object on stdout")]
     json: bool,
+    #[arg(
+        long,
+        conflicts_with = "json",
+        help = "Print each change as <key> = <value>, without the file and the old value"
+    )]
+    brief: bool,
 }
 
 #[derive(clap::Args)]
@@ -47,12 +53,15 @@ pub(super) struct GetArgs {
 pub(super) fn file_of(recipe: &str, name: &str) -> String {
     let main = Path::new(recipe);
     if main.file_name().is_some_and(|n| n == name) {
-        return recipe.to_string();
+        return shown(recipe);
     }
-    main.parent()
-        .map_or_else(|| PathBuf::from(name), |p| p.join(name))
-        .display()
-        .to_string()
+    shown(
+        &main
+            .parent()
+            .map_or_else(|| PathBuf::from(name), |p| p.join(name))
+            .display()
+            .to_string(),
+    )
 }
 
 pub(super) type Saved = Vec<(PathBuf, Option<Vec<u8>>)>;
@@ -91,13 +100,69 @@ pub(super) fn rechecked(file: &str, registry: &Registry) -> Result<(), String> {
     }
     let lines: Vec<String> = problems
         .iter()
-        .map(|p| format!("{file}:{}: {}: {}", p.line.unwrap_or(1), p.path, p.text))
+        .map(|p| {
+            format!(
+                "{}:{}: {}: {}",
+                shown(file),
+                p.line.unwrap_or(1),
+                p.path,
+                p.text
+            )
+        })
         .collect();
     Err(lines.join("; "))
 }
 
-pub(super) fn shown(value: Option<&Toml>) -> String {
+pub(super) fn shown(file: &str) -> String {
+    pfx_recipe::files::shown(file)
+}
+
+pub(super) fn was(value: Option<&Toml>) -> String {
     value.map_or_else(|| "absent".to_string(), |v| tidy(v).to_string())
+}
+
+const LONGEST: usize = 8;
+
+fn summed(key: &str, value: &Toml) -> Option<String> {
+    let array = value.as_array()?;
+    let n = array.len();
+    if n <= LONGEST {
+        return None;
+    }
+    let numbers = array
+        .iter()
+        .all(|v| v.as_float().is_some() || v.as_integer().is_some());
+    let what = if numbers {
+        "values"
+    } else if key.split('.').any(|part| part == "keys") {
+        "keys"
+    } else {
+        "entries"
+    };
+    Some(format!("[{n} {what}]"))
+}
+
+pub(super) fn printed(recipe: &str, changes: &[Change], brief: bool, short: bool) -> Vec<String> {
+    let text = |key: &str, value: &Toml| {
+        short
+            .then(|| summed(key, value))
+            .flatten()
+            .unwrap_or_else(|| tidy(value).to_string())
+    };
+    changes
+        .iter()
+        .map(|c| {
+            lines::change(
+                &file_of(recipe, &c.file),
+                &c.key,
+                &text(&c.key, &c.new),
+                &c.old
+                    .as_ref()
+                    .map_or_else(|| was(None), |old| text(&c.key, old)),
+                brief,
+            )
+        })
+        .collect()
 }
 
 pub(super) fn described(recipe: &str, change: &Change) -> Value {
@@ -134,17 +199,15 @@ fn set(args: &SetArgs, registry: &Registry) -> Result<(), String> {
     }
     if args.json {
         let set: Vec<Value> = changes.iter().map(|c| described(file, c)).collect();
-        println!("{}", json!({ "recipe": file, "set": set, "check": "ok" }));
+        println!(
+            "{}",
+            json!({ "recipe": shown(file), "set": set, "check": "ok" })
+        );
         return Ok(());
     }
-    for change in &changes {
-        println!(
-            "{}: {} = {}  (was {})",
-            file_of(file, &change.file),
-            change.key,
-            tidy(&change.new),
-            shown(change.old.as_ref())
-        );
+    let width = lines::width();
+    for line in printed(file, &changes, args.brief, args.brief || width.is_some()) {
+        lines::emit(&line, width);
     }
     println!("check: ok");
     Ok(())
@@ -175,7 +238,7 @@ fn get(args: &GetArgs) -> Result<(), String> {
             .iter()
             .map(|(key, value)| json!({ "key": key, "value": json_of(value) }))
             .collect();
-        println!("{}", json!({ "recipe": file, "values": list }));
+        println!("{}", json!({ "recipe": shown(file), "values": list }));
     } else {
         for (key, value) in &values {
             println!("{key} = {}", tidy(value));
@@ -204,6 +267,7 @@ mod tests {
             sets: sets.iter().map(|s| s.to_string()).collect(),
             through: false,
             json: true,
+            brief: false,
         }
     }
 
@@ -220,6 +284,61 @@ mod tests {
         let e = set(&set_args(&file, &["look.exposure=dark"]), &Registry::new()).unwrap_err();
         assert!(e.contains("look.exposure"), "{e}");
         assert_eq!(std::fs::read_to_string(&file).unwrap(), RECIPE);
+    }
+
+    #[test]
+    fn brief_prints_key_and_value_without_the_file_or_the_old_value() {
+        let file = written("brief.toml");
+        let mut loaded = load(Path::new(&file)).unwrap();
+        let sets = [
+            "look.exposure=2.5".to_string(),
+            "look.view=\"standard\"".to_string(),
+        ];
+        let changes = set_values_with(&mut loaded, &sets, false).unwrap();
+        assert_eq!(
+            printed(&file, &changes, true, true),
+            ["look.exposure = 2.5", "look.view = \"standard\""]
+        );
+        assert_eq!(
+            printed(&file, &changes, false, false),
+            [
+                format!("{file}: look.exposure = 2.5  (was 3.0)"),
+                format!("{file}: look.view = \"standard\"  (was absent)"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_long_array_is_summed_up_in_short_lines_and_kept_whole_otherwise() {
+        let keys: Vec<String> = (0..412).map(|i| format!("[{i}.0, 1.0]")).collect();
+        let keys: Toml = format!("[{}]", keys.join(", ")).parse().unwrap();
+        let curve: Toml = "[0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]"
+            .parse()
+            .unwrap();
+        let tint: Toml = "[0.1, 0.2, 0.3]".parse().unwrap();
+        assert_eq!(summed("motion.keys", &keys).as_deref(), Some("[412 keys]"));
+        assert_eq!(summed("look.curve", &curve).as_deref(), Some("[10 values]"));
+        assert_eq!(summed("look.tint", &tint), None);
+        let file = written("summed.toml");
+        std::fs::write(
+            &file,
+            format!("{RECIPE}\n[[route]]\nname = \"lane\"\npoints = [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]]\n"),
+        )
+        .unwrap();
+        let mut loaded = load(Path::new(&file)).unwrap();
+        let points: Vec<String> = (0..9).map(|i| format!("[{i}.0, 0.0, 0.0]")).collect();
+        let sets = [format!("route.lane.points=[{}]", points.join(", "))];
+        let changes = set_values_with(&mut loaded, &sets, false).unwrap();
+        assert_eq!(
+            printed(&file, &changes, true, true),
+            ["route.lane.points = [9 entries]"]
+        );
+        let long = &printed(&file, &changes, false, true)[0];
+        assert!(
+            long.starts_with(&format!("{file}: route.lane.points = [9 entries]  (was [[")),
+            "{long}"
+        );
+        assert!(printed(&file, &changes, true, false)[0].ends_with("[8.0, 0.0, 0.0]]"));
     }
 
     #[test]

@@ -11,6 +11,9 @@ pub const CLEARCOAT: &str = "KHR_materials_clearcoat";
 pub const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
 pub const DETAIL_NORMAL: &str = "detailNormalTexture";
 pub const TEXTURE_TRANSFORM: &str = "KHR_texture_transform";
+pub const TRANSMISSION: &str = "KHR_materials_transmission";
+pub const VOLUME: &str = "KHR_materials_volume";
+pub const IOR: &str = "KHR_materials_ior";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SurfaceMaps {
@@ -320,6 +323,20 @@ where
         out.clearcoat = number(clearcoat.get("clearcoatFactor"), 0.0);
         out.clearcoat_roughness = number(clearcoat.get("clearcoatRoughnessFactor"), 0.0);
     }
+    if let Some(ior) = material.extension_value(IOR) {
+        out.ior = number(ior.get("ior"), out.ior).max(1.0);
+    }
+    if let Some(transmission) = material.extension_value(TRANSMISSION) {
+        extended = true;
+        out.transmission = number(transmission.get("transmissionFactor"), 0.0).clamp(0.0, 1.0);
+        match material.extension_value(VOLUME) {
+            Some(volume) => {
+                out.thickness = number(volume.get("thicknessFactor"), 0.0).max(0.0);
+                out.absorption = absorption(volume, out.base);
+            }
+            None => out.thin_walled = out.transmission > 0.0,
+        }
+    }
     if let Some(strength) = material.extension_value(EMISSIVE_STRENGTH) {
         let strength = number(strength.get("emissiveStrength"), 1.0);
         out.emission = out.emission.map(|e| e * strength);
@@ -357,6 +374,24 @@ where
         maps,
         declared,
     })
+}
+
+fn absorption(volume: &Value, base: [f32; 3]) -> f32 {
+    let distance = number(volume.get("attenuationDistance"), f32::INFINITY);
+    if !distance.is_finite() || distance <= 0.0 {
+        return 0.0;
+    }
+    let colour = colour(volume.get("attenuationColor")).unwrap_or([1.0; 3]);
+    let taken: f32 = colour
+        .iter()
+        .map(|c| -c.clamp(1e-9, 1.0).ln() / distance)
+        .sum();
+    let open: f32 = base.iter().map(|b| 1.0 - b.clamp(0.0, 1.0)).sum();
+    if taken > 0.0 && open > 1e-6 {
+        taken / open
+    } else {
+        0.0
+    }
 }
 
 pub fn rgba8(image: &Image) -> Vec<[u8; 4]> {

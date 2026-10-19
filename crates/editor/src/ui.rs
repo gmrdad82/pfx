@@ -8,7 +8,7 @@ use pfx_editor_viewport::{Look, Mode};
 use crate::check::{SceneCheck, worded};
 use crate::editor::{Editor, Group, Play, Request};
 use crate::inspect::{Change, Field, NONE, Row};
-use crate::log::Level;
+use crate::log::{Level, Log};
 use crate::outline::{Item, Node};
 use crate::theme::{code, label, small, title};
 
@@ -23,6 +23,28 @@ fn linear_colour(rgb: [f32; 3]) -> Color32 {
         rgb[1].clamp(0.0, 1.0),
         rgb[2].clamp(0.0, 1.0),
     ))
+}
+
+pub fn log_lines(ui: &mut Ui, log: &Log, root: &Path) {
+    let theme = Theme::of(ui.ctx());
+    egui::ScrollArea::vertical()
+        .id_salt("log scroll")
+        .auto_shrink(false)
+        .stick_to_bottom(true)
+        .show(ui, |ui| {
+            for entry in &log.entries {
+                let colour = match entry.level {
+                    Level::Info => theme.text2,
+                    Level::Warn => theme.warning,
+                    Level::Error => theme.error,
+                };
+                let text = match entry.place(root) {
+                    Some(place) => format!("{place}: {}", entry.text),
+                    None => entry.text.clone(),
+                };
+                ui.label(code(&theme, text, colour));
+            }
+        });
 }
 
 impl Editor {
@@ -700,25 +722,7 @@ impl Editor {
                 self.layout.version = Some(version.rect);
             });
         });
-        let root = self.path().to_path_buf();
-        egui::ScrollArea::vertical()
-            .id_salt("log scroll")
-            .auto_shrink(false)
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                for entry in &self.log.entries {
-                    let colour = match entry.level {
-                        Level::Info => theme.text2,
-                        Level::Warn => theme.warning,
-                        Level::Error => theme.error,
-                    };
-                    let text = match entry.place(&root) {
-                        Some(place) => format!("{place}: {}", entry.text),
-                        None => entry.text.clone(),
-                    };
-                    ui.label(code(&theme, text, colour));
-                }
-            });
+        log_lines(ui, &self.log, self.path());
     }
 
     fn source_panel(&mut self, ui: &mut Ui, file: &Path) {

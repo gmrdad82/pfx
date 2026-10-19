@@ -5,6 +5,8 @@ pub const MAX_PX: f32 = 64.0;
 pub const SAMPLES: u32 = 8;
 pub const MAX_PX_RANGE: std::ops::RangeInclusive<f32> = 1.0..=256.0;
 pub const SAMPLES_RANGE: std::ops::RangeInclusive<u32> = 2..=64;
+pub const SHUTTER_MAX: f32 = 4.0;
+pub const SAMPLES_CAP: u32 = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MotionBlur {
@@ -28,25 +30,67 @@ impl MotionBlur {
         self.shutter > 0.0 && self.max_px > 0.0 && self.samples > 0
     }
 
+    pub fn stretch(self) -> f32 {
+        self.shutter.clamp(1.0, SHUTTER_MAX)
+    }
+
     pub fn max_blur(self) -> u32 {
-        self.max_px
+        (self
+            .max_px
             .clamp(*MAX_PX_RANGE.start(), *MAX_PX_RANGE.end())
-            .floor() as u32
+            .floor()
+            * self.stretch())
+        .floor() as u32
     }
 
     pub fn tile(self) -> u32 {
-        (self.max_blur() - 1) / 8 * 8 + 8
+        let reach = self
+            .max_px
+            .clamp(*MAX_PX_RANGE.start(), *MAX_PX_RANGE.end())
+            .floor() as u32;
+        (reach - 1) / 8 * 8 + 8
+    }
+
+    pub fn neighbour_reach(self) -> u32 {
+        self.max_blur().div_ceil(self.tile()).max(1)
+    }
+
+    pub fn sample_count(self) -> u32 {
+        let samples = self
+            .samples
+            .clamp(*SAMPLES_RANGE.start(), *SAMPLES_RANGE.end());
+        ((samples as f32 * self.stretch()).ceil() as u32).min(SAMPLES_CAP)
     }
 
     pub fn loop_count(self) -> f32 {
-        (self
-            .samples
-            .clamp(*SAMPLES_RANGE.start(), *SAMPLES_RANGE.end())
-            / 2) as f32
+        (self.sample_count() / 2) as f32
+    }
+
+    pub fn params(self, (width, rows): (u32, u32), spans_shutter: bool, time: f32) -> [f32; 12] {
+        let tile = self.tile();
+        let max_blur = self.max_blur() as f32;
+        [
+            f32::from_bits(width),
+            f32::from_bits(rows),
+            f32::from_bits(width.div_ceil(tile)),
+            f32::from_bits(rows.div_ceil(tile)),
+            self.velocity_scale(spans_shutter),
+            max_blur,
+            1.0 / max_blur,
+            self.loop_count(),
+            tile as f32,
+            time.rem_euclid(64.0),
+            (self.neighbour_reach() - 1) as f32,
+            0.0,
+        ]
     }
 
     pub fn velocity_scale(self, spans_shutter: bool) -> f32 {
-        if spans_shutter { 1.0 } else { self.shutter }
+        if spans_shutter {
+            self.stretch()
+        } else {
+            self.shutter.min(SHUTTER_MAX)
+        }
     }
 }
 
@@ -121,6 +165,17 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
     if (any(id.xy >= params.tiles)) { return; }
     let cw = 1.01;
     let at = vec2i(id.xy);
+    if (params.extra.z > 0.0) {
+        let reach = 1 + i32(params.extra.z);
+        var longest = tile_at(at) * cw;
+        for (var dy = -reach; dy <= reach; dy++) {
+            for (var dx = -reach; dx <= reach; dx++) {
+                longest = vmax(longest, tile_at(at + vec2i(dx, dy)));
+            }
+        }
+        textureStore(neighbors, at, vec4f(longest / cw, 0.0, 0.0));
+        return;
+    }
     let v1 = tile_at(at + vec2i(-1, -1));
     let v2 = tile_at(at + vec2i(0, -1));
     let v3 = tile_at(at + vec2i(1, -1));
@@ -174,7 +229,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         return;
     }
     let v_alt = select(v_max, vd_p.xy * (l_v_max / l_v_p), l_v_p * 2.0 > l_v_max);
-    let sc = floor(min(params.blur.w, l_v_max / 2.0));
+    let sc = floor(min(params.blur.w, l_v_max * 2.0));
     let dt = 1.0 / sc;
     let t_offs = (gradient_noise(centre) - 0.5) * dt;
     var t = 1.0 - dt / 2.0;
@@ -474,21 +529,7 @@ impl GpuMotionBlur {
         }
         let (width, rows) = self.viewport;
         let (tiles_x, tiles_y) = (width.div_ceil(tile), rows.div_ceil(tile));
-        let max_blur = blur.max_blur() as f32;
-        let params: [f32; 12] = [
-            f32::from_bits(width),
-            f32::from_bits(rows),
-            f32::from_bits(tiles_x),
-            f32::from_bits(tiles_y),
-            blur.velocity_scale(spans_shutter),
-            max_blur,
-            1.0 / max_blur,
-            blur.loop_count(),
-            tile as f32,
-            time.rem_euclid(64.0),
-            0.0,
-            0.0,
-        ];
+        let params = blur.params(self.viewport, spans_shutter, time);
         let uniform = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -575,6 +616,81 @@ mod tests {
     }
 
     #[test]
+    fn a_shutter_of_one_or_less_keeps_every_setting_of_the_pass() {
+        for shutter in [0.1, 0.25, 0.5, 0.75, 1.0] {
+            for (max_px, samples) in [(64.0, 8), (16.0, 16), (300.0, 1), (0.5, 99), (65.5, 7)] {
+                let blur = MotionBlur {
+                    shutter,
+                    max_px,
+                    samples,
+                };
+                let max_blur = max_px.clamp(1.0, 256.0).floor();
+                let tile = (max_blur as u32 - 1) / 8 * 8 + 8;
+                let size = (1920, 1080);
+                let expected: [f32; 12] = [
+                    f32::from_bits(1920),
+                    f32::from_bits(1080),
+                    f32::from_bits(1920u32.div_ceil(tile)),
+                    f32::from_bits(1080u32.div_ceil(tile)),
+                    shutter,
+                    max_blur,
+                    1.0 / max_blur,
+                    (samples.clamp(2, 64) / 2) as f32,
+                    tile as f32,
+                    1.5,
+                    0.0,
+                    0.0,
+                ];
+                let params = blur.params(size, false, 1.5);
+                assert_eq!(
+                    params.map(f32::to_bits),
+                    expected.map(f32::to_bits),
+                    "{shutter} {max_px} {samples}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_stylised_shutter_lengthens_the_reach_and_the_taps_up_to_their_caps() {
+        let blur = |shutter: f32| MotionBlur {
+            shutter,
+            ..MotionBlur::default()
+        };
+        assert_eq!(
+            [1.0, 2.0, 2.5, 4.0, 9.0].map(|s| (blur(s).max_blur(), blur(s).neighbour_reach())),
+            [(64, 1), (128, 2), (160, 3), (256, 4), (256, 4)]
+        );
+        assert!([1.0, 2.0, 4.0].iter().all(|&s| blur(s).tile() == 64));
+        assert_eq!(
+            [1.0, 2.0, 3.0, 4.0].map(|s| blur(s).sample_count()),
+            [8, 16, 24, 32]
+        );
+        assert_eq!(
+            [2.0, 4.0, 9.0].map(|s| blur(s).velocity_scale(false)),
+            [2.0, 4.0, 4.0]
+        );
+        assert_eq!(
+            [0.5, 1.0, 2.0, 9.0].map(|s| blur(s).velocity_scale(true)),
+            [1.0, 1.0, 2.0, 4.0]
+        );
+        let dense = MotionBlur {
+            shutter: 4.0,
+            max_px: 256.0,
+            samples: 64,
+        };
+        assert_eq!(
+            (
+                dense.max_blur(),
+                dense.sample_count(),
+                dense.neighbour_reach()
+            ),
+            (1024, SAMPLES_CAP, 4)
+        );
+        assert!(dense.tile() * dense.neighbour_reach() >= dense.max_blur());
+    }
+
+    #[test]
     fn velocity_already_spanning_the_shutter_is_not_scaled_again() {
         let blur = MotionBlur {
             shutter: 0.25,
@@ -619,7 +735,22 @@ mod tests {
         target
     }
 
+    const TEST_BLUR: MotionBlur = MotionBlur {
+        shutter: 1.0,
+        max_px: 32.0,
+        samples: 16,
+    };
+
     fn red(gpu: &pfx_gpu::Gpu, blur: &mut GpuMotionBlur, speed: f32) -> Vec<f32> {
+        red_with(gpu, blur, speed, TEST_BLUR)
+    }
+
+    fn red_with(
+        gpu: &pfx_gpu::Gpu,
+        blur: &mut GpuMotionBlur,
+        speed: f32,
+        settings: MotionBlur,
+    ) -> Vec<f32> {
         let square = |x: u32, y: u32| (40..56).contains(&x) && (40..56).contains(&y);
         let still = |x: u32, y: u32| (130..146).contains(&x) && (40..56).contains(&y);
         let source = upload(gpu, |x, y| {
@@ -643,7 +774,7 @@ mod tests {
                 [20.0, 0.0, 0.0, 0.0]
             }
         });
-        blurred(gpu, blur, &source, &motion, &depth)
+        blurred(gpu, blur, &source, &motion, &depth, settings)
             .chunks(4)
             .map(|texel| texel[0])
             .collect()
@@ -655,6 +786,7 @@ mod tests {
         source: &pfx_gpu::OffscreenTarget,
         motion: &pfx_gpu::OffscreenTarget,
         depth: &pfx_gpu::OffscreenTarget,
+        settings: MotionBlur,
     ) -> Vec<f32> {
         let mut encoder = gpu
             .device
@@ -666,11 +798,7 @@ mod tests {
             &source.view,
             &motion.view,
             &depth.view,
-            MotionBlur {
-                shutter: 1.0,
-                max_px: 32.0,
-                samples: 16,
-            },
+            settings,
             false,
             0.0,
             None,
@@ -711,7 +839,7 @@ mod tests {
                 [20.0, 0.0, 0.0, 0.0]
             }
         });
-        let out = blurred(&gpu, &mut blur, &source, &motion, &depth);
+        let out = blurred(&gpu, &mut blur, &source, &motion, &depth, TEST_BLUR);
         assert!(
             out.iter().all(|value| value.is_finite()),
             "{} values are not finite",
@@ -757,5 +885,100 @@ mod tests {
                 "the streak leaked across its motion at row {y}"
             );
         }
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn a_shutter_of_two_streaks_about_twice_as_far_as_one() {
+        let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
+        let mut blur = GpuMotionBlur::new(&gpu.device, SIZE.0, SIZE.1);
+        let streak = |image: &[f32]| {
+            (0..120)
+                .filter(|&x| image[(48 * SIZE.0 + x) as usize] > 0.02)
+                .count() as i32
+                - 16
+        };
+        let mut runs = Vec::new();
+        for shutter in [0.5, 1.0, 2.0] {
+            let settings = MotionBlur {
+                shutter,
+                ..TEST_BLUR
+            };
+            runs.push(streak(&red_with(&gpu, &mut blur, 16.0, settings)));
+        }
+        println!("streak beyond the square at shutter 0.5, 1 and 2: {runs:?} px");
+        let [half, one, two] = [runs[0], runs[1], runs[2]];
+        assert!(half > 0 && one > half, "{runs:?}");
+        let ratio = two as f32 / one as f32;
+        assert!((1.7..=2.3).contains(&ratio), "{runs:?}: {ratio}");
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn the_edges_of_a_still_square_over_a_fast_background_stay_smooth() {
+        let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
+        let mut blur = GpuMotionBlur::new(&gpu.device, SIZE.0, SIZE.1);
+        let still = |x: u32, y: u32| (80..112).contains(&x) && (24..72).contains(&y);
+        let source = upload(&gpu, |x, y| {
+            if still(x, y) {
+                [1.0, 0.0, 0.0, 1.0]
+            } else {
+                let stripe = 0.5 + 0.5 * (x as f32 * 0.7).sin();
+                [stripe, stripe, stripe, 1.0]
+            }
+        });
+        let motion = upload(&gpu, |x, y| {
+            if still(x, y) {
+                [0.0; 4]
+            } else {
+                [-24.0 / SIZE.0 as f32, 0.0, 0.0, 0.0]
+            }
+        });
+        let depth = upload(&gpu, |x, y| {
+            if still(x, y) {
+                [2.0, 0.0, 0.0, 0.0]
+            } else {
+                [20.0, 0.0, 0.0, 0.0]
+            }
+        });
+        let mut worst = Vec::new();
+        for samples in [8, 24, 64] {
+            let out = blurred(
+                &gpu,
+                &mut blur,
+                &source,
+                &motion,
+                &depth,
+                MotionBlur {
+                    samples,
+                    ..TEST_BLUR
+                },
+            );
+            let light = |x: u32, y: u32| {
+                let at = ((y * SIZE.0 + x) * 4) as usize;
+                0.2126 * out[at] + 0.7152 * out[at + 1] + 0.0722 * out[at + 2]
+            };
+            let speckle = (72..80)
+                .chain(112..120)
+                .map(|x| {
+                    let column: Vec<f32> = (32..64).map(|y| light(x, y)).collect();
+                    let mean = column.iter().sum::<f32>() / column.len() as f32;
+                    column.iter().map(|v| (v - mean) * (v - mean)).sum::<f32>()
+                        / column.len() as f32
+                })
+                .fold(0.0, f32::max);
+            println!(
+                "samples {samples}: the worst column beside the square varies by {speckle:.6}"
+            );
+            worst.push(speckle);
+        }
+        assert!(
+            worst[1] < worst[0] && worst[2] < worst[1],
+            "more samples smooth the edge: {worst:?}"
+        );
+        assert!(
+            worst[2] < 1e-5,
+            "the edge speckles at 64 samples: {worst:?}"
+        );
     }
 }

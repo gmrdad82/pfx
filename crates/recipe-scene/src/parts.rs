@@ -252,7 +252,7 @@ pub fn palette_with(
 }
 
 pub fn glassy(material: &Material) -> bool {
-    material.transmission > 0.0 || matches!(material.family, Family::Glass | Family::Liquid)
+    material.refracts() || material.family == Family::Liquid
 }
 
 pub fn glb_parts(bytes: &[u8]) -> Result<Vec<Part>, Error> {

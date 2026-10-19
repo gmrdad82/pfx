@@ -17,9 +17,18 @@ impl Shell {
         self.bare
     }
 
+    pub fn set_clean(&mut self, on: bool) {
+        self.clean = on;
+    }
+
+    pub fn is_clean(&self) -> bool {
+        self.clean
+    }
+
     pub(super) fn bare_view(&mut self, ui: &mut Ui, texture: &TextureHandle) {
+        let palette = Palette::of(ui.ctx());
         CentralPanel::default()
-            .frame(Frame::NONE.fill(BG_DEEP))
+            .frame(Frame::NONE.fill(palette.bg_deep))
             .show(ui, |ui| {
                 let sense = if self.live() {
                     Sense::click_and_drag()
@@ -54,7 +63,7 @@ impl Shell {
                             ui.max_rect().max,
                         ),
                         CornerRadius::ZERO,
-                        BG_BASE,
+                        palette.bg_base,
                     );
                     self.transport(ui);
                 }
@@ -88,5 +97,46 @@ mod tests {
         let mut panelled = Shell::open(&text).without_recent();
         pfx_editor_shell::drive(&ctx, [1080, 1920], &script, |ui| panelled.ui(ui));
         assert!(panelled.viewport().unwrap().width() < 540.0);
+    }
+
+    const BOX: &str = "recipe = 1\nname = \"lane\"\n\n[[object]]\nname = \"box\"\nkind = \"box\"\nsize = [2.0, 0.2, 2.0]\n";
+    const ROUTE: &str = "\n[[route]]\nname = \"lane\"\npoints = [[-0.8, 0.1, -0.8], [0.0, 0.1, 0.6], [0.8, 0.1, -0.8]]\n";
+
+    fn shapes(name: &str, text: &str, clean: bool) -> Vec<egui::epaint::ClippedShape> {
+        let path = crate::scratch(name);
+        std::fs::write(&path, text).unwrap();
+        let mut viewer = crate::viewer::Viewer::new(&path, crate::follow::Mode::Fake);
+        let mut shell = Shell::open(&path.display().to_string())
+            .without_recent()
+            .bare();
+        viewer.sync(&mut shell);
+        shell.routes.all = true;
+        shell.set_clean(clean);
+        let script = pfx_editor_shell::Script::default();
+        let frame = |shell: &mut Shell| {
+            let ctx = Context::default();
+            crate::theme::apply_theme(&ctx, &crate::theme::workbench());
+            pfx_editor_shell::drive(&ctx, [640, 480], &script, |ui| shell.ui(ui)).shapes
+        };
+        frame(&mut shell);
+        viewer.sync(&mut shell);
+        shell.view_error = None;
+        frame(&mut shell)
+    }
+
+    #[test]
+    fn a_clean_take_draws_no_overlay_and_a_hidden_route_draws_none() {
+        let routed = format!("{BOX}{ROUTE}");
+        let hidden = format!("{BOX}{ROUTE}show = false\n");
+        let plain = shapes("clean-plain", BOX, false);
+        assert_ne!(
+            shapes("clean-routed", &routed, false),
+            plain,
+            "a shown route draws its line and handles"
+        );
+        assert_eq!(shapes("clean-hidden", &hidden, false), plain);
+        let bare = shapes("clean-plain-clean", BOX, true);
+        assert_ne!(bare, plain, "clean leaves the grid, axes and scale out");
+        assert_eq!(shapes("clean-routed-clean", &routed, true), bare);
     }
 }

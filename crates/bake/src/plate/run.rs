@@ -8,7 +8,7 @@ use pfx_materials::Blend;
 use pfx_trace::detail::{Bounces, Lens};
 use pfx_trace::sky::Environment;
 use pfx_trace::stage::Staged;
-use pfx_trace::{Converged, Projection, Trace};
+use pfx_trace::{Converged, Projection, Sun, Trace};
 use sha2::{Digest, Sha256};
 
 use super::codec::{inverse_depth, oct16, rgb9e5};
@@ -61,9 +61,15 @@ pub fn stage_plate(
             .materials
             .push(staged.scene.materials[draw.material as usize]);
         ids.push(id);
-        for triangle in &mut staged.detail.instances[index].triangles {
-            triangle.material = copy;
-        }
+        let instance = &mut staged.detail.instances[index];
+        instance.triangles = instance
+            .triangles
+            .iter()
+            .map(|triangle| pfx_trace::detail::TriangleDetail {
+                material: copy,
+                ..*triangle
+            })
+            .collect();
     }
     objects.sort_by_key(|entry| entry.id);
     staged.scene.camera = camera.trace_camera();
@@ -97,6 +103,17 @@ pub fn stage_plate(
         ids,
         objects,
     })
+}
+
+fn staged_triangles(staged: &Staged<Environment>) -> u64 {
+    staged.scene.triangles.len() as u64
+        + staged.detail.triangles.len() as u64
+        + staged
+            .detail
+            .instances
+            .iter()
+            .map(|instance| instance.triangles.len() as u64)
+            .sum::<u64>()
 }
 
 pub struct PlateRun<'a> {
@@ -268,19 +285,10 @@ fn pass_record(converged: &Converged) -> PassRecord {
 
 fn trace_layer(
     run: &mut PlateRun<'_>,
-    staged: &StagedPlate,
-    size: [u32; 2],
+    trace: &mut Trace,
     sampling: &Sampling,
     pacer: &mut Pacer,
 ) -> Result<(Vec<u32>, PassRecord), String> {
-    let mut trace = Trace::new_detailed(
-        run.gpu,
-        &staged.staged.scene,
-        &staged.staged.detail,
-        size[0],
-        size[1],
-    )
-    .map_err(String::from)?;
     let between = &mut *run.between;
     let converged = trace.sample_adaptive(
         run.gpu,
@@ -306,11 +314,84 @@ fn trace_layer(
     Ok((packed, pass_record(&converged)))
 }
 
+fn anchor_sky(scene: &Scene) -> Environment {
+    match scene.environment() {
+        pfx_load::scene::Environment::Analytic(sky) => Environment::Analytic(sky),
+        pfx_load::scene::Environment::Hdr(sky) => {
+            Environment::Hdr(std::sync::Arc::unwrap_or_clone(sky))
+        }
+    }
+}
+
+fn light_anchor(gpu: &Gpu, trace: &mut Trace, scene: &Scene, pass: Pass) -> Result<(), String> {
+    let sun = scene.sun_or_dark();
+    trace.set_sun(Sun {
+        direction: sun.direction,
+        color: sun.color,
+        intensity: sun.intensity,
+    })?;
+    trace.set_sun_radius(sun.radius)?;
+    if pass == Pass::Color {
+        trace.set_environment(gpu, &anchor_sky(scene))?;
+    }
+    Ok(())
+}
+
+struct Traced {
+    layers: Vec<Vec<u32>>,
+    records: Vec<PassRecord>,
+}
+
+fn trace_anchors(
+    run: &mut PlateRun<'_>,
+    view: &str,
+    mut trace: Trace,
+    pass: Pass,
+    scenes: &[(f32, Scene)],
+    sampling: &Sampling,
+    pacer: &mut Pacer,
+) -> Result<Traced, String> {
+    let kind = match pass {
+        Pass::Color => "colour",
+        Pass::Sun => "sun",
+        Pass::Transfer => "transfer",
+    };
+    let mut traced = Traced {
+        layers: Vec::with_capacity(scenes.len()),
+        records: Vec::with_capacity(scenes.len()),
+    };
+    for (index, (hour, scene)) in scenes.iter().enumerate() {
+        (run.log)(&format!("plate {view} at {hour}h: {kind}"));
+        if index > 0 {
+            light_anchor(run.gpu, &mut trace, scene, pass)?;
+        }
+        let (layer, record) = trace_layer(run, &mut trace, sampling, pacer)?;
+        traced.layers.push(layer);
+        traced.records.push(record);
+    }
+    Ok(traced)
+}
+
+fn plate_trace(gpu: &Gpu, staged: StagedPlate, size: [u32; 2]) -> Result<Trace, String> {
+    Trace::new_detailed(
+        gpu,
+        &staged.staged.scene,
+        &staged.staged.detail,
+        size[0],
+        size[1],
+    )
+    .map_err(String::from)
+}
+
 pub struct Geometry {
     pub depth: Vec<f32>,
     pub distance: Vec<f32>,
     pub material: Vec<u32>,
     pub normal: Vec<[f32; 3]>,
+}
+
+fn probe_rows(size: [u32; 2]) -> u32 {
+    ((2_097_152 / size[0]) / 8 * 8).clamp(8, size[1].next_multiple_of(8))
 }
 
 pub fn probe_plate(
@@ -320,16 +401,27 @@ pub fn probe_plate(
     size: [u32; 2],
     between: &mut dyn FnMut(f64) -> bool,
 ) -> Result<Geometry, String> {
-    let [width, height] = size;
-    let rows = ((2_097_152 / width) / 8 * 8).clamp(8, height.next_multiple_of(8));
+    let rows = probe_rows(size);
     let mut trace = Trace::new_detailed(
         gpu,
         &staged.staged.scene,
         &staged.staged.detail,
-        width,
+        size[0],
         rows,
     )
     .map_err(String::from)?;
+    probe_strips(gpu, &mut trace, camera, size, rows, between)
+}
+
+fn probe_strips(
+    gpu: &Gpu,
+    trace: &mut Trace,
+    camera: &PlateCamera,
+    size: [u32; 2],
+    rows: u32,
+    between: &mut dyn FnMut(f64) -> bool,
+) -> Result<Geometry, String> {
+    let [width, height] = size;
     let texels = width as usize * height as usize;
     let mut geometry = Geometry {
         depth: vec![0.0; texels],
@@ -369,7 +461,7 @@ struct Encoded {
 
 fn encode_geometry(
     geometry: &Geometry,
-    staged: &StagedPlate,
+    object_ids: &[u32],
     camera: &PlateCamera,
     size: [u32; 2],
     layers: Layers,
@@ -437,7 +529,7 @@ fn encode_geometry(
         let mut ids = Vec::with_capacity(geometry.material.len());
         for &material in &geometry.material {
             let id = match material.checked_sub(1) {
-                Some(index) => staged.ids.get(index as usize).copied().unwrap_or(0),
+                Some(index) => object_ids.get(index as usize).copied().unwrap_or(0),
                 None => 0,
             };
             ids.push(id as u16);
@@ -466,60 +558,79 @@ fn bake_view(
 ) -> Result<Plate, String> {
     let mut pacer = Pacer::default();
     let first = stage_plate(&scenes[0].1, &camera, size, Pass::Color)?;
-    let geometry = probe_plate(run.gpu, &first, &camera, size, run.between)?;
+    (run.log)(&format!(
+        "plate {}: {} triangles staged",
+        view.name,
+        staged_triangles(&first.staged)
+    ));
+    let rows = probe_rows(size);
+    let (geometry, trace, encoded, objects) = if rows >= size[1] {
+        let objects = first.objects.clone();
+        let ids = first.ids.clone();
+        let look = (first.staged.scene.camera, first.staged.detail.lens);
+        let mut trace = plate_trace(run.gpu, first, size)?;
+        let geometry = probe_strips(run.gpu, &mut trace, &camera, size, size[1], run.between)?;
+        trace.set_camera(look.0)?;
+        trace.set_lens(look.1)?;
+        let encoded = encode_geometry(&geometry, &ids, &camera, size, run.recipe.layers)?;
+        (geometry, trace, encoded, objects)
+    } else {
+        let geometry = probe_plate(run.gpu, &first, &camera, size, run.between)?;
+        let encoded = encode_geometry(&geometry, &first.ids, &camera, size, run.recipe.layers)?;
+        let objects = first.objects.clone();
+        let trace = plate_trace(run.gpu, first, size)?;
+        (geometry, trace, encoded, objects)
+    };
+    (run.log)(&format!("plate {}: depth probed", view.name));
+    drop(geometry);
     let Encoded {
         depth,
         depth_near,
         bounds,
         normal,
         id,
-    } = encode_geometry(&geometry, &first, &camera, size, run.recipe.layers)?;
-    let objects = first.objects.clone();
-    drop(geometry);
-    let mut color = Vec::new();
-    let mut sun = run.recipe.layers.sun.then(Vec::new);
-    let mut transfer = run.recipe.layers.transfer.then(Vec::new);
-    let mut samples = Vec::new();
-    for (index, (hour, scene)) in scenes.iter().enumerate() {
-        (run.log)(&format!("plate {} at {hour}h: colour", view.name));
-        let staged = if index == 0 {
-            None
-        } else {
-            Some(stage_plate(scene, &camera, size, Pass::Color)?)
-        };
-        let (layer, record) = trace_layer(
-            run,
-            staged.as_ref().unwrap_or(&first),
-            size,
-            &sampling,
-            &mut pacer,
-        )?;
-        color.push(layer);
-        let mut records = [None, None];
-        for ((kind, pass), (layers, record)) in [("sun", Pass::Sun), ("transfer", Pass::Transfer)]
-            .into_iter()
-            .zip(
-                [&mut sun, &mut transfer]
-                    .into_iter()
-                    .zip(records.iter_mut()),
-            )
-        {
-            if let Some(layers) = layers {
-                (run.log)(&format!("plate {} at {hour}h: {kind}", view.name));
-                let staged = stage_plate(scene, &camera, size, pass)?;
-                let (layer, traced) = trace_layer(run, &staged, size, &sampling, &mut pacer)?;
-                layers.push(layer);
-                *record = Some(traced);
-            }
+    } = encoded;
+    let color = trace_anchors(
+        run,
+        &view.name,
+        trace,
+        Pass::Color,
+        scenes,
+        &sampling,
+        &mut pacer,
+    )?;
+    let mut lit = [None, None];
+    for ((pass, wanted), slot) in [
+        (Pass::Sun, run.recipe.layers.sun),
+        (Pass::Transfer, run.recipe.layers.transfer),
+    ]
+    .into_iter()
+    .zip(lit.iter_mut())
+    {
+        if wanted {
+            let staged = stage_plate(&scenes[0].1, &camera, size, pass)?;
+            let trace = plate_trace(run.gpu, staged, size)?;
+            *slot = Some(trace_anchors(
+                run, &view.name, trace, pass, scenes, &sampling, &mut pacer,
+            )?);
         }
-        let [sun_record, transfer_record] = records;
-        samples.push(AnchorRecord {
-            hour: *hour,
-            color: record,
-            sun: sun_record,
-            transfer: transfer_record,
-        });
     }
+    let [sun, transfer] = lit;
+    let mut sun_records = sun.as_ref().map(|traced| traced.records.iter());
+    let mut transfer_records = transfer.as_ref().map(|traced| traced.records.iter());
+    let samples = scenes
+        .iter()
+        .zip(&color.records)
+        .map(|((hour, _), record)| AnchorRecord {
+            hour: *hour,
+            color: record.clone(),
+            sun: sun_records.as_mut().and_then(Iterator::next).cloned(),
+            transfer: transfer_records.as_mut().and_then(Iterator::next).cloned(),
+        })
+        .collect();
+    let color = color.layers;
+    let sun = sun.map(|traced| traced.layers);
+    let transfer = transfer.map(|traced| traced.layers);
     Ok(Plate {
         manifest: PlateManifest {
             schema_version: SCHEMA_VERSION,
@@ -568,7 +679,17 @@ pub fn bake_plates(mut run: PlateRun<'_>) -> Result<Vec<PlateOutcome>, String> {
     let mut scenes = Vec::new();
     for &hour in run.anchors {
         let scene = Scene::open_at(run.scene, f64::from(hour)).map_err(String::from)?;
-        let mut subset = scene.static_subset();
+        let mut subset = if scenes.is_empty() {
+            scene.static_subset()
+        } else {
+            Scene {
+                path: scene.path,
+                sun: scene.sun,
+                sky: scene.sky,
+                trace: scene.trace,
+                ..Scene::empty()
+            }
+        };
         subset.trace = run.recipe.trace(subset.trace);
         scenes.push((hour, subset));
     }
@@ -584,6 +705,19 @@ pub fn bake_plates(mut run: PlateRun<'_>) -> Result<Vec<PlateOutcome>, String> {
         growth: adaptive.growth,
         seed: run.seed,
     };
+    let mut triangles = super::room::Triangles {
+        placed: 0,
+        distinct: 0,
+    };
+    let mut meshes = std::collections::BTreeSet::new();
+    for draw in &scenes[0].1.draws().items {
+        let count = draw.geometry.indices.len() as u64 / 3;
+        triangles.placed += count;
+        if meshes.insert(draw.geometry.hash) {
+            triangles.distinct += count;
+        }
+    }
+    let room = super::room::room();
     let mut outcomes = Vec::new();
     let views = run.recipe.views.clone();
     for view in &views {
@@ -625,6 +759,12 @@ pub fn bake_plates(mut run: PlateRun<'_>) -> Result<Vec<PlateOutcome>, String> {
                     target.display()
                 ));
             }
+        }
+        let texels = u64::from(size[0]) * u64::from(size[1]);
+        if let Some(line) =
+            room.and_then(|room| super::room::refusal(&view.name, triangles, texels, room))
+        {
+            return Err(line);
         }
         let plate = bake_view(&mut run, view, &scenes, camera, size, sampling, key.clone())?;
         let next = run.out.join(format!(".{}.next", view.name));

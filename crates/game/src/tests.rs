@@ -615,12 +615,14 @@ mod launcher {
     use std::cell::Cell;
     use std::rc::Rc;
 
+    #[cfg(any(feature = "tools", not(windows)))]
     use std::process::ExitCode;
 
     #[cfg(feature = "tools")]
     use crate::{CommandError, Unmatched};
     use crate::{Commands, Decision, decide};
 
+    #[cfg(any(feature = "tools", not(windows)))]
     fn done(decision: &Decision, code: u8) -> bool {
         matches!(decision, Decision::Done(exit) if *exit == ExitCode::from(code))
     }
@@ -629,11 +631,13 @@ mod launcher {
         list.iter().map(|arg| arg.to_string()).collect()
     }
 
+    #[cfg(not(windows))]
     fn probe(_args: &[String]) -> Result<(), String> {
         println!("pfx-game-link-probe-6c1d");
         Ok(())
     }
 
+    #[cfg(not(windows))]
     fn register(commands: &mut Commands) {
         commands.add("probe", "prints the link probe", probe);
     }
@@ -709,6 +713,51 @@ mod launcher {
         assert_eq!(stopped.get(), 1 + 2 + 3, "each play stopped its own game");
     }
 
+    #[cfg(feature = "tools")]
+    #[test]
+    fn an_edit_hook_s_usage_error_is_refused_under_the_edit_usage_line() {
+        let (decision, _, _) = decided(&["edit", "--tui"], |commands| {
+            commands
+                .edit("edits", |_, args| {
+                    Err(CommandError::usage(pfx_core::cli::unexpected(&args[0])))
+                })
+                .usage("edit", "[--shot <png>]");
+        });
+        let Decision::Edit(hook, rest) = decision else {
+            panic!("{decision:?}");
+        };
+        let error = hook(
+            crate::factory(|| Numbered {
+                number: 0,
+                stopped: Rc::new(Cell::new(0)),
+            }),
+            &rest,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, crate::launcher::USAGE);
+        assert_eq!(
+            error.message,
+            pfx_core::cli::Refusal::new(pfx_core::cli::unexpected("--tui"))
+                .under("game edit [--shot <png>]")
+                .render(false)
+        );
+        let (decision, _, _) = decided(&["edit"], |commands| {
+            commands.edit("edits", |_, _| Err("no scene"));
+        });
+        let Decision::Edit(hook, rest) = decision else {
+            panic!("{decision:?}");
+        };
+        let error = hook(
+            crate::factory(|| Numbered {
+                number: 0,
+                stopped: Rc::new(Cell::new(0)),
+            }),
+            &rest,
+        )
+        .unwrap_err();
+        assert_eq!((error.code, error.message.as_str()), (1, "no scene"));
+    }
+
     #[cfg(not(feature = "tools"))]
     #[test]
     fn without_tools_every_argument_is_ignored_and_nothing_registers() {
@@ -746,7 +795,10 @@ mod launcher {
         let (_, again, _) = decided(&["--help"], |_| {});
         assert!(again.contains("  help     lists these commands"), "{again}");
         let (_, edit, _) = decided(&["-h"], |commands| {
-            commands.edit("opens the game in pfx's editor", |_, _| Ok(()));
+            commands.edit(
+                "opens the game in pfx's editor",
+                |_, _| Ok::<(), String>(()),
+            );
         });
         assert!(
             edit.contains("  edit     opens the game in pfx's editor\n"),
@@ -792,7 +844,7 @@ mod launcher {
         assert!(err.contains("unrecognized subcommand 'edit'"), "{err}");
         let (decision, _, err) = decided(&["edit", "x"], |commands| {
             commands
-                .edit("edits", |_, _| Ok(()))
+                .edit("edits", |_, _| Ok::<(), String>(()))
                 .usage("edit", "")
                 .add("scan", "scans", |_| ExitCode::SUCCESS)
                 .usage("scan", "<SEED>");
@@ -820,7 +872,7 @@ mod launcher {
         assert!(done(&decision, 2));
         assert!(err.contains("registered twice"), "{err}");
         let (decision, _, _) = decided(&["edit", "level.scene.toml"], |commands| {
-            commands.edit("edits", |_, _| Ok(()));
+            commands.edit("edits", |_, _| Ok::<(), String>(()));
         });
         match decision {
             Decision::Edit(_, rest) => assert_eq!(rest, vec!["level.scene.toml".to_string()]),

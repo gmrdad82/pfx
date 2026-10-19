@@ -411,3 +411,42 @@ fn a_room_haze_needs_lo_below_hi() {
     assert!(error("[haze]\nlo = [1.0, 0.0, -1.0]\nhi = [1.0, 2.0, 1.0]\n").contains("haze.hi"));
     assert!(error("[haze]\nheight = 0.0\nphase = 0.95\n").contains("haze.phase"));
 }
+
+#[test]
+fn the_look_reads_grain_and_chromatic() {
+    use pfx_recipe::{LookChromatic, LookGrain};
+    let look = recipe(
+        "[look]\ngrain = { amount = 0.05, size = 2.0, seed = 3 }\nchromatic = { amount = 0.03, falloff = 1.5 }\n",
+    )
+    .look
+    .unwrap();
+    assert_eq!(
+        look.grain,
+        Some(LookGrain {
+            amount: 0.05,
+            size: 2.0,
+            seed: 3
+        })
+    );
+    assert_eq!(
+        look.chromatic,
+        Some(LookChromatic {
+            amount: 0.03,
+            falloff: 1.5
+        })
+    );
+    let plain = recipe("[look]\ngrain = {}\nchromatic = {}\n").look.unwrap();
+    assert_eq!(plain.grain.unwrap().amount, LookGrain::AMOUNT);
+    assert_eq!(plain.chromatic.unwrap().amount, LookChromatic::AMOUNT);
+    assert_eq!(recipe("[look]\n").look.unwrap().grain, None);
+    for (text, key) in [
+        ("grain = { size = 0.0 }", "look.grain.size"),
+        ("grain = { amount = 2.0 }", "look.grain.amount"),
+        ("chromatic = { amount = 0.5 }", "look.chromatic.amount"),
+        ("chromatic = { falloff = -1.0 }", "look.chromatic.falloff"),
+        ("grain = { spread = 1.0 }", "look.grain.spread"),
+    ] {
+        let error = error(&format!("[look]\n{text}\n"));
+        assert!(error.contains(key), "{error}");
+    }
+}

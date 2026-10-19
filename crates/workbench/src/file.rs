@@ -212,14 +212,19 @@ pub fn import_beside(path: &Path, registry: &Registry) -> Result<Option<PathBuf>
             pfx_load::scene::pack(path, &target).map_err(|error| error.to_string())?;
         }
         Some(Kind::Recipe) => {
-            pack(path, registry, &target)?;
+            pack(path, registry, &target, true)?;
         }
         _ => return Ok(None),
     }
     Ok(Some(target))
 }
 
-pub fn pack(recipe: &Path, registry: &Registry, out: &Path) -> Result<PathBuf, String> {
+pub fn pack(
+    recipe: &Path,
+    registry: &Registry,
+    out: &Path,
+    whole: bool,
+) -> Result<PathBuf, String> {
     let out = with_extension(out, pfx_file::EXTENSION);
     let mut document = Document::pack(recipe, registry)?;
     if let Ok(old) = Document::open(&out) {
@@ -228,7 +233,11 @@ pub fn pack(recipe: &Path, registry: &Registry, out: &Path) -> Result<PathBuf, S
             document.thumb = old.thumb;
         }
     }
-    document.write(&out)?;
+    if whole {
+        document.write_whole(&out)?;
+    } else {
+        document.write(&out)?;
+    }
     Ok(out)
 }
 
@@ -397,7 +406,7 @@ mod tests {
         };
         let (_, recipe) = hold(&glb).unwrap();
         assert_eq!(drawn(&recipe), Ok(()));
-        let packed = pack(&recipe, &registry, &glb.with_file_name("model")).unwrap();
+        let packed = pack(&recipe, &registry, &glb.with_file_name("model"), true).unwrap();
         let (_, recipe) = hold(&packed).unwrap();
         assert_eq!(drawn(&recipe), Ok(()));
     }

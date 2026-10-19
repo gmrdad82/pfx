@@ -1,3 +1,4 @@
+use crate::document::Document;
 use crate::{Registry, build_with, library};
 use glam::{DMat4, DVec3};
 use pfx_file::{Codec, Reader, Writer};
@@ -682,6 +683,22 @@ pub fn import_pfx(
     Ok(imported)
 }
 
+pub fn notes(glb: &[u8]) -> Vec<String> {
+    library::file_materials(glb)
+        .into_iter()
+        .filter_map(|(name, spec)| {
+            let material = serde_json::from_value::<pfx_materials::Material>(spec).ok()?;
+            material.looks_metallic_glass().then(|| {
+                format!(
+                    "material `{name}` is metallic {} and transmissive {}: glTF transmits only its non-metal part, so it draws as metal",
+                    rounded(f64::from(material.metalness)),
+                    rounded(f64::from(material.transmission))
+                )
+            })
+        })
+        .collect()
+}
+
 pub fn import_glb(recipe_text: &str, glb: &Path, name: &str) -> Result<String, String> {
     let table: toml::Table = toml::from_str(recipe_text).map_err(|e| e.to_string())?;
     let taken = table
@@ -723,13 +740,27 @@ pub fn export_glb(
     only: Option<&str>,
 ) -> Result<Vec<u8>, String> {
     let file = source.display().to_string();
-    if pfx_file::is_file_path(source) {
+    if !pfx_file::is_file_path(source) {
+        return export_recipe(source, &file, registry, only);
+    }
+    let doc = Document::open(source)?;
+    if doc.recipe_text.contains(&format!("\"{GLTF_PATH}\"")) {
         if only.is_some() {
-            return Err("--only takes a recipe, not a .pitofx".into());
+            return Err("--only takes a recipe, not an imported model".into());
         }
         let reader = Reader::open(source).map_err(|e| e.to_string())?;
         return clean(&file_glb(&reader).map_err(|t| format!("{file}: {t}"))?);
     }
+    let (recipe, _mount) = doc.mount(source)?;
+    export_recipe(&recipe, &file, registry, only)
+}
+
+fn export_recipe(
+    source: &Path,
+    file: &str,
+    registry: &Registry,
+    only: Option<&str>,
+) -> Result<Vec<u8>, String> {
     let loaded = pfx_recipe::load(source).map_err(|e| format!("{file}: {}", e.text))?;
     let mut recipe = loaded.recipe;
     let problems = pfx_recipe::validate(&recipe);
@@ -749,7 +780,11 @@ pub fn export_glb(
                 .map_err(|e| format!("{file}: {e}"))?
                 .glb
         }
-        None => built.try_glb().map_err(|e| format!("{file}: {e}"))?,
+        None => {
+            let glb = built.try_glb().map_err(|e| format!("{file}: {e}"))?;
+            library::pbr(&glb, &built.recipe(&recipe).materials)
+                .map_err(|e| format!("{file}: {e}"))?
+        }
     };
     clean(&glb)
 }

@@ -4,12 +4,12 @@ use std::process::ExitCode;
 use glam::DVec3;
 use pfx_build::Registry;
 use pfx_build::align::{self, Bounds, Edge};
-use pfx_recipe::{Recipe, load, save, set_values, tidy};
+use pfx_recipe::{Recipe, load, save, set_values};
 use serde_json::{Value, json};
 
-use super::set::{described, file_of, originals, rechecked, restore, shown};
+use super::set::{described, originals, printed, rechecked, restore, shown};
 use super::timeline::base;
-use super::{read_failure, refuse};
+use super::{lines, read_failure, refuse};
 
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Axis {
@@ -83,6 +83,12 @@ pub(super) struct Args {
     snap: Option<String>,
     #[arg(long, help = "One JSON object on stdout")]
     json: bool,
+    #[arg(
+        long,
+        conflicts_with = "json",
+        help = "Print each change as <key> = <value>, without the file and the old value"
+    )]
+    brief: bool,
 }
 
 pub fn run(args: &Args, registry: &Registry) -> ExitCode {
@@ -166,8 +172,8 @@ pub(super) fn plan(args: &Args, registry: &Registry) -> Result<Vec<String>, Stri
     let loaded = load(Path::new(file)).map_err(|e| read_failure(file, &e))?;
     let recipe = &loaded.recipe;
     let chosen = picked(recipe, &args.objects)?;
-    let built =
-        pfx_build::build_with(recipe, base(file), registry).map_err(|e| format!("{file}: {e}"))?;
+    let built = pfx_build::build_with(recipe, base(file), registry)
+        .map_err(|e| format!("{}: {e}", pfx_recipe::files::shown(file)))?;
     let bounds_of = |at: usize| -> Result<Bounds, String> {
         align::bounds(&built.parts, at)
             .ok_or_else(|| format!("`{}` has no geometry to align", recipe.objects[at].name))
@@ -240,17 +246,15 @@ fn moved(args: &Args, registry: &Registry) -> Result<(), String> {
     }
     if args.json {
         let set: Vec<Value> = changes.iter().map(|c| described(file, c)).collect();
-        println!("{}", json!({ "recipe": file, "set": set, "check": "ok" }));
+        println!(
+            "{}",
+            json!({ "recipe": shown(file), "set": set, "check": "ok" })
+        );
         return Ok(());
     }
-    for change in &changes {
-        println!(
-            "{}: {} = {}  (was {})",
-            file_of(file, &change.file),
-            change.key,
-            tidy(&change.new),
-            shown(change.old.as_ref())
-        );
+    let width = lines::width();
+    for line in printed(file, &changes, args.brief, args.brief || width.is_some()) {
+        lines::emit(&line, width);
     }
     if changes.is_empty() {
         println!("already in place");

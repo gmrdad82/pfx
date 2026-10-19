@@ -9,7 +9,7 @@ As a mesh, pfx opens a `.pitofx` wherever it opens a `.glb` or `.gltf`: a scene'
 A `.pitofx` is the one file a user receives and edits for recipes and scenes: a recipe with every file it includes or reads, or a scene with its prefabs and material libraries, compressed in one container that archive tools do not open. TOML is the syntax inside it, never a loose file beside it.
 
 - **Reading** decompresses the chunks it needs in memory; nothing is unpacked to disk. `pfx scene print <x.pitofx> [file] [--json]` prints the recipe or scene (or another TOML file it holds, by its name inside) to stdout, or its table as JSON.
-- **Writing** goes through the atomic writer (a temporary file beside it, synced, then renamed): the recipe verbs (`pfx set`, `get`, `key`, `unkey`, `route`, `curve`, `add`, `remove`, `duplicate`, `scene list`, `build`, `check`, `timeline`, `shoot`, `clip`, `shot --still`, `render --recipe`) take the `.pitofx` and write their edit and a fresh build into it, `pfx scene write <x.pitofx> [file] < new.toml` replaces one TOML file from stdin and keeps it only when it still checks, `pfx scene fix <scene.pitofx>` writes missing ids inside it, and the editor edits it in its TOML panel, with syntax highlighting, or through its inspector. A command that fails leaves the `.pitofx` as it was.
+- **Writing** changes only the entries that changed, in place ([Editing in place](#editing-in-place)): the recipe verbs (`pfx set`, `get`, `key`, `unkey`, `route`, `curve`, `add`, `remove`, `duplicate`, `scene list`, `build`, `check`, `timeline`, `shoot`, `clip`, `shot --still`, `render --recipe`) take the `.pitofx`, read only the entries they need, and write back their edit alone: the recipe entry (and any file they changed), never the packed meshes. The build inside goes stale and the next `pfx build`, `pfx scene save` or save in the window rebuilds it. `pfx scene write <x.pitofx> [file] < new.toml` replaces one TOML file from stdin and keeps it only when it still checks, `pfx scene fix <scene.pitofx>` writes missing ids inside it, and the editor edits it in its TOML panel, with syntax highlighting, or through its inspector. A command that fails leaves the `.pitofx` as it was.
 - **Importing.** A plain `.toml` recipe (`recipe = 1`, or the old `manfred = 1`) or scene (`*.scene.toml`) is imported once: `pfx scene migrate <file.toml>` writes `<name>.pitofx` beside it (a format 0 scene is migrated to format 1 inside it), and the `.toml` is never written again; given a folder it imports every recipe and `*.scene.toml` in it, and `--bare` keeps only the recipe and the files it reads, built the first time a command needs it. Every other command given a `.toml` refuses with one line naming `pfx scene migrate`. Import and export otherwise mean glTF: `pfx import <file.glb>` and `pfx export <x.pitofx> --glb <out.glb>`.
 - **Legacy `.pfx`.** Older pfx releases named the same file `.pfx`, which clashes with PKCS #12 certificates. A legacy `.pfx` is imported once like a `.toml`: `pfx scene migrate <x.pfx>` (or opening it in the window, or migrating its folder) checks the `PFXFILE` magic and writes `<x>.pitofx` beside it, byte for byte; the `.pfx` is never written again. Every other command given a `.pfx` refuses with one line naming `pfx scene migrate`, and a `.pfx` without the magic (a certificate) is refused as not a pfx document. Settings kept in an older `settings.pfx` are read until the first save writes `settings.pitofx`.
 - There is no command that writes a document's TOML out as files: `pfx scene unpack` and `pfx scene migrate --pfx`/`--unpack` are gone.
@@ -28,6 +28,7 @@ Little-endian throughout.
 | sum of name lengths | the name block, uncompressed UTF-8 |
 | up to 7 | zero padding to an 8-byte boundary |
 | … | the payloads, each starting on an 8-byte boundary, zero padded between |
+| optional | after an edit in place: a copy of the header, table and name block, then the 24-byte trailer ([Editing in place](#editing-in-place)) |
 
 A table entry:
 
@@ -44,6 +45,18 @@ A table entry:
 | 4 | name length (0 for an unnamed chunk, at most 1024) |
 
 A name is a relative `/` path in UTF-8: no leading `/`, no `\`, no `:` (so no drive), no empty, `.` or `..` part, no control character, at most 1024 bytes, and unique among the chunks of its tag.
+
+## Editing in place
+
+An edit appends the entries it changed after the last byte of the file and leaves every other entry where it is. It writes in three steps, each synced before the next:
+
+1. the new entries' bytes, after the end of the file;
+2. a copy of the new header, chunk table and name block, then a 24-byte trailer: the copy's length (`u64`), its CRC-32 (`u32`), 4 zero bytes and the magic `PFXTAIL\0`;
+3. the new header, table and name block over the old ones at the front.
+
+A reader checks the last 24 bytes first. A trailer whose magic and CRC-32 hold is the document's table, wherever the front stands; otherwise the front is. A write torn in step 1 or 2 leaves no valid trailer, so the document reads as it was; one torn in step 3 reads through the trailer as the new document, and the next edit writes the front again before it appends. A reader that knows nothing of the trailer (pfx 3.0.0 and older) reads the front, which holds the same table once step 3 ends. A chunk before the new payload start (a table that grew) is moved to the end first. Edits take the file's lock while they write.
+
+The replaced entries stay behind as dead bytes. When an edit would leave more than 1 MiB of dead bytes and more than a quarter of the live bytes (the payloads and the table), it writes the whole file again instead, through a temporary file beside it, synced, then renamed, copying each kept chunk's stored bytes without decoding them. `pfx scene compact <x.pitofx>` does that on demand, and the window's save as always writes a compact file.
 
 ## Compression
 
@@ -103,7 +116,7 @@ let wood = reader.named(FILE, "maps/wood.png")?;
 
 - `Reader::from_bytes(&[u8])` reads a slice it borrows; a stored chunk comes back borrowed from that slice, zero-copy, and may outlive the reader. `Reader::open(path)` reads only the header, the table and the name block, then each chunk's range when it is asked for.
 - `reader.chunk(tag)` (the first of a tag), `reader.named(tag, name)` and `reader.chunks(tag)` (every one, with its name) return `Result<Option<Cow<[u8]>>>` or a list, `Ok(None)` or an empty list for a chunk that isn't there; `reader.entries()` lists every chunk's tag, name, flags, codec, offset, stored and raw lengths and checksum; `reader.read(index)` and `reader.stored(index)` take a table index; `pfx_file::tag_text(tag)` prints a tag.
-- `Writer::new().chunk(tag, bytes, codec)`, `.named(tag, name, bytes, codec)` and `.copy(&reader, index)?` (a chunk copied through as stored, without recompressing) build a file; `.to_vec()` gives its bytes and `.write(path)` writes it atomically (a temporary file beside it, synced, then renamed). The same chunks give the same bytes.
+- `Writer::new().chunk(tag, bytes, codec)`, `.named(tag, name, bytes, codec)`, `.copy(&reader, index)?` (a chunk copied through as stored, without recompressing) and `.keep(&reader, index)` (a chunk of the file being edited, left where it is) build a file; `.to_vec()` gives its bytes, `.write(path)` writes it whole and atomically (a temporary file beside it, synced, then renamed) and `.update(path)` edits it in place, keeping every `keep` chunk's bytes untouched, and says how many bytes it appended and how many are dead (`Update`). An update falls back to a whole write when a kept chunk no longer matches the file, the file is not a `.pitofx`, or the dead bytes pass the threshold. `pfx_file::compact(path)` rewrites a file whole. The same chunks give the same bytes.
 - `pfx_file::lz4::compress` and `pfx_file::lz4::decompress(bytes, raw_len)` are the LZ4 block codec on its own; `pfx_file::MAGIC` and `pfx_file::VERSION` are the header's.
 
 ## As a mesh

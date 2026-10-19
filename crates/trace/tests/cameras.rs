@@ -168,7 +168,7 @@ fn texel_spread(sky: &Sky, direction: [f32; 3]) -> f32 {
     (hi - lo) / hi.max(1e-6)
 }
 
-fn round_trip<E: Clone + Into<Environment>>(
+fn round_trip<E: Clone + Into<Environment> + 'static>(
     gpu: &Gpu,
     scene: &Scene<E>,
     passes: u32,

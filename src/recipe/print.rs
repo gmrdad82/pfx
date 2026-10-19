@@ -179,16 +179,11 @@ fn written_recipe(
     text: &str,
     registry: &Registry,
 ) -> Result<(), String> {
-    let opened = super::document::open(&args.pfx)?;
-    let folder = args
-        .pfx
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-    let target = folder.join(name);
+    let (drafted, recipe) = super::document::drafted(&args.pfx)?;
+    let target = drafted.path_of(name)?;
     files::replace(&target, text.as_bytes()).map_err(|e| format!("{name}: {e}"))?;
     let file = args.pfx.display().to_string();
-    let loaded = load(&opened.recipe).map_err(|e| read_failure(&file, &e))?;
+    let loaded = load(&recipe).map_err(|e| read_failure(&file, &e))?;
     let problems = super::check::problems(&loaded.recipe, &file, registry);
     if !problems.is_empty() {
         let mut out = Vec::new();
@@ -198,7 +193,7 @@ fn written_recipe(
             String::from_utf8_lossy(&out).trim_end()
         ));
     }
-    opened.finish(registry).map(|_| ())
+    drafted.finish().map(|_| ())
 }
 
 fn written_chunk(args: &WriteArgs, kind: Kind, name: &str, text: &str) -> Result<(), String> {
@@ -322,7 +317,7 @@ mod tests {
         written_recipe(&args, name, &bigger, &registry).unwrap();
         let doc = Document::open(&pfx).unwrap();
         assert_eq!(doc.recipe_text, bigger);
-        assert!(doc.fresh());
+        assert!(!doc.fresh());
         let before = std::fs::read(&pfx).unwrap();
         let broken = bigger.replace("material = \"wood\"", "material = \"nothing\"");
         let refused = written_recipe(&args, name, &broken, &registry).unwrap_err();

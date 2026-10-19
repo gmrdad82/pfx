@@ -149,6 +149,7 @@ mixer.glide_channel_pitch(ChannelId::EFFECTS, intensity, 0.5);
 - At exactly 1 the clip's samples are read as they are, so the output, and every render's mixdown, is unchanged.
 - Any other ratio resamples in the voice's `Resample` mode. `Resample::Sinc` (the default for `play`, music and streams) is a Kaiser-windowed sinc, 16 zero crossings each side, its cutoff at 0.9 of Nyquist. Above 1 the kernel widens by the ratio so the source's top octaves are filtered out before they can fold back, which is the aliasing of cheaper interpolators. Measured at 48 kHz, a tone that would fold back sits at **-80 dB** or lower below the source at 2x (17 kHz source: -80 dB, 21 kHz: -98 dB) and **-91 dB** or lower at 4x (11 kHz: -91 dB, 21 kHz: -106 dB); a tone in the passband comes out within 0.001 dB of its level at both. The cost grows with the ratio (32 taps a channel at 1x, 128 at 4x).
 - `Resample::Cubic` (the default for `sound` and `tone_sound`) is a 4-point, third-order Hermite interpolation ported from kira's `interpolate_frame` (MIT or Apache-2.0); `Resample::Linear` reads between two frames. Both read only the frames around the cursor and allocate nothing, about 9 ns a frame against the sinc's 200 or more. They do not widen with the ratio, so a large pitch-up folds its top octaves back: keep them for short effects and small ratios (a few semitones of jitter), and the sinc for music and long sounds.
+- `Mixer::play_prepared_pitched_at(channel, at, clip, ratio, level)` starts a prepared clip at an exact frame already at its pitch, with no ramp from 1, so a pitched hit lands on its frame at its pitch (pfx-film's score samples play this way).
 - `SoundSpec::resample` picks the mode for every trigger of a sound; `Mixer::set_resample(id, mode)` (and `Output::set_resample`) changes any voice.
 
 ## Voice limiting, stealing and jitter
@@ -458,6 +459,14 @@ let wav = Clip { rate: pfx_sound::shot::RATE, channels: 2, samples: mix }.to_wav
 - `Script::load(path)` and `Script::parse(text, dir)` read a script into `Script` (curves, layers, samples, all public fields), and `Script::mix(audio_frames)` renders it, so a caller can change a value before mixing. Unknown keys, a curve named twice and a layer reading a curve that does not exist are errors, with the table and key named.
 - The same script gives the same samples, bit for bit: time comes from the frame count, every noise and event draw from the script's `seed` (each layer takes its own seed from it and its place, or `seed` on the layer), and the sines, exponentials and powers go through pfx-sound's sine table and pfx-core's `sim` functions, never the platform's libm.
 - The mix is the layers summed, then `[mix] gain`, then the soft limiter if `limiter` is set (the mixer's own `set_limiter` curve), then a clamp to -1..1.
+
+### `pfx sound mix`
+
+```
+pfx sound mix <script.sound.toml> --frames N [--fps N] --out <out.wav> [--json]
+```
+
+renders a script to a WAV with no scene and no GPU: `render(script, N, fps)` (`--fps` 60 by default, as `pfx shot`'s), written as a 48 kHz stereo 32-bit float WAV, the very function and writer `pfx shot --audio` uses, so the two give the same bytes for the same script, frames and fps (a test in `src/sound.rs` checks it byte for byte at 90 frames at 30 fps and 37 at 24). The output's folder is made if missing. It prints one line (the frames, the length, the rate and the time it took), or with `--json` an object with `mix` (1), `script`, `output`, `frames`, `fps`, `samples` (frames of audio), `seconds`, `rate`, `channels` and `ms`. Input it can't parse is refused the way clap refuses it (exit 2, `Usage: pfx sound mix [OPTIONS] --frames <FRAMES> --out <OUT> <SCRIPT>`); a script that fails to load is one line, `pfx: …`, exit 1. The car-pass example, 600 frames at 60 fps (10 s of audio), mixes and writes in 155 ms, median of five runs (release build, one core, Ryzen 9 9950X under a load average of 24).
 
 ### Script keys
 

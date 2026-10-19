@@ -12,10 +12,10 @@ use serde::{Deserialize, Serialize};
 
 pub use either::Color;
 pub use finish::{
-    Bloom, BloomKind, BloomTable, Dither, DitherKind, Finish, FinishKeys, Grain, GrainTable, Ink,
-    Lut, LutKey, Outline, OutlineTable, STYLES, Scratches, ScratchesTable, Style, Tape,
-    TapeDirection, TapeTable, Tone, ToneKind, ToneTable, Vignette, VignetteKind, VignetteTable,
-    Warmth, WarmthKind, WarmthTable,
+    Bloom, BloomKind, BloomTable, Chromatic, ChromaticTable, Dither, DitherKind, Finish,
+    FinishKeys, Grain, GrainTable, Ink, Lut, LutKey, Outline, OutlineTable, STYLES, Scratches,
+    ScratchesTable, Style, Tape, TapeDirection, TapeTable, Tone, ToneKind, ToneTable, Vignette,
+    VignetteKind, VignetteTable, Warmth, WarmthKind, WarmthTable,
 };
 pub use keys::{Key, KeyShape, KeyValue, Keys, sample};
 pub use material::{
@@ -25,10 +25,10 @@ pub use material::{
 pub use scene::{
     Animation, BlendClip, Body, BodyKind, BodyShape, Bounds, Camera, Casters, CellSize, Character,
     CharacterKind, ClipEvent, Content, Cue, Depth, Emitter, Flare, Haze, Hush, Light, LightKind,
-    Look, Mesh, Motion, MotionBlur, Mover, MoverKind, Node, Nudge, Object, Orbit, ParticleBlend,
-    Particles, Physics, Plane, Plates, Play, Preset, Projection, Proxy, ProxyKind, Repeat, Rig,
-    RigKind, Scale, Shadow, ShadowQuality, Shadows, Sound, Sounds, SpriteClip, Sun, SunModel, Text,
-    TileCell, TilePlane, Tiles, Trace, Trigger, Wander, Zoom,
+    LiveSettings, Look, Mesh, Motion, MotionBlur, Mover, MoverKind, Node, Nudge, Object, Orbit,
+    ParticleBlend, Particles, Physics, Plane, Plates, Play, Preset, Projection, Proxy, ProxyKind,
+    Repeat, Rig, RigKind, Scale, Shadow, ShadowQuality, Shadows, Sound, Sounds, SpriteClip, Sun,
+    SunModel, Text, TileCell, TilePlane, Tiles, Trace, Trigger, Wander, Zoom,
 };
 pub use sky::{Prepare, Room, RoomLamp, Sky, SkyKind};
 pub use tunable::{Tunable, TunableKind, TunableValue};
@@ -127,6 +127,8 @@ pub struct SceneFile {
     pub trace: Option<Trace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadows: Option<Shadows>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub live: Option<LiveSettings>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plates: Option<Plates>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

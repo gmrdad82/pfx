@@ -55,6 +55,34 @@ impl Image {
         }
     }
 
+    pub fn from_fn_banded(
+        width: u32,
+        height: u32,
+        f: impl Fn(u32, u32) -> [f32; 4] + Sync,
+    ) -> Self {
+        let columns = width as usize;
+        let mut pixels = vec![[0.0f32; 4]; columns.saturating_mul(height as usize)];
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let rows = (height as usize).div_ceil(threads).max(1);
+        if columns > 0 {
+            std::thread::scope(|scope| {
+                for (band, out) in pixels.chunks_mut(rows * columns).enumerate() {
+                    let f = &f;
+                    scope.spawn(move || {
+                        for (i, slot) in out.iter_mut().enumerate() {
+                            *slot = f((i % columns) as u32, (band * rows + i / columns) as u32);
+                        }
+                    });
+                }
+            });
+        }
+        Self {
+            width,
+            height,
+            pixels,
+        }
+    }
+
     pub fn index(&self, x: u32, y: u32) -> usize {
         (y * self.width + x) as usize
     }

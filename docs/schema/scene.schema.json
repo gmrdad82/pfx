@@ -513,6 +513,30 @@
       ],
       "type": "string"
     },
+    "Chromatic": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/ChromaticTable"
+        }
+      ]
+    },
+    "ChromaticTable": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "format": "float",
+          "type": "number"
+        },
+        "falloff": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "ClipEvent": {
       "additionalProperties": false,
       "properties": {
@@ -714,6 +738,9 @@
         "cel_threshold": {
           "format": "float",
           "type": "number"
+        },
+        "chromatic": {
+          "$ref": "#/$defs/Chromatic"
         },
         "contrast": {
           "format": "float",
@@ -1030,6 +1057,9 @@
           "format": "float",
           "type": "number"
         },
+        "chromatic": {
+          "$ref": "#/$defs/Chromatic"
+        },
         "contrast": {
           "format": "float",
           "type": "number"
@@ -1306,10 +1336,23 @@
     "GrainTable": {
       "additionalProperties": false,
       "properties": {
+        "amount": {
+          "format": "float",
+          "type": "number"
+        },
         "clamp": {
           "type": "boolean"
         },
         "response": {
+          "format": "float",
+          "type": "number"
+        },
+        "seed": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "size": {
           "format": "float",
           "type": "number"
         },
@@ -1618,6 +1661,21 @@
       ],
       "type": "string"
     },
+    "LiveSettings": {
+      "additionalProperties": false,
+      "properties": {
+        "scene_reflections": {
+          "type": "boolean"
+        },
+        "settle": {
+          "type": "boolean"
+        },
+        "stochastic_reflections": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "Look": {
       "additionalProperties": false,
       "properties": {
@@ -1723,6 +1781,8 @@
         },
         "shutter": {
           "format": "float",
+          "maximum": 4.0,
+          "minimum": 0.0,
           "type": "number"
         }
       },
@@ -3457,6 +3517,9 @@
         "$ref": "#/$defs/Light"
       },
       "type": "array"
+    },
+    "live": {
+      "$ref": "#/$defs/LiveSettings"
     },
     "materials": {
       "items": {

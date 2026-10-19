@@ -7,7 +7,7 @@ use pfx_recipe::{
 };
 use serde_json::{Value, json};
 
-use super::{read_failure, refuse};
+use super::{lines, read_failure, refuse};
 
 #[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Blend {
@@ -81,6 +81,12 @@ pub(super) struct KeyArgs {
     interp: Option<Blend>,
     #[arg(long, help = "One JSON object on stdout")]
     json: bool,
+    #[arg(
+        long,
+        conflicts_with = "json",
+        help = "Print only the key set, as <path> @ <t> = <value>"
+    )]
+    brief: bool,
 }
 
 #[derive(clap::Args)]
@@ -100,6 +106,12 @@ pub(super) struct UnkeyArgs {
     time: Option<f64>,
     #[arg(long, help = "One JSON object on stdout")]
     json: bool,
+    #[arg(
+        long,
+        conflicts_with = "json",
+        help = "Print only what was unkeyed, as <path> @ <t> unkeyed"
+    )]
+    brief: bool,
 }
 
 fn described(file: &str, path: &str, channel: Option<&Channel>) -> Value {
@@ -115,7 +127,7 @@ fn described(file: &str, path: &str, channel: Option<&Channel>) -> Value {
         })
         .unwrap_or_default();
     json!({
-        "recipe": file,
+        "recipe": pfx_recipe::files::shown(file),
         "path": path,
         "keys": keys,
         "interp": channel.map_or(Interp::Linear, |c| c.interp).name(),
@@ -123,15 +135,37 @@ fn described(file: &str, path: &str, channel: Option<&Channel>) -> Value {
 }
 
 fn printed(out: &Value) {
+    let width = lines::width();
     let keys = out["keys"].as_array().cloned().unwrap_or_default();
-    println!(
-        "{}  {} keys  {}",
-        out["path"].as_str().unwrap_or_default(),
-        keys.len(),
-        out["interp"].as_str().unwrap_or_default()
+    lines::emit(
+        &format!(
+            "{}  {} keys  {}",
+            out["path"].as_str().unwrap_or_default(),
+            keys.len(),
+            out["interp"].as_str().unwrap_or_default()
+        ),
+        width,
     );
     for key in keys {
-        println!("  {}  {}", key[0], key[1]);
+        lines::emit(&format!("  {}  {}", key[0], key[1]), width);
+    }
+}
+
+fn keyed(path: &str, t: f64, value: &[f64]) -> String {
+    let value = match value {
+        [one] => json!(one),
+        many => json!(many),
+    };
+    let value = serde_json::to_string(&value)
+        .unwrap_or_default()
+        .replace(',', ", ");
+    format!("{path} @ {} = {value}", json!(t))
+}
+
+fn unkeyed(path: &str, t: Option<f64>) -> String {
+    match t {
+        Some(t) => format!("{path} @ {} unkeyed", json!(t)),
+        None => format!("{path} unkeyed"),
     }
 }
 
@@ -142,7 +176,14 @@ fn problems(loaded: &Loaded) -> Vec<String> {
         .collect()
 }
 
-fn edited(file: &str, path: &str, edits: &[KeyEdit], json: bool, verb: &str) -> ExitCode {
+fn edited(
+    file: &str,
+    path: &str,
+    edits: &[KeyEdit],
+    json: bool,
+    brief: Option<String>,
+    verb: &str,
+) -> ExitCode {
     let mut loaded = match load(Path::new(file)) {
         Ok(loaded) => loaded,
         Err(e) => return refuse(verb, &read_failure(file, &e)),
@@ -156,16 +197,22 @@ fn edited(file: &str, path: &str, edits: &[KeyEdit], json: bool, verb: &str) -> 
         }
     }
     if let Some(fresh) = problems(&loaded).into_iter().find(|p| !before.contains(p)) {
-        return refuse(verb, &format!("{file}: {fresh}; the recipe is unchanged"));
+        return refuse(
+            verb,
+            &format!(
+                "{}: {fresh}; the recipe is unchanged",
+                pfx_recipe::files::shown(file)
+            ),
+        );
     }
     if let Err(e) = save(&loaded) {
         return refuse(verb, &read_failure(file, &e));
     }
     let out = described(file, path, loaded.recipe.channel(path));
-    if json {
-        println!("{out}");
-    } else {
-        printed(&out);
+    match brief {
+        _ if json => println!("{out}"),
+        Some(line) => lines::emit(&line, lines::width()),
+        None => printed(&out),
     }
     ExitCode::SUCCESS
 }
@@ -178,7 +225,10 @@ pub fn key(args: &KeyArgs, _: &Registry) -> ExitCode {
     if let Some(blend) = args.interp {
         edits.push(KeyEdit::Interp(blend.interp()));
     }
-    edited(&args.recipe, &args.path, &edits, args.json, "key")
+    let brief = args
+        .brief
+        .then(|| keyed(&args.path, args.time, &args.value.0));
+    edited(&args.recipe, &args.path, &edits, args.json, brief, "key")
 }
 
 pub fn unkey(args: &UnkeyArgs, _: &Registry) -> ExitCode {
@@ -186,5 +236,28 @@ pub fn unkey(args: &UnkeyArgs, _: &Registry) -> ExitCode {
         Some(t) => KeyEdit::Remove { t },
         None => KeyEdit::RemoveAll,
     };
-    edited(&args.recipe, &args.path, &[edit], args.json, "unkey")
+    let brief = args.brief.then(|| unkeyed(&args.path, args.time));
+    edited(&args.recipe, &args.path, &[edit], args.json, brief, "unkey")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn brief_lines_name_the_path_the_time_and_the_value() {
+        assert_eq!(
+            keyed("object.hero.at", 2.0, &[1.0, 0.5, 0.0]),
+            "object.hero.at @ 2.0 = [1.0, 0.5, 0.0]"
+        );
+        assert_eq!(
+            keyed("look.exposure", 0.5, &[1.5]),
+            "look.exposure @ 0.5 = 1.5"
+        );
+        assert_eq!(
+            unkeyed("look.exposure", Some(0.5)),
+            "look.exposure @ 0.5 unkeyed"
+        );
+        assert_eq!(unkeyed("look.exposure", None), "look.exposure unkeyed");
+    }
 }

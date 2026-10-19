@@ -2,7 +2,7 @@ use crate::staging::Staging;
 use pfx_live::frame::Matrix;
 use pfx_live::text::RichQuad;
 use pfx_materials::{ContentLayer, Material};
-use pfx_recipe_scene::{Error, IDENTITY, Laid};
+use pfx_recipe_scene::{Error, Laid};
 use pfx_text::Atlas;
 use pfx_trace::stage::{ContentKind, Mesh, Placement};
 use pfx_trace::text::{self, Carrier, Fit, Glyph, Laid as Laidout};
@@ -157,7 +157,8 @@ fn way(
     (model, lit): (Matrix, bool),
 ) -> Result<Way, String> {
     let lettering = Ink(text::lettering(atlas, glyphs)?);
-    let fits = |piece: usize| text::fit(&meshes[piece], IDENTITY, model).ok();
+    let mesh = |piece: usize| &meshes[staging.shared[piece].mesh as usize];
+    let fits = |piece: usize| text::fit(mesh(piece), staging.shared[piece].model, model).ok();
     for &piece in targets {
         let Some(card) = staging.cards[piece] else {
             continue;
@@ -166,7 +167,7 @@ fn way(
             continue;
         };
         let picture = staging.content(&card);
-        if card.face.is_none() && fit.elsewhere(&meshes[piece], &picture).is_empty() {
+        if card.face.is_none() && fit.elsewhere(mesh(piece), &picture).is_empty() {
             fit.over(&picture, &lettering)?;
             return Ok(Way::Over {
                 piece,
@@ -184,7 +185,7 @@ fn way(
         };
         let clear = {
             let content = fit.content(&lettering);
-            fit.elsewhere(&meshes[piece], &content).is_empty()
+            fit.elsewhere(mesh(piece), &content).is_empty()
         };
         if clear {
             return Ok(Way::Fit {

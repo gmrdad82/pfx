@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::content::ContentLayer;
 use crate::flakes::Flakes;
@@ -242,7 +242,7 @@ impl NoiseKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, from = "LayerFile")]
 pub struct NoiseLayer {
     pub kind: NoiseKind,
     pub frequency: f32,
@@ -250,6 +250,42 @@ pub struct NoiseLayer {
     pub seed: u32,
     #[serde(default, skip_serializing_if = "unset")]
     pub params: [f32; PARAMS],
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LayerFile {
+    kind: NoiseKind,
+    frequency: f32,
+    amplitude: f32,
+    seed: u32,
+    #[serde(default)]
+    params: [f32; PARAMS],
+}
+
+impl From<LayerFile> for NoiseLayer {
+    fn from(file: LayerFile) -> Self {
+        NoiseLayer::new(file.kind, file.frequency, file.amplitude, file.seed)
+            .with_params(file.params)
+            .filled()
+    }
+}
+
+fn read_layers<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<[NoiseLayer; LAYER_CAP], D::Error> {
+    let given = Vec::<NoiseLayer>::deserialize(deserializer)?;
+    if given.len() > LAYER_CAP {
+        return Err(serde::de::Error::custom(format!(
+            "a material takes at most {LAYER_CAP} noise layers, got {}",
+            given.len()
+        )));
+    }
+    let mut layers = [NoiseLayer::default(); LAYER_CAP];
+    for (slot, layer) in layers.iter_mut().zip(given) {
+        *slot = layer;
+    }
+    Ok(layers)
 }
 
 pub const PARAMS: usize = 12;
@@ -267,6 +303,7 @@ pub fn gpu_params(layer: &NoiseLayer) -> [f32; GPU_PARAMS] {
             out[PARAMS + 1] = 1.0 - p[7];
         }
         NoiseKind::Scratch => out[PARAMS] = p[0] * SCRATCH_STRETCH,
+        NoiseKind::Grime => out[PARAMS] = crate::kinds::Grime::from_params(&p).faded_roughness(),
         _ => {}
     }
     out
@@ -309,6 +346,13 @@ impl NoiseLayer {
 
     pub fn with_params(self, params: [f32; PARAMS]) -> Self {
         Self { params, ..self }
+    }
+
+    pub fn filled(self) -> Self {
+        match crate::kinds::sample_params(self.kind) {
+            Some(params) if unset(&self.params) => Self { params, ..self },
+            _ => self,
+        }
     }
 
     pub fn active(self) -> bool {
@@ -449,6 +493,7 @@ pub struct Material {
     pub maps: Maps,
     pub content: Content,
     pub content_layer: ContentLayer,
+    #[serde(deserialize_with = "read_layers")]
     pub layers: [NoiseLayer; LAYER_CAP],
     pub ageing: Ageing,
     pub wet: Wet,
@@ -512,6 +557,18 @@ impl Material {
         {
             *slot = layer;
         }
+    }
+
+    pub fn transmitted(&self) -> f32 {
+        self.transmission.clamp(0.0, 1.0) * (1.0 - self.metalness.clamp(0.0, 1.0))
+    }
+
+    pub fn refracts(&self) -> bool {
+        self.transmitted() > 0.0 || (self.family == Family::Glass && self.transmission <= 0.0)
+    }
+
+    pub fn looks_metallic_glass(&self) -> bool {
+        self.metalness > 0.5 && self.transmission > 0.0
     }
 
     pub fn to_toml(&self) -> Result<String, String> {

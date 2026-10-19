@@ -30,7 +30,9 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
         None => {
             return Err(cli::no_command(
                 "pfx scene",
-                &["migrate", "fix", "list", "save", "print", "write", "fold"],
+                &[
+                    "migrate", "fix", "list", "save", "print", "write", "fold", "compact",
+                ],
             )
             .into());
         }
@@ -178,7 +180,7 @@ fn strip(doc: &mut pfx_build::Document, recipe: &Path) {
     doc.scene_hash = None;
 }
 
-fn import_recipe(path: &Path, target: &Path, bare: bool) -> Result<(), String> {
+fn import_recipe(path: &Path, target: &Path, bare: bool) -> Result<Vec<String>, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let _mount = current_header(&text).map(|fixed| {
         pfx_recipe::files::mount(
@@ -186,10 +188,30 @@ fn import_recipe(path: &Path, target: &Path, bare: bool) -> Result<(), String> {
         )
     });
     let mut doc = pfx_build::Document::pack(path, &pfx_build::Registry::new())?;
+    for note in &doc.notes {
+        eprintln!("{}: {note}", path.display());
+    }
     if bare {
         strip(&mut doc, path);
     }
-    doc.write(target)
+    doc.write(target)?;
+    let folder = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."))
+        .display()
+        .to_string();
+    let mut lines: Vec<String> = doc
+        .outside
+        .iter()
+        .map(|name| format!("packed {name} from outside {folder}"))
+        .collect();
+    lines.extend(
+        doc.unread
+            .iter()
+            .map(|name| format!("could not read {name}")),
+    );
+    Ok(lines)
 }
 
 fn import_scene(path: &Path, target: &Path) -> Result<(), String> {
@@ -239,11 +261,15 @@ fn import(path: &Path, dry_run: bool, bare: bool) -> Result<String, String> {
     if dry_run {
         return Ok(format!("would import {shown} into {}", target.display()));
     }
-    match found {
+    let mut lines = match found {
         Legacy::Recipe => import_recipe(path, &target, bare)?,
-        Legacy::Scene => import_scene(path, &target)?,
-    }
-    Ok(format!("imported {shown} into {}", target.display()))
+        Legacy::Scene => {
+            import_scene(path, &target)?;
+            Vec::new()
+        }
+    };
+    lines.push(format!("imported {shown} into {}", target.display()));
+    Ok(lines.join("\n"))
 }
 
 fn gather(folder: &Path, top: bool, out: &mut Vec<PathBuf>) {

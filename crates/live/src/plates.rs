@@ -630,7 +630,7 @@ impl PlateKit {
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
+                depth_compare: Some(wgpu::CompareFunction::Greater),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
@@ -1043,7 +1043,7 @@ impl Plates {
         for matrix in [
             inverse,
             still,
-            frame.jittered,
+            crate::frame::reversed(frame.jittered),
             frame.view_projection,
             frame.previous,
             frame.view,

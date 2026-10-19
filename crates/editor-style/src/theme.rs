@@ -103,6 +103,7 @@ pub struct Theme {
     pub card: Color32,
     pub card_line: Color32,
     pub stripe: Color32,
+    pub selected: Color32,
     pub well: Color32,
     pub line: Color32,
     pub track: Color32,

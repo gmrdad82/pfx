@@ -47,6 +47,8 @@ pub(super) struct Args {
     )]
     time: Option<f64>,
     #[command(flatten)]
+    picture: super::Picture,
+    #[command(flatten)]
     pick: super::Picks,
 }
 
@@ -63,7 +65,14 @@ fn still(args: &Args, registry: &Registry) -> Result<Vec<u8>, Error> {
         eprintln!("{line}");
     }
     let gpu = pfx_recipe_scene::headless()?;
-    pfx_recipe_scene::shoot_posed(&gpu, (&recipe, &built), &args.camera, args.size, args.time)
+    pfx_recipe_scene::shoot_posed_as(
+        &gpu,
+        (&recipe, &built),
+        &args.camera,
+        args.size,
+        args.time,
+        args.picture.output(0),
+    )
 }
 
 const THUMB: [u32; 2] = [320, 200];
@@ -95,8 +104,10 @@ pub(super) fn thumbnail(
 }
 
 pub fn run(args: &Args, registry: &Registry) -> ExitCode {
-    let shot = still(args, registry)
-        .and_then(|rgba| pfx_recipe_scene::write_png(&args.out, args.size, &rgba));
+    let shot = still(args, registry).and_then(|rgba| match args.picture.wide() {
+        true => pfx_recipe_scene::write_wide(&args.out, args.size, &rgba),
+        false => pfx_recipe_scene::write_png(&args.out, args.size, &rgba),
+    });
     match shot {
         Ok(()) => {
             println!("{}", args.out.display());
@@ -146,6 +157,7 @@ mod tests {
                 variant: Some("bare".into()),
                 set: vec!["sky.intensity=0.4".into()],
                 time: Some(2.0),
+                picture: Default::default(),
                 pick: Default::default(),
             }
         );

@@ -14,7 +14,7 @@ use crate::{Anchor, BakeScene, Paced, SceneSource, artifact::FileEntry};
 pub const REFLECTION_FORMAT: &str = "cube_array_rgba16f_ggx_mips_inverse_distance_face_major_le_v2";
 pub const REFLECTION_FORMAT_V1: &str = "cube_array_rgba16f_ggx_mips_face_major_le_v1";
 
-const FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
+pub const FACES: [([f32; 3], [f32; 3], [f32; 3]); 6] = [
     ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]),
     ([-1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]),
     ([0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, -1.0]),
@@ -278,55 +278,75 @@ pub fn prefilter(base: Vec<[f32; 4]>, resolution: u32) -> Result<Cube, String> {
         let size = resolution >> mip;
         let roughness = mip as f32 / (count - 1) as f32;
         let alpha2 = roughness.powi(4).max(0.0001);
-        let mut pixels = Vec::with_capacity(6 * size as usize * size as usize);
-        for face in 0..6 {
-            for y in 0..size {
-                for x in 0..size {
-                    let n = face_direction(face, x, y, size);
-                    let helper = if n[1].abs() < 0.99 {
-                        [0.0, 1.0, 0.0]
-                    } else {
-                        [1.0, 0.0, 0.0]
-                    };
-                    let tangent = normalize([
-                        n[1] * helper[2] - n[2] * helper[1],
-                        n[2] * helper[0] - n[0] * helper[2],
-                        n[0] * helper[1] - n[1] * helper[0],
-                    ]);
-                    let bitangent = [
-                        n[1] * tangent[2] - n[2] * tangent[1],
-                        n[2] * tangent[0] - n[0] * tangent[2],
-                        n[0] * tangent[1] - n[1] * tangent[0],
-                    ];
-                    let mut sum = [0.0f32; 4];
-                    let mut weight = 0.0f32;
-                    for sample in 0..64 {
-                        let phi = std::f32::consts::TAU * sample as f32 / 64.0;
-                        let xi = radical_inverse(sample);
-                        let cos_theta = ((1.0 - xi) / (1.0 + (alpha2 - 1.0) * xi)).sqrt();
-                        let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
-                        let h = std::array::from_fn(|i| {
-                            tangent[i] * phi.cos() * sin_theta
-                                + bitangent[i] * phi.sin() * sin_theta
-                                + n[i] * cos_theta
-                        });
-                        let l = std::array::from_fn(|i| 2.0 * dot(n, h) * h[i] - n[i]);
-                        let w = dot(n, l).max(0.0);
-                        if w > 0.0 {
-                            let radiance = lookup(&base, resolution, l);
-                            for channel in 0..4 {
-                                sum[channel] += radiance[channel] * w;
-                            }
-                            weight += w;
-                        }
-                    }
-                    pixels.push(sum.map(|v| v / weight));
-                }
-            }
-        }
-        levels.push(pixels);
+        let base = &base;
+        let faces: Vec<Vec<[f32; 4]>> = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..6)
+                .map(|face| {
+                    scope.spawn(move || prefilter_face(base, resolution, face, size, alpha2))
+                })
+                .collect();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("reflection prefilter worker"))
+                .collect()
+        });
+        levels.push(faces.concat());
     }
     Cube::new(resolution, levels)
+}
+
+fn prefilter_face(
+    base: &[[f32; 4]],
+    resolution: u32,
+    face: usize,
+    size: u32,
+    alpha2: f32,
+) -> Vec<[f32; 4]> {
+    let mut pixels = Vec::with_capacity(size as usize * size as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let n = face_direction(face, x, y, size);
+            let helper = if n[1].abs() < 0.99 {
+                [0.0, 1.0, 0.0]
+            } else {
+                [1.0, 0.0, 0.0]
+            };
+            let tangent = normalize([
+                n[1] * helper[2] - n[2] * helper[1],
+                n[2] * helper[0] - n[0] * helper[2],
+                n[0] * helper[1] - n[1] * helper[0],
+            ]);
+            let bitangent = [
+                n[1] * tangent[2] - n[2] * tangent[1],
+                n[2] * tangent[0] - n[0] * tangent[2],
+                n[0] * tangent[1] - n[1] * tangent[0],
+            ];
+            let mut sum = [0.0f32; 4];
+            let mut weight = 0.0f32;
+            for sample in 0..64 {
+                let phi = std::f32::consts::TAU * sample as f32 / 64.0;
+                let xi = radical_inverse(sample);
+                let cos_theta = ((1.0 - xi) / (1.0 + (alpha2 - 1.0) * xi)).sqrt();
+                let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
+                let h = std::array::from_fn(|i| {
+                    tangent[i] * phi.cos() * sin_theta
+                        + bitangent[i] * phi.sin() * sin_theta
+                        + n[i] * cos_theta
+                });
+                let l = std::array::from_fn(|i| 2.0 * dot(n, h) * h[i] - n[i]);
+                let w = dot(n, l).max(0.0);
+                if w > 0.0 {
+                    let radiance = lookup(base, resolution, l);
+                    for channel in 0..4 {
+                        sum[channel] += radiance[channel] * w;
+                    }
+                    weight += w;
+                }
+            }
+            pixels.push(sum.map(|v| v / weight));
+        }
+    }
+    pixels
 }
 
 pub fn bake_reflection(

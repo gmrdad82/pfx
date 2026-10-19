@@ -162,6 +162,9 @@ fn document(args: &Args, registry: &Registry, out: &mut dyn Write, err: &mut dyn
     } else if let Err(e) = doc.rebuild(pfx, registry).and_then(|()| doc.write(pfx)) {
         return fail(err, &e);
     }
+    for note in &doc.notes {
+        let _ = writeln!(err, "{}: {note}", pfx.display());
+    }
     let base = opened
         .recipe
         .parent()
@@ -530,6 +533,29 @@ mod tests {
             format!(
                 "pfx build: {FIXTURE}: object[left].generator: `app/crate` is built by the app's own build binary, which registers it through the pfx library\n"
             )
+        );
+    }
+
+    #[test]
+    fn a_document_s_build_notes_print_on_stderr_when_its_gltf_is_reused() {
+        let dir = scratch("build-notes");
+        let recipe = dir.join("wall.toml");
+        std::fs::write(
+            &recipe,
+            "recipe = 1\nname = \"wall\"\n\n[materials.plain]\nbase = [0.5, 0.5, 0.5]\nroughness = 0.5\n\n[[object]]\nname = \"wall\"\nkind = \"plane\"\nsize = [1.0, 1.0]\nmaterial = \"plain\"\nbake_layers = { size = 16 }\n",
+        )
+        .unwrap();
+        let doc = pfx_build::Document::pack(&recipe, &Registry::new()).unwrap();
+        let note = "object[wall].bake_layers: no material of the object has a procedural layer, so nothing was baked";
+        assert_eq!(doc.notes, [note]);
+        let pfx = dir.join("wall.pitofx");
+        doc.write(&pfx).unwrap();
+        let shown = pfx.display();
+        let (code, _, err) = run_on(&[pfx.to_str().unwrap(), "--out", dir.to_str().unwrap()]);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(
+            err,
+            format!("{shown}: unchanged since its build; its glTF is reused\n{shown}: {note}\n")
         );
     }
 }

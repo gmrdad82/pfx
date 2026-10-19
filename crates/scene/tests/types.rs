@@ -35,7 +35,7 @@ fn finish_keys_take_every_shape_the_parser_takes() {
     assert!(toml::from_str::<FinishKeys>("glow = 1.0\n").is_err());
     assert!(toml::from_str::<FinishKeys>("bloom = \"bright\"\n").is_err());
     assert!(toml::from_str::<FinishKeys>("pixel = 1.5\n").is_err());
-    assert_eq!(FinishKeys::KEYS.len(), 73);
+    assert_eq!(FinishKeys::KEYS.len(), 74);
 }
 
 #[test]

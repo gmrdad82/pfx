@@ -6,10 +6,47 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 type Shared = Arc<Mutex<Layer>>;
 
+pub type Load = Arc<dyn Fn() -> io::Result<Vec<u8>> + Send + Sync>;
+
+pub enum Content {
+    Bytes(Vec<u8>),
+    Lazy(Load),
+}
+
+enum Slot {
+    Ready(Arc<[u8]>),
+    Lazy(Load),
+}
+
 #[derive(Default)]
 struct Layer {
-    files: BTreeMap<PathBuf, Arc<[u8]>>,
+    files: BTreeMap<PathBuf, Slot>,
     changed: BTreeSet<PathBuf>,
+    names: BTreeMap<PathBuf, String>,
+}
+
+fn lock(layer: &Shared) -> MutexGuard<'_, Layer> {
+    layer.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn fetch(layer: &Shared, key: &Path) -> Option<io::Result<Arc<[u8]>>> {
+    let load = match lock(layer).files.get(key)? {
+        Slot::Ready(bytes) => return Some(Ok(bytes.clone())),
+        Slot::Lazy(load) => load.clone(),
+    };
+    let bytes: Arc<[u8]> = match load() {
+        Ok(bytes) => Arc::from(bytes),
+        Err(error) => return Some(Err(error)),
+    };
+    let mut layer = lock(layer);
+    match layer.files.get_mut(key) {
+        Some(Slot::Ready(now)) => Some(Ok(now.clone())),
+        Some(slot) => {
+            *slot = Slot::Ready(bytes.clone());
+            Some(Ok(bytes))
+        }
+        None => Some(Ok(bytes)),
+    }
 }
 
 #[derive(Default)]
@@ -51,22 +88,25 @@ pub struct Mount {
 
 impl Mount {
     pub fn changed(&self) -> BTreeMap<PathBuf, Vec<u8>> {
-        let layer = self.layer.lock().unwrap_or_else(|e| e.into_inner());
+        let layer = lock(&self.layer);
         layer
             .changed
             .iter()
-            .filter_map(|path| Some((path.clone(), layer.files.get(path)?.to_vec())))
+            .filter_map(|path| match layer.files.get(path)? {
+                Slot::Ready(bytes) => Some((path.clone(), bytes.to_vec())),
+                Slot::Lazy(_) => None,
+            })
             .collect()
     }
 
     pub fn get(&self, path: &Path) -> Option<Vec<u8>> {
-        let layer = self.layer.lock().unwrap_or_else(|e| e.into_inner());
-        layer.files.get(&clean(path)).map(|bytes| bytes.to_vec())
+        fetch(&self.layer, &clean(path))?
+            .ok()
+            .map(|bytes| bytes.to_vec())
     }
 
     pub fn settle(&self) {
-        let mut layer = self.layer.lock().unwrap_or_else(|e| e.into_inner());
-        layer.changed.clear();
+        lock(&self.layer).changed.clear();
     }
 }
 
@@ -77,12 +117,32 @@ impl Drop for Mount {
 }
 
 pub fn mount(files: BTreeMap<PathBuf, Vec<u8>>) -> Mount {
+    mount_named(
+        files
+            .into_iter()
+            .map(|(path, bytes)| (path, Content::Bytes(bytes)))
+            .collect(),
+        BTreeMap::new(),
+    )
+}
+
+pub fn mount_named(files: BTreeMap<PathBuf, Content>, names: BTreeMap<PathBuf, String>) -> Mount {
     let layer = Layer {
         files: files
             .into_iter()
-            .map(|(path, bytes)| (clean(&path), Arc::from(bytes)))
+            .map(|(path, content)| {
+                let slot = match content {
+                    Content::Bytes(bytes) => Slot::Ready(Arc::from(bytes)),
+                    Content::Lazy(load) => Slot::Lazy(load),
+                };
+                (clean(&path), slot)
+            })
             .collect(),
         changed: BTreeSet::new(),
+        names: names
+            .into_iter()
+            .map(|(path, name)| (clean(&path), name))
+            .collect(),
     };
     let layer = Arc::new(Mutex::new(layer));
     let mut table = table();
@@ -125,14 +185,22 @@ fn layer_of(path: &Path) -> Option<(Shared, PathBuf)> {
         .mounts
         .iter()
         .rev()
-        .find(|(_, layer)| {
-            layer
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .files
-                .contains_key(&key)
-        })
+        .find(|(_, layer)| lock(layer).files.contains_key(&key))
         .map(|(_, layer)| (layer.clone(), key))
+}
+
+pub fn shown(path: &str) -> String {
+    let table = table();
+    if table.mounts.is_empty() {
+        return path.to_string();
+    }
+    let key = clean(Path::new(path));
+    table
+        .mounts
+        .iter()
+        .rev()
+        .find_map(|(_, layer)| lock(layer).names.get(&key).cloned())
+        .unwrap_or_else(|| path.to_string())
 }
 
 fn noted(path: &Path) {
@@ -148,11 +216,10 @@ pub fn mounted(path: &Path) -> bool {
 }
 
 pub fn read(path: &Path) -> io::Result<Vec<u8>> {
-    if let Some((layer, key)) = layer_of(path) {
-        let layer = layer.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(bytes) = layer.files.get(&key) {
-            return Ok(bytes.to_vec());
-        }
+    if let Some((layer, key)) = layer_of(path)
+        && let Some(bytes) = fetch(&layer, &key)
+    {
+        return bytes.map(|bytes| bytes.to_vec());
     }
     let bytes = std::fs::read(path)?;
     noted(path);
@@ -169,9 +236,12 @@ pub fn is_file(path: &Path) -> bool {
 
 pub fn replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some((layer, key)) = layer_of(path) {
-        let mut layer = layer.lock().unwrap_or_else(|e| e.into_inner());
-        if layer.files.get(&key).map(|b| &b[..]) != Some(bytes) {
-            layer.files.insert(key.clone(), Arc::from(bytes));
+        let now = fetch(&layer, &key).and_then(Result::ok);
+        if now.as_deref() != Some(bytes) {
+            let mut layer = lock(&layer);
+            layer
+                .files
+                .insert(key.clone(), Slot::Ready(Arc::from(bytes)));
             layer.changed.insert(key);
         }
         return Ok(());

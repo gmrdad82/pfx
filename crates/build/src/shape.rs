@@ -489,7 +489,9 @@ pub(crate) fn imported(
             format!("{path} has no node `{want}` with a mesh"),
         )),
         _ => {
-            looks.retain(|_, look| look.has_maps());
+            crate::library::keep_looks(&mut looks, &bytes, |name| {
+                out.slots.iter().any(|slot| slot.material == name)
+            });
             let skin = rig.and_then(|(_, found, skin)| {
                 let mut skin = skin?;
                 skin.extend_static(out.positions.len());

@@ -10,7 +10,7 @@ const UPDATE_WGSL: &str = r#"
 @group(0) @binding(3) var<uniform> info: vec4f;
 
 fn covered(p: vec2i, size: vec2i) -> f32 {
-    return select(0.0, 1.0, textureLoad(depth_tex, clamp(p, vec2i(0), size - vec2i(1)), 0) < 1.0);
+    return select(0.0, 1.0, textureLoad(depth_tex, clamp(p, vec2i(0), size - vec2i(1)), 0) > 0.0);
 }
 
 @fragment
@@ -53,7 +53,7 @@ fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let p = vec2i(position.xy);
     let alpha = clamp(textureLoad(coverage_tex, p, 0).r, 0.0, 1.0);
     var colour = vec3f(0.0);
-    if (textureLoad(depth_tex, p, 0) < 1.0) {
+    if (textureLoad(depth_tex, p, 0) > 0.0) {
         colour = textureLoad(source, p, 0).rgb;
     } else {
         var sum = vec3f(0.0);
@@ -61,7 +61,7 @@ fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
         for (var y = -1; y <= 1; y += 1) {
             for (var x = -1; x <= 1; x += 1) {
                 let q = clamp(p + vec2i(x, y), vec2i(0), size - vec2i(1));
-                if (textureLoad(depth_tex, q, 0) < 1.0) {
+                if (textureLoad(depth_tex, q, 0) > 0.0) {
                     sum += textureLoad(source, q, 0).rgb;
                     count += 1.0;
                 }

@@ -11,7 +11,13 @@ pub fn dir() -> Result<PathBuf, String> {
         })
         .or_else(|| {
             std::env::var_os("HOME")
+                .filter(|h| !h.is_empty())
                 .map(|h| PathBuf::from(h).join(".cache").join("pito-hd-renderer"))
+        })
+        .or_else(|| {
+            std::env::var_os("LOCALAPPDATA")
+                .filter(|dir| !dir.is_empty())
+                .map(|dir| PathBuf::from(dir).join("pito-hd-renderer"))
         })
         .ok_or("no cache folder: set PFX_CACHE")?;
     std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;

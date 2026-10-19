@@ -291,7 +291,7 @@ fn first_symlink(path: &Path) -> Result<Option<PathBuf>, String> {
     let mut check = PathBuf::new();
     for part in path.components() {
         check.push(part);
-        if check == Path::new("/") {
+        if check.file_name().is_none() {
             continue;
         }
         match fs::symlink_metadata(&check) {

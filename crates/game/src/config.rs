@@ -20,6 +20,7 @@ pub type Crash = Box<dyn Fn(&str)>;
 pub struct Config {
     pub name: String,
     pub title: Option<String>,
+    pub mark: Option<PathBuf>,
     pub crash: Option<Crash>,
     pub version: String,
     pub scene: Option<PathBuf>,
@@ -78,6 +79,7 @@ impl Config {
         Self {
             name: name.into(),
             title: None,
+            mark: None,
             crash: None,
             version: version.into(),
             scene: None,
@@ -119,6 +121,11 @@ impl Config {
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    pub fn mark(mut self, path: impl Into<PathBuf>) -> Self {
+        self.mark = Some(path.into());
         self
     }
 

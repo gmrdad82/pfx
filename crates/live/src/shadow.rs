@@ -18,6 +18,8 @@ pub const SOFT_REACH_TEXELS: f32 = 48.0;
 pub const SOFT_SLOPE_LIMIT: f32 = 4.0;
 pub const OUTER_SCALE: f32 = 3.0;
 pub const SOFT_OFFSET: f32 = 0.0;
+pub const FIRST_SPLIT: f32 = 6.0;
+pub const STREET_GAIN: f32 = 2.0;
 
 pub const SHADOW_WGSL: &str = r#"
 override use_soft_search: bool = true;
@@ -316,7 +318,7 @@ fn shadow_one(
     var layer = cascade;
     let soft = select(-1.0, data.soft_taps.w, (use_soft_search || use_soft_filter) && data.soft.x > 0.0);
     var projected = shadow_project(view_proj, shadow_offset(world, normal, data.sun.xyz, data.filter_params, texel, soft));
-    if ((any(projected < vec3f(0.0)) || any(projected > vec3f(1.0))) && (u32(data.soft_taps.z) & 32u) != 0u && cascade != 2) {
+    if ((any(projected < vec3f(0.0)) || any(projected > vec3f(1.0))) && (u32(data.soft_taps.z) & 160u) != 0u && cascade != 2) {
         view_proj = data.view_proj_2;
         texel = data.texels.z;
         layer = 2;
@@ -521,6 +523,7 @@ pub struct Quality {
     pub outer_scale: f32,
     pub near_map: bool,
     pub soft_offset: f32,
+    pub first_split: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -554,6 +557,7 @@ impl Default for Quality {
             outer_scale: OUTER_SCALE,
             near_map: true,
             soft_offset: SOFT_OFFSET,
+            first_split: FIRST_SPLIT,
         }
     }
 }
@@ -594,6 +598,8 @@ pub struct Fit {
     pub cascades: [Cascade; CASCADE_COUNT],
     pub toward_sun: [f32; 3],
     pub resolution: u32,
+    pub boxed: bool,
+    pub near_map: bool,
 }
 
 pub struct Caster<'a> {
@@ -710,6 +716,7 @@ pub struct Shadows {
     instance_capacity: u64,
     cache: Option<StaticKey>,
     atlas_clean: bool,
+    backed: [bool; CASCADE_COUNT],
     reused: bool,
     transmission: Option<Transmission>,
 }
@@ -837,11 +844,15 @@ pub fn camera_view_proj(view: &View) -> Mat4 {
 }
 
 pub fn fit(view: &View, toward_sun: [f32; 3], quality: &Quality) -> Fit {
+    if let Some(street) = street_fit(view, toward_sun, quality) {
+        return street;
+    }
     let (fov_y, aspect, near, far) = camera_limits(view);
     let count = quality.cascade_count();
     let distances = splits_for(near, far, quality.lambda, count);
     let [_, _, forward] = camera_axes(view);
-    let [light_right, light_up, light_forward] = light_basis(toward_sun);
+    let light = light_basis(toward_sun);
+    let [light_right, light_up, light_forward] = light;
     let resolution = quality.resolution.max(2);
     let light_view = view_matrix(light_right, light_up, light_forward, [0.0, 0.0, 0.0]);
     let mut cascades = [Cascade {
@@ -867,59 +878,7 @@ pub fn fit(view: &View, toward_sun: [f32; 3], quality: &Quality) -> Fit {
             } else {
                 1.0
             };
-            let mut lo = [f32::INFINITY; 3];
-            let mut hi = [f32::NEG_INFINITY; 3];
-            for x in [receiver.min[0], receiver.max[0]] {
-                for y in [receiver.min[1], receiver.max[1]] {
-                    for z in [receiver.min[2], receiver.max[2]] {
-                        let point = [x, y, z];
-                        let light = [
-                            dot(light_right, point),
-                            dot(light_up, point),
-                            -dot(light_forward, point),
-                        ];
-                        for axis in 0..3 {
-                            lo[axis] = lo[axis].min(light[axis]);
-                            hi[axis] = hi[axis].max(light[axis]);
-                        }
-                    }
-                }
-            }
-            let center = [
-                (lo[0] + hi[0]) * 0.5,
-                (lo[1] + hi[1]) * 0.5,
-                (lo[2] + hi[2]) * 0.5,
-            ];
-            if grow != 1.0 {
-                for axis in 0..3 {
-                    lo[axis] = center[axis] + (lo[axis] - center[axis]) * grow;
-                    hi[axis] = center[axis] + (hi[axis] - center[axis]) * grow;
-                }
-            }
-            let span_x = (hi[0] - lo[0]).max(1.0e-4);
-            let span_y = (hi[1] - lo[1]).max(1.0e-4);
-            let texel = span_x.max(span_y) / (resolution as f32 - 3.0).max(1.0);
-            let snapped = [snap(center[0], texel), snap(center[1], texel), center[2]];
-            let half_x = span_x * 0.5 + texel * 1.5;
-            let half_y = span_y * 0.5 + texel * 1.5;
-            let z_lo = lo[2] - texel;
-            let z_hi = hi[2] + texel + quality.caster_margin.max(0.0);
-            let projection = ortho(
-                snapped[0] - half_x,
-                snapped[0] + half_x,
-                snapped[1] - half_y,
-                snapped[1] + half_y,
-                -z_hi,
-                -z_lo,
-            );
-            *cascade = Cascade {
-                near: slice_near,
-                far: slice_far,
-                view_proj: projection.multiply(light_view),
-                texel,
-                light_center: center,
-                snapped_center: snapped,
-            };
+            *cascade = box_cascade(&receiver, grow, light, quality, [slice_near, slice_far]);
             continue;
         }
         let (center_distance, radius) = slice_sphere(fit_near, slice_far, fov_y, aspect);
@@ -965,7 +924,193 @@ pub fn fit(view: &View, toward_sun: [f32; 3], quality: &Quality) -> Fit {
         cascades,
         toward_sun: normalize(toward_sun),
         resolution,
+        boxed: quality.receiver.is_some(),
+        near_map: quality.splits_near_map(),
     }
+}
+
+fn box_cascade(
+    receiver: &ReceiverBox,
+    grow: f32,
+    [light_right, light_up, light_forward]: [[f32; 3]; 3],
+    quality: &Quality,
+    [slice_near, slice_far]: [f32; 2],
+) -> Cascade {
+    let resolution = quality.resolution.max(2);
+    let light_view = view_matrix(light_right, light_up, light_forward, [0.0, 0.0, 0.0]);
+    let mut lo = [f32::INFINITY; 3];
+    let mut hi = [f32::NEG_INFINITY; 3];
+    for x in [receiver.min[0], receiver.max[0]] {
+        for y in [receiver.min[1], receiver.max[1]] {
+            for z in [receiver.min[2], receiver.max[2]] {
+                let point = [x, y, z];
+                let light = [
+                    dot(light_right, point),
+                    dot(light_up, point),
+                    -dot(light_forward, point),
+                ];
+                for axis in 0..3 {
+                    lo[axis] = lo[axis].min(light[axis]);
+                    hi[axis] = hi[axis].max(light[axis]);
+                }
+            }
+        }
+    }
+    let center = [
+        (lo[0] + hi[0]) * 0.5,
+        (lo[1] + hi[1]) * 0.5,
+        (lo[2] + hi[2]) * 0.5,
+    ];
+    if grow != 1.0 {
+        for axis in 0..3 {
+            lo[axis] = center[axis] + (lo[axis] - center[axis]) * grow;
+            hi[axis] = center[axis] + (hi[axis] - center[axis]) * grow;
+        }
+    }
+    let span_x = (hi[0] - lo[0]).max(1.0e-4);
+    let span_y = (hi[1] - lo[1]).max(1.0e-4);
+    let texel = span_x.max(span_y) / (resolution as f32 - 3.0).max(1.0);
+    let snapped = [snap(center[0], texel), snap(center[1], texel), center[2]];
+    let half_x = span_x * 0.5 + texel * 1.5;
+    let half_y = span_y * 0.5 + texel * 1.5;
+    let z_lo = lo[2] - texel;
+    let z_hi = hi[2] + texel + quality.caster_margin.max(0.0);
+    let projection = ortho(
+        snapped[0] - half_x,
+        snapped[0] + half_x,
+        snapped[1] - half_y,
+        snapped[1] + half_y,
+        -z_hi,
+        -z_lo,
+    );
+    Cascade {
+        near: slice_near,
+        far: slice_far,
+        view_proj: projection.multiply(light_view),
+        texel,
+        light_center: center,
+        snapped_center: snapped,
+    }
+}
+
+pub fn street_splits(near: f32, first: f32, reach: f32, far: f32, count: usize) -> [f32; 4] {
+    let count = count.clamp(1, CASCADE_COUNT);
+    let near = finite(near).max(1.0e-4);
+    let far = finite(far).max(near + 1.0e-3);
+    let first = finite(first).clamp(near, far);
+    let span = finite(reach)
+        .clamp(first, far)
+        .max(1.0e-3)
+        .log2()
+        .ceil()
+        .exp2();
+    let mut out = [near, far, far, far];
+    if count > 1 {
+        out[1] = first;
+    }
+    if count > 2 {
+        out[2] = (first * span).sqrt().clamp(first, far);
+    }
+    out
+}
+
+fn street_fit(view: &View, toward_sun: [f32; 3], quality: &Quality) -> Option<Fit> {
+    let receiver = quality.receiver?;
+    let count = quality.cascade_count();
+    let first = finite(quality.first_split);
+    if count < 2 || first <= 0.0 {
+        return None;
+    }
+    let (_, _, near, far) = camera_limits(view);
+    let [_, _, forward] = camera_axes(view);
+    let mut reach = 0.0f32;
+    for x in [receiver.min[0], receiver.max[0]] {
+        for y in [receiver.min[1], receiver.max[1]] {
+            for z in [receiver.min[2], receiver.max[2]] {
+                reach = reach.max(dot(forward, add([x, y, z], scale(view.eye, -1.0))));
+            }
+        }
+    }
+    let distances = street_splits(near, first, reach, far, count);
+    let light = light_basis(toward_sun);
+    let [light_right, light_up, light_forward] = light;
+    let resolution = quality.resolution.max(2);
+    let light_view = view_matrix(light_right, light_up, light_forward, [0.0, 0.0, 0.0]);
+    let whole = box_cascade(&receiver, 1.0, light, quality, [distances[0], distances[3]]);
+    let mut cascades = [whole; CASCADE_COUNT];
+    for index in 0..count - 1 {
+        let slice_near = distances[index];
+        let slice_far = distances[index + 1];
+        let fit_near = if index == 0 {
+            slice_near
+        } else {
+            slice_near - (slice_near - distances[index - 1]) * finite(quality.blend).clamp(0.0, 1.0)
+        };
+        let corners = frustum_corners(view, fit_near, slice_far);
+        let mut lo = [f32::INFINITY; 3];
+        let mut hi = [f32::NEG_INFINITY; 3];
+        for corner in corners {
+            let light = [
+                dot(light_right, corner),
+                dot(light_up, corner),
+                -dot(light_forward, corner),
+            ];
+            for axis in 0..3 {
+                lo[axis] = lo[axis].min(light[axis]);
+                hi[axis] = hi[axis].max(light[axis]);
+            }
+        }
+        let diameter = length(add(corners[0], scale(corners[6], -1.0)))
+            .max(length(add(corners[4], scale(corners[6], -1.0))))
+            .ceil();
+        let texel = diameter / resolution as f32;
+        if index == 0 && texel * STREET_GAIN > whole.texel {
+            return None;
+        }
+        if texel >= whole.texel {
+            break;
+        }
+        let light_center = [
+            (lo[0] + hi[0]) * 0.5,
+            (lo[1] + hi[1]) * 0.5,
+            (lo[2] + hi[2]) * 0.5,
+        ];
+        let snapped = [
+            (light_center[0] / texel).floor() * texel,
+            (light_center[1] / texel).floor() * texel,
+            light_center[2],
+        ];
+        let half = diameter * 0.5;
+        let z_lo = lo[2];
+        let z_hi = hi[2] + quality.caster_margin.max(0.0);
+        let projection = ortho(
+            snapped[0] - half,
+            snapped[0] + half,
+            snapped[1] - half,
+            snapped[1] + half,
+            -z_hi,
+            -z_lo,
+        );
+        cascades[index] = Cascade {
+            near: slice_near,
+            far: slice_far,
+            view_proj: projection.multiply(light_view),
+            texel,
+            light_center,
+            snapped_center: snapped,
+        };
+    }
+    for cascade in cascades.iter_mut().skip(count) {
+        *cascade = whole;
+    }
+    Some(Fit {
+        splits: distances,
+        cascades,
+        toward_sun: normalize(toward_sun),
+        resolution,
+        boxed: false,
+        near_map: false,
+    })
 }
 
 pub fn sample_uniform(fit: &Fit, quality: &Quality) -> [u8; SAMPLE_UNIFORM_BYTES] {
@@ -1011,8 +1156,9 @@ pub fn sample_uniform(fit: &Fit, quality: &Quality) -> [u8; SAMPLE_UNIFORM_BYTES
         | u8::from(quality.blend_dither) << 2
         | u8::from(!quality.lit_skip) << 3
         | u8::from(quality.layered) << 4
-        | u8::from(quality.receiver.is_some() && outer(quality)) << 5
-        | u8::from(quality.splits_near_map()) << 6;
+        | u8::from(fit.boxed && outer(quality)) << 5
+        | u8::from(fit.near_map) << 6
+        | u8::from(!fit.boxed && quality.receiver.is_some()) << 7;
     write_vec4(&mut bytes, 272, [0.0, 0.0, f32::from(flags), 0.0]);
     if radius > 0.0 {
         write_vec4(
@@ -1227,6 +1373,7 @@ impl Shadows {
             instance_capacity,
             cache: None,
             atlas_clean: false,
+            backed: [false; CASCADE_COUNT],
             reused: false,
             transmission: None,
         }
@@ -1298,6 +1445,7 @@ impl Shadows {
             self.resolution = resolution;
             self.cache = None;
             self.atlas_clean = false;
+            self.backed = [false; CASCADE_COUNT];
             self.reused = false;
             self.transmission = None;
         }
@@ -1358,6 +1506,7 @@ impl Shadows {
                 &cascade.view_proj.to_bytes(),
             );
         }
+        self.keep_backup(encoder);
         let instances = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1473,6 +1622,10 @@ impl Shadows {
         if hit {
             if !self.atlas_clean {
                 copy_depth(encoder, &self.backup, &self.atlas, self.resolution);
+                self.atlas_clean = true;
+            }
+            if !moving_draws.is_empty() {
+                self.keep_backup(encoder);
             }
             self.encode(
                 encoder,
@@ -1490,6 +1643,7 @@ impl Shadows {
             profiler.as_deref_mut(),
         );
         copy_depth(encoder, &self.atlas, &self.backup, self.resolution);
+        self.backed = [true; CASCADE_COUNT];
         self.encode(encoder, &moving_draws, wgpu::LoadOp::Load, profiler);
         self.atlas_clean = moving_draws.is_empty();
         self.cache = Some(key);
@@ -1506,32 +1660,108 @@ impl Shadows {
     ) {
         let mut key = static_key(fit, &[]);
         key.content = content;
-        key.near_map = self.quality.get().splits_near_map();
-        let hit = self.cache.as_ref() == Some(&key);
+        key.near_map = fit.near_map;
+        let stale = self.stale(&key);
+        let hit = !stale.contains(&true);
         if hit && self.atlas_clean && !moving {
             self.reused = true;
             return;
         }
         self.reused = hit;
-        if hit {
-            if !self.atlas_clean {
-                copy_depth(encoder, &self.backup, &self.atlas, self.resolution);
-            }
-        } else {
+        if !self.atlas_clean {
+            self.copy_layers(encoder, stale.map(|layer| !layer), false);
+        }
+        if !hit {
             self.encode_layers(
                 encoder,
                 wgpu::LoadOp::Clear(1.0),
                 true,
+                stale,
                 draw,
                 profiler.as_deref_mut(),
             );
-            copy_depth(encoder, &self.atlas, &self.backup, self.resolution);
+            for (backed, stale) in self.backed.iter_mut().zip(stale) {
+                *backed = *backed && !stale;
+            }
             self.cache = Some(key);
         }
+        self.atlas_clean = true;
         if moving {
-            self.encode_layers(encoder, wgpu::LoadOp::Load, false, draw, profiler);
+            self.keep_backup(encoder);
+            self.encode_layers(
+                encoder,
+                wgpu::LoadOp::Load,
+                false,
+                [true; CASCADE_COUNT],
+                draw,
+                profiler,
+            );
         }
         self.atlas_clean = !moving;
+    }
+
+    fn stale(&self, key: &StaticKey) -> [bool; CASCADE_COUNT] {
+        match &self.cache {
+            Some(cached)
+                if cached.sun == key.sun
+                    && cached.draws == key.draws
+                    && cached.content == key.content
+                    && cached.near_map == key.near_map =>
+            {
+                std::array::from_fn(|layer| cached.matrices[layer] != key.matrices[layer])
+            }
+            _ => [true; CASCADE_COUNT],
+        }
+    }
+
+    fn keep_backup(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if self.atlas_clean {
+            self.copy_layers(encoder, self.backed.map(|backed| !backed), true);
+            self.backed = [true; CASCADE_COUNT];
+        }
+    }
+
+    fn copy_layers(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        layers: [bool; CASCADE_COUNT],
+        to_backup: bool,
+    ) {
+        if layers == [true; CASCADE_COUNT] {
+            let (source, destination) = if to_backup {
+                (&self.atlas, &self.backup)
+            } else {
+                (&self.backup, &self.atlas)
+            };
+            copy_depth(encoder, source, destination, self.resolution);
+            return;
+        }
+        for (z, _) in layers.iter().enumerate().filter(|(_, copy)| **copy) {
+            let layer = |texture| wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: z as u32,
+                },
+                aspect: wgpu::TextureAspect::All,
+            };
+            let (source, destination) = if to_backup {
+                (layer(&self.atlas), layer(&self.backup))
+            } else {
+                (layer(&self.backup), layer(&self.atlas))
+            };
+            encoder.copy_texture_to_texture(
+                source,
+                destination,
+                wgpu::Extent3d {
+                    width: self.resolution,
+                    height: self.resolution,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
     }
 
     pub fn transmission_view(&self) -> Option<&wgpu::TextureView> {
@@ -1728,6 +1958,7 @@ impl Shadows {
         if count == 0 {
             return Ok(());
         }
+        self.keep_backup(encoder);
         for (index, layer) in self.drawn().iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 multiview_mask: None,
@@ -1755,10 +1986,14 @@ impl Shadows {
         encoder: &mut wgpu::CommandEncoder,
         load: wgpu::LoadOp<f32>,
         statics: bool,
+        layers: [bool; CASCADE_COUNT],
         draw: &mut LayerDraw<'_>,
         mut profiler: Option<&mut GpuProfiler>,
     ) {
         for (index, layer) in self.drawn().iter().enumerate() {
+            if !layers[index] {
+                continue;
+            }
             let timing = profiler
                 .as_deref_mut()
                 .and_then(|timer| timer.pass(format!("shadow cascade {}", index + 1)));
@@ -2577,6 +2812,64 @@ mod tests {
             before.cascades[0].snapped_center[0],
             changed.cascades[0].snapped_center[0]
         );
+    }
+
+    #[test]
+    fn a_street_box_fits_fine_near_cascades_that_hold_their_texels_under_a_dolly() {
+        let street = ReceiverBox {
+            min: [-15.0, -0.1, -200.0],
+            max: [15.0, 30.0, 200.0],
+        };
+        let quality = Quality {
+            receiver: Some(street),
+            caster_margin: 0.3,
+            ..Quality::default()
+        };
+        let sun = [0.6, 0.5, -0.4];
+        let view = |z: f32| View {
+            eye: [0.0, 1.2, z],
+            forward: normalize([0.0, -0.01, 1.0]),
+            up: [0.0, 1.0, 0.0],
+            fov_y: 50.0_f32.to_radians(),
+            aspect: 16.0 / 9.0,
+            near: 0.02,
+            far: 210.0 - z,
+        };
+        let first = fit(&view(0.0), sun, &quality);
+        assert!(!first.boxed && !first.near_map);
+        assert!(first.cascades[0].texel * 20.0 < first.cascades[2].texel);
+        assert!(
+            first.cascades[0].texel < 0.004,
+            "{}",
+            first.cascades[0].texel
+        );
+        let world = [2.0, 0.0, 9.0];
+        let texel_at = |fitted: &Fit, cascade: usize| {
+            let point = fitted.cascades[cascade].view_proj.transform_point(world);
+            [point[0], point[1]].map(|v| (v * 0.5 + 0.5) * fitted.resolution as f32)
+        };
+        for frame in 1..90 {
+            let moved = fit(&view(frame as f32 / 60.0), sun, &quality);
+            for cascade in 0..2 {
+                assert_eq!(moved.cascades[cascade].texel, first.cascades[cascade].texel);
+                let [a, b] = [texel_at(&first, cascade), texel_at(&moved, cascade)];
+                for axis in 0..2 {
+                    let shift = b[axis] - a[axis];
+                    assert!(
+                        (shift - shift.round()).abs() < 0.01,
+                        "{frame} {cascade} {shift}"
+                    );
+                }
+            }
+        }
+        let small = Quality {
+            receiver: Some(ReceiverBox {
+                min: [-0.4, -0.25, -0.2],
+                max: [0.4, 0.25, 0.35],
+            }),
+            ..quality
+        };
+        assert!(fit(&desk(), sun, &small).boxed);
     }
 
     #[test]

@@ -396,7 +396,7 @@ pub fn cast_tint(material: &Material) -> [f32; 3] {
     } else {
         material.base
     };
-    passed.map(|channel| (channel * material.transmission).clamp(0.0, 1.0))
+    passed.map(|channel| (channel * material.transmitted()).clamp(0.0, 1.0))
 }
 
 fn sun_rows(sun: crate::frame::Sun) -> [[f32; 4]; 2] {
@@ -1270,7 +1270,7 @@ impl Pass {
                         if surface.liquid { 1.0 } else { 0.0 },
                         surface.fluid_height,
                         surface.ripple_height,
-                        0.0,
+                        m.metalness,
                     ],
                     tinted_base: [t.base[0], t.base[1], t.base[2], t.thin_film_amount],
                     tinted_subsurface: [
@@ -1811,7 +1811,7 @@ fn sky_irradiance(n: vec3f) -> vec3f {
     let id = textureLoad(front_id_tex, pixel, 0).r;
     if (id == 0u) { discard; }
     let front_z = textureLoad(front_depth_tex, pixel, 0);
-    let opaque_z = textureLoad(opaque_depth_tex, pixel, 0);
+    let opaque_z = 1.0 - textureLoad(opaque_depth_tex, pixel, 0);
     if (opaque_z < front_z) { discard; }
     let front = textureLoad(front_tex, pixel, 0);
     var back = textureLoad(back_tex, pixel, 0);
@@ -1887,6 +1887,11 @@ fn sky_irradiance(n: vec3f) -> vec3f {
         let body = base * (sky_irradiance(lit_normal) + sun) / 3.14159265;
         color += (vec3f(1.0) - fresnel) * (1.0 - transmission) * (body - reflected);
     }
+    let metal = clamp(object.liquid.w, 0.0, 1.0);
+    if (metal > 0.0) {
+        let conductor = base + (vec3f(1.0) - base) * pow(1.0 - cosine, 5.0);
+        color = mix(color, reflected * conductor, metal);
+    }
     let coat = bitcast<f32>(object.pick.y);
     if (coat > 0.0) {
         let coat_rough = bitcast<f32>(object.pick.z);
@@ -1905,7 +1910,7 @@ fn sky_irradiance(n: vec3f) -> vec3f {
     let id = textureLoad(front_id_tex, pixel, 0).r;
     if (id == 0u) { discard; }
     let front_z = textureLoad(front_depth_tex, pixel, 0);
-    let opaque_z = textureLoad(opaque_depth_tex, pixel, 0);
+    let opaque_z = 1.0 - textureLoad(opaque_depth_tex, pixel, 0);
     if (opaque_z < front_z) { discard; }
     let pick = objects[id - 1u].pick.x;
     if (pick == 0u) { discard; }
@@ -2440,7 +2445,7 @@ mod tests {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -2606,7 +2611,7 @@ mod tests {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -2763,7 +2768,7 @@ mod tests {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -2911,7 +2916,7 @@ mod tests {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &depth_view,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
+                            load: wgpu::LoadOp::Clear(0.0),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,

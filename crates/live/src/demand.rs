@@ -989,9 +989,18 @@ pub(crate) const COMPOSITE_WGSL: &str = r#"
 @fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {
     let under = textureLoad(base, vec2i(position.xy), 0);
     let over = textureLoad(overlay, vec2i(position.xy), 0);
-    return over + under * (1.0 - over.a);
+    let c = over + under * (1.0 - over.a);
+    if dither_on.x == 0u {
+        return c;
+    }
+    let l = clamp(c.rgb, vec3f(0.0), vec3f(1.0));
+    return vec4f(srgb_decode(dithered(srgb_encode(l), position.xy)), c.a);
 }
 "#;
+
+pub(crate) fn composite_wgsl() -> String {
+    format!("{}\n{COMPOSITE_WGSL}", crate::dither::wgsl(2))
+}
 
 pub(crate) const COPY_WGSL: &str = r#"
 @vertex fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4f {
@@ -1352,7 +1361,12 @@ impl Cache {
         );
         let composite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("demand composite"),
-            entries: &[float(0, false), float(1, false)],
+            entries: &[
+                float(0, false),
+                float(1, false),
+                crate::dither::OutputDither::layout_entries(2)[0],
+                crate::dither::OutputDither::layout_entries(2)[1],
+            ],
         });
         let composite_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1362,7 +1376,7 @@ impl Cache {
             });
         let composite_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("demand composite"),
-            source: wgpu::ShaderSource::Wgsl(COMPOSITE_WGSL.into()),
+            source: wgpu::ShaderSource::Wgsl(composite_wgsl().into()),
         });
         let copy_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("demand copy"),
@@ -1541,8 +1555,10 @@ impl Cache {
         encoder: &mut wgpu::CommandEncoder,
         base: &wgpu::TextureView,
         target: (&wgpu::TextureView, wgpu::TextureFormat),
+        dither: &crate::dither::OutputDither,
         profiler: &mut GpuProfiler,
     ) {
+        let [noise, uniform] = dither.entries(2);
         let index = match self
             .composites
             .iter()
@@ -1574,6 +1590,8 @@ impl Cache {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&self.overlay.view),
                 },
+                noise,
+                uniform,
             ],
         });
         let timing = profiler.pass("composite");
@@ -2314,13 +2332,18 @@ mod tests {
 
     #[test]
     fn warp_shaders_validate() {
+        let composite = composite_wgsl();
+        let srgb = crate::renderer::blit_source(wgpu::TextureFormat::Rgba8UnormSrgb);
+        let plain = crate::renderer::blit_source(wgpu::TextureFormat::Rgba8Unorm);
         for source in [
             WARP_WGSL,
             COPY_WGSL,
             WAKE_WGSL,
             TILES_WGSL,
             SPREAD_WGSL,
-            COMPOSITE_WGSL,
+            &composite,
+            &srgb,
+            &plain,
         ] {
             let module = naga::front::wgsl::parse_str(source).unwrap();
             naga::valid::Validator::new(

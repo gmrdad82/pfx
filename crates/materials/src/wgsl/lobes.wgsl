@@ -195,9 +195,9 @@ fn eval_lobed(s: Shaded, wo: vec3f, wi: vec3f, film: vec3f) -> vec3f {
     let coat = clamp(s.clearcoat, 0.0, 1.0);
     if (coat > 0.0) {
         let coat_a = alpha_rough(s.clearcoat_roughness);
-        let coat_f = schlick(vec3f(0.04), vdh, 5.0);
+        let coat_f = schlick(vec3f(0.04), vdh, fresnel_exponent(s));
         let coat_spec = ggx_spec(ndv, ndl, ndh, coat_a * coat_a, coat_f);
-        let fc = schlick(vec3f(0.04), view, 5.0).r;
+        let fc = schlick(vec3f(0.04), view, fresnel_exponent(s)).r;
         colour = coat_spec * coat + colour * (1.0 - coat * fc);
     }
     return colour;

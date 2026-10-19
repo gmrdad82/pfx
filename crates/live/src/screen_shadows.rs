@@ -743,7 +743,7 @@ const DEPTH: &str = r#"
 @group(0) @binding(1) var depth_raw: texture_depth_2d;
 
 fn raw_depth(coord: vec2i) -> f32 {
-    return textureLoad(depth_raw, clamp(coord, vec2i(0), vec2i(params.size.xy) - 1), 0);
+    return 1.0 - textureLoad(depth_raw, clamp(coord, vec2i(0), vec2i(params.size.xy) - 1), 0);
 }
 "#;
 

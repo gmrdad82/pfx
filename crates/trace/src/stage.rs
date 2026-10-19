@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
+use std::sync::Arc;
 
 use pfx_core::anim::{Skinned, skin as skin_vertices};
 use pfx_gpu::Gpu;
@@ -16,6 +17,7 @@ use crate::detail::{
 };
 use crate::gpu::{Camera, Projection, Scene, Sun, Trace, TraceError};
 use crate::lights::{LightShape, LocalLight};
+use crate::motion::InstanceMotion;
 use crate::sky::Environment;
 use crate::text::TextContent;
 
@@ -56,25 +58,38 @@ impl Image<'_> {
                 .is_some_and(|count| self.texels.len() == count)
     }
 
-    pub fn linear(&self) -> ContentImage {
-        let decode = |byte: u8| {
-            let value = f32::from(byte) / 255.0;
-            if !self.srgb {
-                value
-            } else {
-                pfx_materials::linear_channel(value)
-            }
-        };
-        ContentImage {
+    pub(crate) fn linear(&self) -> LinearImage {
+        let content = ContentImage {
             width: self.width,
             height: self.height,
-            texels: self
-                .texels
-                .iter()
-                .map(|&[r, g, b, a]| [decode(r), decode(g), decode(b), f32::from(a) / 255.0])
+            texels: self.texels.to_vec(),
+            srgb: self.srgb,
+        };
+        LinearImage {
+            width: self.width,
+            height: self.height,
+            texels: (0..content.texels.len())
+                .map(|at| content.linear(at))
                 .collect(),
         }
     }
+
+    pub fn content(&self) -> Result<ContentImage, String> {
+        let mut texels = pfx_core::memory::vec(self.texels.len(), "a content image")?;
+        texels.extend_from_slice(self.texels);
+        Ok(ContentImage {
+            width: self.width,
+            height: self.height,
+            texels,
+            srgb: self.srgb,
+        })
+    }
+}
+
+pub(crate) struct LinearImage {
+    pub width: u32,
+    pub height: u32,
+    pub texels: Vec<[f32; 4]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -149,6 +164,13 @@ pub struct Placement<'a> {
     pub shadow_only: bool,
     pub alpha_cutoff: f32,
     pub two_sided: bool,
+    pub motion: Option<PlacementMotion<'a>>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlacementMotion<'a> {
+    pub transforms: &'a [Transform],
+    pub meshes: &'a [u32],
 }
 
 impl Placement<'_> {
@@ -163,6 +185,7 @@ impl Placement<'_> {
             shadow_only: false,
             alpha_cutoff: ALPHA_CUTOFF,
             two_sided: true,
+            motion: None,
         }
     }
 }
@@ -202,7 +225,8 @@ impl<E> Stage<'_, E> {
             .max()
             .unwrap_or(0);
         let mut sources: Vec<ContentKind<'_>> = Vec::new();
-        let mut cuts: Vec<(u32, u32, Vec<TriangleDetail>)> = Vec::new();
+        let mut cuts: BTreeMap<(u32, u32), Vec<TriangleDetail>> = BTreeMap::new();
+        let mut dressed: BTreeMap<(u32, u32, u32), Arc<[TriangleDetail]>> = BTreeMap::new();
         let mut instances = Vec::with_capacity(self.instances.len());
         for placement in self.instances {
             if !(0.0..=1.0).contains(&placement.alpha_cutoff) {
@@ -255,37 +279,68 @@ impl<E> Stage<'_, E> {
                 }
             }
             let key = placement.alpha_cutoff.to_bits();
-            let mut kept = if let Some((_, _, ready)) = cuts
-                .iter()
-                .find(|(index, bits, _)| *index == placement.mesh && *bits == key)
-            {
-                ready.clone()
-            } else {
-                let ready = triangles(mesh, placement.alpha_cutoff)?;
-                cuts.push((placement.mesh, key, ready.clone()));
-                ready
+            let kept = match dressed.entry((placement.mesh, key, placement.material)) {
+                Entry::Occupied(ready) => ready.get().clone(),
+                Entry::Vacant(slot) => {
+                    let cut = match cuts.entry((placement.mesh, key)) {
+                        Entry::Occupied(cut) => cut.into_mut(),
+                        Entry::Vacant(cut) => cut.insert(triangles(mesh, placement.alpha_cutoff)?),
+                    };
+                    let mut dressed =
+                        pfx_core::memory::vec(cut.len(), "the tracer's placed triangles")?;
+                    dressed.extend(cut.iter().map(|triangle| TriangleDetail {
+                        material: placement.material,
+                        ..*triangle
+                    }));
+                    let ready: Arc<[TriangleDetail]> = dressed.into();
+                    slot.insert(ready).clone()
+                }
             };
-            for triangle in &mut kept {
-                triangle.material = placement.material;
-            }
+            let motion = match placement.motion {
+                Some(moving) => {
+                    let mut shapes = Vec::with_capacity(moving.meshes.len());
+                    for &index in moving.meshes {
+                        let step = self
+                            .meshes
+                            .get(index as usize)
+                            .ok_or("staged motion names a missing mesh")?;
+                        let mut shape = triangles(step, placement.alpha_cutoff)?;
+                        if shape.len() != kept.len() {
+                            return Err(
+                                "a deforming mesh changes its triangle count over the shutter"
+                                    .into(),
+                            );
+                        }
+                        for triangle in &mut shape {
+                            triangle.material = placement.material;
+                        }
+                        shapes.push(shape);
+                    }
+                    Some(InstanceMotion {
+                        transforms: moving.transforms.to_vec(),
+                        shapes,
+                    })
+                }
+                None => None,
+            };
             instances.push(Instance {
                 triangles: kept,
                 transform: placement.model,
                 surface,
                 shadow_only: placement.shadow_only,
                 two_sided: placement.two_sided,
+                motion,
             });
         }
         let content_slots = if sources.is_empty() {
             Vec::new()
         } else {
-            std::iter::repeat_n(None, first_slot)
-                .chain(
-                    sources
-                        .iter()
-                        .map(|source| source.image().map(|image| image.linear())),
-                )
-                .collect()
+            let mut slots = Vec::with_capacity(first_slot + sources.len());
+            slots.resize(first_slot, None);
+            for source in &sources {
+                slots.push(source.image().map(|image| image.content()).transpose()?);
+            }
+            slots
         };
         let text_slots = if sources
             .iter()
@@ -323,7 +378,7 @@ impl<E> Stage<'_, E> {
     }
 }
 
-impl<E: Clone + Into<Environment>> Staged<E> {
+impl<E: Clone + Into<Environment> + 'static> Staged<E> {
     pub fn trace(&self, gpu: &Gpu, width: u32, height: u32) -> Result<Trace, TraceError> {
         Trace::new_detailed(gpu, &self.scene, &self.detail, width, height)
     }
@@ -642,7 +697,7 @@ fn triangles(mesh: &Mesh<'_>, cutoff: f32) -> Result<Vec<TriangleDetail>, String
             alpha: mesh.alpha.map_or(1.0, |alpha| alpha[index]),
         }
     };
-    let mut out = Vec::with_capacity(mesh.indices.len() / 3);
+    let mut out = pfx_core::memory::vec(mesh.indices.len() / 3, "the tracer's mesh triangles")?;
     for face in mesh.indices.chunks_exact(3) {
         let corners = [corner(face[0]), corner(face[1]), corner(face[2])];
         let kept = if cutoff.to_bits() == ALPHA_CUTOFF.to_bits() {
@@ -821,7 +876,7 @@ mod tests {
             assert_eq!(kept.len(), count, "{alpha:?}");
             let total: f32 = kept.iter().map(area).sum();
             assert!((total - expected).abs() < 1e-6, "{alpha:?}: {total}");
-            for triangle in kept {
+            for triangle in kept.iter() {
                 for (vertex, uv) in triangle.vertices.iter().zip(triangle.uvs) {
                     assert_eq!([vertex[0], vertex[1]], uv);
                 }
@@ -952,11 +1007,11 @@ mod tests {
         let slots = &staged.detail.content_slots;
         assert_eq!(slots.len(), 5);
         assert!(slots[..2].iter().all(Option::is_none));
-        assert_eq!(slots[2].as_ref().unwrap().texels[0], [1.0, 0.0, 0.0, 1.0]);
-        let linear = slots[3].as_ref().unwrap().texels[0];
+        assert_eq!(slots[2].as_ref().unwrap().linear(0), [1.0, 0.0, 0.0, 1.0]);
+        let linear = slots[3].as_ref().unwrap().linear(0);
         assert!((linear[0] - 188.0 / 255.0).abs() < 1e-6);
         assert!((linear[3] - 128.0 / 255.0).abs() < 1e-6);
-        let decoded = slots[4].as_ref().unwrap().texels[0];
+        let decoded = slots[4].as_ref().unwrap().linear(0);
         assert!((decoded[0] - 0.5029).abs() < 1e-3, "{decoded:?}");
         assert_eq!(decoded[3], linear[3]);
     }

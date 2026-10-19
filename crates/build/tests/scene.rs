@@ -214,6 +214,29 @@ fn no_look_is_the_neutral_graded_finish_and_standard_is_exposure_alone() {
     assert_eq!(format!("{passes:?}"), "[Exposure(0.8)]");
 }
 
+#[test]
+fn the_look_grain_and_chromatic_write_the_finish_the_live_chain_runs() {
+    let (r, folder) = recipe("table", None);
+    for (view, name) in [
+        ("graded", "scene-grain-graded"),
+        ("standard", "scene-grain-standard"),
+    ] {
+        let mut looked = parse(&r.source.replace(
+            "[look]\nexposure = 1.0",
+            &format!(
+                "[look]\nview = \"{view}\"\nexposure = 1.0\ngrain = {{ amount = 0.04, size = 1.5, seed = 5 }}\nchromatic = {{ amount = 0.03, falloff = 1.0 }}"
+            ),
+        ))
+        .unwrap();
+        looked.output.scene = Some("table.scene.toml".into());
+        let live = Lighting::of(&looked).unwrap().finish.passes;
+        assert!(live.iter().any(|pass| matches!(pass, Pass::Grain(_))));
+        assert!(live.iter().any(|pass| matches!(pass, Pass::Chromatic(_))));
+        let written = finish_of(&looked, &folder, name);
+        assert_eq!(format!("{written:?}"), format!("{live:?}"), "{view}");
+    }
+}
+
 fn refused(edit: impl FnOnce(&mut Recipe), name: &str) -> Error {
     let (mut r, folder) = recipe("table", None);
     edit(&mut r);
@@ -668,7 +691,7 @@ fn cards_show_their_image_as_content_and_text_names_its_font() {
     assert!(written.contains(&out.join("JetBrainsMonoNerdFont-Regular.ttf")));
     let text = std::fs::read_to_string(out.join("cards.scene.toml")).unwrap();
     assert!(
-        text.contains("\n[content.badge]\nid = ") && text.contains("\nimage = \"badge.png\"\n"),
+        text.contains("\n[content.badge]\nid = ") && text.contains("\nimage = \"../badge.png\"\n"),
         "{text}"
     );
     let scene = Scene::open(out.join("cards.scene.toml")).unwrap();

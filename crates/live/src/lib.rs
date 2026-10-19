@@ -1,10 +1,12 @@
 pub mod canopy;
+pub mod capture;
 pub mod clusters;
 pub mod content_atlas;
 mod coverage;
 pub mod crisp;
 pub mod deform;
 pub mod demand;
+mod dither;
 pub mod effects;
 pub mod flat;
 pub mod frame;

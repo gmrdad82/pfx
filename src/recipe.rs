@@ -20,6 +20,7 @@ mod key;
 mod library;
 mod library_add;
 mod library_bake;
+mod lines;
 mod new;
 mod print;
 mod process;
@@ -34,6 +35,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 
+use clap::builder::TypedValueParser;
 use clap::{Parser, Subcommand};
 use pfx_build::Registry;
 use pfx_recipe::{Camera, Error, Pick, Problem, Trace, apply_set, apply_variant, load, validate};
@@ -66,7 +68,7 @@ pub const MOVED: &[&str] = &[
     "gui",
 ];
 
-pub const SCENE: &[&str] = &["list", "save", "print", "write", "fold"];
+pub const SCENE: &[&str] = &["list", "save", "print", "write", "fold", "compact"];
 
 #[derive(Parser)]
 #[command(
@@ -195,6 +197,8 @@ enum SceneVerb {
         about = "List the scene edits made in a .pitofx, fold them into the recipe or keep them"
     )]
     Fold(document::FoldArgs),
+    #[command(about = "Rewrite a .pitofx without the dead bytes its in-place edits left behind")]
+    Compact(document::CompactArgs),
 }
 
 fn has(args: &[String], flag: &str) -> bool {
@@ -287,6 +291,45 @@ impl Picks {
     }
 }
 
+#[derive(clap::Args, Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Picture {
+    #[arg(
+        long,
+        value_name = "png|png16",
+        hide_possible_values = true,
+        value_parser = clap::builder::PossibleValuesParser::new(["png", "png16"]).map(|v| v == "png16"),
+        help = "png: 8 bits a channel, dithered [default]; png16: 16 bits a channel from the float frame, not dithered"
+    )]
+    pub(super) format: Option<bool>,
+    #[arg(
+        long,
+        value_name = "on|off",
+        action = clap::ArgAction::Set,
+        hide_possible_values = true,
+        value_parser = clap::builder::PossibleValuesParser::new(["off", "on"]).map(|v| v == "on"),
+        help = "Dither the 8-bit PNG against banding, the same pattern every frame [default: on]"
+    )]
+    pub(super) dither: Option<bool>,
+}
+
+impl Picture {
+    pub(super) fn wide(&self) -> bool {
+        self.format == Some(true)
+    }
+
+    pub(super) fn dither(&self, seed: u64) -> Option<pfx_post::quantise::Dither> {
+        (!self.wide() && self.dither != Some(false))
+            .then(|| pfx_post::quantise::Dither::seeded(seed))
+    }
+
+    pub(super) fn output(&self, seed: u64) -> pfx_recipe_scene::Output {
+        pfx_recipe_scene::Output {
+            wide: self.wide(),
+            dither: self.dither(seed),
+        }
+    }
+}
+
 fn pair(text: &str) -> Result<String, String> {
     match text.split_once('=') {
         Some((key, _)) if !key.trim().is_empty() => Ok(text.to_string()),
@@ -295,6 +338,7 @@ fn pair(text: &str) -> Result<String, String> {
 }
 
 fn read_failure(file: &str, e: &Error) -> String {
+    let file = pfx_recipe::files::shown(file);
     let line = e.line.map_or_else(String::new, |l| format!(":{l}"));
     if e.path.is_empty() || e.path == file {
         format!("{file}{line}: {}", e.text)
@@ -304,6 +348,7 @@ fn read_failure(file: &str, e: &Error) -> String {
 }
 
 fn print_problems(out: &mut dyn Write, file: &str, problems: &[Problem]) {
+    let file = pfx_recipe::files::shown(file);
     for p in problems {
         let _ = writeln!(
             out,
@@ -375,7 +420,7 @@ pub fn main_with(args: &[String], registry: &Registry) -> ExitCode {
     if code != ExitCode::SUCCESS {
         return code;
     }
-    match opened.map(|opened| opened.finish(registry)) {
+    match opened.map(document::Drafted::finish) {
         Some(Err(e)) => refuse("document", &e),
         _ => code,
     }
@@ -415,6 +460,7 @@ fn run_verb(verb: Verb, rest: &[String], registry: &Registry) -> ExitCode {
             SceneVerb::Print(parsed) => print::print(&parsed),
             SceneVerb::Write(parsed) => print::write(&parsed, registry),
             SceneVerb::Fold(parsed) => document::fold(&parsed, registry),
+            SceneVerb::Compact(parsed) => document::compact(&parsed),
         },
     }
 }

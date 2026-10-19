@@ -2045,7 +2045,12 @@ mod tests {
     }
 
     fn fixtures() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/recipes")
+        std::path::absolute(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/recipes"))
+            .unwrap()
+    }
+
+    fn slashed(text: &str) -> String {
+        text.replace('\\', "/")
     }
 
     fn opts_of(args: &[&str]) -> Opts {
@@ -2113,8 +2118,11 @@ mod tests {
             "presets/sample.toml",
             "icons/sample/shapes.toml",
         ] {
-            let file = fixtures().join(rel).display().to_string();
-            assert!(paths.contains(&file.as_str()), "{rel} in {paths:?}");
+            let file = slashed(&fixtures().join(rel).display().to_string());
+            assert!(
+                paths.iter().any(|path| slashed(path) == file),
+                "{rel} in {paths:?}"
+            );
         }
         assert_eq!(scene.recipes.len(), 3);
         let record = &assets_record(&scene)[0];
@@ -2135,19 +2143,22 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(
-            error,
-            format!(
+            slashed(&error),
+            slashed(&format!(
                 "no recipe at {}",
                 fixtures().join("shots/nobody.toml").display()
-            )
+            ))
         );
     }
 
     #[test]
     fn a_shot_across_products_reads_each_from_the_callers_own_folder_in_its_order() {
-        let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tmp")
-            .join(format!("across-{}", std::process::id()));
+        let base = std::path::absolute(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tmp")
+                .join(format!("across-{}", std::process::id())),
+        )
+        .unwrap();
         let own = base.join("own");
         for product in ["sample", "other", "third"] {
             std::fs::create_dir_all(own.join("presets")).unwrap();
@@ -2193,7 +2204,7 @@ use = "icon:*"
         assert!(scene.recipes.iter().all(|r| {
             r["file"]
                 .as_str()
-                .is_some_and(|file| file.starts_with(own.to_str().unwrap()))
+                .is_some_and(|file| slashed(file).starts_with(&slashed(own.to_str().unwrap())))
         }));
         std::fs::write(
             own.join("shots/sample.toml"),
@@ -2206,7 +2217,9 @@ use = "icon:*"
 
     #[test]
     fn a_master_comes_from_the_marks_folder_and_a_missing_one_names_the_path() {
-        let marks = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/marks");
+        let marks =
+            std::path::absolute(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/marks"))
+                .unwrap();
         let root = fixtures().display().to_string();
         let folder = marks.display().to_string();
         let cli = Cli::try_parse_from([
@@ -2248,8 +2261,9 @@ use = "icon:*"
         .err()
         .unwrap();
         assert!(
-            missing.contains(&marks.join("wordmarks/absent.svg").display().to_string())
-                && missing.contains("--assets")
+            slashed(&missing).contains(&slashed(
+                &marks.join("wordmarks/absent.svg").display().to_string()
+            )) && missing.contains("--assets")
                 && missing.contains("PITO_ASSETS")
                 && missing.contains(MARKS),
             "{missing}"

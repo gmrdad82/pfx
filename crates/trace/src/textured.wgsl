@@ -3,7 +3,7 @@ var<private> traced_direction: vec3f = vec3f(1.0, 0.0, 1.0);
 fn traced_map(slot: f32, uv: vec2f) -> vec4f {
     let info = content_info[u32(round(slot))];
     if (info.width == 0u || info.height == 0u) { return vec4f(1.0); }
-    return texels_at(info.offset, info.width, info.height, fract(uv));
+    return image_at(info, fract(uv));
 }
 fn traced_bary(i: u32, p: vec3f) -> vec2f {
     let tri = triangles[i];
@@ -22,9 +22,9 @@ fn traced_bary(i: u32, p: vec3f) -> vec2f {
 fn traced_uv1(hit: Hit, p: vec3f) -> vec2f {
     let first = bitcast<u32>(effects().extension.w);
     if (first == 0u || hit.shape != 0u) { return hit.uv; }
-    let w = traced_bary(hit.surface, p);
-    let r0 = content_texels[first - 1u + hit.surface * 2u];
-    let r1 = content_texels[first - 1u + hit.surface * 2u + 1u];
+    let w = traced_bary(hit.surface, hit_ray(hit.record, p, 1.0));
+    let r0 = content_row(first - 1u + hit.surface * 2u);
+    let r1 = content_row(first - 1u + hit.surface * 2u + 1u);
     return r0.xy * (1.0 - w.x - w.y) + r0.zw * w.x + r1.xy * w.y;
 }
 fn traced_normal(sample: vec4f, scale: f32) -> vec3f {
@@ -73,12 +73,16 @@ fn traced_maps(s_in: Shaded, n_in: vec3f, m: MaterialMaps, hit: Hit, p: vec3f) -
     }
     return DetailResult(s, n);
 }
+fn traced_forward(s: InstanceSurface, v: vec3f) -> vec3f {
+    return vec3f(dot(s.forward0.xyz, v), dot(s.forward1.xyz, v), dot(s.forward2.xyz, v));
+}
 fn traced_curvature(hit: Hit) -> f32 {
     if (hit.shape != 0u) { return 0.0; }
     let tri = triangles[hit.surface];
-    let ab = length(tri.nb.xyz - tri.na.xyz) / max(length(tri.b.xyz - tri.a.xyz), 1e-9);
-    let ac = length(tri.nc.xyz - tri.na.xyz) / max(length(tri.c.xyz - tri.a.xyz), 1e-9);
-    let bc = length(tri.nc.xyz - tri.nb.xyz) / max(length(tri.c.xyz - tri.b.xyz), 1e-9);
+    let s = instance_surfaces[hit.record];
+    let ab = length(tri.nb.xyz - tri.na.xyz) / max(length(traced_forward(s, tri.b.xyz - tri.a.xyz)), 1e-9);
+    let ac = length(tri.nc.xyz - tri.na.xyz) / max(length(traced_forward(s, tri.c.xyz - tri.a.xyz)), 1e-9);
+    let bc = length(tri.nc.xyz - tri.nb.xyz) / max(length(traced_forward(s, tri.c.xyz - tri.b.xyz)), 1e-9);
     return (ab + ac + bc) / 3.0;
 }
 fn lobes_traced(m: MaterialLobes, transform: mat3x3f, hit: Hit, n: vec3f) {

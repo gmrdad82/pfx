@@ -87,6 +87,7 @@ fn render_with(
     let gpu = pollster::block_on(Gpu::headless()).unwrap();
     let output = output(&gpu);
     let mut renderer = Renderer::new(gpu, WIDTH, HEIGHT).unwrap();
+    renderer.set_scene_reflections(None).unwrap();
     renderer.set_exposure(Exposure::Fixed(1.0)).unwrap();
     let mut staged = renderer.stage(scene).unwrap();
     renderer.set_finish(Chain::new());

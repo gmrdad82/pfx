@@ -307,15 +307,21 @@ mod tests {
     use super::*;
 
     fn fixtures() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/recipes")
+        absolute(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/recipes"))
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tmp")
-            .join(format!("{name}-{}", std::process::id()));
+        let dir = absolute(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tmp")
+                .join(format!("{name}-{}", std::process::id())),
+        );
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn slashed(text: &str) -> String {
+        text.replace('\\', "/")
     }
 
     fn named() -> Recipes {
@@ -384,11 +390,11 @@ mod tests {
         assert_eq!(preset.record["sha256"], json!(preset.sha256()));
         let missing = recipes.read("presets/other.toml").unwrap_err();
         assert_eq!(
-            missing,
-            format!(
+            slashed(&missing),
+            slashed(&format!(
                 "no recipe at {}",
                 fixtures().join("presets/other.toml").display()
-            )
+            ))
         );
         assert_eq!(recipes.presets(), ["sample"]);
         assert_eq!(recipes.books(), ["sample"]);
@@ -423,11 +429,11 @@ mod tests {
         assert!(recipes.icon_products().is_empty());
         assert_eq!(recipes.universe("estate"), ["estate"]);
         assert!(
-            recipes.read("presets/other.toml").unwrap_err().contains(
+            slashed(&recipes.read("presets/other.toml").unwrap_err()).contains(&slashed(
                 &top.join("render/assets/presets/other.toml")
                     .display()
                     .to_string()
-            )
+            ))
         );
         let nowhere = Recipes::from_flags(&[], None, || None).unwrap();
         assert!(nowhere.presets().is_empty());

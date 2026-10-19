@@ -15,6 +15,7 @@ use pfx_live::flat::{
 use pfx_live::renderer::Renderer;
 use pfx_live::text::{GlyphPages, RichQuad, page_quads};
 use pfx_live::upscale::{self, Upscale};
+use pfx_post::quantise::{self, Dither};
 use pfx_text::{Anchor, Face, Placement, Representation, Span, TextEngine};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -75,6 +76,7 @@ pub struct Painter {
     size: [u32; 2],
     tick: u32,
     seed: u32,
+    dither: Option<quantise::Tile>,
 }
 
 struct Run {
@@ -339,36 +341,28 @@ pub fn ticks() -> Vec<IconShape> {
         .collect()
 }
 
-fn half(bits: u16) -> f32 {
-    let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
-    let exp = i32::from((bits >> 10) & 0x1f);
-    let mant = f32::from(bits & 0x3ff);
-    match exp {
-        0 => sign * mant * 2f32.powi(-24),
-        31 => sign * f32::INFINITY,
-        _ => sign * (1.0 + mant / 1024.0) * 2f32.powi(exp - 15),
-    }
+fn table() -> &'static [f32] {
+    static TABLE: OnceLock<Vec<f32>> = OnceLock::new();
+    TABLE.get_or_init(|| (0..=u16::MAX).map(quantise::half).collect())
 }
 
-fn table() -> &'static [u8] {
-    static TABLE: OnceLock<Vec<u8>> = OnceLock::new();
-    TABLE.get_or_init(|| {
-        (0..=u16::MAX)
-            .map(|h| {
-                let v = half(h);
-                if v.is_nan() {
-                    0
-                } else {
-                    (v.clamp(0.0, 1.0) * 255.0).round() as u8
-                }
-            })
-            .collect()
-    })
-}
-
-fn bytes(halves: &[u16]) -> Vec<u8> {
+fn bytes(halves: &[u16], width: u32, dither: Option<&quantise::Tile>) -> Vec<u8> {
     let table = table();
-    halves.iter().map(|&h| table[usize::from(h)]).collect()
+    let width = width.max(1);
+    let mut out = Vec::with_capacity(halves.len());
+    for (at, pixel) in halves.chunks_exact(4).enumerate() {
+        let [r, g, b, a] = [0, 1, 2, 3].map(|k| table[usize::from(pixel[k])]);
+        match dither {
+            Some(tile) => {
+                let at = at as u32;
+                let offset = tile.at(at % width, at / width);
+                out.extend([r, g, b].map(|v| quantise::dithered(v, offset)));
+            }
+            None => out.extend([r, g, b].map(quantise::code)),
+        }
+        out.push(quantise::code(a));
+    }
+    out
 }
 
 pub fn cropped(picture: &Picture, crop: Option<[f32; 4]>) -> Result<([u32; 2], Vec<u8>), String> {
@@ -444,7 +438,12 @@ impl Painter {
             size,
             tick,
             seed,
+            dither: Some(Dither::seeded(u64::from(seed)).tile()),
         })
+    }
+
+    pub fn set_dither(&mut self, dither: Option<Dither>) {
+        self.dither = dither.map(|d| d.tile());
     }
 
     fn sprite(
@@ -728,6 +727,7 @@ impl Painter {
     ) -> Result<Vec<u8>, String> {
         self.picture(frame, picture, fit, backdrop)?;
         self.overlay(frame, overlay)?;
-        Ok(bytes(&self.gpu.readback_rgba16(&self.target)?))
+        let halves = self.gpu.readback_rgba16(&self.target)?;
+        Ok(bytes(&halves, self.size[0], self.dither.as_ref()))
     }
 }

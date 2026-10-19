@@ -8,7 +8,7 @@ pub fn parent(stat: &str) -> Option<u32> {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::{Process, below, terminate};
+pub use linux::{Process, below};
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -27,14 +27,6 @@ mod linux {
                     std::ptr::null::<libc::siginfo_t>(),
                     0u32,
                 );
-            }
-        }
-    }
-
-    pub fn terminate(child: &mut std::process::Child) {
-        if let Ok(pid) = libc::pid_t::try_from(child.id()) {
-            unsafe {
-                libc::kill(pid, libc::SIGTERM);
             }
         }
     }
@@ -79,7 +71,16 @@ pub fn below(_root: u32) -> Vec<Process> {
     Vec::new()
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(unix)]
+pub fn terminate(child: &mut std::process::Child) {
+    if let Ok(pid) = libc::pid_t::try_from(child.id()) {
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+}
+
+#[cfg(not(unix))]
 pub fn terminate(child: &mut std::process::Child) {
     let _ = child.kill();
 }
@@ -87,20 +88,20 @@ pub fn terminate(child: &mut std::process::Child) {
 use std::sync::atomic::{AtomicI32, Ordering};
 
 static STOP: AtomicI32 = AtomicI32::new(0);
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 static QUIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 static CHILDREN: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
 
 pub struct Tracked {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     pid: i32,
 }
 
 impl Drop for Tracked {
     fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(unix)]
         {
             let mut kids = CHILDREN.lock().unwrap_or_else(|poison| poison.into_inner());
             if let Some(at) = kids.iter().position(|pid| *pid == self.pid) {
@@ -111,7 +112,7 @@ impl Drop for Tracked {
 }
 
 pub fn track(child: &std::process::Child) -> Tracked {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         let pid = rustix::process::Pid::from_child(child).as_raw_pid();
         CHILDREN
@@ -120,7 +121,7 @@ pub fn track(child: &std::process::Child) -> Tracked {
             .push(pid);
         Tracked { pid }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
         let _ = child;
         Tracked {}
@@ -133,7 +134,7 @@ pub fn stopped() -> Option<i32> {
 }
 
 pub fn stop_like(signal: i32) -> ! {
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         if QUIT.swap(true, Ordering::SeqCst) {
             loop {
@@ -143,16 +144,16 @@ pub fn stop_like(signal: i32) -> ! {
         let _ = signal_hook::low_level::emulate_default_handler(signal);
         signal_hook::low_level::exit(128 + signal);
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     std::process::exit(128 + signal);
 }
 
 pub fn install() -> Result<(), String> {
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(unix))]
     {
-        return Ok(());
+        Ok(())
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     {
         static ONCE: std::sync::Once = std::sync::Once::new();
         let mut result: Result<(), String> = Ok(());
@@ -163,7 +164,7 @@ pub fn install() -> Result<(), String> {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn arm() -> Result<(), String> {
     let mut signals = signal_hook::iterator::Signals::new([
         signal_hook::consts::SIGTERM,
@@ -184,7 +185,7 @@ fn arm() -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 fn pass_term() {
     let pids = CHILDREN
         .lock()
@@ -249,7 +250,7 @@ mod tests {
         assert_eq!(status.code(), Some(128 + 15));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[test]
     fn a_child_is_asked_to_end_with_term() {
         use std::os::unix::process::ExitStatusExt;
@@ -261,7 +262,7 @@ mod tests {
         assert_eq!(child.wait().unwrap().signal(), Some(libc::SIGTERM));
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[test]
     fn a_tracked_child_is_asked_to_end() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

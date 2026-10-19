@@ -66,9 +66,10 @@ fn cell(index: usize) -> Rect {
 }
 
 pub fn ui(shell: &mut Shell, fixture: Fixture, ui: &mut Ui) {
+    let palette = Palette::of(ui.ctx());
     let ctx = &ui.ctx().clone();
     CentralPanel::default()
-        .frame(Frame::NONE.fill(BG_BASE))
+        .frame(Frame::NONE.fill(palette.bg_base))
         .show(ui, |ui| {
             let painter = ui.painter();
             painter.text(
@@ -76,7 +77,7 @@ pub fn ui(shell: &mut Shell, fixture: Fixture, ui: &mut Ui) {
                 Align2::LEFT_TOP,
                 fixture.name(),
                 Theme::of(ctx).font(SIZE_CODE),
-                TEXT_DIM,
+                palette.text_dim,
             );
             if fixture == Fixture::Tabs {
                 painter.text(
@@ -84,7 +85,7 @@ pub fn ui(shell: &mut Shell, fixture: Fixture, ui: &mut Ui) {
                     Align2::LEFT_TOP,
                     "Scene rest · Cameras hover · Lights active",
                     Theme::of(ctx).font(SIZE_CODE),
-                    TEXT_MUTED,
+                    palette.text_muted,
                 );
                 let rect = Rect::from_min_size(Pos2::new(20.0, ROW - 12.0), Vec2::new(560.0, 24.0));
                 let mut child = ui.new_child(
@@ -102,7 +103,7 @@ pub fn ui(shell: &mut Shell, fixture: Fixture, ui: &mut Ui) {
                     Align2::CENTER_TOP,
                     state,
                     Theme::of(ctx).font(SIZE_CODE),
-                    TEXT_MUTED,
+                    palette.text_muted,
                 );
                 let active = shell.chosen == Some(index);
                 let response = match fixture {

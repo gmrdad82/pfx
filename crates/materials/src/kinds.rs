@@ -250,7 +250,25 @@ impl Grime {
             roughness: [p[8], p[9]],
         }
     }
+
+    pub fn faded_roughness(self) -> f32 {
+        let sum: f32 = WEAR_QUANTILES
+            .iter()
+            .map(|&wear| {
+                let factor =
+                    (self.roughness[0] + (self.roughness[1] - self.roughness[0]) * wear).max(1e-4);
+                1.0 / (factor * factor)
+            })
+            .sum();
+        (sum / WEAR_QUANTILES.len() as f32).sqrt().recip()
+    }
 }
+
+pub const WEAR_QUANTILES: [f32; 32] = [
+    0.0, 0.0, 0.0, 0.0, 0.0, 0.0047, 0.0180, 0.0371, 0.0603, 0.0869, 0.1155, 0.1459, 0.1784,
+    0.2125, 0.2483, 0.2857, 0.3249, 0.3639, 0.4048, 0.4464, 0.4891, 0.5334, 0.5792, 0.6260, 0.6739,
+    0.7232, 0.7750, 0.8274, 0.8814, 0.9362, 0.9838, 1.0,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct Scratch {
@@ -433,6 +451,26 @@ impl Track {
             tint: p[8],
             polish: p[9],
         }
+    }
+}
+
+pub fn sample_params(kind: NoiseKind) -> Option<[f32; PARAMS]> {
+    match kind {
+        NoiseKind::Fibre => Some(Fibre::SAMPLE.params()),
+        NoiseKind::Crinkle => Some(Crinkle::SAMPLE.params()),
+        NoiseKind::PlankWood => Some(PlankWood::SAMPLE.params()),
+        NoiseKind::WallMottle => Some(WallMottle::SAMPLE.params()),
+        NoiseKind::Grime => Some(Grime::SAMPLE.params()),
+        NoiseKind::Scratch => Some(Scratch::SAMPLE.params()),
+        NoiseKind::CoatWobble => Some(CoatWobble::SAMPLE.params()),
+        NoiseKind::Crack => Some(Crack::SAMPLE.params()),
+        NoiseKind::Track => Some(Track::SAMPLE.params()),
+        NoiseKind::None
+        | NoiseKind::Leaf
+        | NoiseKind::Bark
+        | NoiseKind::Flow
+        | NoiseKind::Value
+        | NoiseKind::Fbm => None,
     }
 }
 

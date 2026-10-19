@@ -59,12 +59,12 @@ fn flake_coat(s: Shaded, wo: vec3f, wi: vec3f) -> vec3f {
     }
     let h = normalize(wo + wi);
     let coat_a = alpha_rough(s.clearcoat_roughness);
-    let coat_f = schlick(vec3f(0.04), max(dot(wo, h), 0.0), 5.0);
+    let coat_f = schlick(vec3f(0.04), max(dot(wo, h), 0.0), fresnel_exponent(s));
     return ggx_spec(wo.z, wi.z, max(h.z, 0.0), coat_a * coat_a, coat_f) * coat;
 }
 
 fn flake_under_coat(s: Shaded, cos_view: f32) -> f32 {
-    return 1.0 - clamp(s.clearcoat, 0.0, 1.0) * schlick(vec3f(0.04), clamp(cos_view, 0.0, 1.0), 5.0).r;
+    return 1.0 - clamp(s.clearcoat, 0.0, 1.0) * schlick(vec3f(0.04), clamp(cos_view, 0.0, 1.0), fresnel_exponent(s)).r;
 }
 
 fn flake_facet(s: Shaded, flake: vec3f) -> Shaded {

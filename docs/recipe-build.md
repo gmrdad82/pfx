@@ -15,7 +15,7 @@ bake = "assets/bake.toml"
 scene = "scene/desk.scene.toml"
 ```
 
-- `glb`: the meshes, their materials by name, the node tree. Without it the build writes `<name>.glb`.
+- `glb`: the meshes, their materials by name, the node tree. Without it the build writes `<name>.glb`. A part repeated across the scene is written once: a placed part that is an affine copy of an earlier one (the same triangles, UVs and material slots, every vertex within 1e-5 of its size plus 1e-6 of its distance from the origin once carried by one transform, every normal within 1e-4) becomes a node with that transform on the earlier part's glTF mesh, and parts whose meshes are equal (a scatter's, a library object's) share one mesh too; images are embedded once by their bytes. A file material whose name an earlier object already uses for a different material is renamed `<object>.<name>` after the first object that brings it, and every later object bringing the same material takes that name, so the copies of one model keep one material and share their mesh. A loaded scene keeps one geometry for each shared glTF mesh, and the tracer one bottom level.
 - `sidecar` with `sidecar_dialect`: the cameras, sun, sky, look and movers as JSON. `facts` is pfx's own dialect; an [app's build binary](recipe-format.md#generators) can register its own.
 - `bake`: a `pfx bake` recipe for the scene, with the same sky, sun and files.
 - `scene`: the engine's runtime scene file, which the window and pfx open.
@@ -72,7 +72,7 @@ The value takes the kind of the one it replaces. A key the recipe does not carry
 
 ## Edit the recipe from the command line
 
-`add`, `remove`, `duplicate` and `list` change and read the recipe's entries inside its `.pitofx`: objects, cameras, lights, routes, stages, particles, follows, uses, movers and markers. They write the recipe the way the window does, keeping its comments, then check it again and write the `.pitofx` with a fresh build; a write that brings in a problem is refused in one line, exit 1, and the `.pitofx` is left as it was.
+`add`, `remove`, `duplicate` and `list` change and read the recipe's entries inside its `.pitofx`: objects, cameras, lights, routes, stages, particles, follows, uses, movers and markers. They write the recipe the way the window does, keeping its comments, then check it again and write the recipe entry back into the `.pitofx` in place (the build inside is redone by the next `pfx build` or save); a write that brings in a problem is refused in one line, exit 1, and the `.pitofx` is left as it was.
 
 ```
 $ pfx add desk.pitofx object lamp2 kind=sphere radius=0.1 at='[0,2,0]'

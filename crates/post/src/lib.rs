@@ -1,5 +1,6 @@
 pub mod bloom;
 pub mod chain;
+pub mod chromatic;
 pub mod color;
 pub mod comic;
 pub mod cube;
@@ -15,6 +16,7 @@ pub mod look;
 pub mod motion_blur;
 pub mod parse;
 pub mod preset;
+pub mod quantise;
 pub mod tape;
 pub mod tone;
 pub mod view;
@@ -29,6 +31,7 @@ mod tests;
 
 pub use bloom::{Bloom, BloomKind};
 pub use chain::{Aux, Buffers, Chain, GpuDispatch, Pass, Uniforms};
+pub use chromatic::Chromatic;
 pub use comic::ModernComic;
 pub use cube::CubeError;
 pub use flare::Flare;

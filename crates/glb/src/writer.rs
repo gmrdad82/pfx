@@ -253,8 +253,11 @@ impl Builder<'_> {
     fn transform_others(&mut self, map: &Map) -> serde_json::Map<String, serde_json::Value> {
         let mut others = serde_json::Map::new();
         if let Some(t) = self.transform(map)
-            && let Ok(value) = serde_json::to_value(t)
+            && let Ok(mut value) = serde_json::to_value(t)
         {
+            if let Some(fields) = value.as_object_mut() {
+                fields.retain(|_, v| !v.is_null());
+            }
             others.insert(TRANSFORM.into(), value);
         }
         others
@@ -262,11 +265,12 @@ impl Builder<'_> {
 
     fn info(&mut self, map: &Map) -> json::texture::Info {
         let index = self.texture(map);
-        let extensions = self
-            .transform(map)
-            .map(|t| json::extensions::texture::Info {
-                texture_transform: Some(t),
-                others: Default::default(),
+        let extensions = map
+            .transform
+            .is_some()
+            .then(|| json::extensions::texture::Info {
+                texture_transform: None,
+                others: self.transform_others(map),
             });
         json::texture::Info {
             index,
@@ -362,7 +366,7 @@ impl Builder<'_> {
             },
         };
         json::Material {
-            double_sided: true,
+            double_sided: look.double_sided.unwrap_or(true),
             name: Some(name.to_string()),
             alpha_mode: json::validation::Checked::Valid(alpha_mode),
             alpha_cutoff,
@@ -686,6 +690,21 @@ fn unit(normal: [f32; 3], positions: &[[f32; 3]], triangle: &[u32]) -> [f32; 3] 
     }
 }
 
+fn mesh_key(mesh: &Mesh) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut eat = |value: u32| {
+        hash = (hash ^ u64::from(value)).wrapping_mul(0x0000_0100_0000_01b3);
+    };
+    eat(mesh.positions.len() as u32);
+    for value in mesh.positions.iter().chain(&mesh.normals).flatten() {
+        eat(value.to_bits());
+    }
+    for &index in &mesh.indices {
+        eat(index);
+    }
+    hash
+}
+
 fn source(node: &Node) -> (&Mesh, Option<&Morph>) {
     match &node.targets {
         Some(targets) if !targets.morph.is_empty() => (&targets.base, Some(&targets.morph)),
@@ -849,6 +868,7 @@ pub fn write_tree(
 pub struct Content<'a> {
     pub looks: &'a Looks,
     pub lods: &'a [Lod],
+    pub shared: &'a [Option<usize>],
 }
 
 static NO_LOOKS: Looks = Looks::new();
@@ -858,6 +878,7 @@ impl Default for Content<'_> {
         Content {
             looks: &NO_LOOKS,
             lods: &[],
+            shared: &[],
         }
     }
 }
@@ -870,7 +891,10 @@ pub fn write_looks(
     order: Order,
     generator: &str,
 ) -> Result<Vec<u8>, Error> {
-    let content = Content { looks, lods: &[] };
+    let content = Content {
+        looks,
+        ..Content::default()
+    };
     write_animated(nodes, parents, extras, content, order, generator, None)
 }
 
@@ -1080,10 +1104,44 @@ pub fn write_animated(
     builder.root.asset.version = "2.0".to_string();
     builder.root.asset.generator = Some(generator.to_string());
     let mut scene_nodes = Vec::new();
+    let mut made: Vec<Option<Option<Index<json::Mesh>>>> = vec![None; nodes.len()];
+    let mut seen: BTreeMap<u64, Vec<usize>> = BTreeMap::new();
     for &(at, node, extras) in &sequence {
-        let (mesh, morph) = source(node);
-        let primitives = builder.primitives(mesh, morph, &PLAIN);
-        let mesh = builder.mesh(&node.name, primitives, morph);
+        let lead = content
+            .shared
+            .get(at)
+            .copied()
+            .flatten()
+            .filter(|&lead| lead < nodes.len() && lead != at && content.shared[lead].is_none());
+        let owner = match lead {
+            Some(lead) => lead,
+            None => {
+                let (mesh, morph) = source(node);
+                let key = morph.is_none().then(|| mesh_key(mesh));
+                key.and_then(|key| {
+                    seen.get(&key)?.iter().copied().find(|&other| {
+                        let (known, morph) = source(&nodes[other]);
+                        morph.is_none() && known == mesh
+                    })
+                })
+                .unwrap_or_else(|| {
+                    if let Some(key) = key {
+                        seen.entry(key).or_default().push(at);
+                    }
+                    at
+                })
+            }
+        };
+        let mesh = match made[owner] {
+            Some(mesh) => mesh,
+            None => {
+                let (mesh, morph) = source(&nodes[owner]);
+                let primitives = builder.primitives(mesh, morph, &PLAIN);
+                let mesh = builder.mesh(&nodes[owner].name, primitives, morph);
+                made[owner] = Some(mesh);
+                mesh
+            }
+        };
         let children = std::mem::take(&mut children[at]);
         let start = keyed
             .get(node.name.as_str())

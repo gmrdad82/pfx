@@ -7,8 +7,8 @@ use clap::builder::{PossibleValuesParser, TypedValueParser};
 use pfx_build::Registry;
 use pfx_recipe::Trace;
 use pfx_still::{
-    Crop, DRAFT, EQUIRECT_SIZE, Fault, Format, NOISE, Noise, Rendered, Request, SAMPLES, SIZE,
-    Step, View,
+    Crop, DRAFT, EQUIRECT_SIZE, Fault, Format, NOISE, Noise, Paced, Rendered, Request, SAMPLES,
+    SIZE, Step, View,
 };
 
 use super::{pair, refuse, seconds, size};
@@ -18,7 +18,7 @@ const JSON_EVERY: Duration = Duration::from_secs(1);
 const PLAIN_EVERY: Duration = Duration::from_secs(30);
 const DENOISE_APRON: u32 = 96;
 
-fn threshold(text: &str) -> Result<f32, String> {
+pub(super) fn threshold(text: &str) -> Result<f32, String> {
     match text.parse::<f32>() {
         Ok(value) if value.is_finite() && value >= 0.0 => Ok(value),
         _ => Err("is not a number of 0 or more".into()),
@@ -158,9 +158,11 @@ pub(super) struct Args {
         long,
         value_name = "file",
         value_parser = output,
-        help = "The picture to write: .png (8-bit, dithered), .exr or .hdr"
+        help = "The picture to write: .png (8-bit and dithered, or --format png16), .exr or .hdr"
     )]
     out: PathBuf,
+    #[command(flatten)]
+    picture: super::Picture,
     #[arg(
         long,
         value_name = "file",
@@ -268,6 +270,12 @@ impl Args {
 }
 
 fn precheck(args: &Args) -> Result<Trace, String> {
+    if args.picture != super::Picture::default() && !args.png() {
+        return Err(
+            "--format and --dither shape a .png --out; an .exr or .hdr keeps the float frame"
+                .into(),
+        );
+    }
     super::precheck_picked(
         &args.recipe,
         args.variant.as_deref(),
@@ -396,6 +404,22 @@ impl Watch {
                     ("mean_samples", rounded(rendered.mean_samples, 1)),
                     ("most_samples", rendered.most_samples.into()),
                     ("gpu_s", rounded(rendered.paced.gpu_ms / 1000.0, 1)),
+                    (
+                        "cpu_peak_gb",
+                        pfx_still::memory::peak_cpu()
+                            .map_or(serde_json::Value::Null, |b| rounded(gigabytes(b), 2)),
+                    ),
+                    (
+                        "gpu_gb",
+                        rendered
+                            .paced
+                            .gpu_resident
+                            .map_or(serde_json::Value::Null, |b| rounded(gigabytes(b), 2)),
+                    ),
+                    (
+                        "trace_gb",
+                        rounded(gigabytes(rendered.paced.trace_bytes), 2),
+                    ),
                 ],
             )
         })
@@ -488,14 +512,31 @@ fn traced(
         None => format!("{} samples", args.samples()),
     };
     let summary = format!(
-        "{}, {samples}, seed {}: {} submissions, the longest {:.2} ms, {:.0} ms on the GPU",
+        "{}, {samples}, seed {}: {} submissions, the longest {:.2} ms, {:.0} ms on the GPU; {}",
         args.framing(),
         rendered.seed,
         paced.submissions,
         paced.longest_ms,
-        paced.gpu_ms
+        paced.gpu_ms,
+        memory_line(&paced)
     );
     Ok((rendered, summary))
+}
+
+fn gigabytes(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+}
+
+pub(super) fn memory_line(paced: &Paced) -> String {
+    let known = |value: Option<u64>| {
+        value.map_or("unknown".to_string(), |b| format!("{:.2} GB", gigabytes(b)))
+    };
+    format!(
+        "peak memory {} on the CPU, {} on the GPU ({:.2} GB in the tracer's buffers)",
+        known(pfx_still::memory::peak_cpu()),
+        known(paced.gpu_resident),
+        gigabytes(paced.trace_bytes)
+    )
 }
 
 fn written(args: &Args, rendered: &Rendered) -> Result<(), Fault> {
@@ -505,8 +546,11 @@ fn written(args: &Args, rendered: &Rendered) -> Result<(), Fault> {
         if let Some(master) = &args.master {
             pfx_still::write_master(master, size, &pixels)?;
         }
-        if args.png() {
-            pfx_still::write_delivery(&args.out, size, args.origin(), &pixels)?;
+        if args.png() && args.picture.wide() {
+            pfx_still::write_master(&args.out, size, &pixels)?;
+        } else if args.png() {
+            let dither = args.picture.dither(u64::from(rendered.seed));
+            pfx_still::write_delivery(&args.out, size, args.origin(), dither, &pixels)?;
         }
     }
     if !args.png() {
@@ -619,6 +663,32 @@ mod tests {
     }
 
     #[test]
+    fn a_recipe_naming_an_old_manfred_generator_plans_through_the_built_in_registry() {
+        let dir = Path::new("tmp/render-tests");
+        std::fs::create_dir_all(dir).unwrap();
+        let file = dir.join("old-road.toml");
+        std::fs::write(
+            &file,
+            "recipe = 1\nname = \"street\"\n\n[[route]]\nname = \"main\"\npoints = [[0.0, 0.0, 0.0], [0.0, 0.0, 40.0]]\n\n[[object]]\nname = \"road\"\nkind = \"generator\"\ngenerator = \"manfred/road\"\nparams = { route = \"main\" }\n\n[[camera]]\nname = \"main\"\nposition = [0.0, 3.0, -6.0]\ntarget = [0.0, 0.0, 10.0]\nfov_y_deg = 40.0\n",
+        )
+        .unwrap();
+        let args = parse(&strings(&format!(
+            "{} --camera main --size 64x40 --out tmp/render-tests/old-road.png",
+            file.display()
+        )))
+        .unwrap();
+        precheck(&args).unwrap();
+        let (recipe, built) =
+            pfx_recipe_scene::load_at(&file, None, &[], &args.pick.pick(), &Registry::new(), None)
+                .unwrap_or_else(|e| panic!("{e}"));
+        let pfx_recipe::Kind::Generator { generator, .. } = &recipe.objects[0].kind else {
+            panic!("the road is a generator");
+        };
+        assert_eq!(generator, "pfx/road");
+        assert!(!built.parts.is_empty());
+    }
+
+    #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
             "table.toml --camera main --spp 64 --threshold 0.02 --min-samples 16 --seed 9 --size 320x200 --ortho --crop 10,20,30,40 --variant bare --set sky.intensity=0.4 --set object.a.params.b=/x/y --time 1.5 --denoise off --out tmp/a.exr --master tmp/a.master.png --progress json",
@@ -644,6 +714,7 @@ mod tests {
                 denoise: Some(false),
                 out: "tmp/a.exr".into(),
                 master: Some("tmp/a.master.png".into()),
+                picture: Default::default(),
                 progress: Progress::Json,
                 pick: Default::default(),
                 trace: Trace::default(),
@@ -1223,7 +1294,12 @@ mod tests {
         let fixed =
             pfx_still::finished(&rendered.film, (&rendered.finish, &rendered.overlay), false)
                 .unwrap();
-        let near = pfx_still::dithered(size, &fixed);
+        let near = pfx_still::dithered_at(
+            size,
+            [0, 0],
+            Some(pfx_post::quantise::Dither::seeded(7)),
+            &fixed,
+        );
         assert_eq!(rgba, near);
     }
 

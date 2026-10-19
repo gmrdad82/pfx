@@ -389,11 +389,14 @@ fn write_manifest(path: &Path, manifest: &Value) -> Result<(), String> {
 }
 
 fn leaf_name(root: &Path, folder: &Path) -> String {
-    folder
-        .strip_prefix(masters(root))
-        .unwrap_or(folder)
-        .to_string_lossy()
-        .into_owned()
+    slashed(folder.strip_prefix(masters(root)).unwrap_or(folder))
+}
+
+fn slashed(path: &Path) -> String {
+    path.components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 fn catalog_of(manifest: &Value) -> Result<Option<Catalog>, String> {
@@ -632,7 +635,7 @@ fn catalog_for(
             .as_str()
             .ok_or("archive: missing made")?
             .into(),
-        path: path.to_string_lossy().into_owned(),
+        path: slashed(path),
         files: entries,
     })
 }
@@ -640,15 +643,23 @@ fn catalog_for(
 fn lock_path() -> Result<PathBuf, String> {
     let runtime = match std::env::var_os("XDG_RUNTIME_DIR") {
         Some(dir) => PathBuf::from(dir),
-        None => {
-            use std::os::unix::fs::MetadataExt;
-            let uid = fs::metadata("/proc/self")
-                .map_err(|e| format!("archive: no XDG_RUNTIME_DIR and no /proc/self: {e}"))?
-                .uid();
-            PathBuf::from(format!("/run/user/{uid}"))
-        }
+        None => runtime_fallback()?,
     };
     Ok(runtime.join("pito-archive/catalog.lock"))
+}
+
+#[cfg(target_os = "linux")]
+fn runtime_fallback() -> Result<PathBuf, String> {
+    use std::os::unix::fs::MetadataExt;
+    let uid = fs::metadata("/proc/self")
+        .map_err(|e| format!("archive: no XDG_RUNTIME_DIR and no /proc/self: {e}"))?
+        .uid();
+    Ok(PathBuf::from(format!("/run/user/{uid}")))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn runtime_fallback() -> Result<PathBuf, String> {
+    Ok(std::env::temp_dir())
 }
 
 fn with_lock<T>(path: &Path, action: impl FnOnce() -> Result<T, Fail>) -> Result<T, Fail> {
@@ -1195,7 +1206,7 @@ fn filed(catalog: &mut Catalog, masters: &Path, manifest: &Path) {
     if let Some(tool) = leaf.components().next() {
         catalog.tool = tool.as_os_str().to_string_lossy().into_owned();
     }
-    catalog.path = leaf.to_string_lossy().into_owned();
+    catalog.path = slashed(leaf);
 }
 
 fn collect_catalogs(
@@ -1994,7 +2005,9 @@ mod tests {
         fs::write(broken.join("manifest.json"), b"{ not json").unwrap();
         let error = reindex_in(&fixture.root, &fixture.lock).unwrap_err();
         assert!(
-            error.contains("prec/beta/tour/broken/manifest.json"),
+            error
+                .replace('\\', "/")
+                .contains("prec/beta/tour/broken/manifest.json"),
             "{error}"
         );
         assert_eq!(
@@ -2007,7 +2020,10 @@ mod tests {
         )
         .unwrap();
         let error = reindex_in(&fixture.root, &fixture.lock).unwrap_err();
-        assert!(error.contains("broken/manifest.json"), "{error}");
+        assert!(
+            error.replace('\\', "/").contains("broken/manifest.json"),
+            "{error}"
+        );
     }
 
     #[test]

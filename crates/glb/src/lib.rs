@@ -235,6 +235,7 @@ pub struct Look {
     pub occlusion: Option<Map>,
     pub detail_normal: Option<Map>,
     pub alpha_cutoff: Option<f32>,
+    pub double_sided: Option<bool>,
 }
 
 impl Look {
@@ -257,6 +258,7 @@ impl Look {
             || self.sheen.is_some()
             || self.anisotropy.is_some()
             || self.coverage.is_some()
+            || self.double_sided == Some(false)
     }
 }
 

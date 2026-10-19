@@ -16,7 +16,7 @@ const SMOOTH: [u8; 3] = [255, 255, 255];
 
 #[derive(Clone, Debug)]
 pub(crate) struct Baked {
-    pub(crate) slot: usize,
+    pub(crate) material: String,
     pub(crate) look: Look,
 }
 
@@ -69,20 +69,22 @@ fn unit(normal: V3, positions: &[V3], triangle: &[u32]) -> V3 {
     normalize(cross(sub(b, a), sub(c, a)))
 }
 
-pub(crate) fn piece(mesh: &Mesh, slot: &Slot) -> Option<Mesh> {
+fn piece(mesh: &Mesh, slots: &[Slot]) -> Option<Mesh> {
     let vertices = mesh.positions.len();
     let uvs = mesh.uvs.as_ref().filter(|uvs| uvs.len() == vertices)?;
     if mesh.normals.len() != vertices {
         return None;
     }
-    let start = (slot.start as usize).min(mesh.indices.len());
-    let end = (start + slot.count as usize).min(mesh.indices.len());
     let mut remap = vec![u32::MAX; vertices];
     let mut out = Mesh {
         uvs: Some(Vec::new()),
         ..Mesh::default()
     };
-    for triangle in mesh.indices[start..end].chunks_exact(3) {
+    let ranges = slots.iter().map(|slot| {
+        let start = (slot.start as usize).min(mesh.indices.len());
+        start..(start + slot.count as usize).min(mesh.indices.len())
+    });
+    for triangle in ranges.flat_map(|range| mesh.indices[range].chunks_exact(3)) {
         if triangle.iter().any(|&i| i as usize >= vertices) {
             continue;
         }
@@ -307,8 +309,15 @@ pub(crate) fn bake(
             DMat4::IDENTITY
         };
         let mut list = Vec::new();
-        for (index, slot) in node.mesh.slots.iter().enumerate() {
-            let Some(value) = materials.get(&slot.material) else {
+        let mut shared: Vec<(&str, Vec<Slot>)> = Vec::new();
+        for slot in &node.mesh.slots {
+            match shared.iter_mut().find(|(name, _)| *name == slot.material) {
+                Some((_, slots)) => slots.push(slot.clone()),
+                None => shared.push((&slot.material, vec![slot.clone()])),
+            }
+        }
+        for (name, slots) in shared {
+            let Some(value) = materials.get(name) else {
                 continue;
             };
             let material = match serde_json::from_value::<Material>(value.clone()) {
@@ -316,7 +325,7 @@ pub(crate) fn bake(
                 Err(e) => {
                     notes.push(format!(
                         "object[{}].bake_layers: the material `{}` does not read as an engine material ({e}); its layers stay unbaked",
-                        object.name, slot.material
+                        object.name, name
                     ));
                     continue;
                 }
@@ -324,14 +333,21 @@ pub(crate) fn bake(
             if !layered(&material) {
                 continue;
             }
-            let Some(mesh) = piece(&node.mesh, slot) else {
+            let Some(mesh) = piece(&node.mesh, &slots) else {
+                notes.push(format!(
+                    "object[{}].bake_layers: the node `{}` has no normals or no triangles for the material `{name}`, so its layers stay unbaked",
+                    object.name, node.name
+                ));
                 continue;
             };
             let texels = texels(&mesh, matrix, &material, wanted.size)
                 .map_err(|text| fail(object, "bake_layers", format!("{}: {text}", node.name)))?;
-            let look = look(&material, &texels, wanted.size, looks.get(&slot.material))
+            let look = look(&material, &texels, wanted.size, looks.get(name))
                 .map_err(|text| fail(object, "bake_layers", text))?;
-            list.push(Baked { slot: index, look });
+            list.push(Baked {
+                material: name.to_string(),
+                look,
+            });
         }
         let any = baked_any.entry(part.object).or_default();
         *any |= !list.is_empty();
@@ -350,31 +366,30 @@ pub(crate) fn bake(
     Ok(out)
 }
 
+fn renamed(mesh: &mut Mesh, from: &str, to: &str) {
+    for slot in mesh.slots.iter_mut().filter(|slot| slot.material == from) {
+        slot.material = to.to_string();
+    }
+}
+
+fn retitle(node: &mut Node, from: &str, to: &str) {
+    renamed(&mut node.mesh, from, to);
+    if let Some(targets) = node.targets.as_mut() {
+        renamed(&mut targets.base, from, to);
+    }
+}
+
 pub(crate) fn dress(node: &mut Node, baked: &[Baked], looks: &mut Looks) {
     for item in baked {
-        let Some(slot) = node.mesh.slots.get_mut(item.slot) else {
-            continue;
-        };
-        let to = name(&slot.material, &node.name);
+        let to = name(&item.material, &node.name);
         looks.insert(to.clone(), item.look.clone());
-        slot.material = to;
+        retitle(node, &item.material, &to);
     }
 }
 
 pub(crate) fn rename(level: &mut Node, base: &Node, baked: &[Baked]) {
     for item in baked {
-        let Some(slot) = base.mesh.slots.get(item.slot) else {
-            continue;
-        };
-        let to = name(&slot.material, &base.name);
-        for own in level
-            .mesh
-            .slots
-            .iter_mut()
-            .filter(|own| own.material == slot.material)
-        {
-            own.material = to.clone();
-        }
+        retitle(level, &item.material, &name(&item.material, &base.name));
     }
 }
 

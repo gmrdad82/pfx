@@ -91,13 +91,13 @@ A call traps, too, on a key pfx does not name, on an object number `find` never 
 **When the module fails** (a trap, the fuel spent, a cap passed), play stops as F8 would, with one line in the log, and the editor keeps running:
 
 ```
-play: the game failed: mod `marker` ran out of fuel after 10000000 fuel in function 12 at offset 0x5d; it is stopped and disabled for this run; play stopped
+play: the game failed: mod `marker` ran out of fuel after <fuel> fuel in function <n> at offset <offset>; it is stopped and disabled for this run; play stopped
 ```
 
 **When it does not load** (a missing file, bytes that are not a module, an import outside the world, a missing `start` or `tick`), Play does not start, and the log says why:
 
 ```
-play: module `marker` read the component at modules/marker.wasm: No such file or directory; it stays off until its file loads; play did not start
+play: module `marker` cannot be read: <path>: No such file or directory (os error 2); it stays off until its file loads; play did not start
 ```
 
 ## What Stop restores

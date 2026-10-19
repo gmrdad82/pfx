@@ -483,3 +483,71 @@ fn the_pass_cost_at_2160x3840() {
         assert!(!blur[run].is_empty(), "the pass was timed");
     }
 }
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu --class bench"]
+fn the_stylised_shutter_cost_at_1080p_and_4k() {
+    const SHUTTERS: [f32; 3] = [1.0, 2.0, 4.0];
+    let scene = scene(
+        "stylised-cost",
+        "\n[motion_blur]\nshutter = 1.0\nmax_px = 64.0\nsamples = 8\n",
+    );
+    for (width, height) in [(1920, 1080), (3840, 2160)] {
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let target = output(&gpu, width, height);
+        let mut turns = pfx_gpu::pace::Turns::default();
+        let mut renderer = turns.cpu(|| Renderer::new(gpu, width, height).unwrap());
+        renderer.set_exposure(Exposure::Fixed(1.0)).unwrap();
+        let mut staged = turns.cpu(|| renderer.stage(&scene).unwrap());
+        renderer.wait_sky().unwrap();
+        let aspect = width as f32 / height as f32;
+        let mut blur = [Vec::new(), Vec::new(), Vec::new()];
+        let mut frame = [Vec::new(), Vec::new(), Vec::new()];
+        for _round in 0..4 {
+            for (run, shutter) in SHUTTERS.iter().enumerate() {
+                renderer.set_motion_blur(Some(pfx_post::MotionBlur {
+                    shutter: *shutter,
+                    max_px: 64.0,
+                    samples: 8,
+                }));
+                for number in 0..30u32 {
+                    turns.poll();
+                    let finish = staged.finish();
+                    let drawn = staged.frame_at(aspect, (number % 24) as f32 / FPS, 1.0 / FPS, 3);
+                    let timings = renderer
+                        .render(
+                            &drawn.scene,
+                            &drawn.text,
+                            &drawn.effects,
+                            finish,
+                            &target.view,
+                        )
+                        .unwrap();
+                    turns.add(pfx_gpu::pace::gpu_ms(&timings).unwrap_or(f64::NAN));
+                    if number >= 10 && !timings.is_empty() {
+                        frame[run].push(timings.iter().map(|t| t.milliseconds).sum::<f64>());
+                        blur[run].extend(
+                            timings
+                                .iter()
+                                .filter(|t| t.label == "motion blur")
+                                .map(|t| t.milliseconds),
+                        );
+                    }
+                }
+            }
+        }
+        turns.turn();
+        let median = |values: &mut Vec<f64>| {
+            values.sort_by(f64::total_cmp);
+            values.get(values.len() / 2).copied().unwrap_or(f64::NAN)
+        };
+        for (run, shutter) in SHUTTERS.iter().enumerate() {
+            let (blur_ms, frame_ms) = (median(&mut blur[run]), median(&mut frame[run]));
+            println!(
+                "motion blur at {width}x{height}, shutter {shutter} (max_px 64, samples 8): {blur_ms:.3} ms of a {frame_ms:.3} ms frame over {} frames",
+                blur[run].len()
+            );
+            assert!(!blur[run].is_empty(), "the pass was timed");
+        }
+    }
+}

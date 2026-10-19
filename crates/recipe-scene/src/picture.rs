@@ -22,6 +22,27 @@ pub fn write_frame(path: &Path, size: [u32; 2], rgba: &[u8]) -> Result<(), Error
     encode(path, size, &rgb, png::ColorType::Rgb)
 }
 
+pub fn write_wide(path: &Path, size: [u32; 2], rgba: &[u8]) -> Result<(), Error> {
+    if rgba.len() != (size[0] as usize) * (size[1] as usize) * 8 {
+        return Err(Error(format!(
+            "{}: {} bytes do not make a {}x{} 16-bit RGBA image",
+            path.display(),
+            rgba.len(),
+            size[0],
+            size[1]
+        )));
+    }
+    let wide = png::BitDepth::Sixteen;
+    if !rgba.chunks_exact(8).all(|pixel| pixel[6..] == [u8::MAX; 2]) {
+        return encode_as(path, size, rgba, png::ColorType::Rgba, wide);
+    }
+    let rgb: Vec<u8> = rgba
+        .chunks_exact(8)
+        .flat_map(|pixel| pixel[..6].to_vec())
+        .collect();
+    encode_as(path, size, &rgb, png::ColorType::Rgb, wide)
+}
+
 fn fits(path: &Path, size: [u32; 2], rgba: &[u8]) -> Result<(), Error> {
     if rgba.len() == (size[0] as usize) * (size[1] as usize) * 4 {
         return Ok(());
@@ -36,6 +57,16 @@ fn fits(path: &Path, size: [u32; 2], rgba: &[u8]) -> Result<(), Error> {
 }
 
 fn encode(path: &Path, size: [u32; 2], data: &[u8], color: png::ColorType) -> Result<(), Error> {
+    encode_as(path, size, data, color, png::BitDepth::Eight)
+}
+
+fn encode_as(
+    path: &Path,
+    size: [u32; 2],
+    data: &[u8],
+    color: png::ColorType,
+    depth: png::BitDepth,
+) -> Result<(), Error> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| Error(format!("{}: {e}", parent.display())))?;
     }
@@ -43,7 +74,7 @@ fn encode(path: &Path, size: [u32; 2], data: &[u8], color: png::ColorType) -> Re
         std::fs::File::create(path).map_err(|e| Error(format!("{}: {e}", path.display())))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size[0], size[1]);
     encoder.set_color(color);
-    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_depth(depth);
     encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
     encoder.set_compression(png::Compression::Fast);
     let mut writer = encoder
@@ -89,6 +120,13 @@ fn eight_bit(color: png::ColorType, depth: png::BitDepth) -> bool {
 }
 
 pub fn read_png_size(path: &Path) -> Result<[u32; 2], Error> {
+    match read_png_shape(path)? {
+        (size, 8) => Ok(size),
+        _ => Err(Error(format!("{}: not 8-bit RGB or RGBA", path.display()))),
+    }
+}
+
+pub fn read_png_shape(path: &Path) -> Result<([u32; 2], u8), Error> {
     let failed = |e: &dyn std::fmt::Display| Error(format!("{}: {e}", path.display()));
     let mut file = std::fs::File::open(path).map_err(|e| failed(&e))?;
     let mut end = [0u8; 12];
@@ -103,10 +141,12 @@ pub fn read_png_size(path: &Path) -> Result<[u32; 2], Error> {
         .read_info()
         .map_err(|e| failed(&e))?;
     let info = reader.info();
-    if !eight_bit(info.color_type, info.bit_depth) {
-        return Err(failed(&"not 8-bit RGB or RGBA"));
+    let rgb = matches!(info.color_type, png::ColorType::Rgb | png::ColorType::Rgba);
+    match info.bit_depth {
+        png::BitDepth::Eight if rgb => Ok(([info.width, info.height], 8)),
+        png::BitDepth::Sixteen if rgb => Ok(([info.width, info.height], 16)),
+        _ => Err(failed(&"not 8- or 16-bit RGB or RGBA")),
     }
-    Ok([info.width, info.height])
 }
 
 pub fn psnr(a: &[u8], b: &[u8]) -> Result<f64, Error> {

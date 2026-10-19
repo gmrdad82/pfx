@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=pfx
+GenericName=Scene editor
+Comment=Edit pfx scenes and documents
+Exec=pfx gui %f
+TryExec=pfx
+Icon=pfx
+Terminal=false
+MimeType=application/x-pfx;
+Categories=Graphics;3DGraphics;
+Keywords=scene;editor;render;game;

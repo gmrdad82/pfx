@@ -229,7 +229,7 @@ A body, a character and a trigger take a layer by its name (`layer`), and a trig
 | `[[rig]]` | tables | none | camera rigs a game drives. |
 | `[[tiles]]` | tables | none | tile layers: grids of prefab placements. |
 | `[[particles]]` | tables | none | particle systems. |
-| `[sun]`, `[sky]`, `[haze]`, `[camera]`, `[finish]`, `[flare]`, `[motion_blur]`, `[trace]`, `[shadows]`, `[plates]`, `[physics]`, `[play]` | table | none | each held by one file of a scene and its includes at most. |
+| `[sun]`, `[sky]`, `[haze]`, `[camera]`, `[finish]`, `[flare]`, `[motion_blur]`, `[trace]`, `[shadows]`, `[live]`, `[plates]`, `[physics]`, `[play]` | table | none | each held by one file of a scene and its includes at most. |
 | `[authoring]` | table | none | the authoring tool's. |
 
 A glTF material resolves to the library entry of its name, else of its name before the first `.` (`.001` suffixes), else `fallback`.
@@ -834,7 +834,7 @@ The finish keys. A *colour* is `"#rrggbb"` (sRGB, read as linear) or `[r, g, b]`
 
 | key | type | notes |
 |---|---|---|
-| `aberration` | number | chromatic aberration. |
+| `aberration` | number | the red and blue channels pushed this many pixels apart, out from the frame's centre. |
 | `angle` | number | halftone screen angle, degrees. |
 | `black` | number | black level. |
 | `black_threshold` | number | modern comic: black threshold. |
@@ -848,6 +848,7 @@ The finish keys. A *colour* is `"#rrggbb"` (sRGB, read as linear) or `[r, g, b]`
 | `cel_spec_roughness` | number | cel shading. |
 | `cel_spec_threshold` | number | cel shading. |
 | `cel_threshold` | number | cel shading. |
+| `chromatic` | number or table | a lens's radial chromatic aberration: a number is its `amount`; the table below. |
 | `contrast` | number | contrast. |
 | `crease_angle` | number | outline crease angle, degrees. |
 | `crush` | number | noir: black crush. |
@@ -914,8 +915,9 @@ The finish keys' tables (each key optional unless said):
 
 | table | keys |
 |---|---|
+| `chromatic` | `amount` (0 to 0.25, default `0.02`); `falloff` (0 to 8, default `0`) |
 | `bloom` | `strength`, `threshold`, `knee`, `knee_width`, `soft`, `sigma`, `clamp`, `unit` (numbers); `radius` (whole number); `down` (whole number; `0` reads as `1`); `linear_taps` (bool); `radii`, `gains` (four numbers each); `kind` (`"box"`, `"rings"` or `"tent"`) |
-| `grain` | `strength`, `response` (numbers); `clamp` (bool) |
+| `grain` | `strength` or its other name `amount` (one of the two), `response` (numbers); `size` (pixels, above 0 up to 64, default `1`); `seed` (unsigned integer, default `0`); `clamp` (bool) |
 | `lut` | `size` (integer, 2 to 64, needed); `values` (`size³ · 3` numbers, red, green and blue per entry, needed) |
 | `outline` | `enabled`, `local_color` (bools); `thickness`, `alpha`, `crease_angle` (numbers); `color` (colour) |
 | `scratches` | `count` (unsigned integer); `strength` (number) |
@@ -925,6 +927,18 @@ The finish keys' tables (each key optional unless said):
 | `warmth` | `amount`, `shadow`, `highlight` (numbers); `low`, `high` (two numbers each); `kind` (`"linear"` or `"luma_curve"`) |
 
 A `tape` number is a strength ≥ 0, read up to 1.
+
+**Film grain** adds noise to every pixel, its spread set by `strength` (`amount`) and lowered in bright pixels by `response` (the noise times `1 − response × luma`). `size = 1` is a fresh value per pixel; a larger `size` is a smooth value noise with cells `size` pixels across, scaled so its spread matches the fine grain's. The grain is seeded by the chain's `seed`, the grain's own `seed` and the frame: a still or a clip frame rendered twice has the same grain, and a clip's grain moves from frame to frame, since the frame is the shot's time × 60 on the live path and the traced one alike. A crop of a traced still keeps the whole frame's grain at its pixels.
+
+**Chromatic aberration** (`chromatic`) is a lens's radial colour split, ported from Bevy's (the Playdead *Inside* technique): each pixel averages up to 8 samples along the line from it toward the frame's centre, `amount` of the way there, weighted red at the pixel, green halfway and blue at the far end, so a flat frame stays flat and the frame's centre never moves. `falloff` shapes it across the frame: the length is scaled by r<sup>falloff</sup>, with r the distance from the centre over the corner's, so `0` grows the split evenly out from the centre and a larger number holds it to the edges. It runs before the bloom, after a leading `exposure`. A traced crop of a finish with `chromatic` is refused for a `.png` or a master, as the split reads past a crop's margin.
+
+**Their cost at 3840x2160**, on an AMD Radeon RX 9060 XT and a Ryzen 9 9950X (32 threads) under Linux, through a GPU queue other jobs shared (load average 30 to 43), medians over 60 frames (`benchmark_4k_finish_breakdown` in `crates/post/src/gpu.rs`) and over 7 runs on the CPU:
+
+| pass | live (GPU) | traced finish (CPU) |
+|---|---|---|
+| `chromatic`, the default amount | 0.56 to 0.95 ms, a compute pass of its own; ahead of a leading exposure, so the grade stays one fused pass | 135 ms |
+| `grain`, `size = 1` | inside the fused grade | 62 ms |
+| `grain`, `size = 2` | 0.1 to 0.3 ms added to the fused grade | 53 ms |
 
 ### `[flare]`
 
@@ -946,8 +960,8 @@ Every key is optional; a key left out takes the renderer's default.
 
 | key | type | notes |
 |---|---|---|
-| `shutter` | number, 0 to 1 | the share of a frame the shutter stays open. |
-| `max_px` | number ≥ 0 | the longest streak, in pixels. |
+| `shutter` | number, 0 to 4 | up to 1, the share of a frame the shutter stays open; above 1, a stylised streak of that many frames' motion. |
+| `max_px` | number ≥ 0 | the longest streak at a shutter of 1, in pixels; a shutter above 1 multiplies it. |
 | `samples` | integer ≥ 1 | |
 
 ### `[trace]`
@@ -986,6 +1000,16 @@ The live renderer's sun shadows and its two screen-space terms: ambient occlusio
 | `ultra` | 3 | 8192 | on, 9 × 3 | on, 16 steps |
 
 `docs/live-renderer.md` ("Ambient occlusion and contact shadows") has what each term does and what it costs.
+
+### `[live]`
+
+How the live renderer samples over time. A path tracer ignores the table. Without it, or with a key left out, the renderer behaves as its defaults below.
+
+| key | type | default | notes |
+|---|---|---|---|
+| `stochastic_reflections` | bool | `true` | screen-space reflections sample a GGX visible normal per pixel and frame on surfaces rougher than 0.18, start each ray's march at a per-pixel offset, and denoise the trace. `false` traces one fixed ray per pixel instead: the mirror direction with an 8-frame jitter, from a fixed march start, no prefilter, and a ray that ends inside a solid object misses rather than reading dark (the buried-ray test needs the per-pixel offset; on a fixed start it bands). At a grazing view the sampled lobe sends some rays back toward the camera; they leave the screen and take the environment's reflection, so a glossy silhouette shows a thin rim of the environment. `false` keeps the mirror reflection of what lies behind the edge there. |
+| `settle` | bool | `true` | a frame drawn again at an unchanged scene time steps the frame index, so temporal AA, soft shadows and reflections settle over repeated draws. `false` gives every draw at one time that time's own index, so repeated draws repeat one jitter and one noise pattern. |
+| `scene_reflections` | bool | `true` | staging traces the scene's own reflection cube from the camera's eye, so a reflection screen-space reflections can't find reads the scene. `false` skips it, and such a reflection reads the probes and the sky. It has effect only while the renderer takes scene reflections (`Renderer::scene_reflections`, on by default). |
 
 ### `[plates]`
 
@@ -1048,7 +1072,7 @@ What the editor's Play runs; renderers ignore it ([play-modules.md](play-modules
 | `thin_film_ior` | number | `1.5` | 1 and above. |
 | `thin_film_amount` | number | `0` | 0 to 1. |
 | `emission` | `[r, g, b]` | `[0, 0, 0]` | 0 and above, linear. |
-| `fresnel_power` | number | `5` | |
+| `fresnel_power` | number | `5` | the exponent of Schlick's `(1 − cos θ)` term on the base and the coat, live and traced; above 5 the reflection rises later toward grazing, so a glossy paint stays dark further off the normal. 0 or below is 5. |
 | `normal` | table | `{ source = "flat", strength = 0 }` | `[materials.<name>.normal]`. |
 | `maps` | table | `{ layer = -1, tile = 1, normal = 1, albedo = 1 }` | `[materials.<name>.maps]`. |
 | `content` | a content kind | `"none"` | |

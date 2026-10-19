@@ -105,6 +105,20 @@ wait 1.5
 pfx gui samples/workshop.pitofx --clip clips --tape move.tape --poster last
 ```
 
+Each untimed pointer step takes the glide's own time, at least about 0.18 s, and the tape waits for it, so a chain of small moves pulses. A timed step glides its whole path in the seconds you give, on one ease-in-out curve (or `linear`), one step a frame at the clip's rate; the untimed forms work as before:
+
+| Step | Does |
+| --- | --- |
+| `move x y <seconds> [ease\|linear]` | moves the pointer from where it is to x y over the seconds |
+| `drag x0 y0 x1 y1 <seconds> [ease\|linear] [middle\|ctrl\|shift\|alt]` | glides to x0 y0, holds the button, drags to x1 y1 over the seconds and lets go; a left drag in the viewport orbits a quarter of a degree a point, so `drag 500 500 800 500 3` turns the view 75° over 3 s |
+| `scroll x y <lines> <seconds> [ease\|linear]` | spreads the wheel's lines over the seconds, a smooth dolly in or out |
+
+```
+move 500 500 0.8
+drag 500 500 800 500 3
+scroll 700 500 6 1.5
+```
+
 It writes three files into `clips/`, each named `<tape>-<W>x<H>-<fps>fps`: an H.264 `.master.mp4`, a `.poster.png` and a `.json` manifest (`docs/recipe-files.md`). `--fps` is 30, 60 or 120. The frames are drawn as PNGs into a staging folder, `clips/<stem>.partial/`, encoded by pito-codecs' `pcod frames` on the CPU at CRF 14, and removed; the manifest names pcod and its version. It needs `pcod` on the `PATH` and an even `--size`, and refuses in one line without them.
 
 - **It plays on a copy:** the recipe's folder is copied into the clip folder and played there, so the tape's edits never reach your files, and the copy is removed at the end.

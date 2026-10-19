@@ -198,6 +198,7 @@ fn tidy_in(v: &mut Value) {
             t.iter_mut().for_each(|(_, v)| tidy_in(v));
             t.fmt();
         }
+        Value::Float(f) => *v = Value::from(*f.value()),
         _ => {}
     }
     v.decor_mut().clear();

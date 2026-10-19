@@ -1,4 +1,4 @@
-use egui::{Align2, Color32, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, Vec2};
+use egui::{Align2, CornerRadius, Painter, Pos2, Rect, Shape, Stroke, Vec2};
 use glam::{DMat3, DMat4, DQuat, DVec3};
 use pfx_recipe::{Kind, Patch, Plate, Recipe, number, numbers, params_in};
 use toml_edit::{DocumentMut, Item, Table};
@@ -25,7 +25,6 @@ const LEAST_SCALE: f64 = 0.001;
 const LEAST_AREA: f32 = 16.0;
 const ORIGIN_SLACK: f64 = 1e-4;
 const AXES: [DVec3; 3] = [DVec3::X, DVec3::Y, DVec3::Z];
-const COLOURS: [Color32; 3] = [DANGER, OK, INFO];
 const NAMES: [&str; 3] = ["x", "y", "z"];
 const KEYS: [&str; 3] = ["at", "rotate", "scale"];
 
@@ -832,6 +831,7 @@ impl Gizmo {
     }
 
     pub fn draw(&self, painter: &Painter, lens: &Lens, object: usize) {
+        let palette = Palette::of(painter.ctx());
         let Some(pose) = self.shown(object) else {
             return;
         };
@@ -840,11 +840,11 @@ impl Gizmo {
         let lit = active.or(self.hover);
         let colour = |handle: Handle, k: usize| {
             if lock.is_some() {
-                TEXT_DIM
+                palette.text_dim
             } else if lit == Some(handle) {
-                ACCENT
+                palette.accent
             } else {
-                COLOURS[k]
+                [palette.danger, palette.ok, palette.info][k]
             }
         };
         let Some(centre) = lens.project(pose.centre()) else {
@@ -897,17 +897,24 @@ impl Gizmo {
             }
         }
         let middle = if lock.is_some() {
-            TEXT_DIM
+            palette.text_dim
         } else if self.mode == Mode::Scale && lit == Some(Handle::Centre) {
-            ACCENT_TEXT
+            palette.accent_text
         } else {
-            ACCENT
+            palette.accent
         };
         if self.mode == Mode::Scale {
             painter.rect_stroke(
                 Rect::from_center_size(centre, Vec2::splat(BOX * 2.0 + 4.0)),
                 CornerRadius::ZERO,
-                Stroke::new(1.5_f32, if lock.is_some() { TEXT_DIM } else { ACCENT }),
+                Stroke::new(
+                    1.5_f32,
+                    if lock.is_some() {
+                        palette.text_dim
+                    } else {
+                        palette.accent
+                    },
+                ),
                 egui::StrokeKind::Middle,
             );
         }
@@ -916,23 +923,24 @@ impl Gizmo {
             let text = painter.layout(
                 reason.to_string(),
                 Theme::of(painter.ctx()).font(SIZE_SMALL),
-                TEXT_SECONDARY,
+                palette.text_secondary,
                 (lens.image().width() * 0.5).max(160.0),
             );
             let at = centre + Vec2::new(14.0, 14.0);
             let band = Rect::from_min_size(at, text.size() + Vec2::new(16.0, 8.0));
-            painter.rect_filled(band, CornerRadius::same(RADIUS), BG_DEEP);
+            painter.rect_filled(band, CornerRadius::same(RADIUS), palette.bg_deep);
             painter.rect_stroke(
                 band,
                 CornerRadius::same(RADIUS),
-                Stroke::new(STROKE, LINE_BORDER),
+                Stroke::new(STROKE, palette.line_border),
                 egui::StrokeKind::Inside,
             );
-            painter.galley(at + Vec2::new(8.0, 4.0), text, TEXT_SECONDARY);
+            painter.galley(at + Vec2::new(8.0, 4.0), text, palette.text_secondary);
         }
     }
 
     pub fn badge(&self, painter: &Painter, image: Rect) {
+        let palette = Palette::of(painter.ctx());
         let space = if self.mode == Mode::Scale {
             Space::Local
         } else {
@@ -941,7 +949,7 @@ impl Gizmo {
         let text = painter.layout_no_wrap(
             format!("{} · {}", self.mode.word(), space.word()),
             Theme::of(painter.ctx()).font(SIZE_SMALL),
-            ACCENT,
+            palette.accent,
         );
         let size = text.size() + Vec2::new(16.0, 8.0);
         let band = Rect::from_min_size(
@@ -951,8 +959,8 @@ impl Gizmo {
             ),
             size,
         );
-        painter.rect_filled(band, CornerRadius::same(RADIUS), BG_DEEP);
-        painter.galley(band.min + Vec2::new(8.0, 4.0), text, ACCENT);
+        painter.rect_filled(band, CornerRadius::same(RADIUS), palette.bg_deep);
+        painter.galley(band.min + Vec2::new(8.0, 4.0), text, palette.accent);
     }
 }
 

@@ -394,15 +394,18 @@ fn bake(options: Options) -> Result<(), String> {
             force: options.force,
         },
         &mut job,
-    )
-    .and_then(|()| {
+    );
+    let anchors = std::mem::take(&mut source.recipe.anchors);
+    let seed = source.recipe.seed;
+    drop(source);
+    let result = result.and_then(|()| {
         plates_run(PlatesInputs {
             recipe: &recipe_bytes,
             folder: scene_folder,
             flag_anchors: flag_anchors.as_deref(),
-            anchors: &source.recipe.anchors,
+            anchors: &anchors,
             samples: options.samples,
-            seed: source.recipe.seed,
+            seed,
             out: &out,
             force: options.force,
         })
@@ -839,7 +842,6 @@ fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
 
 fn queued() -> bool {
     std::env::var_os("GPU_QUEUE_PID").is_some()
-        && std::env::var("PFX_DIRECT").ok().as_deref() != Some("1")
 }
 
 #[track_caller]
@@ -925,27 +927,36 @@ mod tests {
         dir
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_bakes_turns_reach_pgpu_bare_between_props() {
         if std::env::var_os("PFX_TURN_CHILD").is_some() {
             return;
         }
+        for direct in [None, Some("1")] {
+            turns_with(direct);
+        }
+    }
+
+    fn turns_with(direct: Option<&str>) {
         let scratch = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tmp")
-            .join(format!("bake-turns-{}", std::process::id()));
+            .join(format!(
+                "bake-turns-{}-{}",
+                std::process::id(),
+                direct.unwrap_or("unset")
+            ));
         fs::create_dir_all(&scratch).unwrap();
         let pgpu = scratch.join("pgpu");
         fs::write(&pgpu, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TURN_LOG\"\n").unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&pgpu, fs::Permissions::from_mode(0o700)).unwrap();
-        }
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&pgpu, fs::Permissions::from_mode(0o700)).unwrap();
         let log = scratch.join("turns");
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mut paths = vec![scratch.clone()];
         paths.extend(std::env::split_paths(&path));
-        let status = std::process::Command::new(std::env::current_exe().unwrap())
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child
             .args([
                 "--exact",
                 "bake::tests::bake_turn_child",
@@ -958,9 +969,11 @@ mod tests {
             .env_remove("PFX_DIRECT")
             .env_remove("GPU_QUEUE_FROZEN")
             .env("TURN_LOG", &log)
-            .stdout(std::process::Stdio::null())
-            .status()
-            .unwrap();
+            .stdout(std::process::Stdio::null());
+        if let Some(direct) = direct {
+            child.env("PFX_DIRECT", direct);
+        }
+        let status = child.status().unwrap();
         let lines = fs::read_to_string(&log).unwrap_or_default();
         fs::remove_dir_all(&scratch).unwrap();
         assert!(status.success());
@@ -971,7 +984,8 @@ mod tests {
                 "turn --work-ms 7.500 --longest-ms 7.500",
                 "turn",
                 "turn",
-            ]
+            ],
+            "PFX_DIRECT={direct:?}"
         );
     }
 

@@ -6,7 +6,7 @@
 
 ```
 pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>]
-         [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|exr]
+         [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|png16|exr] [--dither on|off]
          [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
 ```
 
@@ -21,7 +21,8 @@ pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--fro
 | `--hour H` | the scene's | the sun's hour, 0 to 24, set as `sun.hour` |
 | `--set key=value` | none | any scene key, through the editor's edit path (below); repeatable |
 | `--out <dir>` | `tmp/pfx/shot/<scene>-<draft or final>` under the caller's git tree | where the frames and the manifest go |
-| `--format png` or `exr` | png | 8-bit sRGB PNG, or half-float linear EXR |
+| `--format png`, `png16` or `exr` | png | 8-bit sRGB PNG, 16-bit sRGB PNG, or half-float linear EXR |
+| `--dither on` or `off` | on | dithers the 8-bit PNG frames against banding (below); png16 and EXR frames are never dithered |
 | `--audio <out.wav>` | `<out>/audio.wav` when a sound script is known | writes the shot's sound as a 48 kHz stereo float WAV |
 | `--sound <script>` | the scene's `sound` key | the offline mix script (`*.sound.toml`) |
 | `--shutter S` | off | poses the previous frame at t − S / fps for motion blur (below) |
@@ -58,7 +59,7 @@ The live renderer's TAA jitter follows the scene clock (its sample index is roun
 
 ## Motion blur's previous pose
 
-By default each frame's previous pose (`Instance::previous_model`, the skin palettes, the morph weights and the camera's previous view-projection) is the last frame's, as live. TAA stays intact, and the blur pass scales that whole-frame motion by `[motion_blur] shutter`. `--shutter S` instead presents the scene at t − S / fps just before t, so the previous pose is the true pose at the shutter's opening: a fast-spinning wheel or a curved path blurs along its real arc, not along the chord between two whole frames. It trades away TAA stability. The renderer's history check sees a previous view-projection that is not the last rendered frame's, so in a shot whose camera moves TAA restarts every frame, and the shot shows the jittered single samples.
+By default each frame's previous pose (`Instance::previous_model`, the skin palettes, the morph weights and the camera's previous view-projection) is the last frame's, as live. TAA stays intact, and the blur pass scales that whole-frame motion by `[motion_blur] shutter`. `--shutter S` instead presents the scene at t − S / fps just before t, so the previous pose is the true pose at the shutter's opening: a fast-spinning wheel or a curved path blurs along its real arc, not along the chord between two whole frames. A `[motion_blur] shutter` above 1 is a stylised multiplier on top of it: the pass scales the true velocity by that shutter, so `--shutter 1` with a key of 2 streaks two frames' worth along the real arc; a key of 1 or below leaves the velocity as it is. It trades away TAA stability. The renderer's history check sees a previous view-projection that is not the last rendered frame's, so in a shot whose camera moves TAA restarts every frame, and the shot shows the jittered single samples.
 
 ## Sound
 
@@ -84,7 +85,8 @@ The out folder holds `000000.png`, `000001.png`, … (or `.exr`), numbered from 
 | `shot` | the manifest's schema, 1 |
 | `frames`, `from`, `fps`, `size`, `seconds` | what was written; `seconds` is frames / fps |
 | `first_number` | the scene frame `000000` holds, equal to `from`; file k is frame `first_number + k` |
-| `format` | `png` or `exr` |
+| `format` | `png`, `png16` or `exr` |
+| `dither` | true when the PNG frames were dithered |
 | `wav`, `audio` | the WAV's absolute path or null; its source (`script` or `silence`), script, rate, channels and a note |
 | `scene`, `scene_sha256`, `rev` | the scene file, its SHA-256, and the Git HEAD of its folder (`+dirty` when it has changes), or null |
 | `pfx` | the engine's version |
@@ -94,7 +96,7 @@ The out folder holds `000000.png`, `000001.png`, … (or `.exr`), numbered from 
 | `wall_ms` | `total`, and `per_frame`: the total over the frames, readback and file writing included |
 | `out`, `pcod`, `adapter`, `warnings` | the folder, the exact `pcod frames <dir> [--audio <wav>] --fps <fps> <dir>.mp4` command, the GPU, and any warnings |
 
-PNG frames are the finished frame, tone-mapped and sRGB-encoded, as 8-bit RGB. EXR frames hold the same finished frame decoded to linear light (Rec. 709 primaries, D65), as half floats with alpha. They are not the scene-linear radiance before tone mapping. With `--json`, each frame prints `{"frame", "of", "number", "time", "gpu_ms", "camera": {"at", "look_at"}, "wall_ms"}` as it is read back, then the manifest prints as the last line. Without it, pfx prints the folder and the `pcod` command.
+PNG frames are the finished frame, tone-mapped and sRGB-encoded, as 8-bit RGB, dithered where they are rounded to 8 bits: blue noise of about one level in the encoded space, laid at an offset from `--seed`, the same offset every frame, so a static region is byte for byte the same from frame to frame and a smooth sky shows fine grain instead of bands ([the output dither](recipe-render.md#the-output-dither) has the noise, the measurements and why the pattern does not move). `--dither off` rounds plainly. `--format png16` writes the same finished frame as 16-bit RGB (big-endian, sRGB tagged), undithered, for a master; pcod reads such a folder as it reads 8-bit frames, and a 10-bit encode takes it as [16-bit frames](recipe-render.md#16-bit-frames) says. EXR frames hold the same finished frame decoded to linear light (Rec. 709 primaries, D65), as half floats with alpha. They are not the scene-linear radiance before tone mapping. With `--json`, each frame prints `{"frame", "of", "number", "time", "gpu_ms", "camera": {"at", "look_at"}, "wall_ms"}` as it is read back, then the manifest prints as the last line. Without it, pfx prints the folder and the `pcod` command.
 
 Frames are read back one at a time and written by up to 8 threads while the GPU draws the next frame. The pacer takes turns with other GPU jobs as pgpu asks ([Pacing](pacing.md)) but caps no frame rate, so run long shots under `pgpu run --class render`.
 

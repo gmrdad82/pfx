@@ -83,6 +83,7 @@ repo = "https://github.com/gmrdad82/pfx"
 estate = {"manfred", "prec", "pito-compare", "pito-codecs"}
 
 GUIDES = [
+    ("install", 99, "Install pfx on Linux, Windows or macOS from a GitHub Release, check it against SHA256SUMS, and open .pitofx files in pfx's window."),
     ("migrate-3", 100, "Move a game from pfx 2.6.0 to 3.0.0: the crates, what moved in, the renames, converting scenes and recipes, one binary, the window and Play."),
     ("first-game", 101, "Scaffold a game with pfx new, play it with cargo run, open it in the editor and measure it with pfx bench."),
     ("projects", 102, "A game on pfx is its own repo and one binary: what pfx new scaffolds, the project.toml, and how a game plays and opens in the editor."),
@@ -161,7 +162,7 @@ GUIDES = [
     ("editor-gizmos", 407, None),
     ("editor-shots", 408, "pfx gui drawn offscreen: one frame with --shot after a script, or a clip of the window playing a tape."),
     ("editor-rig", 409, "bin/rig: the live pfx gui window in a hidden compositor, for screenshots, keys and the pointer."),
-    ("windows", 501, "Games on pfx build for Windows: the one build Steam ships, which Linux and the Steam Deck run through Proton."),
+    ("windows", 501, "pfx on Windows: the tool's Windows build, and the one game build Steam ships, which Linux and the Steam Deck run through Proton."),
     ("steam", 502, None),
     ("wgpu30", 503, None),
     ("agnostic", 504, None),
@@ -479,7 +480,7 @@ install_body = "\n\n".join([
     "## Build pfx from source\n\n" + build,
 ])
 install_body = rewrite(install_body, "README.md", "install.md")
-write("install.md", front("Install", "Install the pfx tool on Linux, make a game and play it, and link the engine's crates from a game that builds on Linux, Windows and macOS.", 2) + install_body.strip("\n") + "\n")
+write("install.md", front("Install", "Install the pfx tool on Linux, Windows or macOS, make a game and play it, and link the engine's crates from a game that builds on Linux, Windows and macOS.", 2) + install_body.strip("\n") + "\n")
 
 for name, order, override in GUIDES:
     source = f"docs/{name}.md"

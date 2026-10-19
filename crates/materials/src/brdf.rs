@@ -251,12 +251,16 @@ fn half_vector(wo: [f32; 3], wi: [f32; 3]) -> [f32; 3] {
     normalize(add3(wo, wi))
 }
 
-fn reflection_colour(s: &Shaded, cos_theta: f32, ndh_cos: f32) -> [f32; 3] {
-    let power = if s.fresnel_power <= 0.0 {
+fn fresnel_exponent(s: &Shaded) -> f32 {
+    if s.fresnel_power <= 0.0 {
         5.0
     } else {
         s.fresnel_power
-    };
+    }
+}
+
+fn reflection_colour(s: &Shaded, cos_theta: f32, ndh_cos: f32) -> [f32; 3] {
+    let power = fresnel_exponent(s);
     let f0 = lerp3([s.specular; 3], s.base, clamp01(s.metalness));
     let mut plain = if s.transmission > 0.0 || s.dispersion != 0.0 {
         let iors = dispersed_ior(s.ior, s.dispersion);
@@ -336,9 +340,9 @@ pub fn eval(s: &Shaded, wo: [f32; 3], wi: [f32; 3]) -> [f32; 3] {
     if coat > 0.0 {
         let coat_a = alpha(s.clearcoat_roughness);
         let coat_a2 = coat_a * coat_a;
-        let coat_f = schlick([0.04, 0.04, 0.04], vdh, 5.0);
+        let coat_f = schlick([0.04, 0.04, 0.04], vdh, fresnel_exponent(s));
         let coat_spec = ggx_spec(ndv, ndl, ndh, coat_a2, coat_f);
-        let fc = schlick([0.04, 0.04, 0.04], view, 5.0)[0];
+        let fc = schlick([0.04, 0.04, 0.04], view, fresnel_exponent(s))[0];
         let atten = 1.0 - coat * fc;
         colour = add3(scale3(coat_spec, coat), scale3(colour, atten));
     }

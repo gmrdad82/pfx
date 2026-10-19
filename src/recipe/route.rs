@@ -132,7 +132,10 @@ pub fn run(args: &Args, _: &Registry) -> ExitCode {
         };
         let routes: Vec<Value> = chosen.into_iter().map(described).collect();
         if args.json {
-            println!("{}", json!({ "recipe": file, "routes": routes }));
+            println!(
+                "{}",
+                json!({ "recipe": pfx_recipe::files::shown(file), "routes": routes })
+            );
         } else {
             routes.iter().for_each(printed);
         }
@@ -148,11 +151,17 @@ pub fn run(args: &Args, _: &Registry) -> ExitCode {
     let Some(route) = loaded.recipe.route(name).map(described) else {
         return refuse(
             "route",
-            &format!("{file}: route[{name}]: gone after the edit"),
+            &format!(
+                "{}: route[{name}]: gone after the edit",
+                pfx_recipe::files::shown(file)
+            ),
         );
     };
     if args.json {
-        println!("{}", json!({ "recipe": file, "route": route }));
+        println!(
+            "{}",
+            json!({ "recipe": pfx_recipe::files::shown(file), "route": route })
+        );
     } else {
         printed(&route);
     }

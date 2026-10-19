@@ -88,6 +88,30 @@
       },
       "type": "object"
     },
+    "Chromatic": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "$ref": "#/$defs/ChromaticTable"
+        }
+      ]
+    },
+    "ChromaticTable": {
+      "additionalProperties": false,
+      "properties": {
+        "amount": {
+          "format": "float",
+          "type": "number"
+        },
+        "falloff": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
     "Color": {
       "anyOf": [
         {
@@ -134,10 +158,23 @@
     "GrainTable": {
       "additionalProperties": false,
       "properties": {
+        "amount": {
+          "format": "float",
+          "type": "number"
+        },
         "clamp": {
           "type": "boolean"
         },
         "response": {
+          "format": "float",
+          "type": "number"
+        },
+        "seed": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "size": {
           "format": "float",
           "type": "number"
         },
@@ -539,6 +576,9 @@
     "cel_threshold": {
       "format": "float",
       "type": "number"
+    },
+    "chromatic": {
+      "$ref": "#/$defs/Chromatic"
     },
     "contrast": {
       "format": "float",

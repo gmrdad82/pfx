@@ -1,5 +1,6 @@
 use crate::text::Overlay;
-use pfx_post::{BloomKind, Chain, Image, Pass, Vignette, VignetteKind, bayer, color};
+use pfx_post::quantise::{self, Dither};
+use pfx_post::{BloomKind, Chain, Image, Pass, Vignette, VignetteKind, color};
 use pfx_trace::denoise;
 use std::borrow::Cow;
 use std::path::Path;
@@ -197,6 +198,9 @@ fn framed_pass(
 ) -> Image {
     match pass {
         Pass::Vignette(vignette) => vignette_at(image, vignette, origin, full),
+        Pass::Grain(grain) => {
+            pfx_post::grade::grain_at(image, grain, chain.frame, chain.seed, origin)
+        }
         Pass::Grade(passes) => passes.iter().fold(image.clone(), |current, pass| {
             framed_pass(pass, &current, chain, origin, full)
         }),
@@ -301,30 +305,29 @@ fn unframed(pass: &Pass) -> Option<&'static str> {
         Pass::Grade(passes) => passes.iter().find_map(unframed),
         Pass::Vignette(_) => None,
         Pass::Bloom(bloom) if bloom.kind != BloomKind::Rings => None,
-        Pass::Grain(_) | Pass::Dither(_) => Some(pass.name()),
+        Pass::Grain(_) => None,
+        Pass::Dither(_) => Some(pass.name()),
         pass if pass.is_local() => None,
         pass => Some(pass.name()),
     }
 }
 
 pub fn dithered(size: [u32; 2], pixels: &[[f32; 4]]) -> Vec<u8> {
-    dithered_at(size, [0, 0], pixels)
+    dithered_at(size, [0, 0], Some(Dither::default()), pixels)
 }
 
-pub fn dithered_at(size: [u32; 2], origin: [u32; 2], pixels: &[[f32; 4]]) -> Vec<u8> {
+pub fn dithered_at(
+    size: [u32; 2],
+    origin: [u32; 2],
+    dither: Option<Dither>,
+    pixels: &[[f32; 4]],
+) -> Vec<u8> {
     let width = size[0].max(1);
-    pixels
-        .iter()
-        .enumerate()
-        .flat_map(|(at, pixel)| {
-            let (x, y) = (origin[0] + at as u32 % width, origin[1] + at as u32 / width);
-            let offset = (bayer(x, y) - 0.5) / 255.0;
-            let [r, g, b] = [0, 1, 2].map(|k| {
-                ((pixel[k].clamp(0.0, 1.0) + offset).clamp(0.0, 1.0) * 255.0).round() as u8
-            });
-            [r, g, b, 255]
-        })
-        .collect()
+    let height = pixels.len() as u32 / width;
+    quantise::eight([width, height], origin, dither, 4, |at| {
+        let [r, g, b, _] = pixels[at];
+        [r, g, b, 1.0]
+    })
 }
 
 pub fn master(pixels: &[[f32; 4]]) -> Vec<u8> {
@@ -351,6 +354,7 @@ pub fn write_delivery(
     path: &Path,
     size: [u32; 2],
     origin: [u32; 2],
+    dither: Option<Dither>,
     pixels: &[[f32; 4]],
 ) -> Result<(), String> {
     fast_png(
@@ -358,7 +362,7 @@ pub fn write_delivery(
         size,
         pixels.len(),
         png::BitDepth::Eight,
-        &dithered_at(size, origin, pixels),
+        &dithered_at(size, origin, dither, pixels),
     )
 }
 
@@ -590,15 +594,16 @@ mod tests {
             [255, 255, 128, 0, 0, 0, 255, 255]
         );
         let level = 100.4 / 255.0;
-        let flat = vec![[level, level, level, 1.0]; 64];
-        let bytes = dithered([8, 8], &flat);
-        let mean = bytes.chunks(4).map(|p| f64::from(p[0])).sum::<f64>() / 64.0;
+        let tile = vec![[level, level, level, 1.0]; 64 * 64];
+        let bytes = dithered([64, 64], &tile);
+        let mean = bytes.chunks(4).map(|p| f64::from(p[0])).sum::<f64>() / 4096.0;
         assert!((mean - 100.4).abs() < 0.05, "{mean}");
         assert!(
             bytes
                 .chunks(4)
-                .all(|p| p[3] == 255 && (100..=101).contains(&p[0]))
+                .all(|p| p[3] == 255 && (99..=101).contains(&p[0]))
         );
+        let flat = vec![[level, level, level, 1.0]; 64];
         let path = scratch("master.png");
         write_master(&path, [8, 8], &flat).unwrap();
         let reader =

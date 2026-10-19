@@ -9,15 +9,15 @@ use crate::code;
 use crate::edit::first_error;
 use crate::migrate::{add_ids, entry_kinds};
 use crate::mount::{GLTF_PATH, Mount};
-use crate::paths::{Found, Listing, PathError, rooted, slashed};
+use crate::paths::{Found, Listing, PathError, folder, join, rooted, slashed};
 use crate::read::{self, Context, Doc, Finding, Parsed};
 use crate::rules::{self, Issues};
 use crate::scene::{Entry, Scene};
 use crate::spans::{KeyPath, Part};
 use crate::types::{
-    Camera, Content, Emitter, File, FileKind, Finish, FinishKeys, Flare, Haze, Light, LutKey,
-    Material, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates, Play, Proxy, Rig,
-    Shadows, Sky, Sound, Sun, Text, Tiles, Trace,
+    Camera, Content, Emitter, File, FileKind, Finish, FinishKeys, Flare, Haze, Light, LiveSettings,
+    LutKey, Material, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates, Play, Proxy,
+    Rig, Shadows, Sky, Sound, Sun, Text, Tiles, Trace,
 };
 use crate::{Diagnostic, EditError, FORMAT, Id, Patch, PatchGroup, Severity};
 
@@ -237,6 +237,42 @@ impl Project {
 
     pub fn in_memory(&self) -> bool {
         self.mount.as_ref().is_some_and(|mount| mount.memory)
+    }
+
+    pub fn holds(&self, path: &str) -> bool {
+        if let Some(mount) = &self.mount {
+            if mount.holds(path) || self.texts.contains_key(Path::new(path)) {
+                return true;
+            }
+            if mount.memory {
+                return false;
+            }
+        }
+        self.root.join(path).is_file()
+    }
+
+    pub fn locate(&self, file: &Path, raw: &str) -> Result<String, String> {
+        self.placed(file, raw, &|_| false)
+            .map_err(|error| error.message(raw))
+    }
+
+    pub(crate) fn placed(
+        &self,
+        file: &Path,
+        raw: &str,
+        held: &dyn Fn(&str) -> bool,
+    ) -> Result<String, PathError> {
+        let from_root = rooted(raw);
+        let base = folder(file);
+        if base.is_empty() {
+            return from_root;
+        }
+        match (join(&base, raw), &from_root) {
+            (Ok(near), Ok(far)) if near == *far => from_root,
+            (Ok(near), Ok(_)) if held(&near) || self.holds(&near) => Ok(near),
+            (Ok(near), Err(_)) => Ok(near),
+            _ => from_root,
+        }
     }
 
     pub fn pfx_bytes(&self) -> Option<&[u8]> {
@@ -793,6 +829,7 @@ struct Scope {
     motion_blur: Option<Single<MotionBlur>>,
     trace: Option<Single<Trace>>,
     shadows: Option<Single<Shadows>>,
+    live: Option<Single<LiveSettings>>,
     plates: Option<Single<Plates>>,
     physics: Option<Single<Physics>>,
     play: Option<Single<Play>>,
@@ -1149,7 +1186,11 @@ impl<'p> Checker<'p> {
             .parsed
             .get(file)
             .is_some_and(|parsed| parsed.origin.is_some());
-        let rooted = match rooted(raw) {
+        let overlay: BTreeSet<String> = self.overlay.keys().map(|key| slashed(key)).collect();
+        let rooted = match self
+            .project
+            .placed(file, raw, &|path| overlay.contains(path))
+        {
             Ok(rooted) => rooted,
             Err(error) => {
                 if !(old && matches!(error, PathError::Outside(_))) {
@@ -1167,7 +1208,6 @@ impl<'p> Checker<'p> {
             );
             return None;
         }
-        let overlay: BTreeSet<String> = self.overlay.keys().map(|key| slashed(key)).collect();
         let mount = self.project.mount.as_ref();
         let held =
             |path: &str| overlay.contains(path) || mount.is_some_and(|mount| mount.holds(path));
@@ -1663,8 +1703,21 @@ impl<'p> Checker<'p> {
         }
     }
 
-    fn include_target(&mut self, raw: &str, kind: FileKind) -> Option<PathBuf> {
-        let rooted = rooted(raw).ok()?;
+    fn rooted_from(&self, file: &Path, raw: &str) -> Result<String, PathError> {
+        self.project
+            .placed(file, raw, &|path| self.text(Path::new(path)).is_some())
+    }
+
+    fn found_at(&self, file: &Path, raw: &mut String) {
+        if raw.as_str() != GLTF_PATH
+            && let Ok(found) = self.rooted_from(file, raw)
+        {
+            *raw = found;
+        }
+    }
+
+    fn include_target(&mut self, file: &Path, raw: &str, kind: FileKind) -> Option<PathBuf> {
+        let rooted = self.rooted_from(file, raw).ok()?;
         let path = PathBuf::from(rooted);
         let end_ok = match kind {
             FileKind::Prefab => raw.ends_with(".prefab.toml"),
@@ -1697,7 +1750,11 @@ impl<'p> Checker<'p> {
                 }
                 continue;
             };
-            let Some(target) = self.include_target(&raw, kind) else {
+            let naming = steps
+                .last()
+                .map(|step| step.file.clone())
+                .unwrap_or_default();
+            let Some(target) = self.include_target(&naming, &raw, kind) else {
                 continue;
             };
             if let Some(step) = steps.last_mut() {
@@ -1786,7 +1843,7 @@ impl<'p> Checker<'p> {
                 continue;
             };
             for (place, raw) in &doc.materials {
-                if let Ok(rooted) = rooted(raw) {
+                if let Ok(rooted) = self.rooted_from(member, raw) {
                     let library = PathBuf::from(rooted);
                     if self.text(&library).is_some() {
                         scope.libraries.push((
@@ -1913,6 +1970,7 @@ impl<'p> Checker<'p> {
             );
             self.single(&mut scope.trace, member, "trace", doc.trace);
             self.single(&mut scope.shadows, member, "shadows", doc.shadows);
+            self.single(&mut scope.live, member, "live", doc.live);
             self.single(&mut scope.plates, member, "plates", doc.plates);
             self.single(&mut scope.physics, member, "physics", doc.physics);
             self.single(&mut scope.play, member, "play", doc.play);
@@ -2093,7 +2151,7 @@ impl<'p> Checker<'p> {
         ));
     }
 
-    fn prefab_path(&self, scope: &Scope, raw: &str) -> Option<PathBuf> {
+    fn prefab_path(&self, scope: &Scope, file: &Path, raw: &str) -> Option<PathBuf> {
         if Id::parse(raw).is_ok()
             && let Lookup::One(at) = lookup(&scope.objects, raw)
         {
@@ -2101,9 +2159,12 @@ impl<'p> Checker<'p> {
             if Id::parse(&target).is_ok() {
                 return None;
             }
-            return rooted(&target).ok().map(PathBuf::from);
+            return self
+                .rooted_from(&scope.objects[at].file, &target)
+                .ok()
+                .map(PathBuf::from);
         }
-        rooted(raw).ok().map(PathBuf::from)
+        self.rooted_from(file, raw).ok().map(PathBuf::from)
     }
 
     fn place(&mut self, scope: &Scope, chain: &mut Vec<Step>) -> Placed {
@@ -2282,7 +2343,7 @@ impl<'p> Checker<'p> {
                 }
                 continue;
             }
-            let Some(path) = self.prefab_path(&frame.scope, raw) else {
+            let Some(path) = self.prefab_path(&frame.scope, &item.file, raw) else {
                 continue;
             };
             if let Some(step) = chain.last_mut() {
@@ -2810,10 +2871,19 @@ impl<'p> Checker<'p> {
                     value.material = material(self, &own, &reference);
                 }
             }
+            self.found_at(&entry.file, &mut entry.value.file);
             scene.meshes.push(entry);
         }
         for out in &placed.objects {
             let mut entry = out.entry.clone();
+            if let Some(atlas) = entry
+                .value
+                .animation
+                .as_mut()
+                .and_then(|animation| animation.atlas.as_mut())
+            {
+                self.found_at(&entry.file, atlas);
+            }
             if let Some(reference) = entry.value.material.clone() {
                 let own = out
                     .own
@@ -2849,9 +2919,33 @@ impl<'p> Checker<'p> {
         scene.lights = placed.lights.into_iter().map(|out| out.entry).collect();
         scene.emitters = placed.emitters.into_iter().map(|out| out.entry).collect();
         scene.movers = placed.movers.into_iter().map(|out| out.entry).collect();
-        scene.contents = placed.contents.into_iter().map(|out| out.entry).collect();
-        scene.texts = placed.texts.into_iter().map(|out| out.entry).collect();
-        scene.sounds = placed.sounds.into_iter().map(|out| out.entry).collect();
+        scene.contents = placed
+            .contents
+            .into_iter()
+            .map(|out| {
+                let mut entry = out.entry;
+                self.found_at(&entry.file, &mut entry.value.image);
+                entry
+            })
+            .collect();
+        scene.texts = placed
+            .texts
+            .into_iter()
+            .map(|out| {
+                let mut entry = out.entry;
+                self.found_at(&entry.file, &mut entry.value.font);
+                entry
+            })
+            .collect();
+        scene.sounds = placed
+            .sounds
+            .into_iter()
+            .map(|out| {
+                let mut entry = out.entry;
+                self.found_at(&entry.file, &mut entry.value.file);
+                entry
+            })
+            .collect();
         scene.rigs = placed.rigs.into_iter().map(|out| out.entry).collect();
         scene.particles = placed.particles.into_iter().map(|out| out.entry).collect();
         scene.layers = self
@@ -2863,33 +2957,58 @@ impl<'p> Checker<'p> {
             entry.value.dynamic = Some(dynamic);
         }
         scene.sun = scope.sun.as_ref().map(|single| single.value.clone());
-        scene.sky = scope.sky.as_ref().map(|single| single.value.clone());
+        scene.sky = scope.sky.as_ref().map(|single| {
+            let mut sky = single.value.clone();
+            if let Some(path) = sky.path.as_mut() {
+                self.found_at(&single.file, path);
+            }
+            for layer in &mut sky.layer {
+                if let Some(path) = layer.path.as_mut() {
+                    self.found_at(&single.file, path);
+                }
+            }
+            sky
+        });
         scene.haze = scope.haze.as_ref().map(|single| single.value.clone());
         scene.flare = scope.flare.as_ref().map(|single| single.value);
         scene.motion_blur = scope.motion_blur.as_ref().map(|single| single.value);
         scene.sound_file = scope
             .sound_file
             .as_ref()
-            .and_then(|single| rooted(&single.value).ok())
+            .and_then(|single| self.rooted_from(&single.file, &single.value).ok())
             .map(PathBuf::from);
         scene.camera = scope.camera.as_ref().map(|single| single.value.clone());
         scene.trace = scope.trace.as_ref().map(|single| single.value);
         scene.shadows = scope.shadows.as_ref().map(|single| single.value);
-        scene.plates = scope.plates.as_ref().map(|single| single.value.clone());
+        scene.live = scope.live.as_ref().map(|single| single.value);
+        scene.plates = scope.plates.as_ref().map(|single| {
+            let mut plates = single.value.clone();
+            self.found_at(&single.file, &mut plates.dir);
+            if let Some(proxies) = plates.proxies.as_mut() {
+                self.found_at(&single.file, proxies);
+            }
+            plates
+        });
         scene.physics = scope.physics.as_ref().map(|single| single.value.clone());
         scene.play_module = scope
             .play
             .as_ref()
-            .and_then(|single| single.value.module.as_deref())
-            .and_then(|raw| rooted(raw).ok())
+            .and_then(|single| {
+                let raw = single.value.module.as_deref()?;
+                self.rooted_from(&single.file, raw).ok()
+            })
             .map(PathBuf::from);
         scene.music = scope.music.as_ref().map(|single| single.value.clone());
         scene.files = placed.files.clone();
         scene.tiles = self.tile_layers(&scope, &chain, &mut scene.files);
         if let Some(finish) = &scope.finish {
-            scene.finish = Some(finish.value.clone());
+            let mut value = finish.value.clone();
+            if let Some(file) = value.file.as_mut() {
+                self.found_at(&finish.file, file);
+            }
+            scene.finish = Some(value);
             if let Some(raw) = &finish.value.file
-                && let Ok(rooted) = rooted(raw)
+                && let Ok(rooted) = self.rooted_from(&finish.file, raw)
             {
                 let path = PathBuf::from(rooted);
                 scene.finish_file = self
@@ -2899,7 +3018,7 @@ impl<'p> Checker<'p> {
             }
         }
         if let Some(plates) = &scope.plates {
-            self.plate_proxies(&plates.value, &placed.objects, &mut scene);
+            self.plate_proxies(&plates.file, &plates.value, &placed.objects, &mut scene);
         }
         scene.files.extend(library_files);
         Some(scene)
@@ -2920,7 +3039,7 @@ impl<'p> Checker<'p> {
                 let path = if Id::parse(raw).is_ok() {
                     match lookup(&scope.objects, raw) {
                         Lookup::One(found) if scope.objects[found].value.is_placement() => {
-                            self.prefab_path(scope, raw)
+                            self.prefab_path(scope, &item.file, raw)
                         }
                         _ => {
                             self.issue(
@@ -2936,7 +3055,7 @@ impl<'p> Checker<'p> {
                         }
                     }
                 } else {
-                    rooted(raw).ok().map(PathBuf::from)
+                    self.rooted_from(&item.file, raw).ok().map(PathBuf::from)
                 };
                 let Some(path) = path else { continue };
                 if FileKind::of(&path) == Some(FileKind::Prefab) && self.text(&path).is_some() {
@@ -2964,9 +3083,17 @@ impl<'p> Checker<'p> {
         layers
     }
 
-    fn plate_proxies(&mut self, plates: &Plates, placed: &[Out<Object>], scene: &mut Scene) {
+    fn plate_proxies(
+        &mut self,
+        naming: &Path,
+        plates: &Plates,
+        placed: &[Out<Object>],
+        scene: &mut Scene,
+    ) {
         let Some(raw) = &plates.proxies else { return };
-        let Ok(rooted) = rooted(raw) else { return };
+        let Ok(rooted) = self.rooted_from(naming, raw) else {
+            return;
+        };
         if !rooted.ends_with(".proxies.toml") {
             return;
         }
@@ -3493,7 +3620,7 @@ impl<'p> Checker<'p> {
         for scene in &scenes {
             if let Some(doc) = self.parsed.get(scene).and_then(|parsed| parsed.doc.clone()) {
                 for (_, raw) in &doc.include {
-                    if let Ok(rooted) = rooted(raw) {
+                    if let Ok(rooted) = self.rooted_from(scene, raw) {
                         included.insert(PathBuf::from(rooted));
                     }
                 }

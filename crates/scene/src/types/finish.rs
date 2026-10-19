@@ -212,9 +212,15 @@ either!(Vignette, "a number or a table", number => Strength, map => Table(Vignet
 #[serde(deny_unknown_fields)]
 pub struct GrainTable {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clamp: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub strength: Option<f32>,
 }
@@ -227,6 +233,25 @@ pub enum Grain {
 }
 
 either!(Grain, "a number or a table", number => Strength, map => Table(GrainTable),);
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ChromaticTable {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amount: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub falloff: Option<f32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum Chromatic {
+    Amount(f32),
+    Table(ChromaticTable),
+}
+
+either!(Chromatic, "a number or a table", number => Amount, map => Table(ChromaticTable),);
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(untagged)]
@@ -422,6 +447,7 @@ finish! {
     cel_spec_roughness: f32,
     cel_spec_threshold: f32,
     cel_threshold: f32,
+    chromatic: Chromatic,
     contrast: f32,
     crease_angle: f32,
     crush: f32,

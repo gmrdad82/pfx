@@ -85,6 +85,7 @@ impl Live {
             .map_err(|error| format!("the live renderer could not start: {error}"))?;
         renderer.set_exposure(Exposure::Fixed(1.0))?;
         renderer.set_frames_on_demand(Some(Limits::default()))?;
+        renderer.set_output_dither(Some(pfx_post::quantise::Dither::default()))?;
         let mut shown = scene.clone();
         shown.camera = Some(camera.clone());
         let staged = renderer.stage(&shown)?;

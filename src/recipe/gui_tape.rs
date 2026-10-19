@@ -155,7 +155,12 @@ fn place(args: &Args) -> Result<Place, String> {
     }
 }
 
-fn copy_tree(from: &Path, to: &Path, skip: &Path, left: &mut u64) -> Result<(), String> {
+fn copy_tree(
+    from: &Path,
+    to: &Path,
+    (skip, document): (&Path, &Path),
+    left: &mut u64,
+) -> Result<(), String> {
     let named = |path: &Path, error: std::io::Error| format!("{}: {error}", path.display());
     std::fs::create_dir_all(to).map_err(|error| named(to, error))?;
     let mut entries: Vec<_> = std::fs::read_dir(from)
@@ -178,17 +183,20 @@ fn copy_tree(from: &Path, to: &Path, skip: &Path, left: &mut u64) -> Result<(), 
                 && !real.starts_with(skip)
                 && !entry.file_type().is_ok_and(|kind| kind.is_symlink())
             {
-                copy_tree(&path, &to.join(&name), skip, left)?;
+                copy_tree(&path, &to.join(&name), (skip, document), left)?;
             }
         } else if meta.is_file() {
-            if meta.len() > *left {
+            let whole = super::process::real(&path).is_ok_and(|real| real == document);
+            if !whole && meta.len() > *left {
                 return Err(format!(
-                    "{} holds more than {} MiB; clip a recipe from a smaller folder",
+                    "{} holds more than {} MiB beside the document; clip from a smaller folder",
                     from.display(),
                     LARGEST_COPY / 1024 / 1024
                 ));
             }
-            *left -= meta.len();
+            if !whole {
+                *left -= meta.len();
+            }
             std::fs::copy(&path, to.join(&name)).map_err(|error| named(&path, error))?;
         }
     }
@@ -287,6 +295,7 @@ struct Mirror<'a> {
     here: &'a Path,
     reach: &'a [PathBuf],
     skip: &'a Path,
+    document: &'a Path,
     left: u64,
 }
 
@@ -297,7 +306,7 @@ impl Mirror<'_> {
             return Ok(());
         }
         if from == self.focus {
-            return copy_tree(from, to, self.skip, &mut self.left);
+            return copy_tree(from, to, (self.skip, self.document), &mut self.left);
         }
         let opened = [self.focus, self.here, self.skip]
             .iter()
@@ -322,7 +331,7 @@ impl Mirror<'_> {
             return Ok(());
         }
         if from.is_dir() {
-            copy_tree(from, to, self.skip, &mut self.left)
+            copy_tree(from, to, (self.skip, self.document), &mut self.left)
         } else {
             std::fs::copy(from, to)
                 .map(|_| ())
@@ -354,6 +363,7 @@ fn mirrored(
         here: &here,
         reach,
         skip,
+        document: &real,
         left: LARGEST_COPY,
     };
     mirror.entry(&root, &top)?;

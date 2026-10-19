@@ -296,11 +296,7 @@ fn dither_stays_inside_half_a_step() {
 #[test]
 fn grain_follows_the_seed_and_the_frame() {
     let image = Image::solid(16, 16, [0.4, 0.2, 0.5, 1.0]);
-    let pass = Pass::Grain(Grain {
-        strength: 0.1,
-        response: 0.6,
-        clamp: false,
-    });
+    let pass = Pass::Grain(Grain::new(0.1, 0.6, false));
     let same_a = pass.run(&image, None, None, 4, 9);
     let same_b = pass.run(&image, None, None, 4, 9);
     let other_frame = pass.run(&image, None, None, 5, 9);
@@ -308,6 +304,105 @@ fn grain_follows_the_seed_and_the_frame() {
     assert_eq!(same_a.pixels, same_b.pixels);
     assert_ne!(same_a.pixels, other_frame.pixels);
     assert_ne!(same_a.pixels, other_seed.pixels);
+}
+
+#[test]
+fn grain_at_size_one_and_seed_zero_keeps_its_pattern() {
+    let image = Image::solid(8, 8, [0.4, 0.2, 0.5, 1.0]);
+    let out = Pass::Grain(Grain::new(0.1, 0.0, false)).run(&image, None, None, 3, 11);
+    let mixed = hash::mixed(11, 3);
+    for (i, pixel) in out.pixels.iter().enumerate() {
+        let (x, y) = (i as u32 % 8, i as u32 / 8);
+        let n = hash::grain_hash(x, y, mixed ^ 7) + hash::grain_hash(x, y, mixed ^ 19) - 1.0;
+        assert!((pixel[0] - (0.4 + 0.1 * n)).abs() < 1e-6, "{x} {y}");
+    }
+}
+
+#[test]
+fn grain_size_and_seed_change_the_pattern_not_its_spread() {
+    let image = Image::solid(256, 256, [0.5, 0.5, 0.5, 1.0]);
+    let spread = |grain: Grain| {
+        let out = Pass::Grain(grain).run(&image, None, None, 0, 0);
+        let n = out.pixels.len() as f64;
+        let mean = out.pixels.iter().map(|p| f64::from(p[0])).sum::<f64>() / n;
+        let var = out
+            .pixels
+            .iter()
+            .map(|p| (f64::from(p[0]) - mean).powi(2))
+            .sum::<f64>()
+            / n;
+        (out, mean, var.sqrt())
+    };
+    let (fine, fine_mean, fine_spread) = spread(Grain::new(0.1, 0.0, false));
+    let (seeded, ..) = spread(Grain {
+        seed: 4,
+        ..Grain::new(0.1, 0.0, false)
+    });
+    let (coarse, coarse_mean, coarse_spread) = spread(Grain {
+        size: 3.0,
+        ..Grain::new(0.1, 0.0, false)
+    });
+    assert_ne!(fine.pixels, seeded.pixels);
+    assert_ne!(fine.pixels, coarse.pixels);
+    assert!((fine_mean - 0.5).abs() < 2e-3 && (coarse_mean - 0.5).abs() < 4e-3);
+    assert!(
+        (coarse_spread / fine_spread - 1.0).abs() < 0.12,
+        "{fine_spread} {coarse_spread}"
+    );
+}
+
+#[test]
+fn chromatic_keeps_a_flat_frame_and_its_centre() {
+    let pass = crate::chromatic::Chromatic {
+        amount: 0.1,
+        falloff: 1.0,
+    };
+    let flat = Image::solid(33, 21, [0.3, 0.6, 0.9, 1.0]);
+    let out = Pass::Chromatic(pass).run(&flat, None, None, 0, 0);
+    for pixel in &out.pixels {
+        for (got, want) in pixel[..3].iter().zip(&flat.pixels[0][..3]) {
+            assert!((got - want).abs() < 1e-5);
+        }
+    }
+    let spot = Image::from_fn(33, 21, |x, _| {
+        let v = if (8..=10).contains(&x) { 1.0 } else { 0.0 };
+        [v, v, v, 1.0]
+    });
+    let wide = crate::chromatic::Chromatic {
+        amount: 0.25,
+        falloff: 0.0,
+    };
+    let out = Pass::Chromatic(wide).run(&spot, None, None, 0, 0);
+    assert_eq!(out.at(16, 10), spot.at(16, 10));
+    let edge = out.at(5, 10);
+    assert!(edge[2] > edge[0] && edge[2] > 0.1, "{edge:?}");
+    let off = crate::chromatic::Chromatic {
+        amount: 0.0,
+        ..pass
+    };
+    assert_eq!(Pass::Chromatic(off).run(&spot, None, None, 0, 0), spot);
+}
+
+#[test]
+fn the_finish_reads_grain_and_chromatic() {
+    let chain = parse_str(
+        "exposure = 1.2\nbloom = 0.1\nchromatic = { amount = 0.03, falloff = 1.5 }\ngrain = { amount = 0.04, size = 2.0, seed = 9 }\n",
+    )
+    .expect("finish");
+    let names: Vec<&str> = chain.passes.iter().map(Pass::name).collect();
+    assert_eq!(names[..3], ["exposure", "chromatic", "bloom"]);
+    assert!(chain.passes.iter().any(|pass| matches!(
+        pass,
+        Pass::Grain(Grain { strength, size, seed: 9, .. }) if *strength == 0.04 && *size == 2.0
+    )));
+    assert!(chain.passes.iter().any(|pass| matches!(
+        pass,
+        Pass::Chromatic(c) if c.amount == 0.03 && c.falloff == 1.5
+    )));
+    assert!(parse_str("grain = { amount = 0.1, strength = 0.1 }\n").is_err());
+    assert!(parse_str("grain = { size = 0.0 }\n").is_err());
+    assert!(parse_str("chromatic = { amount = 0.5 }\n").is_err());
+    assert!(parse_str("chromatic = { spread = 0.5 }\n").is_err());
 }
 
 #[test]
@@ -443,6 +538,7 @@ fn toml_parses_styles_and_refuses_unknown_keys() {
             strength,
             response: 0.0,
             clamp: false,
+            ..
         })) if (*strength - 0.02).abs() < 1e-6
     ));
     let kinds = parse_str(

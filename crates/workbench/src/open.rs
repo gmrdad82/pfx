@@ -638,6 +638,7 @@ impl Picker {
     }
 
     pub fn draw(&mut self, ctx: &Context, live: bool, path: &str, book: &Book) -> Option<Act> {
+        let palette = Palette::of(ctx);
         if !self.showing(live) {
             self.held = None;
             return None;
@@ -648,8 +649,8 @@ impl Picker {
             .fade_in(false)
             .show(ctx, |ui| {
                 Frame::NONE
-                    .fill(BG_BASE)
-                    .stroke(Stroke::new(STROKE, LINE_STRONG))
+                    .fill(palette.bg_base)
+                    .stroke(Stroke::new(STROKE, palette.line_strong))
                     .corner_radius(CornerRadius::same(RADIUS))
                     .inner_margin(Margin::same(PANEL_PADDING))
                     .show(ui, |ui| {
@@ -692,6 +693,7 @@ impl Picker {
     }
 
     fn contents(&mut self, ui: &mut Ui, live: bool, path: &str, book: &Book) -> Option<Act> {
+        let palette = Palette::of(ui.ctx());
         let purpose = self.purpose;
         if self.focus {
             let id = if purpose.saves() {
@@ -731,7 +733,7 @@ impl Picker {
             if let Some(selected) = self.selected.as_mut() {
                 ui.checkbox(
                     selected,
-                    small(ui, "the selected object only", TEXT_SECONDARY),
+                    small(ui, "the selected object only", palette.text_secondary),
                 );
             }
         }
@@ -761,7 +763,7 @@ impl Picker {
             self.cursor = (self.cursor + 1).min(len - 1);
         }
         if let Some(error) = &self.error {
-            ui.label(code(ui, crate::shown::text(error), DANGER));
+            ui.label(code(ui, crate::shown::text(error), palette.danger));
         }
         let cursor = self.cursor;
         let empty = self.query.trim().is_empty();
@@ -897,7 +899,7 @@ impl Picker {
         let folder = if query.is_empty() {
             self.anchor.clone().unwrap_or_else(|| PathBuf::from("."))
         } else {
-            expand_home(query, std::env::var_os("HOME").as_deref())
+            expand_home(query, home().as_deref())
         };
         if !folder.is_dir() {
             self.error = Some(format!("no folder at {}", folder.display()));
@@ -912,11 +914,12 @@ impl Picker {
 }
 
 fn title(ui: &mut Ui, purpose: Purpose) {
+    let palette = Palette::of(ui.ctx());
     ui.horizontal(|ui| {
         ui.label(
             RichText::new(purpose.title())
                 .font(Theme::of(ui.ctx()).bold_font(SIZE_BODY))
-                .color(TEXT_SECONDARY),
+                .color(palette.text_secondary),
         );
         let keys = match purpose {
             Purpose::Open => Some("ctrl o"),
@@ -925,7 +928,7 @@ fn title(ui: &mut Ui, purpose: Purpose) {
         };
         if let Some(keys) = keys {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                ui.label(small(ui, purpose.verb(), TEXT_SECONDARY));
+                ui.label(small(ui, purpose.verb(), palette.text_secondary));
                 ui.add(KeyCap::new(keys));
             });
         }
@@ -933,36 +936,40 @@ fn title(ui: &mut Ui, purpose: Purpose) {
 }
 
 fn heading(ui: &mut Ui, title: &str) {
+    let palette = Palette::of(ui.ctx());
     ui.add_space(4.0);
-    ui.label(small(ui, title.to_uppercase(), TEXT_SECONDARY));
+    ui.label(small(ui, title.to_uppercase(), palette.text_secondary));
 }
 
 fn muted(ui: &mut Ui, line: &str) {
-    ui.label(code(ui, line, TEXT_MUTED));
+    let palette = Palette::of(ui.ctx());
+    ui.label(code(ui, line, palette.text_muted));
 }
 
 fn footer(ui: &mut Ui, live: bool, purpose: Purpose) -> (bool, bool) {
+    let palette = Palette::of(ui.ctx());
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let enter = ui.add(KeyCap::new("enter").button()).clicked();
-        ui.label(small(ui, purpose.verb(), TEXT_SECONDARY));
+        ui.label(small(ui, purpose.verb(), palette.text_secondary));
         ui.add_space(8.0);
         let escape = ui.add(KeyCap::new("esc").button()).clicked();
         ui.label(small(
             ui,
             if live { "close" } else { "clear" },
-            TEXT_SECONDARY,
+            palette.text_secondary,
         ));
         ui.add_space(8.0);
         ui.add(KeyCap::new("↑↓"));
-        ui.label(small(ui, "choose", TEXT_SECONDARY));
+        ui.label(small(ui, "choose", palette.text_secondary));
         (enter, escape)
     })
     .inner
 }
 
 fn recipe_row(ui: &mut Ui, selected: bool, path: &Path, thumbs: &mut Thumbs) -> egui::Response {
+    let palette = Palette::of(ui.ctx());
     let name = file_name(path);
     let parent = path
         .parent()
@@ -971,7 +978,13 @@ fn recipe_row(ui: &mut Ui, selected: bool, path: &Path, thumbs: &mut Thumbs) -> 
         .unwrap_or_default();
     let thumb = thumbs.get(ui.ctx(), path);
     let icon = if thumb.is_some() { "" } else { FILE };
-    let response = entry(ui, selected, (icon, INFO), &name, &detail(path, &parent));
+    let response = entry(
+        ui,
+        selected,
+        (icon, palette.info),
+        &name,
+        &detail(path, &parent),
+    );
     if let Some(texture) = thumb {
         let side = response.rect.height() - 4.0;
         let at = egui::Rect::from_min_size(
@@ -998,7 +1011,14 @@ pub fn detail(path: &Path, parent: &str) -> String {
 }
 
 fn dir_row(ui: &mut Ui, selected: bool, path: &Path) -> egui::Response {
-    entry(ui, selected, (FOLDER, TEXT_MUTED), &file_name(path), "")
+    let palette = Palette::of(ui.ctx());
+    entry(
+        ui,
+        selected,
+        (FOLDER, palette.text_muted),
+        &file_name(path),
+        "",
+    )
 }
 
 fn entry(

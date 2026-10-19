@@ -38,6 +38,7 @@ use pfx_editor_shell::focus::{Keys, Press};
 pub const TABS: [&str; 4] = ["Scene", "Cameras", "Lights", "Render"];
 const TAB_PANELS: [Panel; 4] = [Panel::B1, Panel::B2, Panel::B3, Panel::C3];
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const HEADER_LEAD: f32 = 32.0;
 const GPU_TIME: &str = "GPU time of the last frame, from the engine's timestamp queries; the window's own CPU work is not in it";
 const PFX_EDITED: &str =
     "pfx edited its scene; pfx scene fold folds or keeps those edits, a save here drops them";
@@ -191,7 +192,7 @@ pub struct Shell {
     through: bool,
     grab: Option<Grab>,
     view: Option<TextureId>,
-    texture: Option<TextureHandle>,
+    texture: Option<(Palette, TextureHandle)>,
     view_error: Option<String>,
     preparing: Option<String>,
     picker: crate::open::Picker,
@@ -234,12 +235,15 @@ pub struct Shell {
     playing_recipe: bool,
     preparing_play: Option<session::Preparing>,
     play_frames: u32,
+    heard: session::Heard,
+    clean: bool,
     scene_revision: u64,
     module: pfx_editor::play::Play,
     session_wake: Option<pfx_editor_shell::worker::Wake>,
     imports: bool,
     board: crate::clipboard::Board,
     pasted: Option<String>,
+    palette: Palette,
 }
 
 impl fmt::Debug for Shell {
@@ -315,13 +319,14 @@ fn bar(
 }
 
 fn side(panel: egui::Panel, width: f32, ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
+    let palette = Palette::of(ui.ctx());
     panel
         .exact_size(width)
         .resizable(false)
         .show_separator_line(false)
         .frame(
             Frame::NONE
-                .fill(BG_BASE)
+                .fill(palette.bg_base)
                 .inner_margin(Margin::same(GAP as i8)),
         )
         .show(ui, |ui| {
@@ -331,6 +336,7 @@ fn side(panel: egui::Panel, width: f32, ui: &mut Ui, body: impl FnOnce(&mut Ui))
 }
 
 fn notice(painter: &Painter, image: Rect, title: &str, colour: Color32, body: &str) {
+    let palette = Palette::of(painter.ctx());
     let inner = image.shrink(SECTION_GAP * 2.0);
     let title = painter.layout_no_wrap(
         title.to_string(),
@@ -340,7 +346,7 @@ fn notice(painter: &Painter, image: Rect, title: &str, colour: Color32, body: &s
     let body = painter.layout(
         crate::shown::text(body),
         Theme::of(painter.ctx()).font(SIZE_CODE),
-        TEXT_CODE,
+        palette.text_code,
         inner.width().max(1.0),
     );
     let tall = title.size().y + ITEM_SPACING + body.size().y;
@@ -350,21 +356,26 @@ fn notice(painter: &Painter, image: Rect, title: &str, colour: Color32, body: &s
     painter.galley(
         Pos2::new(inner.left(), top + title_height + ITEM_SPACING),
         body,
-        TEXT_CODE,
+        palette.text_code,
     );
 }
 
 fn band(painter: &Painter, min: Pos2, text: String, width: Option<f32>) {
-    let galley = painter.layout_no_wrap(text, Theme::of(painter.ctx()).font(SIZE_SMALL), ACCENT);
+    let palette = Palette::of(painter.ctx());
+    let galley = painter.layout_no_wrap(
+        text,
+        Theme::of(painter.ctx()).font(SIZE_SMALL),
+        palette.accent,
+    );
     let band = Rect::from_min_size(
         min,
         Vec2::new(width.unwrap_or(galley.size().x + 16.0), 24.0),
     );
-    painter.rect_filled(band, CornerRadius::same(RADIUS), BG_DEEP);
+    painter.rect_filled(band, CornerRadius::same(RADIUS), palette.bg_deep);
     painter.galley(
         band.left_center() + Vec2::new(8.0, -galley.size().y / 2.0),
         galley,
-        ACCENT,
+        palette.accent,
     );
 }
 
@@ -554,12 +565,15 @@ impl Shell {
             playing_recipe: false,
             preparing_play: None,
             play_frames: 0,
+            heard: session::Heard::default(),
+            clean: false,
             scene_revision: 0,
             module: pfx_editor::play::Play::default(),
             session_wake: None,
             imports: false,
             board: crate::clipboard::Board::default(),
             pasted: None,
+            palette: Palette::new(&workbench()),
         }
     }
 
@@ -754,7 +768,7 @@ impl Shell {
         self.file_note = None;
         if let Some(held) = self.held.clone() {
             return match held.target {
-                Some(target) => self.pack_to(&target),
+                Some(target) => self.pack_to(&target, false),
                 None => {
                     self.ask(Purpose::SaveAs);
                     false
@@ -806,9 +820,9 @@ impl Shell {
         }
     }
 
-    fn pack_to(&mut self, target: &Path) -> bool {
+    fn pack_to(&mut self, target: &Path, whole: bool) -> bool {
         let recipe = PathBuf::from(&self.document.path);
-        match file::pack(&recipe, &self.registry, target) {
+        match file::pack(&recipe, &self.registry, target, whole) {
             Ok(written) => {
                 let undo = self.editor.as_ref().map_or(0, |editor| editor.steps().0);
                 if let Some(held) = self.held.as_mut() {
@@ -836,10 +850,10 @@ impl Shell {
             return false;
         }
         if self.held.is_some() {
-            return self.pack_to(path);
+            return self.pack_to(path, true);
         }
         let recipe = PathBuf::from(&self.document.path);
-        match file::pack(&recipe, &self.registry, path) {
+        match file::pack(&recipe, &self.registry, path, true) {
             Ok(written) => {
                 self.open_file(&written);
                 if self.held.is_none() {
@@ -958,13 +972,14 @@ impl Shell {
     }
 
     fn file_menu(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         let editable = self.editor.is_some();
         let savable = editable || self.held.is_some() || self.edits_scene();
         let packs = editable || self.edits_scene();
         let mut chosen = None;
         let title = RichText::new("File")
             .font(Theme::of(ui.ctx()).font(SIZE_BODY))
-            .color(TEXT_PRIMARY);
+            .color(palette.text_primary);
         ui.menu_button(title, |ui| {
             for (label, keys, enabled, menu) in [
                 ("Open…", "Ctrl+O", true, Menu::Open),
@@ -1501,6 +1516,7 @@ impl Shell {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = &ui.ctx().clone();
+        self.palette = Palette::of(ctx);
         if let Some(fixture) = self.fixture {
             fixture::ui(self, fixture, ui);
             return;
@@ -1513,12 +1529,16 @@ impl Shell {
         self.pointer(ctx);
         self.tick(ctx);
         self.panels.clear();
-        let texture = self
-            .texture
-            .get_or_insert_with(|| {
-                ctx.load_texture("viewport", viewport::checker(), TextureOptions::NEAREST)
-            })
-            .clone();
+        let palette = self.palette();
+        let texture = match &self.texture {
+            Some((made, texture)) if *made == palette => texture.clone(),
+            _ => {
+                let checker = viewport::checker(&palette);
+                let texture = ctx.load_texture("viewport", checker, TextureOptions::NEAREST);
+                self.texture = Some((palette, texture.clone()));
+                texture
+            }
+        };
         if self.bare {
             self.bare_view(ui, &texture);
         } else {
@@ -1529,6 +1549,7 @@ impl Shell {
             self.right(ui);
             self.centre(ui, &texture);
             self.open_layer(ctx);
+            self.log_window(ctx);
         }
         self.reveal = false;
         self.drain(ctx);
@@ -1955,6 +1976,7 @@ impl Shell {
             (_, Key::Num3) if self.live() => self.snap_ortho(Ortho::Side),
             (_, Key::Num9) if self.live() => self.snap_ortho(Ortho::Rear),
             (_, Key::Num5) if self.live() => self.unsnap(),
+            (Panel::C1, Key::H) if self.live() => self.clean = !self.clean,
             (_, Key::I) if self.live() && !self.scene => {
                 self.references_on = !self.references_on;
             }
@@ -2518,6 +2540,7 @@ impl Shell {
                     ("g r s", "move rotate scale"),
                     ("l", "local"),
                     ("p", "routes"),
+                    ("h", "hide overlays"),
                     ("ctrl", "snap"),
                     ("esc", "cancel"),
                     ("z", "shade"),
@@ -2548,10 +2571,11 @@ impl Shell {
     }
 
     fn edge(&self, panel: Panel) -> Color32 {
+        let palette = self.palette();
         if self.focus == panel {
-            LINE_STRONG
+            palette.line_strong
         } else {
-            LINE_BORDER
+            palette.line_border
         }
     }
 
@@ -2571,6 +2595,68 @@ impl Shell {
         }
     }
 
+    fn header_mark(
+        &self,
+        ctx: &Context,
+    ) -> Option<Result<(String, std::sync::Arc<crate::mark::Mark>), String>> {
+        let Some(session) = self.session().filter(|session| session.plays_a_game()) else {
+            let mark =
+                crate::mark::source(ctx, "pfx", || crate::mark::Mark::read(crate::mark::PFX));
+            return Some(mark.map(|mark| ("pfx".to_string(), mark)));
+        };
+        let path = session.config()?.mark.as_ref()?;
+        let path = match session.project() {
+            Some(project) if path.is_relative() => project.root().join(path),
+            _ => path.clone(),
+        };
+        let key = path.display().to_string();
+        let mark = crate::mark::source(ctx, &key, || crate::mark::Mark::open(&path));
+        Some(mark.map(|mark| (key, mark)))
+    }
+
+    fn header_title(&self) -> String {
+        match self.session().filter(|session| session.plays_a_game()) {
+            Some(session) => session
+                .config()
+                .map_or_else(String::new, |config| config.name.clone()),
+            None => String::new(),
+        }
+    }
+
+    fn top_header(&mut self, ui: &mut Ui) {
+        let theme = Theme::of(ui.ctx());
+        let title = self.header_title();
+        let mut header = Header::new("A", &title);
+        let mut width = 0.0;
+        let mut about = self.kind_word().to_string();
+        match self.header_mark(ui.ctx()) {
+            Some(Ok((key, mark))) => {
+                let (texture, size) = crate::mark::texture(ui.ctx(), &key, &mark, theme.row_height);
+                header = header.mark(texture, size);
+                width += size.x + pfx_editor_style::tokens::HEADER_GAP;
+            }
+            Some(Err(error)) => about = format!("{about}; the mark: {error}"),
+            None => {}
+        }
+        let shown = ui
+            .painter()
+            .layout_job(
+                theme
+                    .titles
+                    .job(&title, theme.title_font(theme.size_small), theme.text),
+            )
+            .size()
+            .x;
+        width += shown + HEADER_LEAD;
+        let header = header
+            .id(header_id(Panel::A))
+            .focused(self.focus == Panel::A)
+            .width(width.max(92.0).ceil());
+        if ui.add(header).on_hover_text(about).clicked() {
+            self.go(ui.ctx(), Panel::A);
+        }
+    }
+
     fn go(&mut self, ctx: &Context, panel: Panel) {
         self.focus = panel;
         self.confirm = None;
@@ -2583,22 +2669,22 @@ impl Shell {
     }
 
     fn top(&mut self, ui: &mut Ui) {
-        let rect = bar(egui::Panel::top("A"), TOP, BG_DEEP, ui, |ui| {
-            let kind = self.kind_word();
-            self.header(ui, Panel::A, Header::new("A", kind).width(92.0));
+        let palette = Palette::of(ui.ctx());
+        let rect = bar(egui::Panel::top("A"), TOP, palette.bg_deep, ui, |ui| {
+            self.top_header(ui);
             self.file_menu(ui);
             self.edit_menu(ui);
             ui.add_space(SECTION_GAP);
             ui.label(
                 RichText::new(&self.document.name)
                     .font(Theme::of(ui.ctx()).bold_font(SIZE_HEADING))
-                    .color(TEXT_PRIMARY),
+                    .color(palette.text_primary),
             );
             if self.dirty() {
-                ui.label(code(ui, file::MARK, ACCENT))
+                ui.label(code(ui, file::MARK, palette.accent))
                     .on_hover_text("unsaved edits: ctrl s saves the .pitofx");
             }
-            ui.label(code(ui, self.shown_path(), TEXT_MUTED));
+            ui.label(code(ui, self.shown_path(), palette.text_muted));
             ui.add_space(SECTION_GAP * 2.0);
             let mut tab = tab_of(self.focus);
             if ui.add(Tabs::new(&mut tab, &TABS)).changed()
@@ -2639,73 +2725,96 @@ impl Shell {
     }
 
     fn status(&mut self, ui: &mut Ui) {
-        let rect = bar(egui::Panel::bottom("D1"), STATUS, BG_DEEP, ui, |ui| {
-            let whole = ui.max_rect();
-            let mut tools = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(whole)
-                    .layout(Layout::right_to_left(Align::Center)),
-            );
-            self.status_tools(&mut tools);
-            let limit = (tools.min_rect().left() - SECTION_GAP).max(whole.left());
-            let mut ui = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(Rect::from_min_max(
-                        whole.min,
-                        Pos2::new(limit, whole.bottom()),
-                    ))
-                    .layout(Layout::left_to_right(Align::Center)),
-            );
-            let ui = &mut ui;
-            self.header(ui, Panel::D1, Header::new("D1", "status").width(92.0));
-            let kind = self.kind_word();
-            item(ui, kind, &self.shown_path(), TEXT_CODE);
-            divider(ui);
-            let session = self.session_said();
-            match (&self.trouble, self.note, self.said()) {
-                _ if self.preparing_play.is_some() => {
-                    item(ui, "play", "building the recipe's scene…", ACCENT)
-                }
-                _ if session.is_some() => {
-                    if let Some((text, colour)) = &session {
-                        item(ui, "log", &first_line(text, 96), *colour);
-                    }
-                }
-                _ if self.file_note.is_some() => {
-                    if let Some((text, error)) = &self.file_note {
-                        let (label, colour) = if *error {
-                            ("error", DANGER)
-                        } else {
-                            ("file", ACCENT)
-                        };
-                        item(ui, label, &first_line(text, 96), colour);
-                    }
-                }
-                (_, _, Some(Said::Refused(why))) => {
-                    item(ui, "refused", &first_line(why, 96), DANGER)
-                }
-                _ if self.busy => item(ui, "build", "rebuilding…", ACCENT),
-                (Some(trouble), _, _) => item(ui, "error", &first_line(trouble, 96), DANGER),
-                (None, Some(note), _) => item(ui, "note", note, ACCENT),
-                (None, None, Some(Said::Reloaded(what))) => {
-                    item(ui, "reloaded", &first_line(what, 96), ACCENT)
-                }
-                (None, None, Some(Said::Patched(line))) => {
-                    item(ui, "patch", &first_line(line, 96), TEXT_CODE)
-                }
-                (None, None, None) => item(ui, "patch", &self.document.patch, TEXT_CODE),
-            }
-            if let Some(job) = self.shots.job() {
+        let palette = Palette::of(ui.ctx());
+        let rect = bar(
+            egui::Panel::bottom("D1"),
+            STATUS,
+            palette.bg_deep,
+            ui,
+            |ui| {
+                let whole = ui.max_rect();
+                let mut tools = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(whole)
+                        .layout(Layout::right_to_left(Align::Center)),
+                );
+                self.status_tools(&mut tools);
+                let limit = (tools.min_rect().left() - SECTION_GAP).max(whole.left());
+                let mut ui = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(Rect::from_min_max(
+                            whole.min,
+                            Pos2::new(limit, whole.bottom()),
+                        ))
+                        .layout(Layout::left_to_right(Align::Center)),
+                );
+                let ui = &mut ui;
+                self.header(ui, Panel::D1, Header::new("D1", "status").width(92.0));
+                let kind = self.kind_word();
+                item(ui, kind, &self.shown_path(), palette.text_code);
                 divider(ui);
-                item(ui, "render", &job.summary(), phase_colour(&job.phase));
-            }
-        });
+                let session = self.session_said();
+                let held = self.heard.held().map(str::to_string);
+                match (&self.trouble, self.note, self.said()) {
+                    _ if self.preparing_play.is_some() => {
+                        item(ui, "play", "building the recipe's scene…", palette.accent)
+                    }
+                    _ if held.is_some() => {
+                        if let Some(text) = &held {
+                            self.held_item(ui, text);
+                        }
+                    }
+                    _ if session.is_some() => {
+                        if let Some((text, colour)) = &session {
+                            item(ui, "log", &first_line(text, 96), *colour);
+                        }
+                    }
+                    _ if self.file_note.is_some() => {
+                        if let Some((text, error)) = &self.file_note {
+                            let (label, colour) = if *error {
+                                ("error", palette.danger)
+                            } else {
+                                ("file", palette.accent)
+                            };
+                            item(ui, label, &first_line(text, 96), colour);
+                        }
+                    }
+                    (_, _, Some(Said::Refused(why))) => {
+                        item(ui, "refused", &first_line(why, 96), palette.danger)
+                    }
+                    _ if self.busy => item(ui, "build", "rebuilding…", palette.accent),
+                    (Some(trouble), _, _) => {
+                        item(ui, "error", &first_line(trouble, 96), palette.danger)
+                    }
+                    (None, Some(note), _) => item(ui, "note", note, palette.accent),
+                    (None, None, Some(Said::Reloaded(what))) => {
+                        item(ui, "reloaded", &first_line(what, 96), palette.accent)
+                    }
+                    (None, None, Some(Said::Patched(line))) => {
+                        item(ui, "patch", &first_line(line, 96), palette.text_code)
+                    }
+                    (None, None, None) => {
+                        item(ui, "patch", &self.document.patch, palette.text_code)
+                    }
+                }
+                if let Some(job) = self.shots.job() {
+                    divider(ui);
+                    item(
+                        ui,
+                        "render",
+                        &job.summary(),
+                        phase_colour(&palette, &job.phase),
+                    );
+                }
+            },
+        );
         self.panels.push((Panel::D1, rect));
         self.border_over(ui.ctx(), Panel::D1, rect);
     }
 
     fn status_tools(&mut self, ui: &mut Ui) {
-        ui.label(code(ui, status_version(), TEXT_MUTED));
+        let palette = Palette::of(ui.ctx());
+        ui.label(code(ui, status_version(), palette.text_muted));
         divider(ui);
         let tone = match self.pgpu {
             Pgpu::Free => Tone::Ok,
@@ -2713,18 +2822,19 @@ impl Shell {
             Pgpu::Queued => Tone::Neutral,
         };
         ui.add(Pill::new(self.pgpu.word(), tone));
-        ui.label(code(ui, "pgpu", TEXT_MUTED));
+        ui.label(code(ui, "pgpu", palette.text_muted));
         divider(ui);
         let frame = self
             .frame_ms
             .map_or_else(|| "—".to_string(), |ms| format!("{ms:.1} ms"));
-        ui.label(code(ui, frame, TEXT_CODE)).on_hover_text(GPU_TIME);
-        ui.label(code(ui, "GPU frame", TEXT_MUTED))
+        ui.label(code(ui, frame, palette.text_code))
+            .on_hover_text(GPU_TIME);
+        ui.label(code(ui, "GPU frame", palette.text_muted))
             .on_hover_text(GPU_TIME);
         if self.timing_drops > 0 {
             divider(ui);
             ui.label(
-                code(ui, format!("{} dropped", self.timing_drops), ACCENT),
+                code(ui, format!("{} dropped", self.timing_drops), palette.accent),
             )
             .on_hover_text(format!(
                 "{} frames' GPU timings never arrived or arrived too late, so the GPU frame time skips them",
@@ -2734,48 +2844,56 @@ impl Shell {
     }
 
     fn hints(&mut self, ui: &mut Ui) {
-        bar(egui::Panel::bottom("hints"), HINTS, BG_BASE, ui, |ui| {
-            let mut tools = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(ui.max_rect())
-                    .layout(Layout::right_to_left(Align::Center)),
-            );
-            self.hint_tools(&mut tools);
-            let limit = tools.min_rect().left() - SECTION_GAP;
-            ui.label(code(ui, self.focus.code(), TEXT_DIM));
-            let hints = if self.scene {
-                Shell::viewing_hints(self.focus)
-            } else {
-                Shell::hints_for(self.focus, self.live())
-            };
-            let gap = 4.0 + ui.spacing().item_spacing.x;
-            let more = gap + hint_width(ui, None, MORE);
-            for (index, (key, word)) in hints.iter().enumerate() {
-                let tail = if index + 1 < hints.len() { more } else { 0.0 };
-                if ui.cursor().left() + gap + hint_width(ui, Some(key), word) + tail > limit {
-                    let rest: Vec<String> = hints[index..]
-                        .iter()
-                        .map(|(key, word)| format!("{key}  {word}"))
-                        .collect();
+        let palette = Palette::of(ui.ctx());
+        bar(
+            egui::Panel::bottom("hints"),
+            HINTS,
+            palette.bg_base,
+            ui,
+            |ui| {
+                let mut tools = ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(ui.max_rect())
+                        .layout(Layout::right_to_left(Align::Center)),
+                );
+                self.hint_tools(&mut tools);
+                let limit = tools.min_rect().left() - SECTION_GAP;
+                ui.label(code(ui, self.focus.code(), palette.text_dim));
+                let hints = if self.scene {
+                    Shell::viewing_hints(self.focus)
+                } else {
+                    Shell::hints_for(self.focus, self.live())
+                };
+                let gap = 4.0 + ui.spacing().item_spacing.x;
+                let more = gap + hint_width(ui, None, MORE);
+                for (index, (key, word)) in hints.iter().enumerate() {
+                    let tail = if index + 1 < hints.len() { more } else { 0.0 };
+                    if ui.cursor().left() + gap + hint_width(ui, Some(key), word) + tail > limit {
+                        let rest: Vec<String> = hints[index..]
+                            .iter()
+                            .map(|(key, word)| format!("{key}  {word}"))
+                            .collect();
+                        ui.add_space(4.0);
+                        ui.label(small(ui, MORE, palette.text_secondary))
+                            .on_hover_text(rest.join("\n"));
+                        break;
+                    }
                     ui.add_space(4.0);
-                    ui.label(small(ui, MORE, TEXT_SECONDARY))
-                        .on_hover_text(rest.join("\n"));
-                    break;
+                    ui.add(KeyCap::new(key));
+                    ui.label(small(ui, *word, palette.text_secondary));
                 }
-                ui.add_space(4.0);
-                ui.add(KeyCap::new(key));
-                ui.label(small(ui, *word, TEXT_SECONDARY));
-            }
-        });
+            },
+        );
     }
 
     fn hint_tools(&mut self, ui: &mut Ui) {
-        ui.label(small(ui, "panel", TEXT_SECONDARY));
+        let palette = Palette::of(ui.ctx());
+        ui.label(small(ui, "panel", palette.text_secondary));
         ui.add(KeyCap::new("1–3"));
         let pending = self.keys.pending().map(|letter| letter.to_string());
         ui.add(KeyCap::new(pending.as_deref().unwrap_or("a–d")).lit(pending.is_some()));
         ui.add_space(SECTION_GAP);
-        ui.label(small(ui, "open", TEXT_SECONDARY));
+        ui.label(small(ui, "open", palette.text_secondary));
         let closed = !self.picker.showing(self.live());
         if ui
             .add_enabled(closed, KeyCap::new("ctrl o").button())
@@ -2791,7 +2909,7 @@ impl Shell {
             ("ctrl ⇧ z", "redo", Command::Redo, redo),
             ("ctrl z", "undo", Command::Undo, undo),
         ] {
-            ui.label(small(ui, word, TEXT_SECONDARY));
+            ui.label(small(ui, word, palette.text_secondary));
             if ui
                 .add_enabled(steps > 0, KeyCap::new(key).button())
                 .clicked()
@@ -2871,10 +2989,11 @@ impl Shell {
     }
 
     fn centre(&mut self, ui: &mut Ui, texture: &TextureHandle) {
+        let palette = Palette::of(ui.ctx());
         CentralPanel::default()
             .frame(
                 Frame::NONE
-                    .fill(BG_BASE)
+                    .fill(palette.bg_base)
                     .inner_margin(Margin::symmetric(0, GAP as i8)),
             )
             .show(ui, |ui| {
@@ -2910,7 +3029,8 @@ impl Shell {
                     let room = ui.available_size() - Vec2::new(0.0, bar);
                     let (area, response) =
                         ui.allocate_exact_size(room.max(Vec2::splat(1.0)), sense);
-                    ui.painter().rect_filled(area, CornerRadius::ZERO, BG_DEEP);
+                    ui.painter()
+                        .rect_filled(area, CornerRadius::ZERO, palette.bg_deep);
                     let image = Rect::from_min_max(area.min.round(), area.max.round());
                     if !shell.live() {
                         let painter = ui.painter();
@@ -3214,9 +3334,16 @@ impl Shell {
     }
 
     fn picture(&self, ui: &Ui, image: Rect) {
+        let palette = Palette::of(ui.ctx());
         let painter = ui.painter();
         match (&self.view_error, self.view) {
-            (Some(error), _) => notice(painter, image, "C1 cannot draw this recipe", DANGER, error),
+            (Some(error), _) => notice(
+                painter,
+                image,
+                "C1 cannot draw this recipe",
+                palette.danger,
+                error,
+            ),
             (None, Some(id)) => {
                 painter.image(id, image, WHOLE, Color32::WHITE);
                 if let Some(preparing) = &self.preparing {
@@ -3227,9 +3354,12 @@ impl Shell {
             }
             (None, None) => {
                 if let Some(preparing) = &self.preparing {
-                    notice(painter, image, "C1 preparing", ACCENT, preparing);
+                    notice(painter, image, "C1 preparing", palette.accent, preparing);
                 }
             }
+        }
+        if self.clean {
+            return;
         }
         viewport::frame(painter, image);
         if let Some(eye) = self.view_eye() {
@@ -3269,6 +3399,7 @@ impl Shell {
     }
 
     fn outliner(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         if self.edits_scene() {
             return self.session_outliner(ui);
         }
@@ -3291,11 +3422,12 @@ impl Shell {
                     };
                     let object = node.object;
                     let (label, icon) = match object {
-                        Some(object) if !self.search.is_empty() => {
-                            (self.document.objects[object].name.as_str(), (CUBE, INFO))
-                        }
-                        Some(_) => (node.label.as_str(), (CUBE, INFO)),
-                        None => (node.label.as_str(), (FOLDER, TEXT_MUTED)),
+                        Some(object) if !self.search.is_empty() => (
+                            self.document.objects[object].name.as_str(),
+                            (CUBE, palette.info),
+                        ),
+                        Some(_) => (node.label.as_str(), (CUBE, palette.info)),
+                        None => (node.label.as_str(), (FOLDER, palette.text_muted)),
                     };
                     let detail = match object {
                         Some(object) => self.document.objects[object].material.as_str(),
@@ -3343,6 +3475,7 @@ impl Shell {
     }
 
     fn route_rows(&mut self, ui: &mut Ui, focused: bool) {
+        let palette = Palette::of(ui.ctx());
         if self.scene || !self.search.is_empty() {
             return;
         }
@@ -3361,10 +3494,16 @@ impl Shell {
             .collect();
         for (name, detail) in rows {
             let selected = self.routes.chosen.as_deref() == Some(name.as_str());
-            let response = list_row(ui, focused, selected, 0, (ROUTE, ACCENT), &name, &detail)
-                .on_hover_text(
-                    "show or hide this route's line and points in C1; p shows every route",
-                );
+            let response = list_row(
+                ui,
+                focused,
+                selected,
+                0,
+                (ROUTE, palette.accent),
+                &name,
+                &detail,
+            )
+            .on_hover_text("show or hide this route's line and points in C1; p shows every route");
             if response.clicked() {
                 self.routes.toggle(&name);
             }
@@ -3387,6 +3526,7 @@ impl Shell {
     }
 
     fn cameras(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         let focused = self.focus == Panel::B2;
         let list = (ui.available_height() - BUTTONS - GAP).max(ROW_HEIGHT);
         let mut chosen = None;
@@ -3402,7 +3542,7 @@ impl Shell {
                         focused,
                         index == self.camera,
                         0,
-                        (CAMERA, INFO),
+                        (CAMERA, palette.info),
                         name,
                         detail,
                     );
@@ -3419,13 +3559,14 @@ impl Shell {
     }
 
     fn camera_buttons(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         let mut act = Gesture::None;
         let editing = self.eye.is_some() && !self.scene;
         let any = !self.document.cameras.is_empty();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             if let Some(name) = &self.confirm {
-                ui.label(code(ui, format!("delete {name}?"), DANGER));
+                ui.label(code(ui, format!("delete {name}?"), palette.danger));
                 if chip(ui, "Delete  ⏎", true).clicked() {
                     act = Gesture::Delete(name.clone());
                 }
@@ -3458,6 +3599,7 @@ impl Shell {
     }
 
     fn lights(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         let focused = self.focus == Panel::B3;
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut chosen = None;
@@ -3472,7 +3614,7 @@ impl Shell {
                 focused,
                 index == self.light,
                 0,
-                (icon, ACCENT),
+                (icon, palette.accent),
                 name,
                 detail,
             );
@@ -3491,12 +3633,12 @@ impl Shell {
         let mut write = false;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            ui.label(small(ui, "hour", TEXT_SECONDARY));
+            ui.label(small(ui, "hour", palette.text_secondary));
             let label = kept.map_or("Use hour", |(label, _)| label);
             let chip_font = Theme::of(ui.ctx()).font(SIZE_CODE);
             let chip_width = ui.fonts_mut(|fonts| {
                 fonts
-                    .layout_no_wrap(label.to_string(), chip_font, TEXT_CODE)
+                    .layout_no_wrap(label.to_string(), chip_font, palette.text_code)
                     .size()
                     .x
             }) + 18.0;
@@ -3510,7 +3652,7 @@ impl Shell {
             ui.label(code(
                 ui,
                 format!("{:02}:{:02}", minutes / 60, minutes % 60),
-                VALUE,
+                palette.value,
             ));
             let response = chip(ui, label, kept.is_none());
             write = response.clicked();
@@ -3580,6 +3722,7 @@ impl Shell {
     }
 
     fn properties(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         if self.edits_scene() {
             return self.session_inspector(ui);
         }
@@ -3589,7 +3732,7 @@ impl Shell {
             return self.lit_properties(ui);
         }
         if self.object.is_none() {
-            ui.label(small(ui, "nothing selected", TEXT_MUTED));
+            ui.label(small(ui, "nothing selected", palette.text_muted));
             return;
         }
         if self.editor.is_none() {
@@ -3633,7 +3776,7 @@ impl Shell {
             let many = matches!(fields.map(|fields| &fields.material), Some(Slots::Many(_)));
             labelled(ui, "material", |ui| {
                 if many {
-                    ui.label(code(ui, material.as_str(), TEXT_MUTED))
+                    ui.label(code(ui, material.as_str(), palette.text_muted))
                         .on_hover_text("several material slots: change `materials` in the recipe");
                     return;
                 }
@@ -3693,7 +3836,7 @@ impl Shell {
                     }
                     ComboBox::from_id_salt("smoothing")
                         .width(ui.available_width())
-                        .selected_text(code(ui, sample::SMOOTHING[*smoothing], TEXT_CODE))
+                        .selected_text(code(ui, sample::SMOOTHING[*smoothing], palette.text_code))
                         .show_ui(ui, |ui| {
                             for (index, name) in sample::SMOOTHING.iter().enumerate() {
                                 ui.selectable_value(smoothing, index, *name);
@@ -3744,9 +3887,10 @@ impl Shell {
     }
 
     fn lit_properties(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         let (_, name, detail) = &self.document.lights[self.light];
         labelled(ui, "name", |ui| {
-            ui.label(code(ui, name.as_str(), TEXT_CODE));
+            ui.label(code(ui, name.as_str(), palette.text_code));
         });
         ui.add(Dotted::new());
         let Some(lit) = self.lit.as_ref().map(|fields| fields.lit.clone()) else {
@@ -3757,7 +3901,7 @@ impl Shell {
                 }
                 (true, _) => detail.as_str(),
             };
-            ui.label(small(ui, why, TEXT_MUTED));
+            ui.label(small(ui, why, palette.text_muted));
             return;
         };
         let dials = &mut self.dials;
@@ -3868,18 +4012,27 @@ impl Shell {
     }
 
     fn render_panel(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         ui.spacing_mut().item_spacing.y = GAP;
         ui.add_space(4.0);
         if let Some((on, samples)) = self.session_tracing() {
             ui.label(small(
                 ui,
                 "traces the view on the engine's path tracer, a sample a frame",
-                TEXT_SECONDARY,
+                palette.text_secondary,
             ));
             let (label, fill, text) = if on {
-                (format!("{STOP}  Stop tracing"), BG_CHIP, TEXT_PRIMARY)
+                (
+                    format!("{STOP}  Stop tracing"),
+                    palette.bg_chip,
+                    palette.text_primary,
+                )
             } else {
-                (format!("{PLAY}  Trace"), ACCENT, ACCENT_TEXT)
+                (
+                    format!("{PLAY}  Trace"),
+                    palette.accent,
+                    palette.accent_text,
+                )
             };
             let button = Button::new(
                 RichText::new(label)
@@ -3887,7 +4040,10 @@ impl Shell {
                     .color(text),
             )
             .fill(fill)
-            .stroke(Stroke::new(STROKE, if on { LINE_STRONG } else { fill }))
+            .stroke(Stroke::new(
+                STROKE,
+                if on { palette.line_strong } else { fill },
+            ))
             .corner_radius(CornerRadius::same(RADIUS))
             .min_size(Vec2::new(ui.available_width(), 28.0));
             if ui.add(button).clicked() {
@@ -3898,7 +4054,7 @@ impl Shell {
             } else {
                 "not tracing".to_string()
             };
-            ui.label(code(ui, shown, TEXT_CODE));
+            ui.label(code(ui, shown, palette.text_code));
             return;
         }
         let unrenderable = self.unrenderable();
@@ -3915,7 +4071,7 @@ impl Shell {
                 .selected_text(code(
                     ui,
                     cameras.get(*camera).map_or("—", |(name, _)| name.as_str()),
-                    TEXT_CODE,
+                    palette.text_code,
                 ))
                 .show_ui(ui, |ui| {
                     for (index, (name, _)) in cameras.iter().enumerate() {
@@ -3937,7 +4093,7 @@ impl Shell {
                     .decimals(0)
                     .width(width),
             );
-            ui.label(code(ui, "×", TEXT_MUTED));
+            ui.label(code(ui, "×", palette.text_muted));
             ui.add(
                 Number::new(&mut size[1])
                     .unit("px")
@@ -3964,9 +4120,17 @@ impl Shell {
         ui.add(Dotted::new());
         let busy = self.shots.busy();
         let (label, fill, text) = match (busy, renders) {
-            (true, _) => (format!("{STOP}  Cancel"), BG_CHIP, TEXT_PRIMARY),
-            (false, true) => (format!("{PLAY}  Render"), ACCENT, ACCENT_TEXT),
-            (false, false) => (format!("{PLAY}  Render"), BG_CHIP, TEXT_DIM),
+            (true, _) => (
+                format!("{STOP}  Cancel"),
+                palette.bg_chip,
+                palette.text_primary,
+            ),
+            (false, true) => (
+                format!("{PLAY}  Render"),
+                palette.accent,
+                palette.accent_text,
+            ),
+            (false, false) => (format!("{PLAY}  Render"), palette.bg_chip, palette.text_dim),
         };
         let button = Button::new(
             RichText::new(label)
@@ -3974,7 +4138,10 @@ impl Shell {
                 .color(text),
         )
         .fill(fill)
-        .stroke(Stroke::new(STROKE, if busy { LINE_STRONG } else { fill }))
+        .stroke(Stroke::new(
+            STROKE,
+            if busy { palette.line_strong } else { fill },
+        ))
         .corner_radius(CornerRadius::same(RADIUS))
         .min_size(Vec2::new(ui.available_width(), 28.0));
         let response = ui.add_enabled(busy || renders, button);
@@ -3992,8 +4159,9 @@ impl Shell {
     }
 
     fn render_state(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         let Some(job) = self.shots.job().cloned() else {
-            ui.label(code(ui, "no render yet", TEXT_DIM));
+            ui.label(code(ui, "no render yet", palette.text_dim));
             return;
         };
         ui.horizontal(|ui| {
@@ -4007,10 +4175,10 @@ impl Shell {
                 Phase::Waiting(reason) => format!("for {reason}"),
                 _ => format!("{} {}×{}", job.camera, job.size[0], job.size[1]),
             };
-            ui.label(code(ui, detail, TEXT_MUTED));
+            ui.label(code(ui, detail, palette.text_muted));
         });
         if let Phase::Failed(reason) = &job.phase {
-            ui.label(code(ui, first_line(reason, 120), DANGER));
+            ui.label(code(ui, first_line(reason, 120), palette.danger));
         }
         let (Phase::Done, Some(views)) = (&job.phase, &self.shot_views) else {
             return;
@@ -4025,14 +4193,14 @@ impl Shell {
         ui.painter().rect_stroke(
             rect,
             CornerRadius::ZERO,
-            Stroke::new(STROKE, LINE_BORDER),
+            Stroke::new(STROKE, palette.line_border),
             StrokeKind::Inside,
         );
         let clicked = response.clicked();
         ui.label(code(
             ui,
             tail_text(&job.out.display().to_string(), 40),
-            TEXT_MUTED,
+            palette.text_muted,
         ));
         if clicked {
             self.full = true;
@@ -4040,13 +4208,18 @@ impl Shell {
     }
 
     fn shading(&mut self, ui: &mut Ui, image: Rect) {
+        let palette = Palette::of(ui.ctx());
         if self.full || self.view_error.is_some() {
             return;
         }
         let mut right = image.right() - SECTION_GAP * 0.5;
         let top = image.bottom() - SECTION_GAP * 0.5 - ROW_HEIGHT;
         let mut toggle = |ui: &mut Ui, text: &str, on: bool| {
-            let colour = if on { ACCENT } else { TEXT_SECONDARY };
+            let colour = if on {
+                palette.accent
+            } else {
+                palette.text_secondary
+            };
             let font = Theme::of(ui.ctx()).font(SIZE_CODE);
             let width = ui
                 .painter()
@@ -4061,8 +4234,19 @@ impl Shell {
                 rect,
                 Button::new(code(ui, text, colour))
                     .wrap_mode(egui::TextWrapMode::Extend)
-                    .fill(if on { BG_SELECTED } else { BG_CHIP })
-                    .stroke(Stroke::new(STROKE, if on { ACCENT } else { LINE_BORDER }))
+                    .fill(if on {
+                        palette.bg_selected
+                    } else {
+                        palette.bg_chip
+                    })
+                    .stroke(Stroke::new(
+                        STROKE,
+                        if on {
+                            palette.accent
+                        } else {
+                            palette.line_border
+                        },
+                    ))
                     .corner_radius(CornerRadius::same(RADIUS)),
             )
             .on_hover_text(match text {
@@ -4083,11 +4267,12 @@ impl Shell {
     }
 
     fn shot_overlay(&self, ui: &Ui, image: Rect) {
+        let palette = Palette::of(ui.ctx());
         let (true, Some(views), Some(job)) = (self.full, &self.shot_views, self.shots.job()) else {
             return;
         };
         let painter = ui.painter();
-        painter.rect_filled(image, CornerRadius::ZERO, BG_DEEP);
+        painter.rect_filled(image, CornerRadius::ZERO, palette.bg_deep);
         let [width, height] = views.full.size();
         let fitted = viewport::fit(image, width as f32 / height.max(1) as f32);
         painter.image(views.full.id(), fitted, WHOLE, Color32::WHITE);
@@ -4123,12 +4308,12 @@ fn phase_tone(phase: &Phase) -> Tone {
     }
 }
 
-fn phase_colour(phase: &Phase) -> Color32 {
+fn phase_colour(palette: &Palette, phase: &Phase) -> Color32 {
     match phase {
-        Phase::Queued | Phase::Waiting(_) | Phase::Cancelled => TEXT_CODE,
-        Phase::Running => ACCENT,
-        Phase::Done => OK,
-        Phase::Failed(_) => DANGER,
+        Phase::Queued | Phase::Waiting(_) | Phase::Cancelled => palette.text_code,
+        Phase::Running => palette.accent,
+        Phase::Done => palette.ok,
+        Phase::Failed(_) => palette.danger,
     }
 }
 
@@ -4142,12 +4327,17 @@ pub(crate) fn tail_text(text: &str, most: usize) -> String {
 }
 
 fn chip(ui: &mut Ui, text: &str, enabled: bool) -> Response {
-    let colour = if enabled { TEXT_SECONDARY } else { TEXT_DIM };
+    let palette = Palette::of(ui.ctx());
+    let colour = if enabled {
+        palette.text_secondary
+    } else {
+        palette.text_dim
+    };
     ui.add_enabled(
         enabled,
         Button::new(code(ui, text, colour))
-            .fill(BG_CHIP)
-            .stroke(Stroke::new(STROKE, LINE_BORDER))
+            .fill(palette.bg_chip)
+            .stroke(Stroke::new(STROKE, palette.line_border))
             .corner_radius(CornerRadius::same(RADIUS)),
     )
 }
@@ -4190,6 +4380,7 @@ const MORE: &str = "…";
 const ITEM_SHARE: f32 = 0.6;
 
 fn hint_width(ui: &mut Ui, key: Option<&str>, word: &str) -> f32 {
+    let palette = Palette::of(ui.ctx());
     let mut probe = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(ui.max_rect())
@@ -4199,7 +4390,7 @@ fn hint_width(ui: &mut Ui, key: Option<&str>, word: &str) -> f32 {
     if let Some(key) = key {
         probe.add(KeyCap::new(key));
     }
-    probe.label(small(&probe, word, TEXT_SECONDARY));
+    probe.label(small(&probe, word, palette.text_secondary));
     probe.min_rect().width()
 }
 const DETAIL_SHARE: f32 = 0.4;
@@ -4217,6 +4408,7 @@ fn fitted(
 }
 
 pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
+    let palette = Palette::of(ui.ctx());
     let Row {
         focused,
         selected,
@@ -4233,11 +4425,11 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
     }
     let lit = selected && focused;
     let fill = if lit {
-        Some(ACCENT)
+        Some(palette.accent)
     } else if selected {
-        Some(BG_SELECTED)
+        Some(palette.bg_selected)
     } else if response.hovered() {
-        Some(BG_HOVER)
+        Some(palette.bg_hover)
     } else {
         None
     };
@@ -4246,7 +4438,7 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
     if let Some(fill) = fill {
         painter.rect_filled(rect, CornerRadius::same(RADIUS), fill);
     }
-    let ink = |colour| if lit { ACCENT_TEXT } else { colour };
+    let ink = |colour| if lit { palette.accent_text } else { colour };
     let theme = Theme::of(painter.ctx());
     let x = rect.left() + 4.0 + depth as f32 * SECTION_GAP;
     painter.text(
@@ -4254,12 +4446,15 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
         Align2::LEFT_CENTER,
         icon.0,
         theme.font(SIZE_BODY),
-        ink(if dim { TEXT_DIM } else { icon.1 }),
+        ink(if dim { palette.text_dim } else { icon.1 }),
     );
     let mut right = rect.right() - 4.0;
     let badge = mark.map(|mark| {
-        let galley =
-            painter.layout_no_wrap(mark.to_string(), theme.font(SIZE_CODE), ink(TEXT_MUTED));
+        let galley = painter.layout_no_wrap(
+            mark.to_string(),
+            theme.font(SIZE_CODE),
+            ink(palette.text_muted),
+        );
         let badge = Rect::from_center_size(
             Pos2::new(right - galley.size().x / 2.0 - 4.0, rect.center().y),
             galley.size() + Vec2::new(8.0, 2.0),
@@ -4273,7 +4468,11 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
         painter,
         label,
         theme.font(SIZE_BODY),
-        ink(if dim { TEXT_MUTED } else { TEXT_PRIMARY }),
+        ink(if dim {
+            palette.text_muted
+        } else {
+            palette.text_primary
+        }),
         f32::INFINITY,
     );
     let detail = (!detail.is_empty()).then(|| {
@@ -4281,7 +4480,7 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
             painter,
             detail,
             theme.font(SIZE_CODE),
-            ink(TEXT_MUTED),
+            ink(palette.text_muted),
             f32::INFINITY,
         );
         let wanted = room - label.size().x - ROW_GAP;
@@ -4291,7 +4490,7 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
                 painter,
                 detail,
                 theme.font(SIZE_CODE),
-                ink(TEXT_MUTED),
+                ink(palette.text_muted),
                 width,
             )
         } else {
@@ -4308,7 +4507,11 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
             painter,
             &full,
             theme.font(SIZE_BODY),
-            ink(if dim { TEXT_MUTED } else { TEXT_PRIMARY }),
+            ink(if dim {
+                palette.text_muted
+            } else {
+                palette.text_primary
+            }),
             label_room.max(0.0),
         )
     } else {
@@ -4318,7 +4521,7 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
     painter.galley(
         Pos2::new(left, rect.center().y - 0.5 - label.size().y / 2.0),
         label,
-        TEXT_PRIMARY,
+        palette.text_primary,
     );
     if let Some(detail) = detail {
         painter.galley(
@@ -4327,17 +4530,28 @@ pub(crate) fn marked_row(ui: &mut Ui, row: Row) -> Response {
                 rect.center().y - 0.5 - detail.size().y / 2.0,
             ),
             detail,
-            TEXT_MUTED,
+            palette.text_muted,
         );
     }
     if let Some((badge, galley)) = badge {
         painter.rect_stroke(
             badge,
             CornerRadius::same(RADIUS),
-            Stroke::new(STROKE, if lit { ACCENT_TEXT } else { LINE_BORDER }),
+            Stroke::new(
+                STROKE,
+                if lit {
+                    palette.accent_text
+                } else {
+                    palette.line_border
+                },
+            ),
             egui::StrokeKind::Inside,
         );
-        painter.galley(badge.center() - galley.size() / 2.0, galley, ACCENT_TEXT);
+        painter.galley(
+            badge.center() - galley.size() / 2.0,
+            galley,
+            palette.accent_text,
+        );
     }
     if elided {
         return response.on_hover_text(match row.detail {
@@ -4428,6 +4642,7 @@ fn dial_row(
 }
 
 fn colour_row(ui: &mut Ui, color: &mut [f32; 3]) -> Option<(usize, f32)> {
+    let palette = Palette::of(ui.ctx());
     let mut done = None;
     labelled(ui, "colour", |ui| {
         let swatch = ROW_HEIGHT;
@@ -4449,7 +4664,7 @@ fn colour_row(ui: &mut Ui, color: &mut [f32; 3]) -> Option<(usize, f32)> {
             rect,
             CornerRadius::same(RADIUS),
             Color32::from(egui::Rgba::from_rgb(r, g, b)),
-            Stroke::new(STROKE, LINE_BORDER),
+            Stroke::new(STROKE, palette.line_border),
             StrokeKind::Inside,
         );
     });
@@ -4491,20 +4706,21 @@ fn locked_slot(ui: &mut Ui, shown: &str, reason: &str, width: f32) {
 }
 
 fn read_slot(ui: &mut Ui, shown: &str, hover: String, width: f32) {
+    let palette = Palette::of(ui.ctx());
     let (rect, response) = ui.allocate_exact_size(Vec2::new(width, ROW_HEIGHT), Sense::hover());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         painter.rect(
             rect,
             CornerRadius::same(RADIUS),
-            BG_BASE,
-            Stroke::new(STROKE, LINE_SUBTLE),
+            palette.bg_base,
+            Stroke::new(STROKE, palette.line_subtle),
             StrokeKind::Inside,
         );
         let text = painter.layout_no_wrap(
             shown.to_string(),
             Theme::of(painter.ctx()).font(SIZE_SMALL),
-            TEXT_MUTED,
+            palette.text_muted,
         );
         let inner = rect.shrink2(Vec2::new(6.0, 0.0));
         let at = Pos2::new(
@@ -4515,12 +4731,15 @@ fn read_slot(ui: &mut Ui, shown: &str, hover: String, width: f32) {
             },
             rect.center().y - text.size().y / 2.0,
         );
-        painter.with_clip_rect(inner).galley(at, text, TEXT_MUTED);
+        painter
+            .with_clip_rect(inner)
+            .galley(at, text, palette.text_muted);
     }
     response.on_hover_text(hover);
 }
 
 fn labelled(ui: &mut Ui, label: &str, body: impl FnOnce(&mut Ui)) {
+    let palette = Palette::of(ui.ctx());
     ui.horizontal(|ui| {
         let (rect, _) = ui.allocate_exact_size(Vec2::new(LABEL, ROW_HEIGHT), Sense::hover());
         ui.painter().text(
@@ -4528,14 +4747,15 @@ fn labelled(ui: &mut Ui, label: &str, body: impl FnOnce(&mut Ui)) {
             Align2::LEFT_CENTER,
             label,
             Theme::of(ui.ctx()).font(SIZE_SMALL),
-            TEXT_SECONDARY,
+            palette.text_secondary,
         );
         body(ui);
     });
 }
 
 fn item(ui: &mut Ui, label: &str, value: &str, colour: Color32) {
-    ui.label(code(ui, label, TEXT_MUTED));
+    let palette = Palette::of(ui.ctx());
+    ui.label(code(ui, label, palette.text_muted));
     let text = code(ui, crate::shown::text(value), colour);
     let natural = egui::WidgetText::from(text.clone())
         .into_galley(
@@ -4555,11 +4775,12 @@ fn item(ui: &mut Ui, label: &str, value: &str, colour: Color32) {
 }
 
 fn divider(ui: &mut Ui) {
+    let palette = Palette::of(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, 12.0), Sense::hover());
     ui.painter().vline(
         rect.center().x.floor() + 0.5,
         rect.y_range(),
-        Stroke::new(STROKE, LINE_SUBTLE),
+        Stroke::new(STROKE, palette.line_subtle),
     );
 }
 
@@ -4602,31 +4823,32 @@ pub(crate) fn text_field(
     width: f32,
     id: Option<Id>,
 ) -> Response {
+    let palette = Palette::of(ui.ctx());
     let back = ui.painter().add(Shape::Noop);
     let mut edit = TextEdit::singleline(text)
         .frame(Frame::NONE)
         .margin(Margin::symmetric(6, 2))
         .desired_width(width - 12.0)
         .font(Theme::of(ui.ctx()).font(SIZE_CODE))
-        .text_color(TEXT_CODE)
-        .hint_text(code(ui, hint, TEXT_DIM));
+        .text_color(palette.text_code)
+        .hint_text(code(ui, hint, palette.text_dim));
     if let Some(id) = id {
         edit = edit.id(id);
     }
     let response = ui.add(edit);
     let border = if response.has_focus() {
-        ACCENT
+        palette.accent
     } else if response.hovered() {
-        LINE_HOVER
+        palette.line_hover
     } else {
-        LINE_BORDER
+        palette.line_border
     };
     ui.painter().set(
         back,
         RectShape::new(
             response.rect,
             CornerRadius::same(RADIUS),
-            BG_DEEP,
+            palette.bg_deep,
             Stroke::new(STROKE, border),
             StrokeKind::Inside,
         ),
@@ -5309,6 +5531,214 @@ fov_y_deg = 30.0
         }
     }
 
+    fn inks(shape: &egui::Shape, into: &mut std::collections::BTreeSet<[u8; 4]>) {
+        let mut put = |colour: Color32| {
+            into.insert(colour.to_array());
+        };
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|shape| inks(shape, into)),
+            egui::Shape::Rect(rect) => {
+                put(rect.fill);
+                put(rect.stroke.color);
+            }
+            egui::Shape::Circle(circle) => {
+                put(circle.fill);
+                put(circle.stroke.color);
+            }
+            egui::Shape::LineSegment { stroke, .. } => put(stroke.color),
+            egui::Shape::Path(path) => {
+                put(path.fill);
+                if let egui::epaint::ColorMode::Solid(colour) = path.stroke.color {
+                    put(colour);
+                }
+            }
+            egui::Shape::Text(text) => {
+                for section in &text.galley.job.sections {
+                    put(section.format.color);
+                    put(section.format.background);
+                }
+                put(text.fallback_color);
+            }
+            egui::Shape::Mesh(mesh) => mesh.vertices.iter().for_each(|vertex| put(vertex.color)),
+            _ => {}
+        }
+    }
+
+    fn window_inks(theme: &Theme) -> std::collections::BTreeSet<[u8; 4]> {
+        let (mut shell, _, _) = live("shell-theme-inks", SCENE);
+        let ctx = Context::default();
+        theme::apply_theme(&ctx, theme);
+        let script = Script::parse("frame\nkey b\nkey 1\nkey ArrowDown\nframe\nframe").unwrap();
+        let output = drive(&ctx, SIZE, &script, |ui| shell.ui(ui));
+        let mut seen = std::collections::BTreeSet::new();
+        for clipped in &output.shapes {
+            inks(&clipped.shape, &mut seen);
+        }
+        seen
+    }
+
+    #[test]
+    fn every_colour_the_window_paints_follows_the_theme() {
+        let pfx = theme::workbench();
+        let game = theme::game();
+        let own = |theme: &Theme| -> std::collections::BTreeSet<[u8; 4]> {
+            Palette::new(theme)
+                .every()
+                .into_iter()
+                .map(|colour| colour.to_array())
+                .collect()
+        };
+        let (pfx_own, game_own) = (own(&pfx), own(&game));
+        assert!(pfx_own.is_disjoint(&game_own));
+        let in_game = window_inks(&game);
+        assert!(in_game.contains(&pfx_editor_style::tokens::game::BG.to_array()));
+        assert!(in_game.contains(&pfx_editor_style::tokens::game::HOT.to_array()));
+        let leaked: Vec<_> = in_game.intersection(&pfx_own).collect();
+        assert!(
+            leaked.is_empty(),
+            "pfx colours in the game theme: {leaked:x?}"
+        );
+        let in_pfx = window_inks(&pfx);
+        let leaked: Vec<_> = in_pfx.intersection(&game_own).collect();
+        assert!(
+            leaked.is_empty(),
+            "game colours in the pfx theme: {leaked:x?}"
+        );
+    }
+
+    fn header_drawn(shell: &mut Shell, theme: &Theme) -> (Vec<String>, usize, Context) {
+        let ctx = Context::default();
+        theme::apply_theme(&ctx, theme);
+        let output = drive(&ctx, SIZE, &Script::default(), |ui| shell.ui(ui));
+        let header = ctx.read_response(header_id(Panel::A)).unwrap().rect;
+        let mut texts = Vec::new();
+        let mut images = Vec::new();
+        for clipped in &output.shapes {
+            painted(&clipped.shape, &mut texts);
+            if let egui::Shape::Mesh(mesh) = &clipped.shape
+                && mesh.texture_id != egui::TextureId::default()
+                && mesh
+                    .vertices
+                    .iter()
+                    .all(|vertex| header.contains(vertex.pos))
+            {
+                images.push(mesh.texture_id);
+            }
+        }
+        let texts = texts
+            .into_iter()
+            .filter(|(text, _, at)| !text.is_empty() && header.contains(*at))
+            .map(|(text, _, _)| text)
+            .collect();
+        (texts, images.len(), ctx)
+    }
+
+    fn game_shell(name: &str, mark: Option<&str>) -> Shell {
+        let root = std::path::absolute(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tmp/ui-tests")
+                .join(name),
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        pfx_project::scaffold("sample-game", &root, "0.0.0").unwrap();
+        let project = pfx_project::Project::folder(&root).unwrap();
+        let mut config = pfx_game::Config::new("sample-game", "0.0.0", project.play());
+        if let Some(mark) = mark {
+            let pixels: Vec<u8> = (0..16 * 16)
+                .flat_map(|at| {
+                    if at % 3 == 0 {
+                        [0xF2, 0xBF, 0x58, 0xFF]
+                    } else {
+                        [0; 4]
+                    }
+                })
+                .collect();
+            let mut bytes = Vec::new();
+            let mut encoder = png::Encoder::new(&mut bytes, 16, 16);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header().unwrap();
+            writer.write_image_data(&pixels).unwrap();
+            writer.finish().unwrap();
+            std::fs::write(root.join(mark), bytes).unwrap();
+            config = config.mark(mark);
+        }
+        let setup = pfx_editor::session::Setup {
+            pgpu: false,
+            audio: false,
+        };
+        let factory = pfx_editor::factory(|| pfx_play::SceneGame);
+        let session =
+            pfx_editor::session::Session::open_game(&root, setup, factory, config).unwrap();
+        Shell::edited(session).without_recent()
+    }
+
+    #[test]
+    fn the_header_carries_pfx_s_mark_and_a_game_s_own_name_and_mark() {
+        let (mut shell, _, _) = live("shell-header-mark", SCENE);
+        let (texts, images, ctx) = header_drawn(&mut shell, &theme::workbench());
+        assert_eq!((texts, images), (vec!["A".to_string()], 1));
+        assert!(crate::mark::read_into(&ctx, "pfx"));
+        let mut game = game_shell("header-game-mark", Some("mark.png"));
+        let theme = game.theme();
+        let (texts, images, ctx) = header_drawn(&mut game, &theme);
+        assert_eq!(texts, ["A", "SAMPLE-GAME"]);
+        assert_eq!(images, 1);
+        assert!(!crate::mark::read_into(&ctx, "pfx"));
+        let mut plain = game_shell("header-game-plain", None);
+        let theme = plain.theme();
+        let (texts, images, ctx) = header_drawn(&mut plain, &theme);
+        assert_eq!(
+            (texts, images),
+            (vec!["A".to_string(), "SAMPLE-GAME".to_string()], 0)
+        );
+        assert!(!crate::mark::read_into(&ctx, "pfx"));
+    }
+
+    #[test]
+    fn a_tape_s_directing_steps_reach_a_game_opened_scene() {
+        use crate::tape::Act;
+        let mut shell = game_shell("direct-game", None);
+        let theme = shell.theme();
+        header_drawn(&mut shell, &theme);
+        let eye = |shell: &Shell| {
+            shell
+                .session()
+                .and_then(|session| session.editor.viewport.eye())
+                .unwrap()
+        };
+        let distance = |eye: pfx_editor_viewport::Eye| {
+            (glam::DVec3::from_array(eye.position) - glam::DVec3::from_array(eye.target)).length()
+        };
+        shell.direct(&Act::Select(vec!["grid".into()])).unwrap();
+        let session = shell.session().unwrap();
+        assert_eq!(session.editor.selected_object(), Some("grid"));
+        assert!(shell.direct(&Act::Select(vec!["nothing".into()])).is_err());
+        let before = eye(&shell);
+        shell.direct(&Act::Orbit(30.0)).unwrap();
+        let turned = eye(&shell);
+        assert_ne!(turned.position, before.position);
+        assert!((distance(turned) - distance(before)).abs() < 1e-6);
+        shell.direct(&Act::Dolly(0.5)).unwrap();
+        assert!((distance(turned) - distance(eye(&shell)) - 0.5).abs() < 1e-6);
+        let away = eye(&shell);
+        shell
+            .direct(&Act::Fit {
+                objects: vec!["incoming".into()],
+                before: 0.0,
+                now: 1.0,
+            })
+            .unwrap();
+        assert_ne!(eye(&shell).target, away.target);
+        assert_eq!(
+            shell.session().unwrap().editor.selected_object(),
+            Some("grid")
+        );
+        assert!(shell.direct(&Act::View(crate::tape::View::Top)).is_err());
+    }
+
     #[test]
     fn a_copy_in_the_outliner_is_dimmed_and_badged_with_its_use() {
         let path = scratch("shell-copy-badge");
@@ -5353,8 +5783,9 @@ fov_y_deg = 30.0
                 .collect::<Vec<_>>()
         };
         assert_eq!(colour("use").len(), 1, "{texts:?}");
-        assert_eq!(colour("left_cap"), [TEXT_MUTED]);
-        assert_eq!(colour("board"), [TEXT_PRIMARY]);
+        let palette = Palette::of(&ctx);
+        assert_eq!(colour("left_cap"), [palette.text_muted]);
+        assert_eq!(colour("board"), [palette.text_primary]);
     }
 
     #[test]

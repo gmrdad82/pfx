@@ -50,7 +50,23 @@ Both are packed into one standalone GLB first (`pfx_load::pack::model`), and tha
 pfx export <file.pitofx|recipe> --glb <out.glb> [--only <object>] [--json]
 ```
 
-A `.pitofx` exports its own glTF. A recipe is built first: one object (the recipe's only one, or `--only`) exports as a node tree with real pivots, the library's form, and a scene of many keeps its objects' parents as the node hierarchy. Either way the GLB is standalone and carries no pfx extras: every `extras` is dropped but a mesh's `extras.targetNames`, the morph target names glTF tools read, and so is every extension not named `KHR_`, `EXT_` or `MSFT_`. `--json` prints `source`, `glb`, `bytes` and `nodes`.
+An imported model's `.pitofx` exports its own glTF. A recipe, in a `.pitofx` or not, is built first: one object (the recipe's only one, or `--only`) exports as a node tree with real pivots, the library's form, and a scene of many keeps its objects' parents as the node hierarchy. Either way the GLB is standalone and carries no pfx extras: every `extras` is dropped but a mesh's `extras.targetNames`, the morph target names glTF tools read, and so is every extension not named `KHR_`, `EXT_` or `MSFT_`. `--json` prints `source`, `glb`, `bytes` and `nodes`.
+
+A recipe's materials are written as glTF metallic-roughness materials, every object's:
+
+| Recipe material | glTF |
+|---|---|
+| `base`, `alpha` | `baseColorFactor` |
+| `metalness`, `roughness` | `metallicFactor`, `roughnessFactor` |
+| `base_map`, `roughness_map`, `normal_map` (`normal_scale`), `occlusion_map`, with `uv_scale`, `uv_offset` and `uv_rotation` | `baseColorTexture`, `metallicRoughnessTexture`, `normalTexture`, `occlusionTexture`, each with `KHR_texture_transform` |
+| `emission` | `emissiveFactor`, with `KHR_materials_emissive_strength` above 1 |
+| `transmission`, `ior` | `KHR_materials_transmission`, `KHR_materials_ior` |
+| `thickness`, `absorption` (unless `thin_walled`) | `KHR_materials_volume`: `thicknessFactor`, and an `attenuationDistance` of 1 / `absorption` with an `attenuationColor` of e^(`base` − 1), so the base-tinted absorption reads back exactly |
+| `clearcoat`, `clearcoat_roughness` | `KHR_materials_clearcoat` |
+| `alpha_mode`, `alpha_cutoff` | `alphaMode`, `alphaCutoff` |
+| `fabric`, `anisotropy` | `KHR_materials_sheen`, `KHR_materials_anisotropy` |
+
+A GLB used as a recipe's mesh reads the same fields back. A transmissive glTF material without `KHR_materials_volume` is thin-walled, as glTF defines it. Both renderers weight transmission by 1 − `metalness`, the way glTF does: a metallic surface reflects and lets nothing through, so a "glass" with metalness 1 draws as a mirror. `pfx import` prints one line on stderr for each material with a metalness above 0.5 and any transmission, naming it.
 
 ```
 $ pfx export library/vehicle/coupe.pitofx --glb coupe.glb

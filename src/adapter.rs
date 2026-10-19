@@ -912,6 +912,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn turns_reach_pgpu_with_their_pacing() {
         if std::env::var_os("PFX_TURN_CHILD").is_some() {
@@ -927,11 +928,8 @@ mod tests {
             "#!/bin/sh\nmkdir \"$TURN_LOG.held\" 2>/dev/null || echo overlap >> \"$TURN_LOG\"\nsleep 0.1\nprintf '%s\\n' \"$*\" >> \"$TURN_LOG\"\nrmdir \"$TURN_LOG.held\" 2>/dev/null\n",
         )
         .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&pgpu, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&pgpu, std::fs::Permissions::from_mode(0o700)).unwrap();
         let log = scratch.join("turns");
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mut paths = vec![scratch.clone()];

@@ -212,3 +212,133 @@ fn the_tables_scene_staged_by_the_engine_draws_as_pfx_draws_the_recipe() {
 fn the_toybox_scene_staged_by_the_engine_draws_as_pfx_draws_the_recipe() {
     live_and_traced(&TOYBOX);
 }
+
+fn looked(name: &str, look: &str) -> PathBuf {
+    let source = golden(TABLE.set).join(format!("{}.toml", TABLE.set));
+    let text = std::fs::read_to_string(source).unwrap();
+    let anchor = "[look]\nexposure = 1.0\n";
+    assert!(text.contains(anchor));
+    let out = scratch(&format!("scene-gpu-look-{name}"));
+    let recipe = out.join(format!("{}.toml", TABLE.set));
+    std::fs::write(
+        &recipe,
+        text.replacen(anchor, &format!("{anchor}{look}\n"), 1),
+    )
+    .unwrap();
+    recipe
+}
+
+fn mean(rgba: &[u8]) -> f64 {
+    let sum: f64 = rgba
+        .chunks_exact(4)
+        .flat_map(|p| p[..3].iter().map(|&v| f64::from(v)))
+        .sum();
+    sum / (rgba.len() / 4 * 3) as f64
+}
+
+fn shift(with: &[u8], without: &[u8]) -> f64 {
+    let total: f64 = with
+        .chunks_exact(4)
+        .zip(without.chunks_exact(4))
+        .flat_map(|(a, b)| (0..3).map(move |k| (f64::from(a[k]) - f64::from(b[k])).abs()))
+        .sum();
+    total / (with.len() / 4 * 3) as f64
+}
+
+fn linear(level: u8) -> f64 {
+    let c = f64::from(level) / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn grain_spread(with: &[u8], without: &[u8], response: f64) -> (f64, usize) {
+    let mut z = Vec::new();
+    for (a, b) in with.chunks_exact(4).zip(without.chunks_exact(4)) {
+        if a[..3]
+            .iter()
+            .chain(&b[..3])
+            .any(|&v| !(3..=252).contains(&v))
+        {
+            continue;
+        }
+        let plain = [0, 1, 2].map(|k| linear(b[k]));
+        let luma = 0.2126 * plain[0] + 0.7152 * plain[1] + 0.0722 * plain[2];
+        let scale = 1.0 - response * luma;
+        z.extend((0..3).map(|k| (linear(a[k]) - plain[k]) / scale));
+    }
+    let n = z.len() as f64;
+    let mean = z.iter().sum::<f64>() / n;
+    let spread = (z.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n).sqrt();
+    (spread, z.len() / 3)
+}
+
+#[test]
+#[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+fn the_looks_grain_and_chromatic_read_alike_live_and_traced() {
+    let gpu = headless().unwrap();
+    let mut shots = Vec::new();
+    for (name, look) in [
+        ("plain", ""),
+        ("grained", "grain = { amount = 0.05, seed = 2 }"),
+        ("aberrated", "chromatic = { amount = 0.04, falloff = 1.0 }"),
+    ] {
+        let recipe = looked(name, look);
+        let live = pfx_live(&gpu, &TABLE, &recipe);
+        turn_reporting(Default::default());
+        let traced = pfx_traced(&TABLE, &recipe);
+        turn_reporting(Default::default());
+        shots.push((live, traced));
+    }
+    let [
+        (live, traced),
+        (live_grain, traced_grain),
+        (live_chroma, traced_chroma),
+    ] = shots.try_into().unwrap();
+    for (way, plain, grained, aberrated) in [
+        ("live", &live, &live_grain, &live_chroma),
+        ("traced", &traced, &traced_grain, &traced_chroma),
+    ] {
+        println!(
+            "{way}: mean {:.2}, grained {:.2}, aberrated {:.2}",
+            mean(plain),
+            mean(grained),
+            mean(aberrated)
+        );
+        assert!(
+            (mean(grained) - mean(plain)).abs() < 0.6,
+            "{way} grain moves the mean"
+        );
+        assert!(
+            (mean(aberrated) - mean(plain)).abs() < 0.6,
+            "{way} chromatic moves the mean"
+        );
+    }
+    let expected = 0.05 * (1.0f64 / 6.0).sqrt();
+    let (live_spread, live_count) = grain_spread(&live_grain, &live, 0.5);
+    let (traced_spread, traced_count) = grain_spread(&traced_grain, &traced, 0.5);
+    println!(
+        "grain in linear light over the response: live {live_spread:.4} over {live_count} pixels, traced {traced_spread:.4} over {traced_count}, expected {expected:.4}"
+    );
+    assert!(live_count > 10_000 && traced_count > 10_000);
+    for (way, spread) in [("live", live_spread), ("traced", traced_spread)] {
+        assert!(
+            (spread / expected - 1.0).abs() < 0.15,
+            "{way} grain spreads {spread:.4}, expected {expected:.4}"
+        );
+    }
+    assert!(
+        (live_spread / traced_spread - 1.0).abs() < 0.1,
+        "grain spreads {live_spread:.4} live and {traced_spread:.4} traced"
+    );
+    let live_shift = shift(&boxed(&live_chroma), &boxed(&live));
+    let traced_shift = shift(&boxed(&traced_chroma), &boxed(&traced));
+    println!("chromatic: live {live_shift:.3}, traced {traced_shift:.3} levels a channel");
+    assert!(live_shift > 0.05 && traced_shift > 0.05);
+    assert!(
+        (live_shift / traced_shift).ln().abs() < 0.5_f64.ln().abs(),
+        "chromatic shifts {live_shift:.3} live and {traced_shift:.3} traced"
+    );
+}

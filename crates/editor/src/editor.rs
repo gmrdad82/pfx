@@ -829,6 +829,14 @@ impl Editor {
     pub fn play_pressed(&mut self) {
         match self.play {
             Play::Stopped => {
+                if let Some(module) = self.module.module().filter(|module| !module.is_file()) {
+                    let shown = module.strip_prefix(self.project_root()).unwrap_or(module);
+                    self.log.error(format!(
+                        "play: module {} is missing; play did not start",
+                        shown.display()
+                    ));
+                    return;
+                }
                 self.end_group();
                 self.request(Request::Play);
             }

@@ -1,6 +1,6 @@
 # Material libraries
 
-`pfx_materials::Material` is the one physically based description the live renderer, the tracer and the bake share. `Material::to_toml` and `Material::from_toml` write and read one material as TOML: every field has `Material::default()`'s value when left out, unknown keys are refused, and `layers` is a list of at most four `{ kind, frequency, amplitude, seed, params }` tables (`params` left out is twelve zeros; see Noise layers below).
+`pfx_materials::Material` is the one physically based description the live renderer, the tracer and the bake share. `Material::to_toml` and `Material::from_toml` write and read one material as TOML: every field has `Material::default()`'s value when left out, unknown keys are refused, and `layers` is a list of at most four `{ kind, frequency, amplitude, seed, params }` tables (`params` left out takes the kind's `SAMPLE`; see Noise layers below). A `Material` read straight through serde, as the generators' JSON is, takes the same list of none to four layers.
 
 A product ships its materials as a **library**: one TOML file of `[materials.<name>]` tables, each in that same material TOML. `Library::from_toml(text)` parses it and `Library::to_toml()` writes it back, sorted by name, so a library round-trips to the same text and every material to the same bits (`PackedMaterial` included). A product loads its file with `include_str!` or from disk and looks materials up by name:
 
@@ -70,7 +70,7 @@ Other neutral fixtures for engine tests live beside the crates they exercise: a 
 
 ## Noise layers
 
-A `Material` carries up to four `NoiseLayer`s: a `kind`, a `frequency`, an `amplitude`, a `seed` and twelve `params` whose meaning the kind defines. A layer whose amplitude is 0 does nothing. Each parameterised kind has a typed builder that writes its params in order and reads them back (`Kind::from_params`), and a neutral `SAMPLE` the engine's own tests use. Unset params are 0, and a kind with no params draws nothing visible (plank wood and coat wobble need a positive first param to draw at all).
+A `Material` carries up to four `NoiseLayer`s: a `kind`, a `frequency`, an `amplitude`, a `seed` and twelve `params` whose meaning the kind defines. A layer whose amplitude is 0 does nothing. Each parameterised kind has a typed builder that writes its params in order and reads them back (`Kind::from_params`), and a neutral `SAMPLE` the engine's own tests use. A layer read with its `params` left out (or all zero) takes its kind's `SAMPLE` (`sample_params(kind)`, `NoiseLayer::filled`), in every renderer and the bake alike, so a grime layer written as `{ kind = "grime", frequency = 1.0, amplitude = 1.0, seed = 0 }` draws the sample grime. Before, its params were twelve zeros: grime's roughness factors of 0 turned a road into a mirror, and wall mottle, fibre and the others drew nothing.
 
 | Kind (shader id) | Builder | Params, in order |
 |---|---|---|
@@ -91,7 +91,11 @@ A `Material` carries up to four `NoiseLayer`s: a `kind`, a `frequency`, an `ampl
 
 The shader ids are stable; ids 6 and 9 to 13 are retired. The algorithms' shape (mix weights, thresholds, the warp octaves inside the plank rings) is fixed; scales and gains are the params.
 
-On the GPU each layer is five `vec4` rows: the kind row and four parameter rows. Twelve values are the params; `gpu_params` adds four the packer derives (a plank's reciprocal width and seam span, a scratch's stretch), and the live renderer adds its own (the ring fade rate, `RING_FADE` = 8/7 of the ring frequency, and a coat's fine scale and tile match). `PackedMaterial` is 736 bytes: the layer rows, then one `wet` row (see Wet surfaces), then eleven rows for the lobes and texture maps, one coverage row and two flake rows (`PackedMaterial::LOBES_OFFSET`, 512; see the figurine lobes and Texture maps on imported meshes below).
+**Grime under a pixel.** The live renderer fades a noise octave finer than a pixel to its mean so it doesn't shimmer, and the tracer averages it over its samples. For grime's albedo the two agree, since the tint is linear in the wear; its roughness is not: the average of many GGX lobes of different widths is brighter at the peak than one lobe of the mean width. So `Grime::faded_roughness` sets the faded factor that keeps the peak, `(E[1/f²])^(-1/2)` over the wear's distribution (`WEAR_QUANTILES`, 32 quantiles of `smoothstep(0.35, 0.75, 0.6 · a + 0.4 · b)` for two independent value noises), and live's faded grime multiplies α by it. Before, live used the factor at the mean wear, so `roughness = [1.25, 0.6]` and `[1.0, 0.92]` both came to about 1 and drew the same road, while the tracer drew the first one brighter in the sun's glint. On a generated plane (`tests/wet_ground.rs`), the near ground's mean luminance is 0.1156 live and 0.1128 traced with `[1.25, 0.6]`, and 0.1069 against 0.1060 with `[1.0, 0.92]` (0.1010 and 0.1068 live before).
+
+**Fbm in the tracer.** The tracer had no `Fbm` case, so an fbm layer drew only live. It now sums the same four octaves as `fbm3` (the tracer supersamples, so it takes them unfiltered, as the CPU `resolve` does); an fbm layer of frequency 2 and amplitude 1 on a chalk plane gives the same pattern in both, correlation 1.000 over 16-pixel cells.
+
+On the GPU each layer is five `vec4` rows: the kind row and four parameter rows. Twelve values are the params; `gpu_params` adds four the packer derives (a plank's reciprocal width and seam span, a scratch's stretch, grime's faded roughness factor above), and the live renderer adds its own (the ring fade rate, `RING_FADE` = 8/7 of the ring frequency, and a coat's fine scale and tile match). `PackedMaterial` is 736 bytes: the layer rows, then one `wet` row (see Wet surfaces), then eleven rows for the lobes and texture maps, one coverage row and two flake rows (`PackedMaterial::LOBES_OFFSET`, 512; see the figurine lobes and Texture maps on imported meshes below).
 
 ## Noise functions
 

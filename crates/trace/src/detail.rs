@@ -51,11 +51,12 @@ pub type Transform = [[f32; 4]; 4];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instance {
-    pub triangles: Vec<TriangleDetail>,
+    pub triangles: std::sync::Arc<[TriangleDetail]>,
     pub transform: Transform,
     pub surface: InstanceSurface,
     pub shadow_only: bool,
     pub two_sided: bool,
+    pub motion: Option<crate::motion::InstanceMotion>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -195,6 +196,15 @@ impl Pose {
         Ok(Self { m, normal })
     }
 
+    pub(crate) fn inverse_determinant(&self) -> f32 {
+        let m = self.m.map(|column| column.map(f64::from));
+        let a = |row: usize, column: usize| m[column][row];
+        let determinant = a(0, 0) * (a(1, 1) * a(2, 2) - a(1, 2) * a(2, 1))
+            - a(0, 1) * (a(1, 0) * a(2, 2) - a(1, 2) * a(2, 0))
+            + a(0, 2) * (a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0));
+        (1.0 / determinant) as f32
+    }
+
     pub(crate) fn point(&self, point: [f32; 3]) -> [f32; 3] {
         let m = self.m;
         std::array::from_fn(|row| {
@@ -283,7 +293,8 @@ impl Lens {
 pub struct ContentImage {
     pub width: u32,
     pub height: u32,
-    pub texels: Vec<[f32; 4]>,
+    pub texels: Vec<[u8; 4]>,
+    pub srgb: bool,
 }
 
 impl ContentImage {
@@ -293,7 +304,29 @@ impl ContentImage {
             && (self.width as usize)
                 .checked_mul(self.height as usize)
                 .is_some_and(|count| self.texels.len() == count)
-            && self.texels.iter().flatten().all(|value| value.is_finite())
+    }
+
+    pub fn linear(&self, at: usize) -> [f32; 4] {
+        let [r, g, b, a] = self.texels[at];
+        let decode = |byte: u8| {
+            let value = f32::from(byte) / 255.0;
+            if self.srgb {
+                pfx_materials::linear_channel(value)
+            } else {
+                value
+            }
+        };
+        [decode(r), decode(g), decode(b), f32::from(a) / 255.0]
+    }
+
+    pub fn words(&self) -> impl Iterator<Item = [u32; 4]> + '_ {
+        self.texels.chunks(4).map(|chunk| {
+            std::array::from_fn(|k| chunk.get(k).map_or(0, |&t| u32::from_le_bytes(t)))
+        })
+    }
+
+    pub fn bytes(&self) -> usize {
+        self.texels.len() * 4
     }
 }
 
@@ -334,6 +367,8 @@ pub struct Detail {
     pub sampler: crate::sobol::Sampler,
     pub textures: Textures,
     pub sky_look: pfx_load::scene::SkyLook,
+    pub fit_textures: Option<[u32; 2]>,
+    pub motion: Option<crate::motion::Motion>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -638,10 +673,11 @@ mod tests {
             material: 0,
         };
         let instance = Instance {
-            triangles: vec![triangle],
+            triangles: vec![triangle].into(),
             surface: InstanceSurface::default(),
             shadow_only: false,
             two_sided: true,
+            motion: None,
             transform: [
                 [2.0, 0.0, 0.0, 0.0],
                 [0.0, 1.0, 0.0, 0.0],

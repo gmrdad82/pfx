@@ -157,6 +157,7 @@ override use_wood: bool = true;
 override use_wall: bool = true;
 override use_fibre: bool = true;
 override use_crinkle: bool = true;
+override use_pavement: bool = true;
 override use_procedural_detail: bool = false;
 var<private> map_ink_base: vec4f;
 var<private> map_pixel: f32;
@@ -421,15 +422,18 @@ fn map_layer(result_in: MapResult, layer: vec4f, pa: vec4f, pb: vec4f, pc: vec4f
         result.normal = map_perturb(result.normal, g);
     } else if (use_grime && kind == 5u) {
         var wear = map_wear_mean;
+        var factor = pd.x;
         let grime_weight = map_weight(pa.x);
         if (grime_weight > 0.0) {
             let grime = value_noise3(p * pa.x, false) * 0.6 + map_noise(p * pa.y, pa.y) * 0.4;
-            wear = map_faded(map_wear_mean, smoothstep(0.35, 0.75, grime), grime_weight);
+            let sharp = smoothstep(0.35, 0.75, grime);
+            wear = map_faded(map_wear_mean, sharp, grime_weight);
+            factor = map_faded(pd.x, mix(pc.x, pc.y, sharp), grime_weight);
         }
         let tint = mix(vec3f(pa.z, pa.w, pb.x), vec3f(pb.y, pb.z, pb.w), wear);
         result.base *= mix(vec3f(1.0), tint, clamp(amp, 0.0, 1.0));
         let alpha = result.roughness * result.roughness;
-        result.roughness = mix(result.roughness, sqrt(min(alpha * mix(pc.x, pc.y, wear), 1.0)), clamp(amp, 0.0, 1.0));
+        result.roughness = mix(result.roughness, sqrt(min(alpha * factor, 1.0)), clamp(amp, 0.0, 1.0));
     } else if (kind == 7u) {
         let spots = fbm3(vec3f(uv * 12.0, 2.0), 4, true);
         result.base *= mix(1.0, 0.7 + 0.6 * spots, clamp(amp, 0.0, 1.0));
@@ -446,6 +450,14 @@ fn map_layer(result_in: MapResult, layer: vec4f, pa: vec4f, pb: vec4f, pc: vec4f
             result.base = scratched.xyz;
             result.roughness = scratched.w;
         }
+    } else if (use_pavement && kind == 19u) {
+        let crack = pavement_crack(p, result.normal, pa, pb, pc, seed, select(map_pixel, 0.0, use_fine_noise)) * clamp(amp, 0.0, 1.0);
+        result.base *= 1.0 - pb.z * crack;
+        result.roughness = mix(result.roughness, pb.w, crack);
+    } else if (use_pavement && kind == 20u) {
+        let worn = pavement_track(uv, pa, pb, seed, select(map_pixel, 0.0, use_fine_noise)) * clamp(amp, 0.0, 1.0);
+        result.base *= mix(1.0, pc.x, worn);
+        result.roughness = mix(result.roughness, result.roughness * pc.y, worn);
     } else if (use_lacquer && kind == 18u) {
         result.normal = map_perturb(result.normal, map_lacquer(p, amp, tile, pa, pb, pd));
     } else if (kind == 14u) {

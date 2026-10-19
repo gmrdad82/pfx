@@ -81,6 +81,31 @@ fn hash_hp_float(i: u32) -> f32 {
     hash_hp_uint(i) as f32 * (1.0 / 4_294_967_808.0)
 }
 
+pub fn hash_uint2(kx: u32, ky: u32) -> u32 {
+    let mut a = 0xdeadbeef_u32.wrapping_add((2 << 2) + 13);
+    let mut b = a.wrapping_add(ky);
+    let mut c = a;
+    a = a.wrapping_add(kx);
+    c ^= b;
+    c = c.wrapping_sub(b.rotate_left(14));
+    a ^= c;
+    a = a.wrapping_sub(c.rotate_left(11));
+    b ^= a;
+    b = b.wrapping_sub(a.rotate_left(25));
+    c ^= b;
+    c = c.wrapping_sub(b.rotate_left(16));
+    a ^= c;
+    a = a.wrapping_sub(c.rotate_left(4));
+    b ^= a;
+    b = b.wrapping_sub(a.rotate_left(14));
+    c ^= b;
+    c.wrapping_sub(b.rotate_left(24))
+}
+
+pub fn animated_seed(seed: u32, frame: u32) -> u32 {
+    hash_uint2(frame, seed)
+}
+
 pub fn generate_4d(points: &mut [[f32; 4]], seed: u32) {
     let size = points.len();
     if size == 0 {
@@ -159,6 +184,16 @@ mod tests {
                 assert!(seen.iter().all(|s| *s), "{n} points, axis {axis}");
             }
         }
+    }
+
+    #[test]
+    fn the_animated_seed_is_cycles_lookup3_of_frame_and_seed() {
+        assert_eq!(hash_uint2(0, 0), 0xdc3d_74f9);
+        assert_eq!(hash_uint2(1, 0), 0x4b85_f272);
+        assert_eq!(animated_seed(7, 12), 0xdde1_90d2);
+        let seeds: std::collections::HashSet<u32> =
+            (0..240).map(|frame| animated_seed(7, frame)).collect();
+        assert_eq!(seeds.len(), 240);
     }
 
     #[test]

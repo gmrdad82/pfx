@@ -182,6 +182,19 @@ impl<'a> Places<'a> {
         }
     }
 
+    pub(super) fn found(&self, base: &Path, relative: &str) -> PathBuf {
+        if let Some(near) = near(base, relative) {
+            let held = match self.mount {
+                Some(project) => project.holds(&near),
+                None => self.root.join(&near).is_file(),
+            };
+            if held {
+                return self.root.join(near);
+            }
+        }
+        self.root.join(relative)
+    }
+
     pub(super) fn holder(&self, files: &[PathBuf], key: &str) -> PathBuf {
         files
             .iter()
@@ -460,6 +473,7 @@ pub(super) fn build_with(
             })
             .unwrap_or_default(),
         shadows: resolved.shadows,
+        live: resolved.live,
         contents,
         texts,
         plates,
@@ -743,6 +757,7 @@ struct Rigging {
     morphs: Vec<(u32, Morph)>,
     lod_levels: BTreeSet<u32>,
     lod_groups: BTreeMap<u32, String>,
+    shared: BTreeMap<(u32, usize), Arc<Geometry>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -770,8 +785,8 @@ fn walk(
         parent
     };
     let node_override = overrides.get(&node.name).cloned().unwrap_or_default();
-    if let Some(group) = node.group {
-        let group = &mesh.groups[group as usize];
+    if let Some(group_index) = node.group {
+        let group = &mesh.groups[group_index as usize];
         let morph = (group.targets() > 0).then(|| {
             rigs.morphs.push((
                 index,
@@ -793,6 +808,29 @@ fn walk(
             ));
         }
         for (slot, primitive) in group.primitives.iter().enumerate() {
+            let plain = node.lod.is_empty()
+                && morph.is_none()
+                && !(node.skin.is_some()
+                    && primitive.joints.is_some()
+                    && primitive.weights.is_some());
+            if plain && let Some(known) = rigs.shared.get(&(group_index, slot)) {
+                parts.push(Part {
+                    node: node.name.clone(),
+                    joint: Some(joint),
+                    transform,
+                    geometry: known.clone(),
+                    material: primitive
+                        .material
+                        .map(|material| mesh.materials[material as usize].name.clone()),
+                    overrides: node_override.clone(),
+                    surface: primitive
+                        .material
+                        .and_then(|material| mesh.surfaces.get(material as usize))
+                        .filter(|surface| surface.declared)
+                        .map(|surface| Arc::new(surface.clone())),
+                });
+                continue;
+            }
             let mut geometry = geometry(primitive)
                 .map_err(|message| format!("mesh {name}, node {}: {message}", node.name))?;
             if !node.lod.is_empty() {
@@ -826,11 +864,15 @@ fn walk(
                 geometry = geometry.with_skin(GeometrySkin { joints, weights });
                 placed = IDENTITY;
             }
+            let geometry = Arc::new(geometry);
+            if plain {
+                rigs.shared.insert((group_index, slot), geometry.clone());
+            }
             parts.push(Part {
                 node: node.name.clone(),
                 joint: Some(joint),
                 transform: placed,
-                geometry: Arc::new(geometry),
+                geometry,
                 material: primitive
                     .material
                     .map(|material| mesh.materials[material as usize].name.clone()),
@@ -1541,13 +1583,38 @@ fn pass_line(text: &str, place: usize) -> Option<usize> {
         .map(|(number, _)| number + 1)
 }
 
+fn near(base: &Path, relative: &str) -> Option<String> {
+    if relative.contains('\\') || relative.starts_with('/') {
+        return None;
+    }
+    let mut parts: Vec<String> = base
+        .parent()?
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    for part in relative.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            other => parts.push(other.to_string()),
+        }
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
 fn finish_file(
     places: &Places,
     reader: &mut Reader,
     hasher: &mut Sha256,
+    base: &Path,
     relative: &str,
 ) -> Result<Vec<u8>, String> {
-    let bytes = reader.read(&places.root.join(relative))?;
+    let bytes = reader.read(&places.found(base, relative))?;
     hasher.update(relative.as_bytes());
     hasher.update(sha256(&bytes));
     Ok(bytes)
@@ -1582,13 +1649,15 @@ fn build_finish(
             hasher.update(sha256(&bytes));
             let text = String::from_utf8(bytes)
                 .map_err(|_| SceneError::new(&path, None, "the finish is not UTF-8"))?;
-            let mut files = |relative: &str| finish_file(places, reader, &mut hasher, relative);
+            let named = Path::new(relative);
+            let mut files = |inner: &str| finish_file(places, reader, &mut hasher, named, inner);
             pfx_post::parse_str_with(&text, &mut files)
                 .map_err(|error| SceneError::new(&path, None, error.to_string()))?
         }
         None => {
             hasher.update(base.to_string().as_bytes());
-            let mut files = |relative: &str| finish_file(places, reader, &mut hasher, relative);
+            let mut files =
+                |relative: &str| finish_file(places, reader, &mut hasher, holder, relative);
             pfx_post::parse_with(&base, &mut files)
                 .map_err(|error| places.refusal(holder, &steps, format!("[finish]: {error}")))?
         }
@@ -1605,7 +1674,7 @@ fn build_finish(
         let Some(pass) = item.as_table() else {
             return Err(refuse("a [[finish.pass]] is a table of finish keys".into()));
         };
-        let mut files = |relative: &str| finish_file(places, reader, &mut hasher, relative);
+        let mut files = |relative: &str| finish_file(places, reader, &mut hasher, holder, relative);
         let built = pfx_post::parse_with(pass, &mut files)
             .map_err(|error| refuse(format!("[[finish.pass]]: {error}")))?;
         if built.passes.is_empty() {

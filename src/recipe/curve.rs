@@ -124,7 +124,7 @@ pub fn run(args: &Args) -> ExitCode {
         Err(e) => return refuse("curve", &read_failure(file, &e)),
     };
     let out = json!({
-        "recipe": file,
+        "recipe": pfx_recipe::files::shown(file),
         "object": object,
         "param": param,
         "view": view_of(&loaded, object, param),

@@ -4,6 +4,7 @@ use crate::skin::{self, Player, Skin};
 use crate::{Built, Error, GENERATOR, Generated, GeneratedLight, Piece, world};
 use glam::{DMat4, DQuat, DVec3};
 use pfx_glb::{Looks, Node, Order, Targets};
+use pfx_materials::{AlphaMode, Material};
 use pfx_mesh::{Mesh, Morph};
 use pfx_recipe::{Kind, Object, Recipe};
 use serde_json::{Map, Value, json};
@@ -23,6 +24,7 @@ const EMISSIVE_STRENGTH: &str = "KHR_materials_emissive_strength";
 const TRANSMISSION: &str = "KHR_materials_transmission";
 const IOR: &str = "KHR_materials_ior";
 const CLEARCOAT: &str = "KHR_materials_clearcoat";
+const VOLUME: &str = "KHR_materials_volume";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sidecar {
@@ -751,92 +753,129 @@ pub fn join_glb(json: &Value, bin: &[u8]) -> Vec<u8> {
     out
 }
 
-fn number(spec: &Map<String, Value>, key: &str) -> Option<f64> {
-    spec.get(key)
-        .and_then(Value::as_f64)
-        .filter(|v| v.is_finite())
+fn short(v: f32) -> f64 {
+    let r = (f64::from(v) * 1e6).round() / 1e6;
+    if r == 0.0 { 0.0 } else { r }
 }
 
-fn pbr(glb: &[u8], materials: &BTreeMap<String, Value>) -> Result<Vec<u8>, String> {
+fn unit(v: f32) -> f64 {
+    short(v.clamp(0.0, 1.0))
+}
+
+fn extensions_of(material: &Material) -> Map<String, Value> {
+    let mut extensions = Map::new();
+    let strength = material.emission.iter().copied().fold(0.0_f32, f32::max);
+    if strength > 1.0 {
+        extensions.insert(
+            EMISSIVE_STRENGTH.into(),
+            json!({ "emissiveStrength": short(strength) }),
+        );
+    }
+    if material.transmission > 0.0 {
+        extensions.insert(
+            TRANSMISSION.into(),
+            json!({ "transmissionFactor": unit(material.transmission) }),
+        );
+        if !material.thin_walled {
+            let mut volume = json!({ "thicknessFactor": short(material.thickness.max(0.0)) });
+            if material.absorption > 0.0 {
+                volume["attenuationDistance"] = json!(short(1.0 / material.absorption));
+                volume["attenuationColor"] = json!(
+                    material
+                        .base
+                        .map(|b| short((b.clamp(0.0, 1.0) - 1.0).exp()))
+                );
+            }
+            extensions.insert(VOLUME.into(), volume);
+        }
+    }
+    if material.transmission > 0.0 || material.ior != Material::default().ior {
+        extensions.insert(IOR.into(), json!({ "ior": short(material.ior.max(1.0)) }));
+    }
+    if material.clearcoat > 0.0 {
+        extensions.insert(
+            CLEARCOAT.into(),
+            json!({
+                "clearcoatFactor": unit(material.clearcoat),
+                "clearcoatRoughnessFactor": unit(material.clearcoat_roughness),
+            }),
+        );
+    }
+    extensions
+}
+
+fn dress_material(slot: &mut Value, material: &Material) -> Result<Vec<String>, String> {
+    let out = slot.as_object_mut().ok_or("a material is not an object")?;
+    let [r, g, b] = material.base.map(unit);
+    let pbr = out
+        .entry("pbrMetallicRoughness")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or("pbrMetallicRoughness is not an object")?;
+    pbr.insert(
+        "baseColorFactor".into(),
+        json!([r, g, b, unit(material.alpha)]),
+    );
+    pbr.insert("metallicFactor".into(), json!(unit(material.metalness)));
+    pbr.insert("roughnessFactor".into(), json!(unit(material.roughness)));
+    out.remove("alphaCutoff");
+    match material.alpha_mode {
+        AlphaMode::Opaque => {
+            out.remove("alphaMode");
+        }
+        AlphaMode::Mask => {
+            out.insert("alphaMode".into(), json!("MASK"));
+            out.insert(
+                "alphaCutoff".into(),
+                json!(short(material.alpha_cutoff.max(0.0))),
+            );
+        }
+        AlphaMode::Blend => {
+            out.insert("alphaMode".into(), json!("BLEND"));
+        }
+    }
+    let emission = material.emission.map(|e| e.max(0.0));
+    let strength = emission.iter().copied().fold(0.0_f32, f32::max);
+    if strength > 0.0 {
+        let scale = strength.max(1.0);
+        out.insert(
+            "emissiveFactor".into(),
+            json!(emission.map(|e| short(e / scale))),
+        );
+    } else {
+        out.remove("emissiveFactor");
+    }
+    let extensions = extensions_of(material);
+    let names = extensions.keys().cloned().collect();
+    let slot = out
+        .entry("extensions")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or("a material's extensions are not an object")?;
+    for name in [EMISSIVE_STRENGTH, TRANSMISSION, VOLUME, IOR, CLEARCOAT] {
+        slot.remove(name);
+    }
+    slot.extend(extensions);
+    if slot.is_empty() {
+        out.remove("extensions");
+    }
+    Ok(names)
+}
+
+pub(crate) fn pbr(glb: &[u8], materials: &BTreeMap<String, Value>) -> Result<Vec<u8>, String> {
     let (mut json, bin) = split_glb(glb)?;
     let mut used = BTreeSet::new();
     if let Some(list) = json.get_mut("materials").and_then(Value::as_array_mut) {
-        for material in list {
-            let Some(spec) = material
+        for slot in list {
+            let Some(material) = slot
                 .get("name")
                 .and_then(Value::as_str)
                 .and_then(|n| materials.get(n))
-                .and_then(Value::as_object)
-                .cloned()
+                .and_then(|spec| serde_json::from_value::<Material>(spec.clone()).ok())
             else {
                 continue;
             };
-            let textured = material
-                .get("pbrMetallicRoughness")
-                .and_then(|p| p.get("baseColorTexture"))
-                .is_some();
-            let alpha = number(&spec, "alpha").unwrap_or(1.0).clamp(0.0, 1.0);
-            match spec.get("alpha_mode").and_then(Value::as_str) {
-                Some("mask") => {
-                    material["alphaMode"] = json!("MASK");
-                    material["alphaCutoff"] =
-                        json!(number(&spec, "alpha_cutoff").unwrap_or(0.5).max(0.0));
-                }
-                Some("blend") => material["alphaMode"] = json!("BLEND"),
-                _ => {}
-            }
-            if !textured {
-                let base = vec3(spec.get("base")).unwrap_or(DVec3::splat(0.8));
-                let base = base.clamp(DVec3::ZERO, DVec3::ONE);
-                material["pbrMetallicRoughness"] = json!({
-                    "baseColorFactor": [base.x, base.y, base.z, alpha],
-                    "metallicFactor": number(&spec, "metalness").unwrap_or(0.0).clamp(0.0, 1.0),
-                    "roughnessFactor": number(&spec, "roughness").unwrap_or(0.5).clamp(0.0, 1.0),
-                });
-            }
-            let mut extensions = Map::new();
-            if let Some(emission) = vec3(spec.get("emission")).filter(|e| e.max_element() > 0.0) {
-                let emission = emission.max(DVec3::ZERO);
-                let strength = emission.max_element();
-                if strength > 1.0 {
-                    material["emissiveFactor"] = json!((emission / strength).to_array());
-                    extensions.insert(
-                        EMISSIVE_STRENGTH.into(),
-                        json!({ "emissiveStrength": strength }),
-                    );
-                } else {
-                    material["emissiveFactor"] = json!(emission.to_array());
-                }
-            }
-            if let Some(t) = number(&spec, "transmission").filter(|t| *t > 0.0) {
-                extensions.insert(
-                    TRANSMISSION.into(),
-                    json!({ "transmissionFactor": t.min(1.0) }),
-                );
-            }
-            if let Some(ior) = number(&spec, "ior").filter(|i| *i >= 1.0) {
-                extensions.insert(IOR.into(), json!({ "ior": ior }));
-            }
-            if let Some(c) = number(&spec, "clearcoat").filter(|c| *c > 0.0) {
-                extensions.insert(
-                    CLEARCOAT.into(),
-                    json!({
-                        "clearcoatFactor": c.min(1.0),
-                        "clearcoatRoughnessFactor": number(&spec, "clearcoat_roughness").unwrap_or(0.0).clamp(0.0, 1.0),
-                    }),
-                );
-            }
-            if !extensions.is_empty() {
-                used.extend(extensions.keys().cloned());
-                let slot = material
-                    .as_object_mut()
-                    .ok_or("a material is not an object")?
-                    .entry("extensions")
-                    .or_insert_with(|| json!({}));
-                if let Some(slot) = slot.as_object_mut() {
-                    slot.extend(extensions);
-                }
-            }
+            used.extend(dress_material(slot, &material)?);
         }
     }
     if !used.is_empty() {
@@ -864,24 +903,60 @@ pub(crate) fn material_name(name: Option<&str>, index: Option<usize>) -> String 
     }
 }
 
-pub(crate) fn file_materials(bytes: &[u8]) -> BTreeMap<String, Value> {
-    let json = match bytes.get(0..4) {
+fn file_json(bytes: &[u8]) -> Option<Value> {
+    match bytes.get(0..4) {
         Some(b"glTF") => split_glb(bytes).ok().map(|(json, _)| json),
         _ => serde_json::from_slice::<Value>(bytes).ok(),
-    };
-    json.as_ref()
+    }
+}
+
+fn each_material<T>(bytes: &[u8], f: impl Fn(&Value) -> Option<T>) -> BTreeMap<String, T> {
+    file_json(bytes)
+        .as_ref()
         .and_then(|json| json.get("materials"))
         .and_then(Value::as_array)
         .map(|list| {
             list.iter()
                 .enumerate()
-                .map(|(i, m)| {
+                .filter_map(|(i, m)| {
                     let name = material_name(m.get("name").and_then(Value::as_str), Some(i));
-                    (name, material_of(m))
+                    f(m).map(|found| (name, found))
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+pub(crate) fn file_materials(bytes: &[u8]) -> BTreeMap<String, Value> {
+    each_material(bytes, |m| Some(material_of(m)))
+}
+
+pub(crate) fn keep_looks(looks: &mut Looks, bytes: &[u8], used: impl Fn(&str) -> bool) {
+    let sides = each_material(bytes, |m| m.get("doubleSided").and_then(Value::as_bool));
+    for (name, two) in sides {
+        if used(&name) {
+            looks.entry(name).or_default().double_sided = Some(two);
+        }
+    }
+    looks.retain(|_, look| look.has_maps() || look.double_sided.is_some());
+}
+
+fn absorption(volume: &Value, base: [f64; 3]) -> Option<f64> {
+    let distance = volume
+        .get("attenuationDistance")
+        .and_then(Value::as_f64)
+        .filter(|d| d.is_finite() && *d > 0.0)?;
+    let colour = vec3(volume.get("attenuationColor")).unwrap_or(DVec3::ONE);
+    let taken: f64 = colour
+        .to_array()
+        .iter()
+        .map(|c| -c.clamp(1e-9, 1.0).ln() / distance)
+        .sum();
+    let open: f64 = base
+        .iter()
+        .map(|b| (1.0 - b.clamp(0.0, 1.0)).max(0.0))
+        .sum();
+    (taken > 0.0 && open > 1e-6).then(|| (taken / open * 1e6).round() / 1e6)
 }
 
 fn material_of(m: &Value) -> Value {
@@ -940,6 +1015,23 @@ fn material_of(m: &Value) -> Value {
     let transmission = ext(TRANSMISSION, "transmissionFactor").filter(|t| *t > 0.0);
     if let Some(t) = transmission {
         out.insert("transmission".into(), json!(t));
+        match m.get("extensions").and_then(|e| e.get(VOLUME)) {
+            Some(volume) => {
+                let thickness = volume
+                    .get("thicknessFactor")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                if thickness > 0.0 {
+                    out.insert("thickness".into(), json!(thickness));
+                }
+                if let Some(absorption) = absorption(volume, base) {
+                    out.insert("absorption".into(), json!(absorption));
+                }
+            }
+            None => {
+                out.insert("thin_walled".into(), json!(true));
+            }
+        }
     }
     if let Some(ior) = ext(IOR, "ior") {
         out.insert("ior".into(), json!(ior));
@@ -1550,7 +1642,11 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
         Some((_, found)) => skin::player(recipe, object, Arc::new(found.rig), false)?,
         None => None,
     };
-    looks.retain(|_, look| look.has_maps());
+    keep_looks(&mut looks, &bytes, |name| {
+        pieces
+            .iter()
+            .any(|piece| piece.mesh.slots.iter().any(|slot| slot.material == name))
+    });
     let materials = file_materials(&bytes);
     let lights = facts
         .get("lights")

@@ -1,40 +1,12 @@
+use std::sync::Arc;
+
+use pfx_core::memory;
+
 use crate::bvh::{Bounds, Bvh, Node};
 use crate::detail::{Instance, Pose, Transform, TriangleDetail};
+use crate::motion::{Decomposed, decompose_steps, rows, swept};
 
 pub(crate) const INSTANCE_LEAF: u32 = 1;
-const PARALLEL_TRIANGLES: usize = 1 << 15;
-
-#[derive(Clone, Debug)]
-pub(crate) enum Materials {
-    One(u32),
-    Each(Vec<u32>),
-}
-
-impl Materials {
-    fn of(triangles: &[TriangleDetail], order: &[u32]) -> Self {
-        let first = order.first().map_or(0, |&j| triangles[j as usize].material);
-        if order
-            .iter()
-            .all(|&j| triangles[j as usize].material == first)
-        {
-            Self::One(first)
-        } else {
-            Self::Each(
-                order
-                    .iter()
-                    .map(|&j| triangles[j as usize].material)
-                    .collect(),
-            )
-        }
-    }
-
-    fn at(&self, index: usize) -> u32 {
-        match self {
-            Self::One(material) => *material,
-            Self::Each(materials) => materials[index],
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub(crate) struct Mesh {
@@ -42,17 +14,28 @@ pub(crate) struct Mesh {
     pub order: Vec<u32>,
     pub nodes: Vec<Node>,
     pub root: u32,
+    pub first: u32,
+    pub bounds: Bounds,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct Placed {
     pub mesh: usize,
     pub base: u32,
+    pub record: u32,
     pub transform: Transform,
     pub word: u32,
-    pub materials: Materials,
+    pub material: Option<u32>,
     pub bounds: Bounds,
     pub inverse: [f32; 12],
+    pub motion: Vec<Decomposed>,
+    pub deform: usize,
+}
+
+impl Placed {
+    pub(crate) fn moving(&self) -> bool {
+        !self.motion.is_empty() || self.deform > 0
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -68,6 +51,7 @@ pub(crate) struct Laid {
     pub nodes: Vec<Node>,
     pub levels: Option<Levels>,
     pub bottom_builds: usize,
+    pub slots: usize,
 }
 
 fn geometry_hash(triangles: &[TriangleDetail]) -> u64 {
@@ -79,6 +63,7 @@ fn geometry_hash(triangles: &[TriangleDetail]) -> u64 {
             .chain(&triangle.normals)
             .flatten()
             .chain(triangle.uvs.iter().flatten())
+            .chain(triangle.uvs1.iter().flatten())
         {
             hash = (hash ^ u64::from(value.to_bits())).wrapping_mul(0x0000_0100_0000_01b3);
         }
@@ -86,22 +71,23 @@ fn geometry_hash(triangles: &[TriangleDetail]) -> u64 {
     hash
 }
 
-fn same_geometry(a: &[TriangleDetail], b: &[TriangleDetail]) -> bool {
+fn same_geometry(a: &TriangleDetail, b: &TriangleDetail) -> bool {
     let bits = |t: &TriangleDetail| {
-        let mut out = [0_u32; 24];
+        let mut out = [0_u32; 30];
         for (slot, value) in t
             .vertices
             .iter()
             .chain(&t.normals)
             .flatten()
             .chain(t.uvs.iter().flatten())
+            .chain(t.uvs1.iter().flatten())
             .enumerate()
         {
             out[slot] = value.to_bits();
         }
         out
     };
-    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| bits(x) == bits(y))
+    bits(a) == bits(b)
 }
 
 fn shifted(nodes: &[Node], offset: u32) -> Vec<Node> {
@@ -124,96 +110,224 @@ fn bounds_of(node: &Node) -> Bounds {
     }
 }
 
+pub(crate) fn placed_bounds(pose: &Pose, local: Bounds) -> Bounds {
+    let mut bounds = Bounds::empty();
+    for corner in 0..8 {
+        let point = std::array::from_fn(|axis| {
+            if corner >> axis & 1 == 0 {
+                local.lo[axis]
+            } else {
+                local.hi[axis]
+            }
+        });
+        bounds.point(pose.point(point));
+    }
+    bounds
+}
+
+fn one_material(triangles: &[TriangleDetail]) -> Option<u32> {
+    let first = triangles.first()?.material;
+    triangles
+        .iter()
+        .all(|triangle| triangle.material == first)
+        .then_some(first)
+}
+
+fn refit(nodes: &mut [Node], index: usize, boxes: &[Bounds]) -> Bounds {
+    let node = nodes[index];
+    let bounds = if node.count > 0 {
+        let mut bounds = Bounds::empty();
+        for slot in node.first..node.first + node.count {
+            bounds.grow(boxes[slot as usize]);
+        }
+        bounds
+    } else {
+        let mut bounds = refit(nodes, index + 1, boxes);
+        bounds.grow(refit(nodes, node.first as usize, boxes));
+        bounds
+    };
+    nodes[index].lo[..3].copy_from_slice(&bounds.lo);
+    nodes[index].hi[..3].copy_from_slice(&bounds.hi);
+    bounds
+}
+
+fn deformed_boxes(
+    shapes: &[Vec<TriangleDetail>],
+    triangles: &[TriangleDetail],
+    order: &[u32],
+) -> Vec<Bounds> {
+    order
+        .iter()
+        .map(|&j| {
+            let mut bounds = Bounds::empty();
+            for shape in shapes
+                .iter()
+                .map(|shape| &shape[j as usize])
+                .chain([&triangles[j as usize]])
+            {
+                for &vertex in &shape.vertices {
+                    bounds.point(vertex);
+                }
+            }
+            bounds
+        })
+        .collect()
+}
+
+pub(crate) fn motion_steps(transforms: &[Transform]) -> Vec<Decomposed> {
+    if transforms.is_empty() {
+        return Vec::new();
+    }
+    decompose_steps(&transforms.iter().map(rows).collect::<Vec<_>>())
+}
+
+struct Known {
+    source: Arc<[TriangleDetail]>,
+    hash: u64,
+    mesh: usize,
+}
+
 pub(crate) fn lay(
-    detailed: &[TriangleDetail],
-    world: usize,
+    world: &[TriangleDetail],
     instances: &[Instance],
-    starts: &[usize],
     words: &[u32],
+    unique: &[bool],
+    moving: bool,
 ) -> Result<Laid, String> {
+    let mut world_triangles = memory::vec(world.len(), "the tracer's world triangles")?;
+    world_triangles.extend(world.iter().copied().map(TriangleDetail::triangle));
+    let world_bvh = Bvh::try_build(&world_triangles)?;
+    drop(world_triangles);
     if instances.is_empty() {
-        let triangles: Vec<_> = detailed
-            .iter()
-            .copied()
-            .map(TriangleDetail::triangle)
-            .collect();
-        let bvh = Bvh::build(&triangles);
         return Ok(Laid {
-            order: bvh.order,
-            nodes: bvh.nodes,
+            order: world_bvh.order,
+            nodes: world_bvh.nodes,
             levels: None,
-            bottom_builds: usize::from(!detailed.is_empty()),
+            bottom_builds: usize::from(!world.is_empty()),
+            slots: world.len(),
         });
     }
-    let world_triangles: Vec<_> = detailed[..world]
-        .iter()
-        .copied()
-        .map(TriangleDetail::triangle)
-        .collect();
-    let world_bvh = Bvh::build(&world_triangles);
     let mut meshes: Vec<Mesh> = Vec::new();
-    let mut hashes: Vec<u64> = Vec::new();
+    let mut known: Vec<Known> = Vec::new();
     let mut placed = Vec::with_capacity(instances.len());
-    let mut bottom_builds = usize::from(world > 0);
-    let mut base = world as u32;
-    for ((instance, &start), &word) in instances.iter().zip(starts).zip(words) {
+    let mut bottom_builds = usize::from(!world.is_empty());
+    let mut next = world.len() as u32;
+    let mut record = 0u32;
+    for ((instance, &word), &alone) in instances.iter().zip(words).zip(unique) {
         let len = instance.triangles.len();
         if len == 0 {
             placed.push(None);
             continue;
         }
-        let hash = geometry_hash(&instance.triangles);
-        let found = meshes.iter().zip(&hashes).position(|(mesh, &h)| {
-            h == hash && mesh.order.len() == len && {
-                let ordered: Vec<TriangleDetail> = mesh
+        let pose = Pose::new(instance.transform)?;
+        let motion = instance
+            .motion
+            .as_ref()
+            .filter(|motion| moving && motion.moves(&instance.transform));
+        let deform = motion.map_or(0, |motion| motion.shapes.len());
+        let alone = alone || deform > 0;
+        let material = one_material(&instance.triangles);
+        let fits = |mesh: &Mesh| {
+            material.is_some()
+                || mesh
                     .order
                     .iter()
-                    .map(|&j| instance.triangles[j as usize])
-                    .collect();
-                same_geometry(&ordered, &mesh.triangles)
-            }
-        });
+                    .zip(&mesh.triangles)
+                    .all(|(&j, triangle)| {
+                        instance.triangles[j as usize].material == triangle.material
+                    })
+        };
+        let shared = known
+            .iter()
+            .any(|entry| Arc::ptr_eq(&entry.source, &instance.triangles));
+        let mut hash = None;
+        let found = if alone {
+            None
+        } else if let Some(entry) = known.iter().find(|entry| {
+            Arc::ptr_eq(&entry.source, &instance.triangles) && fits(&meshes[entry.mesh])
+        }) {
+            Some(entry.mesh)
+        } else {
+            let hashed = *hash.get_or_insert_with(|| geometry_hash(&instance.triangles));
+            known
+                .iter()
+                .find(|entry| {
+                    let mesh = &meshes[entry.mesh];
+                    entry.hash == hashed
+                        && mesh.order.len() == len
+                        && fits(mesh)
+                        && mesh
+                            .order
+                            .iter()
+                            .zip(&mesh.triangles)
+                            .all(|(&j, triangle)| {
+                                same_geometry(&instance.triangles[j as usize], triangle)
+                            })
+                })
+                .map(|entry| entry.mesh)
+        };
         let mesh = match found {
             Some(index) => index,
             None => {
-                let triangles: Vec<_> = instance
-                    .triangles
-                    .iter()
-                    .copied()
-                    .map(TriangleDetail::triangle)
-                    .collect();
-                let bvh = Bvh::build(&triangles);
-                bottom_builds += 1;
-                meshes.push(Mesh {
-                    triangles: bvh
-                        .order
+                let mut triangles = memory::vec(len, "the tracer's mesh triangles")?;
+                triangles.extend(
+                    instance
+                        .triangles
                         .iter()
-                        .map(|&j| instance.triangles[j as usize])
-                        .collect(),
+                        .copied()
+                        .map(TriangleDetail::triangle),
+                );
+                let mut bvh = Bvh::try_build(&triangles)?;
+                drop(triangles);
+                if let Some(motion) = motion.filter(|_| deform > 0) {
+                    let boxes = deformed_boxes(&motion.shapes, &instance.triangles, &bvh.order);
+                    refit(&mut bvh.nodes, 0, &boxes);
+                }
+                bottom_builds += 1;
+                let bounds = bvh.nodes.first().map_or(Bounds::empty(), bounds_of);
+                let mut ordered = memory::vec(len, "the tracer's mesh triangles")?;
+                ordered.extend(bvh.order.iter().map(|&j| instance.triangles[j as usize]));
+                memory::more(&mut meshes, 1, "the tracer's meshes")?;
+                meshes.push(Mesh {
+                    triangles: ordered,
                     order: bvh.order,
                     nodes: bvh.nodes,
                     root: 0,
+                    first: next,
+                    bounds,
                 });
-                hashes.push(hash);
+                next = next
+                    .checked_add(len as u32)
+                    .ok_or("trace scene has too many triangles")?;
                 meshes.len() - 1
             }
         };
-        let mut bounds = Bounds::empty();
-        for triangle in &detailed[start..start + len] {
-            for &vertex in &triangle.vertices {
-                bounds.point(vertex);
-            }
+        if !alone && !shared {
+            known.push(Known {
+                source: instance.triangles.clone(),
+                hash: hash.unwrap_or_else(|| geometry_hash(&instance.triangles)),
+                mesh,
+            });
         }
+        record += 1;
+        let steps = motion_steps(motion.map_or(&[][..], |motion| &motion.transforms));
+        let bounds = if steps.is_empty() {
+            placed_bounds(&pose, meshes[mesh].bounds)
+        } else {
+            swept(meshes[mesh].bounds, &steps)
+        };
         placed.push(Some(Placed {
             mesh,
-            base,
+            base: meshes[mesh].first,
+            record,
             transform: instance.transform,
             word,
-            materials: Materials::of(&instance.triangles, &meshes[mesh].order),
+            material,
             bounds,
-            inverse: Pose::new(instance.transform)?.inverse_rows(),
+            inverse: pose.inverse_rows(),
+            motion: steps,
+            deform,
         }));
-        base += len as u32;
     }
     let world_root = world_bvh.nodes.first().map(bounds_of);
     let mut levels = Levels {
@@ -233,27 +347,17 @@ pub(crate) fn lay(
         mesh.nodes = shifted(&mesh.nodes, offset);
         offset += mesh.nodes.len() as u32;
     }
-    let mut order: Vec<u32> = world_bvh.order.clone();
-    for (placed, &start) in levels.placed.iter().zip(starts) {
-        if let Some(placed) = placed {
-            order.extend(
-                levels.meshes[placed.mesh]
-                    .order
-                    .iter()
-                    .map(|&j| start as u32 + j),
-            );
-        }
-    }
     let mut nodes = levels.top();
     nodes.extend_from_slice(&levels.world_nodes);
     for mesh in &levels.meshes {
         nodes.extend_from_slice(&mesh.nodes);
     }
     Ok(Laid {
-        order,
+        order: world_bvh.order,
         nodes,
         levels: Some(levels),
         bottom_builds,
+        slots: next as usize,
     })
 }
 
@@ -261,6 +365,7 @@ struct Group {
     bounds: Bounds,
     root: u32,
     base: u32,
+    record: u32,
     inverse: Option<[f32; 12]>,
 }
 
@@ -272,6 +377,7 @@ impl Levels {
                 bounds,
                 root,
                 base: 0,
+                record: 0,
                 inverse: None,
             });
         }
@@ -280,6 +386,7 @@ impl Levels {
                 bounds: placed.bounds,
                 root: self.meshes[placed.mesh].root,
                 base: placed.base,
+                record: placed.record,
                 inverse: Some(placed.inverse),
             });
         }
@@ -313,6 +420,7 @@ impl Levels {
                     let group = &groups[index];
                     node.first = group.root;
                     node.count = group.base;
+                    node.lo[3] = f32::from_bits(group.record);
                     node._pad = [
                         INSTANCE_LEAF,
                         if group.inverse.is_some() {
@@ -343,53 +451,29 @@ impl Levels {
     pub(crate) fn instance_count(&self) -> usize {
         self.placed.len()
     }
-}
 
-pub(crate) fn pose_into<T: Send>(
-    pose: &Pose,
-    source: &[TriangleDetail],
-    materials: &Materials,
-    out: &mut [T],
-    pack: impl Fn(&TriangleDetail) -> T + Sync,
-) -> Bounds {
-    let work = |offset: usize, out: &mut [T]| {
-        let mut bounds = Bounds::empty();
-        for (k, slot) in out.iter_mut().enumerate() {
-            let mut triangle = pose.triangle(&source[offset + k]);
-            triangle.material = materials.at(offset + k);
-            for &vertex in &triangle.vertices {
-                bounds.point(vertex);
-            }
-            *slot = pack(&triangle);
+    pub(crate) fn set_motion(&mut self, index: usize, transforms: &[Transform]) {
+        let Some(Some(placed)) = self.placed.get_mut(index) else {
+            return;
+        };
+        let still = transforms
+            .iter()
+            .all(|transform| *transform == placed.transform);
+        if still && placed.motion.is_empty() {
+            return;
         }
-        bounds
-    };
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
-    if source.len() < PARALLEL_TRIANGLES || threads < 2 {
-        return work(0, out);
-    }
-    let chunk = source.len().div_ceil(threads);
-    let parts: Vec<Bounds> = std::thread::scope(|scope| {
-        let handles: Vec<_> = out
-            .chunks_mut(chunk)
-            .enumerate()
-            .map(|(index, part)| {
-                let work = &work;
-                scope.spawn(move || work(index * chunk, part))
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| handle.join().expect("a posing thread panicked"))
-            .collect()
-    });
-    let mut bounds = Bounds::empty();
-    for part in parts {
-        if part.lo[0] <= part.hi[0] {
-            bounds.grow(part);
+        let local = self.meshes[placed.mesh].bounds;
+        placed.motion = if still {
+            Vec::new()
+        } else {
+            motion_steps(transforms)
+        };
+        if !placed.motion.is_empty() {
+            placed.bounds = swept(local, &placed.motion);
+        } else if let Ok(pose) = Pose::new(placed.transform) {
+            placed.bounds = placed_bounds(&pose, local);
         }
     }
-    bounds
 }
 
 #[cfg(test)]
@@ -398,13 +482,14 @@ mod tests {
     use crate::bvh::{Ray, triangle_hit};
     use crate::detail::InstanceSurface;
 
-    fn instance(transform: Transform, triangles: Vec<TriangleDetail>) -> Instance {
+    fn instance(transform: Transform, triangles: Arc<[TriangleDetail]>) -> Instance {
         Instance {
             triangles,
             transform,
             surface: InstanceSurface::default(),
             shadow_only: false,
             two_sided: true,
+            motion: None,
         }
     }
 
@@ -450,7 +535,8 @@ mod tests {
                 for j in 0..node.count {
                     let slot = base + node.first + j;
                     let limit = best.map_or(f32::INFINITY, |(_, t)| t);
-                    if let Some(hit) = triangle_hit(&world[slot as usize].triangle(), ray, limit) {
+                    if let Some(hit) = triangle_hit(&world[slot as usize].triangle(), local, limit)
+                    {
                         best = Some((slot, hit.distance));
                     }
                 }
@@ -508,7 +594,7 @@ mod tests {
                 })
                 .collect()
         };
-        let shared = blob(60);
+        let shared: Arc<[TriangleDetail]> = blob(60).into();
         let world = blob(30);
         let turned = |angle: f32, at: [f32; 3], scale: f32| -> Transform {
             let (s, c) = angle.sin_cos();
@@ -522,21 +608,29 @@ mod tests {
         let instances = vec![
             instance(turned(0.3, [2.0, 0.0, 0.0], 1.0), shared.clone()),
             instance(turned(-1.2, [-2.0, 0.5, 1.0], 0.7), shared.clone()),
-            instance(turned(2.0, [0.0, -2.0, -1.0], 1.5), blob(40)),
+            instance(turned(2.0, [0.0, -2.0, -1.0], 1.5), blob(40).into()),
+            instance(
+                turned(2.5, [1.0, 1.5, -2.0], 0.5),
+                shared.iter().copied().collect(),
+            ),
         ];
-        let mut detailed = world.clone();
-        let mut starts = Vec::new();
-        for instance in &instances {
-            starts.push(detailed.len());
-            detailed.extend(instance.transformed().unwrap());
-        }
-        let laid = lay(&detailed, world.len(), &instances, &starts, &[0, 0, 0]).unwrap();
+        let laid = lay(&world, &instances, &[0; 4], &[false; 4], false).unwrap();
         assert_eq!(laid.bottom_builds, 3);
-        let slots: Vec<TriangleDetail> = laid
+        assert_eq!(laid.slots, 30 + 60 + 40);
+        let levels = laid.levels.as_ref().unwrap();
+        let mut slots: Vec<TriangleDetail> = laid
             .order
             .iter()
-            .map(|&index| detailed[index as usize])
+            .map(|&index| world[index as usize])
             .collect();
+        for mesh in &levels.meshes {
+            assert_eq!(mesh.first as usize, slots.len());
+            slots.extend_from_slice(&mesh.triangles);
+        }
+        let mut placed = world.clone();
+        for instance in &instances {
+            placed.extend(instance.transformed().unwrap());
+        }
         for _ in 0..3000 {
             let ray = Ray {
                 origin: [
@@ -550,18 +644,72 @@ mod tests {
                     random() * 2.0 - 1.0,
                 ]),
             };
-            let brute = slots
+            let brute = placed
                 .iter()
-                .enumerate()
-                .filter_map(|(slot, t)| {
-                    triangle_hit(&t.triangle(), ray, f32::INFINITY)
-                        .map(|hit| (slot as u32, hit.distance))
-                })
-                .min_by(|a, b| a.1.total_cmp(&b.1));
-            assert_eq!(
-                walk(&laid.nodes, &slots, ray).map(|h| h.0),
-                brute.map(|h| h.0)
-            );
+                .filter_map(|t| triangle_hit(&t.triangle(), ray, f32::INFINITY))
+                .map(|hit| hit.distance)
+                .min_by(f32::total_cmp);
+            let walked = walk(&laid.nodes, &slots, ray).map(|h| h.1);
+            match (walked, brute) {
+                (Some(a), Some(b)) => assert!((a - b).abs() <= 1e-4 * b.max(1.0), "{a} {b}"),
+                (a, b) => assert_eq!(a, b),
+            }
         }
+    }
+
+    #[test]
+    fn moving_and_deforming_instances_are_bounded_over_the_whole_shutter() {
+        let triangle = |lift: f32| TriangleDetail {
+            vertices: [[-0.5, 0.0, 0.0], [0.5, 0.0, 0.0], [0.0, 1.0 + lift, 0.0]],
+            normals: [[0.0, 0.0, 1.0]; 3],
+            uvs: [[0.0; 2]; 3],
+            uvs1: [[0.0; 2]; 3],
+            material: 0,
+        };
+        let turned = |angle: f32, x: f32| -> Transform {
+            let (s, c) = angle.sin_cos();
+            [
+                [c, s, 0.0, 0.0],
+                [-s, c, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [x, 0.0, 0.0, 1.0],
+            ]
+        };
+        let steps = [turned(-1.0, -2.0), turned(0.0, 0.0), turned(1.0, 2.0)];
+        let mut spun = instance(steps[1], vec![triangle(0.0)].into());
+        spun.motion = Some(crate::motion::InstanceMotion {
+            transforms: steps.to_vec(),
+            shapes: Vec::new(),
+        });
+        let mut grown = instance(turned(0.0, 5.0), vec![triangle(0.0)].into());
+        grown.motion = Some(crate::motion::InstanceMotion {
+            transforms: Vec::new(),
+            shapes: vec![
+                vec![triangle(-0.5)],
+                vec![triangle(0.0)],
+                vec![triangle(1.5)],
+            ],
+        });
+        let instances = vec![spun, grown];
+        let laid = lay(&[], &instances, &[0, 0], &[false, false], true).unwrap();
+        let levels = laid.levels.unwrap();
+        let spun = levels.placed[0].as_ref().unwrap();
+        let motion = crate::motion::decompose_steps(&steps.map(|step| rows(&step)));
+        for k in 0..=50 {
+            let at = crate::motion::interpolate(&motion, k as f32 / 50.0);
+            for vertex in triangle(0.0).vertices {
+                let p = crate::motion::point(&at, vertex);
+                for axis in 0..3 {
+                    assert!(p[axis] >= spun.bounds.lo[axis] - 1e-3, "{k} {p:?}");
+                    assert!(p[axis] <= spun.bounds.hi[axis] + 1e-3, "{k} {p:?}");
+                }
+            }
+        }
+        let grown = levels.placed[1].as_ref().unwrap();
+        assert_eq!((spun.deform, grown.deform), (0, 3));
+        assert!(grown.motion.is_empty());
+        assert!(levels.meshes[grown.mesh].bounds.hi[1] >= 2.5);
+        assert!(grown.bounds.hi[1] >= 2.5);
+        assert_ne!(spun.mesh, grown.mesh);
     }
 }

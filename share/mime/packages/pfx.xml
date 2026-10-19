@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-pfx">
+    <comment>pfx document</comment>
+    <icon name="application-x-pfx"/>
+    <generic-icon name="application-x-generic"/>
+    <magic priority="80">
+      <match type="string" value="PFXFILE\0" offset="0"/>
+    </magic>
+    <glob pattern="*.pitofx"/>
+  </mime-type>
+</mime-info>

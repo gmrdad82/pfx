@@ -80,6 +80,8 @@ d0ea83e311bf02dcd40392c47632538db51ec590867ac1bb2d603f676f647479  crates/editor/
 94d162eb7238c374787554555feb3ca4fb4d0dc2f80ada33edf48e35473f29bd  crates/editor/tests/shots/project-scene-camera.png  generated: pfx gui's offscreen shot harness, crates/editor/tests/project.rs, on the RX 9060 XT
 7308a3c545842614cfc4f24f023ef3ba61ef580499d72effaba379607b10a087  assets/marks/pfx.svg  generated: pfx's own mark (Incoming), exported from pfx's brand masters (a logo, see TRADEMARKS.md)
 674de94695888aa68a44a939ada80c048135a866517cebed89f2d00a7ac763a8  assets/marks/pfx-icon.png  generated: pfx's own mark on its tile at 512, exported from pfx's brand masters (a logo, see TRADEMARKS.md)
+9d286824d7ad5dfbb354675c6786c7174e9f1574822310d34aaa7f6cc9ca3b62  assets/marks/pfx.ico  generated: pfx's own mark as a Windows icon, 16 to 256 px, exported from pfx's brand masters (a logo, see TRADEMARKS.md)
+1f6a8d753978d7b2c73a0d5416c5b448d2493a53e29df9ff84305a7e14a77a24  assets/marks/pfx.icns  generated: pfx's own mark as a macOS icon, 16 to 1024 px, exported from pfx's brand masters (a logo, see TRADEMARKS.md)
 41a6584abe4fdaa93683497d43db4bdc2c34bdfb7bf3b08d440ab03f4b4771bb  .github/icon.png  generated: pfx's README icon, exported from pfx's brand masters (a logo, see TRADEMARKS.md)
 c4cc6f84b7747f71774c0caeabcef225e87bc397f332ae1b977ec422645c01e4  assets/marks/wordmark.svg  generated: pfx's wordmark, exported from pfx's brand masters (a logo, see TRADEMARKS.md)
 0de417341d0706c157bd089814db757ae31f03de72d0d17b1f73a11f86a47e85  assets/marks/lockup.svg  generated: pfx's lockup, exported from pfx's brand masters (a logo, see TRADEMARKS.md)

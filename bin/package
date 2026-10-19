@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF2'
+Usage: bin/package <tag> <platform> <binary> <out dir> [<launcher>]
+
+Packages a release build of pfx as the GitHub Release assets for <platform>:
+  linux-x86_64     pfx-<tag>-linux-x86_64.tar.gz, with share/ (desktop file, MIME type, icons)
+  macos-arm64      pfx-<tag>-macos-arm64.tar.gz and pfx-<tag>-macos-arm64.app.zip (pfx.app)
+  windows-x86_64   pfx-<tag>-windows-x86_64.zip: <binary> as pfx.com (the console tool),
+                   <launcher> as pfx.exe (the window launcher), and associate.ps1
+Each archive holds the binaries at its root with LICENSE, README.md, NOTICE.md,
+LICENSE-MT19937.md and LICENSE-ebur128.md. SHA256SUMS is written over every asset by the release workflow.
+EOF2
+}
+
+refuse() {
+  printf "error: %s\n\nUsage: bin/package <tag> <platform> <binary> <out dir> [<launcher>]\n\nFor more information, try '--help'.\n" "$1" >&2
+  exit 2
+}
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+args=()
+for arg in "$@"; do
+  case $arg in
+    -h|--help) usage; exit 0 ;;
+    -*) refuse "unexpected argument '$arg' found" ;;
+    *) args+=("$arg") ;;
+  esac
+done
+case ${#args[@]} in
+  4 | 5) ;;
+  [0-3]) refuse "the following required arguments were not provided: <tag> <platform> <binary> <out dir>" ;;
+  *) refuse "unexpected argument '${args[5]}' found" ;;
+esac
+tag=${args[0]}
+platform=${args[1]}
+binary=${args[2]}
+out=${args[3]}
+launcher=${args[4]:-}
+
+case $tag in
+  v[0-9]*.[0-9]*.[0-9]*) ;;
+  *) echo "package: '$tag' is not a tag like v1.2.3" >&2; exit 1 ;;
+esac
+case $platform in
+  linux-x86_64 | macos-arm64) exe=pfx; kind=tar.gz ;;
+  windows-x86_64) exe=pfx.com; kind=zip ;;
+  *) refuse "invalid value '$platform' for '<platform>' [possible values: linux-x86_64, macos-arm64, windows-x86_64]" ;;
+esac
+if [ "$platform" = windows-x86_64 ] && [ -z "$launcher" ]; then
+  refuse "the following required arguments were not provided: <launcher> (windows-x86_64 ships pfx.exe beside pfx.com)"
+fi
+if [ "$platform" != windows-x86_64 ] && [ -n "$launcher" ]; then
+  refuse "unexpected argument '$launcher' found"
+fi
+for file in "$binary" ${launcher:+"$launcher"}; do
+  if [ ! -f "$file" ]; then
+    echo "package: $file is not a file" >&2
+    exit 1
+  fi
+done
+
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+name=pfx-$tag-$platform
+stage=$(mktemp -d "$out/.stage.XXXXXX")
+trap 'rm -rf "$stage"' EXIT
+
+notices() {
+  cp "$root/LICENSE" "$root/README.md" "$root/NOTICE.md" "$root/crates/generators/LICENSE-MT19937.md" "$root/crates/sound/LICENSE-ebur128.md" "$1/"
+}
+
+zipped() {
+  local archive=$1
+  shift
+  rm -f "$archive"
+  if command -v 7z >/dev/null 2>&1; then
+    7z a -tzip -bd -bso0 "$archive" "$@"
+  elif command -v zip >/dev/null 2>&1; then
+    zip -q -r -y "$archive" "$@"
+  else
+    echo "package: no 7z or zip to write $archive" >&2
+    exit 1
+  fi
+}
+
+dir=$stage/$name
+mkdir -p "$dir"
+cp "$binary" "$dir/$exe"
+chmod +x "$dir/$exe"
+notices "$dir"
+
+case $platform in
+  linux-x86_64)
+    hicolor=$dir/share/icons/hicolor
+    mkdir -p "$dir/share/applications" "$dir/share/mime/packages" \
+      "$hicolor/scalable/apps" "$hicolor/scalable/mimetypes" "$hicolor/512x512/apps" "$hicolor/512x512/mimetypes"
+    cp "$root/share/applications/pfx.desktop" "$dir/share/applications/"
+    cp "$root/share/mime/packages/pfx.xml" "$dir/share/mime/packages/"
+    cp "$root/assets/marks/pfx.svg" "$hicolor/scalable/apps/pfx.svg"
+    cp "$root/assets/marks/pfx.svg" "$hicolor/scalable/mimetypes/application-x-pfx.svg"
+    cp "$root/assets/marks/pfx-icon.png" "$hicolor/512x512/apps/pfx.png"
+    cp "$root/assets/marks/pfx-icon.png" "$hicolor/512x512/mimetypes/application-x-pfx.png"
+    ;;
+  windows-x86_64)
+    cp "$launcher" "$dir/pfx.exe"
+    cp "$root/share/windows/associate.ps1" "$dir/"
+    ;;
+  macos-arm64)
+    version=${tag#v}
+    version=${version%%-*}
+    app=$stage/app/pfx.app
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+    sed "s/@VERSION@/$version/g" "$root/share/macos/Info.plist" > "$app/Contents/Info.plist"
+    printf 'APPL????' > "$app/Contents/PkgInfo"
+    cp "$binary" "$app/Contents/MacOS/pfx"
+    chmod +x "$app/Contents/MacOS/pfx"
+    notices "$app/Contents/Resources"
+    cp "$root/assets/marks/pfx.icns" "$app/Contents/Resources/pfx.icns"
+    rm -f "$out/$name.app.zip"
+    if command -v ditto >/dev/null 2>&1; then
+      ditto -c -k --keepParent "$app" "$out/$name.app.zip"
+    else
+      (cd "$stage/app" && zipped "$out/$name.app.zip" pfx.app)
+    fi
+    echo "$out/$name.app.zip"
+    ;;
+esac
+
+files=()
+while IFS= read -r file; do
+  files+=("$file")
+done < <(cd "$dir" && find . -mindepth 1 -maxdepth 1 | sed 's|^\./||' | LC_ALL=C sort)
+if [ "$kind" = zip ]; then
+  (cd "$dir" && zipped "$out/$name.zip" "${files[@]}")
+else
+  tar -C "$dir" -czf "$out/$name.tar.gz" "${files[@]}"
+fi
+echo "$out/$name.$kind"

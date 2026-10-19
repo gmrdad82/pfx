@@ -7,7 +7,7 @@ use pfx_recipe::{
 };
 use serde_json::{Value, json};
 
-use super::{pair, read_failure, refuse};
+use super::{lines, pair, read_failure, refuse};
 
 const TABLES: [&str; 12] = [
     "object",
@@ -39,8 +39,13 @@ pub(super) struct Add {
     pairs: Vec<String>,
     #[arg(long, help = "One JSON object on stdout")]
     json: bool,
+    #[arg(
+        long,
+        conflicts_with = "json",
+        help = "Print only what changed, without the file and the entry's keys"
+    )]
+    brief: bool,
 }
-
 #[derive(clap::Args)]
 pub(super) struct Remove {
     #[arg(value_name = "recipe", help = "The recipe to write")]
@@ -51,8 +56,13 @@ pub(super) struct Remove {
     name: String,
     #[arg(long, help = "One JSON object on stdout")]
     json: bool,
+    #[arg(
+        long,
+        conflicts_with = "json",
+        help = "Print only what changed, without the file and the entry's keys"
+    )]
+    brief: bool,
 }
-
 #[derive(clap::Args)]
 pub(super) struct Duplicate {
     #[arg(value_name = "recipe", help = "The recipe to write")]
@@ -67,8 +77,13 @@ pub(super) struct Duplicate {
     pairs: Vec<String>,
     #[arg(long, help = "One JSON object on stdout")]
     json: bool,
+    #[arg(
+        long,
+        conflicts_with = "json",
+        help = "Print only what changed, without the file and the entry's keys"
+    )]
+    brief: bool,
 }
-
 #[derive(clap::Args)]
 pub(super) struct List {
     #[arg(value_name = "recipe", help = "The recipe to read")]
@@ -119,6 +134,7 @@ fn written(
     table: &str,
     name: &str,
     json: bool,
+    brief: bool,
     patch: impl FnOnce(&Loaded) -> Result<Patch, pfx_recipe::Error>,
 ) -> ExitCode {
     let mut loaded = match opened(command, file) {
@@ -139,7 +155,7 @@ fn written(
         println!(
             "{}",
             json!({
-                "recipe": file,
+                "recipe": pfx_recipe::files::shown(file),
                 "done": verb,
                 "table": table,
                 "name": name,
@@ -147,12 +163,29 @@ fn written(
             })
         );
     } else {
-        match &entry {
-            Some(entry) => println!("{file}: {verb} {}", line(entry)),
-            None => println!("{file}: {verb} {table}[{name}]"),
-        }
+        lines::emit(
+            &changed(file, verb, table, name, entry.as_ref(), brief),
+            lines::width(),
+        );
     }
     ExitCode::SUCCESS
+}
+
+fn changed(
+    file: &str,
+    verb: &str,
+    table: &str,
+    name: &str,
+    entry: Option<&Entry>,
+    brief: bool,
+) -> String {
+    match (entry, brief) {
+        (_, true) => format!("{verb} {table}[{name}]"),
+        (Some(entry), false) => {
+            format!("{}: {verb} {}", pfx_recipe::files::shown(file), line(entry))
+        }
+        (None, false) => format!("{}: {verb} {table}[{name}]", pfx_recipe::files::shown(file)),
+    }
 }
 
 pub fn add(args: &Add) -> ExitCode {
@@ -162,6 +195,7 @@ pub fn add(args: &Add) -> ExitCode {
         &args.table,
         &args.name,
         args.json,
+        args.brief,
         |l| add_patch(l, &args.table, &args.name, &args.pairs),
     )
 }
@@ -173,6 +207,7 @@ pub fn remove(args: &Remove) -> ExitCode {
         &args.table,
         &args.name,
         args.json,
+        args.brief,
         |l| remove_patch(l, &args.table, &args.name),
     )
 }
@@ -184,6 +219,7 @@ pub fn duplicate(args: &Duplicate) -> ExitCode {
         &args.table,
         &args.new_name,
         args.json,
+        args.brief,
         |l| duplicate_patch(l, &args.table, &args.name, &args.new_name, &args.pairs),
     )
 }
@@ -200,7 +236,10 @@ pub fn list(args: &List) -> ExitCode {
     };
     if args.json {
         let list: Vec<Value> = found.iter().map(described).collect();
-        println!("{}", json!({ "recipe": file, "entries": list }));
+        println!(
+            "{}",
+            json!({ "recipe": pfx_recipe::files::shown(file), "entries": list })
+        );
     } else {
         for entry in &found {
             println!("{}", line(entry));

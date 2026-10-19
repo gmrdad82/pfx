@@ -238,16 +238,17 @@ fn each_kind_of_text_takes_the_engines_way() {
     }
     let crate_piece = piece(&recipe, &staging, "crate");
     let meshes = staging.meshes();
+    let crate_shared = staging.shared[crate_piece];
     let fit = text::fit(
-        &meshes[crate_piece],
-        IDENTITY,
+        &meshes[crate_shared.mesh as usize],
+        crate_shared.model,
         model(&staging, &recipe, "label"),
     )
     .unwrap();
     let Way::Carrier { lettering: ink, .. } = way("label") else {
         unreachable!()
     };
-    let shared = fit.elsewhere(&meshes[crate_piece], &fit.content(ink));
+    let shared = fit.elsewhere(&meshes[crate_shared.mesh as usize], &fit.content(ink));
     assert_eq!(shared.len(), 10, "the box's other triangles share its UVs");
     let plate = piece(&recipe, &staging, "plate");
     let Way::Fit {
@@ -259,7 +260,13 @@ fn each_kind_of_text_takes_the_engines_way() {
         panic!("the plate's text is fitted to the plate");
     };
     assert_eq!(*piece, plate);
-    assert!(fit.elsewhere(&meshes[plate], &fit.content(ink)).is_empty());
+    assert!(
+        fit.elsewhere(
+            &meshes[staging.shared[plate].mesh as usize],
+            &fit.content(ink)
+        )
+        .is_empty()
+    );
     assert!(matches!(fit.content(ink).kind, ContentKind::Text(_)));
 
     let mut meshes = staging.meshes();
@@ -268,7 +275,7 @@ fn each_kind_of_text_takes_the_engines_way() {
     let before = placements.clone();
     lettering.stage(&mut meshes, &mut placements, &mut materials);
     let pieces = staging.pieces.len();
-    assert_eq!(meshes.len(), pieces + 3);
+    assert_eq!(meshes.len(), staging.mesh_count() + 3);
     assert_eq!(placements.len(), pieces + 3);
     for at in (0..pieces).filter(|&at| at != plate) {
         assert_eq!(placements[at], before[at]);
@@ -293,7 +300,11 @@ fn each_kind_of_text_takes_the_engines_way() {
         let Way::Carrier { lettering, lit, .. } = way(name) else {
             unreachable!()
         };
-        assert_eq!(carrier.mesh as usize, at, "{name}");
+        assert_eq!(
+            carrier.mesh as usize,
+            staging.mesh_count() + at - pieces,
+            "{name}"
+        );
         assert_eq!(carrier.model, model(&staging, &recipe, name), "{name}");
         assert!(!carrier.casts_shadow, "{name}");
         assert_eq!(carrier.content, Some(lettering.content()), "{name}");
@@ -308,7 +319,10 @@ fn each_kind_of_text_takes_the_engines_way() {
             text::material(*lit),
             "{name}"
         );
-        assert!(same(&meshes[at], &lettering.carrier().mesh()), "{name}");
+        assert!(
+            same(&meshes[carrier.mesh as usize], &lettering.carrier().mesh()),
+            "{name}"
+        );
     }
     let staged = staging.stage(lens).unwrap();
     assert_eq!(staged.detail.instances.len(), pieces + 3);
@@ -435,7 +449,7 @@ fn a_lit_text_on_a_card_is_lettered_over_its_picture() {
     let before = placements[badge];
     lettering.stage(&mut meshes, &mut placements, &mut materials);
     assert_eq!(placements.len(), staging.pieces.len());
-    assert_eq!(meshes.len(), staging.pieces.len());
+    assert_eq!(meshes.len(), staging.mesh_count());
     let picture = before.content.unwrap();
     let content = placements[badge].content.unwrap();
     assert_eq!(content, fit.over(&picture, ink).unwrap());
