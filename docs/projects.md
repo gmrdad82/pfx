@@ -62,7 +62,7 @@ It writes:
 |---|---|
 | `Cargo.toml` | one package `<game>`; `pfx-game`, `pfx-project` and, optional, `pfx-workbench`, all from `https://github.com/gmrdad82/pfx.git` at the tag pfx was built from (`v` and its own version); `default = ["tools"]`, `tools = ["pfx-game/tools", "dep:pfx-workbench"]` |
 | `src/lib.rs` | the game: a unit struct named after the game (`my-game` gives `my_game::MyGame`) implementing `pfx_game::Game`, doing nothing yet; `project()` (`Project::locate`); and `config(&project)`, the game's `pfx_game::Config` on `project.play()` with the project's screen policy and `Exposure::Fixed(1.0)`, the exposure the editor's viewport draws with, instead of auto exposure (delete the line for auto) |
-| `src/main.rs` | `#![cfg_attr(not(feature = "tools"), windows_subsystem = "windows")]`, then `pfx_game::launch(<Game>::new, config(&project), …)`; with `tools` it sets the launcher's edit hook to `pfx_workbench::run_project(project.root(), factory, config(&project)?)`, the hook's factory and the game's own config |
+| `src/main.rs` | `#![cfg_attr(not(feature = "tools"), windows_subsystem = "windows")]`, then `pfx_game::launch(<Game>::new, config(&project), …)`; with `tools` it sets the launcher's edit hook to `pfx_workbench::edit_project(project.root(), factory, config(&project)?, args)`, the hook's factory, the game's own config and the arguments after `edit` |
 | `tests/first.rs` | a GPU test, ignored by default: the first scene runs headless (`pfx_game::Headless::with_gpu`) for half a second at 960 × 540, writes `tmp/first-frame.png` and checks the wordmark's light, the mark's violet and the X axis's red |
 | `project.toml` | the project, as above: `scene` and `play` name `content/first.pitofx`, `select` names `incoming`, and `[authoring.pfx.screen]` holds 16:9 on a desktop and 16:10 on a Deck |
 | `content/first.pitofx` | the empty world, below, with inside it `content/first.scene.toml`, `content/prefabs/incoming.prefab.toml` (pfx's mark as a group: the badge, the wordmark and the game's version, placed by the scene's `incoming`) and `content/materials/base.materials.toml` and `incoming.materials.toml` (the grid's and the axes' materials; the badge's and the wordmark's); `pfx scene print content/first.pitofx <file>` shows each |
@@ -132,14 +132,17 @@ The scaffold's `main` sets the launcher's edit hook (`docs/game.md`, "The launch
 
 ```rust
 commands
-    .edit("opens the game in pfx's editor; F5 plays it", move |factory, _args| {
-        let config = my_game::config(&project)?;
-        pfx_workbench::run_project(project.root(), factory, config)
-    })
-    .usage("edit", "");
+    .edit(
+        "opens the game in pfx's editor; F5 plays it; --shot and --clip draw it offscreen",
+        move |factory, args| {
+            let config = my_game::config(&project)?;
+            pfx_workbench::edit_project(project.root(), factory, config, args)
+        },
+    )
+    .usage("edit", pfx_workbench::EDIT_USAGE);
 ```
 
-`usage("edit", "")` says `edit` takes no arguments, so `my-game edit extra` is refused before the hook runs, the way every PITO MD command line refuses input it cannot parse (`docs/game.md`, "Refusals"). The hook gets a factory, `pfx_game::Factory` (`Rc<dyn Fn() -> Box<dyn Game>>`, the constructor `launch` was given), and the arguments after `edit`; no game is built until a play needs one. `run_project(folder, factory, config)` opens the project in pfx's window as `pfx gui <folder>` does (a pfx-editor `Session::open_game` under the window's panels), and **F5 plays the game's own logic**: `factory()` at each F5, a fresh game every play, drawn by pfx-game's own painter from `config` (its fonts, icons, sprites, screen policy, exposure and settings), so it looks and sounds as its window does (`docs/editor.md`, "Play mode"). A `Config::flat()` game plays on an empty world, and its project opens even with no `*.scene.toml` (below). Pause, step, stop and its exact restore, F9's input recording, sound (the game's own PCM streams included), the HUD and the pgpu hooks work as `docs/editor.md` says; a failing game stops play with its error in the log. `pfx_editor::factory(make)` (the same as `pfx_game::factory`) builds a factory from a constructor, for a `Session::open_project` or `open_game` of one's own.
+`usage("edit", pfx_workbench::EDIT_USAGE)` gives `edit`'s shape, and `edit_project` refuses anything else (`my-game edit extra`) in clap's words under it, the way every PITO MD command line refuses input it cannot parse (`docs/game.md`, "Refusals"). With no arguments `edit_project` opens the window; `--shot` and `--clip` draw it offscreen on a copy of the project (`docs/game.md`, "The edit hook"). The hook gets a factory, `pfx_game::Factory` (`Rc<dyn Fn() -> Box<dyn Game>>`, the constructor `launch` was given), and the arguments after `edit`; no game is built until a play needs one. `run_project(folder, factory, config)` opens the project in pfx's window as `pfx gui <folder>` does (a pfx-editor `Session::open_game` under the window's panels), and **F5 plays the game's own logic**: `factory()` at each F5, a fresh game every play, drawn by pfx-game's own painter from `config` (its fonts, icons, sprites, screen policy, exposure and settings), so it looks and sounds as its window does (`docs/editor.md`, "Play mode"). A `Config::flat()` game plays on an empty world, and its project opens even with no `*.scene.toml` (below). Pause, step, stop and its exact restore, F9's input recording, sound (the game's own PCM streams included), the HUD and the pgpu hooks work as `docs/editor.md` says; a failing game stops play with its error in the log. `pfx_editor::factory(make)` (the same as `pfx_game::factory`) builds a factory from a constructor, for a `Session::open_project` or `open_game` of one's own.
 
 ## Live reload
 

@@ -243,7 +243,9 @@ fn the_placements_carry_each_cards_image_cutout_turn_and_shadow() {
     for name in ["backdrop", "mv_slide", "ghost", "solid"] {
         let placement = at(name);
         assert!(placement.content.is_none(), "{name}");
-        assert_eq!(placement.model, IDENTITY, "{name}");
+        let shared = staging.shared[piece(&recipe, &staging, name)];
+        assert_eq!(placement.model, shared.model, "{name}");
+        assert_eq!(placement.mesh, shared.mesh, "{name}");
         assert_eq!(
             staging.materials[placement.material as usize]
                 .content_layer
@@ -364,10 +366,10 @@ fn plain<'a>(staging: &'a Staging) -> Vec<Placement<'a>> {
     staging
         .slots
         .iter()
-        .enumerate()
-        .map(|(mesh, &material)| Placement {
+        .zip(&staging.shared)
+        .map(|(&material, shared)| Placement {
             two_sided: false,
-            ..Placement::new(mesh as u32, IDENTITY, material)
+            ..Placement::new(shared.mesh, shared.model, material)
         })
         .collect()
 }

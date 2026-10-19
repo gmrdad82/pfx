@@ -8,10 +8,12 @@ use pfx_live::lights::{LocalLight, MAX_CLUSTERED, MAX_LIGHTS};
 use pfx_live::sky::SkySource;
 use pfx_load::scene::{SPOT_CONE, SPOT_DIRECTION, Spot};
 use pfx_load::{RoomLamp, RoomSky, Sky};
-use pfx_post::{Bloom, Chain, Flare, MotionBlur, Pass, Saturation, Tone, Vignette, Warmth};
+use pfx_post::{
+    Bloom, Chain, Chromatic, Flare, Grain, MotionBlur, Pass, Saturation, Tone, Vignette, Warmth,
+};
 use pfx_recipe::{
-    CAP_LUMINANCE, CAP_MEAN, CAPPED, LightKind, Recipe, Room, Setting, Settings, SkyAmbient,
-    SkyKind, View,
+    CAP_LUMINANCE, CAP_MEAN, CAPPED, LightKind, LookChromatic, LookGrain, Recipe, Room, Setting,
+    Settings, SkyAmbient, SkyKind, View,
 };
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -594,7 +596,30 @@ fn finish(recipe: &Recipe) -> Result<Chain, Error> {
     if let Some(settings) = &recipe.effects.flare {
         chain.set_flare(flare(settings));
     }
+    if let Some(look) = &recipe.look {
+        if let Some(chromatic) = &look.chromatic {
+            chain.set_chromatic(look_chromatic(chromatic));
+        }
+        if let Some(grain) = &look.grain {
+            chain.set_grain(look_grain(grain));
+        }
+    }
     Ok(chain)
+}
+
+pub fn look_grain(grain: &LookGrain) -> Grain {
+    Grain {
+        size: grain.size as f32,
+        seed: grain.seed,
+        ..Grain::new(grain.amount as f32, LookGrain::RESPONSE as f32, true)
+    }
+}
+
+pub fn look_chromatic(chromatic: &LookChromatic) -> Chromatic {
+    Chromatic {
+        amount: chromatic.amount as f32,
+        falloff: chromatic.falloff as f32,
+    }
 }
 
 pub fn flare(settings: &Settings) -> Flare {

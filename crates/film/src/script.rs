@@ -1,5 +1,6 @@
 use crate::art::Art;
 use crate::beat::{self, Grid, TempoPart};
+use crate::bed::{Bed, BedPart};
 use crate::camera::WIDE;
 use crate::duck::{self, Duck, DuckPart, Side};
 use crate::input::Touch;
@@ -83,6 +84,7 @@ pub struct Film<K: Kinds> {
     pub limit: f32,
     pub true_peak: f32,
     pub beat: Option<Grid>,
+    pub bed: Option<Bed>,
     pub app: K::Film,
 }
 
@@ -128,6 +130,7 @@ struct FilmPart {
     offset: Option<f64>,
     snap: Option<String>,
     strict: Option<bool>,
+    bed: Option<BedPart>,
 }
 
 impl Default for FilmPart {
@@ -153,6 +156,7 @@ impl Default for FilmPart {
             offset: None,
             snap: None,
             strict: None,
+            bed: None,
         }
     }
 }
@@ -161,7 +165,7 @@ pub const CEILING: f32 = 0.89;
 pub const LIMIT: f32 = 0.72;
 pub const TRUE_PEAK: f32 = -1.0;
 
-const FILM_KEYS: [&str; 20] = [
+const FILM_KEYS: [&str; 21] = [
     "frames",
     "audio",
     "bars",
@@ -182,6 +186,7 @@ const FILM_KEYS: [&str; 20] = [
     "offset",
     "snap",
     "strict",
+    "bed",
 ];
 
 #[derive(Deserialize)]
@@ -340,6 +345,7 @@ impl<K: Kinds> Film<K> {
             limit: f.limit,
             true_peak: f.true_peak,
             beat,
+            bed: f.bed.map(Bed::new).transpose()?,
             app,
         })
     }
@@ -477,6 +483,13 @@ impl<K: Kinds> Scene<K> {
 }
 
 impl<K: Kinds> Script<K> {
+    pub fn read_bed(&mut self, dir: &std::path::Path) -> Result<(), String> {
+        match &mut self.film.bed {
+            Some(bed) => bed.read(dir, crate::shoot::RATE),
+            None => Ok(()),
+        }
+    }
+
     pub fn parse(text: &str, known: &Known<'_>) -> Result<Script<K>, String> {
         let raw: Raw = toml::from_str(text).map_err(|e| e.to_string())?;
         if raw.scenes.is_empty() {

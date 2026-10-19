@@ -16,6 +16,7 @@ pfx-play = { path = "../play" }
 pfx-game = { path = "../game", features = ["modules"] }
 pfx-editor-shell = { path = "../editor-shell" }
 pfx-editor-style = { path = "../editor-style" }
+pfx-editor-viewport = { path = "../editor-viewport" }
 pfx-core = { path = "../core" }
 pfx-gpu = { path = "../gpu" }
 pfx-live = { path = "../live" }

@@ -26,6 +26,7 @@ override TRACE_WET: bool = true;
 override TRACE_THIN: bool = true;
 override TRACE_ALPHA: bool = true;
 override TRACE_FLAKES: bool = true;
+override TRACE_MOTION: bool = false;
 override SOBOL_LENGTH: u32 = 256u;
 override STEAM_SPREAD_BASE: f32 = 0.7;
 override STEAM_SPREAD_GROWTH: f32 = 4.0;
@@ -69,9 +70,9 @@ struct Material {
 }
 struct MaterialMaps { textures: vec4f, scales: vec4f, extra: vec4f, transform: vec4f, detail: vec4f, normal: vec4f, orm: vec4f, turns: vec4f }
 struct MaterialLobes { sheen: vec4f, lobes: vec4f, scatter: vec4f }
-struct Hit { t: f32, n: vec3f, geometric: vec3f, material: u32, uv: vec2f, tangent: vec3f, bitangent: vec3f, surface: u32, shape: u32 }
+struct Hit { t: f32, n: vec3f, geometric: vec3f, material: u32, uv: vec2f, tangent: vec3f, bitangent: vec3f, surface: u32, shape: u32, record: u32 }
 struct ContentInfo { offset: u32, width: u32, height: u32, kind: u32 }
-struct InstanceSurface { clip0: vec4f, clip1: vec4f, transform: vec4f, crop: vec4f }
+struct InstanceSurface { clip0: vec4f, clip1: vec4f, transform: vec4f, crop: vec4f, info: vec4u, forward0: vec4f, forward1: vec4f, forward2: vec4f, inverse0: vec4f, inverse1: vec4f, inverse2: vec4f }
 struct ContentLayer { layer: vec4f, extra: vec4f }
 struct LightSample { dir: vec3f, pdf: f32, channel: u32, weight: vec3f, lobe: u32 }
 struct Accum { color: vec4f, albedo: vec4f, normal: vec4f }
@@ -83,7 +84,7 @@ struct Candidate { wi: vec3f, scale: vec3f, pdf: f32, roughness: f32, direction:
 @group(0) @binding(3) var<storage, read> shapes: array<Shape>;
 @group(0) @binding(4) var<storage, read> materials: array<vec4f>;
 @group(0) @binding(5) var<storage, read> triangle_uv_v: array<vec4f>;
-@group(0) @binding(6) var<storage, read> content_texels: array<vec4f>;
+@group(0) @binding(6) var<storage, read> content_words: array<vec4u>;
 @group(0) @binding(7) var<storage, read_write> accum: array<Accum>;
 @group(0) @binding(8) var output: texture_storage_2d<rgba32float, write>;
 @group(0) @binding(9) var albedo: texture_storage_2d<rgba32float, write>;
@@ -337,12 +338,231 @@ fn box_hit(node: Node, o: vec3f, d: vec3f, limit: f32) -> bool {
     }
     return true;
 }
+struct Rows { x: vec4f, y: vec4f, z: vec4f }
+struct Moved { ro: vec3f, rd: vec3f, inv_det: f32 }
+const MOTION_SQRT2: f32 = 1.4142135;
+var<private> ray_time: f32 = 0.5;
+var<private> deform_steps: u32 = 0u;
+var<private> deform_len: u32 = 0u;
+var<private> deform_first: u32 = 0u;
+var<private> deform_base: u32 = 0u;
+var<private> deform_step: u32 = 0u;
+var<private> deform_t: f32 = 0.0;
+fn node_at(i: u32) -> Node {
+    return nodes[i];
+}
+fn motion_vec(k: u32) -> vec4f {
+    let node=nodes[frame.columns.y+k/3u];
+    let lane=k%3u;
+    if (lane==0u) { return node.lo; }
+    if (lane==1u) { return node.hi; }
+    return bitcast<vec4f>(vec4u(node.first,node.count,node.pad.x,node.pad.y));
+}
+fn motion_word(k: u32) -> vec4u {
+    return bitcast<vec4u>(motion_vec(k));
+}
+fn quat_mix(q1: vec4f, q2: vec4f, t: f32) -> vec4f {
+    let costheta=dot(q1,q2);
+    if (costheta>0.9995) { return normalize((1.0-t)*q1+t*q2); }
+    let theta=acos(clamp(costheta,-1.0,1.0));
+    let qperp=normalize(q2-q1*costheta);
+    let thetap=theta*t;
+    return q1*cos(thetap)+qperp*sin(thetap);
+}
+fn rows_compose(q: vec4f, y: vec4f, z: vec4f, w: vec4f) -> Rows {
+    let q0=MOTION_SQRT2*q.w;
+    let q1=MOTION_SQRT2*q.x;
+    let q2=MOTION_SQRT2*q.y;
+    let q3=MOTION_SQRT2*q.z;
+    let qda=q0*q1;
+    let qdb=q0*q2;
+    let qdc=q0*q3;
+    let qaa=q1*q1;
+    let qab=q1*q2;
+    let qac=q1*q3;
+    let qbb=q2*q2;
+    let qbc=q2*q3;
+    let qcc=q3*q3;
+    let rx=vec3f(1.0-qbb-qcc,-qdc+qab,qdb+qac);
+    let ry=vec3f(qdc+qab,1.0-qaa-qcc,-qda+qbc);
+    let rz=vec3f(-qdb+qac,qda+qbc,1.0-qaa-qbb);
+    let sx=vec3f(y.w,z.z,w.y);
+    let sy=vec3f(z.x,z.w,w.z);
+    let sz=vec3f(z.y,w.x,w.w);
+    return Rows(vec4f(dot(rx,sx),dot(rx,sy),dot(rx,sz),y.x),
+        vec4f(dot(ry,sx),dot(ry,sy),dot(ry,sz),y.y),
+        vec4f(dot(rz,sx),dot(rz,sy),dot(rz,sz),y.z));
+}
+fn motion_at(at: u32, steps: u32, time: f32) -> Rows {
+    let maxstep=i32(steps)-1;
+    let step=min(i32(time*f32(maxstep)),maxstep-1);
+    let t=time*f32(maxstep)-f32(step);
+    let a=at+u32(step)*4u;
+    let b=a+4u;
+    return rows_compose(quat_mix(motion_vec(a),motion_vec(b),t),
+        (1.0-t)*motion_vec(a+1u)+t*motion_vec(b+1u),
+        (1.0-t)*motion_vec(a+2u)+t*motion_vec(b+2u),
+        (1.0-t)*motion_vec(a+3u)+t*motion_vec(b+3u));
+}
+fn rows_point(m: Rows, p: vec3f) -> vec3f {
+    let q=vec4f(p,1.0);
+    return vec3f(dot(m.x,q),dot(m.y,q),dot(m.z,q));
+}
+fn rows_vector(m: Rows, v: vec3f) -> vec3f {
+    return vec3f(dot(m.x.xyz,v),dot(m.y.xyz,v),dot(m.z.xyz,v));
+}
+fn rows_transposed(m: Rows, v: vec3f) -> vec3f {
+    return m.x.xyz*v.x+m.y.xyz*v.y+m.z.xyz*v.z;
+}
+fn rows_det(m: Rows) -> f32 {
+    return dot(m.x.xyz,cross(m.y.xyz,m.z.xyz));
+}
+fn rows_inverse(m: Rows) -> Rows {
+    var x=vec3f(m.x.x,m.y.x,m.z.x);
+    var y=vec3f(m.x.y,m.y.y,m.z.y);
+    var z=vec3f(m.x.z,m.y.z,m.z.z);
+    let w=vec3f(m.x.w,m.y.w,m.z.w);
+    var det=dot(x,cross(y,z));
+    if (det==0.0) {
+        x.x+=1e-8;
+        y.y+=1e-8;
+        z.z+=1e-8;
+        det=dot(x,cross(y,z));
+        if (det==0.0) { det=3.4028235e38; }
+    }
+    let ix=cross(y,z)/det;
+    let iy=cross(z,x)/det;
+    let iz=cross(x,y)/det;
+    return Rows(vec4f(ix,-dot(ix,w)),vec4f(iy,-dot(iy,w)),vec4f(iz,-dot(iz,w)));
+}
+fn motion_head() -> vec4u {
+    return motion_word(0u);
+}
+fn slot_at(s: u32) -> u32 {
+    let head=motion_head();
+    return 1u+4u*head.y+64u*head.z+s*(2u+4u*head.x);
+}
+fn shutter_time(u: f32) -> f32 {
+    let head=motion_head();
+    if (head.z==0u) { return u; }
+    let first=1u+4u*head.y;
+    let x=saturate(u)*255.0;
+    let index=min(u32(x),255u);
+    let next=min(index+1u,255u);
+    let t=x-f32(index);
+    let a=motion_vec(first+index/4u)[index%4u];
+    if (t==0.0) { return a; }
+    let b=motion_vec(first+next/4u)[next%4u];
+    return (1.0-t)*a+t*b;
+}
+fn mover_moves(s: u32) -> bool {
+    return motion_word(slot_at(s)).x!=0u;
+}
+fn mover_rigid(s: u32) -> bool {
+    return (motion_word(slot_at(s)).x&1u)!=0u;
+}
+fn mover_slot(k: u32) -> u32 {
+    return motion_word(slot_at(motion_head().w)+k/4u)[k%4u];
+}
+fn mover_now(s: u32) -> Rows {
+    return motion_at(slot_at(s)+2u,motion_head().x,ray_time);
+}
+fn mover_enter(s: u32, o: vec3f, d: vec3f) -> Moved {
+    let info=motion_word(slot_at(s));
+    var m=Moved(o,d,bitcast<f32>(instance_surfaces[s+1u].info.w));
+    if ((info.x&1u)!=0u) {
+        let inverse=rows_inverse(mover_now(s));
+        m.ro=rows_point(inverse,o);
+        m.rd=rows_vector(inverse,d);
+        m.inv_det=rows_det(inverse);
+    } else {
+        m.ro=record_ray(s+1u,o,1.0);
+        m.rd=record_ray(s+1u,d,0.0);
+    }
+    deform_steps=info.x>>1u;
+    if (deform_steps>1u) {
+        deform_len=info.y;
+        deform_first=info.z;
+        deform_base=info.w;
+        let maxstep=i32(deform_steps)-1;
+        let step=min(i32(ray_time*f32(maxstep)),maxstep-1);
+        deform_step=u32(step);
+        deform_t=ray_time*f32(maxstep)-f32(step);
+    }
+    return m;
+}
+fn mover_leave() {
+    deform_steps=0u;
+}
+fn hit_ray(record: u32, p: vec3f, w: f32) -> vec3f {
+    if (TRACE_MOTION && record>0u && mover_rigid(record-1u)) {
+        let inverse=rows_inverse(mover_now(record-1u));
+        if (w==0.0) { return rows_vector(inverse,p); }
+        return rows_point(inverse,p);
+    }
+    return record_ray(record,p,w);
+}
+fn tri_at(i: u32) -> Tri {
+    let tri=triangles[i];
+    if (!TRACE_MOTION || deform_steps<2u) { return tri; }
+    let k=i-deform_base;
+    let a=triangles[deform_first+deform_step*deform_len+k];
+    let b=triangles[deform_first+(deform_step+1u)*deform_len+k];
+    let t=deform_t;
+    return Tri(vec4f(mix(a.a.xyz,b.a.xyz,t),tri.a.w),
+        vec4f(mix(a.b.xyz,b.b.xyz,t),tri.b.w),
+        vec4f(mix(a.c.xyz,b.c.xyz,t),tri.c.w),
+        vec4f(normalize(mix(a.na.xyz,b.na.xyz,t)),tri.na.w),
+        vec4f(normalize(mix(a.nb.xyz,b.nb.xyz,t)),tri.nb.w),
+        vec4f(normalize(mix(a.nc.xyz,b.nc.xyz,t)),tri.nc.w));
+}
+fn moved_world_hit(h: Hit) -> Hit {
+    let forward=mover_now(h.record-1u);
+    let inverse=rows_inverse(forward);
+    var w=h;
+    let mirror=select(1.0,-1.0,rows_det(inverse)<0.0);
+    w.geometric=normalize(rows_transposed(inverse,h.geometric))*mirror;
+    let shaded=rows_transposed(inverse,h.n);
+    w.n=select(normalize(shaded),w.geometric,all(h.n==vec3f(0.0)));
+    w.tangent=normalize(rows_vector(forward,h.tangent));
+    let handed=select(-1.0,1.0,dot(cross(h.geometric,h.tangent),h.bitangent)>=0.0);
+    w.bitangent=normalize(cross(w.geometric,w.tangent))*handed;
+    return w;
+}
 const ONE_SIDED: u32 = 8388608u;
 const LAYER_MASK: u32 = 262143u;
-fn hit_layer(i: u32, material: u32) -> ContentLayer {
-    let layer=(u32(triangles[i].b.w)>>5u) & LAYER_MASK;
+const NO_MATERIAL: u32 = 4294967295u;
+fn hit_layer(word: u32, material: u32) -> ContentLayer {
+    let layer=(word>>5u) & LAYER_MASK;
     if (layer>0u) { return content_layers[layer-1u]; }
     return content_layers[material];
+}
+fn record_material(info: vec4u, tri: Tri) -> u32 {
+    return select(info.y,u32(tri.a.w),info.y==NO_MATERIAL);
+}
+fn record_ray(record: u32, p: vec3f, w: f32) -> vec3f {
+    if (record==0u) { return p; }
+    let s=instance_surfaces[record];
+    let q=vec4f(p,w);
+    return vec3f(dot(s.inverse0,q),dot(s.inverse1,q),dot(s.inverse2,q));
+}
+fn clipped_at(surface: InstanceSurface, point: vec3f) -> bool {
+    return (any(surface.clip0.xyz != vec3f(0.0)) && dot(surface.clip0.xyz,point)>surface.clip0.w)
+        || (any(surface.clip1.xyz != vec3f(0.0)) && dot(surface.clip1.xyz,point)>surface.clip1.w);
+}
+fn world_hit(h: Hit) -> Hit {
+    if (h.record==0u || h.shape!=0u) { return h; }
+    if (TRACE_MOTION && mover_rigid(h.record-1u)) { return moved_world_hit(h); }
+    let s=instance_surfaces[h.record];
+    var w=h;
+    let mirror=select(1.0,-1.0,bitcast<f32>(s.info.w)<0.0);
+    w.geometric=normalize(s.inverse0.xyz*h.geometric.x+s.inverse1.xyz*h.geometric.y+s.inverse2.xyz*h.geometric.z)*mirror;
+    let shaded=s.inverse0.xyz*h.n.x+s.inverse1.xyz*h.n.y+s.inverse2.xyz*h.n.z;
+    w.n=select(normalize(shaded),w.geometric,all(h.n==vec3f(0.0)));
+    w.tangent=normalize(vec3f(dot(s.forward0.xyz,h.tangent),dot(s.forward1.xyz,h.tangent),dot(s.forward2.xyz,h.tangent)));
+    let handed=select(-1.0,1.0,dot(cross(h.geometric,h.tangent),h.bitangent)>=0.0);
+    w.bitangent=normalize(cross(w.geometric,w.tangent))*handed;
+    return w;
 }
 fn alpha_hash(i: u32, o: vec3f, d: vec3f) -> f32 {
     let a=pcg(i^pcg(bitcast<u32>(o.x)^pcg(bitcast<u32>(o.y)^pcg(bitcast<u32>(o.z)))));
@@ -360,8 +580,8 @@ fn alpha_cut(i: u32, u: f32, v: f32, m: Material, o: vec3f, d: vec3f) -> bool {
             var uv=vec2f(tri.na.w*(1.0-u-v)+tri.nb.w*u+tri.nc.w*v,uv_v.x*(1.0-u-v)+uv_v.y*u+uv_v.z*v);
             let first=bitcast<u32>(effects().extension.w);
             if ((u32(round(maps.scales.w))&1u)!=0u && first!=0u) {
-                let r0=content_texels[first-1u+i*2u];
-                let r1=content_texels[first-1u+i*2u+1u];
+                let r0=content_row(first-1u+i*2u);
+                let r1=content_row(first-1u+i*2u+1u);
                 uv=r0.xy*(1.0-u-v)+r0.zw*u+r1.xy*v;
             }
             alpha*=traced_map(maps.textures.x,uv_place(uv,maps.transform,maps.extra.z)).a;
@@ -370,35 +590,62 @@ fn alpha_cut(i: u32, u: f32, v: f32, m: Material, o: vec3f, d: vec3f) -> bool {
     if (coverage.z<1.5) { return alpha<coverage.y; }
     return alpha<=alpha_hash(i,o,d);
 }
-fn cut_out(i: u32, u: f32, v: f32, o: vec3f, d: vec3f) -> bool {
+fn cut_out(i: u32, record: u32, u: f32, v: f32, o: vec3f, d: vec3f) -> bool {
+    let surface=instance_surfaces[record];
     let tri = triangles[i];
-    if ((u32(tri.b.w)&4u)==0u) { return false; }
+    let material=record_material(surface.info,tri);
     if (TRACE_ALPHA) {
-        let m=material_at(u32(tri.a.w));
+        let m=material_at(material);
         if ((extension_flags(m)&EXTENSION_ALPHA)!=0u) { return alpha_cut(i,u,v,m,o,d); }
     }
-    let slot=i32(round(hit_layer(i,u32(tri.a.w)).layer.x));
+    if ((surface.info.x&4u)==0u) { return false; }
+    let slot=i32(round(hit_layer(surface.info.x,material).layer.x));
     if (slot<0) { return true; }
     let uv_v=triangle_uv_v[i];
     let uv=vec2f(tri.na.w*(1.0-u-v)+tri.nb.w*u+tri.nc.w*v,uv_v.x*(1.0-u-v)+uv_v.y*u+uv_v.z*v);
-    let surface=instance_surfaces[i];
     let at=content_uv(uv,surface.transform);
     if (!content_inside(at,surface.crop)) { return true; }
-    let cutoff=uv_v.w;
+    let cutoff=bitcast<f32>(surface.info.z);
     if (cutoff==0.5) { return content_at(slot,at).a<0.5; }
     return content_at(slot,at).a<cutoff;
 }
-fn tri_hit(i: u32, o: vec3f, d: vec3f, shadow_ray: bool, hit: ptr<function,Hit>) {
-    let tri = triangles[i];
-    let flags = u32(tri.b.w);
-    if ((flags&1u)!=0u && !shadow_ray) { return; }
-    if ((flags&2u)!=0u && shadow_ray) { return; }
+fn tri_fill(i: u32, record: u32, t: f32, u: f32, v: f32, hit: ptr<function,Hit>) {
+    let tri = tri_at(i);
+    let e1 = tri.b.xyz-tri.a.xyz;
+    let e2 = tri.c.xyz-tri.a.xyz;
+    (*hit).t=t;
+    (*hit).surface=i;
+    (*hit).shape=0u;
+    (*hit).record=record;
+    let geometric=normalize(cross(e1,e2));
+    (*hit).geometric=geometric;
+    let shaded=tri.na.xyz*(1.0-u-v)+tri.nb.xyz*u+tri.nc.xyz*v;
+    (*hit).n=select(select(geometric,vec3f(0.0),record>0u),normalize(shaded),dot(shaded,shaded)>1e-12);
+    (*hit).material=record_material(instance_surfaces[record].info,tri);
+    let uv_v=triangle_uv_v[i];
+    (*hit).uv=vec2f(tri.na.w*(1.0-u-v)+tri.nb.w*u+tri.nc.w*v,
+        uv_v.x*(1.0-u-v)+uv_v.y*u+uv_v.z*v);
+    let du1=tri.nb.w-tri.na.w;
+    let du2=tri.nc.w-tri.na.w;
+    let dv1=uv_v.y-uv_v.x;
+    let dv2=uv_v.z-uv_v.x;
+    let uv_det=du1*dv2-du2*dv1;
+    var tangent=normalize(e1);
+    if (abs(uv_det)>1e-10) { tangent=normalize((e1*dv2-e2*dv1)/uv_det); }
+    (*hit).tangent=tangent;
+    (*hit).bitangent=normalize(cross(geometric,tangent))*select(-1.0,1.0,uv_det>=0.0);
+}
+fn tri_hit(i: u32, record: u32, word: u32, inv_det: f32, o: vec3f, d: vec3f, wo: vec3f, wd: vec3f, shadow_ray: bool, hit: ptr<function,Hit>) {
+    let tri = tri_at(i);
+    if ((word&1u)!=0u && !shadow_ray) { return; }
+    if ((word&2u)!=0u && shadow_ray) { return; }
     let e1 = tri.b.xyz-tri.a.xyz;
     let e2 = tri.c.xyz-tri.a.xyz;
     let p = cross(d,e2);
     let det = dot(e1,p);
-    if (abs(det)<1e-9) { return; }
-    if (!shadow_ray && (flags & ONE_SIDED) != 0u && det < 0.0) { return; }
+    let seen = det*inv_det;
+    if (abs(seen)<1e-9) { return; }
+    if (!shadow_ray && (word & ONE_SIDED) != 0u && seen < 0.0) { return; }
     let inv = 1.0/det;
     let s = o-tri.a.xyz;
     let u = dot(s,p)*inv;
@@ -408,30 +655,9 @@ fn tri_hit(i: u32, o: vec3f, d: vec3f, shadow_ray: bool, hit: ptr<function,Hit>)
     if (v<0.0 || u+v>1.0) { return; }
     let t = dot(e2,q)*inv;
     if (t>0.0001 && t<(*hit).t) {
-        let surface=instance_surfaces[i];
-        let point=o+d*t;
-        if ((any(surface.clip0.xyz != vec3f(0.0)) && dot(surface.clip0.xyz,point)>surface.clip0.w)
-            || (any(surface.clip1.xyz != vec3f(0.0)) && dot(surface.clip1.xyz,point)>surface.clip1.w)) { return; }
-        if (cut_out(i,u,v,o,d)) { return; }
-        (*hit).t=t;
-        (*hit).surface=i;
-        let geometric=normalize(cross(e1,e2));
-        (*hit).geometric=geometric;
-        let shaded=tri.na.xyz*(1.0-u-v)+tri.nb.xyz*u+tri.nc.xyz*v;
-        (*hit).n=select(geometric,normalize(shaded),dot(shaded,shaded)>1e-12);
-        (*hit).material=u32(tri.a.w);
-        let uv_v=triangle_uv_v[i];
-        (*hit).uv=vec2f(tri.na.w*(1.0-u-v)+tri.nb.w*u+tri.nc.w*v,
-            uv_v.x*(1.0-u-v)+uv_v.y*u+uv_v.z*v);
-        let du1=tri.nb.w-tri.na.w;
-        let du2=tri.nc.w-tri.na.w;
-        let dv1=uv_v.y-uv_v.x;
-        let dv2=uv_v.z-uv_v.x;
-        let uv_det=du1*dv2-du2*dv1;
-        var tangent=normalize(e1);
-        if (abs(uv_det)>1e-10) { tangent=normalize((e1*dv2-e2*dv1)/uv_det); }
-        (*hit).tangent=tangent;
-        (*hit).bitangent=normalize(cross(geometric,tangent))*select(-1.0,1.0,uv_det>=0.0);
+        if (clipped_at(instance_surfaces[record],wo+wd*t)) { return; }
+        if (cut_out(i,record,u,v,wo,wd)) { return; }
+        tri_fill(i,record,t,u,v,hit);
     }
 }
 fn ellipsoid(p: vec3f, radius: vec3f) -> f32 {
@@ -629,7 +855,7 @@ fn union_hit(i: u32, o: vec3f, d: vec3f, limit: f32) -> f32 {
     return limit;
 }
 fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
-    var hit=Hit(limit,vec3f(0.0),vec3f(0.0),0u,vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,0u);
+    var hit=Hit(limit,vec3f(0.0),vec3f(0.0),0u,vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,0u,0u);
     if (frame.counts.x>0u) {
         var stack: array<u32,64>;
         var top=1u;
@@ -637,6 +863,9 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
         var ro=o;
         var rd=d;
         var base=0u;
+        var record=0u;
+        var word=0u;
+        var inv_det=1.0;
         while (top>0u) {
             top-=1u;
             let index=stack[top];
@@ -644,6 +873,10 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
                 ro=o;
                 rd=d;
                 base=0u;
+                record=0u;
+                word=0u;
+                inv_det=1.0;
+                mover_leave();
                 continue;
             }
             let node=nodes[index];
@@ -654,10 +887,20 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
                     stack[top+1u]=node.first;
                     top+=2u;
                     base=node.count;
+                    record=bitcast<u32>(node.lo.w);
+                    let info=instance_surfaces[record].info;
+                    word=info.x;
+                    inv_det=bitcast<f32>(info.w);
                     if (node.pad.y>0u) {
                         let m=nodes[node.pad.y];
                         ro=to_object(m,o,1.0);
                         rd=to_object(m,d,0.0);
+                        if (TRACE_MOTION && record>0u && mover_moves(record-1u)) {
+                            let moved=mover_enter(record-1u,o,d);
+                            ro=moved.ro;
+                            rd=moved.rd;
+                            inv_det=moved.inv_det;
+                        }
                     }
                 }
             } else if (node.count==0u) {
@@ -667,7 +910,7 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
                     top+=2u;
                 }
             } else {
-                for (var j=0u;j<node.count;j++) { tri_hit(base+node.first+j,o,d,shadow_ray,&hit); }
+                for (var j=0u;j<node.count;j++) { tri_hit(base+node.first+j,record,word,inv_det,ro,rd,o,d,shadow_ray,&hit); }
             }
         }
     }
@@ -682,19 +925,19 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
                 shape_distance(i,p+vec3f(e,0.0,0.0))-shape_distance(i,p-vec3f(e,0.0,0.0)),
                 shape_distance(i,p+vec3f(0.0,e,0.0))-shape_distance(i,p-vec3f(0.0,e,0.0)),
                 shape_distance(i,p+vec3f(0.0,0.0,e))-shape_distance(i,p-vec3f(0.0,0.0,e))));
-            hit=Hit(t,n,n,u32(shapes[i].c.w),vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,i+1u);
+            hit=Hit(t,n,n,u32(shapes[i].c.w),vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,i+1u,0u);
         }
     }
-    return hit;
+    return world_hit(hit);
 }
-fn tri_blocks(i: u32, o: vec3f, d: vec3f, limit: f32) -> bool {
-    let tri = triangles[i];
-    if ((u32(tri.b.w)&2u)!=0u) { return false; }
+fn tri_blocks(i: u32, record: u32, word: u32, inv_det: f32, o: vec3f, d: vec3f, wo: vec3f, wd: vec3f, limit: f32) -> bool {
+    let tri = tri_at(i);
+    if ((word&2u)!=0u) { return false; }
     let e1 = tri.b.xyz-tri.a.xyz;
     let e2 = tri.c.xyz-tri.a.xyz;
     let p = cross(d,e2);
     let det = dot(e1,p);
-    if (abs(det)<1e-9) { return false; }
+    if (abs(det*inv_det)<1e-9) { return false; }
     let inv = 1.0/det;
     let s = o-tri.a.xyz;
     let u = dot(s,p)*inv;
@@ -704,11 +947,8 @@ fn tri_blocks(i: u32, o: vec3f, d: vec3f, limit: f32) -> bool {
     if (v<0.0 || u+v>1.0) { return false; }
     let t = dot(e2,q)*inv;
     if (t<=0.0001 || t>=limit) { return false; }
-    let surface=instance_surfaces[i];
-    let point=o+d*t;
-    if ((any(surface.clip0.xyz != vec3f(0.0)) && dot(surface.clip0.xyz,point)>surface.clip0.w)
-        || (any(surface.clip1.xyz != vec3f(0.0)) && dot(surface.clip1.xyz,point)>surface.clip1.w)) { return false; }
-    return !cut_out(i,u,v,o,d);
+    if (clipped_at(instance_surfaces[record],wo+wd*t)) { return false; }
+    return !cut_out(i,record,u,v,wo,wd);
 }
 fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
     if (frame.counts.x>0u) {
@@ -718,6 +958,9 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
         var ro=o;
         var rd=d;
         var base=0u;
+        var record=0u;
+        var word=0u;
+        var inv_det=1.0;
         while (top>0u) {
             top-=1u;
             let index=stack[top];
@@ -725,6 +968,10 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
                 ro=o;
                 rd=d;
                 base=0u;
+                record=0u;
+                word=0u;
+                inv_det=1.0;
+                mover_leave();
                 continue;
             }
             let node=nodes[index];
@@ -735,10 +982,20 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
                     stack[top+1u]=node.first;
                     top+=2u;
                     base=node.count;
+                    record=bitcast<u32>(node.lo.w);
+                    let info=instance_surfaces[record].info;
+                    word=info.x;
+                    inv_det=bitcast<f32>(info.w);
                     if (node.pad.y>0u) {
                         let m=nodes[node.pad.y];
                         ro=to_object(m,o,1.0);
                         rd=to_object(m,d,0.0);
+                        if (TRACE_MOTION && record>0u && mover_moves(record-1u)) {
+                            let moved=mover_enter(record-1u,o,d);
+                            ro=moved.ro;
+                            rd=moved.rd;
+                            inv_det=moved.inv_det;
+                        }
                     }
                 }
             } else if (node.count==0u) {
@@ -749,7 +1006,10 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
                 }
             } else {
                 for (var j=0u;j<node.count;j++) {
-                    if (tri_blocks(base+node.first+j,o,d,limit)) { return true; }
+                    if (tri_blocks(base+node.first+j,record,word,inv_det,ro,rd,o,d,limit)) {
+                        mover_leave();
+                        return true;
+                    }
                 }
             }
         }
@@ -763,7 +1023,7 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
     return false;
 }
 fn cast_tint(material: u32) -> vec3f {
-    let transmission=material_row(material,2u).y;
+    let transmission=clamp(material_row(material,2u).y,0.0,1.0)*(1.0-clamp(material_row(material,1u).x,0.0,1.0));
     if (transmission<=0.0) { return vec3f(0.0); }
     var passed=material_row(material,0u).xyz;
     let thickness=material_row(material,3u).x;
@@ -771,9 +1031,9 @@ fn cast_tint(material: u32) -> vec3f {
     if (thickness>0.0 && absorption>0.0) { passed=beer(thickness,passed,absorption); }
     return clamp(passed*transmission,vec3f(0.0),vec3f(1.0));
 }
-fn tri_passes(i: u32, o: vec3f, d: vec3f, limit: f32) -> vec3f {
-    if (!tri_blocks(i,o,d,limit)) { return vec3f(1.0); }
-    return sqrt(cast_tint(u32(triangles[i].a.w)));
+fn tri_passes(i: u32, record: u32, word: u32, inv_det: f32, o: vec3f, d: vec3f, wo: vec3f, wd: vec3f, limit: f32) -> vec3f {
+    if (!tri_blocks(i,record,word,inv_det,o,d,wo,wd,limit)) { return vec3f(1.0); }
+    return sqrt(cast_tint(record_material(instance_surfaces[record].info,triangles[i])));
 }
 fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
     var passed=vec3f(1.0);
@@ -784,6 +1044,9 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
         var ro=o;
         var rd=d;
         var base=0u;
+        var record=0u;
+        var word=0u;
+        var inv_det=1.0;
         while (top>0u) {
             top-=1u;
             let index=stack[top];
@@ -791,6 +1054,10 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
                 ro=o;
                 rd=d;
                 base=0u;
+                record=0u;
+                word=0u;
+                inv_det=1.0;
+                mover_leave();
                 continue;
             }
             let node=nodes[index];
@@ -801,10 +1068,20 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
                     stack[top+1u]=node.first;
                     top+=2u;
                     base=node.count;
+                    record=bitcast<u32>(node.lo.w);
+                    let info=instance_surfaces[record].info;
+                    word=info.x;
+                    inv_det=bitcast<f32>(info.w);
                     if (node.pad.y>0u) {
                         let m=nodes[node.pad.y];
                         ro=to_object(m,o,1.0);
                         rd=to_object(m,d,0.0);
+                        if (TRACE_MOTION && record>0u && mover_moves(record-1u)) {
+                            let moved=mover_enter(record-1u,o,d);
+                            ro=moved.ro;
+                            rd=moved.rd;
+                            inv_det=moved.inv_det;
+                        }
                     }
                 }
             } else if (node.count==0u) {
@@ -815,8 +1092,11 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
                 }
             } else {
                 for (var j=0u;j<node.count;j++) {
-                    passed*=tri_passes(base+node.first+j,o,d,limit);
-                    if (all(passed<=vec3f(0.0))) { return vec3f(0.0); }
+                    passed*=tri_passes(base+node.first+j,record,word,inv_det,ro,rd,o,d,limit);
+                    if (all(passed<=vec3f(0.0))) {
+                        mover_leave();
+                        return vec3f(0.0);
+                    }
                 }
             }
         }
@@ -865,6 +1145,17 @@ fn detail_wobble(p: vec3f, scale: f32) -> vec3f {
 fn detail_perturb(n: vec3f, g: vec3f) -> vec3f {
     return normalize(n-(g-n*dot(g,n)));
 }
+fn detail_fbm(p: vec3f) -> f32 {
+    var sum=0.0;
+    var amp=0.5;
+    var q=p;
+    for (var i=0;i<4;i++) {
+        sum+=amp*value_noise3(q,true);
+        q=q*2.03+vec3f(1.7,9.2,3.1);
+        amp*=0.5;
+    }
+    return sum;
+}
 fn detail_layer(value: Shaded, normal_in: vec3f, layer: vec4f, pa: vec4f, pb: vec4f, pc: vec4f, pd: vec4f, position: vec3f, uv: vec2f) -> DetailResult {
     var shade=value;
     var base=value.base;
@@ -905,6 +1196,8 @@ fn detail_layer(value: Shaded, normal_in: vec3f, layer: vec4f, pa: vec4f, pb: ve
         roughness=mix(roughness,sqrt(min(roughness*roughness*mix(pc.x,pc.y,wear),1.0)),clamp(amp,0.0,1.0));
     } else if (kind==15u) {
         base*=mix(1.0,1.0+(value_noise3(p*layer.y,false)-0.5)*2.0,clamp(amp,0.0,1.0));
+    } else if (kind==16u) {
+        base*=mix(1.0,1.0+(detail_fbm(p*layer.y)-0.5)*2.0,clamp(amp,0.0,1.0));
     } else if (kind==17u) {
         let line=1.0-smoothstep(0.0,0.045,abs(value_noise3(vec3f(p.x*pd.x+f32(seed),p.y*pa.x,p.z*pd.x),false)-0.5));
         let smudge=smoothstep(0.52,0.78,value_noise3(p*pa.y,false)*0.65+value_noise3(p*pa.z,false)*0.35);
@@ -1025,15 +1318,44 @@ fn texels_at(offset: u32, width: u32, height: u32, uv: vec2f) -> vec4f {
     let lo=vec2u(floor(p));
     let hi=min(lo+vec2u(1u),vec2u(width-1u,height-1u));
     let f=fract(p);
-    let a=content_texels[offset+lo.y*width+lo.x];
-    let b=content_texels[offset+lo.y*width+hi.x];
-    let c=content_texels[offset+hi.y*width+lo.x];
-    let d=content_texels[offset+hi.y*width+hi.x];
+    let a=content_row(offset+lo.y*width+lo.x);
+    let b=content_row(offset+lo.y*width+hi.x);
+    let c=content_row(offset+hi.y*width+lo.x);
+    let d=content_row(offset+hi.y*width+hi.x);
     return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+}
+fn srgb_channel(byte: u32) -> f32 {
+    return bitcast<f32>(content_words[byte/4u][byte&3u]);
+}
+fn content_row(at: u32) -> vec4f {
+    return bitcast<vec4f>(content_words[at]);
+}
+fn byte_texel(offset: u32, width: u32, x: u32, y: u32, srgb: bool) -> vec4f {
+    let at=y*width+x;
+    let packed=content_words[offset+at/4u][at&3u];
+    let bytes=vec4u(packed&255u,(packed>>8u)&255u,(packed>>16u)&255u,packed>>24u);
+    if (srgb) { return vec4f(srgb_channel(bytes.x),srgb_channel(bytes.y),srgb_channel(bytes.z),f32(bytes.w)/255.0); }
+    return vec4f(bytes)/255.0;
+}
+fn bytes_at(offset: u32, width: u32, height: u32, uv: vec2f, srgb: bool) -> vec4f {
+    let size=vec2f(f32(width),f32(height));
+    let p=clamp(uv*size-vec2f(0.5),vec2f(0.0),size-vec2f(1.0));
+    let lo=vec2u(floor(p));
+    let hi=min(lo+vec2u(1u),vec2u(width-1u,height-1u));
+    let f=fract(p);
+    let a=byte_texel(offset,width,lo.x,lo.y,srgb);
+    let b=byte_texel(offset,width,hi.x,lo.y,srgb);
+    let c=byte_texel(offset,width,lo.x,hi.y,srgb);
+    let d=byte_texel(offset,width,hi.x,hi.y,srgb);
+    return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+}
+fn image_at(info: ContentInfo, uv: vec2f) -> vec4f {
+    if (info.kind>=2u) { return bytes_at(info.offset,info.width,info.height,uv,info.kind==3u); }
+    return texels_at(info.offset,info.width,info.height,uv);
 }
 fn atlas_texel(offset: u32, width: u32, x: u32, y: u32) -> vec3f {
     let at=y*width+x;
-    let packed=u32(content_texels[offset+at/4u][at&3u]);
+    let packed=u32(content_row(offset+at/4u)[at&3u]);
     return vec3f(f32(packed&255u),f32((packed>>8u)&255u),f32(packed>>16u))/255.0;
 }
 fn atlas_at(offset: u32, width: u32, height: u32, uv: vec2f) -> vec3f {
@@ -1049,27 +1371,27 @@ fn atlas_at(offset: u32, width: u32, height: u32, uv: vec2f) -> vec3f {
     return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
 }
 fn text_at(offset: u32, uv: vec2f) -> vec4f {
-    let grid=content_texels[offset];
-    let shape=vec4u(content_texels[offset+1u]);
-    let atlas=vec4u(content_texels[offset+2u]);
-    let picture=vec4u(content_texels[offset+3u]);
+    let grid=content_row(offset);
+    let shape=vec4u(content_row(offset+1u));
+    let atlas=vec4u(content_row(offset+2u));
+    let picture=vec4u(content_row(offset+3u));
     var color=vec4f(0.0);
     if (picture.x>0u) { color=texels_at(offset+picture.z,picture.x,picture.y,uv); }
     let cell=floor((uv-grid.xy)*grid.zw);
     if (cell.x<0.0 || cell.y<0.0 || cell.x>=f32(shape.x) || cell.y>=f32(shape.y)) { return color; }
     let index=u32(cell.y)*shape.x+u32(cell.x);
-    let pair=content_texels[offset+4u+index/2u];
+    let pair=content_row(offset+4u+index/2u);
     let entry=vec2u(select(pair.xy,pair.zw,(index&1u)==1u));
     let size=vec2f(f32(atlas.x),f32(atlas.y));
     let half=vec2f(0.5)/size;
     for (var k=0u;k<entry.y;k++) {
         let at=entry.x+k;
-        let glyph=offset+shape.z+u32(content_texels[offset+shape.w+at/4u][at&3u])*5u;
-        let m=content_texels[glyph];
-        let t=content_texels[glyph+1u];
-        let clip=content_texels[glyph+2u];
-        let box=content_texels[glyph+3u];
-        let ink=content_texels[glyph+4u];
+        let glyph=offset+shape.z+u32(content_row(offset+shape.w+at/4u)[at&3u])*5u;
+        let m=content_row(glyph);
+        let t=content_row(glyph+1u);
+        let clip=content_row(glyph+2u);
+        let box=content_row(glyph+3u);
+        let ink=content_row(glyph+4u);
         let f=vec2f(m.x*uv.x+m.y*uv.y+t.x,m.z*uv.x+m.w*uv.y+t.y);
         if (any(f<max(clip.xy,vec2f(0.0))) || any(f>min(clip.zw,vec2f(1.0)))) { continue; }
         let low=min(box.xy+half,box.zw);
@@ -1090,7 +1412,7 @@ fn content_at(slot: i32, uv: vec2f) -> vec4f {
     let info=content_info[u32(slot)];
     if (info.width==0u || info.height==0u) { return vec4f(0.0); }
     if (info.kind==1u) { return text_at(info.offset,uv); }
-    return texels_at(info.offset,info.width,info.height,uv);
+    return image_at(info,uv);
 }
 const CF_WEIGHTS = array<vec3f, 81>(
     vec3f(5.039987e-05, 0.0, 0.00035778867),
@@ -1442,14 +1764,15 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         var layer=content_layers[hit.material];
         var shown=true;
         if (hit.shape==0u) {
-            layer=hit_layer(hit.surface,hit.material);
-            let face=(u32(triangles[hit.surface].b.w)>>3u)&3u;
+            let word=instance_surfaces[hit.record].info.x;
+            layer=hit_layer(word,hit.material);
+            let face=(word>>3u)&3u;
             let front=dot(hit.geometric,d)<0.0;
             shown=face==0u || (face==1u && front) || (face==2u && !front);
         }
         let slot=i32(round(layer.layer.x));
         if (slot>=0 && shown) {
-            let surface_data=instance_surfaces[hit.surface];
+            let surface_data=instance_surfaces[hit.record];
             let at=content_uv(hit.uv,surface_data.transform);
             if (content_inside(at,surface_data.crop)) {
                 let texel=content_at(slot,at);
@@ -1641,22 +1964,39 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_id) local
         let jitter=vec2f(rnd(&state,pixel_filter.x),rnd(&state,pixel_filter.y));
         let ndc=(vec2f(pixel)+jitter)/vec2f(frame.window.xy)*2.0-1.0;
         let kind=u32(round(frame.origin.w));
-        var direction=normalize(frame.forward.xyz+frame.right.xyz*(ndc.x+frame.lens.x)+frame.up.xyz*(-ndc.y+frame.lens.y));
-        var origin=frame.origin.xyz;
+        var cam_origin=frame.origin.xyz;
+        var cam_forward=frame.forward.xyz;
+        var cam_right=frame.right.xyz;
+        var cam_up=frame.up.xyz;
+        if (TRACE_MOTION) {
+            var u=f32(pcg(state^0x2545f491u)>>8u)/16777216.0;
+            if (SOBOL) { u=sobol(1u).z; }
+            ray_time=shutter_time(u);
+            let head=motion_head();
+            if (head.y>1u) {
+                let moved=motion_at(1u,head.y,ray_time);
+                cam_right=vec3f(moved.x.x,moved.y.x,moved.z.x);
+                cam_up=vec3f(moved.x.y,moved.y.y,moved.z.y);
+                cam_forward=vec3f(moved.x.z,moved.y.z,moved.z.z);
+                cam_origin=vec3f(moved.x.w,moved.y.w,moved.z.w);
+            }
+        }
+        var direction=normalize(cam_forward+cam_right*(ndc.x+frame.lens.x)+cam_up*(-ndc.y+frame.lens.y));
+        var origin=cam_origin;
         if (kind==1u) {
-            direction=normalize(frame.forward.xyz);
-            origin+=normalize(frame.right.xyz)*((ndc.x+frame.lens.x)*frame.right.w)+normalize(frame.up.xyz)*((-ndc.y+frame.lens.y)*frame.up.w);
+            direction=normalize(cam_forward);
+            origin+=normalize(cam_right)*((ndc.x+frame.lens.x)*frame.right.w)+normalize(cam_up)*((-ndc.y+frame.lens.y)*frame.up.w);
         } else if (kind==2u) {
             let phi=(ndc.x*0.5)*2.0*PI;
             let theta=(ndc.y*0.5+0.5)*PI;
             let local=vec3f(sin(theta)*sin(phi),cos(theta),-sin(theta)*cos(phi));
-            direction=normalize(normalize(frame.right.xyz)*local.x+normalize(frame.up.xyz)*local.y-normalize(frame.forward.xyz)*local.z);
+            direction=normalize(normalize(cam_right)*local.x+normalize(cam_up)*local.y-normalize(cam_forward)*local.z);
         } else if (frame.lens.z>0.0) {
-            let focus=origin+direction*(frame.lens.w/dot(direction,normalize(frame.forward.xyz)));
+            let focus=origin+direction*(frame.lens.w/dot(direction,normalize(cam_forward)));
             let aperture=sobol(1u);
             let radius=sqrt(rnd(&state,aperture.x))*frame.lens.z;
             let phi=2.0*PI*rnd(&state,aperture.y);
-            origin+=normalize(frame.right.xyz)*(radius*cos(phi))+normalize(frame.up.xyz)*(radius*sin(phi));
+            origin+=normalize(cam_right)*(radius*cos(phi))+normalize(cam_up)*(radius*sin(phi));
             direction=normalize(focus-origin);
         }
         let traced=radiance(origin,direction,&state,&first_albedo,&first_normal);

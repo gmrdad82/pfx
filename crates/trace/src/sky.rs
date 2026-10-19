@@ -44,6 +44,21 @@ pub fn look(look: &pfx_load::scene::SkyLook) -> [[f32; 4]; 2] {
 }
 
 impl Environment {
+    pub fn try_clone(&self) -> Result<Self, String> {
+        Ok(match self {
+            Self::Analytic(sky) => Self::Analytic(*sky),
+            Self::Hdr(hdr) => {
+                let mut texels = pfx_core::memory::vec(hdr.texels.len(), "the sky")?;
+                texels.extend_from_slice(&hdr.texels);
+                Self::Hdr(HdrSky {
+                    width: hdr.width,
+                    height: hdr.height,
+                    texels,
+                })
+            }
+        })
+    }
+
     pub fn uniform(&self) -> EnvironmentUniform {
         let (model, mode) = match self {
             Self::Analytic(model) => (*model, 0.0),

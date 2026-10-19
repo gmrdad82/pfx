@@ -51,6 +51,7 @@ impl Viewer {
         let output = output(&gpu, WIDTH, HEIGHT);
         let mut turns = Turns::default();
         let mut renderer = turns.cpu(|| Renderer::new(gpu, WIDTH, HEIGHT).unwrap());
+        renderer.set_scene_reflections(None).unwrap();
         renderer.set_exposure(Exposure::Fixed(1.0)).unwrap();
         let staged = turns.cpu(|| renderer.stage(scene).unwrap());
         renderer.wait_sky().unwrap();

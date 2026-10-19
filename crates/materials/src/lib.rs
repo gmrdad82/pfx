@@ -37,7 +37,9 @@ pub use flakes::{
     Cell, FLAKE_RANDOMNESS, Flakes, flake_frame, flake_normal, hash_int3_to_float3, hash_pcg3d_i,
     voronoi_f1,
 };
-pub use kinds::{CoatWobble, Crack, Crinkle, Fibre, Grime, PlankWood, Scratch, Track, WallMottle};
+pub use kinds::{
+    CoatWobble, Crack, Crinkle, Fibre, Grime, PlankWood, Scratch, Track, WallMottle, sample_params,
+};
 pub use library::{FIXTURE, Library};
 pub use lobes::{
     Anisotropy, Fabric, SHEEN_ROUGHNESS_FLOOR, SHEEN_TABLE, SHEEN_TABLE_SIDE, Scatter, Textures,

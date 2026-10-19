@@ -569,7 +569,7 @@ fn over(below: [f32; 4], color: [f32; 4], opacity: f32) -> [f32; 4] {
     ]
 }
 
-fn texel_at(image: &crate::detail::ContentImage, uv: [f32; 2]) -> [f32; 4] {
+fn texel_at(image: &crate::stage::LinearImage, uv: [f32; 2]) -> [f32; 4] {
     let size = [image.width as f32, image.height as f32];
     let p = [0, 1].map(|k| (uv[k] * size[k] - 0.5).clamp(0.0, size[k] - 1.0));
     let lo = p.map(|v| v.floor() as u32);
@@ -1507,7 +1507,7 @@ mod tests {
         let picture = records[3].map(|value| value as usize);
         let mut color = [0.0; 4];
         if picture[0] > 0 {
-            let image = crate::detail::ContentImage {
+            let image = crate::stage::LinearImage {
                 width: picture[0] as u32,
                 height: picture[1] as u32,
                 texels: records[picture[2]..picture[2] + picture[0] * picture[1]].to_vec(),
@@ -1850,8 +1850,13 @@ mod tests {
         assert_eq!(*text, lettering.shown().records().unwrap());
         let buffers = crate::gpu::SceneBuffers::build(&[], &[], &materials, detail).unwrap();
         let info: &[u32] = bytemuck::cast_slice(&buffers.content_info);
-        assert_eq!(&info[..4], [4, text.width, text.height, 1]);
-        assert_eq!(&info[4..], [0, 2, 2, 0]);
-        assert_eq!(buffers.content.len(), (4 + text.records.len()) * 16);
+        let srgb = detail.content_slots[1].as_ref().unwrap().srgb;
+        let first = crate::textured::SRGB_ROWS as u32;
+        assert_eq!(&info[..4], [first + 1, text.width, text.height, 1]);
+        assert_eq!(&info[4..], [first, 2, 2, if srgb { 3 } else { 2 }]);
+        assert_eq!(
+            buffers.content.len(),
+            (first as usize + 1 + text.records.len()) * 16
+        );
     }
 }

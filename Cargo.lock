@@ -3147,6 +3147,7 @@ dependencies = [
  "pfx-load",
  "pfx-mesh",
  "pfx-motion",
+ "pfx-post",
  "pfx-project",
  "pfx-recipe",
  "pfx-recipe-scene",
@@ -3162,6 +3163,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "terminal_size",
  "toml 0.9.12+spec-1.1.0",
 ]
 
@@ -3215,12 +3217,15 @@ dependencies = [
 name = "pfx-bench"
 version = "3.0.0"
 dependencies = [
+ "pfx-build",
  "pfx-core",
  "pfx-gpu",
  "pfx-input",
  "pfx-live",
  "pfx-load",
  "pfx-play",
+ "pfx-recipe",
+ "pfx-recipe-scene",
  "pollster",
  "serde_json",
 ]
@@ -3365,6 +3370,7 @@ dependencies = [
  "pfx-gpu",
  "pfx-live",
  "pfx-load",
+ "pfx-post",
  "png 0.18.1",
 ]
 
@@ -3385,6 +3391,7 @@ dependencies = [
  "pfx-gpu",
  "pfx-input",
  "pfx-live",
+ "pfx-post",
  "pfx-sound",
  "pfx-text",
  "pito-codecs",
@@ -3483,6 +3490,13 @@ dependencies = [
  "sha2 0.11.0",
  "windows-sys 0.61.2",
  "winit",
+]
+
+[[package]]
+name = "pfx-launcher"
+version = "3.0.0"
+dependencies = [
+ "winresource",
 ]
 
 [[package]]
@@ -3777,12 +3791,14 @@ dependencies = [
  "pfx-live",
  "pfx-load",
  "pfx-materials",
+ "pfx-mesh",
  "pfx-post",
  "pfx-recipe",
  "pfx-recipe-scene",
  "pfx-text",
  "pfx-trace",
  "png 0.18.1",
+ "serde_json",
 ]
 
 [[package]]
@@ -3844,6 +3860,7 @@ dependencies = [
  "pfx-editor",
  "pfx-editor-shell",
  "pfx-editor-style",
+ "pfx-editor-viewport",
  "pfx-file",
  "pfx-game",
  "pfx-gpu",
@@ -4980,6 +4997,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix 1.1.5",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6384,6 +6411,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2bc6d36480b829272a5bdabf08e6dca8004761c1da7e35efef800540c66221b"
+dependencies = [
+ "version_check",
 ]
 
 [[package]]

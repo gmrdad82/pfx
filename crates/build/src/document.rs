@@ -3,7 +3,7 @@ use std::path::{Component, Path, PathBuf};
 
 use pfx_file::{Codec, Reader, Tag, Writer};
 use pfx_recipe::toml_edit::{self, DocumentMut, Item};
-use pfx_recipe::{Key, Patch, Recipe, files};
+use pfx_recipe::{Key, Kind, Patch, Recipe, apply_variant, files};
 use sha2::{Digest, Sha256};
 
 use crate::{Built, Registry, build_with, glb_path};
@@ -68,6 +68,9 @@ pub struct Document {
     pub overrides: Vec<Override>,
     pub built_from: Option<String>,
     pub scene_hash: Option<String>,
+    pub outside: Vec<String>,
+    pub unread: Vec<String>,
+    pub notes: Vec<String>,
     foreign: Vec<(Tag, String, Vec<u8>)>,
 }
 
@@ -433,11 +436,209 @@ fn asset_records(seen: &BTreeSet<PathBuf>) -> Vec<PathBuf> {
         .collect()
 }
 
+fn strings_in(value: &toml::Value, out: &mut Vec<String>) {
+    match value {
+        toml::Value::String(text) => out.push(text.clone()),
+        toml::Value::Array(items) => items.iter().for_each(|item| strings_in(item, out)),
+        toml::Value::Table(table) => table.values().for_each(|item| strings_in(item, out)),
+        _ => {}
+    }
+}
+
+fn path_between(folder: &Path, file: &Path) -> String {
+    let from: Vec<_> = folder.components().collect();
+    let to: Vec<_> = file.components().collect();
+    let shared = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut parts = vec!["..".to_string(); from.len() - shared];
+    parts.extend(
+        to[shared..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    parts.join("/")
+}
+
+fn outside_paths(
+    main: &Path,
+    seen: &BTreeSet<PathBuf>,
+    folder: &Path,
+) -> (Vec<PathBuf>, Vec<String>) {
+    let mut found = Vec::new();
+    let mut unread = Vec::new();
+    let texts = std::iter::once(main).chain(
+        seen.iter()
+            .map(PathBuf::as_path)
+            .filter(|path| path.extension().is_some_and(|e| e == "toml")),
+    );
+    for text_file in texts {
+        let Ok(text) = files::read_to_string(text_file) else {
+            continue;
+        };
+        let Ok(table) = toml::from_str::<toml::Table>(&text) else {
+            continue;
+        };
+        let mut strings = Vec::new();
+        strings_in(&toml::Value::Table(table), &mut strings);
+        let here = text_file.parent().unwrap_or(folder);
+        for reference in strings {
+            if !reference.starts_with("../") || reference.contains('\\') {
+                continue;
+            }
+            let candidates = [here, folder].map(|base| files::clean(&base.join(&reference)));
+            if candidates.iter().any(|path| path.is_dir()) {
+                continue;
+            }
+            match candidates.iter().find(|path| files::is_file(path)) {
+                Some(path) if !seen.contains(path) && !found.contains(path) => {
+                    found.push(path.clone());
+                }
+                Some(_) => {}
+                None => {
+                    let shown = format!("{reference} (named in {})", text_file.display());
+                    if !unread.contains(&shown) {
+                        unread.push(shown);
+                    }
+                }
+            }
+        }
+    }
+    (found, unread)
+}
+
+fn render_reads(recipe: &Recipe, base: &Path) -> Vec<PathBuf> {
+    let mut named: Vec<&str> = Vec::new();
+    if let Some(path) = recipe.sky.as_ref().and_then(|sky| sky.path.as_deref()) {
+        named.push(path);
+    }
+    for object in &recipe.objects {
+        match &object.kind {
+            Kind::Card {
+                image: Some(image), ..
+            } => named.push(image),
+            Kind::Text { spans, .. } => named.extend(
+                spans
+                    .iter()
+                    .filter_map(|span| span.family.as_deref())
+                    .filter(|family| *family != pfx_recipe::MONO),
+            ),
+            _ => {}
+        }
+    }
+    named
+        .into_iter()
+        .filter_map(|path| recipe.asset(base, path).ok())
+        .map(|found| files::clean(&found))
+        .filter(|file| file.is_file())
+        .collect()
+}
+
 fn real_folder(pfx: &Path) -> PathBuf {
     match pfx.parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
         _ => PathBuf::from("."),
     }
+}
+
+struct Placed {
+    recipe: PathBuf,
+    folder: PathBuf,
+    dir: Vec<String>,
+}
+
+fn parts(path: &Path) -> Vec<String> {
+    path.components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect()
+}
+
+impl Placed {
+    fn of(pfx: &Path, recipe_name: &str) -> Result<Placed, String> {
+        let name = safe_name(recipe_name)?;
+        let folder = real_folder(pfx);
+        let dir = name.parent().map(parts).unwrap_or_default();
+        let file = name.file_name().map(PathBuf::from).unwrap_or(name);
+        Ok(Placed {
+            recipe: folder.join(file),
+            folder: files::clean(&folder),
+            dir,
+        })
+    }
+
+    fn path(&self, name: &Path) -> PathBuf {
+        let name = parts(name);
+        let shared = self
+            .dir
+            .iter()
+            .zip(&name)
+            .take_while(|(a, b)| a == b)
+            .count();
+        let mut out = self.folder.clone();
+        for _ in shared..self.dir.len() {
+            out.pop();
+        }
+        out.extend(&name[shared..]);
+        out
+    }
+
+    fn name(&self, path: &Path) -> Option<PathBuf> {
+        let mut out = self.dir.clone();
+        for part in path_between(&self.folder, path).split('/') {
+            match part {
+                "" | "." => {}
+                ".." => {
+                    out.pop()?;
+                }
+                other => out.push(other.to_string()),
+            }
+        }
+        (!out.is_empty()).then(|| out.iter().collect())
+    }
+}
+
+fn smet_text(
+    recipe: &str,
+    scene_hash: Option<&str>,
+    scene: &[(String, Vec<u8>)],
+) -> Result<String, String> {
+    let mut smet = toml::Table::new();
+    smet.insert("format".into(), toml::Value::Integer(1));
+    smet.insert("entry".into(), toml::Value::String(ENTRY.into()));
+    smet.insert(
+        "recipe".into(),
+        toml::Value::String(sha256(recipe.as_bytes())),
+    );
+    smet.insert(
+        "scene".into(),
+        toml::Value::String(scene_hash.map_or_else(|| scene_hash_of(scene), str::to_string)),
+    );
+    toml::to_string(&smet).map_err(|e| e.to_string())
+}
+
+struct Chunks<'a> {
+    writer: Writer<'a>,
+    old: Option<&'a Reader<'a>>,
+}
+
+impl<'a> Chunks<'a> {
+    fn put(&mut self, tag: Tag, name: &str, bytes: std::borrow::Cow<'a, [u8]>, codec: Codec) {
+        let writer = std::mem::take(&mut self.writer);
+        let kept = self
+            .old
+            .and_then(|old| same(old, tag, name, &bytes).map(|index| (old, index)));
+        self.writer = match kept {
+            Some((old, index)) => writer.keep(old, index),
+            None => writer.named(tag, name, bytes, codec),
+        };
+    }
+}
+
+fn same(old: &Reader<'_>, tag: Tag, name: &str, bytes: &[u8]) -> Option<usize> {
+    let index = old.find_named(tag, name)?;
+    let entry = &old.entries()[index];
+    (entry.raw == bytes.len() as u64
+        && pfx_file::crc32::hash(bytes) == entry.crc
+        && old.read(index).ok()?.as_ref() == bytes)
+        .then_some(index)
 }
 
 impl Document {
@@ -450,21 +651,28 @@ impl Document {
             build_with(&loaded.recipe, &base, registry).map_err(|e| format!("{shown}: {e}"))?;
         let mut doc = Document::default();
         doc.fill(&built, &loaded.recipe, &base)?;
+        let variants: Vec<Recipe> = loaded
+            .recipe
+            .variants
+            .keys()
+            .filter_map(|name| apply_variant(&loaded.recipe, name).ok())
+            .collect();
+        for variant in &variants {
+            let _ = build_with(variant, &base, registry);
+        }
         let mut seen = recorder.seen();
         drop(recorder);
-        if let Some(sky) = &loaded.recipe.sky
-            && let Some(path) = &sky.path
-            && let Ok(found) = loaded.recipe.asset(&base, path)
-        {
-            let file = files::clean(&found);
-            if file.is_file() {
-                seen.insert(file);
-            }
+        for recipe in std::iter::once(&loaded.recipe).chain(&variants) {
+            seen.extend(render_reads(recipe, &base));
         }
         let main = files::clean(recipe);
         seen.remove(&main);
         let records = asset_records(&seen);
         seen.extend(records);
+        let folder = main.parent().map(Path::to_path_buf).unwrap_or_default();
+        let (found, unread) = outside_paths(&main, &seen, &folder);
+        seen.extend(found);
+        doc.unread = unread;
         let mut root = main.parent().map(Path::to_path_buf).unwrap_or_default();
         for file in &seen {
             while !file.starts_with(&root) {
@@ -486,7 +694,10 @@ impl Document {
             let Some(name) = relative(&root, &file) else {
                 continue;
             };
-            let bytes = std::fs::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+            if !file.starts_with(&folder) {
+                doc.outside.push(path_between(&folder, &file));
+            }
+            let bytes = files::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             doc.files.insert(name, bytes);
         }
         let outputs = std::mem::take(&mut doc.outputs);
@@ -500,6 +711,7 @@ impl Document {
             doc.files.entry(scene_dir.join(&name)).or_insert(bytes);
         }
         doc.built_from = Some(doc.hash());
+        doc.notes.clone_from(&built.notes);
         doc.facts = doc.facts_text(&built)?;
         Ok(doc)
     }
@@ -573,6 +785,17 @@ impl Document {
                     .collect(),
             ),
         );
+        if !self.notes.is_empty() {
+            build.insert(
+                "notes".into(),
+                toml::Value::Array(
+                    self.notes
+                        .iter()
+                        .map(|note| toml::Value::String(note.clone()))
+                        .collect(),
+                ),
+            );
+        }
         table.insert("build".into(), toml::Value::Table(build));
         let objects: toml::Table = built
             .object_facts()
@@ -696,75 +919,92 @@ impl Document {
                 .filter_map(toml::Value::as_str)
                 .map(PathBuf::from)
                 .collect();
+            doc.notes = build
+                .get("notes")
+                .and_then(toml::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(toml::Value::as_str)
+                .map(str::to_string)
+                .collect();
         }
         Ok(doc)
     }
 
     pub fn to_vec(&self) -> Result<Vec<u8>, String> {
-        self.writer()?.to_vec().map_err(|e| e.to_string())
+        self.writer(None)?.to_vec().map_err(|e| e.to_string())
     }
 
-    fn writer(&self) -> Result<Writer<'_>, String> {
-        let mut smet = toml::Table::new();
-        smet.insert("format".into(), toml::Value::Integer(1));
-        smet.insert("entry".into(), toml::Value::String(ENTRY.into()));
-        smet.insert(
-            "recipe".into(),
-            toml::Value::String(sha256(self.recipe_text.as_bytes())),
+    fn writer<'a>(&'a self, old: Option<&'a Reader<'a>>) -> Result<Writer<'a>, String> {
+        let smet = smet_text(&self.recipe_text, self.scene_hash.as_deref(), &self.scene)?;
+        let mut w = Chunks {
+            writer: Writer::new(),
+            old,
+        };
+        w.put(pfx_file::SMET, "", smet.into_bytes().into(), Codec::Store);
+        w.put(
+            pfx_file::RCPE,
+            &self.recipe_name,
+            self.recipe_text.as_bytes().into(),
+            Codec::Auto,
         );
-        smet.insert(
-            "scene".into(),
-            toml::Value::String(
-                self.scene_hash
-                    .clone()
-                    .unwrap_or_else(|| scene_hash_of(&self.scene)),
-            ),
-        );
-        let smet = toml::to_string(&smet).map_err(|e| e.to_string())?;
-        let mut w = Writer::new()
-            .chunk(pfx_file::SMET, smet.into_bytes(), Codec::Store)
-            .named(
-                pfx_file::RCPE,
-                self.recipe_name.as_str(),
-                self.recipe_text.as_bytes(),
-                Codec::Auto,
-            );
         for (name, bytes) in &self.files {
-            w = w.named(pfx_file::FILE, name_of(name), &bytes[..], stored(bytes));
+            w.put(
+                pfx_file::FILE,
+                &name_of(name),
+                bytes[..].into(),
+                stored(bytes),
+            );
         }
         for (name, bytes) in &self.scene {
-            w = w.named(pfx_file::SCNE, name.as_str(), &bytes[..], Codec::Auto);
+            w.put(pfx_file::SCNE, name, bytes[..].into(), Codec::Auto);
         }
         if !self.gltf.is_empty() {
-            w = w.chunk(pfx_file::GLTF, &self.gltf[..], Codec::Auto).chunk(
-                pfx_file::GBIN,
-                &self.gbin[..],
-                Codec::Auto,
-            );
+            w.put(pfx_file::GLTF, "", self.gltf[..].into(), Codec::Auto);
+            w.put(pfx_file::GBIN, "", self.gbin[..].into(), Codec::Auto);
         }
-        w = w
-            .chunk(pfx_file::FACT, self.facts.as_bytes(), Codec::Auto)
-            .chunk(pfx_file::NODE, self.nodes.as_bytes(), Codec::Auto);
+        w.put(
+            pfx_file::FACT,
+            "",
+            self.facts.as_bytes().into(),
+            Codec::Auto,
+        );
+        w.put(
+            pfx_file::NODE,
+            "",
+            self.nodes.as_bytes().into(),
+            Codec::Auto,
+        );
         if let Some(thumb) = &self.thumb {
-            w = w.chunk(pfx_file::THMB, &thumb[..], Codec::Store);
+            w.put(pfx_file::THMB, "", thumb[..].into(), Codec::Store);
         }
         if !self.overrides.is_empty() {
-            w = w.chunk(
+            w.put(
                 pfx_file::OVRD,
-                overrides_text(&self.overrides)?.into_bytes(),
+                "",
+                overrides_text(&self.overrides)?.into_bytes().into(),
                 Codec::Auto,
             );
         }
         for (tag, name, bytes) in &self.foreign {
             if !OWNED.contains(tag) {
-                w = w.named(*tag, name.as_str(), &bytes[..], Codec::Auto);
+                w.put(*tag, name, bytes[..].into(), Codec::Auto);
             }
         }
-        Ok(w)
+        Ok(w.writer)
     }
 
     pub fn write(&self, path: &Path) -> Result<(), String> {
-        self.writer()?
+        let shown = |e: pfx_file::Error| format!("{}: {e}", path.display());
+        let old = Reader::open(path).ok();
+        self.writer(old.as_ref())?
+            .update(path)
+            .map(drop)
+            .map_err(shown)
+    }
+
+    pub fn write_whole(&self, path: &Path) -> Result<(), String> {
+        self.writer(None)?
             .write(path)
             .map_err(|e| format!("{}: {e}", path.display()))
     }
@@ -786,21 +1026,22 @@ impl Document {
     }
 
     pub fn mount(&self, pfx: &Path) -> Result<(PathBuf, files::Mount), String> {
-        let folder = real_folder(pfx);
-        let recipe = folder.join(safe_name(&self.recipe_name)?);
+        let placed = Placed::of(pfx, &self.recipe_name)?;
         let mut mounted = BTreeMap::new();
-        mounted.insert(recipe.clone(), self.recipe_text.clone().into_bytes());
+        mounted.insert(placed.recipe.clone(), self.recipe_text.clone().into_bytes());
         for (name, bytes) in &self.files {
-            mounted.insert(folder.join(safe_name(&name_of(name))?), bytes.clone());
+            mounted.insert(placed.path(&safe_name(&name_of(name))?), bytes.clone());
         }
-        Ok((recipe, files::mount(mounted)))
+        Ok((placed.recipe, files::mount(mounted)))
     }
 
     pub fn take_changes(&mut self, pfx: &Path, mount: &files::Mount) -> bool {
-        let folder = files::clean(&real_folder(pfx));
+        let Ok(placed) = Placed::of(pfx, &self.recipe_name) else {
+            return false;
+        };
         let changed = mount.changed();
         for (path, bytes) in &changed {
-            let Some(name) = relative(&folder, path) else {
+            let Some(name) = placed.name(path) else {
                 continue;
             };
             if name_of(&name) == self.recipe_name {
@@ -842,6 +1083,7 @@ impl Document {
             }
         }
         self.built_from = Some(self.hash());
+        self.notes.clone_from(&built.notes);
         self.facts = self.facts_text(&built)?;
         Ok(())
     }
@@ -949,5 +1191,201 @@ impl Document {
         drop(mount);
         self.keep(&kept);
         Ok(kept)
+    }
+}
+
+pub struct Draft {
+    reader: std::sync::Arc<Reader<'static>>,
+    pub recipe_name: String,
+    pub recipe_text: String,
+    recipe_changed: bool,
+    files: BTreeMap<PathBuf, usize>,
+    own_gltf: Option<PathBuf>,
+    changed: BTreeMap<PathBuf, Vec<u8>>,
+    scene_hash: Option<String>,
+    scene: Vec<(String, Vec<u8>)>,
+}
+
+impl Draft {
+    pub fn open(path: &Path) -> Result<Draft, String> {
+        let shown = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+        let reader = Reader::open(path).map_err(|e| shown(&e))?;
+        let mut recipe = None;
+        let mut files = BTreeMap::new();
+        let mut scene = Vec::new();
+        let mut scene_hash = None;
+        let mut gltf = false;
+        for (index, entry) in reader.entries().iter().enumerate() {
+            match entry.tag {
+                pfx_file::RCPE => {
+                    let name = if entry.name.is_empty() {
+                        "recipe.toml".to_string()
+                    } else {
+                        entry.name.clone()
+                    };
+                    safe_name(&name).map_err(|e| shown(&e))?;
+                    let bytes = reader.read(index).map_err(|e| shown(&e))?;
+                    recipe = Some((name, text_of(&bytes, "RCPE").map_err(|e| shown(&e))?));
+                }
+                pfx_file::FILE => {
+                    files.insert(safe_name(&entry.name).map_err(|e| shown(&e))?, index);
+                }
+                pfx_file::SCNE => {
+                    safe_name(&entry.name).map_err(|e| shown(&e))?;
+                    let bytes = reader.read(index).map_err(|e| shown(&e))?;
+                    scene.push((entry.name.clone(), bytes.into_owned()));
+                }
+                pfx_file::GLTF => gltf = true,
+                pfx_file::SMET => {
+                    let bytes = reader.read(index).map_err(|e| shown(&e))?;
+                    let table: toml::Table =
+                        toml::from_str(&text_of(&bytes, "SMET").map_err(|e| shown(&e))?)
+                            .map_err(|e| shown(&format!("SMET: {e}")))?;
+                    scene_hash = table
+                        .get("scene")
+                        .and_then(toml::Value::as_str)
+                        .map(str::to_string);
+                }
+                _ => {}
+            }
+        }
+        let (recipe_name, recipe_text) =
+            recipe.ok_or_else(|| shown(&"the document has no recipe (RCPE)"))?;
+        let own = Path::new(&recipe_name)
+            .parent()
+            .map_or_else(|| PathBuf::from(GLTF_NAME), |dir| dir.join(GLTF_NAME));
+        let own_gltf = (gltf
+            && recipe_text.contains(&format!("\"{GLTF_NAME}\""))
+            && !files.contains_key(&own))
+        .then_some(own);
+        Ok(Draft {
+            reader: std::sync::Arc::new(reader),
+            recipe_name,
+            recipe_text,
+            recipe_changed: false,
+            files,
+            own_gltf,
+            changed: BTreeMap::new(),
+            scene_hash,
+            scene,
+        })
+    }
+
+    pub fn edited(&self) -> bool {
+        self.scene_hash
+            .as_deref()
+            .is_some_and(|recorded| recorded != scene_hash_of(&self.scene))
+    }
+
+    pub fn holds(&self, name: &Path) -> bool {
+        self.files.contains_key(name)
+    }
+
+    pub fn path_of(&self, pfx: &Path, name: &str) -> Result<PathBuf, String> {
+        let placed = Placed::of(pfx, &self.recipe_name)?;
+        if name == self.recipe_name {
+            return Ok(placed.recipe);
+        }
+        Ok(placed.path(&safe_name(name)?))
+    }
+
+    pub fn mount(&self, pfx: &Path, label: &str) -> Result<(PathBuf, files::Mount), String> {
+        let placed = Placed::of(pfx, &self.recipe_name)?;
+        let recipe = placed.recipe.clone();
+        let mut mounted = BTreeMap::new();
+        let mut names = BTreeMap::new();
+        mounted.insert(
+            recipe.clone(),
+            files::Content::Bytes(self.recipe_text.clone().into_bytes()),
+        );
+        names.insert(recipe.clone(), label.to_string());
+        for (name, &index) in &self.files {
+            let path = placed.path(name);
+            let reader = self.reader.clone();
+            let load: files::Load = std::sync::Arc::new(move || {
+                reader
+                    .read(index)
+                    .map(std::borrow::Cow::into_owned)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            });
+            let inside = Path::new(&self.recipe_name)
+                .parent()
+                .and_then(|dir| name.strip_prefix(dir).ok())
+                .unwrap_or(name);
+            names.insert(path.clone(), format!("{label}:{}", name_of(inside)));
+            mounted.insert(path, files::Content::Lazy(load));
+        }
+        if let Some(own) = &self.own_gltf {
+            let reader = self.reader.clone();
+            let load: files::Load = std::sync::Arc::new(move || {
+                let chunk = |tag| {
+                    reader
+                        .chunk(tag)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                        .map(|c| c.map(std::borrow::Cow::into_owned).unwrap_or_default())
+                };
+                Ok(join_glb(&chunk(pfx_file::GLTF)?, &chunk(pfx_file::GBIN)?))
+            });
+            mounted.insert(placed.path(own), files::Content::Lazy(load));
+        }
+        Ok((recipe, files::mount_named(mounted, names)))
+    }
+
+    pub fn take_changes(&mut self, pfx: &Path, mount: &files::Mount) -> bool {
+        let Ok(placed) = Placed::of(pfx, &self.recipe_name) else {
+            return false;
+        };
+        let changed = mount.changed();
+        for (path, bytes) in &changed {
+            let Some(name) = placed.name(path) else {
+                continue;
+            };
+            if name_of(&name) == self.recipe_name {
+                self.recipe_text = String::from_utf8_lossy(bytes).into_owned();
+                self.recipe_changed = true;
+            } else if self.own_gltf.as_ref() != Some(&name) {
+                self.changed.insert(name, bytes.clone());
+            }
+        }
+        mount.settle();
+        !changed.is_empty()
+    }
+
+    pub fn write(&self, pfx: &Path) -> Result<pfx_file::Update, String> {
+        let reader: &Reader<'_> = &self.reader;
+        let smet = smet_text(&self.recipe_text, self.scene_hash.as_deref(), &self.scene)?;
+        let mut writer = Writer::new();
+        let mut written = BTreeSet::new();
+        for (index, entry) in reader.entries().iter().enumerate() {
+            let name = Path::new(&entry.name);
+            writer = match entry.tag {
+                pfx_file::SMET => writer.chunk(pfx_file::SMET, smet.as_bytes(), Codec::Store),
+                pfx_file::RCPE if self.recipe_changed => writer.named(
+                    pfx_file::RCPE,
+                    entry.name.as_str(),
+                    self.recipe_text.as_bytes(),
+                    Codec::Auto,
+                ),
+                pfx_file::FILE if self.changed.contains_key(name) => {
+                    written.insert(name.to_path_buf());
+                    let bytes = &self.changed[name];
+                    writer.named(
+                        pfx_file::FILE,
+                        entry.name.as_str(),
+                        &bytes[..],
+                        stored(bytes),
+                    )
+                }
+                _ => writer.keep(reader, index),
+            };
+        }
+        for (name, bytes) in &self.changed {
+            if !written.contains(name) {
+                writer = writer.named(pfx_file::FILE, name_of(name), &bytes[..], stored(bytes));
+            }
+        }
+        writer
+            .update(pfx)
+            .map_err(|e| format!("{}: {e}", pfx.display()))
     }
 }

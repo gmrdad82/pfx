@@ -1,13 +1,13 @@
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::sync::Mutex;
 
 use crate::{
-    ALIGN, COMPRESSED, Codec, ENTRY_LEN, Error, HEADER_LEN, MAGIC, MAX_CHUNKS, MAX_RAW, Result,
-    STORED, Tag, VERSION, check_name, codec, tag_text,
+    ALIGN, COMPRESSED, Codec, ENTRY_LEN, Error, HEADER_LEN, MAGIC, MAX_CHUNKS, MAX_FRONT, MAX_RAW,
+    Result, STORED, TAIL, TAIL_LEN, Tag, VERSION, check_name, codec, tag_text,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,19 +196,110 @@ fn align(at: u64) -> u64 {
     at.div_ceil(ALIGN) * ALIGN
 }
 
+pub(crate) struct Layout {
+    pub version: u32,
+    pub entries: Vec<Entry>,
+    pub front: Vec<u8>,
+    pub from_tail: bool,
+    pub len: u64,
+}
+
+fn parse_front(front: &[u8], len: u64) -> Result<(u32, Vec<Entry>, usize)> {
+    let (version, count) = header(&front[..front.len().min(HEADER_LEN as usize)], len)?;
+    let table_end = (HEADER_LEN + u64::from(count) * ENTRY_LEN) as usize;
+    if front.len() < table_end {
+        return Err(corrupt("the chunk table is cut short"));
+    }
+    let rows = rows(&front[HEADER_LEN as usize..table_end]);
+    let names_len = names_len(rows.iter().map(|r| (r.name_offset, r.name_len)))?;
+    let names_end = table_end as u64 + names_len;
+    if names_end > front.len() as u64 || names_end > len {
+        return Err(corrupt("the name block is cut short"));
+    }
+    let names = &front[table_end..names_end as usize];
+    let entries = entries(rows, names, align(names_end), len)?;
+    Ok((version, entries, names_end as usize))
+}
+
+fn tail(footer: &[u8], len: u64) -> Option<(u64, u64, u32)> {
+    if footer.len() != TAIL_LEN as usize || footer[16..] != TAIL {
+        return None;
+    }
+    let front_len = u64_at(footer, 0);
+    let crc = u32_at(footer, 8);
+    if !(HEADER_LEN..=MAX_FRONT).contains(&front_len) || front_len + TAIL_LEN > len {
+        return None;
+    }
+    Some((len - TAIL_LEN - front_len, front_len, crc))
+}
+
+fn committed(front: &[u8], crc: u32) -> bool {
+    front.starts_with(&MAGIC) && crate::crc32::hash(front) == crc
+}
+
+pub(crate) fn layout(file: &mut File) -> Result<Layout> {
+    let len = file.metadata()?.len();
+    if len >= HEADER_LEN + TAIL_LEN {
+        let mut footer = [0u8; TAIL_LEN as usize];
+        file.seek(SeekFrom::Start(len - TAIL_LEN))?;
+        file.read_exact(&mut footer)?;
+        if let Some((start, front_len, crc)) = tail(&footer, len) {
+            let mut front = vec![0u8; front_len as usize];
+            file.seek(SeekFrom::Start(start))?;
+            file.read_exact(&mut front)?;
+            if committed(&front, crc) {
+                let (version, entries, end) = parse_front(&front, len)?;
+                front.truncate(end);
+                return Ok(Layout {
+                    version,
+                    entries,
+                    front,
+                    from_tail: true,
+                    len,
+                });
+            }
+        }
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let mut front = vec![0u8; len.min(HEADER_LEN) as usize];
+    file.read_exact(&mut front)?;
+    let (_, count) = header(&front, len)?;
+    front.resize((HEADER_LEN + u64::from(count) * ENTRY_LEN) as usize, 0);
+    file.read_exact(&mut front[HEADER_LEN as usize..])?;
+    let names = names_len(
+        rows(&front[HEADER_LEN as usize..])
+            .iter()
+            .map(|r| (r.name_offset, r.name_len)),
+    )?;
+    if front.len() as u64 + names > len {
+        return Err(corrupt("the name block is cut short"));
+    }
+    let table_end = front.len();
+    front.resize(table_end + names as usize, 0);
+    file.read_exact(&mut front[table_end..])?;
+    let (version, entries, _) = parse_front(&front, len)?;
+    Ok(Layout {
+        version,
+        entries,
+        front,
+        from_tail: false,
+        len,
+    })
+}
+
 impl<'a> Reader<'a> {
     pub fn from_bytes(bytes: &'a [u8]) -> Result<Reader<'a>> {
         let len = bytes.len() as u64;
-        let (version, count) = header(&bytes[..bytes.len().min(HEADER_LEN as usize)], len)?;
-        let table_end = (HEADER_LEN + u64::from(count) * ENTRY_LEN) as usize;
-        let rows = rows(&bytes[HEADER_LEN as usize..table_end]);
-        let names_len = names_len(rows.iter().map(|r| (r.name_offset, r.name_len)))?;
-        let names_end = table_end as u64 + names_len;
-        if names_end > len {
-            return Err(corrupt("the name block is cut short"));
+        let mut front = bytes;
+        if len >= HEADER_LEN + TAIL_LEN
+            && let Some((start, front_len, crc)) = tail(&bytes[(len - TAIL_LEN) as usize..], len)
+        {
+            let copy = &bytes[start as usize..(start + front_len) as usize];
+            if committed(copy, crc) {
+                front = copy;
+            }
         }
-        let names = &bytes[table_end..names_end as usize];
-        let entries = entries(rows, names, align(names_end), len)?;
+        let (version, entries, _) = parse_front(front, len)?;
         Ok(Reader {
             version,
             entries,
@@ -218,21 +309,9 @@ impl<'a> Reader<'a> {
 
     pub fn open(path: impl AsRef<Path>) -> Result<Reader<'static>> {
         let mut file = File::open(path)?;
-        let len = file.metadata()?.len();
-        let mut head = vec![0u8; len.min(HEADER_LEN) as usize];
-        file.read_exact(&mut head)?;
-        let (version, count) = header(&head, len)?;
-        let mut table = vec![0u8; (u64::from(count) * ENTRY_LEN) as usize];
-        file.read_exact(&mut table)?;
-        let rows = rows(&table);
-        let names_len = names_len(rows.iter().map(|r| (r.name_offset, r.name_len)))?;
-        let table_end = HEADER_LEN + table.len() as u64;
-        if table_end + names_len > len {
-            return Err(corrupt("the name block is cut short"));
-        }
-        let mut names = vec![0u8; names_len as usize];
-        file.read_exact(&mut names)?;
-        let entries = entries(rows, &names, align(table_end + names_len), len)?;
+        let Layout {
+            version, entries, ..
+        } = layout(&mut file)?;
         Ok(Reader {
             version,
             entries,
@@ -299,6 +378,31 @@ impl<'a> Reader<'a> {
                 Ok(Cow::Owned(out))
             }
         }
+    }
+
+    pub fn stored_to(&self, index: usize, out: &mut dyn Write) -> Result<()> {
+        let entry = self
+            .entries
+            .get(index)
+            .ok_or_else(|| Error::Invalid(format!("no chunk {index}")))?;
+        match &self.source {
+            Source::Bytes(bytes) => out
+                .write_all(&bytes[entry.offset as usize..(entry.offset + entry.stored) as usize])?,
+            Source::File(file) => {
+                let mut file = file
+                    .lock()
+                    .map_err(|_| Error::Invalid("the file lock is poisoned".into()))?;
+                file.seek(SeekFrom::Start(entry.offset))?;
+                let copied = std::io::copy(&mut (&mut *file).take(entry.stored), out)?;
+                if copied != entry.stored {
+                    return Err(corrupt(format!(
+                        "chunk {}: runs past the end",
+                        tag_text(entry.tag)
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn read(&self, index: usize) -> Result<Cow<'a, [u8]>> {

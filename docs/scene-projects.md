@@ -36,7 +36,7 @@ scene = "scenes/room.scene.toml"
 
 ## Paths
 
-Every path is relative to the project root, whichever file names it, and uses `/`. An absolute path, a backslash or a `..` that leaves the root is refused. A path keeps its case: one the checker finds only with another case is refused as `path-case`, so a project reads the same on Linux, Windows and macOS. Assets are standard files referenced by path, never embedded: glTF 2.0, PNG, WAV or Ogg Vorbis, TTF or OTF, Radiance HDR.
+A relative path resolves from the folder of the file that names it first, then from the project root, and uses `/` ([Scenes as data](scenes.md#loading) has the rule). A path written relative to the root, as the demo's are, keeps resolving through the second step. An absolute path, a backslash or a `..` that leaves the root is refused. A path keeps its case: one the checker finds only with another case is refused as `path-case`, so a project reads the same on Linux, Windows and macOS. Assets are standard files referenced by path, never embedded: glTF 2.0, PNG, WAV or Ogg Vorbis, TTF or OTF, Radiance HDR.
 
 ## Ids and names
 

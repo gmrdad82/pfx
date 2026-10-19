@@ -47,6 +47,8 @@ Drag in the viewport to orbit, Shift+drag or middle-drag to pan, and the wheel t
 
 A recipe's `[[route]]` lines show in the viewport while one is chosen in the outliner (its row under the objects), while an object whose generator names it in `params.route` is selected, or for every route with `p`.
 
+A route with `show = false` never shows. `h` in the viewport hides every overlay of a recipe's view (route lines and handles, guides, grid, gizmo, axes and scale) until it is pressed again, for a clean recording; `pfx gui --clean` does the same for an offscreen take (`--shot`, `--clip` with `--tape`, and `--bare`).
+
 - **Move a point:** drag its disc. It slides on the ground at its own height; hold Shift to move it up and down. The recipe's `points` change live as you drag, and the release is one edit; Esc mid-drag puts it back.
 - **Add a point:** Ctrl+click on the line inserts one there.
 - **Remove a point:** click its disc, then Delete or Backspace. A route keeps at least 2 points.
@@ -62,6 +64,10 @@ The cameras panel lists the recipe's cameras. Choose one to look through it; orb
 ## The hour
 
 The hour slider in the lights panel moves the sun and the sky live without writing anything. **Use hour** writes the shown hour into the recipe's daylight `[sun]`.
+
+## Play errors
+
+When Play fails (a missing or broken module, a trap in the game, a factory that refuses), the error stays in the status bar until the next key or click. F6, or a click on that error, opens the window's log with the full message.
 
 ## Undo
 

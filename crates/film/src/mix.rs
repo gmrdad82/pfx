@@ -3,6 +3,7 @@ use crate::score::{Play, Sounds};
 use crate::script::{Kinds, Script};
 use pfx_sound::Limiter;
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 const STEREO: usize = 2;
 const OPEN: f32 = 0.98;
@@ -32,7 +33,14 @@ pub struct Mixdown<'a> {
     ceiling: f32,
     limit: f32,
     true_peak: f32,
+    bed_track: Option<BedTrack>,
     pub track: Vec<f32>,
+}
+
+struct BedTrack {
+    samples: Option<Arc<Vec<f32>>>,
+    gain: f32,
+    at: usize,
 }
 
 struct Split {
@@ -131,8 +139,30 @@ impl<'a> Mixdown<'a> {
             ceiling: script.film.ceiling,
             limit: script.film.limit,
             true_peak: script.film.true_peak,
+            bed_track: script.film.bed.as_ref().map(|b| BedTrack {
+                samples: b.samples.clone(),
+                gain: b.gain,
+                at: b.first(rate),
+            }),
             track: Vec::new(),
         }
+    }
+
+    fn lay_bed(&mut self, game: &mut [f32]) {
+        let Some(BedTrack {
+            samples: Some(samples),
+            gain,
+            at,
+        }) = &mut self.bed_track
+        else {
+            return;
+        };
+        let from = (*at).min(samples.len());
+        let end = (*at + game.len()).min(samples.len());
+        for (g, v) in game.iter_mut().zip(&samples[from..end]) {
+            *g += v * *gain;
+        }
+        *at += game.len();
     }
 
     fn selectors(&self) -> Vec<Vec<String>> {
@@ -149,6 +179,9 @@ impl<'a> Mixdown<'a> {
     }
 
     pub fn route(&mut self) -> Result<(), String> {
+        if self.bed_track.as_ref().is_some_and(|b| b.samples.is_none()) {
+            return Err("[film] bed was not read: call Script::read_bed with the script's folder before shooting".into());
+        }
         if !self.sides.is_empty() {
             let masks = self.score.stems(&self.selectors())?;
             self.split = Some(Split {
@@ -213,7 +246,8 @@ impl<'a> Mixdown<'a> {
                 self.score.cue(&d.name, d.at, d.play)?;
             }
         }
-        let game = self.game(frames, speed, gain);
+        let mut game = self.game(frames, speed, gain);
+        self.lay_bed(&mut game);
         if let Some(split) = &mut self.split {
             let fresh = self.score.render_stems(frames);
             for (i, stem) in split.stems.iter_mut().enumerate() {

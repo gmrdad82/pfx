@@ -14,6 +14,7 @@ use pfx_live::frame::{
     multiply,
 };
 use pfx_live::glass;
+use pfx_live::morph::{InstanceWeights, MorphData, MorphTargetData};
 use pfx_live::renderer::{Effects, Exposure, Finish, Renderer, RendererError, Text};
 use pfx_live::screen_shadows::{look_quality, look_screen};
 use pfx_live::shadow::{Quality, ReceiverBox};
@@ -21,7 +22,7 @@ use pfx_live::textured;
 use pfx_load::scene::{ShadowQuality, Shadows};
 use pfx_materials::Material;
 use pfx_recipe::{Camera as Shot, Daylight, Recipe, Shadow, Sky, Sun as Lamp};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -252,6 +253,7 @@ pub struct Stage {
     glazed: Vec<usize>,
     generation: u64,
     looked: Option<(Matrix, Matrix)>,
+    swept: BTreeSet<u32>,
 }
 
 pub struct Outline<'a> {
@@ -300,7 +302,16 @@ impl Stage {
     }
 
     pub fn made(gpu: Gpu, prepared: Prepared, size: [u32; 2]) -> Result<Stage, Error> {
-        let mut renderer = Renderer::new_with_output_format(gpu, size[0], size[1], OUTPUT)
+        Stage::made_as(gpu, prepared, size, OUTPUT)
+    }
+
+    pub fn made_as(
+        gpu: Gpu,
+        prepared: Prepared,
+        size: [u32; 2],
+        format: wgpu::TextureFormat,
+    ) -> Result<Stage, Error> {
+        let mut renderer = Renderer::new_with_output_format(gpu, size[0], size[1], format)
             .map_err(|e| Error(refused(&e)))?;
         renderer.set_exposure(Exposure::Fixed(1.0)).map_err(Error)?;
         let lighting = Arc::new(prepared.lighting.clone());
@@ -339,6 +350,7 @@ impl Stage {
             glazed: Vec::new(),
             generation: 0,
             looked: None,
+            swept: BTreeSet::new(),
         };
         stage.apply(prepared)?;
         Ok(stage)
@@ -401,9 +413,17 @@ impl Stage {
         for ((&index, mark), action) in opaque.iter().zip(opaque_marks).zip(&plan.actions) {
             let piece = &pieces[index];
             let handle = match *action {
+                Action::Keep(at) if self.swept.remove(&self.uploaded[at].handle.0) => {
+                    change.replaced += 1;
+                    self.plain(self.uploaded[at].handle, piece)?
+                }
                 Action::Keep(at) => {
                     change.kept += 1;
                     self.uploaded[at].handle
+                }
+                Action::Replace(at) if self.swept.remove(&self.uploaded[at].handle.0) => {
+                    change.replaced += 1;
+                    self.plain(self.uploaded[at].handle, piece)?
                 }
                 Action::Replace(at) => {
                     let handle = self.uploaded[at].handle;
@@ -420,6 +440,10 @@ impl Stage {
             };
             uploaded.push(Uploaded { mark, handle });
         }
+        self.swept.clear();
+        self.renderer
+            .set_weights(&[])
+            .map_err(|e| Error(format!("the live renderer: {e}")))?;
         for &at in &plan.released {
             self.renderer
                 .release_mesh(self.uploaded[at].handle)
@@ -488,6 +512,13 @@ impl Stage {
 
     pub fn output_format(&self) -> wgpu::TextureFormat {
         self.renderer.output_format()
+    }
+
+    pub fn set_output_dither(
+        &mut self,
+        dither: Option<pfx_post::quantise::Dither>,
+    ) -> Result<(), Error> {
+        self.renderer.set_output_dither(dither).map_err(Error)
     }
 
     pub fn materials(&self) -> &[String] {
@@ -634,6 +665,11 @@ impl Stage {
     }
 
     pub fn reshape(&mut self, parts: &[Part]) -> Result<usize, Error> {
+        self.reshape_from(parts, &[])
+    }
+
+    pub fn reshape_from(&mut self, parts: &[Part], before: &[Part]) -> Result<usize, Error> {
+        let earlier = parts::pieces(before);
         let mut replaced = 0;
         for piece in parts::pieces(parts) {
             let Some(at) = self
@@ -644,14 +680,92 @@ impl Stage {
                 continue;
             };
             if let Some(slot) = self.opaque.iter().position(|&index| index == at) {
-                self.renderer
-                    .replace_mesh(self.uploaded[slot].handle, data(&piece))
-                    .map_err(|e| Error(format!("object {}: {e}", piece.name)))?;
+                let moved = earlier
+                    .iter()
+                    .find(|p| p.name == piece.name && p.material == piece.material)
+                    .filter(|p| p.geometry.positions.len() == piece.geometry.positions.len());
+                let handle = self.uploaded[slot].handle;
+                let swept = self.swept.remove(&handle.0);
+                let made = match moved {
+                    Some(earlier) => {
+                        let made = self.moving(handle, &piece, earlier)?;
+                        self.swept.insert(made.0);
+                        made
+                    }
+                    None if swept => self.plain(handle, &piece)?,
+                    None => {
+                        self.renderer
+                            .replace_mesh(handle, data(&piece))
+                            .map_err(|e| Error(format!("object {}: {e}", piece.name)))?;
+                        handle
+                    }
+                };
+                self.uploaded[slot].handle = made;
+                self.instances[slot].mesh = made;
                 replaced += 1;
             }
             self.pieces[at].geometry = piece.geometry;
         }
+        self.faced.clear();
+        self.weigh()?;
         Ok(replaced)
+    }
+
+    fn moving(
+        &mut self,
+        handle: MeshHandle,
+        piece: &Piece,
+        earlier: &Piece,
+    ) -> Result<MeshHandle, Error> {
+        let delta: Vec<[f32; 3]> = earlier
+            .geometry
+            .positions
+            .iter()
+            .zip(&piece.geometry.positions)
+            .map(|(before, now)| [0, 1, 2].map(|axis| before[axis] - now[axis]))
+            .collect();
+        let made = self
+            .renderer
+            .upload_morphed_mesh(
+                data(piece),
+                None,
+                MorphData {
+                    targets: &[MorphTargetData {
+                        positions: &delta,
+                        normals: None,
+                    }],
+                },
+            )
+            .map_err(|e| Error(format!("object {}: {e}", piece.name)))?;
+        self.renderer
+            .release_mesh(handle)
+            .map_err(|e| Error(format!("object {}: {e}", piece.name)))?;
+        Ok(made)
+    }
+
+    fn plain(&mut self, handle: MeshHandle, piece: &Piece) -> Result<MeshHandle, Error> {
+        let made = upload(&mut self.renderer, piece)?;
+        self.renderer
+            .release_mesh(handle)
+            .map_err(|e| Error(format!("object {}: {e}", piece.name)))?;
+        Ok(made)
+    }
+
+    fn weigh(&mut self) -> Result<(), Error> {
+        let weights: Vec<InstanceWeights<'_>> = self
+            .instances
+            .iter()
+            .enumerate()
+            .filter(|(_, instance)| self.swept.contains(&instance.mesh.0))
+            .map(|(instance, _)| InstanceWeights {
+                instance,
+                current: &[0.0],
+                previous: &[1.0],
+            })
+            .collect();
+        self.renderer
+            .set_weights(&weights)
+            .map_err(|e| Error(format!("the live renderer: {e}")))
     }
 
     pub fn set_poses(&mut self, posed: BTreeMap<String, Matrix>) -> bool {
@@ -769,6 +883,10 @@ impl Stage {
             .timings()
             .filter(|timings| !timings.passes.is_empty())
             .map(|timings| timings.passes.iter().map(|t| t.milliseconds).sum())
+    }
+
+    pub fn timings(&self) -> Option<&pfx_gpu::FrameTimings> {
+        self.renderer.timings()
     }
 
     pub fn timing_drops(&self) -> u64 {

@@ -57,11 +57,14 @@ impl Bin {
 
 pub const TILTED: [f32; 3] = [0.0, 0.6, 0.8];
 pub const TURN: [f32; 3] = [0.0, -0.2, 0.1];
+pub const ARM_UV: [f32; 4] = [0.0, 0.0, 0.5, 0.5];
+pub const CAP_UV: [f32; 4] = [0.75, 0.75, 1.0, 1.0];
 
 pub struct Model {
     pub scale: f32,
     pub paint: [f32; 3],
     pub normals: bool,
+    pub uvs: bool,
 }
 
 impl Default for Model {
@@ -70,11 +73,19 @@ impl Default for Model {
             scale: 1.0,
             paint: [0.8, 0.1, 0.1],
             normals: true,
+            uvs: false,
         }
     }
 }
 
-fn quad(bin: &mut Bin, half: f32, normal: [f32; 3], normals: bool, morph: bool) -> Value {
+fn quad(
+    bin: &mut Bin,
+    half: f32,
+    normal: [f32; 3],
+    normals: bool,
+    morph: bool,
+    uv: Option<[f32; 4]>,
+) -> Value {
     let positions = [
         -half, -half, 0.0, half, -half, 0.0, half, half, 0.0, -half, half, 0.0,
     ];
@@ -82,6 +93,9 @@ fn quad(bin: &mut Bin, half: f32, normal: [f32; 3], normals: bool, morph: bool) 
     let mut attributes = json!({ "POSITION": p });
     if normals {
         attributes["NORMAL"] = json!(bin.floats(&normal.repeat(4), "VEC3", 3));
+    }
+    if let Some([u0, v0, u1, v1]) = uv {
+        attributes["TEXCOORD_0"] = json!(bin.floats(&[u0, v1, u1, v1, u1, v0, u0, v0], "VEC2", 2));
     }
     let i = bin.indices(&[0, 1, 2, 0, 2, 3]);
     let mut primitive = json!({ "attributes": attributes, "indices": i });
@@ -96,11 +110,33 @@ fn quad(bin: &mut Bin, half: f32, normal: [f32; 3], normals: bool, morph: bool) 
 impl Model {
     pub fn glb(&self) -> Vec<u8> {
         let mut bin = Bin::default();
-        let mut lid = quad(&mut bin, 0.5, TILTED, self.normals, true);
+        let uv = |rect: [f32; 4]| self.uvs.then_some(rect);
+        let mut lid = quad(
+            &mut bin,
+            0.5,
+            TILTED,
+            self.normals,
+            true,
+            uv([0.0, 0.0, 1.0, 1.0]),
+        );
         lid["material"] = json!(0);
-        let mut arm = quad(&mut bin, 0.25, [0.0, 0.0, 1.0], self.normals, false);
+        let mut arm = quad(
+            &mut bin,
+            0.25,
+            [0.0, 0.0, 1.0],
+            self.normals,
+            false,
+            uv(ARM_UV),
+        );
         arm["material"] = json!(1);
-        let mut cap = quad(&mut bin, 0.1, [0.0, 0.0, 1.0], self.normals, false);
+        let mut cap = quad(
+            &mut bin,
+            0.1,
+            [0.0, 0.0, 1.0],
+            self.normals,
+            false,
+            uv(CAP_UV),
+        );
         cap["material"] = json!(1);
         let s = self.scale;
         let [r, g, b] = self.paint;

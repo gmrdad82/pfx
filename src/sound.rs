@@ -7,9 +7,28 @@ use pfx_sound::clean::{self, Cleaned, Gate, Harmonic, Options, Preview, Report};
 use serde_json::{Value, json};
 
 pub const CLEAN: &str = "pfx sound clean [OPTIONS] <IN> <OUT>";
+pub const MIX: &str = "pfx sound mix [OPTIONS] --frames <FRAMES> --out <OUT> <SCRIPT>";
+const COMMANDS: &[&str] = &["clean", "mix"];
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Command {
+pub enum Command {
+    Clean(Clean),
+    #[cfg(feature = "shot-sound")]
+    Mix(Mix),
+}
+
+#[cfg(feature = "shot-sound")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Mix {
+    pub script: PathBuf,
+    pub frames: u64,
+    pub fps: u32,
+    pub output: PathBuf,
+    pub json: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Clean {
     pub input: PathBuf,
     pub output: PathBuf,
     pub options: Options,
@@ -34,11 +53,104 @@ fn pair(value: &str, flag: &str, what: &str) -> Result<(f32, f32), String> {
 
 pub fn plan(args: &[String]) -> Result<Command, Refusal> {
     match args.first().map(String::as_str) {
-        None => return Err(cli::no_command("pfx sound", &["clean"]).into()),
-        Some("clean") => {}
-        Some(flag) if flag.starts_with('-') => return Err(cli::unexpected(flag).into()),
-        Some(word) => return Err(cli::unrecognized(word).into()),
+        None => Err(cli::no_command("pfx sound", COMMANDS).into()),
+        Some("clean") => plan_clean(args).map(Command::Clean),
+        #[cfg(feature = "shot-sound")]
+        Some("mix") => plan_mix(&args[1..]).map(Command::Mix),
+        #[cfg(not(feature = "shot-sound"))]
+        Some("mix") => Err(Refusal::new(
+            "this pfx was built without the offline mix (the shot-sound feature)",
+        )),
+        Some(flag) if flag.starts_with('-') => Err(cli::unexpected(flag).into()),
+        Some(word) => Err(cli::unrecognized(word).into()),
     }
+}
+
+#[cfg(feature = "shot-sound")]
+fn plan_mix(args: &[String]) -> Result<Mix, Refusal> {
+    let refuse = |message: String| Refusal::new(message).under(MIX);
+    let mut script = None;
+    let mut frames = None;
+    let mut fps = None;
+    let mut output = None;
+    let mut json = false;
+    let mut words = args.iter();
+    while let Some(arg) = words.next() {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_string())),
+            _ => (arg.as_str(), None),
+        };
+        match flag {
+            "--json" if inline.is_some() => return Err(refuse(cli::unexpected(arg))),
+            "--json" if json => return Err(refuse(cli::repeated(flag))),
+            "--json" => json = true,
+            "--frames" | "--fps" | "--out" => {
+                let value = inline
+                    .or_else(|| words.next().cloned())
+                    .filter(|v| !v.is_empty() && !v.starts_with("--"))
+                    .ok_or_else(|| Refusal::new(cli::missing_value(flag)))?;
+                let slot = match flag {
+                    "--frames" => &mut frames,
+                    "--fps" => &mut fps,
+                    _ => &mut output,
+                };
+                if slot.is_some() {
+                    return Err(refuse(cli::repeated(&cli::with_value(flag))));
+                }
+                *slot = Some(value);
+            }
+            other if other.starts_with('-') && other.len() > 1 => {
+                return Err(refuse(cli::unexpected(arg)));
+            }
+            _ if script.is_some() => return Err(refuse(cli::unexpected(arg))),
+            file => script = Some(PathBuf::from(file)),
+        }
+    }
+    let mut missing = Vec::new();
+    if frames.is_none() {
+        missing.push(cli::with_value("--frames"));
+    }
+    if output.is_none() {
+        missing.push(cli::with_value("--out"));
+    }
+    if script.is_none() {
+        missing.push("<SCRIPT>".to_string());
+    }
+    if !missing.is_empty() {
+        return Err(refuse(cli::required(&missing)));
+    }
+    let whole = |value: &str, flag: &str, high: u64| {
+        value
+            .parse::<u64>()
+            .ok()
+            .filter(|n| (1..=high).contains(n))
+            .ok_or_else(|| {
+                Refusal::new(cli::invalid(
+                    value,
+                    flag,
+                    format!("expected a whole number from 1 to {high}"),
+                ))
+            })
+    };
+    let frames = whole(
+        frames.as_deref().unwrap_or_default(),
+        "--frames",
+        10_000_000,
+    )?;
+    let fps = match &fps {
+        Some(value) => whole(value, "--fps", u64::from(crate::shot::MAX_FPS))? as u32,
+        None => crate::shot::DEFAULT_FPS,
+    };
+    Ok(Mix {
+        script: script.unwrap_or_default(),
+        frames,
+        fps,
+        output: output.map(PathBuf::from).unwrap_or_default(),
+        json,
+    })
+}
+
+fn plan_clean(args: &[String]) -> Result<Clean, Refusal> {
     let refuse = |message: String| Refusal::new(message).under(CLEAN);
     let mut files: Vec<PathBuf> = Vec::new();
     let mut keep = None;
@@ -166,7 +278,7 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
             "<--keep <KEEP>|--remove <REMOVE>|--gate>",
         ])));
     }
-    Ok(Command {
+    Ok(Clean {
         output: files.pop().unwrap_or_default(),
         input: files.pop().unwrap_or_default(),
         options,
@@ -206,7 +318,7 @@ fn round(v: f32, places: i32) -> f64 {
     (f64::from(v) * scale).round() / scale
 }
 
-fn report_json(command: &Command, report: &Report, ms: f64) -> Value {
+fn report_json(command: &Clean, report: &Report, ms: f64) -> Value {
     json!({
         "clean": 1,
         "input": command.input.display().to_string(),
@@ -240,7 +352,7 @@ fn report_json(command: &Command, report: &Report, ms: f64) -> Value {
     })
 }
 
-fn report_text(command: &Command, report: &Report, ms: f64) -> String {
+fn report_text(command: &Clean, report: &Report, ms: f64) -> String {
     let mut lines = vec![format!(
         "cleaned {} -> {}: {:.3} s, {} Hz, {} channel{}, {:.1} dBFS -> {:.1} dBFS, {ms:.0} ms",
         command.input.display(),
@@ -291,6 +403,50 @@ fn report_text(command: &Command, report: &Report, ms: f64) -> String {
 }
 
 pub fn run(command: &Command) -> Result<(), String> {
+    match command {
+        Command::Clean(clean) => run_clean(clean),
+        #[cfg(feature = "shot-sound")]
+        Command::Mix(mix) => run_mix(mix),
+    }
+}
+
+#[cfg(feature = "shot-sound")]
+fn run_mix(mix: &Mix) -> Result<(), String> {
+    let started = Instant::now();
+    crate::shot::script_wav(&mix.script, mix.frames, mix.fps, &mix.output)?;
+    let ms = started.elapsed().as_secs_f64() * 1000.0;
+    let frames = crate::shot::audio_frames(mix.frames, mix.fps);
+    let seconds = frames as f64 / f64::from(crate::shot::RATE);
+    if mix.json {
+        println!(
+            "{}",
+            json!({
+                "mix": 1,
+                "script": mix.script.display().to_string(),
+                "output": mix.output.display().to_string(),
+                "frames": mix.frames,
+                "fps": mix.fps,
+                "samples": frames,
+                "seconds": (seconds * 1000.0).round() / 1000.0,
+                "rate": crate::shot::RATE,
+                "channels": crate::shot::CHANNELS,
+                "ms": (ms * 10.0).round() / 10.0,
+            })
+        );
+    } else {
+        println!(
+            "mixed {} -> {}: {} frames at {} fps, {seconds:.3} s, {} Hz stereo, {ms:.0} ms",
+            mix.script.display(),
+            mix.output.display(),
+            mix.frames,
+            mix.fps,
+            crate::shot::RATE,
+        );
+    }
+    Ok(())
+}
+
+fn run_clean(command: &Clean) -> Result<(), String> {
     let path = &command.input;
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let clip = Clip::from_wav(&bytes).ok_or_else(|| {
@@ -332,9 +488,104 @@ mod tests {
         line.split_whitespace().map(str::to_string).collect()
     }
 
+    #[cfg(feature = "shot-sound")]
+    #[test]
+    fn mix_takes_its_flags_and_refuses_like_clap() {
+        let Command::Mix(mix) = plan(&words(
+            "mix a.sound.toml --frames 90 --fps 30 --out b.wav --json",
+        ))
+        .unwrap() else {
+            panic!("not a mix");
+        };
+        assert_eq!(mix.script, PathBuf::from("a.sound.toml"));
+        assert_eq!((mix.frames, mix.fps, mix.json), (90, 30, true));
+        assert_eq!(mix.output, PathBuf::from("b.wav"));
+        let Command::Mix(mix) = plan(&words("mix a.sound.toml --frames=12 --out=b.wav")).unwrap()
+        else {
+            panic!("not a mix");
+        };
+        assert_eq!(mix.fps, crate::shot::DEFAULT_FPS);
+        let refusal = |line: &str| plan(&words(line)).unwrap_err();
+        assert_eq!(refusal("").message, cli::no_command("pfx sound", COMMANDS));
+        let missing = refusal("mix");
+        assert_eq!(
+            missing.message,
+            cli::required(&["--frames <FRAMES>", "--out <OUT>", "<SCRIPT>"])
+        );
+        assert_eq!(missing.usage.as_deref(), Some(MIX));
+        assert_eq!(
+            refusal("mix a.sound.toml --out b.wav").message,
+            cli::required(&["--frames <FRAMES>"])
+        );
+        assert_eq!(
+            refusal("mix a.sound.toml --frames 1 --out b.wav c").message,
+            cli::unexpected("c")
+        );
+        assert_eq!(
+            refusal("mix a.sound.toml --frames 1 --frames 2 --out b.wav").message,
+            cli::repeated("--frames <FRAMES>")
+        );
+        assert_eq!(
+            refusal("mix a.sound.toml --frames 1 --out b.wav --seconds 2").message,
+            cli::unexpected("--seconds")
+        );
+        assert_eq!(
+            refusal("mix a.sound.toml --out b.wav --frames").message,
+            cli::missing_value("--frames")
+        );
+        assert!(
+            refusal("mix a.sound.toml --frames 0 --out b.wav")
+                .message
+                .starts_with("invalid value '0' for '--frames <FRAMES>'")
+        );
+        assert!(
+            refusal("mix a.sound.toml --frames 1 --fps 241 --out b.wav")
+                .message
+                .starts_with("invalid value '241' for '--fps <FPS>'")
+        );
+    }
+
+    #[cfg(feature = "shot-sound")]
+    #[test]
+    fn mix_writes_the_wav_pfx_shot_writes_for_the_script() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let script = root.join("crates/sound/examples/car-pass.sound.toml");
+        let dir = root.join("tmp/sound-mix-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        for (frames, fps) in [(90u64, 30u32), (37, 24)] {
+            let mixed = dir.join(format!("mix-{frames}-{fps}.wav"));
+            let line = format!(
+                "mix {} --frames {frames} --fps {fps} --out {}",
+                script.display(),
+                mixed.display()
+            );
+            run(&plan(&words(&line)).unwrap()).unwrap();
+            let shot_out = dir.join(format!("shot-{frames}-{fps}"));
+            let line = format!(
+                "scene.pitofx --frames {frames} --fps {fps} --sound {}",
+                script.display()
+            );
+            let shot = crate::shot::parse(&words(&line), crate::SHOT_FLAGS).unwrap();
+            let (wav, _) = crate::shot::audio(&shot, Some(&script), &shot_out).unwrap();
+            let shot_bytes = std::fs::read(wav.unwrap()).unwrap();
+            let mix_bytes = std::fs::read(&mixed).unwrap();
+            assert_eq!(mix_bytes, shot_bytes, "{frames} frames at {fps} fps");
+            let clip = Clip::from_wav(&mix_bytes).unwrap();
+            assert_eq!((clip.rate, clip.channels), (48_000, 2));
+            assert_eq!(
+                clip.frames() as usize,
+                crate::shot::audio_frames(frames, fps)
+            );
+            assert!(clip.samples.iter().any(|s| s.abs() > 0.01));
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn clean_takes_its_modes_and_refuses_like_clap() {
-        let command = plan(&words("clean a.wav b.wav --keep harmonic --f0 30,200 --remove transients --gate --noise 0,1.5 --reduce 12 --mask m.png --json")).unwrap();
+        let Command::Clean(command) = plan(&words("clean a.wav b.wav --keep harmonic --f0 30,200 --remove transients --gate --noise 0,1.5 --reduce 12 --mask m.png --json")).unwrap() else {
+            panic!("not a clean");
+        };
         assert_eq!(command.input, PathBuf::from("a.wav"));
         assert_eq!(command.output, PathBuf::from("b.wav"));
         assert_eq!(
@@ -354,7 +605,7 @@ mod tests {
         );
         assert!(command.json);
         let refusal = |line: &str| plan(&words(line)).unwrap_err().message;
-        assert_eq!(refusal(""), cli::no_command("pfx sound", &["clean"]));
+        assert_eq!(refusal(""), cli::no_command("pfx sound", COMMANDS));
         assert_eq!(refusal("tidy"), cli::unrecognized("tidy"));
         assert_eq!(
             refusal("clean a.wav b.wav"),

@@ -4,7 +4,7 @@ use pfx_gpu::wgpu;
 use pfx_mesh::{Mesh, Slot};
 use pfx_recipe::{Recipe, Shadow, load};
 use pfx_recipe_scene::pace::turn;
-use pfx_recipe_scene::{Eye, Reel, Stage, camera, headless, shoot, write_png};
+use pfx_recipe_scene::{Dither, Eye, Output, Reel, Stage, camera, headless, shoot, write_png};
 use std::path::PathBuf;
 
 const SIZE: [u32; 2] = [640, 400];
@@ -321,5 +321,81 @@ fn a_shallow_focus_blurs_off_the_focal_plane_and_fstop_zero_does_not() {
     assert!(
         blurred > 1000,
         "{blurred} pixels changed off the focal plane"
+    );
+}
+
+#[test]
+#[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+fn the_eight_bit_frame_dithers_by_about_one_level_and_the_wide_frame_keeps_the_same_picture() {
+    let recipe = fixture("box.toml");
+    let gpu = headless().unwrap();
+    let parts = box_parts("orange");
+    let main = camera(&recipe, "main").unwrap();
+    let draw = |output: Output| {
+        let mut reel = Reel::with_output(&gpu, &recipe, &parts, SIZE, output).unwrap();
+        let eye = reel.through(main);
+        let bytes = reel.shoot(&eye).unwrap().0;
+        turn();
+        bytes
+    };
+    let plain = draw(Output::default());
+    let mut old = Reel::new(&gpu, &recipe, &parts, SIZE).unwrap();
+    let eye = old.through(main);
+    assert_eq!(old.shoot(&eye).unwrap().0, plain);
+    turn();
+    let dithered = draw(Output {
+        wide: false,
+        dither: Some(Dither::seeded(0)),
+    });
+    assert_eq!(
+        dithered,
+        draw(Output {
+            wide: false,
+            dither: Some(Dither::seeded(0)),
+        })
+    );
+    let wide = draw(Output {
+        wide: true,
+        dither: None,
+    });
+    assert_eq!(wide.len(), plain.len() * 2);
+    let colour = |bytes: &[u8]| -> Vec<f64> {
+        bytes
+            .chunks(4)
+            .flat_map(|p| p[..3].iter().map(|&v| f64::from(v)).collect::<Vec<_>>())
+            .collect()
+    };
+    let truth: Vec<f64> = wide
+        .chunks(8)
+        .flat_map(|p| {
+            p[..6]
+                .chunks(2)
+                .map(|v| f64::from(u16::from_be_bytes([v[0], v[1]])) / 257.0)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let (a, b) = (colour(&plain), colour(&dithered));
+    let off = |x: &[f64], y: &[f64]| {
+        x.iter()
+            .zip(y)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0, f64::max)
+    };
+    let drift = |x: &[f64]| x.iter().zip(&truth).map(|(x, t)| x - t).sum::<f64>() / x.len() as f64;
+    let changed = a.iter().zip(&b).filter(|(a, b)| a != b).count();
+    let wider = a
+        .iter()
+        .zip(&b)
+        .filter(|(a, b)| (*a - *b).abs() > 1.0)
+        .count();
+    assert!(off(&a, &truth) <= 1.0, "{}", off(&a, &truth));
+    assert!(off(&b, &truth) <= 2.0, "{}", off(&b, &truth));
+    assert!(wider * 1000 < a.len(), "{wider} values moved by 2");
+    assert!(changed * 10 > a.len(), "{changed} of {}", a.len());
+    assert!(
+        drift(&b).abs() < 0.05,
+        "{} against {}",
+        drift(&b),
+        drift(&a)
     );
 }

@@ -149,6 +149,7 @@ fn loud() -> Theme {
     theme.card = take();
     theme.card_line = take();
     theme.stripe = take();
+    theme.selected = take();
     theme.grid = take();
     theme.rule = take();
     theme.title = take();

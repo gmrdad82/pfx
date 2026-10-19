@@ -79,7 +79,7 @@ impl SkySource {
         }
     }
 
-    fn diffuse(&self, direction: [f32; 3]) -> [f32; 3] {
+    pub fn diffuse(&self, direction: [f32; 3]) -> [f32; 3] {
         match self {
             Self::Analytic(model) => model.diffuse(direction),
             Self::Hdr(_) => self.radiance(direction),
@@ -665,7 +665,7 @@ struct SkyVertex {
 fn sky_vs(@builtin(vertex_index) index: u32) -> SkyVertex {
     var positions = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
     var output: SkyVertex;
-    output.position = vec4f(positions[index], 1.0, 1.0);
+    output.position = vec4f(positions[index], 0.0, 1.0);
     output.uv = positions[index]*vec2f(0.5, -0.5)+vec2f(0.5, 0.5);
     return output;
 }
@@ -767,7 +767,7 @@ impl SkyPass {
             depth_stencil: depth.map(|format| wgpu::DepthStencilState {
                 format,
                 depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
                 stencil: Default::default(),
                 bias: Default::default(),
             }),

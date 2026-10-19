@@ -199,11 +199,12 @@ fn reflection_colour(s: Shaded, cos_theta: f32, ndh_cos: f32) -> vec3f {
     return reflection_filmed(s, ndh_cos, film);
 }
 
+fn fresnel_exponent(s: Shaded) -> f32 {
+    return select(s.fresnel_power, 5.0, s.fresnel_power <= 0.0);
+}
+
 fn reflection_filmed(s: Shaded, ndh_cos: f32, film: vec3f) -> vec3f {
-    var power = s.fresnel_power;
-    if (power <= 0.0) {
-        power = 5.0;
-    }
+    let power = fresnel_exponent(s);
     let f0 = mix(vec3f(s.specular), s.base, clamp(s.metalness, 0.0, 1.0));
     var plain: vec3f;
     if (s.transmission > 0.0 || s.dispersion != 0.0) {
@@ -274,9 +275,9 @@ fn eval_filmed(s: Shaded, wo: vec3f, wi: vec3f, film: vec3f) -> vec3f {
     let coat = clamp(s.clearcoat, 0.0, 1.0);
     if (coat > 0.0) {
         let coat_a = alpha_rough(s.clearcoat_roughness);
-        let coat_f = schlick(vec3f(0.04), vdh, 5.0);
+        let coat_f = schlick(vec3f(0.04), vdh, fresnel_exponent(s));
         let coat_spec = ggx_spec(ndv, ndl, ndh, coat_a * coat_a, coat_f);
-        let fc = schlick(vec3f(0.04), view, 5.0).r;
+        let fc = schlick(vec3f(0.04), view, fresnel_exponent(s)).r;
         colour = coat_spec * coat + colour * (1.0 - coat * fc);
     }
     return colour;

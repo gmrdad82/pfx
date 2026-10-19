@@ -34,6 +34,10 @@ impl Adaptive {
             && self.growth > 1.0
     }
 
+    pub fn automatic_min_samples(threshold: f32) -> u32 {
+        ((16.0 / threshold.powf(0.3)).ceil() as u32).max(4)
+    }
+
     pub fn margin(&self) -> u32 {
         self.rounds().len() as u32
     }
@@ -352,6 +356,14 @@ mod tests {
             }
             .valid()
         );
+    }
+
+    #[test]
+    fn the_floor_is_cycles_automatic_min_samples() {
+        assert_eq!(Adaptive::automatic_min_samples(0.1), 32);
+        assert_eq!(Adaptive::automatic_min_samples(0.01), 64);
+        assert_eq!(Adaptive::automatic_min_samples(0.001), 128);
+        assert_eq!(Adaptive::automatic_min_samples(10.0), 9);
     }
 
     #[test]

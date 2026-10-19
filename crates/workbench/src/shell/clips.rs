@@ -135,6 +135,7 @@ impl Shell {
     }
 
     pub(super) fn edit_menu(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         let (undo, redo) = self.history();
         let recipe = self.editor.is_some() && !self.edits_scene();
         let scene = self.edits_scene();
@@ -146,7 +147,7 @@ impl Shell {
         let mut picked: Vec<Command> = Vec::new();
         let title = RichText::new("Edit")
             .font(Theme::of(ui.ctx()).font(SIZE_BODY))
-            .color(TEXT_PRIMARY);
+            .color(palette.text_primary);
         ui.menu_button(title, |ui| {
             let last = |list: &[String]| list.last().cloned().unwrap_or_default();
             for (label, keys, enabled, command) in [
@@ -187,22 +188,26 @@ impl Shell {
                 }
             }
             ui.separator();
-            ui.label(small(ui, "HISTORY", TEXT_MUTED));
+            ui.label(small(ui, "HISTORY", palette.text_muted));
             if undo.is_empty() && redo.is_empty() {
-                ui.label(small(ui, "no edits yet", TEXT_DIM));
+                ui.label(small(ui, "no edits yet", palette.text_dim));
             }
             for (depth, label) in redo.iter().enumerate() {
                 let steps = redo.len() - depth;
                 let text = RichText::new(format!("↷ {label}"))
                     .font(Theme::of(ui.ctx()).font(SIZE_SMALL))
-                    .color(TEXT_DIM);
+                    .color(palette.text_dim);
                 if ui.add(Button::new(text).frame(false)).clicked() {
                     picked.extend(std::iter::repeat_n(Command::Redo, steps));
                     ui.close();
                 }
             }
             for (depth, label) in undo.iter().rev().enumerate() {
-                let colour = if depth == 0 { ACCENT } else { TEXT_SECONDARY };
+                let colour = if depth == 0 {
+                    palette.accent
+                } else {
+                    palette.text_secondary
+                };
                 let text = RichText::new(format!("● {label}"))
                     .font(Theme::of(ui.ctx()).font(SIZE_SMALL))
                     .color(colour);

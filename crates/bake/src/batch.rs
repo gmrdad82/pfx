@@ -479,7 +479,7 @@ mod tests {
         .unwrap();
         assert_eq!(buffers.triangles.len(), 96);
         assert_eq!(buffers.uv.len(), 16);
-        assert_eq!(buffers.surfaces.len(), 64);
+        assert_eq!(buffers.surfaces.len(), 176);
         assert_eq!(buffers.content_info.len(), 16);
         assert_eq!(buffers.layers.len(), 32);
         assert_eq!(std::mem::size_of::<super::Frame>(), 176);

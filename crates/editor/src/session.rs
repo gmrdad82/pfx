@@ -238,6 +238,10 @@ impl Session {
         self.editor.project.as_ref()
     }
 
+    pub fn config(&self) -> Option<&Config> {
+        self.config.as_ref()
+    }
+
     pub fn plays_a_game(&self) -> bool {
         self.factory.is_some()
     }

@@ -1,60 +1,60 @@
 format = 1
 
-materials = ["scenes/table.materials.toml"]
+materials = ["table.materials.toml"]
 
 [mesh.ball]
 id = "7edmrtm9qk"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "ball"
 
 [mesh.crate]
 id = "zgmva79x4c"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "crate"
 
 [mesh.dial]
 id = "6rx3kwv8dq"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "dial"
 
 [mesh.lamp]
 id = "dtvbmdr9sv"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "lamp"
 
 [mesh.note]
 id = "2nhjjwh617"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "note"
 
 [mesh.rod]
 id = "68we23drpc"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "rod"
 
 [mesh.tile_a]
 id = "bx74man96q"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "tile_a"
 
 [mesh.tile_b]
 id = "jmmq5491c4"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "tile_b"
 
 [mesh.top]
 id = "chrbxmt0vg"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "top"
 
 [mesh.tray]
 id = "1a9m026k9s"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "tray"
 
 [mesh.wall]
 id = "1mc55aq39k"
-file = "scenes/table.glb"
+file = "table.glb"
 node = "wall"
 
 [[object]]

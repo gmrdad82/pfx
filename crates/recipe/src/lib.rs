@@ -731,6 +731,7 @@ pub struct RouteSpec {
     pub name: String,
     pub points: Vec<[f64; 3]>,
     pub closed: bool,
+    pub show: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1130,6 +1131,33 @@ pub struct Look {
     pub grade: Grade,
     pub lut: Option<String>,
     pub lut_amount: Option<f64>,
+    pub grain: Option<LookGrain>,
+    pub chromatic: Option<LookChromatic>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LookGrain {
+    pub amount: f64,
+    pub size: f64,
+    pub seed: u32,
+}
+
+impl LookGrain {
+    pub const AMOUNT: f64 = 0.02;
+    pub const RESPONSE: f64 = 0.5;
+    pub const SIZE_MOST: f64 = 64.0;
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LookChromatic {
+    pub amount: f64,
+    pub falloff: f64,
+}
+
+impl LookChromatic {
+    pub const AMOUNT: f64 = 0.02;
+    pub const AMOUNT_MOST: f64 = 0.25;
+    pub const FALLOFF_MOST: f64 = 8.0;
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -3,13 +3,15 @@ use pfx_build::Part;
 use pfx_live::frame::{Matrix, multiply};
 use pfx_live::sky::SkySource;
 use pfx_materials::{Blend, Material};
+use pfx_mesh::rigid;
 use pfx_post::Chain;
 use pfx_recipe::{Recipe, Shadow};
 use pfx_recipe_scene::{Card, Cards, Error, Eye, Laid, Lighting, MapSet, Palette, Picture, Piece};
 use pfx_trace::detail::{Lens, Textures};
 use pfx_trace::lights::{LightShape, LocalLight};
+use pfx_trace::motion::Motion;
 use pfx_trace::sky::Environment;
-use pfx_trace::stage::{Image, Mesh, Placement, PlacementContent, Stage, Staged};
+use pfx_trace::stage::{Image, Mesh, Placement, PlacementContent, PlacementMotion, Stage, Staged};
 use pfx_trace::textured::from_scene;
 use pfx_trace::{Camera, Projection, Sun};
 
@@ -50,6 +52,31 @@ pub struct Staging {
     pub finish: Chain,
     pub text: Laid,
     pub posed: Vec<Matrix>,
+    pub shared: Vec<Shared>,
+    pub motion_blur: Option<pfx_post::MotionBlur>,
+    pub steps: Option<Steps>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Shared {
+    pub mesh: u32,
+    pub model: Matrix,
+}
+
+pub struct Steps {
+    pub posed: Vec<Vec<Matrix>>,
+    pub shapes: Vec<(usize, Vec<Piece>)>,
+    pub cameras: Vec<Camera>,
+}
+
+impl Steps {
+    pub fn moves(&self) -> bool {
+        !self.shapes.is_empty()
+            || self.posed.windows(2).any(|pair| pair[0] != pair[1])
+            || self.cameras.windows(2).any(|pair| {
+                pfx_trace::motion::camera_rows(&pair[0]) != pfx_trace::motion::camera_rows(&pair[1])
+            })
+    }
 }
 
 impl Staging {
@@ -111,6 +138,7 @@ impl Staging {
             })
             .collect();
         let count = pieces.len();
+        let shared = shared(&pieces, &found.cards);
         Ok(Staging {
             pieces,
             slots,
@@ -134,13 +162,45 @@ impl Staging {
             finish: lighting.finish.clone(),
             text: Laid::of(recipe, parts)?,
             posed: vec![IDENTITY; count],
+            shared,
+            motion_blur: lighting.motion_blur.filter(|blur| blur.shutter > 0.0),
+            steps: None,
         })
     }
 
+    pub fn share(&mut self) {
+        self.shared = shared(&self.pieces, &self.cards);
+    }
+
+    pub fn shed(&mut self) {
+        let mut seen = vec![false; self.mesh_count()];
+        for (piece, shared) in self.pieces.iter_mut().zip(&self.shared) {
+            if std::mem::replace(&mut seen[shared.mesh as usize], true) {
+                let geometry = &mut piece.geometry;
+                geometry.positions = Vec::new();
+                geometry.normals = Vec::new();
+                geometry.tangents = Vec::new();
+                geometry.uvs = Vec::new();
+                geometry.indices = Vec::new();
+            }
+        }
+    }
+
+    pub fn mesh_count(&self) -> usize {
+        self.shared
+            .iter()
+            .map(|shared| shared.mesh as usize + 1)
+            .max()
+            .unwrap_or(0)
+    }
+
     pub fn meshes(&self) -> Vec<Mesh<'_>> {
+        let mut seen = vec![false; self.mesh_count()];
         self.pieces
             .iter()
-            .map(|piece| {
+            .zip(&self.shared)
+            .filter(|(_, shared)| !std::mem::replace(&mut seen[shared.mesh as usize], true))
+            .map(|(piece, _)| {
                 let geometry = &piece.geometry;
                 Mesh {
                     positions: &geometry.positions,
@@ -172,30 +232,43 @@ impl Staging {
         }
     }
 
+    pub fn models(&self, posed: &[Matrix], eye: &Eye) -> Vec<Matrix> {
+        self.cards
+            .iter()
+            .zip(&self.shared)
+            .enumerate()
+            .map(|(at, (card, shared))| {
+                let faced = card
+                    .and_then(|card| card.face)
+                    .map_or(shared.model, |face| pfx_recipe_scene::facing(&face, eye));
+                let posed = posed.get(at).copied().unwrap_or(IDENTITY);
+                if posed == IDENTITY {
+                    faced
+                } else {
+                    multiply(posed, faced)
+                }
+            })
+            .collect()
+    }
+
     pub fn placements(&self, eye: &Eye) -> Vec<Placement<'_>> {
+        let models = self.models(&self.posed, eye);
         self.slots
             .iter()
             .zip(&self.pieces)
             .zip(&self.cards)
             .zip(&self.clips)
+            .zip(&self.shared)
             .enumerate()
-            .map(|(mesh, (((&material, piece), card), clip))| {
-                let faced = card
-                    .and_then(|card| card.face)
-                    .map_or(IDENTITY, |face| pfx_recipe_scene::facing(&face, eye));
-                let posed = self.posed.get(mesh).copied().unwrap_or(IDENTITY);
-                let model = if posed == IDENTITY {
-                    faced
-                } else {
-                    multiply(posed, faced)
-                };
+            .map(|(at, ((((&material, piece), card), clip), shared))| {
+                let model = models[at];
                 let mut placed = Placement {
                     casts_shadow: piece.shadow != Shadow::None,
                     content: card.as_ref().map(|card| self.content(card)),
                     clip: *clip,
                     shadow_only: piece.shadow == Shadow::Only,
                     two_sided: piece.two_sided,
-                    ..Placement::new(mesh as u32, model, material)
+                    ..Placement::new(shared.mesh, model, material)
                 };
                 if let Some(card) = card {
                     placed.alpha_cutoff = card.cutoff;
@@ -213,14 +286,52 @@ impl Staging {
         }
         let lettering = Lettering::of(self)?;
         let mut meshes = self.meshes();
+        let steps = self.steps.as_ref().filter(|steps| steps.moves());
+        let moving: Vec<Vec<Matrix>> = match steps {
+            Some(steps) => {
+                let per_step: Vec<Vec<Matrix>> = steps
+                    .posed
+                    .iter()
+                    .map(|posed| self.models(posed, &eyepiece.eye))
+                    .collect();
+                (0..self.pieces.len())
+                    .map(|piece| per_step.iter().map(|models| models[piece]).collect())
+                    .collect()
+            }
+            None => Vec::new(),
+        };
+        let mut shaped: Vec<Vec<u32>> = vec![Vec::new(); self.pieces.len()];
+        if let Some(steps) = steps {
+            for (piece, pieces) in &steps.shapes {
+                for step in pieces {
+                    shaped[*piece].push(meshes.len() as u32);
+                    let geometry = &step.geometry;
+                    meshes.push(Mesh {
+                        positions: &geometry.positions,
+                        normals: &geometry.normals,
+                        tangents: &geometry.tangents,
+                        uvs: &geometry.uvs,
+                        uvs1: None,
+                        alpha: None,
+                        indices: &geometry.indices,
+                    });
+                }
+            }
+        }
         let mut placements = self.placements(&eyepiece.eye);
+        if steps.is_some() {
+            for ((placement, transforms), meshes) in placements.iter_mut().zip(&moving).zip(&shaped)
+            {
+                placement.motion = Some(PlacementMotion { transforms, meshes });
+            }
+        }
         let mut materials = self.materials.clone();
         lettering.stage(&mut meshes, &mut placements, &mut materials);
         let mut staged = Stage {
             meshes: &meshes,
             instances: &placements,
             materials: &materials,
-            sky: self.sky.clone(),
+            sky: self.sky.try_clone().map_err(Error)?,
             sun: self.sun,
             camera: eyepiece.camera,
             projection: eyepiece.projection,
@@ -234,8 +345,96 @@ impl Staging {
         staged.detail.transmissive_shadows = self.transmissive_shadows;
         staged.detail.clamp_indirect = self.clamp_indirect;
         staged.detail.filter_glossy = self.filter_glossy;
+        if let Some(steps) = steps {
+            staged.detail.motion = Some(Motion {
+                steps: steps.posed.len(),
+                cameras: steps.cameras.clone(),
+                curve: Vec::new(),
+            });
+        }
         Ok(staged)
     }
+}
+
+struct Lead {
+    piece: usize,
+    mesh: u32,
+    anchors: Option<Option<rigid::Anchors>>,
+}
+
+fn shape(piece: &Piece) -> rigid::Shape<'_> {
+    rigid::Shape {
+        positions: &piece.geometry.positions,
+        normals: &piece.geometry.normals,
+    }
+}
+
+fn register(lead: &Piece, anchors: &rigid::Anchors, piece: &Piece) -> Option<Matrix> {
+    let (a, b) = (&lead.geometry, &piece.geometry);
+    if a.indices != b.indices || a.uvs != b.uvs {
+        return None;
+    }
+    let rows = rigid::register(shape(lead), anchors, shape(piece))?;
+    let f = |r: usize, c: usize| rows[r][c] as f32;
+    Some([
+        [f(0, 0), f(1, 0), f(2, 0), 0.0],
+        [f(0, 1), f(1, 1), f(2, 1), 0.0],
+        [f(0, 2), f(1, 2), f(2, 2), 0.0],
+        [f(0, 3), f(1, 3), f(2, 3), 1.0],
+    ])
+}
+
+fn shared(pieces: &[Piece], cards: &[Option<Card>]) -> Vec<Shared> {
+    let mut leads: Vec<Lead> = Vec::new();
+    let mut keyed: std::collections::BTreeMap<u64, Vec<usize>> = std::collections::BTreeMap::new();
+    let mut out = Vec::with_capacity(pieces.len());
+    let mut meshes = 0u32;
+    for (at, piece) in pieces.iter().enumerate() {
+        let carded = cards.get(at).is_some_and(Option::is_some);
+        let key = rigid::key(
+            piece.geometry.positions.len(),
+            &piece.geometry.indices,
+            &piece.geometry.uvs,
+        );
+        if !carded {
+            let mut found = None;
+            for &index in keyed.get(&key).map_or(&[][..], Vec::as_slice) {
+                let lead = &mut leads[index];
+                let lead_piece = &pieces[lead.piece];
+                let Some(anchors) = *lead
+                    .anchors
+                    .get_or_insert_with(|| rigid::anchors(&lead_piece.geometry.positions))
+                else {
+                    continue;
+                };
+                if let Some(model) = register(lead_piece, &anchors, piece) {
+                    found = Some(Shared {
+                        mesh: lead.mesh,
+                        model,
+                    });
+                    break;
+                }
+            }
+            if let Some(found) = found {
+                out.push(found);
+                continue;
+            }
+        }
+        out.push(Shared {
+            mesh: meshes,
+            model: IDENTITY,
+        });
+        if !carded {
+            keyed.entry(key).or_default().push(leads.len());
+            leads.push(Lead {
+                piece: at,
+                mesh: meshes,
+                anchors: None,
+            });
+        }
+        meshes += 1;
+    }
+    out
 }
 
 pub fn eyepiece(
@@ -342,29 +541,42 @@ mod tests {
     }
 
     #[test]
-    fn three_boxes_stage_as_three_placed_meshes_with_interned_materials() {
+    fn three_boxes_stage_as_three_placements_sharing_one_mesh_with_interned_materials() {
         let (recipe, staging) = staging(SCENE);
         assert_eq!(staging.names, ["red", "steel"]);
         assert_eq!(staging.slots, [0, 1, 0]);
         assert_eq!(staging.materials[0].base, [0.8, 0.1, 0.1]);
         let eyepiece = eyepiece(&recipe.cameras[0], View::Lens, [64, 32]).unwrap();
-        let mut expected: Vec<_> = [0u32, 1, 0]
-            .iter()
-            .enumerate()
-            .map(|(mesh, &material)| Placement {
-                two_sided: false,
-                ..Placement::new(mesh as u32, IDENTITY, material)
-            })
-            .collect();
-        expected[2].shadow_only = true;
         let placements = staging.placements(&eyepiece.eye);
-        assert_eq!(placements, expected);
+        assert_eq!(placements.len(), 3);
+        assert_eq!((placements[0].mesh, placements[2].mesh), (0, 0));
+        assert_eq!(placements[0].model, IDENTITY);
+        let mut moved = IDENTITY;
+        moved[3] = [-2.0, 0.0, 0.0, 1.0];
+        assert_eq!(placements[2].model, moved);
+        assert_eq!(
+            placements
+                .iter()
+                .map(|placed| placed.material)
+                .collect::<Vec<_>>(),
+            [0, 1, 0]
+        );
+        assert_eq!(
+            placements
+                .iter()
+                .map(|placed| placed.shadow_only)
+                .collect::<Vec<_>>(),
+            [false, false, true]
+        );
+        assert!(placements.iter().all(|placed| !placed.two_sided));
         assert!(placements.iter().all(|placed| placed.clip == [[0.0; 4]; 2]));
         assert!(
             placements.iter().all(|placed| {
                 placed.alpha_cutoff == Placement::new(0, IDENTITY, 0).alpha_cutoff
             })
         );
+        assert!(staging.mesh_count() <= 2);
+        assert_eq!(staging.meshes().len(), staging.mesh_count());
         let staged = staging.stage(eyepiece).unwrap();
         assert!(staged.detail.content_slots.is_empty());
         assert!(
@@ -396,11 +608,10 @@ mod tests {
             instances.iter().map(|i| i.shadow_only).collect::<Vec<_>>(),
             [false, false, true]
         );
-        assert!(instances.iter().all(|i| i.transform == IDENTITY));
         let corners = |at: usize| {
             let mut lo = [f32::INFINITY; 3];
             let mut hi = [f32::NEG_INFINITY; 3];
-            for triangle in &instances[at].triangles {
+            for triangle in instances[at].transformed().unwrap() {
                 for vertex in triangle.vertices {
                     for k in 0..3 {
                         lo[k] = lo[k].min(vertex[k]);
@@ -412,7 +623,8 @@ mod tests {
         };
         assert_eq!(corners(0), [[-0.5; 3], [0.5; 3]]);
         assert_eq!(corners(1), [[1.75, -0.25, -0.25], [2.25, 0.25, 0.25]]);
-        for triangle in &instances[0].triangles {
+        assert_eq!(corners(2), [[-2.5, -0.5, -0.5], [-1.5, 0.5, 0.5]]);
+        for triangle in instances[0].triangles.iter() {
             let [a, b, c] = triangle.vertices;
             let centre: [f32; 3] = std::array::from_fn(|k| (a[k] + b[k] + c[k]) / 3.0);
             let normal = triangle.normals[0];

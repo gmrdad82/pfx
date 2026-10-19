@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::adaptive::{Adaptive, PreparedAdaptive, Quantize};
 use crate::channel::{
-    BUILT_IN, Channel, ChannelId, DuckState, Ducking, RAMP_SECONDS, clamp_volume, ramp_frames,
+    BUILT_IN, Channel, ChannelId, DuckState, Ducking, RAMP_SECONDS, Ramp, clamp_volume, ramp_frames,
 };
 use crate::clip::Clip;
 use crate::drive::Drive;
@@ -705,6 +705,21 @@ impl Mixer {
 
     pub fn play_prepared(&mut self, channel: ChannelId, clip: &Prepared, level: Level) -> VoiceId {
         self.play_prepared_at(channel, self.clock, clip, false, level)
+    }
+
+    pub fn play_prepared_pitched_at(
+        &mut self,
+        channel: ChannelId,
+        at: u64,
+        clip: &Prepared,
+        ratio: f32,
+        level: Level,
+    ) -> VoiceId {
+        let id = self.play_prepared_at(channel, at, clip, false, level);
+        if let Some(voice) = self.voices.last_mut() {
+            voice.pitch = Ramp::new(clamp_ratio(ratio));
+        }
+        id
     }
 
     pub fn play_music(&mut self, track: &MusicTrack, fade_seconds: f32, level: Level) -> VoiceId {

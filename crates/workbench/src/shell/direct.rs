@@ -78,6 +78,49 @@ pub fn blend(from: &Eye, to: &Eye, amount: f64) -> Eye {
     }
 }
 
+fn session_dollied(eye: &pfx_editor_viewport::Eye, metres: f64) -> pfx_editor_viewport::Eye {
+    let target = DVec3::from_array(eye.target);
+    let offset = DVec3::from_array(eye.position) - target;
+    let distance = offset.length();
+    let Some(along) = offset.try_normalize() else {
+        return *eye;
+    };
+    let nearer = (distance - metres).max(pfx_editor_viewport::camera::NEAREST);
+    pfx_editor_viewport::Eye {
+        position: (target + along * nearer).to_array(),
+        ortho_height: eye.ortho_height.map(|height| {
+            (height * nearer / distance.max(1e-9)).max(pfx_editor_viewport::camera::NEAREST)
+        }),
+        ..*eye
+    }
+}
+
+fn session_blend(
+    from: &pfx_editor_viewport::Eye,
+    to: &pfx_editor_viewport::Eye,
+    amount: f64,
+) -> pfx_editor_viewport::Eye {
+    let mix = |a: [f64; 3], b: [f64; 3]| {
+        DVec3::from_array(a)
+            .lerp(DVec3::from_array(b), amount)
+            .to_array()
+    };
+    pfx_editor_viewport::Eye {
+        position: mix(from.position, to.position),
+        target: mix(from.target, to.target),
+        up: DVec3::from_array(mix(from.up, to.up))
+            .try_normalize()
+            .unwrap_or(DVec3::Y)
+            .to_array(),
+        fov_y_deg: from.fov_y_deg + (to.fov_y_deg - from.fov_y_deg) * amount,
+        ortho_height: match (from.ortho_height, to.ortho_height) {
+            (Some(a), Some(b)) => Some(a + (b - a) * amount),
+            (_, other) => other,
+        },
+        ..*to
+    }
+}
+
 impl Shell {
     pub fn set_guides(&mut self, guides: Guides) -> bool {
         if guides == self.guides {
@@ -222,7 +265,74 @@ impl Shell {
         }
     }
 
+    fn direct_session(&mut self, act: &Act) -> Result<(), String> {
+        let session = self
+            .edit
+            .as_deref_mut()
+            .ok_or("the window has no scene open")?;
+        let editor = &mut session.editor;
+        let seen = || "the scene has no view yet".to_string();
+        match act {
+            Act::Select(names) => {
+                let [name] = names.as_slice() else {
+                    return Err("a game's scene selects one object at a time".into());
+                };
+                if !editor.viewport.select(Some(name)) {
+                    return Err(format!("no object {name} in the scene"));
+                }
+                editor.select(Some(pfx_editor::outline::Item::Object(name.clone())));
+            }
+            Act::Orbit(degrees) => {
+                let eye = editor.viewport.eye().ok_or_else(seen)?;
+                editor.viewport.set_eye(eye.turn([
+                    degrees / pfx_editor_viewport::camera::DEGREES_PER_POINT,
+                    0.0,
+                ]));
+            }
+            Act::Dolly(metres) => {
+                let eye = editor.viewport.eye().ok_or_else(seen)?;
+                editor.viewport.set_eye(session_dollied(&eye, *metres));
+            }
+            Act::Fit {
+                objects,
+                before,
+                now,
+            } => {
+                let [name] = objects.as_slice() else {
+                    return Err("a game's scene frames one object at a time".into());
+                };
+                let eye = editor.viewport.eye().ok_or_else(seen)?;
+                let kept = editor.selected_object().map(str::to_string);
+                if !editor.viewport.select(Some(name)) {
+                    return Err(format!("no object {name} in the scene"));
+                }
+                editor.viewport.frame_selection();
+                let goal = editor.viewport.eye().ok_or_else(seen)?;
+                editor.viewport.select(kept.as_deref());
+                let left = 1.0 - before;
+                let amount = if left <= 1e-12 {
+                    1.0
+                } else {
+                    ((now - before) / left).clamp(0.0, 1.0)
+                };
+                editor.viewport.set_eye(session_blend(&eye, &goal, amount));
+            }
+            Act::Region(region) => self.region = *region,
+            Act::Strip(on) => self.strip = *on,
+            Act::View(_) | Act::Camera(_) | Act::Stage(_) | Act::Reveal { .. } => {
+                return Err(
+                    "a game's scene takes select, orbit, dolly and frame; view, camera, stage and reveal act on a recipe"
+                        .into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     pub fn direct(&mut self, act: &Act) -> Result<(), String> {
+        if self.edits_scene() {
+            return self.direct_session(act);
+        }
         if !self.live() {
             return Err("the window has no recipe or scene open".into());
         }
@@ -318,12 +428,13 @@ impl Shell {
     }
 
     pub(super) fn overlays(&self, painter: &Painter, eye: &Eye, image: Rect) {
+        let palette = Palette::of(painter.ctx());
         if !self.overlays_on() || self.view_error.is_some() {
             return;
         }
         let painter = painter.with_clip_rect(image);
         let lens = Lens::new(eye, image);
-        let accent = Stroke::new(GUIDE_WIDTH, ACCENT);
+        let accent = Stroke::new(GUIDE_WIDTH, palette.accent);
         let aspect = self.span().map_or(f64::from(self.render_aspect()), |span| {
             f64::from(span.aspect)
         });
@@ -353,7 +464,7 @@ impl Shell {
             &painter,
             &lens,
             &self.guides.path,
-            Stroke::new(PATH_WIDTH, ACCENT),
+            Stroke::new(PATH_WIDTH, palette.accent),
         );
         let lit = self
             .document
@@ -363,9 +474,9 @@ impl Shell {
             .map(|(_, name, _)| name.as_str());
         for lamp in &self.guides.lamps {
             let colour = if Some(lamp.name.as_str()) == lit {
-                ACCENT
+                palette.accent
             } else {
-                TEXT_SECONDARY
+                palette.text_secondary
             };
             let stroke = Stroke::new(GUIDE_WIDTH, colour);
             let lines = match lamp.cone {
@@ -380,7 +491,7 @@ impl Shell {
             &painter,
             &lens,
             &self.guides.dots,
-            ACCENT.gamma_multiply(0.85),
+            palette.accent.gamma_multiply(0.85),
         );
         if let Some(frame) = self.camera_frame() {
             painter.rect_stroke(frame, CornerRadius::ZERO, accent, StrokeKind::Outside);
@@ -390,7 +501,7 @@ impl Shell {
             painter.rect_stroke(
                 Rect::from_two_pos(at(x0, y0), at(x1, y1)),
                 CornerRadius::ZERO,
-                Stroke::new(PATH_WIDTH, ACCENT),
+                Stroke::new(PATH_WIDTH, palette.accent),
                 StrokeKind::Middle,
             );
         }

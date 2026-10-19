@@ -1279,7 +1279,7 @@ fn text_pipeline(
         depth_stencil: depth.then_some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
             depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
             stencil: Default::default(),
             bias: Default::default(),
         }),
@@ -2284,9 +2284,15 @@ fn uniform(space: TextSpace, atlas: &GpuAtlas, mode: u32, id: Option<u32>) -> Un
         }
         _ => (identity, identity, [0.0, 0.0, 1.0, 0.0], DeformerId::NONE.0),
     };
+    let matrix = match space {
+        TextSpace::Surface { .. } | TextSpace::LitSurface { .. } => {
+            crate::frame::reversed(space.matrix())
+        }
+        _ => space.matrix(),
+    };
     Uniform {
-        matrix: space.matrix(),
-        view_projection,
+        matrix,
+        view_projection: crate::frame::reversed(view_projection),
         model,
         rest_normal,
         atlas_size: [atlas.width as f32, atlas.height as f32],
@@ -3684,7 +3690,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: &depth,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
+                            load: wgpu::LoadOp::Clear(0.0),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,
@@ -4084,7 +4090,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4f {
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: depth,
                         depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
+                            load: wgpu::LoadOp::Clear(0.0),
                             store: wgpu::StoreOp::Store,
                         }),
                         stencil_ops: None,

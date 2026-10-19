@@ -168,6 +168,7 @@ pub struct GpuChain {
     height: u32,
     viewport: (u32, u32),
     gain: f32,
+    reversed: bool,
 }
 
 fn retune_lut(pass: &mut Pass, amount: f32) -> bool {
@@ -443,7 +444,7 @@ fn conversion_pipeline(device: &wgpu::Device) -> wgpu::ComputePipeline {
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let source = "@group(0) @binding(0) var src: texture_depth_2d; @group(0) @binding(1) var<storage, read_write> dst: array<f32>; @group(0) @binding(2) var<uniform> extent: vec4<u32>; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3<u32>) { let dim = min(textureDimensions(src), extent.xy); if (id.x < dim.x && id.y < dim.y) { dst[id.y * dim.x + id.x] = textureLoad(src, id.xy, 0); } }";
+    let source = "@group(0) @binding(0) var src: texture_depth_2d; @group(0) @binding(1) var<storage, read_write> dst: array<f32>; @group(0) @binding(2) var<uniform> extent: vec4<u32>; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3<u32>) { let dim = min(textureDimensions(src), extent.xy); if (id.x < dim.x && id.y < dim.y) { let d = textureLoad(src, id.xy, 0); dst[id.y * dim.x + id.x] = select(d, 1.0 - d, extent.z != 0u); } }";
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("post geometry conversion shader"),
         source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -463,8 +464,19 @@ fn plan_passes(passes: Vec<Pass>, fuse: bool) -> Vec<Pass> {
         .into_iter()
         .filter(|pass| !pass.is_identity() || matches!(pass, Pass::Exposure(_)))
         .collect();
-    let active = fuse_cavity_rim(active);
+    let active = fuse_cavity_rim(lead_chromatic(active));
     if fuse { fuse_grades(active) } else { active }
+}
+
+fn lead_chromatic(mut passes: Vec<Pass>) -> Vec<Pass> {
+    let lead = passes
+        .iter()
+        .take_while(|pass| matches!(pass, Pass::Exposure(_)))
+        .count();
+    if lead > 0 && matches!(passes.get(lead), Some(Pass::Chromatic(_))) {
+        passes[..=lead].rotate_right(1);
+    }
+    passes
 }
 
 fn fuse_cavity_rim(passes: Vec<Pass>) -> Vec<Pass> {
@@ -853,6 +865,7 @@ impl GpuChain {
             height,
             viewport: (width, height),
             gain: 1.0,
+            reversed: false,
         }
     }
 
@@ -888,6 +901,16 @@ impl GpuChain {
 
     pub fn viewport(&self) -> (u32, u32) {
         self.viewport
+    }
+
+    pub fn set_reversed_depth(&mut self, reversed: bool) {
+        if reversed != self.reversed {
+            self.reversed = reversed;
+            *self
+                .conversion
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = None;
+        }
     }
 
     pub fn set_viewport(&mut self, width: u32, height: u32) -> Result<(), String> {
@@ -1051,7 +1074,12 @@ impl GpuChain {
                     .device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: Some("post geometry conversion extent"),
-                        contents: bytemuck::cast_slice(&[width, height, 0, 0]),
+                        contents: bytemuck::cast_slice(&[
+                            width,
+                            height,
+                            u32::from(self.reversed),
+                            0,
+                        ]),
                         usage: wgpu::BufferUsages::UNIFORM,
                     });
                 let layout = pipeline.get_bind_group_layout(0);
@@ -1247,6 +1275,10 @@ impl GpuChain {
         let mut bytes = vec![0u8; total as usize];
         let mut areas = Vec::with_capacity(groups.iter().map(|group| group.stages.len()).sum());
         let mut start = 0;
+        let exposed = usize::from(matches!(
+            groups.first().map(|group| &group.pass),
+            Some(Pass::Chromatic(_))
+        ));
         for (group_index, group) in groups.iter().enumerate() {
             for (stage_index, (stage, params)) in
                 group.stages.iter().zip(&group.params[buffers]).enumerate()
@@ -1259,7 +1291,7 @@ impl GpuChain {
                     params[0] = group.factor as f32;
                 }
                 let (w, h) = self.slot_size(group, stage.target);
-                if group_index == 0
+                if group_index == exposed
                     && let Some(slot) = group.exposure[stage_index]
                 {
                     params[slot] *= exposure * self.gain;
@@ -1620,6 +1652,21 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_chromatic_after_the_exposure_runs_first_and_keeps_the_grade_whole() {
+        let passes = vec![
+            Pass::Exposure(1.0),
+            Pass::Exposure(1.2),
+            Pass::Chromatic(crate::chromatic::Chromatic::default()),
+            Pass::Bloom(crate::bloom::Bloom::neutral(0.2)),
+            Pass::Tone(crate::tone::Tone::aces()),
+        ];
+        assert_eq!(
+            plan_names(passes),
+            ["chromatic", "grade(exposure+exposure+bloom+tone)"]
+        );
+    }
+
+    #[test]
     fn a_grade_takes_one_bloom_after_exposure_only() {
         let bloom = Pass::Bloom(crate::bloom::Bloom::neutral(0.2));
         let passes = vec![
@@ -1853,6 +1900,74 @@ pub(crate) mod tests {
                         delta <= 1,
                         "{} pixel {pixel} channel {channel}: {} vs {}",
                         style.name(),
+                        float(got[channel]),
+                        want[channel]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn grain_and_chromatic_match_cpu_on_gpu() {
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let source = synthetic(96, 64);
+        let input = gpu.offscreen(96, 64, FORMAT).unwrap();
+        let output = output_target(&gpu, 96, 64);
+        let pixels: Vec<u16> = source
+            .pixels
+            .iter()
+            .flat_map(|p| p.iter().map(|v| half(*v)))
+            .collect();
+        gpu.upload_rgba16(&input, &pixels).unwrap();
+        let grain = |size: f32, seed: u32| crate::grade::Grain {
+            size,
+            seed,
+            ..crate::grade::Grain::new(0.08, 0.4, true)
+        };
+        let chromatic = |amount: f32, falloff: f32| crate::chromatic::Chromatic { amount, falloff };
+        let cases = [
+            ("chromatic", vec![Pass::Chromatic(chromatic(0.06, 0.0))]),
+            (
+                "chromatic falloff",
+                vec![Pass::Chromatic(chromatic(0.1, 1.5))],
+            ),
+            ("grain", vec![Pass::Grain(grain(1.0, 5))]),
+            ("grain size", vec![Pass::Grain(grain(3.5, 9))]),
+            (
+                "graded",
+                vec![
+                    Pass::Exposure(1.2),
+                    Pass::Chromatic(chromatic(0.04, 1.0)),
+                    Pass::Tone(crate::tone::Tone::aces()),
+                    Pass::Grain(grain(2.0, 3)),
+                ],
+            ),
+        ];
+        for (name, passes) in cases {
+            let mut chain = Chain {
+                passes,
+                frame: 7,
+                seed: 23,
+            };
+            chain.passes.push(Pass::Encode);
+            let expected = chain.apply(&source, None, None);
+            let post = GpuChain::new(chain, &gpu.device, 96, 64);
+            let mut encoder = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("post test"),
+                });
+            post.run(&mut encoder, &input.view, None, None, &output.view, 7, 23);
+            gpu.queue.submit(Some(encoder.finish()));
+            let actual = gpu.readback_rgba16(&output).unwrap();
+            for (pixel, (got, want)) in actual.chunks_exact(4).zip(&expected.pixels).enumerate() {
+                for channel in 0..3 {
+                    let delta = (encode(float(got[channel])) - encode(want[channel])).abs();
+                    assert!(
+                        delta <= 1,
+                        "{name} pixel {pixel} channel {channel}: {} vs {}",
                         float(got[channel]),
                         want[channel]
                     );
@@ -2475,7 +2590,19 @@ pub(crate) mod tests {
     }
 
     fn finishes() -> Vec<(&'static str, Chain)> {
-        let mut out = vec![("frame finish", as_live(frame_finish()))];
+        let mut chromatic = frame_finish();
+        chromatic.set_chromatic(crate::chromatic::Chromatic::default());
+        let mut grained = frame_finish();
+        grained.set_grain(crate::grade::Grain {
+            size: 2.0,
+            seed: 3,
+            ..crate::grade::Grain::clamped(0.03, 0.5)
+        });
+        let mut out = vec![
+            ("frame finish", as_live(frame_finish())),
+            ("frame finish with chromatic", as_live(chromatic)),
+            ("frame finish with grain", as_live(grained)),
+        ];
         out.extend(
             Style::ALL
                 .into_iter()

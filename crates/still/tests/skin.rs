@@ -1,6 +1,6 @@
 use pfx_build::Registry;
 use pfx_recipe::Pick;
-use pfx_still::{Reel, Request, Step, View, looked_with};
+use pfx_still::{Reel, Request, Seed, Step, Take, View, looked_with};
 use std::path::{Path, PathBuf};
 
 const RECIPE: &str = r#"recipe = 1
@@ -85,7 +85,13 @@ fn a_traced_clip_frame_of_a_skinned_mesh_is_the_render_posed_at_its_time() {
     for time in [0.0, 0.5] {
         reel.pose(time).unwrap();
         let camera = reel.recipe.cameras[0].clone();
-        let rendered = reel.frame(&camera, SIZE, 4, &mut |_: Step| {}).unwrap();
+        let take = Take {
+            size: SIZE,
+            samples: 4,
+            noise: None,
+            seed: Seed::Locked,
+        };
+        let rendered = reel.frame(&camera, take, &mut |_: Step| {}).unwrap();
         let rgba =
             looked_with(&rendered.film, (&rendered.finish, &rendered.overlay), true).unwrap();
         assert!(

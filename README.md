@@ -2,7 +2,7 @@
 
 # pfx
 
-[![CI](https://github.com/gmrdad82/pfx/actions/workflows/ci.yml/badge.svg)](https://github.com/gmrdad82/pfx/actions/workflows/ci.yml) [![Version](https://img.shields.io/github/v/tag/gmrdad82/pfx)](https://github.com/gmrdad82/pfx/tags)
+[![Version](https://img.shields.io/github/v/tag/gmrdad82/pfx)](https://github.com/gmrdad82/pfx/tags)
 
 pfx is a game and render engine in Rust, part of [PITO MD](https://pitomd.com). It draws scenes live at 4K, path-traces stills and clips with its own denoiser, builds scenes from recipes, edits them in its own editor, plays them with a game's WebAssembly module, and runs the physics, sound, input and Steam a game needs. It is one tool, `pfx`, and a set of library crates a game links. It is built to be fast, light and simple, and every number below was measured on this repository's code.
 
@@ -23,11 +23,9 @@ How and when each was measured is on its page.
 
 | | |
 |---|---|
-| Linux | `cargo install --locked --git https://github.com/gmrdad82/pfx --tag v3.0.0 pfx` |
-| Windows | the `pfx` tool is Linux-only; a game's crates build on Windows (below) |
-| macOS | the `pfx` tool is Linux-only; a game's crates build on macOS (below) |
+| Linux, Windows, macOS | `cargo install --locked --git https://github.com/gmrdad82/pfx --tag v3.0.0 pfx` |
 
-The `pfx` tool builds from source: a release publishes its docs, not binaries. It needs Rust 1.97 or newer and a Vulkan GPU. On Debian or Ubuntu, first `sudo apt install libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev`.
+The `pfx` tool builds from source on Linux, Windows and macOS (Apple Silicon); [docs/install.md](docs/install.md) also covers a release's prebuilt archives, their checksums and the `.pitofx` file type each one registers. It needs Rust 1.97 or newer and a GPU wgpu can open: Vulkan on Linux, Vulkan or DX12 on Windows, Metal on macOS. On Debian or Ubuntu, first `sudo apt install libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev`.
 
 `pfx` alone opens the window, `pfx <file.pitofx>` opens that document in it, and any command or flag runs on the command line without one.
 
@@ -49,7 +47,7 @@ A game links the crates it uses by the same tag, on Linux, Windows and macOS:
 pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.0.0" }
 ```
 
-Its crates build and pass their tests on Linux and Windows in CI, build for macOS on Apple Silicon in CI, and a Windows build runs on Linux and the Steam Deck through Proton ([docs/windows.md](docs/windows.md)). [Your first game](docs/first-game.md) walks through it, and [your first recipe](docs/recipe-first-scene.md) builds a scene.
+pfx and its crates build and pass their unit tests on Linux, Windows and macOS (Apple Silicon), and a game's Windows build runs on Linux and the Steam Deck through Proton ([docs/windows.md](docs/windows.md)). [Your first game](docs/first-game.md) walks through it, and [your first recipe](docs/recipe-first-scene.md) builds a scene.
 
 ## The .pitofx file
 
@@ -152,7 +150,7 @@ cargo build --release
 bin/gate
 ```
 
-`bin/gate` is what CI runs, one phase per job in parallel: `lint` (formatting, clippy with warnings as errors, the check that keeps game content out of the engine, and the licence check of every dependency), `tests`, `release` (the optimised `pfx` binary), `windows` (the game crates' clippy and tests on Windows) and `macos` (the game crates on macOS). With no phase it runs `lint` and `tests`. GPU tests are `#[ignore]`d: run a crate's with `cargo test -p <crate> -- --ignored`.
+`bin/gate` is the gate, run locally; every release is gated and built on the maintainer's machines. `bin/gate --fast` is the check before a merge: formatting, clippy, and the unit tests of the crates a branch changed. The full gate's phases are `lint` (formatting, clippy with warnings as errors, the check that keeps game content out of the engine, and the licence check of every dependency), `tests`, `release` (the optimised `pfx` binary), `windows` and `macos` (the whole workspace's unit tests on Windows and on macOS, and the game crates' integration tests on Windows), and `windows-lint` and `macos-lint` (clippy over the workspace on each). With no phase it runs `lint` and `tests`. GPU tests are `#[ignore]`d: run a crate's with `cargo test -p <crate> -- --ignored`.
 
 ## Contributing
 

@@ -10,6 +10,7 @@ pub const THICKNESS: f32 = 0.03;
 pub const ROUGH_FADE: [f32; 2] = [0.6, 0.75];
 pub const CONSISTENT: f32 = 0.8;
 pub const JOIN: f32 = 0.005;
+pub const SETTLED_HISTORY: f32 = 0.95;
 
 pub type Matrix = [[f32; 4]; 4];
 
@@ -282,6 +283,7 @@ pub fn upsample(
     sum.map(|value| value / total)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn accumulate(
     current: [f32; 4],
     low: [f32; 4],
@@ -289,12 +291,18 @@ pub fn accumulate(
     history: [f32; 4],
     coverage: f32,
     roughness: f32,
+    moved_px: f32,
     history_valid: bool,
 ) -> [f32; 4] {
     if !history_valid || coverage <= 0.001 {
         return current;
     }
-    let weight = mix(0.6, 0.9, roughness.clamp(0.0, 1.0)) * (coverage * 2.0).clamp(0.0, 1.0);
+    let settled = 1.0 - smoothstep(0.05, 0.5, moved_px);
+    let weight = mix(
+        mix(0.6, 0.9, roughness.clamp(0.0, 1.0)),
+        SETTLED_HISTORY,
+        settled,
+    ) * (coverage * 2.0).clamp(0.0, 1.0);
     std::array::from_fn(|channel| {
         let old = history[channel].clamp(low[channel], high[channel]);
         mix(current[channel], old, weight)
@@ -323,7 +331,10 @@ fn ssr_similarity(depth: f32, normal: vec3f, other_depth: f32, other_normal: vec
     return near * facing;
 }
 const SSR_DEPTH_TOLERANCE: f32 = 0.03;
+const SSR_SETTLED_HISTORY: f32 = 0.95;
 const SSR_GLOSSY: f32 = 0.18;
+const SSR_SOLID: f32 = 0.5;
+const SSR_SOLID_RUN: f32 = 270.0;
 "#
     };
 }
@@ -341,6 +352,8 @@ struct ReflectParams {
     refine: u32,
     thickness: f32,
     history_half: vec2u,
+    far: f32,
+    stochastic: u32,
 }
 @group(0) @binding(0) var<uniform> params: ReflectParams;
 fn inside(uv: vec2f) -> bool {
@@ -376,7 +389,8 @@ fn to_pixel(p: vec3f) -> vec3f {
 }
 fn scene_depth(pixel: vec2f) -> f32 {
     let at = vec2i(clamp(pixel, vec2f(0.0), vec2f(params.size) - vec2f(1.0)));
-    return textureLoad(depth_tex, at, 0).r;
+    let depth = textureLoad(depth_tex, at, 0).r;
+    return select(depth, 3.0e38, depth >= params.far * 0.999);
 }
 fn ray_depth(k: vec2f, s: f32) -> f32 {
     return 1.0 / mix(k.x, k.y, s);
@@ -446,6 +460,8 @@ fn march(origin: vec3f, direction: vec3f, steps: u32, jitter: f32) -> vec3f {
     var previous = 0.0;
     var previous_depth = start.z;
     var front = start.z <= scene_depth(start.xy);
+    var buried = -1.0;
+    let run = max(4.0, size.y / SSR_SOLID_RUN);
     for (var i = 1u; i <= steps; i++) {
         let u = (f32(i) - jitter) / (f32(steps) - jitter);
         let travelled = min(max(pixels * u * u, f32(i) - jitter), pixels);
@@ -473,6 +489,17 @@ fn march(origin: vec3f, direction: vec3f, steps: u32, jitter: f32) -> vec3f {
                 let fade = 1.0 - smoothstep(0.8, 1.0, hi);
                 return vec3f(pixel, edge_weight(pixel / size) * fade);
             }
+        }
+        if (params.stochastic != 0u && ray > scene * (1.0 + params.thickness) && ray <= scene * (1.0 + SSR_SOLID)) {
+            if (buried < 0.0) {
+                buried = travelled;
+            } else if (travelled - buried >= run) {
+                let pixel = start.xy + delta * s;
+                let fade = 1.0 - smoothstep(0.8, 1.0, s);
+                return vec3f(pixel, -edge_weight(pixel / size) * fade);
+            }
+        } else {
+            buried = -1.0;
         }
         previous = s;
         previous_depth = ray;
@@ -514,7 +541,7 @@ fn trace_pass(@builtin(global_invocation_id) id: vec3u) {
     let roughness = clamp(nr.w, 0.0, 1.0);
     let view_ray = normalize(origin);
     var direction = vec3f(0.0);
-    if (roughness > SSR_GLOSSY) {
+    if (params.stochastic != 0u && roughness > SSR_GLOSSY) {
         direction = ssr_sample_reflection(view_ray, normal, roughness * roughness, ssr_random(pixel, params.frame_index));
     } else {
         let angle = 6.2831853 * f32(params.frame_index % 8u) * 0.125;
@@ -529,8 +556,11 @@ fn trace_pass(@builtin(global_invocation_id) id: vec3u) {
     var hit = vec3f(0.0);
     let fade = 1.0 - smoothstep(0.6, 0.75, roughness);
     if (fade > 0.0) {
-        let jitter = ssr_random(pixel + vec2u(17u, 59u), params.frame_index + 2654435769u).x;
+        let jitter = select(0.0, ssr_random(pixel + vec2u(17u, 59u), params.frame_index + 2654435769u).x, params.stochastic != 0u);
         hit = march(origin + surface * depth * 0.002, direction, march_steps(roughness), jitter);
+    }
+    if (hit.z < 0.0) {
+        result = vec4f(0.0, 0.0, 0.0, -hit.z * fade);
     }
     if (hit.z > 0.0) {
         let at = vec2i(clamp(hit.xy, vec2f(0.0), vec2f(params.size) - vec2f(1.0)));
@@ -538,7 +568,7 @@ fn trace_pass(@builtin(global_invocation_id) id: vec3u) {
         let confidence = hit.z * fade * clamp(1.0 - 4.0 * (facing - 0.1), 0.0, 1.0);
         let top = f32(textureNumLevels(source_colour) - 1u);
         var lod = clamp(roughness * 4.0 - 0.5, 0.0, top);
-        if (roughness > SSR_GLOSSY) {
+        if (params.stochastic != 0u && roughness > SSR_GLOSSY) {
             let footprint = 2.0 * distance(hit.xy, vec2f(pixel) + vec2f(0.5)) * roughness * roughness;
             lod = clamp(max(lod, log2(max(footprint, 1.0))), 0.0, top);
         }
@@ -594,7 +624,9 @@ fn resolve_pass(@builtin(global_invocation_id) id: vec3u) {
     }
     var result = current;
     let pixel = trace_pixel(id.xy);
-    let prev = (vec2f(pixel) + vec2f(0.5)) / vec2f(params.size) + textureLoad(motion_tex, vec2i(pixel), 0).rg;
+    let motion = textureLoad(motion_tex, vec2i(pixel), 0).rg;
+    let prev = (vec2f(pixel) + vec2f(0.5)) / vec2f(params.size) + motion;
+    let settled = 1.0 - smoothstep(0.05, 0.5, length(motion * vec2f(params.size)));
     if (params.history_valid != 0u && inside(prev)) {
         let history_last = vec2i(params.history_half) - vec2i(1);
         let f = prev * vec2f(params.history_half) - vec2f(0.5);
@@ -616,7 +648,7 @@ fn resolve_pass(@builtin(global_invocation_id) id: vec3u) {
         }
         if (total > 0.001 && coverage > 0.001) {
             let old = clamp(sum / total, low, high);
-            let weight = mix(0.6, 0.9, clamp(guide.w, 0.0, 1.0)) * clamp(coverage * 2.0, 0.0, 1.0);
+            let weight = mix(mix(0.6, 0.9, clamp(guide.w, 0.0, 1.0)), SSR_SETTLED_HISTORY, settled) * clamp(coverage * 2.0, 0.0, 1.0);
             result = mix(current, old, weight);
         }
     }
@@ -650,7 +682,7 @@ fn prefilter_pass(@builtin(global_invocation_id) id: vec3u) {
     let centre = textureLoad(raw_tex, cell, 0);
     let guide = textureLoad(guide_tex, cell, 0);
     let spread = smoothstep(SSR_GLOSSY, 0.45, guide.w);
-    if (guide.x <= 0.0 || spread <= 0.0) {
+    if (guide.x <= 0.0 || spread <= 0.0 || params.stochastic == 0u) {
         textureStore(output_tex, cell, centre);
         return;
     }
@@ -901,22 +933,37 @@ fn reflection_dfg(roughness: f32, ndv: f32) -> vec2f {
     dfg = dfg * u + vec2f(dot(p, vec3f(0.8148172, 0.1125372, -0.01374308) + f5 * vec3f(0.05596158, -0.1952609, -0.01097813)), dot(p, vec3f(0.03557167, -0.07356264, 0.03812399) + f5 * vec3f(0.1873088, 0.3210023, 0.1747016)));
     return clamp(dfg, vec2f(0.0), vec2f(1.0));
 }
+fn reflection_steepness(surface: Shaded, ndv: f32) -> f32 {
+    let power = fresnel_exponent(surface);
+    if (power == 5.0) {
+        return 1.0;
+    }
+    return min(pow(clamp(1.0 - ndv, 1e-4, 1.0), power - 5.0), 4.0);
+}
 fn reflection_environment(surface: Shaded, ndv: f32, film: vec3f, film_normal: vec3f) -> vec3f {
     let f0 = reflection_filmed(surface, 1.0, film_normal);
     if (all(f0 <= vec3f(0.0)) && surface.thin_film_amount <= 0.0) {
         return vec3f(0.0);
     }
     let dfg = reflection_dfg(surface.roughness, ndv);
-    let fitted = clamp(f0 * (dfg.x - dfg.y) + vec3f(dfg.y), vec3f(0.0), vec3f(1.0));
-    let filmed = reflection_filmed(surface, ndv, film) - (f0 + (vec3f(1.0) - f0) * pow(1.0 - ndv, 5.0));
+    let grazing = dfg.y * reflection_steepness(surface, ndv);
+    let fitted = clamp(f0 * (dfg.x - grazing) + vec3f(grazing), vec3f(0.0), vec3f(1.0));
+    let filmed = reflection_filmed(surface, ndv, film) - (f0 + (vec3f(1.0) - f0) * pow(1.0 - ndv, fresnel_exponent(surface)));
     return clamp(fitted + select(vec3f(0.0), filmed, surface.thin_film_amount > 0.0), vec3f(0.0), vec3f(1.0));
+}
+fn coat_reflectance(surface: Shaded, ndv: f32) -> f32 {
+    let coat = clamp(surface.clearcoat, 0.0, 1.0);
+    if (coat <= 0.0) {
+        return 0.0;
+    }
+    let dfg = reflection_dfg(surface.clearcoat_roughness, ndv);
+    let grazing = dfg.y * reflection_steepness(surface, ndv);
+    return coat * clamp(0.04 * (dfg.x - grazing) + grazing, 0.0, 1.0);
 }
 fn reflection_diffuse_weight(surface: Shaded, view: vec3f, normal: vec3f, film: vec3f, film_normal: vec3f) -> vec3f {
     let ndv = clamp(dot(normal, view), 0.0, 1.0);
     let fresnel = reflection_environment(surface, ndv, film, film_normal);
-    let coat = clamp(surface.clearcoat, 0.0, 1.0);
-    let coat_f = schlick(vec3f(0.04), ndv, 5.0).r;
-    return (vec3f(1.0) - fresnel) * (1.0 - clamp(surface.metalness, 0.0, 1.0)) * (1.0 - clamp(surface.transmission, 0.0, 1.0)) * (1.0 - coat * coat_f);
+    return (vec3f(1.0) - fresnel) * (1.0 - clamp(surface.metalness, 0.0, 1.0)) * (1.0 - clamp(surface.transmission, 0.0, 1.0)) * (1.0 - coat_reflectance(surface, ndv));
 }
 fn reflection_fallback(
     direction: vec3f,
@@ -968,9 +1015,7 @@ fn reflection_radiance(
     let caught = max(hit.rgb, vec3f(0.0));
     let radiance = reflection_fallback(direction, lookup, rough, open, sky, local, probe_a, probe_b, samp, local_mip, sky_mip) * (1.0 - confidence) + caught;
     let fresnel = reflection_environment(surface, ndv, film, film_normal);
-    let coat = clamp(surface.clearcoat, 0.0, 1.0);
-    let coat_f = schlick(vec3f(0.04), ndv, 5.0).r;
-    let coat_spec = coat * coat_f;
+    let coat_spec = coat_reflectance(surface, ndv);
     let substrate = min(fresnel * (1.0 - coat_spec), vec3f(1.0 - coat_spec));
     if (coat_spec <= 0.0) {
         return radiance * substrate;
@@ -998,7 +1043,7 @@ fn coat_radiance(
     sky_visible: f32,
 ) -> vec3f {
     let ndv = clamp(dot(normal, view), 0.0, 1.0);
-    let coat_spec = clamp(surface.clearcoat, 0.0, 1.0) * schlick(vec3f(0.04), ndv, 5.0).r;
+    let coat_spec = coat_reflectance(surface, ndv);
     if (coat_spec <= 0.0) {
         return vec3f(0.0);
     }
@@ -1024,7 +1069,8 @@ struct TraceUniform {
     refine: u32,
     thickness: f32,
     history_half: [u32; 2],
-    pad: [u32; 2],
+    far: f32,
+    stochastic: u32,
 }
 
 fn sampled(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
@@ -1103,6 +1149,7 @@ pub struct Inputs<'a> {
     pub inverse_projection: [[f32; 4]; 4],
     pub frame_index: u32,
     pub thickness: f32,
+    pub far: f32,
     pub history_valid: bool,
 }
 
@@ -1130,6 +1177,7 @@ pub struct Pass {
     sampler: wgpu::Sampler,
     next: usize,
     valid: bool,
+    stochastic: bool,
     trace_layout: wgpu::BindGroupLayout,
     prefilter_layout: wgpu::BindGroupLayout,
     resolve_layout: wgpu::BindGroupLayout,
@@ -1253,6 +1301,7 @@ impl Pass {
             sampler,
             next: 0,
             valid: false,
+            stochastic: true,
             trace_layout,
             prefilter_layout,
             resolve_layout,
@@ -1284,6 +1333,14 @@ impl Pass {
             .chain(&self._guides)
             .cloned()
             .collect()
+    }
+
+    pub fn stochastic(&self) -> bool {
+        self.stochastic
+    }
+
+    pub fn set_stochastic(&mut self, on: bool) {
+        self.stochastic = on;
     }
 
     pub fn set_viewport(&mut self, width: u32, height: u32) -> Result<(), String> {
@@ -1326,7 +1383,8 @@ impl Pass {
             refine: REFINE_STEPS,
             thickness: inputs.thickness,
             history_half: self.history,
-            pad: [0; 2],
+            far: inputs.far,
+            stochastic: u32::from(self.stochastic),
         };
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("reflection uniforms"),
@@ -1929,7 +1987,10 @@ mod tests {
         let mut history = History::default();
         let mut frame = |n: f32, previous, now| {
             let valid = history.advance(n / 60.0, previous, now);
-            (valid, accumulate(current, low, high, old, 1.0, 0.1, valid))
+            (
+                valid,
+                accumulate(current, low, high, old, 1.0, 0.1, 1.0, valid),
+            )
         };
         assert_eq!(frame(0.0, a, a), (false, current));
         let (valid, kept) = frame(1.0, a, a);
@@ -1940,7 +2001,16 @@ mod tests {
         assert_eq!(frame(2.0, b, b), (false, current), "a cut drops history");
         let (valid, kept) = frame(3.0, b, b);
         assert!(valid && kept != current);
-        let ghost = accumulate(current, low, high, [5.0, 5.0, 5.0, 1.0], 1.0, 0.1, true);
+        let ghost = accumulate(
+            current,
+            low,
+            high,
+            [5.0, 5.0, 5.0, 1.0],
+            1.0,
+            0.1,
+            1.0,
+            true,
+        );
         assert!(
             ghost
                 .iter()
@@ -1949,10 +2019,24 @@ mod tests {
             "history outside this frame's neighbourhood is clamped: {ghost:?}"
         );
         assert_eq!(
-            accumulate(current, low, high, old, 0.0, 0.1, true),
+            accumulate(current, low, high, old, 0.0, 0.1, 1.0, true),
             current,
             "a disoccluded texel has no history"
         );
+    }
+
+    #[test]
+    fn a_still_texel_keeps_more_of_its_history_than_a_moving_one() {
+        let (current, old) = ([0.0; 4], [1.0; 4]);
+        let (low, high) = ([0.0; 4], [1.0; 4]);
+        let kept = |moved: f32| accumulate(current, low, high, old, 1.0, 0.03, moved, true)[0];
+        assert!((kept(0.0) - SETTLED_HISTORY).abs() < 1e-6, "{}", kept(0.0));
+        assert!(
+            (kept(2.0) - mix(0.6, 0.9, 0.03)).abs() < 1e-6,
+            "{}",
+            kept(2.0)
+        );
+        assert!(kept(0.2) < kept(0.0) && kept(0.2) > kept(2.0));
     }
 
     #[test]
@@ -2110,6 +2194,7 @@ mod tests {
             inverse_projection: inverse_perspective(&desk.projection),
             frame_index,
             thickness: THICKNESS,
+            far: f32::MAX,
             history_valid,
         }
     }
@@ -2296,6 +2381,35 @@ mod tests {
         assert!(
             rough > 0.25 && rough > 4.0 * sharp,
             "a 0.6-rough floor reflects the card as sharply as a mirror: {rough} of its light outside the mirror image, {sharp} for the mirror"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn gpu_without_stochastic_reflections_a_rough_floor_traces_one_fixed_ray() {
+        let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
+        let desk = desk(640, 360);
+        let views = rough_views(&gpu, &desk, [1.0, 0.0, 0.0], 0.38);
+        let traced = |stochastic: bool, frame: u32| {
+            let mut pass = Pass::new(&gpu.device, desk.width, desk.height);
+            pass.set_stochastic(stochastic);
+            run(&gpu, &mut pass, &views, &desk, frame, false);
+            (read(&gpu, &pass._raw[0]), read(&gpu, &pass._filtered))
+        };
+        let (first, filtered) = traced(false, 0);
+        assert_eq!(
+            first,
+            traced(false, 8).0,
+            "without stochastic reflections a frame one jitter cycle later traces the same rays"
+        );
+        assert_eq!(
+            first, filtered,
+            "without stochastic reflections the prefilter passes the trace through"
+        );
+        assert_ne!(
+            traced(true, 0).0,
+            traced(true, 8).0,
+            "stochastic reflections sample new rays each frame"
         );
     }
 

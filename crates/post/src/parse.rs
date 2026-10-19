@@ -1,5 +1,6 @@
 use crate::bloom::{Bloom, NEUTRAL_GAINS, NEUTRAL_RADII};
 use crate::chain::{Chain, Pass};
+use crate::chromatic::Chromatic;
 use crate::color;
 use crate::comic::ModernComic;
 use crate::fx::{self, NoiseKind};
@@ -23,6 +24,7 @@ pub const KEYS: &[&str] = &[
     "cel_spec_roughness",
     "cel_spec_threshold",
     "cel_threshold",
+    "chromatic",
     "contrast",
     "crease_angle",
     "crush",
@@ -105,7 +107,9 @@ const VIGNETTE_KEYS: &[&str] = &[
     "aspect", "inner", "kind", "outer", "power", "scale", "strength",
 ];
 
-const GRAIN_KEYS: &[&str] = &["clamp", "response", "strength"];
+const GRAIN_KEYS: &[&str] = &["amount", "clamp", "response", "seed", "size", "strength"];
+
+const CHROMATIC_KEYS: &[&str] = &["amount", "falloff"];
 
 const LUT_KEYS: &[&str] = &["size", "values"];
 
@@ -246,6 +250,7 @@ pub fn parse_with(table: &Table, read: &mut Reader<'_>) -> Result<Chain, ParseEr
             "bloom" => set_bloom(&mut chain, value)?,
             "vignette" => set_vignette(&mut chain, value)?,
             "grain" => set_grain(&mut chain, value)?,
+            "chromatic" => set_chromatic(&mut chain, value)?,
             "dither" => set_dither(&mut chain, value)?,
             "dither_kind" => set_dither_kind(&mut chain, value)?,
             "encode" => {
@@ -979,10 +984,28 @@ fn set_grain(chain: &mut Chain, value: &Value) -> Result<(), ParseError> {
         if let Some(bad) = table.keys().find(|key| !GRAIN_KEYS.contains(&key.as_str())) {
             return Err(unknown("grain", bad, GRAIN_KEYS));
         }
+        if table.contains_key("amount") && table.contains_key("strength") {
+            return Err(ParseError::msg(
+                "grain.amount and grain.strength are one key; give one",
+            ));
+        }
         ensure_grain(chain);
-        if let Some(v) = table.get("strength") {
-            let n = number(v, "grain.strength")?;
-            grain_mut(chain).strength = n;
+        for key in ["amount", "strength"] {
+            if let Some(v) = table.get(key) {
+                let n = number(v, &format!("grain.{key}"))?;
+                grain_mut(chain).strength = n;
+            }
+        }
+        if let Some(v) = table.get("size") {
+            let n = number(v, "grain.size")?;
+            if !(n > 0.0 && n <= 64.0) {
+                return Err(ParseError::msg("grain.size is above 0, up to 64 pixels"));
+            }
+            grain_mut(chain).size = n;
+        }
+        if let Some(v) = table.get("seed") {
+            let n = integer(v, "grain.seed")?;
+            grain_mut(chain).seed = n;
         }
         if let Some(v) = table.get("response") {
             let n = number(v, "grain.response")?;
@@ -1002,12 +1025,43 @@ fn set_grain(chain: &mut Chain, value: &Value) -> Result<(), ParseError> {
     {
         grain_mut(chain).strength = n;
     } else {
-        chain.passes.push(Pass::Grain(Grain {
-            strength: n,
-            response: 0.0,
-            clamp: false,
-        }));
+        chain.passes.push(Pass::Grain(Grain::new(n, 0.0, false)));
     }
+    Ok(())
+}
+
+fn set_chromatic(chain: &mut Chain, value: &Value) -> Result<(), ParseError> {
+    let mut pass = Chromatic::default();
+    match value.as_table() {
+        Some(table) => {
+            if let Some(bad) = table
+                .keys()
+                .find(|key| !CHROMATIC_KEYS.contains(&key.as_str()))
+            {
+                return Err(unknown("chromatic", bad, CHROMATIC_KEYS));
+            }
+            if let Some(v) = table.get("amount") {
+                pass.amount = number(v, "chromatic.amount")?;
+            }
+            if let Some(v) = table.get("falloff") {
+                pass.falloff = number(v, "chromatic.falloff")?;
+            }
+        }
+        None => pass.amount = number(value, "chromatic")?,
+    }
+    if !(0.0..=Chromatic::MOST).contains(&pass.amount) {
+        return Err(ParseError::msg(format!(
+            "chromatic.amount is from 0 to {}",
+            Chromatic::MOST
+        )));
+    }
+    if !(0.0..=Chromatic::FALLOFF_MOST).contains(&pass.falloff) {
+        return Err(ParseError::msg(format!(
+            "chromatic.falloff is from 0 to {}",
+            Chromatic::FALLOFF_MOST
+        )));
+    }
+    chain.set_chromatic(pass);
     Ok(())
 }
 
@@ -1017,11 +1071,7 @@ fn ensure_grain(chain: &mut Chain) {
         .iter()
         .any(|pass| matches!(pass, Pass::Grain(_)))
     {
-        chain.passes.push(Pass::Grain(Grain {
-            strength: 0.0,
-            response: 0.0,
-            clamp: false,
-        }));
+        chain.passes.push(Pass::Grain(Grain::new(0.0, 0.0, false)));
     }
 }
 

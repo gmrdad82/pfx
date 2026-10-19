@@ -602,12 +602,13 @@ pub struct OpaqueFeatures {
     pub wall: bool,
     pub fibre: bool,
     pub crinkle: bool,
+    pub pavement: bool,
     pub procedural_detail: bool,
     pub film: bool,
     pub flakes: bool,
 }
 
-const OPAQUE_FEATURES: usize = 29;
+const OPAQUE_FEATURES: usize = 30;
 const FLAT_TRANSFORM: f64 = 1e-6;
 
 impl OpaqueFeatures {
@@ -638,6 +639,7 @@ impl OpaqueFeatures {
         "wall",
         "fibre",
         "crinkle",
+        "pavement",
         "procedural_detail",
         "film",
         "flakes",
@@ -675,9 +677,10 @@ impl OpaqueFeatures {
             wall: flags[23],
             fibre: flags[24],
             crinkle: flags[25],
-            procedural_detail: flags[26],
-            film: flags[27],
-            flakes: flags[28],
+            pavement: flags[26],
+            procedural_detail: flags[27],
+            film: flags[28],
+            flakes: flags[29],
         }
     }
 
@@ -709,6 +712,7 @@ impl OpaqueFeatures {
             self.wall,
             self.fibre,
             self.crinkle,
+            self.pavement,
             self.procedural_detail,
             self.film,
             self.flakes,
@@ -799,6 +803,7 @@ pub(crate) fn opaque_pipeline(
             targets: &opaque_targets(),
             cull: (!key.two_sided).then_some(wgpu::Face::Back),
             write_depth: false,
+            reversed: true,
             cache,
         },
         &constants,
@@ -872,6 +877,7 @@ impl Pipelines {
                 targets: &[],
                 cull: None,
                 write_depth: true,
+                reversed: false,
                 cache: None,
             },
         );
@@ -1117,6 +1123,14 @@ pub fn multiply(a: Matrix, b: Matrix) -> Matrix {
     result
 }
 
+pub fn reversed(matrix: Matrix) -> Matrix {
+    let mut out = matrix;
+    for column in &mut out {
+        column[2] = column[3] - column[2];
+    }
+    out
+}
+
 pub fn transform(matrix: Matrix, point: [f32; 4]) -> [f32; 4] {
     std::array::from_fn(|row| {
         (0..4)
@@ -1293,6 +1307,7 @@ fn opaque_instance_features(
         wall: carries(&[4.0]),
         fibre: carries(&[1.0, 11.0]),
         crinkle: carries(&[2.0]),
+        pavement: carries(&[19.0, 20.0]),
         ageing: f32::from_bits(instance.extra[2]) > 0.0,
         uv1: material.seeds[3] >= 2 && material.packed[1] != 0.0,
         content_cutout: instance.content_face[2] & 4 != 0,
@@ -1825,6 +1840,7 @@ struct PipelineSpec<'a> {
     targets: &'a [Option<wgpu::ColorTargetState>],
     cull: Option<wgpu::Face>,
     write_depth: bool,
+    reversed: bool,
     cache: Option<&'a wgpu::PipelineCache>,
 }
 
@@ -1848,6 +1864,7 @@ fn prepass_pipelines(
                 targets: &prepass_targets(),
                 cull,
                 write_depth: true,
+                reversed: true,
                 cache: None,
             },
             &[("use_content_cutout", f64::from(u8::from(cut)))],
@@ -1880,10 +1897,11 @@ fn pipeline_with(
         depth_stencil: Some(wgpu::DepthStencilState {
             format: wgpu::TextureFormat::Depth32Float,
             depth_write_enabled: Some(spec.write_depth),
-            depth_compare: Some(if spec.write_depth {
-                wgpu::CompareFunction::Less
-            } else {
-                wgpu::CompareFunction::LessEqual
+            depth_compare: Some(match (spec.reversed, spec.write_depth) {
+                (true, true) => wgpu::CompareFunction::Greater,
+                (true, false) => wgpu::CompareFunction::GreaterEqual,
+                (false, true) => wgpu::CompareFunction::Less,
+                (false, false) => wgpu::CompareFunction::LessEqual,
             }),
             stencil: Default::default(),
             bias: Default::default(),
@@ -2287,6 +2305,7 @@ impl Frame {
                     targets: &[],
                     cull: None,
                     write_depth: true,
+                    reversed: false,
                     cache: None,
                 },
             )
@@ -2307,6 +2326,7 @@ impl Frame {
                 })],
                 cull: None,
                 write_depth: true,
+                reversed: false,
                 cache: None,
             },
         );
@@ -3093,6 +3113,7 @@ impl Frame {
                 targets: &prepass_targets(),
                 cull: None,
                 write_depth: true,
+                reversed: true,
                 cache: None,
             },
         );
@@ -3108,6 +3129,7 @@ impl Frame {
                 targets: &opaque_targets(),
                 cull: None,
                 write_depth: false,
+                reversed: true,
                 cache: None,
             },
         );
@@ -3711,7 +3733,7 @@ impl Frame {
         let motion_view_projection = multiply(scene.camera.projection, scene.camera.view);
         let wind = scene.wind;
         let uniforms = Uniforms {
-            view_projection: multiply(jitter_matrix(self.jitter), motion_view_projection),
+            view_projection: reversed(multiply(jitter_matrix(self.jitter), motion_view_projection)),
             motion_view_projection,
             previous_view_projection: scene.camera.previous_view_projection,
             view: scene.camera.view,
@@ -4217,7 +4239,7 @@ impl Frame {
         } else {
             0.0
         };
-        let near_map = shadows.quality().splits_near_map();
+        let near_map = fit.near_map;
         for (index, cascade) in fit.cascades.iter().enumerate() {
             let pancake = if near_map && index == 1 { 0.0f32 } else { 1.0 };
             let mut slot = [0u8; CASTER_BYTES as usize];
@@ -4298,7 +4320,7 @@ impl Frame {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.targets.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -5114,7 +5136,7 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     }
     var output: OpaqueOutput;
     output.colour = vec4f(max(direct + diffuse + specular + surface.emission, vec3f(0.0)), 1.0);
-    output.normal_roughness = vec4f(view_normal, select(surface.roughness, min(surface.roughness, surface.clearcoat_roughness), wetted));
+    output.normal_roughness = vec4f(view_normal, select(surface.roughness, min(surface.roughness, surface.clearcoat_roughness), wetted || surface.clearcoat >= 0.5));
     return output;
 }
 "#;

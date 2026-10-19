@@ -125,7 +125,7 @@ const FLARE: &[(&str, Shape)] = &[
 ];
 
 const MOTION_BLUR: &[(&str, Shape)] = &[
-    ("shutter", Shape::Num(Rule::Within(0.0, 1.0))),
+    ("shutter", Shape::Num(Rule::Within(0.0, 4.0))),
     ("max_px", Shape::Num(Rule::AtLeast(0.0))),
     ("samples", Shape::Whole(1, WHOLE)),
 ];

@@ -147,11 +147,17 @@ pub(super) fn base(file: &str) -> &Path {
 fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), String> {
     let file = args.recipe.as_str();
     let recipe = chosen(file)?;
-    let timeline = recipe
-        .timeline
-        .ok_or_else(|| format!("{file} has no [timeline], so nothing moves"))?;
-    let built = build_with(&recipe, base(file), registry).map_err(|e| format!("{file}: {e}"))?;
-    let glb = built.try_glb().map_err(|e| format!("{file}: {e}"))?;
+    let timeline = recipe.timeline.ok_or_else(|| {
+        format!(
+            "{} has no [timeline], so nothing moves",
+            pfx_recipe::files::shown(file)
+        )
+    })?;
+    let built = build_with(&recipe, base(file), registry)
+        .map_err(|e| format!("{}: {e}", pfx_recipe::files::shown(file)))?;
+    let glb = built
+        .try_glb()
+        .map_err(|e| format!("{}: {e}", pfx_recipe::files::shown(file)))?;
     let facts = facts(&glb)?;
     let follows: Vec<Value> = followed(&recipe)
         .into_iter()
@@ -186,7 +192,7 @@ fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), S
             .map(|(name, keyed)| json!({ "node": name, "keys": keyed.keys, "channels": keyed.channels }))
             .collect();
         let line = json!({
-            "recipe": file,
+            "recipe": pfx_recipe::files::shown(file),
             "frames": u64::from(timeline.frames) + 1,
             "last_frame": timeline.frames,
             "fps": timeline.fps,
@@ -203,7 +209,8 @@ fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), S
     }
     let _ = writeln!(
         out,
-        "{file}: {} frames (0 to {}) at {} fps, {} s, {}x{}",
+        "{}: {} frames (0 to {}) at {} fps, {} s, {}x{}",
+        pfx_recipe::files::shown(file),
         u64::from(timeline.frames) + 1,
         timeline.frames,
         timeline.fps,

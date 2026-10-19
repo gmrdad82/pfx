@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF2'
+Usage: bin/checksums <dir>
+
+Writes <dir>/SHA256SUMS over every release asset in <dir> (pfx-v*.tar.gz, pfx-v*.zip
+and docs-v*.tar.gz), one "<sha256>  <file>" line each in sha256sum's format, sorted
+by name, then checks it.
+EOF2
+}
+
+refuse() {
+  printf "error: %s\n\nUsage: bin/checksums <dir>\n\nFor more information, try '--help'.\n" "$1" >&2
+  exit 2
+}
+
+args=()
+for arg in "$@"; do
+  case $arg in
+    -h|--help) usage; exit 0 ;;
+    -*) refuse "unexpected argument '$arg' found" ;;
+    *) args+=("$arg") ;;
+  esac
+done
+case ${#args[@]} in
+  1) ;;
+  0) refuse "the following required arguments were not provided: <dir>" ;;
+  *) refuse "unexpected argument '${args[1]}' found" ;;
+esac
+dir=${args[0]}
+if [ ! -d "$dir" ]; then
+  echo "checksums: $dir is not a folder" >&2
+  exit 1
+fi
+
+if command -v sha256sum >/dev/null 2>&1; then
+  sum=(sha256sum)
+else
+  sum=(shasum -a 256)
+fi
+
+cd "$dir"
+assets=()
+while IFS= read -r file; do
+  assets+=("$file")
+done < <(find . -maxdepth 1 -type f \( -name 'pfx-v*.tar.gz' -o -name 'pfx-v*.zip' -o -name 'docs-v*.tar.gz' \) | sed 's|^\./||' | LC_ALL=C sort)
+if [ ${#assets[@]} -eq 0 ]; then
+  echo "checksums: no release assets in $dir" >&2
+  exit 1
+fi
+"${sum[@]}" -- "${assets[@]}" > SHA256SUMS.partial
+mv SHA256SUMS.partial SHA256SUMS
+"${sum[@]}" -c SHA256SUMS

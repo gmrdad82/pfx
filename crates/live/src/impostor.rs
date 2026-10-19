@@ -540,7 +540,7 @@ impl ImpostorPass {
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: depth_format,
                     depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
                     stencil: Default::default(),
                     bias: Default::default(),
                 }),
@@ -1181,7 +1181,7 @@ mod tests {
         });
         let depth_view = depth.create_view(&Default::default());
         let params = ImpostorParams {
-            view_projection,
+            view_projection: crate::frame::reversed(view_projection),
             camera_position: [0.0, bounds.center[1], 10.0, 0.0],
             camera_right: [1.0, 0.0, 0.0, 0.0],
             camera_up: [0.0, 1.0, 0.0, 0.0],
@@ -1215,7 +1215,7 @@ mod tests {
                         view: &depth_view,
                         depth_ops: Some(wgpu::Operations {
                             load: if clear {
-                                wgpu::LoadOp::Clear(1.0)
+                                wgpu::LoadOp::Clear(0.0)
                             } else {
                                 wgpu::LoadOp::Load
                             },

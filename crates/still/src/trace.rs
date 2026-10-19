@@ -1,5 +1,5 @@
 use crate::picture::{Film, Reach};
-use crate::staging::{IDENTITY, Staging, View, eyepiece};
+use crate::staging::{IDENTITY, Staging, Steps, View, eyepiece};
 use crate::text::Overlay;
 use pfx_build::{Built, Registry};
 use pfx_denoise::Denoiser;
@@ -43,6 +43,15 @@ pub struct Noise {
 }
 
 impl Noise {
+    pub fn floored(self) -> Noise {
+        Noise {
+            min_samples: self
+                .min_samples
+                .max(Adaptive::automatic_min_samples(self.threshold)),
+            ..self
+        }
+    }
+
     fn adaptive(self, cap: u32) -> Option<Adaptive> {
         let adaptive = Adaptive {
             threshold: self.threshold,
@@ -51,6 +60,36 @@ impl Noise {
             growth: GROWTH,
         };
         adaptive.valid().then_some(adaptive)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Seed {
+    #[default]
+    Locked,
+    Animated(u32),
+}
+
+impl Seed {
+    pub fn of(self, seed: u32) -> u32 {
+        match self {
+            Seed::Locked => seed,
+            Seed::Animated(frame) => pfx_trace::sobol::animated_seed(seed, frame),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Take {
+    pub size: [u32; 2],
+    pub samples: u32,
+    pub noise: Option<Noise>,
+    pub seed: Seed,
+}
+
+impl Take {
+    pub fn adaptive(&self) -> Option<Adaptive> {
+        self.noise.and_then(|noise| noise.adaptive(self.samples))
     }
 }
 
@@ -265,6 +304,8 @@ pub struct Paced {
     pub longest_ms: f64,
     pub gpu_ms: f64,
     pub wall_ms: f64,
+    pub trace_bytes: u64,
+    pub gpu_resident: Option<u64>,
 }
 
 impl Paced {
@@ -374,7 +415,9 @@ pub fn render(
         request.time,
     )?;
     turn(Report::default());
-    let staging = Staging::of(&recipe, &built.parts)?;
+    let mut staging = Staging::of(&recipe, &built.parts)?;
+    drop(built);
+    staging.shed();
     let camera = pfx_recipe_scene::camera(&recipe, request.camera)?;
     let reach = match request.crop {
         Some(crop) if crop.finished => {
@@ -391,9 +434,12 @@ pub fn render(
         _ => Reach::NONE,
     };
     let mut staged = staging.stage(eyepiece(camera, request.view, request.size)?)?;
+    staging.images = Vec::new();
+    staging.textures = Default::default();
     staged.detail.sampler = Sampler::Sobol {
         samples: request.samples,
     };
+    staged.detail.fit_textures = Some(request.size);
     turn(Report::default());
     let adaptive = request
         .noise
@@ -462,7 +508,9 @@ pub fn render(
     Ok(Rendered {
         film,
         overlay: Overlay::of(&staging.text),
-        finish: staging.finish,
+        finish: staging
+            .finish
+            .at(request.time.unwrap_or(0.0), pfx_recipe_scene::seed(&recipe)),
         paced,
         seed,
         mean_samples,
@@ -476,13 +524,18 @@ pub fn render(
 pub struct Reel {
     pub recipe: Recipe,
     pub seed: u32,
+    pub motion_steps: u32,
     base: Recipe,
     built: Built,
     staging: Staging,
     gpu: Gpu,
     denoiser: Option<Denoiser>,
     kept: Option<Kept>,
+    moving_cameras: Vec<Camera>,
+    time: f64,
 }
+
+pub const MOTION_STEPS: u32 = 1;
 
 struct Kept {
     trace: Trace,
@@ -507,11 +560,14 @@ impl Reel {
             base: recipe.clone(),
             recipe,
             seed,
+            motion_steps: MOTION_STEPS,
             built,
             staging,
             gpu,
             denoiser: None,
             kept: None,
+            moving_cameras: Vec::new(),
+            time: 0.0,
         })
     }
 
@@ -524,13 +580,10 @@ impl Reel {
     }
 
     pub fn pose(&mut self, time: f64) -> Result<(), Fault> {
-        self.recipe = pfx_build::pose_cameras(&self.base, &self.built, time)
-            .map_err(|e| Fault::Failed(e.to_string()))?;
-        let fps = self.base.timeline.map_or(1, |t| t.fps);
-        let posed = pfx_recipe_scene::poses(&self.built, fps, time);
-        for (model, piece) in self.staging.posed.iter_mut().zip(&self.staging.pieces) {
-            *model = posed.get(&piece.name).copied().unwrap_or(IDENTITY);
-        }
+        self.time = time;
+        self.staging.steps = None;
+        self.moving_cameras.clear();
+        self.posed_at(time)?;
         if self.built.skinned() {
             for piece in pfx_recipe_scene::pieces(&self.built.skinned_parts(time)) {
                 if let Some(found) = self
@@ -543,8 +596,79 @@ impl Reel {
                     self.kept = None;
                 }
             }
+            if self.kept.is_none() {
+                self.staging.share();
+            }
         }
         Ok(())
+    }
+
+    fn posed_at(&mut self, time: f64) -> Result<(), Fault> {
+        self.recipe = pfx_build::pose_cameras(&self.base, &self.built, time)
+            .map_err(|e| Fault::Failed(e.to_string()))?;
+        let fps = self.base.timeline.map_or(1, |t| t.fps);
+        let posed = pfx_recipe_scene::poses(&self.built, fps, time);
+        for (model, piece) in self.staging.posed.iter_mut().zip(&self.staging.pieces) {
+            *model = posed.get(&piece.name).copied().unwrap_or(IDENTITY);
+        }
+        Ok(())
+    }
+
+    pub fn blurs(&self) -> bool {
+        self.staging.motion_blur.is_some() && self.motion_steps > 0
+    }
+
+    pub fn pose_moving(&mut self, time: f64, camera: &str) -> Result<Camera, Fault> {
+        let shutter = self
+            .staging
+            .motion_blur
+            .map(|blur| f64::from(blur.shutter))
+            .filter(|_| self.motion_steps > 0);
+        let Some(shutter) = shutter else {
+            self.pose(time)?;
+            return Ok(pfx_recipe_scene::camera(&self.recipe, camera)?.clone());
+        };
+        let fps = f64::from(self.base.timeline.map_or(1, |t| t.fps));
+        let times = pfx_trace::motion::Shutter::around(
+            time,
+            1.0 / fps,
+            shutter,
+            pfx_trace::motion::Position::Center,
+        )
+        .times(pfx_trace::motion::steps_of(self.motion_steps));
+        let mut posed = Vec::with_capacity(times.len());
+        let mut cameras = Vec::with_capacity(times.len());
+        let mut shapes: Vec<(usize, Vec<pfx_recipe_scene::Piece>)> = Vec::new();
+        for &at in &times {
+            self.posed_at(at)?;
+            posed.push(self.staging.posed.clone());
+            cameras.push(pfx_recipe_scene::camera(&self.recipe, camera)?.clone());
+            if self.built.skinned() {
+                for piece in pfx_recipe_scene::pieces(&self.built.skinned_parts(at)) {
+                    let Some(index) = self
+                        .staging
+                        .pieces
+                        .iter()
+                        .position(|p| p.name == piece.name && p.material == piece.material)
+                    else {
+                        continue;
+                    };
+                    match shapes.iter_mut().find(|(found, _)| *found == index) {
+                        Some((_, steps)) => steps.push(piece),
+                        None => shapes.push((index, vec![piece])),
+                    }
+                }
+            }
+        }
+        self.pose(time)?;
+        shapes.retain(|(_, steps)| steps.len() == times.len());
+        self.moving_cameras = cameras;
+        self.staging.steps = Some(Steps {
+            posed,
+            shapes,
+            cameras: Vec::new(),
+        });
+        Ok(pfx_recipe_scene::camera(&self.recipe, camera)?.clone())
     }
 
     pub fn spin(&mut self, object: usize, motion: Matrix) -> Result<(), Fault> {
@@ -566,10 +690,10 @@ impl Reel {
     pub fn frame(
         &mut self,
         camera: &Camera,
-        size: [u32; 2],
-        samples: u32,
+        take: Take,
         progress: &mut dyn FnMut(Step),
     ) -> Result<Rendered, Fault> {
+        let Take { size, samples, .. } = take;
         if samples == 0 {
             return Err(Fault::Failed("a render needs at least one sample".into()));
         }
@@ -577,57 +701,113 @@ impl Reel {
         let mut turn = turn_reporting;
         let lens = eyepiece(camera, View::Lens, size)?;
         let failed = |e: String| Fault::Failed(format!("the tracer: {e}"));
+        let mut traced_cameras = Vec::with_capacity(self.moving_cameras.len());
+        for moving in &self.moving_cameras {
+            traced_cameras.push(eyepiece(moving, View::Lens, size)?.camera);
+        }
+        if let Some(steps) = self.staging.steps.as_mut() {
+            steps.cameras = traced_cameras;
+        }
+        let moves = self.staging.steps.as_ref().is_some_and(Steps::moves);
         let mut kept = match self.kept.take() {
-            Some(mut kept) if kept.size == size && kept.samples == samples => {
-                let models: Vec<Matrix> = self
-                    .staging
-                    .placements(&lens.eye)
-                    .iter()
-                    .map(|placement| placement.model)
-                    .collect();
+            Some(mut kept)
+                if kept.size == size && kept.samples == samples && kept.trace.moving() == moves =>
+            {
+                let placements = self.staging.placements(&lens.eye);
+                let models: Vec<Matrix> =
+                    placements.iter().map(|placement| placement.model).collect();
                 kept.trace
                     .set_instance_transforms(&self.gpu, &models)
                     .map_err(failed)?;
                 kept.trace.set_projection(lens.projection).map_err(failed)?;
                 kept.trace.set_lens(lens.lens).map_err(failed)?;
                 kept.trace.set_camera(lens.camera).map_err(failed)?;
-                kept
-            }
-            _ => {
-                let mut staged = self.staging.stage(lens)?;
-                staged.detail.sampler = Sampler::Sobol { samples };
-                Kept {
-                    trace: Region::whole(size).open(&self.gpu, &staged)?,
-                    size,
-                    samples,
+                match self.staging.steps.as_ref().filter(|_| moves) {
+                    Some(steps) => {
+                        let per_step: Vec<Vec<Matrix>> = steps
+                            .posed
+                            .iter()
+                            .map(|posed| self.staging.models(posed, &lens.eye))
+                            .collect();
+                        let motion: Vec<Vec<Matrix>> = (0..models.len())
+                            .map(|piece| {
+                                per_step
+                                    .iter()
+                                    .filter_map(|models| models.get(piece).copied())
+                                    .collect()
+                            })
+                            .collect();
+                        match kept.trace.set_motion(&self.gpu, &motion, &steps.cameras) {
+                            Ok(()) => kept,
+                            Err(_) => self.restage(lens, size, samples)?,
+                        }
+                    }
+                    None => kept,
                 }
             }
+            _ => self.restage(lens, size, samples)?,
         };
         turn(Report::default());
         if self.denoiser.is_none() {
             self.denoiser = Some(denoiser(&self.gpu)?);
         }
-        let traced = traced(
-            &self.gpu,
-            &mut kept.trace,
-            (size, self.seed, self.denoiser.as_mut()),
-            samples,
-            progress,
-            &mut turn,
-        );
+        let seed = take.seed.of(self.seed);
+        let shot = (size, seed, self.denoiser.as_mut());
+        let traced = match take.adaptive() {
+            Some(adaptive) => adapted(
+                &self.gpu,
+                &mut kept.trace,
+                shot,
+                adaptive,
+                progress,
+                &mut turn,
+            ),
+            None => traced(
+                &self.gpu,
+                &mut kept.trace,
+                shot,
+                samples,
+                progress,
+                &mut turn,
+            )
+            .map(|(film, paced)| (film, paced, f64::from(samples), samples)),
+        };
         self.kept = Some(kept);
-        let (film, paced) = traced?;
+        let (film, paced, mean_samples, most_samples) = traced?;
         Ok(Rendered {
             film,
             overlay: Overlay::of(&self.staging.text),
-            finish: self.staging.finish.clone(),
+            finish: self
+                .staging
+                .finish
+                .clone()
+                .at(self.time, pfx_recipe_scene::seed(&self.base)),
             paced,
-            seed: self.seed,
-            mean_samples: f64::from(samples),
-            most_samples: samples,
+            seed,
+            mean_samples,
+            most_samples,
             region: Region::whole(size),
             rect: Region::whole(size).rect(),
-            left_out: pfx_recipe_scene::unapplied(&self.recipe, true),
+            left_out: pfx_recipe_scene::unapplied(&self.recipe, true)
+                .into_iter()
+                .filter(|key| *key != "motion_blur" || self.staging.steps.is_none())
+                .collect(),
+        })
+    }
+
+    fn restage(
+        &self,
+        lens: crate::staging::Eyepiece,
+        size: [u32; 2],
+        samples: u32,
+    ) -> Result<Kept, Fault> {
+        let mut staged = self.staging.stage(lens)?;
+        staged.detail.sampler = Sampler::Sobol { samples };
+        staged.detail.fit_textures = Some(size);
+        Ok(Kept {
+            trace: Region::whole(size).open(&self.gpu, &staged)?,
+            size,
+            samples,
         })
     }
 }
@@ -694,9 +874,12 @@ fn traced(
     turn: &mut dyn FnMut(Report),
 ) -> Result<(Film, Paced), Fault> {
     let mut turns = Turns::new(turn);
-    let paced = sampled(samples, &mut turns, progress, |pacer, between| {
+    let resident = crate::memory::gpu_resident();
+    let mut paced = sampled(samples, &mut turns, progress, |pacer, between| {
         trace.sample_paced(gpu, 1, seed, pacer, between)
     })?;
+    paced.trace_bytes = trace.gpu_bytes();
+    paced.gpu_resident = resident;
     let film = developed(gpu, trace, size, samples, denoiser)?;
     turns.now();
     Ok((film, paced))
@@ -716,10 +899,29 @@ pub fn converge(
         denoiser,
     } = shot;
     let mut trace = region.open(gpu, staged)?;
+    adapted(
+        gpu,
+        &mut trace,
+        (region.size, seed, denoiser),
+        adaptive,
+        progress,
+        turn,
+    )
+}
+
+fn adapted(
+    gpu: &Gpu,
+    trace: &mut Trace,
+    (size, seed, denoiser): ([u32; 2], u32, Option<&mut Denoiser>),
+    adaptive: Adaptive,
+    progress: &mut dyn FnMut(Step),
+    turn: &mut dyn FnMut(Report),
+) -> Result<(Film, Paced, f64, u32), Fault> {
+    let resident = crate::memory::gpu_resident();
     let mut turns = Turns::new(turn);
     let mut pacer = Pacer::default();
     let cap = adaptive.max_samples;
-    let pixels = u64::from(region.size[0]) * u64::from(region.size[1]);
+    let pixels = u64::from(size[0]) * u64::from(size[1]);
     let watch = RefCell::new((Plan::new(&adaptive, pixels), 0.0f64, progress));
     let tell = |watch: &mut (Plan, f64, &mut dyn FnMut(Step))| {
         let (plan, gpu_ms, progress) = watch;
@@ -752,10 +954,14 @@ pub fn converge(
             },
         )
         .map_err(|e| Fault::Failed(format!("the tracer: {e}")))?;
-    let mut paced = Paced::default();
+    let mut paced = Paced {
+        trace_bytes: trace.gpu_bytes(),
+        gpu_resident: resident,
+        ..Paced::default()
+    };
     paced.add(&converged.stats);
     turns.now();
-    let film = developed(gpu, &trace, region.size, cap, denoiser)?;
+    let film = developed(gpu, trace, size, cap, denoiser)?;
     turns.now();
     Ok((
         film,

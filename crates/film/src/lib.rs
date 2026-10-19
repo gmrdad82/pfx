@@ -1,5 +1,6 @@
 pub mod art;
 pub mod beat;
+pub mod bed;
 pub mod camera;
 pub mod colour;
 pub mod cut;
@@ -25,6 +26,7 @@ pub mod write;
 
 pub use art::{Art, Plain, What};
 pub use beat::Grid;
+pub use bed::Bed;
 pub use camera::{Camera, Picture, WIDE, layout, layout_in, picture, picture_in};
 pub use cut::{Cast, Cut, Director, Posed};
 pub use duck::Duck;

@@ -26,6 +26,7 @@ pub fn lines(recipe: &Recipe) -> Vec<Line> {
     recipe
         .routes
         .iter()
+        .filter(|spec| spec.show)
         .filter_map(|spec| {
             let route = Route::new(&spec.points, spec.closed).ok()?;
             let step = (route.length() / SAMPLES).max(LEAST_STEP);
@@ -258,8 +259,9 @@ impl Routes {
     }
 
     pub fn draw(&self, painter: &Painter, lens: &Lens, object_route: Option<&str>) {
-        let line_stroke = Stroke::new(1.5_f32, ACCENT.gamma_multiply(0.85));
-        let disc_stroke = Stroke::new(STROKE + 0.5, ACCENT);
+        let palette = Palette::of(painter.ctx());
+        let line_stroke = Stroke::new(1.5_f32, palette.accent.gamma_multiply(0.85));
+        let disc_stroke = Stroke::new(STROKE + 0.5, palette.accent);
         for line in self.shown(object_route) {
             let mut run: Vec<Pos2> = Vec::new();
             for point in &line.path {
@@ -288,7 +290,11 @@ impl Routes {
                         .point
                         .as_ref()
                         .is_some_and(|(n, i)| *n == line.name && *i == index);
-                let fill = if held { ACCENT } else { BG_DEEP };
+                let fill = if held {
+                    palette.accent
+                } else {
+                    palette.bg_deep
+                };
                 painter.circle(screen, DISC, fill, disc_stroke);
             }
         }

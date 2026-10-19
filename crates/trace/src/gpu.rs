@@ -1,5 +1,6 @@
 use bytemuck::{Pod, Zeroable};
 use pfx_core::daylight::{Daylight, REFERENCE_HOUR};
+use pfx_core::memory;
 use pfx_gpu::pace::{Pacer, Slice, Stats, Turned, Turns, Work};
 use pfx_gpu::{Gpu, GpuRefusal, GpuShortfall, OffscreenTarget, trace_floor};
 use pfx_load::Sky;
@@ -31,10 +32,25 @@ struct GpuSurface {
     clip1: [f32; 4],
     transform: [f32; 4],
     crop: [f32; 4],
+    info: [u32; 4],
+    forward: [[f32; 4]; 3],
+    inverse: [[f32; 4]; 3],
 }
 
-impl From<InstanceSurface> for GpuSurface {
-    fn from(surface: InstanceSurface) -> Self {
+pub const NO_MATERIAL: u32 = u32::MAX;
+const IDENTITY_ROWS: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+
+fn rows3(rows: [f32; 12]) -> [[f32; 4]; 3] {
+    std::array::from_fn(|row| std::array::from_fn(|k| rows[row * 4 + k]))
+}
+
+impl GpuSurface {
+    fn of(
+        surface: InstanceSurface,
+        info: [u32; 4],
+        forward: [f32; 12],
+        inverse: [f32; 12],
+    ) -> Self {
         Self {
             clip0: surface.clip[0],
             clip1: surface.clip[1],
@@ -45,7 +61,34 @@ impl From<InstanceSurface> for GpuSurface {
                 surface.uv_scale[1],
             ],
             crop: surface.crop,
+            info,
+            forward: rows3(forward),
+            inverse: rows3(inverse),
         }
+    }
+
+    fn world() -> Self {
+        Self::of(
+            InstanceSurface::default(),
+            [0, NO_MATERIAL, 0, 1.0f32.to_bits()],
+            IDENTITY_ROWS,
+            IDENTITY_ROWS,
+        )
+    }
+
+    fn placed(surface: InstanceSurface, placed: &crate::levels::Placed) -> Result<Self, String> {
+        let pose = crate::detail::Pose::new(placed.transform)?;
+        Ok(Self::of(
+            surface,
+            [
+                placed.word,
+                placed.material.unwrap_or(NO_MATERIAL),
+                surface.alpha_cutoff.to_bits(),
+                pose.inverse_determinant().to_bits(),
+            ],
+            pose.rows(),
+            placed.inverse,
+        ))
     }
 }
 
@@ -204,7 +247,6 @@ pub const BAND_STEP: u32 = 8;
 pub const SAMPLE_SPAN_MS: f64 = 12.0;
 pub const SAMPLE_TARGET_MS: f64 = 10.0;
 const LANES: u32 = 64;
-const UPLOAD_TRIANGLES: usize = 1 << 18;
 const PIECE_COLUMNS: u32 = 8;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -270,11 +312,19 @@ pub struct Trace {
     pub normal: OffscreenTarget,
     rt: Option<crate::rt::Rt>,
     placing: Option<Placing>,
-    triangle_buffer: wgpu::Buffer,
+    surface_buffer: wgpu::Buffer,
     node_buffer: wgpu::Buffer,
     emitter_buffer: wgpu::Buffer,
     emitter_cdf_buffer: wgpu::Buffer,
     builds: Builds,
+    gpu_bytes: u64,
+    half_sky: bool,
+    moving: Option<MovingState>,
+}
+
+struct MovingState {
+    moving: crate::moving::Moving,
+    offset: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -311,6 +361,7 @@ pub struct SceneBuffers {
     levels: Option<Placing>,
     bottom_builds: usize,
     features: Features,
+    moving: Option<crate::moving::Moving>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -396,7 +447,14 @@ impl SceneBuffers {
         materials: &[Material],
         detail: &Detail,
     ) -> Result<Self, String> {
-        Self::build_with(triangles, shapes, materials, detail, true)
+        Self::build_with(
+            triangles,
+            shapes,
+            materials,
+            detail,
+            true,
+            &crate::textured::Shrink::default(),
+        )
     }
 
     fn build_with(
@@ -405,6 +463,7 @@ impl SceneBuffers {
         materials: &[Material],
         detail: &Detail,
         emitter_sampling: bool,
+        shrink: &crate::textured::Shrink,
     ) -> Result<Self, String> {
         if detail.lights.len() > MAX_LIGHTS || detail.lights.iter().any(|light| !light.valid()) {
             return Err("invalid trace light".into());
@@ -425,24 +484,18 @@ impl SceneBuffers {
         {
             return Err("invalid trace scene detail".into());
         }
-        let mut detailed: Vec<TriangleDetail> = triangles
-            .iter()
-            .copied()
-            .map(TriangleDetail::flat)
-            .collect();
-        detailed.extend_from_slice(&detail.triangles);
-        let mut surfaces = vec![GpuSurface::from(InstanceSurface::default()); detailed.len()];
-        let mut flags = vec![0_u32; detailed.len()];
-        let mut cutoffs = vec![0.0_f32; detailed.len()];
+        let mut world: Vec<TriangleDetail> = memory::vec(
+            triangles.len() + detail.triangles.len(),
+            "the tracer's world triangles",
+        )?;
+        world.extend(triangles.iter().copied().map(TriangleDetail::flat));
+        world.extend_from_slice(&detail.triangles);
         if materials.len() + detail.instances.len() >= LAYER_LIMIT {
             return Err("trace scene has too many content layers".into());
         }
         let mut placed_layers = Vec::new();
-        let world = detailed.len();
-        let mut starts = Vec::with_capacity(detail.instances.len());
         let mut words = Vec::with_capacity(detail.instances.len());
         for instance in &detail.instances {
-            let transformed = instance.transformed()?;
             let surface = instance.surface;
             let mut word = surface.face.code() << FACE_SHIFT;
             if surface.layer.active() {
@@ -461,17 +514,9 @@ impl SceneBuffers {
             if !instance.two_sided {
                 word |= ONE_SIDED;
             }
-            starts.push(detailed.len());
             words.push(word);
-            flags.extend(std::iter::repeat_n(word, transformed.len()));
-            surfaces.extend(std::iter::repeat_n(
-                GpuSurface::from(surface),
-                transformed.len(),
-            ));
-            cutoffs.extend(std::iter::repeat_n(surface.alpha_cutoff, transformed.len()));
-            detailed.extend(transformed);
         }
-        if detailed.iter().any(|tri| {
+        let broken = |tri: &TriangleDetail| {
             tri.vertices.into_iter().any(|vertex| !finite3(vertex))
                 || tri.normals.into_iter().any(|normal| !finite3(normal))
                 || tri
@@ -480,17 +525,28 @@ impl SceneBuffers {
                     .flatten()
                     .any(|value| !value.is_finite())
                 || tri.material as usize >= materials.len()
-        }) || shapes
-            .iter()
-            .copied()
-            .any(|shape| !valid_shape(shape) || shape.material() as usize >= materials.len())
+        };
+        let mut checked: Vec<&std::sync::Arc<[TriangleDetail]>> = Vec::new();
+        let mut broken_instance = false;
+        for instance in &detail.instances {
+            if checked
+                .iter()
+                .any(|seen| std::sync::Arc::ptr_eq(seen, &instance.triangles))
+            {
+                continue;
+            }
+            checked.push(&instance.triangles);
+            broken_instance |= instance.triangles.iter().any(broken);
+        }
+        drop(checked);
+        if broken_instance
+            || world.iter().any(broken)
+            || shapes
+                .iter()
+                .copied()
+                .any(|shape| !valid_shape(shape) || shape.material() as usize >= materials.len())
         {
             return Err("invalid trace geometry".into());
-        }
-        for (word, tri) in flags.iter_mut().zip(&detailed) {
-            if !materials[tri.material as usize].alpha_mode.opaque() {
-                *word |= CUTOUT;
-            }
         }
         for (index, shape) in shapes.iter().enumerate() {
             if let Shape::SmoothUnion { left, right, .. } = shape
@@ -502,16 +558,6 @@ impl SceneBuffers {
                 return Err("smooth union needs earlier primitive shapes".into());
             }
         }
-        let laid = crate::levels::lay(&detailed, world, &detail.instances, &starts, &words)?;
-        let order = &laid.order;
-        let mut triangles: Vec<_> = order
-            .iter()
-            .map(|&index| pack_triangle(&detailed[index as usize], flags[index as usize]))
-            .collect();
-        let ordered_surfaces: Vec<GpuSurface> = order
-            .iter()
-            .map(|&index| surfaces[index as usize])
-            .collect();
         let mut effects = crate::record::Hot::default();
         if let Some(leaf) = detail.leaf {
             effects.base_roughness = [leaf.time, leaf.strength, 0.0, 0.0];
@@ -524,18 +570,6 @@ impl SceneBuffers {
             effects.thick_sub_film = vec4(steam.box_lo, steam.density);
             effects.tint_absorption = vec4(steam.box_hi, steam.ambient);
         }
-        let uv_v: Vec<[f32; 4]> = order
-            .iter()
-            .map(|&index| {
-                let tri = detailed[index as usize];
-                [
-                    tri.uvs[0][1],
-                    tri.uvs[1][1],
-                    tri.uvs[2][1],
-                    cutoffs[index as usize],
-                ]
-            })
-            .collect();
         let slotted = !detail.content_slots.is_empty() || !detail.text_slots.is_empty();
         let slot_images = if !slotted {
             &detail.content
@@ -544,16 +578,17 @@ impl SceneBuffers {
         };
         let slot_count = slot_images.len().max(detail.text_slots.len());
         let mut content_info = vec![GpuContent::zeroed(); slot_count.max(1)];
-        let mut content_texels: Vec<[f32; 4]> = Vec::new();
+        let mut content_bytes: Vec<u8> = crate::textured::srgb_rows()?;
         for (index, image) in slot_images.iter().enumerate() {
             if let Some(image) = image {
-                content_info[index] = GpuContent {
-                    offset: content_texels.len() as u32,
-                    width: image.width,
-                    height: image.height,
-                    kind: 0,
-                };
-                content_texels.extend_from_slice(&image.texels);
+                let mut placed = Vec::with_capacity(1);
+                crate::textured::push(
+                    image,
+                    crate::textured::at(&shrink.content, index),
+                    &mut placed,
+                    &mut content_bytes,
+                )?;
+                content_info[index] = placed[0];
             }
         }
         for (index, text) in detail.text_slots.iter().enumerate() {
@@ -562,22 +597,27 @@ impl SceneBuffers {
                     return Err("a content slot holds both an image and text".into());
                 }
                 content_info[index] = GpuContent {
-                    offset: content_texels.len() as u32,
+                    offset: crate::textured::row(&content_bytes),
                     width: text.width,
                     height: text.height,
                     kind: 1,
                 };
-                content_texels.extend_from_slice(&text.records);
+                memory::more(
+                    &mut content_bytes,
+                    16 * text.records.len(),
+                    "the tracer's content",
+                )?;
+                for record in &text.records {
+                    crate::textured::put_row(&mut content_bytes, record.map(f32::to_bits));
+                }
             }
         }
-        let texture_slots =
-            crate::textured::place(&detail.textures, &mut content_info, &mut content_texels);
-        if content_texels.len() > u32::MAX as usize {
-            return Err("trace content is too large".into());
-        }
-        if content_texels.is_empty() {
-            content_texels.push([0.0; 4]);
-        }
+        let texture_slots = crate::textured::place(
+            &detail.textures,
+            shrink,
+            &mut content_info,
+            &mut content_bytes,
+        )?;
         let mut content_layers: Vec<GpuLayer> = materials
             .iter()
             .enumerate()
@@ -623,36 +663,132 @@ impl SceneBuffers {
             texture_slots.remap(packed);
         }
         let features = Features::of(&packed_materials);
-        if packed_materials.iter().any(crate::textured::wants_uvs1) {
-            effects.set_uvs1(crate::textured::place_uvs1(
-                order.iter().map(|&index| detailed[index as usize].uvs1),
-                &mut content_texels,
-            )?);
-        }
-        let records = crate::record::Records::split(&packed_materials, effects);
-        let emitting: Vec<bool> = (0..records.len())
+        let emitting: Vec<bool> = packed_materials
+            .iter()
             .zip(&content_layers)
-            .map(|(material, layer)| {
-                emitter_sampling && layer.layer[0] < 0.0 && emits(records.hot(material).emission())
+            .zip(materials)
+            .map(|((packed, layer), material)| {
+                let film = packed.emission_film;
+                emitter_sampling
+                    && layer.layer[0] < 0.0
+                    && material.alpha_mode.opaque()
+                    && emits([film[0], film[1], film[2]])
             })
             .collect();
-        let emission = |material: u32| records.hot(material as usize).emission();
+        let unique: Vec<bool> = detail
+            .instances
+            .iter()
+            .zip(&words)
+            .map(|(instance, &word)| {
+                word & (SHADOW_ONLY | CUTOUT) == 0
+                    && (word >> LAYER_SHIFT) & LAYER_MASK == 0
+                    && instance
+                        .triangles
+                        .iter()
+                        .any(|tri| emitting[tri.material as usize])
+            })
+            .collect();
+        crate::moving::check(detail)?;
+        let moves = crate::moving::moves(detail);
+        let laid = crate::levels::lay(&world, &detail.instances, &words, &unique, moves)?;
+        let order = &laid.order;
+        let slots = laid.slots;
+        let stride = std::mem::size_of::<GpuTriangle>();
+        let mut triangle_bytes: Vec<u8> = memory::vec(slots * stride, "the tracer's triangles")?;
+        let mut uv_v: Vec<[f32; 4]> = memory::vec(slots, "the tracer's triangle uvs")?;
+        let mut put = |tri: &TriangleDetail| {
+            triangle_bytes.extend_from_slice(bytemuck::bytes_of(&pack_triangle(tri, 0)));
+            uv_v.push([tri.uvs[0][1], tri.uvs[1][1], tri.uvs[2][1], 0.0]);
+        };
+        for &index in order {
+            put(&world[index as usize]);
+        }
+        if let Some(levels) = &laid.levels {
+            for mesh in &levels.meshes {
+                mesh.triangles.iter().for_each(&mut put);
+            }
+        }
+        let mut records = vec![GpuSurface::world()];
+        let mut opaque = Vec::new();
+        if let Some(levels) = &laid.levels {
+            for (instance, placed) in detail.instances.iter().zip(&levels.placed) {
+                let Some(placed) = placed else { continue };
+                records.push(GpuSurface::placed(instance.surface, placed)?);
+                let mesh = &levels.meshes[placed.mesh];
+                let clear = |material: u32| {
+                    let material = &materials[material as usize];
+                    material.transmitted() <= 0.0 && material.alpha_mode.opaque()
+                };
+                opaque.push(
+                    placed.word & (SHADOW_ONLY | CASTS_NO_SHADOW | CUTOUT | ONE_SIDED) == 0
+                        && instance.surface.clip[0][..3] == [0.0; 3]
+                        && instance.surface.clip[1][..3] == [0.0; 3]
+                        && match placed.material {
+                            Some(material) => clear(material),
+                            None => mesh.triangles.iter().all(|tri| clear(tri.material)),
+                        },
+                );
+            }
+        }
+        if packed_materials.iter().any(crate::textured::wants_uvs1) {
+            let meshes = laid.levels.iter().flat_map(|levels| &levels.meshes);
+            effects.set_uvs1(crate::textured::place_uvs1(
+                order
+                    .iter()
+                    .map(|&index| world[index as usize].uvs1)
+                    .chain(meshes.flat_map(|mesh| mesh.triangles.iter().map(|tri| tri.uvs1))),
+                &mut content_bytes,
+            )?);
+        }
+        if content_bytes.len() / 16 > u32::MAX as usize {
+            return Err("trace content is too large".into());
+        }
+        let records_split = crate::record::Records::split(&packed_materials, effects);
+        let emission = |material: u32| records_split.hot(material as usize).emission();
         let mut candidates = Vec::new();
+        let mark = |bytes: &mut Vec<u8>, slot: usize, value: usize| {
+            let at = slot * stride + 2 * 16 + 12;
+            bytes[at..at + 4].copy_from_slice(&(value as f32).to_le_bytes());
+        };
         for (slot, &index) in order.iter().enumerate() {
-            let tri = detailed[index as usize];
-            if emitting[tri.material as usize]
-                && flags[index as usize] & (SHADOW_ONLY | CUTOUT) == 0
-                && (flags[index as usize] >> LAYER_SHIFT) & LAYER_MASK == 0
-                && crate::lights::triangle_area(tri.vertices) > 1e-12
+            let tri = world[index as usize];
+            if emitting[tri.material as usize] && crate::lights::triangle_area(tri.vertices) > 1e-12
             {
                 candidates.push(Candidate {
                     source: Source::Triangle {
                         vertices: tri.vertices,
                         slot: slot as u32,
+                        record: 0,
                     },
                     emission: emission(tri.material),
                 });
-                triangles[slot].c[3] = candidates.len() as f32;
+                mark(&mut triangle_bytes, slot, candidates.len());
+            }
+        }
+        if let Some(levels) = &laid.levels {
+            for (placed, &alone) in levels.placed.iter().zip(&unique) {
+                let Some(placed) = placed.as_ref().filter(|_| alone) else {
+                    continue;
+                };
+                let pose = crate::detail::Pose::new(placed.transform)?;
+                let mesh = &levels.meshes[placed.mesh];
+                for (j, tri) in mesh.triangles.iter().enumerate() {
+                    let material = placed.material.unwrap_or(tri.material);
+                    let vertices = tri.vertices.map(|point| pose.point(point));
+                    if emitting[material as usize] && crate::lights::triangle_area(vertices) > 1e-12
+                    {
+                        let slot = mesh.first as usize + j;
+                        candidates.push(Candidate {
+                            source: Source::Triangle {
+                                vertices,
+                                slot: slot as u32,
+                                record: placed.record,
+                            },
+                            emission: emission(material),
+                        });
+                        mark(&mut triangle_bytes, slot, candidates.len());
+                    }
+                }
             }
         }
         for (index, shape) in shapes.iter().enumerate() {
@@ -675,26 +811,15 @@ impl SceneBuffers {
         if candidates.len() > MAX_EMITTERS {
             return Err("trace scene has too many emitters".into());
         }
-        let solid: Vec<bool> = order
-            .iter()
-            .map(|&index| {
-                let index = index as usize;
-                let surface = surfaces[index];
-                flags[index] & (SHADOW_ONLY | CASTS_NO_SHADOW | CUTOUT | ONE_SIDED) == 0
-                    && surface.clip0[..3] == [0.0; 3]
-                    && surface.clip1[..3] == [0.0; 3]
-                    && materials[detailed[index].material as usize].transmission <= 0.0
-            })
-            .collect();
-        let world_slots = if laid.levels.is_some() {
-            world
-        } else {
-            order.len()
-        };
-        let placed: Vec<[[f32; 3]; 3]> = order[..world_slots]
-            .iter()
-            .map(|&index| detailed[index as usize].vertices)
-            .collect();
+        let mut solid: Vec<bool> = memory::vec(order.len(), "the tracer's world flags")?;
+        solid.extend(order.iter().map(|&index| {
+            let material = &materials[world[index as usize].material as usize];
+            material.transmitted() <= 0.0 && material.alpha_mode.opaque()
+        }));
+        let mut placed: Vec<[[f32; 3]; 3]> =
+            memory::vec(order.len(), "the tracer's world vertices")?;
+        placed.extend(order.iter().map(|&index| world[index as usize].vertices));
+        drop(world);
         let boxes = shapes
             .iter()
             .enumerate()
@@ -719,27 +844,71 @@ impl SceneBuffers {
         } else {
             Vec::new()
         };
-        let mut rt = crate::rt::RtGeometry::new(&placed, &solid[..world_slots], boxes);
+        let mut rt = crate::rt::RtGeometry::new(&placed, &solid, boxes);
         if let Some(levels) = &laid.levels {
-            rt.place(levels, &solid);
+            rt.place(levels, &opaque);
         }
+        let moving = match (&detail.motion, moves) {
+            (Some(motion), true) => {
+                let slots = laid
+                    .levels
+                    .as_ref()
+                    .map_or(0, |levels| levels.placed.iter().flatten().count());
+                let mut moving = crate::moving::Moving::new(motion, slots);
+                if let Some(levels) = &laid.levels {
+                    for (instance, placed) in detail.instances.iter().zip(&levels.placed) {
+                        let Some(placed) = placed.as_ref().filter(|placed| placed.deform > 0)
+                        else {
+                            continue;
+                        };
+                        let Some(shapes) = instance.motion.as_ref().map(|motion| &motion.shapes)
+                        else {
+                            continue;
+                        };
+                        let mesh = &levels.meshes[placed.mesh];
+                        moving.firsts[placed.record as usize - 1] =
+                            (triangle_bytes.len() / stride) as u32;
+                        for shape in shapes {
+                            for &index in &mesh.order {
+                                triangle_bytes.extend_from_slice(bytemuck::bytes_of(
+                                    &pack_triangle(&shape[index as usize], 0),
+                                ));
+                            }
+                        }
+                    }
+                }
+                Some(moving)
+            }
+            _ => None,
+        };
         let laid_lights = crate::tree::lay(&detail.lights);
         let list = build_emitters(&candidates, laid_lights.looped, laid_lights.tree);
         let lights = laid_lights.rows;
         Ok(Self {
-            triangles: bytemuck::cast_slice(&triangles).to_vec(),
-            nodes: bytemuck::cast_slice(&laid.nodes).to_vec(),
+            triangles: triangle_bytes,
+            nodes: {
+                let mut bytes = memory::vec(
+                    std::mem::size_of_val(laid.nodes.as_slice()),
+                    "the tracer's bvh nodes",
+                )?;
+                bytes.extend_from_slice(bytemuck::cast_slice(&laid.nodes));
+                bytes
+            },
             shapes: bytemuck::cast_slice(&packed_shapes).to_vec(),
-            materials: records.bytes(),
-            uv: bytemuck::cast_slice(&uv_v).to_vec(),
-            content: bytemuck::cast_slice(&content_texels).to_vec(),
-            surfaces: bytemuck::cast_slice(&ordered_surfaces).to_vec(),
+            materials: records_split.bytes(),
+            uv: {
+                let mut bytes = memory::vec(uv_v.len() * 16, "the tracer's triangle uvs")?;
+                bytes.extend_from_slice(bytemuck::cast_slice(&uv_v));
+                bytes
+            },
+            content: content_bytes,
+            surfaces: bytemuck::cast_slice(&records).to_vec(),
             layers: bytemuck::cast_slice(&content_layers).to_vec(),
             content_info: bytemuck::cast_slice(&content_info).to_vec(),
             emitters: bytemuck::cast_slice(&list.entries).to_vec(),
             emitter_cdf: bytemuck::cast_slice(&list.cdf).to_vec(),
             lights: bytemuck::cast_slice(&lights).to_vec(),
-            triangle_count: detailed.len() as u32,
+            triangle_count: slots as u32,
             shape_count: shapes.len() as u32,
             emitter_count: candidates.len() as u32,
             light_count: detail.lights.len() as u32,
@@ -752,6 +921,7 @@ impl SceneBuffers {
             }),
             bottom_builds: laid.bottom_builds,
             features,
+            moving,
         })
     }
 }
@@ -837,8 +1007,12 @@ fn pipeline_constants(
     detail: &Detail,
     height: u32,
     features: Features,
+    moving: bool,
 ) -> Vec<(&'static str, f64)> {
     let mut constants = bounce_limits(detail.bounces).to_vec();
+    if moving {
+        constants.push(("TRACE_MOTION", 1.0));
+    }
     constants.extend(features.constants());
     constants.push((
         "BLOCK_STRIDE",
@@ -1231,6 +1405,8 @@ fn shader_source(lit: bool, rt: bool) -> String {
         return source;
     }
     let source = [
+        ("fn node_at(i: u32", "fn soft_node_at(i: u32"),
+        ("fn motion_vec(k: u32", "fn soft_motion_vec(k: u32"),
         ("fn scene(o: vec3f", "fn soft_scene(o: vec3f"),
         ("fn occluded(o: vec3f", "fn soft_occluded(o: vec3f"),
         (
@@ -1321,12 +1497,77 @@ fn sobol_table(gpu: &Gpu, sampler: crate::sobol::Sampler) -> wgpu::Texture {
     )
 }
 
+fn ready<F: std::future::Future>(future: F) -> Option<F::Output> {
+    let mut future = std::pin::pin!(future);
+    match future
+        .as_mut()
+        .poll(&mut std::task::Context::from_waker(std::task::Waker::noop()))
+    {
+        std::task::Poll::Ready(value) => Some(value),
+        std::task::Poll::Pending => None,
+    }
+}
+
+fn halved_sky(sky: &Sky) -> Result<Sky, String> {
+    let width = sky.width.div_ceil(2);
+    let height = sky.height.div_ceil(2);
+    let at =
+        |x: u32, y: u32| sky.texels[(y.min(sky.height - 1) * sky.width + x % sky.width) as usize];
+    let mut texels = memory::vec(width as usize * height as usize, "the sky")?;
+    for y in 0..height {
+        for x in 0..width {
+            let mut sum = [0.0f32; 4];
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let texel = at(2 * x + dx, 2 * y + dy);
+                for c in 0..4 {
+                    sum[c] += texel[c];
+                }
+            }
+            texels.push(sum.map(|value| value * 0.25));
+        }
+    }
+    Ok(Sky {
+        width,
+        height,
+        texels,
+    })
+}
+
+fn fitted(
+    sky: Environment,
+    camera: &Camera,
+    projection: Projection,
+    size: [u32; 2],
+) -> Result<Environment, String> {
+    let Environment::Hdr(mut hdr) = sky else {
+        return Ok(sky);
+    };
+    let length = |v: [f32; 3]| f64::from(dot3f(v, v)).sqrt();
+    let needed = match projection {
+        Projection::Perspective => {
+            let tangent = length(camera.right) / length(camera.forward).max(f64::MIN_POSITIVE);
+            (std::f64::consts::TAU * f64::from(size[0]) / (2.0 * tangent)).ceil()
+        }
+        Projection::Equirectangular => f64::from(size[0]),
+        Projection::Orthographic { .. } => return Ok(Environment::Hdr(hdr)),
+    };
+    while f64::from(hdr.width / 2) >= needed && hdr.height >= 2 {
+        hdr = halved_sky(&hdr)?;
+    }
+    Ok(Environment::Hdr(hdr))
+}
+
+fn dot3f(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
 fn environment_binding(
     gpu: &Gpu,
     pipeline: &wgpu::ComputePipeline,
     environment: &Environment,
     look: [[f32; 4]; 2],
-) -> Result<wgpu::BindGroup, String> {
+    half: bool,
+) -> Result<(wgpu::BindGroup, u64), String> {
     let (width, height, texels) = match environment {
         Environment::Hdr(hdr) => {
             if hdr.width == 0
@@ -1340,6 +1581,11 @@ fn environment_binding(
         Environment::Analytic(_) => (1, 1, &[[0.0; 4]][..]),
     };
     let cdf = SkyCdf::build(environment, 256, 128).without_sun();
+    let halved = half
+        && texels
+            .iter()
+            .flatten()
+            .all(|value| value.is_finite() && value.abs() <= f32::from(half::f16::MAX));
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("trace environment"),
         size: wgpu::Extent3d {
@@ -1350,16 +1596,32 @@ fn environment_binding(
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
+        format: if halved {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            wgpu::TextureFormat::Rgba32Float
+        },
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
+    let texel_bytes = if halved { 8 } else { 16 };
+    let packed: Vec<u16>;
+    let data: &[u8] = if halved {
+        packed = texels
+            .iter()
+            .flatten()
+            .map(|&value| half::f16::from_f32(value).to_bits())
+            .collect();
+        bytemuck::cast_slice(&packed)
+    } else {
+        bytemuck::cast_slice(texels)
+    };
     gpu.queue.write_texture(
         texture.as_image_copy(),
-        bytemuck::cast_slice(texels),
+        data,
         wgpu::TexelCopyBufferLayout {
             offset: 0,
-            bytes_per_row: Some(width * 16),
+            bytes_per_row: Some(width * texel_bytes),
             rows_per_image: Some(height),
         },
         texture.size(),
@@ -1402,40 +1664,45 @@ fn environment_binding(
             contents: bytemuck::bytes_of(&cdf.uniform()),
             usage: wgpu::BufferUsages::UNIFORM,
         });
-    Ok(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("trace environment bindings"),
-        layout: &pipeline.get_bind_group_layout(1),
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(&sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: rows.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: columns.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
-                resource: cdf_uniform.as_entire_binding(),
-            },
-        ],
-    }))
+    let bytes = u64::from(width) * u64::from(height) * u64::from(texel_bytes)
+        + 4 * (cdf.rows.len() + cdf.columns.len()) as u64;
+    Ok((
+        gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("trace environment bindings"),
+            layout: &pipeline.get_bind_group_layout(1),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: rows.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: columns.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: cdf_uniform.as_entire_binding(),
+                },
+            ],
+        }),
+        bytes,
+    ))
 }
 
 impl Trace {
-    pub fn new<E: Clone + Into<Environment>>(
+    pub fn new<E: Clone + Into<Environment> + 'static>(
         gpu: &Gpu,
         scene: &Scene<E>,
         width: u32,
@@ -1444,7 +1711,7 @@ impl Trace {
         Self::new_detailed(gpu, scene, &Detail::default(), width, height)
     }
 
-    pub fn new_detailed<E: Clone + Into<Environment>>(
+    pub fn new_detailed<E: Clone + Into<Environment> + 'static>(
         gpu: &Gpu,
         scene: &Scene<E>,
         detail: &Detail,
@@ -1454,7 +1721,7 @@ impl Trace {
         Self::build(gpu, scene, detail, width, height, true)
     }
 
-    fn build<E: Clone + Into<Environment>>(
+    fn build<E: Clone + Into<Environment> + 'static>(
         gpu: &Gpu,
         scene: &Scene<E>,
         detail: &Detail,
@@ -1517,13 +1784,52 @@ impl Trace {
         if !detail.projection.fits(&scene.camera) {
             return Err("an orthographic or equirect camera needs forward, right and up".into());
         }
-        let buffers = SceneBuffers::build_with(
+        let shrink = crate::textured::budget(scene, detail, width, height);
+        let mut buffers = SceneBuffers::build_with(
             &scene.triangles,
             &scene.shapes,
             &scene.materials,
             detail,
             emitter_sampling,
+            &shrink,
         )?;
+        let hardware = crate::rt::wanted(gpu)
+            && !buffers.rt.is_empty()
+            && buffers.rt.instances.len() <= crate::rt::MAX_INSTANCES;
+        let mut motion_at = [0_u32; 3];
+        let moving = match buffers.moving.take() {
+            Some(moving) => {
+                let levels = buffers.levels.as_ref().map(|placing| &placing.levels);
+                let (block, movers) = moving.block(levels);
+                let offset = if hardware {
+                    let mut words = Vec::new();
+                    let first_mesh = levels
+                        .and_then(|levels| levels.meshes.first())
+                        .map_or(0, |mesh| mesh.root);
+                    if let Some(levels) = levels {
+                        for mesh in &levels.meshes {
+                            words.extend(crate::moving::node_words(&mesh.nodes));
+                        }
+                    }
+                    let map = buffers.rt.map.len() as u32;
+                    motion_at = [map + words.len() as u32, map, first_mesh];
+                    buffers.rt.tail = words;
+                    buffers.rt.tail.extend(crate::moving::as_words(&block));
+                    buffers.rt.movers = movers;
+                    u64::from(motion_at[0]) * 4
+                } else {
+                    let node = std::mem::size_of::<crate::bvh::Node>();
+                    let at = (buffers.nodes.len() / node) as u32;
+                    motion_at = [at, 0, 0];
+                    buffers
+                        .nodes
+                        .extend_from_slice(bytemuck::cast_slice(&crate::moving::as_nodes(&block)));
+                    u64::from(at) * node as u64
+                };
+                Some(MovingState { moving, offset })
+            }
+            None => None,
+        };
         for bytes in [
             &buffers.triangles,
             &buffers.uv,
@@ -1547,18 +1853,31 @@ impl Trace {
             mapped_at_creation: false,
         });
         let placed = buffers.levels.is_some();
-        let tri_buffer = storage(gpu, "trace triangles", &buffers.triangles, placed);
-        let uv_buffer = storage(gpu, "trace triangle uv v", &buffers.uv, false);
-        let content_buffer = storage(gpu, "trace content", &buffers.content, false);
-        let surface_buffer = storage(gpu, "trace instance surfaces", &buffers.surfaces, false);
-        let layer_buffer = storage(gpu, "trace content layers", &buffers.layers, false);
-        let content_info_buffer = storage(gpu, "trace content info", &buffers.content_info, false);
-        let node_buffer = storage(gpu, "trace nodes", &buffers.nodes, placed);
-        let shape_buffer = storage(gpu, "trace shapes", &buffers.shapes, false);
-        let material_buffer = storage(gpu, "trace materials", &buffers.materials, false);
-        let emitter_buffer = storage(gpu, "trace emitters", &buffers.emitters, placed);
-        let emitter_cdf_buffer = storage(gpu, "trace emitter cdf", &buffers.emitter_cdf, placed);
-        let light_buffer = storage(gpu, "trace lights", &buffers.lights, false);
+        let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let mut gpu_bytes = 0u64;
+        let mut upload = |label: &'static str, data: &mut Vec<u8>, read_write: bool| {
+            gpu_bytes += data.len().max(256) as u64;
+            let buffer = storage(gpu, label, data, read_write);
+            *data = Vec::new();
+            buffer
+        };
+        let tri_buffer = upload("trace triangles", &mut buffers.triangles, false);
+        let uv_buffer = upload("trace triangle uv v", &mut buffers.uv, false);
+        let content_buffer = upload("trace content", &mut buffers.content, false);
+        let surface_buffer = upload("trace instance surfaces", &mut buffers.surfaces, placed);
+        let layer_buffer = upload("trace content layers", &mut buffers.layers, false);
+        let content_info_buffer = upload("trace content info", &mut buffers.content_info, false);
+        let node_buffer = upload(
+            "trace nodes",
+            &mut buffers.nodes,
+            placed || moving.is_some(),
+        );
+        let shape_buffer = upload("trace shapes", &mut buffers.shapes, false);
+        let material_buffer = upload("trace materials", &mut buffers.materials, false);
+        let emitter_buffer = upload("trace emitters", &mut buffers.emitters, placed);
+        let emitter_cdf_buffer = upload("trace emitter cdf", &mut buffers.emitter_cdf, placed);
+        let light_buffer = upload("trace lights", &mut buffers.lights, false);
+        gpu_bytes += pixels * (48 + 3 * 16);
         let accum_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trace accumulation"),
             size: pixels * 48,
@@ -1583,10 +1902,11 @@ impl Trace {
             ],
             lit,
         };
-        let rt = (crate::rt::wanted(gpu)
-            && !buffers.rt.is_empty()
-            && buffers.rt.instances.len() <= crate::rt::MAX_INSTANCES)
-            .then(|| crate::rt::Rt::build(gpu, &buffers.rt));
+        let rt = hardware.then(|| crate::rt::Rt::build(gpu, &buffers.rt));
+        if let Some(rt) = &rt {
+            gpu_bytes += rt.bytes;
+        }
+        buffers.rt = crate::rt::RtGeometry::default();
         let module = gpu
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1601,7 +1921,12 @@ impl Trace {
                 module: &module,
                 entry_point: Some("main"),
                 compilation_options: wgpu::PipelineCompilationOptions {
-                    constants: &pipeline_constants(detail, height, buffers.features),
+                    constants: &pipeline_constants(
+                        detail,
+                        height,
+                        buffers.features,
+                        moving.is_some(),
+                    ),
                     ..Default::default()
                 },
                 cache: None,
@@ -1705,8 +2030,30 @@ impl Trace {
             entries: &entries,
         });
         let look = crate::sky::look(&detail.sky_look);
-        let environment_binding =
-            environment_binding(gpu, &pipeline, &scene.sky.clone().into(), look)?;
+        let sky: Environment =
+            match (&scene.sky as &dyn std::any::Any).downcast_ref::<Environment>() {
+                Some(environment) => environment.try_clone()?,
+                None => scene.sky.clone().into(),
+            };
+        let sky = match detail.fit_textures {
+            Some(size) => fitted(
+                sky,
+                &scene.camera,
+                detail.projection,
+                [size[0].max(width), size[1].max(height)],
+            )?,
+            None => sky,
+        };
+        let (environment_binding, sky_bytes) =
+            environment_binding(gpu, &pipeline, &sky, look, detail.fit_textures.is_some())?;
+        drop(sky);
+        if let Some(error) = ready(scope.pop()).flatten() {
+            return Err(format!(
+                "the tracer's buffers and textures need {gpu_bytes} bytes on the GPU: {error}"
+            )
+            .into());
+        }
+        gpu_bytes += sky_bytes;
         let base = Frame {
             size: [width, height, 0, 0],
             counts: [buffers.triangle_count, buffers.shape_count, 0, 0],
@@ -1723,7 +2070,7 @@ impl Trace {
                 detail.lens.focus_distance,
             ],
             window: [width, height, 0, 0],
-            columns: [0; 4],
+            columns: [0, motion_at[0], motion_at[1], motion_at[2]],
         };
         let mut base = base;
         detail.projection.place(&mut base);
@@ -1750,7 +2097,7 @@ impl Trace {
             normal,
             rt,
             placing: buffers.levels,
-            triangle_buffer: tri_buffer,
+            surface_buffer: surface_buffer.clone(),
             node_buffer,
             emitter_buffer,
             emitter_cdf_buffer,
@@ -1758,11 +2105,18 @@ impl Trace {
                 bottom: buffers.bottom_builds,
                 top: usize::from(placed),
             },
+            gpu_bytes,
+            half_sky: detail.fit_textures.is_some(),
+            moving,
         })
     }
 
     pub fn builds(&self) -> Builds {
         self.builds
+    }
+
+    pub fn gpu_bytes(&self) -> u64 {
+        self.gpu_bytes
     }
 
     pub fn instance_count(&self) -> usize {
@@ -1812,57 +2166,41 @@ impl Trace {
             return Ok(());
         }
         let mut emitters_moved = false;
-        let mut packed: Vec<GpuTriangle> = Vec::new();
+        let record_size = std::mem::size_of::<GpuSurface>() as u64;
         for ((placed, transform), pose) in levels.placed.iter_mut().zip(transforms).zip(&poses) {
             let Some(placed) = placed else { continue };
             if !moved(placed, transform) {
                 continue;
             }
             let mesh = &levels.meshes[placed.mesh];
-            let word = placed.word;
-            packed.clear();
-            packed.resize(mesh.triangles.len(), GpuTriangle::zeroed());
-            let bounds = crate::levels::pose_into(
-                pose,
-                &mesh.triangles,
-                &placed.materials,
-                &mut packed,
-                |triangle| pack_triangle(triangle, word),
-            );
-            if packed.iter().any(|tri| {
-                [tri.a, tri.b, tri.c, tri.na, tri.nb, tri.nc]
-                    .iter()
-                    .any(|lane| !lane[..3].iter().all(|v| v.is_finite()))
-            }) {
-                return Err("a moved instance has non-finite geometry".into());
-            }
-            let first = placed.base;
-            let last = first + packed.len() as u32;
-            for (index, candidate) in placing.candidates.iter_mut().enumerate() {
-                if let crate::lights::Source::Triangle { vertices, slot } = &mut candidate.source
-                    && (first..last).contains(slot)
+            placed.transform = *transform;
+            placed.inverse = pose.inverse_rows();
+            placed.bounds = crate::levels::placed_bounds(pose, mesh.bounds);
+            for candidate in &mut placing.candidates {
+                if let crate::lights::Source::Triangle {
+                    vertices,
+                    slot,
+                    record,
+                } = &mut candidate.source
+                    && *record == placed.record
                 {
-                    let tri = &mut packed[(*slot - first) as usize];
-                    tri.c[3] = (index + 1) as f32;
-                    *vertices = [
-                        [tri.a[0], tri.a[1], tri.a[2]],
-                        [tri.b[0], tri.b[1], tri.b[2]],
-                        [tri.c[0], tri.c[1], tri.c[2]],
-                    ];
+                    let local = &mesh.triangles[(*slot - mesh.first) as usize];
+                    *vertices = local.vertices.map(|point| pose.point(point));
                     emitters_moved = true;
                 }
             }
-            let stride = std::mem::size_of::<GpuTriangle>();
-            for (k, chunk) in packed.chunks(UPLOAD_TRIANGLES).enumerate() {
-                gpu.queue.write_buffer(
-                    &self.triangle_buffer,
-                    (first as usize + k * UPLOAD_TRIANGLES) as u64 * stride as u64,
-                    bytemuck::cast_slice(chunk),
-                );
-            }
-            placed.transform = *transform;
-            placed.inverse = pose.inverse_rows();
-            placed.bounds = bounds;
+            let offset = record_size * u64::from(placed.record);
+            let forward = 4 * 16 + 16;
+            gpu.queue.write_buffer(
+                &self.surface_buffer,
+                offset + 4 * 16 + 12,
+                bytemuck::bytes_of(&pose.inverse_determinant().to_bits()),
+            );
+            gpu.queue.write_buffer(
+                &self.surface_buffer,
+                offset + forward,
+                bytemuck::cast_slice(&[rows3(pose.rows()), rows3(placed.inverse)]),
+            );
         }
         gpu.queue
             .write_buffer(&self.node_buffer, 0, bytemuck::cast_slice(&levels.top()));
@@ -1893,6 +2231,114 @@ impl Trace {
         self.rt.is_some()
     }
 
+    pub fn moving(&self) -> bool {
+        self.moving.is_some()
+    }
+
+    pub fn set_motion(
+        &mut self,
+        gpu: &Gpu,
+        transforms: &[Vec<crate::detail::Transform>],
+        cameras: &[Camera],
+    ) -> Result<(), String> {
+        let Some(state) = self.moving.as_mut() else {
+            return Err("this trace was staged without motion; stage it again to blur it".into());
+        };
+        let steps = state.moving.steps;
+        let wanted = cameras.windows(2).any(|pair| {
+            crate::motion::camera_rows(&pair[0]) != crate::motion::camera_rows(&pair[1])
+        });
+        match (state.moving.cameras.len(), wanted) {
+            (0, true) => {
+                return Err("this trace was staged with a still camera; stage it again".into());
+            }
+            (0, false) => {}
+            (count, _) if cameras.len() != count => {
+                return Err(format!("this trace takes {count} camera steps"));
+            }
+            _ => {
+                if cameras
+                    .iter()
+                    .flat_map(|camera| [camera.origin, camera.forward, camera.right, camera.up])
+                    .any(|v| !finite3(v))
+                {
+                    return Err("camera contains invalid parameters".into());
+                }
+                state.moving.cameras = crate::motion::decompose_steps(
+                    &cameras
+                        .iter()
+                        .map(crate::motion::camera_rows)
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        let levels = match self.placing.as_mut() {
+            Some(placing) => Some(&mut placing.levels),
+            None if transforms.iter().all(Vec::is_empty) => None,
+            None => return Err("this trace has no instances to move".into()),
+        };
+        if let Some(levels) = levels {
+            if transforms.len() > levels.placed.len() {
+                return Err(format!(
+                    "the trace has {} instances and {} motions were given",
+                    levels.placed.len(),
+                    transforms.len()
+                ));
+            }
+            for moved in transforms {
+                if !moved.is_empty() && moved.len() != steps {
+                    return Err(format!(
+                        "a moving instance has {} transforms for {steps} motion steps",
+                        moved.len()
+                    ));
+                }
+                for transform in moved {
+                    crate::detail::Pose::new(*transform)?;
+                }
+            }
+            for (index, moved) in transforms.iter().enumerate() {
+                levels.set_motion(index, moved);
+            }
+        }
+        let levels = self.placing.as_ref().map(|placing| &placing.levels);
+        let (block, boxes) = state.moving.block(levels);
+        match &mut self.rt {
+            Some(rt) => {
+                gpu.queue.write_buffer(
+                    &rt.map,
+                    state.offset,
+                    bytemuck::cast_slice(&crate::moving::as_words(&block)),
+                );
+                if let Some(levels) = levels {
+                    let flags: Vec<bool> = levels
+                        .placed
+                        .iter()
+                        .flatten()
+                        .map(|placed| placed.moving())
+                        .collect();
+                    rt.set_movers(gpu, &flags, &boxes);
+                }
+            }
+            None => {
+                gpu.queue.write_buffer(
+                    &self.node_buffer,
+                    state.offset,
+                    bytemuck::cast_slice(&crate::moving::as_nodes(&block)),
+                );
+                if let Some(levels) = levels {
+                    gpu.queue.write_buffer(
+                        &self.node_buffer,
+                        0,
+                        bytemuck::cast_slice(&levels.top()),
+                    );
+                }
+            }
+        }
+        self.builds.top += 1;
+        self.samples = 0;
+        Ok(())
+    }
+
     fn banded_pacer() -> Pacer {
         let mut pacer = Pacer::default();
         pacer.set_step(BAND_STEP, BAND_STEP);
@@ -1903,7 +2349,7 @@ impl Trace {
 
     pub fn set_environment(&mut self, gpu: &Gpu, environment: &Environment) -> Result<(), String> {
         self.environment_binding =
-            environment_binding(gpu, &self.pipeline, environment, self.look)?;
+            environment_binding(gpu, &self.pipeline, environment, self.look, self.half_sky)?.0;
         self.samples = 0;
         Ok(())
     }
@@ -1987,6 +2433,16 @@ impl Trace {
             return Err("invalid sun radius".into());
         }
         self.base.sun_dir[3] = radius_deg.to_radians().cos();
+        self.samples = 0;
+        Ok(())
+    }
+
+    pub fn set_sun(&mut self, sun: Sun) -> Result<(), String> {
+        if !finite3(sun.direction) || !finite3(sun.color) || !sun.intensity.is_finite() {
+            return Err("sun contains invalid parameters".into());
+        }
+        self.base.sun_dir = vec4(sun.direction, self.base.sun_dir[3]);
+        self.base.sun_color = vec4(sun.color, sun.intensity);
         self.samples = 0;
         Ok(())
     }
@@ -2313,7 +2769,8 @@ mod tests {
             material: 0,
             uvs1: [[0.0; 2]; 3],
         };
-        let texel = [0.12, 0.04, 0.02, 0.5];
+        let bytes = [31u8, 10, 5, 128];
+        let texel = bytes.map(|byte| f32::from(byte) / 255.0);
         let mut material = Material {
             base: [0.8, 0.6, 0.4],
             roughness: 0.9,
@@ -2343,7 +2800,7 @@ mod tests {
         };
         let mut detail = Detail {
             instances: vec![crate::detail::Instance {
-                triangles: vec![triangle],
+                triangles: vec![triangle].into(),
                 transform: [
                     [1.0, 0.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0, 0.0],
@@ -2353,11 +2810,13 @@ mod tests {
                 surface: InstanceSurface::default(),
                 shadow_only: false,
                 two_sided: true,
+                motion: None,
             }],
             content_slots: vec![Some(crate::detail::ContentImage {
                 width: 1,
                 height: 1,
-                texels: vec![texel],
+                texels: vec![bytes],
+                srgb: false,
             })],
             ..Detail::default()
         };
@@ -2450,10 +2909,11 @@ mod tests {
         let transformed = Detail {
             triangles: Vec::new(),
             instances: vec![crate::detail::Instance {
-                triangles: vec![triangle],
+                triangles: vec![triangle].into(),
                 surface: InstanceSurface::default(),
                 shadow_only: false,
                 two_sided: true,
+                motion: None,
                 transform: [
                     [1.0, 0.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0, 0.0],
@@ -2467,7 +2927,8 @@ mod tests {
             content: vec![Some(crate::detail::ContentImage {
                 width: 2,
                 height: 1,
-                texels: vec![[0.0; 4], [1.0, 0.0, 0.0, 1.0]],
+                texels: vec![[0; 4], [255, 0, 0, 255]],
+                srgb: false,
             })],
             ..baseline.clone()
         };
@@ -2606,7 +3067,7 @@ mod tests {
         assert!(source.contains("override CLAMP_INDIRECT: f32 = 0.0;"));
         assert!(source.contains("override FILTER_GLOSSY: f32 = 0.0;"));
         let named = |detail: &Detail| -> Vec<(&'static str, f64)> {
-            pipeline_constants(detail, 64, Features::of(&[]))
+            pipeline_constants(detail, 64, Features::of(&[]), false)
                 .into_iter()
                 .filter(|(name, _)| ["CLAMP_INDIRECT", "FILTER_GLOSSY"].contains(name))
                 .collect()
@@ -2629,7 +3090,7 @@ mod tests {
     fn a_scene_skips_only_the_material_features_none_of_its_materials_use() {
         let off = |materials: &[Material]| -> Vec<&'static str> {
             let buffers = SceneBuffers::build(&[], &[], materials, &Detail::default()).unwrap();
-            pipeline_constants(&Detail::default(), 64, buffers.features)
+            pipeline_constants(&Detail::default(), 64, buffers.features, false)
                 .into_iter()
                 .filter(|(name, value)| name.starts_with("TRACE_") && *value == 0.0)
                 .map(|(name, _)| name)
@@ -3690,7 +4151,7 @@ mod tests {
         };
         let instance = |surface: InstanceSurface, shadow_only: bool, two_sided: bool, x: f32| {
             crate::detail::Instance {
-                triangles: vec![triangle],
+                triangles: vec![triangle].into(),
                 transform: [
                     [1.0, 0.0, 0.0, 0.0],
                     [0.0, 1.0, 0.0, 0.0],
@@ -3700,6 +4161,7 @@ mod tests {
                 surface,
                 shadow_only,
                 two_sided,
+                motion: None,
             }
         };
         let placed = ContentLayer {
@@ -3746,54 +4208,51 @@ mod tests {
                 Some(crate::detail::ContentImage {
                     width: 1,
                     height: 1,
-                    texels: vec![[1.0; 4]],
+                    texels: vec![[255; 4]],
+                    srgb: true,
                 }),
             ],
             ..Detail::default()
         };
         let materials = [Material::default(), Material::default()];
         let buffers = SceneBuffers::build(&[], &[], &materials, &detail).unwrap();
-        let triangles: &[GpuTriangle] = bytemuck::cast_slice(&buffers.triangles);
         let layers: &[GpuLayer] = bytemuck::cast_slice(&buffers.layers);
-        assert_eq!(buffers.surfaces.len(), 4 * 64);
-        let mut seen: Vec<(f32, u32)> = triangles
-            .iter()
-            .map(|triangle| (triangle.a[0], triangle.b[3] as u32))
-            .collect();
-        seen.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let records: &[GpuSurface] = bytemuck::cast_slice(&buffers.surfaces);
+        assert_eq!(buffers.triangles.len(), std::mem::size_of::<GpuTriangle>());
+        assert_eq!(buffers.triangle_count, 1);
+        assert_eq!(std::mem::size_of::<GpuSurface>(), 176);
+        assert_eq!(records.len(), 5);
         assert_eq!(
-            seen,
+            records
+                .iter()
+                .map(|record| record.info[0])
+                .collect::<Vec<_>>(),
             [
-                (0.0, 0),
-                (2.0, SHADOW_ONLY | CASTS_NO_SHADOW),
-                (4.0, CUTOUT | 2 << FACE_SHIFT | 3 << LAYER_SHIFT),
-                (6.0, ONE_SIDED),
+                0,
+                0,
+                SHADOW_ONLY | CASTS_NO_SHADOW,
+                CUTOUT | 2 << FACE_SHIFT | 3 << LAYER_SHIFT,
+                ONE_SIDED,
             ]
+        );
+        assert_eq!(
+            records[1..]
+                .iter()
+                .map(|record| (f32::from_bits(record.info[2]), record.forward[0][3]))
+                .collect::<Vec<_>>(),
+            [(0.5, 0.0), (0.25, 2.0), (0.9, 4.0), (0.5, 6.0)]
         );
         assert_eq!(layers.len(), 3);
         assert_eq!(layers[2].layer, [1.0, 2.0, -1.0, 0.0]);
         assert_eq!(layers[2].extra[0], placed.strength);
-        let uvs: &[[f32; 4]] = bytemuck::cast_slice(&buffers.uv);
-        let mut lanes: Vec<(f32, f32)> = triangles
-            .iter()
-            .zip(uvs)
-            .map(|(triangle, uv)| (triangle.a[0], uv[3]))
-            .collect();
-        lanes.sort_by(|a, b| a.0.total_cmp(&b.0));
-        assert_eq!(lanes, [(0.0, 0.5), (2.0, 0.25), (4.0, 0.9), (6.0, 0.5)]);
         let flat = Triangle {
             vertices: [[-2.0, 0.0, 0.0], [-1.0, 0.0, 0.0], [-2.0, 1.0, 0.0]],
             material: 0,
         };
         let with_scene = SceneBuffers::build(&[flat], &[], &materials, &detail).unwrap();
-        let scene_tris: &[GpuTriangle] = bytemuck::cast_slice(&with_scene.triangles);
-        let scene_uvs: &[[f32; 4]] = bytemuck::cast_slice(&with_scene.uv);
-        let scene_lane = scene_tris
-            .iter()
-            .zip(scene_uvs)
-            .find(|(triangle, _)| triangle.a[0] == -2.0)
-            .map(|(_, uv)| uv[3]);
-        assert_eq!(scene_lane, Some(0.0));
+        assert_eq!(with_scene.triangle_count, 2);
+        let scene_records: &[GpuSurface] = bytemuck::cast_slice(&with_scene.surfaces);
+        assert_eq!(scene_records[0].info, [0, NO_MATERIAL, 0, 1.0f32.to_bits()]);
         let glow = Material {
             emission: [1.0, 0.2, 0.0],
             ..Material::default()

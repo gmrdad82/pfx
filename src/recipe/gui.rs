@@ -126,6 +126,12 @@ pub(super) struct Args {
     pub(super) strip: bool,
     #[arg(
         long,
+        requires = "offscreen",
+        help = "Hide every overlay in the viewport: route lines and handles, guides, grid, gizmo, axes and scale; the picture alone"
+    )]
+    pub(super) clean: bool,
+    #[arg(
+        long,
         value_name = "WxH",
         requires = "offscreen",
         value_parser = size,
@@ -195,6 +201,7 @@ fn blend(text: &str) -> Result<f32, String> {
 }
 
 pub(super) fn shade(args: &Args, shell: &mut Shell) -> Result<(), String> {
+    shell.set_clean(args.clean);
     if let Some(camera) = &args.camera {
         shell.open_on(camera)?;
     }

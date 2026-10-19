@@ -15,13 +15,13 @@ use crate::{
     Along, Bake, BakeLayers, Bend, BendForm, Bevel, CAP_LUMINANCE, CAP_MEAN, CAPPED, Camera,
     CameraPath, Caps, Casters, Collection, Constrained, Cup, Curl, Daylight, DetailUv, Drift,
     Dynamics, Ease, Error, Follow, Grade, Kind, LAYER_SIZE, Lines, Loaded, Lod, LodTarget, Look,
-    Marker, Mover, NO_SIDECAR, NORMAL_SIZE, OLD_HEADER, Object, Orbit, Order, Origin, Ortho,
-    Outline, Output, Owner, PathKey, PathKind, PieceRule, Plate, PlateView, Plates, Play, Problem,
-    Profile, ProfileKind, Projection, Proxy, REFERENCE_HOUR, RELEASE_EASE, RIG_LOOK, RIG_OFFSET,
-    Recipe, Reference, Rig, RigFocus, RigFrame, RigShake, RigTracks, Room, RootMotion, RouteSpec,
-    SCHEMA, Scatter, Shadow, ShadowLook, ShadowQuality, Sky, SkyAmbient, SkyKind, SkyLight, Span,
-    Spring, Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline, Trace, Use, Uv, Variant,
-    VariantOutput, View, Volume,
+    LookChromatic, LookGrain, Marker, Mover, NO_SIDECAR, NORMAL_SIZE, OLD_HEADER, Object, Orbit,
+    Order, Origin, Ortho, Outline, Output, Owner, PathKey, PathKind, PieceRule, Plate, PlateView,
+    Plates, Play, Problem, Profile, ProfileKind, Projection, Proxy, REFERENCE_HOUR, RELEASE_EASE,
+    RIG_LOOK, RIG_OFFSET, Recipe, Reference, Rig, RigFocus, RigFrame, RigShake, RigTracks, Room,
+    RootMotion, RouteSpec, SCHEMA, Scatter, Shadow, ShadowLook, ShadowQuality, Sky, SkyAmbient,
+    SkyKind, SkyLight, Span, Spring, Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline,
+    Trace, Use, Uv, Variant, VariantOutput, View, Volume,
 };
 
 pub(crate) struct Source {
@@ -1545,7 +1545,11 @@ fn read_kind(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Kind, Error> 
             edit: read_edit(cx, tab)?,
         },
         "generator" => {
-            let generator = tab.req(cx, "generator", STR)?;
+            let generator: String = tab.req(cx, "generator", STR)?;
+            let generator = match generator.strip_prefix(OLD_GENERATORS) {
+                Some(name) => format!("{GENERATORS}{name}"),
+                None => generator,
+            };
             let params = match tab.peek(cx, "params") {
                 Some(item) => match item.as_table_like() {
                     Some(t) => json_map(t),
@@ -2849,6 +2853,9 @@ fn read_lamp(cx: &mut Cx, t: &dyn TableLike, index: usize, line: usize) -> Resul
     Ok(lamp)
 }
 
+const GENERATORS: &str = "pfx/";
+const OLD_GENERATORS: &str = "manfred/";
+
 fn read_route(
     cx: &mut Cx,
     t: &dyn TableLike,
@@ -2861,6 +2868,7 @@ fn read_route(
         name: tab.req(cx, "name", STR)?,
         points: tab.req(cx, "points", V3S)?,
         closed: tab.or(cx, "closed", false, BOOL)?,
+        show: tab.or(cx, "show", true, BOOL)?,
     };
     tab.finish(cx)?;
     Ok(route)
@@ -3281,6 +3289,8 @@ fn read_look(cx: &mut Cx, root: &mut Tab<'_>) -> Result<(Option<Look>, Option<Sh
             ));
         }
     }
+    let grain = read_grain(cx, &mut tab)?;
+    let chromatic = read_chromatic(cx, &mut tab)?;
     let grade = match tab.sub(cx, "grade")? {
         Some(mut sub) => {
             let grade = Grade {
@@ -3322,9 +3332,61 @@ fn read_look(cx: &mut Cx, root: &mut Tab<'_>) -> Result<(Option<Look>, Option<Sh
             grade,
             lut,
             lut_amount,
+            grain,
+            chromatic,
         }),
         shadows,
     ))
+}
+
+fn read_grain(cx: &mut Cx, look: &mut Tab<'_>) -> Result<Option<LookGrain>, Error> {
+    let Some(mut tab) = look.sub(cx, "grain")? else {
+        return Ok(None);
+    };
+    let grain = LookGrain {
+        amount: tab.or(cx, "amount", LookGrain::AMOUNT, NUM)?,
+        size: tab.or(cx, "size", 1.0, NUM)?,
+        seed: tab.or(cx, "seed", 0, UINT)?,
+    };
+    let out_of = |key: &str, range: &str| {
+        Error::new(
+            tab.kpath(key),
+            cx.lines.get(&tab.kipath(key)).copied(),
+            format!("expected {range}"),
+        )
+    };
+    if !(0.0..=1.0).contains(&grain.amount) {
+        return Err(out_of("amount", "a number from 0 to 1"));
+    }
+    if !(grain.size > 0.0 && grain.size <= LookGrain::SIZE_MOST) {
+        return Err(out_of("size", "a number of pixels above 0, up to 64"));
+    }
+    tab.finish(cx)?;
+    Ok(Some(grain))
+}
+
+fn read_chromatic(cx: &mut Cx, look: &mut Tab<'_>) -> Result<Option<LookChromatic>, Error> {
+    let Some(mut tab) = look.sub(cx, "chromatic")? else {
+        return Ok(None);
+    };
+    let chromatic = LookChromatic {
+        amount: tab.or(cx, "amount", LookChromatic::AMOUNT, NUM)?,
+        falloff: tab.or(cx, "falloff", 0.0, NUM)?,
+    };
+    for (key, value, most) in [
+        ("amount", chromatic.amount, LookChromatic::AMOUNT_MOST),
+        ("falloff", chromatic.falloff, LookChromatic::FALLOFF_MOST),
+    ] {
+        if !(0.0..=most).contains(&value) {
+            return Err(Error::new(
+                tab.kpath(key),
+                cx.lines.get(&tab.kipath(key)).copied(),
+                format!("expected a number from 0 to {most}"),
+            ));
+        }
+    }
+    tab.finish(cx)?;
+    Ok(Some(chromatic))
 }
 
 fn read_trace(cx: &mut Cx, root: &mut Tab<'_>) -> Result<Trace, Error> {

@@ -679,6 +679,7 @@ pub struct Renderer {
     velocity_spans_shutter: bool,
     haze: Option<RoomHaze>,
     height_fog: Option<(HeightFog, HeightFogPass)>,
+    scene_reflections: Option<crate::capture::SceneReflections>,
     exposure: ExposureMeter,
     exposure_mode: Exposure,
     custom_finish: bool,
@@ -690,6 +691,7 @@ pub struct Renderer {
     display: Option<(wgpu::Texture, wgpu::TextureView)>,
     blit: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
     blit_group: CachedGroup,
+    output_dither: Option<crate::dither::OutputDither>,
     coverage: Option<crate::coverage::Coverage>,
     depths: [(wgpu::Texture, wgpu::TextureView); 2],
     depth_index: usize,
@@ -718,6 +720,7 @@ pub struct Renderer {
     tuned_sky: Option<u64>,
     history: History,
     still: (Option<f32>, u32),
+    settle: bool,
     history_valid: bool,
     hour: f32,
     probe_emission: f32,
@@ -805,7 +808,7 @@ struct MotionUniform {
     if (textureLoad(scene_ids, pixel, 0).r != 0u) {
         discard;
     }
-    let z = textureLoad(scene_depth, pixel, 0);
+    let z = 1.0 - textureLoad(scene_depth, pixel, 0);
     let uv = position.xy * motion.size.zw;
     let world = motion.inverse * vec4f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, z, 1.0);
     let point = vec4f(world.xyz / world.w, 1.0);
@@ -835,37 +838,47 @@ pub fn downsample_source() -> String {
     format!("{FULLSCREEN}\n{DOWNSAMPLE_WGSL}")
 }
 
+pub(crate) fn blit_source(format: wgpu::TextureFormat) -> String {
+    let dither = crate::dither::wgsl(1);
+    if format == wgpu::TextureFormat::Rgba8Unorm {
+        format!(
+            "{FULLSCREEN}\n{dither}\n@group(0) @binding(0) var source: texture_2d<f32>; @fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {{ let c = textureLoad(source, vec2i(position.xy), 0); let l = clamp(c.rgb, vec3f(0.0), vec3f(1.0)); return vec4f(dithered(srgb_encode(l), position.xy), c.a); }}"
+        )
+    } else {
+        format!(
+            "{FULLSCREEN}\n{dither}\n@group(0) @binding(0) var source: texture_2d<f32>; @fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {{ let c = textureLoad(source, vec2i(position.xy), 0); if dither_on.x == 0u {{ return c; }} let l = clamp(c.rgb, vec3f(0.0), vec3f(1.0)); return vec4f(srgb_decode(dithered(srgb_encode(l), position.xy)), c.a); }}"
+        )
+    }
+}
+
 fn blit_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
 ) -> (wgpu::BindGroupLayout, wgpu::RenderPipeline) {
+    let [noise, dither] = crate::dither::OutputDither::layout_entries(1);
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("live output blit"),
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
             },
-            count: None,
-        }],
+            noise,
+            dither,
+        ],
     });
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("live output blit"),
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let source = if format == wgpu::TextureFormat::Rgba8Unorm {
-        format!(
-            "{FULLSCREEN}\n@group(0) @binding(0) var source: texture_2d<f32>; @fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {{ let c = textureLoad(source, vec2i(position.xy), 0); let l = clamp(c.rgb, vec3f(0.0), vec3f(1.0)); return vec4f(select(1.055 * pow(l, vec3f(1.0 / 2.4)) - vec3f(0.055), l * 12.92, l <= vec3f(0.0031308)), c.a); }}"
-        )
-    } else {
-        format!(
-            "{FULLSCREEN}\n@group(0) @binding(0) var source: texture_2d<f32>; @fragment fn fragment(@builtin(position) position: vec4f) -> @location(0) vec4f {{ return textureLoad(source, vec2i(position.xy), 0); }}"
-        )
-    };
+    let source = blit_source(format);
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("live output blit"),
         source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -1000,7 +1013,7 @@ fn depth_pipeline(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::Comput
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("live linear depth"), source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let z = textureLoad(source, id.xy, 0); let distance = select(limits.y / (z + limits.x), (limits.y - z) / limits.x, limits.w > 0.5); textureStore(destination, id.xy, vec4f(select(limits.z, distance, z < 1.0 && distance > 0.0), 0.0, 0.0, 0.0)); }".into()) });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("live linear depth"), source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let z = textureLoad(source, id.xy, 0); let distance = select(limits.y / (z + limits.x), (limits.y - z) / limits.x, limits.w > 0.5); textureStore(destination, id.xy, vec4f(select(limits.z, distance, z > 0.0 && distance > 0.0), 0.0, 0.0, 0.0)); }".into()) });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("live linear depth"),
         layout: Some(&pipeline_layout),
@@ -1296,12 +1309,13 @@ impl Renderer {
         let text = TextPass::new(device);
         let effects = effects::Effects::new(device, width, height, 4)?;
         let style = Finish::Standard;
-        let post = GpuChain::new(
+        let mut post = GpuChain::new(
             chain(style, output_format == wgpu::TextureFormat::Rgba16Float),
             device,
             width,
             height,
         );
+        post.set_reversed_depth(true);
         let display = (output_format != wgpu::TextureFormat::Rgba16Float).then(|| {
             image(
                 device,
@@ -1317,6 +1331,9 @@ impl Renderer {
         let blit = display
             .as_ref()
             .map(|_| blit_pipeline(device, output_format));
+        let output_dither = display
+            .as_ref()
+            .map(|_| crate::dither::OutputDither::new(device, &gpu.queue));
         let (reactive, reactive_view) = image(
             device,
             width,
@@ -1351,6 +1368,7 @@ impl Renderer {
             velocity_spans_shutter: false,
             haze: None,
             height_fog: None,
+            scene_reflections: Some(crate::capture::SceneReflections::default()),
             exposure: ExposureMeter::new(device),
             exposure_mode: Exposure::Auto { bias: 0.0 },
             custom_finish: false,
@@ -1362,6 +1380,7 @@ impl Renderer {
             display,
             blit,
             blit_group: CachedGroup::default(),
+            output_dither,
             coverage: None,
             depths: linear_depths(device, width, height),
             depth_index: 0,
@@ -1400,6 +1419,7 @@ impl Renderer {
             tuned_sky: None,
             history: History::default(),
             still: (None, 0),
+            settle: true,
             history_valid: false,
             hour: 12.0,
             probe_emission: 0.0,
@@ -1517,11 +1537,28 @@ impl Renderer {
             capacity_height,
         );
         post.set_viewport(width, height)?;
+        post.set_reversed_depth(true);
         Ok(post)
     }
 
     pub fn output_format(&self) -> wgpu::TextureFormat {
         self.output_format
+    }
+
+    pub fn set_output_dither(
+        &mut self,
+        dither: Option<pfx_post::quantise::Dither>,
+    ) -> Result<(), String> {
+        let output = self
+            .output_dither
+            .as_mut()
+            .ok_or("the output dither needs an 8-bit output format")?;
+        output.set(&self.frame.gpu.queue, dither);
+        Ok(())
+    }
+
+    pub fn output_dither(&self) -> Option<pfx_post::quantise::Dither> {
+        self.output_dither.as_ref().and_then(|d| d.dither)
     }
 
     pub fn last_pass_order(&self) -> &[&'static str] {
@@ -1667,6 +1704,21 @@ impl Renderer {
             self.touch();
         }
         self.lens = lens;
+    }
+
+    pub fn set_scene_reflections(
+        &mut self,
+        reflections: Option<crate::capture::SceneReflections>,
+    ) -> Result<(), String> {
+        if reflections.is_some_and(|settings| !settings.valid()) {
+            return Err("scene reflections need a power-of-two resolution from 4 to 1024, samples and a finite fade and margin".into());
+        }
+        self.scene_reflections = reflections;
+        Ok(())
+    }
+
+    pub fn scene_reflections(&self) -> Option<crate::capture::SceneReflections> {
+        self.scene_reflections
     }
 
     pub fn set_motion_blur(&mut self, blur: Option<MotionBlur>) {
@@ -2097,6 +2149,25 @@ impl Renderer {
     pub fn write_contact(&self, values: &[f32]) -> Result<(), String> {
         self.touch();
         self.frame.write_contact(values)
+    }
+
+    pub fn stochastic_reflections(&self) -> bool {
+        self.reflections.stochastic()
+    }
+
+    pub fn set_stochastic_reflections(&mut self, on: bool) {
+        if on != self.reflections.stochastic() {
+            self.touch();
+            self.reflections.set_stochastic(on);
+        }
+    }
+
+    pub fn settles(&self) -> bool {
+        self.settle
+    }
+
+    pub fn set_settle(&mut self, on: bool) {
+        self.settle = on;
     }
 
     pub fn set_reflection_occlusion(&mut self, threshold: f32) -> Result<(), String> {
@@ -2811,7 +2882,7 @@ impl Renderer {
             self.sky_shown(shown)?;
         }
         let still = match self.still {
-            (Some(last), count) if last == scene.time => count.wrapping_add(1),
+            (Some(last), count) if self.settle && last == scene.time => count.wrapping_add(1),
             _ => 0,
         };
         self.still = (Some(scene.time), still);
@@ -3005,7 +3076,7 @@ impl Renderer {
             props.update(
                 &self.frame.gpu,
                 ImpostorParams {
-                    view_projection: jittered,
+                    view_projection: frame::reversed(jittered),
                     camera_position: [
                         scene.camera.position[0],
                         scene.camera.position[1],
@@ -3102,8 +3173,8 @@ impl Renderer {
             &self.depth_limits,
             0,
             bytemuck::cast_slice(&[
-                scene.camera.projection[2][2],
-                scene.camera.projection[3][2],
+                frame::reversed(scene.camera.projection)[2][2],
+                frame::reversed(scene.camera.projection)[3][2],
                 view.far,
                 if scene.camera.projection[2][3] == 0.0 {
                     1.0
@@ -3308,6 +3379,7 @@ impl Renderer {
                 inverse_projection,
                 frame_index: frame_number,
                 thickness: reflect::THICKNESS,
+                far: view.far,
                 history_valid: valid,
             },
             Some(&mut self.profiler),
@@ -3858,12 +3930,14 @@ impl Renderer {
         }
         let source = post_output.clone();
         if cached && overlays {
-            if let Some(cache) = self.demand.as_mut() {
+            if let (Some(cache), Some(dither)) = (self.demand.as_mut(), self.output_dither.as_ref())
+            {
                 cache.encode_composite(
                     device,
                     &mut encoder,
                     &source,
                     (output, self.output_format),
+                    dither,
                     &mut self.profiler,
                 );
                 self.pass_log.push("composite");
@@ -3919,14 +3993,22 @@ impl Renderer {
                 (coverage.pipeline().clone(), bind, wgpu::Color::TRANSPARENT)
             }
             None => {
+                let Some(dither) = &self.output_dither else {
+                    return;
+                };
+                let [noise, uniform] = dither.entries(1);
                 let bind = self.blit_group.get(
                     device,
                     "live output blit",
                     layout,
-                    &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(post_output),
-                    }],
+                    &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(post_output),
+                        },
+                        noise,
+                        uniform,
+                    ],
                 );
                 (pipeline.clone(), bind.clone(), wgpu::Color::BLACK)
             }
@@ -4185,12 +4267,13 @@ impl Renderer {
             demand::Last::Colour => cache.colour.view.clone(),
             demand::Last::Scratch => cache.scratch.view.clone(),
         };
-        if cache.overlaid {
+        if let (true, Some(dither)) = (cache.overlaid, self.output_dither.as_ref()) {
             cache.encode_composite(
                 device,
                 encoder,
                 &base,
                 (output, self.output_format),
+                dither,
                 &mut self.profiler,
             );
             self.pass_log.push("composite");

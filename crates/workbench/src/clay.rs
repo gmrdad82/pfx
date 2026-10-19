@@ -3,7 +3,7 @@ use pfx_gpu::{Gpu, wgpu};
 use pfx_recipe_scene::Outline;
 use wgpu::util::DeviceExt;
 
-use crate::theme::{ACCENT, BG_DEEP};
+use crate::theme::Palette;
 use crate::wire::{Look, Matrix};
 
 const VERTEX_BYTES: u64 = 16;
@@ -87,6 +87,7 @@ pub struct Scene<'a> {
     pub key: u64,
     pub outlines: &'a [Outline<'a>],
     pub selected: &'a [u32],
+    pub palette: Palette,
 }
 
 pub struct Target<'a> {
@@ -244,8 +245,8 @@ impl Clay {
         let mut uniform = Vec::with_capacity(VIEW_BYTES as usize);
         push_matrix(&mut uniform, &view);
         push_matrix(&mut uniform, &projection);
-        push_floats(&mut uniform, linear(BG_DEEP));
-        push_floats(&mut uniform, linear(ACCENT));
+        push_floats(&mut uniform, linear(scene.palette.bg_deep));
+        push_floats(&mut uniform, linear(scene.palette.accent));
         push_floats(
             &mut uniform,
             [
@@ -739,6 +740,7 @@ mod tests {
             key: 1,
             outlines: &outlines,
             selected: &selected,
+            palette: Palette::new(&crate::theme::workbench()),
         };
         let set = gpu.device.create_query_set(&wgpu::QuerySetDescriptor {
             label: None,

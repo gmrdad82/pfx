@@ -99,10 +99,12 @@ pub fn simplify(mesh: &Mesh, target_triangles: usize) -> Simplified {
             attributes.extend(uvs1[v].map(|a| a * UV_WEIGHT));
         }
     }
+    let uv_points: Option<Vec<[f32; 2]>> =
+        uvs.map(|uvs| origin.iter().map(|&v| uvs[v as usize]).collect());
     let error = reduce(
         &positions,
-        &attributes,
-        weights.len(),
+        (&attributes, weights.len()),
+        uv_points.as_deref(),
         &mut indices,
         &mut tris,
         target_triangles.saturating_mul(3),
@@ -165,6 +167,7 @@ struct Adjacency {
     offsets: Vec<u32>,
     next: Vec<u32>,
     prev: Vec<u32>,
+    tris: Vec<u32>,
 }
 
 impl Adjacency {
@@ -173,6 +176,7 @@ impl Adjacency {
             offsets: vec![0; vertices + 1],
             next: vec![0; indices],
             prev: vec![0; indices],
+            tris: vec![0; indices],
         }
     }
 
@@ -188,12 +192,13 @@ impl Adjacency {
             *slot = offset;
             offset += count;
         }
-        for t in indices.chunks_exact(3) {
+        for (k, t) in indices.chunks_exact(3).enumerate() {
             let [a, b, c] = [map(t[0]), map(t[1]), map(t[2])];
             for (v, n, p) in [(a, b, c), (b, c, a), (c, a, b)] {
                 let at = self.offsets[v + 1] as usize;
                 self.next[at] = n as u32;
                 self.prev[at] = p as u32;
+                self.tris[at] = k as u32;
                 self.offsets[v + 1] += 1;
             }
         }
@@ -658,6 +663,54 @@ fn has_flip(a: V3, b: V3, c: V3, d: V3) -> bool {
     ndp <= 0.25 * (abc * abd).sqrt()
 }
 
+fn uv_area(p: [[f32; 2]; 3]) -> f64 {
+    let [a, b, c] = p.map(|q| q.map(f64::from));
+    (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+struct Charts<'a> {
+    uvs: &'a [[f32; 2]],
+    indices: &'a [u32],
+}
+
+fn has_uv_flips(
+    adjacency: &Adjacency,
+    charts: &Charts,
+    (collapse, remap): (&[u32], &[u32]),
+    r0: u32,
+    moved: &[(u32, u32)],
+) -> bool {
+    let to = |c: u32| {
+        moved
+            .iter()
+            .find(|m| m.0 == c)
+            .map_or(collapse[c as usize], |m| m.1)
+    };
+    let gone = |v: [u32; 3]| {
+        let r = v.map(|x| remap[x as usize]);
+        r[0] == r[1] || r[0] == r[2] || r[1] == r[2]
+    };
+    let area = |v: [u32; 3]| uv_area(v.map(|x| charts.uvs[x as usize]));
+    for &t in &adjacency.tris[adjacency.range(r0)] {
+        let at = t as usize * 3;
+        let corners = [0, 1, 2].map(|k| charts.indices[at + k]);
+        let before = corners.map(|c| collapse[c as usize]);
+        let after = corners.map(to);
+        if before == after || gone(before) || gone(after) {
+            continue;
+        }
+        let was = area(before);
+        if was == 0.0 {
+            continue;
+        }
+        let now = area(after);
+        if now == 0.0 || (now > 0.0) != (was > 0.0) {
+            return true;
+        }
+    }
+    false
+}
+
 fn has_flips(adjacency: &Adjacency, points: &[V3], collapse: &[u32], i0: u32, i1: u32) -> bool {
     let v0 = points[i0 as usize];
     let v1 = points[i1 as usize];
@@ -830,6 +883,7 @@ struct Pass<'a> {
     collapse: &'a mut [u32],
     locked: &'a mut [bool],
     result_error: &'a mut f32,
+    charts: Option<Charts<'a>>,
 }
 
 fn perform(
@@ -846,6 +900,7 @@ fn perform(
     let mut edge_goal = triangle_goal / 2;
     let count = collapses.len();
     let (remap, wedge, kind) = (topo.remap, topo.wedge, topo.kind);
+    let mut moved = Vec::new();
     for &at in order {
         let c = collapses[at as usize];
         if triangle_collapses >= triangle_goal {
@@ -872,21 +927,30 @@ fn perform(
             edge_goal += 1;
             continue;
         }
+        moved.clear();
         if k == COMPLEX {
             let mut v = i0;
             loop {
-                pass.collapse[v as usize] = i1;
+                moved.push((v, i1));
                 v = wedge[v as usize];
                 if v == i0 {
                     break;
                 }
             }
         } else if k == SEAM {
-            let (s0, s1) = seam_pair(topo, i0, i1);
-            pass.collapse[i0 as usize] = i1;
-            pass.collapse[s0 as usize] = s1;
+            moved.push((i0, i1));
+            moved.push(seam_pair(topo, i0, i1));
         } else {
-            pass.collapse[i0 as usize] = i1;
+            moved.push((i0, i1));
+        }
+        if let Some(charts) = &pass.charts
+            && has_uv_flips(adjacency, charts, (pass.collapse, remap), r0, &moved)
+        {
+            edge_goal += 1;
+            continue;
+        }
+        for &(from, to) in &moved {
+            pass.collapse[from as usize] = to;
         }
         pass.locked[r0 as usize] = true;
         pass.locked[r1 as usize] = true;
@@ -958,8 +1022,8 @@ fn remap_indices(indices: &mut Vec<u32>, tris: &mut Vec<u32>, collapse: &[u32], 
 
 fn reduce(
     positions: &[V3],
-    attributes: &[f32],
-    count: usize,
+    (attributes, count): (&[f32], usize),
+    uvs: Option<&[[f32; 2]]>,
     indices: &mut Vec<u32>,
     tris: &mut Vec<u32>,
     target_index_count: usize,
@@ -1023,6 +1087,7 @@ fn reduce(
                 collapse: &mut collapse,
                 locked: &mut locked,
                 result_error: &mut result_error,
+                charts: uvs.map(|uvs| Charts { uvs, indices }),
             },
             &collapses,
             &order,
@@ -1128,6 +1193,41 @@ mod tests {
         assert_eq!(morph.positions[0].len(), s.mesh.positions.len());
         for (p, d) in s.mesh.positions.iter().zip(&morph.positions[0]) {
             assert_eq!(d[2], p[0] * 2.0);
+        }
+    }
+
+    fn flipped(m: &Mesh, sign: f64) -> usize {
+        let uvs = m.uvs.as_ref().unwrap();
+        m.indices
+            .chunks_exact(3)
+            .filter(|t| uv_area([0, 1, 2].map(|k| uvs[t[k] as usize])) * sign <= 0.0)
+            .count()
+    }
+
+    #[test]
+    fn a_collapse_never_turns_a_triangle_over_in_uv_space() {
+        let mut sheet = surface([64, 64], |u, v| {
+            [u, v, (u * 11.0).sin() * (v * 9.0).cos() * 0.04]
+        });
+        for uv in sheet.uvs.as_mut().unwrap() {
+            let [x, y] = [uv[0] - 0.5, uv[1] - 0.5];
+            let fall = (0.5 - (x * x + y * y).sqrt()).max(0.0);
+            let (sin, cos) = (fall * fall * 8.0).sin_cos();
+            *uv = [0.5 + x * cos - y * sin, 0.5 + x * sin + y * cos];
+        }
+        let sign =
+            uv_area([0, 1, 2].map(|k| sheet.uvs.as_ref().unwrap()[sheet.indices[k] as usize]))
+                .signum();
+        assert_eq!(flipped(&sheet, sign), 0);
+        for share in [4, 10, 30] {
+            let target = sheet.triangle_count() / share;
+            let s = simplify(&sheet, target);
+            assert!(
+                s.mesh.triangle_count() < target * 2,
+                "{share}: {}",
+                s.mesh.triangle_count()
+            );
+            assert_eq!(flipped(&s.mesh, sign), 0, "{share}");
         }
     }
 }

@@ -129,21 +129,25 @@ pub fn solids(recipe: &Recipe, built: &Built) -> Vec<Solid> {
 }
 
 impl Line {
-    pub fn colour(&self) -> Color32 {
+    pub fn colour(&self, palette: &Palette) -> Color32 {
         match self.rule {
-            Rule::Cell => GRID.gamma_multiply(self.fade),
-            Rule::X => DANGER.gamma_multiply(AXIS_ALPHA * self.fade),
-            Rule::Z => INFO.gamma_multiply(AXIS_ALPHA * self.fade),
+            Rule::Cell => palette.grid.gamma_multiply(self.fade),
+            Rule::X => palette.danger.gamma_multiply(AXIS_ALPHA * self.fade),
+            Rule::Z => palette.info.gamma_multiply(AXIS_ALPHA * self.fade),
         }
     }
 }
 
-pub fn checker() -> ColorImage {
+pub fn checker(palette: &Palette) -> ColorImage {
     let [width, height] = CHECKER;
     let pixels = (0..width * height)
         .map(|index| {
             let (x, y) = (index % width / SQUARE, index / width / SQUARE);
-            if (x + y) % 2 == 0 { BG_DEEP } else { BG_CHIP }
+            if (x + y) % 2 == 0 {
+                palette.bg_deep
+            } else {
+                palette.bg_chip
+            }
         })
         .collect();
     ColorImage::new(CHECKER, pixels)
@@ -202,7 +206,8 @@ pub fn widen(eye: &Eye, frame: Rect, image: Rect) -> Eye {
 }
 
 pub fn passepartout(painter: &Painter, image: Rect, frame: Rect) {
-    let shade = BG_DEEP.gamma_multiply(PASSEPARTOUT);
+    let palette = Palette::of(painter.ctx());
+    let shade = palette.bg_deep.gamma_multiply(PASSEPARTOUT);
     for band in [
         Rect::from_min_max(image.min, Pos2::new(image.right(), frame.top())),
         Rect::from_min_max(Pos2::new(image.left(), frame.bottom()), image.max),
@@ -222,29 +227,31 @@ pub fn passepartout(painter: &Painter, image: Rect, frame: Rect) {
     painter.rect_stroke(
         frame,
         CornerRadius::ZERO,
-        Stroke::new(STROKE, LINE_BORDER),
+        Stroke::new(STROKE, palette.line_border),
         StrokeKind::Outside,
     );
 }
 
 pub fn frame(painter: &Painter, image: Rect) {
+    let palette = Palette::of(painter.ctx());
     painter.rect_stroke(
         image.expand(1.0),
         CornerRadius::ZERO,
-        Stroke::new(STROKE, LINE_BORDER),
+        Stroke::new(STROKE, palette.line_border),
         StrokeKind::Inside,
     );
 }
 
 pub fn gizmo(painter: &Painter, image: Rect) {
+    let palette = Palette::of(painter.ctx());
     let centre = image.center().round();
     let reach = (image.height() * 0.16).clamp(24.0, 72.0).round();
     let axes: [(&str, Vec2, Color32); 3] = [
-        ("x", Vec2::new(0.866, 0.5), DANGER),
-        ("y", Vec2::new(0.0, -1.0), OK),
-        ("z", Vec2::new(-0.866, 0.5), INFO),
+        ("x", Vec2::new(0.866, 0.5), palette.danger),
+        ("y", Vec2::new(0.0, -1.0), palette.ok),
+        ("z", Vec2::new(-0.866, 0.5), palette.info),
     ];
-    painter.circle_stroke(centre, reach + 14.0, Stroke::new(1.5_f32, ACCENT));
+    painter.circle_stroke(centre, reach + 14.0, Stroke::new(1.5_f32, palette.accent));
     for (name, direction, colour) in axes {
         let end: Pos2 = centre + direction * reach;
         painter.line_segment([centre, end], Stroke::new(2.0_f32, colour));
@@ -257,7 +264,7 @@ pub fn gizmo(painter: &Painter, image: Rect) {
             colour,
         );
     }
-    painter.circle_filled(centre, 3.0, ACCENT);
+    painter.circle_filled(centre, 3.0, palette.accent);
 }
 
 fn compass(image: Rect) -> (Pos2, f32) {
@@ -267,6 +274,7 @@ fn compass(image: Rect) -> (Pos2, f32) {
 }
 
 pub fn scale(painter: &Painter, eye: &Eye, image: Rect, basis: &Basis) {
+    let palette = Palette::of(painter.ctx());
     let lens = Lens::new(eye, image);
     let target = DVec3::from_array(eye.target);
     let (Some(a), Some(b)) = (lens.project(target), lens.project(target + basis.right)) else {
@@ -284,7 +292,7 @@ pub fn scale(painter: &Painter, eye: &Eye, image: Rect, basis: &Basis) {
     }
     ScaleBar::new(1.0 / points)
         .width(width)
-        .backing(BG_DEEP.gamma_multiply(0.8))
+        .backing(palette.bg_deep.gamma_multiply(0.8))
         .paint(
             painter,
             Pos2::new(left, centre.y + reach + 12.0),
@@ -293,11 +301,12 @@ pub fn scale(painter: &Painter, eye: &Eye, image: Rect, basis: &Basis) {
 }
 
 pub fn axes(painter: &Painter, image: Rect, basis: &Basis) {
+    let palette = Palette::of(painter.ctx());
     let (centre, reach) = compass(image);
     let world: [(&str, [f64; 3], Color32); 3] = [
-        ("x", [1.0, 0.0, 0.0], DANGER),
-        ("y", [0.0, 1.0, 0.0], OK),
-        ("z", [0.0, 0.0, 1.0], INFO),
+        ("x", [1.0, 0.0, 0.0], palette.danger),
+        ("y", [0.0, 1.0, 0.0], palette.ok),
+        ("z", [0.0, 0.0, 1.0], palette.info),
     ];
     let mut order: Vec<(f64, &str, Vec2, Color32)> = world
         .into_iter()
@@ -308,7 +317,7 @@ pub fn axes(painter: &Painter, image: Rect, basis: &Basis) {
         })
         .collect();
     order.sort_by(|a, b| b.0.total_cmp(&a.0));
-    painter.circle_filled(centre, reach + 12.0, BG_DEEP.gamma_multiply(0.8));
+    painter.circle_filled(centre, reach + 12.0, palette.bg_deep.gamma_multiply(0.8));
     for (_, name, flat, colour) in order {
         let end = centre + flat * reach;
         painter.line_segment([centre, end], Stroke::new(1.5_f32, colour));
@@ -321,7 +330,7 @@ pub fn axes(painter: &Painter, image: Rect, basis: &Basis) {
             colour,
         );
     }
-    painter.circle_filled(centre, 2.0, ACCENT);
+    painter.circle_filled(centre, 2.0, palette.accent);
 }
 
 fn span(eye: &Eye) -> f64 {
@@ -518,9 +527,13 @@ pub fn grid(painter: &Painter, eye: &Eye, image: Rect, solids: &[Solid]) {
             .memory_mut(|memory| memory.data.insert_temp(id, memo));
         lines
     });
+    let palette = Palette::of(painter.ctx());
     let clipped = painter.with_clip_rect(image);
     for line in lines.iter() {
-        clipped.line_segment([line.from, line.to], Stroke::new(1.0_f32, line.colour()));
+        clipped.line_segment(
+            [line.from, line.to],
+            Stroke::new(1.0_f32, line.colour(&palette)),
+        );
     }
 }
 
@@ -555,11 +568,12 @@ mod tests {
 
     #[test]
     fn the_checker_alternates_in_the_two_tokens() {
-        let image = checker();
+        let palette = Palette::new(&crate::theme::game());
+        let image = checker(&palette);
         assert_eq!(image.size, CHECKER);
-        assert_eq!(image.pixels[0], BG_DEEP);
-        assert_eq!(image.pixels[SQUARE], BG_CHIP);
-        assert_eq!(image.pixels[CHECKER[0] * SQUARE], BG_CHIP);
+        assert_eq!(image.pixels[0], palette.bg_deep);
+        assert_eq!(image.pixels[SQUARE], palette.bg_chip);
+        assert_eq!(image.pixels[CHECKER[0] * SQUARE], palette.bg_chip);
         assert_eq!(CHECKER[0] as f32 / CHECKER[1] as f32, ASPECT);
     }
 
@@ -636,7 +650,8 @@ mod tests {
         );
         assert!(lines.iter().all(|line| line.fade > 0.0 && line.fade <= 1.0));
         let near = lines.iter().find(|line| line.rule == Rule::X).unwrap();
-        assert!(near.colour().a() > 0 && near.colour().a() < 255);
+        let palette = Palette::new(&crate::theme::workbench());
+        assert!(near.colour(&palette).a() > 0 && near.colour(&palette).a() < 255);
     }
 
     #[test]

@@ -65,7 +65,7 @@ fn out_of_range_and_missing_keys_are_reported_where_they_stand() {
     let folder = golden("golden-bad");
     let bad = SCENE
         .replace("inherit = 0.5", "inherit = 1.5")
-        .replace("shutter = 0.5", "shutter = 2.0")
+        .replace("shutter = 0.5", "shutter = 4.5")
         .replace("lut_amount = 0.8", "lut_amount = -1.0")
         .replace("shafts = 0.6", "shafts = 3.0")
         .replace("[[0.0, 6.0], [3.0, 2.5]]", "[[3.0, 6.0], [1.0, 2.5]]")

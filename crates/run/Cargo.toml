@@ -21,7 +21,7 @@ pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.14.3"
 [features]
 encode = ["dep:pito-codecs"]
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }
 signal-hook = "0.3"

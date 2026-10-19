@@ -705,6 +705,33 @@ fn a_shadows_table_reaches_the_scene_and_changes_nothing_else() {
 }
 
 #[test]
+fn a_live_table_reaches_the_scene_and_changes_nothing_else() {
+    let plain = Scene::open(fixtures().join("room.scene.toml")).unwrap();
+    assert!(plain.live.is_none());
+    let table =
+        "\n[live]\nstochastic_reflections = false\nsettle = false\nscene_reflections = false\n";
+    let diff = diff_after("diff-live", |folder| {
+        let mut text = folder.read("room.scene.toml");
+        text.push_str(table);
+        folder.write("room.scene.toml", &text);
+    });
+    assert!(
+        diff.live && !diff.shadows && !diff.draws() && !diff.finish && !diff.camera,
+        "{diff:?}"
+    );
+    let folder = Folder::new("live-on");
+    let mut text = folder.read("room.scene.toml");
+    text.push_str(table);
+    folder.write("room.scene.toml", &text);
+    let live = folder.open().unwrap().live.unwrap();
+    assert_eq!(live.stochastic_reflections, Some(false));
+    assert_eq!(live.settle, Some(false));
+    assert_eq!(live.scene_reflections, Some(false));
+    let error = refused("live-key", "[live]\nglossy = false\n");
+    assert!(error.message.contains("stochastic_reflections"), "{error}");
+}
+
+#[test]
 fn a_trace_table_turns_on_transmissive_shadows_for_the_tracer_alone() {
     let plain = Scene::open(fixtures().join("room.scene.toml")).unwrap();
     assert!(!plain.trace.transmissive_shadows);

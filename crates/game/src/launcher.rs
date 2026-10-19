@@ -9,7 +9,7 @@ use crate::config::Config;
 
 pub type Command = Box<dyn Fn(&[String]) -> Result<ExitCode, CommandError>>;
 pub type Factory = Rc<dyn Fn() -> Box<dyn Game>>;
-pub type Edit = Box<dyn FnOnce(Factory, &[String]) -> Result<(), String>>;
+pub type Edit = Box<dyn FnOnce(Factory, &[String]) -> Result<(), CommandError>>;
 pub type Rest = Box<dyn FnOnce(&[String]) -> Result<Unmatched, CommandError>>;
 
 pub const USAGE: u8 = 2;
@@ -179,20 +179,21 @@ impl Commands {
     }
 
     #[cfg(feature = "tools")]
-    pub fn edit(
+    pub fn edit<E: Into<CommandError>>(
         &mut self,
         about: &str,
-        hook: impl FnOnce(Factory, &[String]) -> Result<(), String> + 'static,
+        hook: impl FnOnce(Factory, &[String]) -> Result<(), E> + 'static,
     ) -> &mut Self {
+        let hook = move |factory: Factory, args: &[String]| hook(factory, args).map_err(Into::into);
         self.edit = Some((about.to_string(), Box::new(hook)));
         self
     }
 
     #[cfg(not(feature = "tools"))]
-    pub fn edit(
+    pub fn edit<E: Into<CommandError>>(
         &mut self,
         _about: &str,
-        _hook: impl FnOnce(Factory, &[String]) -> Result<(), String> + 'static,
+        _hook: impl FnOnce(Factory, &[String]) -> Result<(), E> + 'static,
     ) -> &mut Self {
         self
     }
@@ -355,7 +356,19 @@ fn route<O: std::io::Write, E: std::io::Write>(
         "edit" => match (commands.takes_nothing("edit", rest), commands.edit.take()) {
             (_, None) => talk.refuse(cli::unrecognized("edit"), talk.top()),
             (Some(message), Some(_)) => talk.refuse(message, commands.usage_line(name, "edit")),
-            (None, Some((_, hook))) => Decision::Edit(hook, rest.to_vec()),
+            (None, Some((_, hook))) => {
+                let usage = commands.usage_line(name, "edit");
+                let color = talk.color;
+                let hook = move |factory: Factory, args: &[String]| {
+                    hook(factory, args).map_err(|error| match error.code {
+                        USAGE => CommandError::usage(
+                            Refusal::new(error.message).under(usage).render(color),
+                        ),
+                        _ => error,
+                    })
+                };
+                Decision::Edit(Box::new(hook), rest.to_vec())
+            }
         },
         command => {
             if let Some((_, _, run)) = commands.list.iter().find(|(taken, _, _)| taken == command) {
@@ -419,9 +432,13 @@ fn play<G: Game + 'static>(game: G, config: Config) -> ExitCode {
 pub fn edit(name: &str, hook: Edit, factory: Factory, args: &[String]) -> ExitCode {
     match hook(factory, args) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(error) if error.code == USAGE => {
+            eprintln!("{}", error.message);
+            ExitCode::from(USAGE)
+        }
         Err(error) => {
-            eprintln!("{name} edit: {error}");
-            ExitCode::FAILURE
+            eprintln!("{name} edit: {}", error.message);
+            ExitCode::from(error.code)
         }
     }
 }

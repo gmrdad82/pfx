@@ -3,9 +3,9 @@ use pfx_gpu::wgpu;
 use wgpu::util::DeviceExt;
 
 use crate::effects::{
-    EffectCommands, EffectFrame, EffectTargets, HDR_FORMAT, SCENE_DEPTH_FORMAT, UPSAMPLE_WGSL,
-    VolumeTimestamps, buffer_entry, color_attachment, pipeline_with, premultiplied_target,
-    shadow_entry, texture_entry, uniform, volume_targets,
+    EffectCommands, EffectFrame, EffectTargets, HDR_FORMAT, SCENE_DEPTH_FORMAT, VolumeTimestamps,
+    buffer_entry, color_attachment, pipeline_with, premultiplied_target, shadow_entry,
+    texture_entry, uniform, volume_targets,
 };
 use crate::lights::LocalLight;
 
@@ -141,7 +141,7 @@ fn fog_uniform(fog: &HeightFog, ambient: [f32; 3], lights: &[FogLight]) -> FogUn
     }
 }
 
-pub const HEIGHT_FOG_WGSL: &str = r#"
+pub const FOG_COMMON_WGSL: &str = r#"
 struct Frame {
     view_proj: mat4x4f, eye: vec4f, right: vec4f, up: vec4f, forward: vec4f,
     lens: vec4f, sun: vec4f, sun_color: vec4f, extent: vec4f,
@@ -227,23 +227,17 @@ fn local_light(index: u32, p: vec3f, ray: vec3f) -> vec3f {
     }
     return light.color_radius.rgb * attenuation * henyey_greenstein(dot(ray, l), fog.march.z);
 }
-struct VolumeOut { @location(0) radiance: vec4f, @location(1) distance: f32, }
-@fragment fn fs_main(in: Out) -> VolumeOut {
-    let screen = vec2i(clamp(in.uv * frame.extent.xy, vec2f(0.0), frame.extent.xy - vec2f(1.0)));
-    let scene_limit = textureLoad(scene_depth, screen, 0).x;
+fn march(pixel: vec2f, uv: vec2f, scene_limit: f32) -> vec4f {
     let centre_clip = frame.view_proj * vec4f(frame.eye.xyz + frame.forward.xyz, 1.0);
     let centre = centre_clip.xy / centre_clip.w;
-    let ray = normalize(frame.forward.xyz + frame.right.xyz * ((in.uv.x * 2.0 - 1.0 - centre.x) * frame.lens.x) + frame.up.xyz * ((1.0 - in.uv.y * 2.0 - centre.y) * frame.lens.y));
-    var out: VolumeOut;
-    out.radiance = vec4f(0.0);
-    out.distance = scene_limit;
+    let ray = normalize(frame.forward.xyz + frame.right.xyz * ((uv.x * 2.0 - 1.0 - centre.x) * frame.lens.x) + frame.up.xyz * ((1.0 - uv.y * 2.0 - centre.y) * frame.lens.y));
     let along = max(dot(ray, normalize(frame.forward.xyz)), 0.001);
     let span = min(scene_limit / along, fog.shape.w);
-    if (span <= 0.0 || fog.shape.z <= 0.0) { return out; }
+    if (span <= 0.0 || fog.shape.z <= 0.0) { return vec4f(0.0); }
     let steps = max(u32(fog.march.y), 1u);
     let step_length = span / f32(steps);
     let index = pcg(bitcast<u32>(frame.extent.z) ^ bitcast<u32>(frame.extent.w));
-    let jitter = interleaved_gradient_noise(in.clip.xy, index);
+    let jitter = interleaved_gradient_noise(pixel, index);
     let sun = normalize(frame.sun.xyz);
     let sun_light = frame.sun_color.rgb * frame.sun_color.w * henyey_greenstein(dot(ray, sun), fog.march.z);
     let shafts = fog.march.x;
@@ -290,10 +284,67 @@ struct VolumeOut { @location(0) radiance: vec4f, @location(1) distance: f32, }
             light += fog.color.rgb * SCATTERING * fog_density(p.y) * light_step * local_light(l, p, ray) * seen;
         }
     }
-    out.radiance = vec4f(light, 1.0 - background);
+    return vec4f(light, 1.0 - background);
+}
+"#;
+
+const MARCH_MAIN_WGSL: &str = r#"
+struct VolumeOut { @location(0) radiance: vec4f, @location(1) distance: f32, }
+@fragment fn fs_main(in: Out) -> VolumeOut {
+    let screen = vec2i(clamp(in.uv * frame.extent.xy, vec2f(0.0), frame.extent.xy - vec2f(1.0)));
+    let scene_limit = textureLoad(scene_depth, screen, 0).x;
+    var out: VolumeOut;
+    out.radiance = march(in.clip.xy, in.uv, scene_limit);
+    out.distance = scene_limit;
     return out;
 }
 "#;
+
+pub const FOG_EDGE: f32 = 0.05;
+
+const UPSAMPLE_MAIN_WGSL: &str = r#"
+@group(0) @binding(5) var low_color: texture_2d<f32>;
+@group(0) @binding(6) var low_depth: texture_2d<f32>;
+override edge: f32 = 0.05;
+override low_scale: f32 = 2.0;
+@fragment fn fs_main(in: Out) -> @location(0) vec4f {
+    let size = min(vec2f(textureDimensions(low_color)), ceil(frame.extent.xy / low_scale));
+    let pixel = vec2i(in.clip.xy);
+    let full = textureLoad(scene_depth, pixel, 0).x;
+    let point = in.clip.xy / frame.extent.xy * size - vec2f(0.5);
+    let base = vec2i(floor(point));
+    let fraction = fract(point);
+    let max_pixel = vec2i(size) - vec2i(1);
+    var total = 0.0;
+    var result = vec4f(0.0);
+    var closest = 1e30;
+    for (var y = 0; y < 2; y++) {
+        for (var x = 0; x < 2; x++) {
+            let at = clamp(base + vec2i(x, y), vec2i(0), max_pixel);
+            let depth = textureLoad(low_depth, at, 0).x;
+            let relative = abs(full - depth) / max(min(full, depth), 0.0001);
+            closest = min(closest, relative);
+            let spatial = select(1.0 - fraction.x, fraction.x, x == 1) * select(1.0 - fraction.y, fraction.y, y == 1);
+            let d = relative / edge;
+            let weight = (spatial + 0.0001) * max(1.0 - d * d, 0.0);
+            result += textureLoad(low_color, at, 0) * weight;
+            total += weight;
+        }
+    }
+    if (closest > edge || total <= 0.000001) {
+        return march(in.clip.xy, in.clip.xy / frame.extent.xy, full);
+    }
+    return result / total;
+}
+"#;
+
+pub fn march_source() -> String {
+    format!("{FOG_COMMON_WGSL}\n{MARCH_MAIN_WGSL}")
+}
+
+pub fn upsample_source() -> String {
+    format!("{FOG_COMMON_WGSL}\n{UPSAMPLE_MAIN_WGSL}")
+}
 
 struct Targets {
     size: [u32; 2],
@@ -353,14 +404,25 @@ impl HeightFogPass {
                     wgpu::BufferBindingType::Uniform,
                 ),
                 texture_entry(1),
-                texture_entry(2),
-                texture_entry(3),
+                shadow_entry(2),
+                buffer_entry(
+                    3,
+                    wgpu::ShaderStages::FRAGMENT,
+                    wgpu::BufferBindingType::Uniform,
+                ),
+                buffer_entry(
+                    4,
+                    wgpu::ShaderStages::FRAGMENT,
+                    wgpu::BufferBindingType::Uniform,
+                ),
+                texture_entry(5),
+                texture_entry(6),
             ],
         });
         let march_pipeline = pipeline_with(
             device,
             "height fog march",
-            HEIGHT_FOG_WGSL,
+            &march_source(),
             &march_layout,
             &volume_targets(),
             &[],
@@ -368,10 +430,13 @@ impl HeightFogPass {
         let upsample_pipeline = pipeline_with(
             device,
             "height fog upsample",
-            UPSAMPLE_WGSL,
+            &upsample_source(),
             &upsample_layout,
             &[premultiplied_target()],
-            &[("low_scale", f64::from(FOG_SCALE))],
+            &[
+                ("low_scale", f64::from(FOG_SCALE)),
+                ("edge", f64::from(FOG_EDGE)),
+            ],
         );
         let empty_shadow = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("height fog empty shadow"),
@@ -554,10 +619,22 @@ impl HeightFogPass {
                     },
                     wgpu::BindGroupEntry {
                         binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&low.color_view),
+                        resource: wgpu::BindingResource::TextureView(shadow_view),
                     },
                     wgpu::BindGroupEntry {
                         binding: 3,
+                        resource: shadow_data.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: fog_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&low.color_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
                         resource: wgpu::BindingResource::TextureView(&low.depth_view),
                     },
                 ],
@@ -585,12 +662,14 @@ mod tests {
 
     #[test]
     fn the_march_shader_validates() {
-        let module = naga::front::wgsl::parse_str(HEIGHT_FOG_WGSL).unwrap();
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::default(),
-        )
-        .validate(&module)
-        .unwrap();
+        for source in [march_source(), upsample_source()] {
+            let module = naga::front::wgsl::parse_str(&source).unwrap();
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::default(),
+            )
+            .validate(&module)
+            .unwrap();
+        }
     }
 }

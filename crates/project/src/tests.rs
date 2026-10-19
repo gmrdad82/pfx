@@ -3,9 +3,12 @@ use std::path::{Path, PathBuf};
 use crate::Project;
 
 fn folder(name: &str) -> PathBuf {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../tmp/project-tests")
-        .join(name);
+    let root = std::path::absolute(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tmp/project-tests")
+            .join(name),
+    )
+    .unwrap();
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     root
@@ -400,8 +403,10 @@ mod scaffold {
             "#![cfg_attr(not(feature = \"tools\"), windows_subsystem = \"windows\")]"
         ));
         assert!(main.contains("pfx_game::launch(my_game::MyGame::new"));
-        assert!(main.contains(".usage(\"edit\", \"\")"));
-        assert!(main.contains("pfx_workbench::run_project(project.root(), factory, config)"));
+        assert!(main.contains(".usage(\"edit\", pfx_workbench::EDIT_USAGE)"));
+        assert!(
+            main.contains("pfx_workbench::edit_project(project.root(), factory, config, args)")
+        );
         let project = Project::open(&root).unwrap();
         assert_eq!(project.name(), "my-game");
         assert_eq!(project.play(), root.join(DOCUMENT));

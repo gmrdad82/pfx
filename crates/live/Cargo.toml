@@ -18,6 +18,7 @@ pfx-post = { path = "../post" }
 pfx-geom = { path = "../geom" }
 pfx-bake = { path = "../bake" }
 pfx-load = { path = "../load" }
+pfx-trace = { path = "../trace" }
 half = "2.7.1"
 i_overlay = { version = "=9.0.0", default-features = false }
 bytemuck = { version = "1", features = ["derive"] }
@@ -33,13 +34,11 @@ dev-hud = ["dep:egui", "dep:egui-wgpu", "dep:pfx-input", "dep:pfx-theme"]
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }
 
-[target.'cfg(not(target_os = "windows"))'.dev-dependencies]
-pfx-run = { path = "../run" }
-
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
 
 [dev-dependencies]
+pfx-run = { path = "../run" }
 pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }
 pfx-text = { path = "../text", features = ["fixture"] }
 pfx-core = { path = "../core", features = ["fixture"] }

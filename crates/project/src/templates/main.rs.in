@@ -21,13 +21,13 @@ fn main() -> ExitCode {
 fn tools(commands: &mut pfx_game::Commands, project: pfx_project::Project) {
     commands
         .edit(
-            "opens the game in pfx's editor; F5 plays it",
-            move |factory, _args| {
+            "opens the game in pfx's editor; F5 plays it; --shot and --clip draw it offscreen",
+            move |factory, args| {
                 let config = {{crate}}::config(&project)?;
-                pfx_workbench::run_project(project.root(), factory, config)
+                pfx_workbench::edit_project(project.root(), factory, config, args)
             },
         )
-        .usage("edit", "");
+        .usage("edit", pfx_workbench::EDIT_USAGE);
 }
 
 #[cfg(not(feature = "tools"))]

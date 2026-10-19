@@ -2,15 +2,76 @@ use std::sync::mpsc::{Receiver, channel};
 
 use super::*;
 use pfx_editor::editor::{Play as Playing, Request};
-use pfx_editor::log::Level;
+use pfx_editor::log::{Level, Log};
 use pfx_editor::play::{From as Chosen, Play as Module};
 use pfx_editor::session::Session;
 
 pub const PLAY_DIR: &str = "tmp/pfx/play";
 const PLAY_WAIT: u32 = 3;
 
+const LOG_SIZE: Vec2 = Vec2::new(720.0, 260.0);
+
 pub(super) struct Preparing {
     done: Receiver<Result<PathBuf, String>>,
+}
+
+#[derive(Default)]
+pub(super) struct Heard {
+    log: Log,
+    said: u64,
+    held: Option<String>,
+    open: bool,
+}
+
+impl Heard {
+    pub(super) fn held(&self) -> Option<&str> {
+        self.held.as_deref()
+    }
+
+    fn listen(&mut self, log: &Log) {
+        self.said = log.said;
+    }
+
+    fn hear(&mut self, log: &Log) {
+        let fresh = log.said.saturating_sub(self.said);
+        let fresh = usize::try_from(fresh).map_or(log.entries.len(), |n| n.min(log.entries.len()));
+        self.said = log.said;
+        let start = log.entries.len() - fresh;
+        let errors: Vec<String> = log
+            .entries
+            .range(start..)
+            .filter(|entry| entry.level == Level::Error)
+            .map(|entry| entry.text.clone())
+            .collect();
+        for error in errors {
+            self.note(error);
+        }
+    }
+
+    fn note(&mut self, error: String) {
+        self.log.error(error.clone());
+        self.held = Some(error);
+    }
+
+    fn act(&mut self, ctx: &Context) {
+        let (acted, toggled) = ctx.input(|input| {
+            let acted = input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    egui::Event::Key { pressed: true, .. }
+                        | egui::Event::PointerButton { pressed: true, .. }
+                        | egui::Event::Text(_)
+                )
+            });
+            (acted, input.key_pressed(Key::F6))
+        });
+        if acted {
+            self.held = None;
+        }
+        if toggled {
+            self.open = !self.open;
+        }
+    }
 }
 
 pub fn recipe_scene(recipe: &Path, registry: &Registry, out: &Path) -> Result<PathBuf, String> {
@@ -46,6 +107,7 @@ impl Shell {
         let path = session.editor.path().to_path_buf();
         let document = crate::scenes::document(session.editor.scene(), &path.display().to_string());
         self.scene_revision = session.editor.revision;
+        self.heard.listen(&session.editor.log);
         self.edit = Some(Box::new(session));
         self.playing_recipe = false;
         self.preparing_play = None;
@@ -63,6 +125,17 @@ impl Shell {
 
     pub fn session(&self) -> Option<&Session> {
         self.edit.as_deref()
+    }
+
+    pub fn theme(&self) -> Theme {
+        match self.session() {
+            Some(session) if session.plays_a_game() => crate::theme::game(),
+            _ => crate::theme::workbench(),
+        }
+    }
+
+    pub fn palette(&self) -> Palette {
+        self.palette
     }
 
     pub fn session_mut(&mut self) -> Option<&mut Session> {
@@ -182,6 +255,7 @@ impl Shell {
     }
 
     pub(super) fn begin_session(&mut self, ctx: &Context) {
+        self.heard.act(ctx);
         self.poll_play(ctx);
         let typing = ctx.memory(|memory| memory.focused().is_some());
         let Some(session) = self.edit.as_deref_mut() else {
@@ -231,6 +305,7 @@ impl Shell {
                 }
                 Ok(Err(error)) => {
                     self.preparing_play = None;
+                    self.heard.note(format!("play: {error}"));
                     self.file_note = Some((format!("play: {error}"), true));
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -240,6 +315,9 @@ impl Shell {
                     self.preparing_play = None;
                 }
             }
+        }
+        if let Some(session) = self.edit.as_deref() {
+            self.heard.hear(&session.editor.log);
         }
         if !self.playing_recipe {
             return;
@@ -270,12 +348,14 @@ impl Shell {
         let mut session = match Session::open(scene, pfx_editor::setup()) {
             Ok(session) => session,
             Err(error) => {
+                self.heard.note(format!("play: {error}"));
                 self.file_note = Some((format!("play: {error}"), true));
                 return;
             }
         };
         let chosen = self.module.module().map(Path::to_path_buf);
         session.editor.module.set_module(chosen, self.module.from());
+        self.heard.listen(&session.editor.log);
         if let Some(wake) = &self.session_wake {
             pfx_editor_shell::App::waker(&mut session, wake.clone());
         }
@@ -295,12 +375,66 @@ impl Shell {
 
     pub(super) fn session_said(&self) -> Option<(String, Color32)> {
         let entry = self.edit.as_deref()?.editor.log.entries.back()?;
+        let palette = self.palette();
         let colour = match entry.level {
-            Level::Error => DANGER,
-            Level::Warn => ACCENT,
-            Level::Info => TEXT_CODE,
+            Level::Error => palette.danger,
+            Level::Warn => palette.accent,
+            Level::Info => palette.text_code,
         };
         Some((entry.text.clone(), colour))
+    }
+
+    pub(super) fn held_item(&mut self, ui: &mut Ui, held: &str) {
+        let palette = Palette::of(ui.ctx());
+        ui.label(code(ui, "error", palette.text_muted));
+        let shown = ui
+            .add(
+                egui::Label::new(code(
+                    ui,
+                    crate::shown::text(&first_line(held, 96)),
+                    palette.danger,
+                ))
+                .sense(Sense::click()),
+            )
+            .on_hover_text("F6 or a click opens the log with the full message");
+        if shown.clicked() {
+            self.heard.open = true;
+        }
+    }
+
+    pub(super) fn log_window(&mut self, ctx: &Context) {
+        let palette = Palette::of(ctx);
+        if !self.heard.open {
+            return;
+        }
+        let folder = Path::new(&self.document.path)
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let (log, root) = match self.edit.as_deref() {
+            Some(session) => (&session.editor.log, session.editor.path().to_path_buf()),
+            None => (&self.heard.log, folder),
+        };
+        egui::Area::new(egui::Id::new("workbench log"))
+            .order(egui::Order::Foreground)
+            .anchor(
+                Align2::LEFT_BOTTOM,
+                Vec2::new(f32::from(PANEL_PADDING), -STATUS - f32::from(PANEL_PADDING)),
+            )
+            .fade_in(false)
+            .show(ctx, |ui| {
+                Frame::NONE
+                    .fill(palette.bg_base)
+                    .stroke(Stroke::new(STROKE, palette.line_strong))
+                    .corner_radius(CornerRadius::same(RADIUS))
+                    .inner_margin(Margin::same(PANEL_PADDING))
+                    .show(ui, |ui| {
+                        ui.set_min_size(LOG_SIZE);
+                        ui.set_max_size(LOG_SIZE);
+                        ui.add(Header::new("F6", "log").width(92.0));
+                        pfx_editor::ui::log_lines(ui, log, &root);
+                    });
+            });
     }
 
     pub(super) fn session_undo(&mut self, command: Command) -> bool {
@@ -368,5 +502,70 @@ impl Shell {
             .as_deref()
             .filter(|_| !self.playing_recipe)
             .map(|session| (session.editor.trace, session.editor.trace_samples))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::follow::Mode;
+    use crate::viewer::Viewer;
+    use crate::{Script, scratch, theme};
+    use pfx_editor_shell::drive;
+
+    const RECIPE: &str = "recipe = 1\nname = \"crate\"\n\n[[object]]\nname = \"crate\"\nkind = \"box\"\nsize = [0.2, 0.2, 0.2]\n";
+
+    fn run(shell: &mut Shell, script: &str) {
+        let ctx = Context::default();
+        theme::apply_theme(&ctx, &theme::workbench());
+        drive(&ctx, [1586, 992], &Script::parse(script).unwrap(), |ui| {
+            shell.ui(ui)
+        });
+    }
+
+    #[test]
+    fn a_play_whose_module_is_missing_keeps_its_error_until_the_next_action() {
+        let path = scratch("play-missing-module");
+        std::fs::write(&path, RECIPE).unwrap();
+        let mut viewer = Viewer::new(&path, Mode::Fake);
+        let mut shell = Shell::open(&path.display().to_string());
+        viewer.sync(&mut shell);
+        shell.choose_module(path.with_file_name("missing.wasm"));
+        shell.play_pressed();
+        for _ in 0..2000 {
+            if shell.preparing_play.is_none() {
+                break;
+            }
+            run(&mut shell, "frame");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            shell.preparing_play.is_none(),
+            "the recipe's scene was built"
+        );
+        for _ in 0..12 {
+            run(&mut shell, "frame");
+        }
+        assert!(
+            shell.edit.is_none(),
+            "the failed play hands the recipe back"
+        );
+        let held = shell.heard.held().map(str::to_string).unwrap_or_default();
+        assert!(
+            held.contains("missing.wasm") && held.contains("play did not start"),
+            "{held}"
+        );
+        assert!(
+            shell
+                .heard
+                .log
+                .entries
+                .iter()
+                .any(|entry| entry.text == held),
+            "the window's log keeps the full message"
+        );
+        run(&mut shell, "key F6\nframe");
+        assert!(shell.heard.held().is_none(), "the next action clears it");
+        assert!(shell.heard.open, "F6 opens the log");
     }
 }

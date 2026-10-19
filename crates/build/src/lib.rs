@@ -423,6 +423,12 @@ impl Built {
             nodes.push(node);
             parents.push(parent);
         }
+        let leveled: Vec<usize> = self
+            .lods
+            .iter()
+            .filter_map(|lod| placed.get(lod.of).copied().flatten())
+            .collect();
+        let shared = shared_meshes(&mut nodes, &leveled);
         let lods: Vec<Lod> = self
             .lods
             .iter()
@@ -460,6 +466,7 @@ impl Built {
             pfx_glb::Content {
                 looks: dressed.as_ref().unwrap_or(&self.looks),
                 lods: &lods,
+                shared: &shared,
             },
             self.order,
             GENERATOR,
@@ -565,6 +572,64 @@ pub fn world(recipe: &Recipe, index: usize) -> Result<DMat4, Error> {
         "parent",
         "the parents form a loop",
     ))
+}
+
+fn rigid_shape(mesh: &pfx_mesh::Mesh) -> pfx_mesh::rigid::Shape<'_> {
+    pfx_mesh::rigid::Shape {
+        positions: &mesh.positions,
+        normals: &mesh.normals,
+    }
+}
+
+type Lead = (usize, Option<Option<pfx_mesh::rigid::Anchors>>);
+
+fn shared_meshes(nodes: &mut [Node], leveled: &[usize]) -> Vec<Option<usize>> {
+    use pfx_mesh::rigid;
+    let mut shared = vec![None; nodes.len()];
+    let mut leads: BTreeMap<u64, Vec<Lead>> = BTreeMap::new();
+    for at in 0..nodes.len() {
+        let node = &nodes[at];
+        if node.keep_transform || node.targets.is_some() || leveled.contains(&at) {
+            continue;
+        }
+        let mesh = &node.mesh;
+        let uvs = mesh.uvs.as_deref().unwrap_or_default();
+        let key = rigid::key(mesh.positions.len(), &mesh.indices, uvs);
+        let mut found = None;
+        for (lead, anchors) in leads.entry(key).or_default().iter_mut() {
+            let known = &nodes[*lead].mesh;
+            if known.indices != mesh.indices
+                || known.uvs != mesh.uvs
+                || known.uvs1 != mesh.uvs1
+                || known.slots != mesh.slots
+            {
+                continue;
+            }
+            let Some(anchors) = *anchors.get_or_insert_with(|| rigid::anchors(&known.positions))
+            else {
+                continue;
+            };
+            if let Some(rows) = rigid::register(rigid_shape(known), &anchors, rigid_shape(mesh)) {
+                found = Some((*lead, rows));
+                break;
+            }
+        }
+        match found {
+            Some((lead, rows)) => {
+                let node = &mut nodes[at];
+                node.transform = DMat4::from_cols_array(&[
+                    rows[0][0], rows[1][0], rows[2][0], 0.0, rows[0][1], rows[1][1], rows[2][1],
+                    0.0, rows[0][2], rows[1][2], rows[2][2], 0.0, rows[0][3], rows[1][3],
+                    rows[2][3], 1.0,
+                ]);
+                node.keep_transform = true;
+                node.mesh = pfx_mesh::Mesh::default();
+                shared[at] = Some(lead);
+            }
+            None => leads.entry(key).or_default().push((at, None)),
+        }
+    }
+    shared
 }
 
 fn nest(recipe: &Recipe, parts: &[Part]) -> Vec<Option<(usize, DMat4)>> {
@@ -928,7 +993,25 @@ fn share(
         {
             continue;
         }
-        let own = format!("{}.{name}", object.name);
+        let stored = |known: &str| match (
+            recipe.materials.get(&name),
+            recipe.materials.contains_key(known),
+        ) {
+            (Some(theirs), false) => Some(theirs),
+            _ => made.materials.get(&name),
+        };
+        let suffix = format!(".{name}");
+        let own = offered
+            .iter()
+            .find(|(known, (_, have))| {
+                known.ends_with(&suffix)
+                    && stored(known) == Some(have)
+                    && imported.get(known.as_str()) == made.looks.get(&name)
+            })
+            .map_or_else(
+                || format!("{}.{name}", object.name),
+                |(known, _)| known.clone(),
+            );
         if let Some(mut value) = made.materials.remove(&name) {
             if let (Some(theirs), false) = (
                 recipe.materials.get(&name),

@@ -1,4 +1,7 @@
-use egui::{Align2, CornerRadius, Id, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, Widget};
+use egui::{
+    Align2, Color32, CornerRadius, Id, Pos2, Rect, Response, Sense, Stroke, StrokeKind, TextureId,
+    Ui, Vec2, Widget,
+};
 
 use super::{State, place, shaped};
 use crate::theme::Theme;
@@ -11,6 +14,7 @@ pub struct Header<'a> {
     focused: bool,
     width: Option<f32>,
     id: Option<Id>,
+    mark: Option<(TextureId, Vec2)>,
 }
 
 impl<'a> Header<'a> {
@@ -22,6 +26,7 @@ impl<'a> Header<'a> {
             focused: false,
             width: None,
             id: None,
+            mark: None,
         }
     }
 
@@ -37,6 +42,11 @@ impl<'a> Header<'a> {
 
     pub fn id(mut self, id: Id) -> Header<'a> {
         self.id = Some(id);
+        self
+    }
+
+    pub fn mark(mut self, texture: TextureId, size: Vec2) -> Header<'a> {
+        self.mark = Some((texture, size));
         self
     }
 
@@ -93,6 +103,20 @@ impl Widget for Header<'_> {
             code_font,
             code_text,
         );
+        let mut after = code_rect.right_center() + Vec2::new(HEADER_GAP, 0.0);
+        if let Some((texture, size)) = self.mark {
+            let scale = ui.ctx().pixels_per_point();
+            let snap = |value: f32| (value * scale).round() / scale;
+            let min = Pos2::new(snap(after.x), snap(rect.center().y - size.y / 2.0));
+            let image = Rect::from_min_size(min, size);
+            painter.image(
+                texture,
+                image,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+            after = Pos2::new(image.right() + HEADER_GAP, after.y);
+        }
         let title = shaped(
             painter,
             self.title,
@@ -100,13 +124,7 @@ impl Widget for Header<'_> {
             title_text,
             theme.titles,
         );
-        place(
-            painter,
-            code_rect.right_center() + Vec2::new(HEADER_GAP, 0.0),
-            Align2::LEFT_CENTER,
-            title,
-            title_text,
-        );
+        place(painter, after, Align2::LEFT_CENTER, title, title_text);
         if let Some(info) = self.info {
             let info = shaped(
                 painter,

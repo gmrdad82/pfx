@@ -27,7 +27,10 @@ pub use memory::Memory;
 pub use parts::{Palette, Piece, glb_parts, material, palette, palette_with, pieces};
 use pfx_live::frame::Matrix;
 pub use pfx_live::frame::MeshStats;
-pub use picture::{difference, psnr, read_png, read_png_size, write_frame, write_png};
+pub use pfx_post::quantise::Dither;
+pub use picture::{
+    difference, psnr, read_png, read_png_shape, read_png_size, write_frame, write_png, write_wide,
+};
 pub use stage::{Change, Outline, Pick, Prepared, Stage, family_of};
 pub use text::{Laid, fonts};
 
@@ -228,7 +231,10 @@ pub fn unapplied(recipe: &Recipe, traced: bool) -> Vec<&'static str> {
 }
 
 pub fn unapplied_line(verb: &str, recipe: &Recipe, traced: bool) -> Option<String> {
-    let keys = unapplied(recipe, traced);
+    left_out_line(verb, &unapplied(recipe, traced), traced)
+}
+
+pub fn left_out_line(verb: &str, keys: &[&str], traced: bool) -> Option<String> {
     (!keys.is_empty()).then(|| {
         format!(
             "pfx {verb}: the {} renderer leaves out {}",
@@ -245,18 +251,42 @@ pub fn shoot_posed(
     size: [u32; 2],
     time: Option<f64>,
 ) -> Result<Vec<u8>, Error> {
+    shoot_posed_as(
+        gpu,
+        (recipe, built),
+        camera_name,
+        size,
+        time,
+        Output::default(),
+    )
+}
+
+pub fn shoot_posed_as(
+    gpu: &Gpu,
+    (recipe, built): (&Recipe, &Built),
+    camera_name: &str,
+    size: [u32; 2],
+    time: Option<f64>,
+    output: Output,
+) -> Result<Vec<u8>, Error> {
     let lens = camera(recipe, camera_name)?;
-    let mut reel = Reel::new(gpu, recipe, &built.parts, size)?;
+    let mut reel = Reel::with_output(gpu, recipe, &built.parts, size, output)?;
     if let (Some(time), Some(timeline)) = (time, recipe.timeline)
         && reel.blurs()
     {
         let before = time - 1.0 / f64::from(timeline.fps.max(1));
         reel.set_poses(poses(built, timeline.fps, before));
+        if built.skinned() {
+            reel.reshape(&built.skinned_parts(before))?;
+        }
         let early =
             pfx_build::pose_cameras(recipe, built, before).map_err(|e| Error(e.to_string()))?;
         let eye = reel.through(camera(&early, camera_name)?);
         reel.settle(&eye)?;
         reel.set_poses(std::collections::BTreeMap::new());
+        if built.skinned() {
+            reel.reshape_from(&built.skinned_parts(time), &built.skinned_parts(before))?;
+        }
         let eye = reel.through(lens);
         return reel.develop(&eye).map(|(rgba, _)| rgba);
     }
@@ -264,29 +294,96 @@ pub fn shoot_posed(
     reel.shoot(&eye).map(|(rgba, _)| rgba)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Output {
+    pub wide: bool,
+    pub dither: Option<pfx_post::quantise::Dither>,
+}
+
+impl Output {
+    pub fn bytes_per_pixel(&self) -> usize {
+        if self.wide { 8 } else { 4 }
+    }
+}
+
+fn wide_target(gpu: &Gpu, size: [u32; 2]) -> OffscreenTarget {
+    let format = wgpu::TextureFormat::Rgba16Float;
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("recipe reel wide output"),
+        size: wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    OffscreenTarget {
+        texture,
+        view,
+        format,
+        width: size[0],
+        height: size[1],
+    }
+}
+
 pub struct Reel {
     stage: Stage,
     target: OffscreenTarget,
     turns: TurnState,
     size: [u32; 2],
+    output: Output,
 }
 
 impl Reel {
     pub fn new(gpu: &Gpu, recipe: &Recipe, parts: &[Part], size: [u32; 2]) -> Result<Reel, Error> {
+        Reel::with_output(gpu, recipe, parts, size, Output::default())
+    }
+
+    pub fn with_output(
+        gpu: &Gpu,
+        recipe: &Recipe,
+        parts: &[Part],
+        size: [u32; 2],
+        output: Output,
+    ) -> Result<Reel, Error> {
         if size[0] == 0 || size[1] == 0 {
             return Err(Error(format!("the size {}x{} is empty", size[0], size[1])));
         }
-        let mut stage = Stage::with_parts(gpu.clone(), recipe, parts, size)?;
+        let format = if output.wide {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            wgpu::TextureFormat::Rgba8UnormSrgb
+        };
+        let mut stage = Stage::made_as(gpu.clone(), Prepared::of(recipe, parts)?, size, format)?;
         stage.blur_motion(true);
-        let target = gpu
-            .offscreen(size[0], size[1], wgpu::TextureFormat::Rgba8UnormSrgb)
-            .map_err(Error)?;
+        if !output.wide {
+            stage.set_output_dither(output.dither)?;
+        }
+        let target = if output.wide {
+            wide_target(gpu, size)
+        } else {
+            gpu.offscreen(size[0], size[1], format).map_err(Error)?
+        };
         Ok(Reel {
             stage,
             target,
             turns: TurnState::default(),
             size,
+            output,
         })
+    }
+
+    pub fn output(&self) -> Output {
+        self.output
     }
 
     pub fn pose(&mut self, recipe: &Recipe, parts: &[Part]) -> Result<(), Error> {
@@ -303,6 +400,10 @@ impl Reel {
 
     pub fn reshape(&mut self, parts: &[Part]) -> Result<usize, Error> {
         self.stage.reshape(parts)
+    }
+
+    pub fn reshape_from(&mut self, parts: &[Part], before: &[Part]) -> Result<usize, Error> {
+        self.stage.reshape_from(parts, before)
     }
 
     pub fn set_lights(&mut self, lights: &[pfx_recipe::Light]) -> Result<bool, Error> {
@@ -349,12 +450,17 @@ impl Reel {
     }
 
     fn read(&mut self, gpu_ms: f64) -> Result<(Vec<u8>, f64), Error> {
-        let rgba = self
-            .stage
-            .gpu()
-            .readback_rgba8(&self.target)
-            .map_err(Error)?;
-        Ok((rgba, gpu_ms))
+        let gpu = self.stage.gpu();
+        let bytes = if self.output.wide {
+            let halves = gpu.readback_rgba16(&self.target).map_err(Error)?;
+            halves
+                .iter()
+                .flat_map(|&h| pfx_post::quantise::wide(pfx_post::quantise::half(h)).to_be_bytes())
+                .collect()
+        } else {
+            gpu.readback_rgba8(&self.target).map_err(Error)?
+        };
+        Ok((bytes, gpu_ms))
     }
 }
 

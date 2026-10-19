@@ -31,7 +31,8 @@ impl Kind {
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Layer {
-    pub wave: Kind,
+    pub wave: Option<Kind>,
+    pub sample: Option<String>,
     pub note: Option<f32>,
     pub hz: Option<f32>,
     #[serde(default)]
@@ -57,6 +58,11 @@ pub struct Layer {
     pub pan: f32,
     #[serde(default)]
     pub linear: bool,
+    #[serde(default)]
+    pub pitch: f32,
+    #[serde(default)]
+    pub start: f32,
+    pub end: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -146,10 +152,17 @@ pub fn hz(note: f32) -> f32 {
     440.0 * 2f32.powf((note - 69.0) / 12.0)
 }
 
+pub const MOST_SAMPLE_GAIN: f32 = 4.0;
+pub const MOST_PITCH: f32 = 24.0;
+
 impl Layer {
     pub fn pitch(&self) -> f32 {
         let base = self.hz.or(self.note.map(hz)).unwrap_or(0.0);
-        base * 2f32.powf(self.cents / 1200.0)
+        base * 2f32.powf((self.cents + self.pitch * 100.0) / 1200.0)
+    }
+
+    pub fn rate(&self, transpose: f32) -> f32 {
+        2f32.powf((self.cents + (self.pitch + transpose) * 100.0) / 1200.0)
     }
 
     pub fn span(&self) -> f32 {
@@ -160,12 +173,63 @@ impl Layer {
         }
     }
 
+    fn check_sample(&self) -> Result<(), String> {
+        let tone = self.hz.is_some()
+            || self.note.is_some()
+            || self.decay != 0.0
+            || self.sustain != 0.0
+            || self.hold != 0.0
+            || self.bend != 0.0
+            || self.glide != 0.0
+            || self.linear;
+        if tone {
+            return Err(
+                "a sample layer takes no hz, note, decay, sustain, hold, bend, glide or linear"
+                    .into(),
+            );
+        }
+        if self.sample.as_deref().is_none_or(str::is_empty) {
+            return Err("a sample layer names a WAV file".into());
+        }
+        if !(0.0..=MOST_SAMPLE_GAIN).contains(&self.volume) {
+            return Err(format!(
+                "a sample layer's volume is in [0, {MOST_SAMPLE_GAIN}]"
+            ));
+        }
+        let times = [self.attack, self.release, self.at, self.start];
+        if times.iter().any(|t| !t.is_finite() || *t < 0.0) {
+            return Err("times are milliseconds, never negative".into());
+        }
+        if let Some(end) = self.end
+            && !(end.is_finite() && end > self.start)
+        {
+            return Err("a sample's end comes after its start".into());
+        }
+        Ok(())
+    }
+
     fn check(&self) -> Result<(), String> {
+        if !(self.pitch.is_finite() && self.pitch.abs() <= MOST_PITCH) || !self.cents.is_finite() {
+            return Err(format!("pitch is within {MOST_PITCH} semitones either way"));
+        }
+        if !(-1.0..=1.0).contains(&self.pan) {
+            return Err("pan is in [-1, 1] and bend within four octaves".into());
+        }
+        let wave = match (self.wave, &self.sample) {
+            (Some(_), Some(_)) | (None, None) => {
+                return Err("a layer takes a wave or a sample, one of them".into());
+            }
+            (None, Some(_)) => return self.check_sample(),
+            (Some(wave), None) => wave,
+        };
+        if self.start != 0.0 || self.end.is_some() {
+            return Err("start and end are a sample layer's".into());
+        }
         let pitched = self.hz.is_some() || self.note.is_some();
         if self.hz.is_some() && self.note.is_some() {
             return Err("a layer takes hz or note, not both".into());
         }
-        if !self.wave.noise() && !pitched {
+        if !wave.noise() && !pitched {
             return Err("a tone layer needs hz or note".into());
         }
         let times = [

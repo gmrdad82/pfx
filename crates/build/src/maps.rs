@@ -223,6 +223,7 @@ pub(crate) fn look(
         detail_normal: None,
         alpha_cutoff: (material.alpha_mode() == gltf::material::AlphaMode::Mask)
             .then(|| material.alpha_cutoff().unwrap_or(0.5)),
+        double_sided: None,
     })
 }
 
@@ -382,7 +383,8 @@ pub(crate) fn resolve(
         };
         let lobed =
             !material.fabric.off() || !material.anisotropy.off() || !material.alpha_mode.opaque();
-        if !lobed && !looks.get(name).is_some_and(Look::has_maps) {
+        let kept = |look: &Look| look.has_maps() || look.double_sided.is_some();
+        if !lobed && !looks.get(name).is_some_and(kept) {
             continue;
         }
         factors(looks.entry(name.clone()).or_default(), &material);

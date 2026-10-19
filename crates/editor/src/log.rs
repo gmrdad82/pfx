@@ -34,10 +34,12 @@ impl Entry {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Log {
     pub entries: VecDeque<Entry>,
+    pub said: u64,
 }
 
 impl Log {
     pub fn push(&mut self, entry: Entry) {
+        self.said += 1;
         if self.entries.len() == KEEP {
             self.entries.pop_front();
         }

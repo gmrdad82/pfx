@@ -138,11 +138,7 @@ impl Style {
                     keep: None,
                     keep_range: 0.45,
                 }),
-                Pass::Grain(Grain {
-                    strength: 0.07,
-                    response: 0.45,
-                    clamp: false,
-                }),
+                Pass::Grain(Grain::new(0.07, 0.45, false)),
                 Pass::Vignette(Vignette::power(0.62, 2.4, 0.8, 1.28)),
             ],
             Self::Vignette => vec![Pass::Vignette(Vignette::power(0.55, 2.4, 0.8, 1.28))],
@@ -169,11 +165,7 @@ impl Style {
                 }),
                 Pass::Tone(Tone::aces()),
                 Pass::Sepia(0.18),
-                Pass::Grain(Grain {
-                    strength: 0.03,
-                    response: 0.5,
-                    clamp: true,
-                }),
+                Pass::Grain(Grain::new(0.03, 0.5, true)),
                 Pass::Vignette(Vignette::smoothstep(0.3, 0.72, 0.28, 0.8)),
             ],
             Self::Crt => vec![

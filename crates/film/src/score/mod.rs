@@ -1,9 +1,10 @@
 mod recipe;
 
-pub use recipe::{Curve, Kind, Layer, Recipe, Saturate, Table, hz};
+pub use recipe::{Curve, Kind, Layer, MOST_PITCH, MOST_SAMPLE_GAIN, Recipe, Saturate, Table, hz};
 
-use pfx_sound::{ChannelId, Envelope, Mixer, Shape, VoiceId, Wave};
+use pfx_sound::{ChannelId, Clip, Envelope, Level, Mixer, Prepared, Shape, VoiceId, Wave};
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 pub const CHANNELS: u16 = 2;
 const FIRST: u32 = 4096;
@@ -72,13 +73,73 @@ pub struct Score {
     clock: u64,
     acts: Vec<(u64, Act)>,
     next: u32,
+    samples: BTreeMap<(String, usize), Prepared>,
+}
+
+fn trimmed(clip: &Clip, layer: &Layer, rate: u32) -> Result<Clip, String> {
+    let clip = clip.for_rate(rate);
+    let channels = usize::from(clip.channels.max(1));
+    let frames = clip.frames() as usize;
+    let at = |ms: f32| (f64::from(ms) * f64::from(rate) / 1000.0).round() as usize;
+    let start = at(layer.start);
+    let end = layer.end.map_or(frames, |ms| at(ms).min(frames));
+    if start >= end {
+        return Err(format!(
+            "the sample is {:.1} ms long, and its start is past its end",
+            frames as f64 * 1000.0 / f64::from(rate)
+        ));
+    }
+    Ok(Clip {
+        rate,
+        channels: clip.channels,
+        samples: clip.samples[start * channels..end * channels].to_vec(),
+    })
+}
+
+fn load(
+    table: &Table,
+    rate: u32,
+    dir: &Path,
+) -> Result<BTreeMap<(String, usize), Prepared>, String> {
+    let mut files: BTreeMap<PathBuf, Clip> = BTreeMap::new();
+    let mut out = BTreeMap::new();
+    for (name, recipe) in &table.recipes {
+        for (i, layer) in recipe.layers.iter().enumerate() {
+            let Some(file) = &layer.sample else {
+                continue;
+            };
+            let path = dir.join(file);
+            let at = |e: String| format!("score: {name}: {}: {e}", path.display());
+            if !files.contains_key(&path) {
+                let bytes = std::fs::read(&path).map_err(|e| at(e.to_string()))?;
+                let clip = Clip::from_wav(&bytes)
+                    .ok_or_else(|| at("not a WAV of 8-bit, 16-bit or float samples".into()))?;
+                files.insert(path.clone(), clip);
+            }
+            let clip = trimmed(&files[&path], layer, rate).map_err(at)?;
+            out.insert((name.clone(), i), Prepared::new(&clip, rate));
+        }
+    }
+    Ok(out)
 }
 
 impl Score {
     pub fn new(text: &str, bare: &[&str], seed: u64, rate: u32) -> Result<Score, String> {
+        Score::in_dir(text, bare, seed, rate, Path::new(""))
+    }
+
+    pub fn in_dir(
+        text: &str,
+        bare: &[&str],
+        seed: u64,
+        rate: u32,
+        dir: &Path,
+    ) -> Result<Score, String> {
         let table = Table::parse(text, bare)?;
         let mixer = Score::mixer(&table, seed, rate);
+        let samples = load(&table, rate.max(1), dir)?;
         Ok(Score {
+            samples,
             table,
             mixer,
             stems: Vec::new(),
@@ -255,8 +316,11 @@ impl Score {
             .seconds
             .map_or(1.0, |s| (s * 1000.0 / recipe.length).max(0.01));
         self.sweeps(&recipe, channel, at, stretch);
-        for layer in &recipe.layers {
-            self.layer(layer, channel, at, stretch, play);
+        for (i, layer) in recipe.layers.iter().enumerate() {
+            match self.samples.get(&(name.to_string(), i)).cloned() {
+                Some(clip) => self.sample(&clip, layer, channel, at, stretch, play),
+                None => self.layer(layer, channel, at, stretch, play),
+            }
         }
         self.to = 0;
         Ok(())
@@ -298,13 +362,35 @@ impl Score {
         }
     }
 
+    fn sample(
+        &mut self,
+        clip: &Prepared,
+        l: &Layer,
+        channel: ChannelId,
+        at: u64,
+        stretch: f32,
+        play: Play,
+    ) {
+        let start = at + self.frames(l.at * stretch);
+        let level = Level {
+            volume: (l.volume * play.gain).max(0.0),
+            pan: l.pan,
+            fade_in: self.frames(l.attack),
+            fade_out: self.frames(l.release),
+        };
+        let bus = self.to;
+        self.mix(bus)
+            .play_prepared_pitched_at(channel, start, clip, l.rate(play.pitch), level);
+    }
+
     fn layer(&mut self, l: &Layer, channel: ChannelId, at: u64, stretch: f32, play: Play) {
         let start = at + self.frames(l.at * stretch);
         let hz = l.pitch() * 2f32.powf(play.pitch / 12.0);
         let volume = (l.volume * play.gain).max(0.0);
         let (bus, offset) = (self.to, start - self.clock);
         let mixer = self.mix(bus);
-        let id = mixer.tone_in(offset, channel, l.wave.wave(), hz, volume);
+        let wave = l.wave.map_or(Wave::Sine, Kind::wave);
+        let id = mixer.tone_in(offset, channel, wave, hz, volume);
         mixer.set_pan(id, l.pan);
         let shape = if l.linear {
             Shape::Linear

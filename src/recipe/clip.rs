@@ -4,7 +4,7 @@ use std::process::{Command, ExitCode};
 use pfx_build::{Built, Registry};
 use pfx_glb::DMat4;
 use pfx_recipe::{Camera, CameraPath, Recipe};
-use pfx_still::Step;
+use pfx_still::{NOISE, Noise, Step};
 
 use super::process::on_path;
 use super::{pair, refuse, size};
@@ -99,6 +99,14 @@ pub(super) struct Args {
     spp: Option<u32>,
     #[arg(
         long,
+        value_name = "T",
+        requires = "trace",
+        value_parser = super::render::threshold,
+        help = "A pixel stops once its noise is under this, after at least Cycles' automatic floor of samples; 0 runs every pixel to --spp [default: the recipe's trace.threshold, else 0]"
+    )]
+    threshold: Option<f32>,
+    #[arg(
+        long,
         value_name = "name",
         help = "Film this variant instead of the recipe"
     )]
@@ -117,9 +125,15 @@ pub(super) struct Args {
         help = "Encode the frames into this .mp4 or .webm with pcod"
     )]
     film: Option<PathBuf>,
+    #[command(flatten)]
+    picture: super::Picture,
 }
 
 impl Args {
+    fn bits(&self) -> u8 {
+        if self.picture.wide() { 16 } else { 8 }
+    }
+
     fn samples(&self) -> Option<u32> {
         self.trace.then(|| self.spp.unwrap_or(SAMPLES))
     }
@@ -244,7 +258,13 @@ fn manifest(args: &Args) -> String {
         text.push_str(&format!("spin {object}, {} turns\n", args.spun()));
     }
     match args.samples() {
-        Some(samples) => text.push_str(&format!("renderer traced, {samples} spp\n")),
+        Some(samples) => {
+            text.push_str(&format!("renderer traced, {samples} spp"));
+            if let Some(threshold) = args.threshold {
+                text.push_str(&format!(", threshold {threshold}"));
+            }
+            text.push('\n');
+        }
         None => text.push_str("renderer live\n"),
     }
     if let Some(variant) = &args.variant {
@@ -252,6 +272,11 @@ fn manifest(args: &Args) -> String {
     }
     for set in &args.set {
         text.push_str(&format!("set {set}\n"));
+    }
+    if args.picture.wide() {
+        text.push_str("png16\n");
+    } else if args.picture.dither(0).is_none() {
+        text.push_str("dither off\n");
     }
     text
 }
@@ -272,13 +297,13 @@ fn claim(dir: &Path, wanted: &str) -> Result<(), String> {
     }
 }
 
-fn finished(path: &Path, size: [u32; 2]) -> bool {
-    pfx_recipe_scene::read_png_size(path).is_ok_and(|found| found == size)
+fn finished(path: &Path, size: [u32; 2], bits: u8) -> bool {
+    pfx_recipe_scene::read_png_shape(path).is_ok_and(|found| found == (size, bits))
 }
 
-fn pending(dir: &Path, frames: u32, size: [u32; 2]) -> Vec<u32> {
+fn pending(dir: &Path, frames: u32, size: [u32; 2], bits: u8) -> Vec<u32> {
     (0..frames)
-        .filter(|&frame| !finished(&dir.join(name(frame, frames)), size))
+        .filter(|&frame| !finished(&dir.join(name(frame, frames)), size, bits))
         .collect()
 }
 
@@ -328,32 +353,37 @@ fn path_of(camera: &Camera) -> Result<&CameraPath, String> {
 
 enum Renderer {
     Live(Box<pfx_recipe_scene::Reel>, Box<(Recipe, Built)>),
-    Traced(Box<pfx_still::Reel>, u32),
+    Traced(Box<pfx_still::Reel>, u32, Option<Noise>, super::Picture),
 }
 
 impl Renderer {
     fn recipe(&self) -> &Recipe {
         match self {
             Renderer::Live(_, base) => &base.0,
-            Renderer::Traced(reel, _) => &reel.recipe,
+            Renderer::Traced(reel, ..) => &reel.recipe,
         }
     }
 
     fn spin(&mut self, object: usize, motion: Matrix) -> Result<(), String> {
         match self {
             Renderer::Live(reel, _) => reel.preview(object, motion).map_err(|e| e.0),
-            Renderer::Traced(reel, _) => reel.spin(object, motion).map_err(|e| e.to_string()),
+            Renderer::Traced(reel, ..) => reel.spin(object, motion).map_err(|e| e.to_string()),
         }
     }
 
-    fn pose(&mut self, time: f64, name: &str) -> Result<Camera, String> {
+    fn pose(&mut self, time: f64, before: Option<f64>, name: &str) -> Result<Camera, String> {
         match self {
             Renderer::Live(reel, base) => {
                 let (recipe, built) = (&base.0, &base.1);
                 let fps = recipe.timeline.map_or(1, |t| t.fps);
                 reel.set_poses(pfx_recipe_scene::poses(built, fps, time));
                 if built.skinned() {
-                    reel.reshape(&built.skinned_parts(time)).map_err(|e| e.0)?;
+                    let now = built.skinned_parts(time);
+                    match before {
+                        Some(before) => reel.reshape_from(&now, &built.skinned_parts(before)),
+                        None => reel.reshape(&now),
+                    }
+                    .map_err(|e| e.0)?;
                 }
                 let lit = recipe.keyed.keys().any(|entry| entry.starts_with("light."));
                 let recipe =
@@ -365,12 +395,7 @@ impl Renderer {
                     .cloned()
                     .map_err(|e| e.0)
             }
-            Renderer::Traced(reel, _) => {
-                reel.pose(time).map_err(|e| e.to_string())?;
-                pfx_recipe_scene::camera(&reel.recipe, name)
-                    .cloned()
-                    .map_err(|e| e.0)
-            }
+            Renderer::Traced(reel, ..) => reel.pose_moving(time, name).map_err(|e| e.to_string()),
         }
     }
 
@@ -409,19 +434,50 @@ impl Renderer {
                     None => reel.shoot(&eye),
                 }
                 .map_err(|e| e.0)?;
-                pfx_recipe_scene::write_frame(to, size, &rgba).map_err(|e| e.0)?;
+                match reel.output().wide {
+                    true => pfx_recipe_scene::write_wide(to, size, &rgba),
+                    false => pfx_recipe_scene::write_frame(to, size, &rgba),
+                }
+                .map_err(|e| e.0)?;
                 Ok(format!("{gpu_ms:.0} ms on the GPU"))
             }
-            Renderer::Traced(reel, samples) => {
+            Renderer::Traced(reel, samples, noise, picture) => {
+                let take = pfx_still::Take {
+                    size,
+                    samples: *samples,
+                    noise: *noise,
+                    seed: pfx_still::Seed::Locked,
+                };
                 let rendered = reel
-                    .frame(camera, size, *samples, &mut |_: Step| {})
+                    .frame(camera, take, &mut |_: Step| {})
                     .map_err(|e| e.to_string())?;
-                let rgba = pfx_still::looked_with(
+                let pixels = pfx_still::finished(
                     &rendered.film,
                     (&rendered.finish, &rendered.overlay),
                     true,
                 )?;
-                pfx_recipe_scene::write_frame(to, rendered.film.size, &rgba).map_err(|e| e.0)?;
+                let size = rendered.film.size;
+                match picture.wide() {
+                    true => pfx_recipe_scene::write_wide(
+                        to,
+                        size,
+                        &pfx_post::quantise::sixteen(pixels.len(), 4, |at| {
+                            let [r, g, b, _] = pixels[at];
+                            [r, g, b, 1.0]
+                        }),
+                    ),
+                    false => pfx_recipe_scene::write_frame(
+                        to,
+                        size,
+                        &pfx_still::dithered_at(
+                            size,
+                            [0, 0],
+                            picture.dither(u64::from(rendered.seed)),
+                            &pixels,
+                        ),
+                    ),
+                }
+                .map_err(|e| e.0)?;
                 let paced = rendered.paced;
                 let builds = reel.builds().map_or(String::new(), |builds| {
                     format!(
@@ -430,8 +486,11 @@ impl Renderer {
                     )
                 });
                 Ok(format!(
-                    "{} submissions, the longest {:.2} ms, {:.0} ms on the GPU{builds}",
-                    paced.submissions, paced.longest_ms, paced.gpu_ms
+                    "{} submissions, the longest {:.2} ms, {:.0} ms on the GPU{builds}; {}",
+                    paced.submissions,
+                    paced.longest_ms,
+                    paced.gpu_ms,
+                    super::render::memory_line(&paced)
                 ))
             }
         }
@@ -450,8 +509,14 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
                 spun(&recipe, name)?;
             }
             let gpu = pfx_recipe_scene::headless().map_err(|e| e.0)?;
-            let reel = pfx_recipe_scene::Reel::new(&gpu, &recipe, &built.parts, args.size)
-                .map_err(|e| e.0)?;
+            let reel = pfx_recipe_scene::Reel::with_output(
+                &gpu,
+                &recipe,
+                &built.parts,
+                args.size,
+                args.picture.output(0),
+            )
+            .map_err(|e| e.0)?;
             let base = Box::new((recipe.clone(), built));
             (Renderer::Live(Box::new(reel), base), recipe)
         }
@@ -465,7 +530,11 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
             )
             .map_err(|e| e.to_string())?;
             let recipe = reel.recipe.clone();
-            (Renderer::Traced(Box::new(reel), samples), recipe)
+            let noise = noise(args, &recipe.trace, samples);
+            (
+                Renderer::Traced(Box::new(reel), samples, noise, args.picture),
+                recipe,
+            )
         }
     };
     let camera = pfx_recipe_scene::camera(&recipe, &args.camera).map_err(|e| e.0)?;
@@ -473,10 +542,24 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
     Ok((renderer, camera.clone()))
 }
 
+fn noise(args: &Args, trace: &pfx_recipe::Trace, samples: u32) -> Option<Noise> {
+    let threshold = args
+        .threshold
+        .or(trace.threshold.map(|t| t as f32))
+        .unwrap_or(0.0);
+    (threshold > 0.0 && samples >= 2).then(|| {
+        Noise {
+            threshold,
+            min_samples: trace.min_samples.unwrap_or(NOISE.min_samples),
+        }
+        .floored()
+    })
+}
+
 fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Result<(), String> {
     claim(&args.out, &manifest(args))?;
     let count = args.count();
-    let todo = pending(&args.out, count, args.size);
+    let todo = pending(&args.out, count, args.size, args.bits());
     let done = count - todo.len() as u32;
     eprintln!(
         "pfx clip: {} of {count} frames to make, {done} already finished in {}",
@@ -497,9 +580,11 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
     } else {
         Some(path_of(&camera)?)
     };
-    if let Some(line) =
-        pfx_recipe_scene::unapplied_line("clip", renderer.recipe(), renderer.traced())
-    {
+    let mut left_out = pfx_recipe_scene::unapplied(renderer.recipe(), renderer.traced());
+    if renderer.traced() && path.is_none() && spin.is_none() {
+        left_out.retain(|key| *key != "motion_blur");
+    }
+    if let Some(line) = pfx_recipe_scene::left_out_line("clip", &left_out, renderer.traced()) {
         eprintln!("{line}");
     }
     let place = |renderer: &mut Renderer, frame: u32| -> Result<Camera, String> {
@@ -515,7 +600,9 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
             }
             (None, Some(path)) => camera.at(path.time(frame, count)),
             (None, None) => {
-                renderer.pose(f64::from(frame) / f64::from(args.rate()), &args.camera)?
+                let at = |frame: u32| f64::from(frame) / f64::from(args.rate());
+                let before = frame.checked_sub(1).filter(|_| renderer.blurs()).map(at);
+                renderer.pose(at(frame), before, &args.camera)?
             }
         })
     };
@@ -639,7 +726,7 @@ mod tests {
     #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
-            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --variant bare --set sky.intensity=0.4 --video tmp/c.webm",
+            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16",
         ))
         .unwrap();
         assert_eq!(
@@ -656,11 +743,17 @@ mod tests {
                 out: "tmp/c".into(),
                 trace: true,
                 spp: Some(16),
+                threshold: Some(0.02),
                 variant: Some("bare".into()),
                 set: vec!["sky.intensity=0.4".into()],
                 film: Some("tmp/c.webm".into()),
+                picture: super::super::Picture {
+                    format: Some(true),
+                    dither: None,
+                },
             }
         );
+        assert_eq!(args.bits(), 16);
         let live = parse(&strings(
             "a.toml --camera main --frames 3 --fps 24 --size 8x8 --out d",
         ))
@@ -672,6 +765,30 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(traced.samples(), Some(64));
+    }
+
+    #[test]
+    fn a_traced_clip_stops_pixels_no_earlier_than_the_automatic_floor() {
+        let args = |line: &str| {
+            parse(&strings(&format!(
+                "a.toml --camera main --frames 3 --fps 24 --size 8x8 --out d --trace {line}"
+            )))
+            .unwrap()
+        };
+        let trace = |threshold: Option<f64>, min_samples: Option<u32>| pfx_recipe::Trace {
+            threshold,
+            min_samples,
+            ..pfx_recipe::Trace::default()
+        };
+        assert_eq!(noise(&args(""), &trace(None, None), 64), None);
+        let floored = noise(&args(""), &trace(Some(0.01), Some(8)), 256).unwrap();
+        assert_eq!(floored.min_samples, 64);
+        let flagged = noise(&args("--threshold 0.05"), &trace(None, Some(48)), 256).unwrap();
+        assert_eq!((flagged.threshold, flagged.min_samples), (0.05, 48));
+        assert_eq!(
+            noise(&args("--threshold 0"), &trace(Some(0.01), None), 256),
+            None
+        );
     }
 
     #[test]
@@ -696,7 +813,7 @@ mod tests {
             "{text}"
         );
         assert_eq!(
-            pending(&dir, live.count(), live.size),
+            pending(&dir, live.count(), live.size, 8),
             (0..24).collect::<Vec<_>>()
         );
         assert_eq!(live.rate(), 24);
@@ -820,7 +937,7 @@ mod tests {
                 pfx_recipe_scene::read_png(&path).unwrap(),
                 ([4, 2], rgba.clone())
             );
-            assert!(finished(&path, [4, 2]));
+            assert!(finished(&path, [4, 2], 8));
         }
     }
 
@@ -836,9 +953,10 @@ mod tests {
         let whole = std::fs::read(dir.join(name(0, 5))).unwrap();
         std::fs::write(dir.join(name(4, 5)), &whole[..whole.len() - 20]).unwrap();
         std::fs::write(dir.join(partial(1, 5)), &whole).unwrap();
-        assert_eq!(pending(&dir, 5, size), [1, 3, 4]);
-        assert_eq!(pending(&dir, 5, [4, 4]), [0, 1, 2, 3, 4]);
-        assert_eq!(pending(&scratch("empty"), 3, size), [0, 1, 2]);
+        assert_eq!(pending(&dir, 5, size, 8), [1, 3, 4]);
+        assert_eq!(pending(&dir, 5, size, 16), [0, 1, 2, 3, 4]);
+        assert_eq!(pending(&dir, 5, [4, 4], 8), [0, 1, 2, 3, 4]);
+        assert_eq!(pending(&scratch("empty"), 3, size, 8), [0, 1, 2]);
     }
 
     #[test]
@@ -1059,12 +1177,20 @@ mod tests {
         };
         let made: Vec<Vec<u8>> = (0..3).map(read).collect();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let shot = pfx_recipe_scene::still_with(
+        let (table, built) = pfx_recipe_scene::load(
             &root.join("tests/golden/table/table.toml"),
+            None,
+            &[],
+            &Registry::new(),
+        )
+        .unwrap();
+        let shot = pfx_recipe_scene::shoot_posed_as(
+            &pfx_recipe_scene::headless().unwrap(),
+            (&table, &built),
             "main",
             args.size,
             None,
-            &Registry::new(),
+            args.picture.output(0),
         )
         .unwrap();
         assert!(
@@ -1075,7 +1201,7 @@ mod tests {
         for frame in [1, 2] {
             std::fs::remove_file(out.join(name(frame, 3))).unwrap();
         }
-        assert_eq!(pending(&out, 3, args.size), [1, 2]);
+        assert_eq!(pending(&out, 3, args.size, 8), [1, 2]);
         frames(&args, &Registry::new(), &mut |_| {}).unwrap();
         for frame in 0..3 {
             assert!(
@@ -1083,7 +1209,7 @@ mod tests {
                 "frame {frame} after resuming"
             );
         }
-        assert!(pending(&out, 3, args.size).is_empty());
+        assert!(pending(&out, 3, args.size, 8).is_empty());
     }
 
     #[test]
@@ -1112,16 +1238,16 @@ mod tests {
             time: None,
         };
         let rendered = pfx_still::render(&request, &Registry::new(), &mut |_| {}).unwrap();
-        let still = dir.join("render.png");
-        pfx_still::write_with(
-            &still,
-            &rendered.film,
-            (&rendered.finish, &rendered.overlay),
-            true,
-        )
-        .unwrap();
+        let pixels =
+            pfx_still::finished(&rendered.film, (&rendered.finish, &rendered.overlay), true)
+                .unwrap();
+        let render = pfx_still::dithered_at(
+            args.size,
+            [0, 0],
+            args.picture.dither(u64::from(rendered.seed)),
+            &pixels,
+        );
         let (_, first) = pfx_recipe_scene::read_png(&out.join(name(0, 3))).unwrap();
-        let (_, render) = pfx_recipe_scene::read_png(&still).unwrap();
         assert!(
             first == render,
             "frame 0 differs from pfx render --recipe of the camera"

@@ -243,15 +243,40 @@ pub struct Grain {
     pub strength: f32,
     pub response: f32,
     pub clamp: bool,
+    pub size: f32,
+    pub seed: u32,
 }
 
 impl Grain {
-    pub fn clamped(strength: f32, response: f32) -> Self {
+    pub const SMOOTH_GAIN: f32 = 35.0 / 26.0;
+
+    pub fn new(strength: f32, response: f32, clamp: bool) -> Self {
         Self {
             strength,
             response,
-            clamp: true,
+            clamp,
+            size: 1.0,
+            seed: 0,
         }
+    }
+
+    pub fn clamped(strength: f32, response: f32) -> Self {
+        Self::new(strength, response, true)
+    }
+
+    pub fn salt(&self) -> u32 {
+        self.seed.wrapping_mul(0x9e37_79b9) >> 8
+    }
+
+    pub fn noise(&self, x: u32, y: u32, mixed: u32) -> f32 {
+        let mixed = mixed ^ self.salt().wrapping_mul(0x632b_e5ab);
+        if self.size <= 1.0 {
+            return grain_hash(x, y, mixed ^ 7) + grain_hash(x, y, mixed ^ 19) - 1.0;
+        }
+        let u = (x as f32 + 0.5) / self.size;
+        let v = (y as f32 + 0.5) / self.size;
+        (hash::value_noise(u, v, mixed ^ 7) + hash::value_noise(u, v, mixed ^ 19) - 1.0)
+            * Self::SMOOTH_GAIN
     }
 }
 
@@ -371,19 +396,25 @@ pub fn vignette(image: &Image, pass: &Vignette) -> Image {
 }
 
 pub fn grain(image: &Image, pass: &Grain, frame: u32, seed: u32) -> Image {
+    grain_at(image, pass, frame, seed, [0, 0])
+}
+
+pub fn grain_at(image: &Image, pass: &Grain, frame: u32, seed: u32, origin: [u32; 2]) -> Image {
     if pass.strength.abs() < 1e-8 && !pass.clamp {
         return image.clone();
     }
     let mixed = hash::mixed(seed, frame);
-    image.map_rgb(|x, y, c| {
-        let n = grain_hash(x, y, mixed ^ 7) + grain_hash(x, y, mixed ^ 19) - 1.0;
+    Image::from_fn_banded(image.width, image.height, |x, y| {
+        let p = image.at(x, y);
+        let c = [p[0], p[1], p[2]];
+        let n = pass.noise(origin[0] + x, origin[1] + y, mixed);
         let l = color::luma(c, REC709);
         let add = n * pass.strength * (1.0 - pass.response * l);
         let out = [c[0] + add, c[1] + add, c[2] + add];
         if pass.clamp {
-            [out[0].max(0.0), out[1].max(0.0), out[2].max(0.0)]
+            [out[0].max(0.0), out[1].max(0.0), out[2].max(0.0), p[3]]
         } else {
-            out
+            [out[0], out[1], out[2], p[3]]
         }
     })
 }

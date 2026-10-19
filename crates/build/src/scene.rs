@@ -8,8 +8,8 @@ use pfx_materials::{Blend, ContentLayer, Library, Material};
 use pfx_mesh::math::Real;
 use pfx_recipe::toml_edit::{DocumentMut, Item, Value};
 use pfx_recipe::{
-    CAP_LUMINANCE, CAP_MEAN, CAPPED, Camera, Casters, Kind, LightKind, MAX_LIGHTS, MONO, Object,
-    Projection, Recipe, RigFocus, Room, SCENE_SUFFIX, Shadow, SkyAmbient, SkyKind, Table,
+    CAP_LUMINANCE, CAP_MEAN, CAPPED, Camera, Casters, Kind, LightKind, LookGrain, MAX_LIGHTS, MONO,
+    Object, Projection, Recipe, RigFocus, Room, SCENE_SUFFIX, Shadow, SkyAmbient, SkyKind, Table,
     TextSpace, Trace, View,
 };
 use pfx_scene::types::{FORMAT, MaterialsFile, SceneFile};
@@ -1040,7 +1040,36 @@ fn finish(
             s.num("lut_amount", amount)?;
         }
     }
+    if let Some(grain) = recipe.look.as_ref().and_then(|look| look.grain) {
+        let mut s = Section::new(out, "[[finish.pass]]", "look.grain");
+        s.put(
+            "grain",
+            &format!(
+                "{{ amount = {}, response = {}, clamp = true, size = {}, seed = {} }}",
+                number(grain.amount, "look.grain.amount")?,
+                number(LookGrain::RESPONSE, "look.grain")?,
+                number(grain.size, "look.grain.size")?,
+                grain.seed
+            ),
+        );
+    }
     Ok(copy)
+}
+
+fn chromatic(out: &mut String, recipe: &Recipe) -> Result<(), Error> {
+    let Some(chromatic) = recipe.look.as_ref().and_then(|look| look.chromatic) else {
+        return Ok(());
+    };
+    let mut s = Section::new(out, "[[finish.pass]]", "look.chromatic");
+    s.put(
+        "chromatic",
+        &format!(
+            "{{ amount = {}, falloff = {} }}",
+            number(chromatic.amount, "look.chromatic.amount")?,
+            number(chromatic.falloff, "look.chromatic.falloff")?
+        ),
+    );
+    Ok(())
 }
 
 fn standard_or_graded(out: &mut String, recipe: &Recipe) -> Result<(), Error> {
@@ -1061,7 +1090,8 @@ fn standard_or_graded(out: &mut String, recipe: &Recipe) -> Result<(), Error> {
         && look.view == View::Standard
     {
         s.num("exposure", exposure)?;
-        return keys::put(&mut s, &keyed);
+        keys::put(&mut s, &keyed)?;
+        return chromatic(out, recipe);
     }
     keys::put(&mut s, &keyed)?;
     let (bloom, vignette, saturation, warmth) = match grade {
@@ -1103,6 +1133,9 @@ fn standard_or_graded(out: &mut String, recipe: &Recipe) -> Result<(), Error> {
     for (key, value) in passes {
         let mut s = Section::new(out, "[[finish.pass]]", "look");
         s.put(key, &value);
+        if key == "exposure" {
+            chromatic(out, recipe)?;
+        }
     }
     Ok(())
 }
@@ -1411,6 +1444,21 @@ fn animated(
     s.put("name", &string(name));
     s.put("mesh", &string(name));
     s.put(pick, "1");
+    let cutoff = built
+        .parts
+        .iter()
+        .filter(|part| !part.hidden)
+        .find_map(|part| match &recipe.objects[part.object].kind {
+            Kind::Card {
+                image: Some(_),
+                alpha_cutoff,
+                ..
+            } => Some(*alpha_cutoff),
+            _ => None,
+        });
+    if let Some(cutoff) = cutoff {
+        s.num("alpha_cutoff", cutoff.clamp(0.0, 1.0))?;
+    }
     let mut s = Section::new(out, "[object.animation]", &ip);
     s.put("clip", &string(pfx_glb::ANIMATION));
     Ok(())
@@ -1661,6 +1709,7 @@ fn key(name: &str) -> String {
 struct Paths {
     folder: PathBuf,
     root: PathBuf,
+    provenance: PathBuf,
     format: u32,
     scene: PathBuf,
     sources: Vec<PathBuf>,
@@ -1674,14 +1723,16 @@ impl Paths {
             Some(root) => declared(&scene, &root)?,
             None => Project::root_of(&scene),
         };
-        let folder = if format == 0 {
-            folder(&scene)?
+        let folder = folder(&scene)?;
+        let provenance = if format == 0 {
+            folder.clone()
         } else {
             root.clone()
         };
         Ok(Paths {
             folder,
             root,
+            provenance,
             format,
             scene,
             sources: recipe.asset_roots_at(base),
@@ -1868,7 +1919,7 @@ pub fn object_ids(
         out,
     );
     let paths = Paths::of(&scene, 1, recipe, base)?;
-    let source = source_of(recipe, &paths.folder)?.unwrap_or_else(|| recipe.name.clone());
+    let source = source_of(recipe, &paths.provenance)?.unwrap_or_else(|| recipe.name.clone());
     let nodes = built.map(nodes_of).unwrap_or_default();
     let (_, bases) = bases(recipe, &nodes, &source, built.is_some());
     Ok(recipe
@@ -1913,7 +1964,7 @@ fn one(
     };
     let mut scene: SceneFile =
         toml::from_str(&written.text).map_err(|e| refused("output.scene", &e))?;
-    let source = source_of(recipe, &paths.folder)?;
+    let source = source_of(recipe, &paths.provenance)?;
     let mut authoring = toml::Table::new();
     if let Some(source) = &source {
         authoring.insert("recipe".into(), toml::Value::String(source.clone()));

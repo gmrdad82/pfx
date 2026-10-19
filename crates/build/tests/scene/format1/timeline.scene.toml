@@ -1,11 +1,11 @@
 format = 1
 
-materials = ["scenes/street.materials.toml"]
-sound = "recipes/street.sound.toml"
+materials = ["street.materials.toml"]
+sound = "../recipes/street.sound.toml"
 
 [mesh.street]
 id = "44ggk0ckz8"
-file = "scenes/street.glb"
+file = "street.glb"
 
 [mesh.street.nodes.car]
 material = "paint"
@@ -132,7 +132,7 @@ warmth = { amount = 0.0, kind = "linear" }
 tone = "aces"
 
 [[finish.pass]]
-lut = "scenes/grade.cube"
+lut = "grade.cube"
 lut_amount = 0.75
 
 [flare]

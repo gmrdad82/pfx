@@ -201,7 +201,17 @@ fn outline(
             let Some(camera) = stage.looked() else {
                 return Ok(());
             };
-            let routes = recipe.map_or(&[][..], |recipe| &recipe.routes[..]);
+            let routes: Vec<_> = recipe
+                .filter(|_| !shell.is_clean())
+                .map(|recipe| {
+                    recipe
+                        .routes
+                        .iter()
+                        .filter(|route| route.show)
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
             (
                 stage.outlines(),
                 stage.generation(),
@@ -222,6 +232,7 @@ fn outline(
             key,
             outlines: &outlines,
             selected: &selected,
+            palette: shell.palette(),
         },
         &crate::clay::Target {
             output: &target.draw,
@@ -237,8 +248,9 @@ fn outline(
         &crate::wire::Scene {
             key,
             outlines: &outlines,
-            routes,
+            routes: &routes,
             selected: &selected,
+            palette: shell.palette(),
             pieces: shell.pieces(),
         },
         &crate::wire::Target {
@@ -302,6 +314,7 @@ pub struct Viewer {
     wire: crate::wire::Wire,
     clay: crate::clay::Clay,
     backdrop: crate::backdrop::Backdrop,
+    dither: bool,
 }
 
 impl Viewer {
@@ -341,6 +354,7 @@ impl Viewer {
             wire: crate::wire::Wire::default(),
             clay: crate::clay::Clay::default(),
             backdrop: crate::backdrop::Backdrop::default(),
+            dither: true,
         }
     }
 
@@ -417,6 +431,20 @@ impl Viewer {
 
     pub fn settling(&self) -> bool {
         self.settling > 0 || self.drawing.as_ref().is_some_and(Drawing::settling)
+    }
+
+    pub fn set_dither(&mut self, on: bool) -> Result<(), String> {
+        self.dither = on;
+        self.dithered()
+    }
+
+    fn dithered(&mut self) -> Result<(), String> {
+        match &mut self.drawing {
+            Some(Drawing::Stage(stage)) => stage
+                .set_output_dither(self.dither.then(pfx_recipe_scene::Dither::default))
+                .map_err(|error| error.0),
+            _ => Ok(()),
+        }
     }
 
     pub fn steady(&mut self) {
@@ -639,6 +667,9 @@ impl Viewer {
         match made {
             Ok(drawing) => {
                 self.drawing = Some(drawing);
+                if let Err(error) = self.dithered() {
+                    self.refused = Some(error);
+                }
                 self.previewed = None;
                 self.picking = false;
                 self.target = None;
@@ -975,9 +1006,12 @@ fn made(
     size: [u32; 2],
     memory: &Memory,
 ) -> Result<Drawing, String> {
-    Stage::kept(gpu, recipe, built, size, memory)
-        .map(|stage| Drawing::Stage(Box::new(stage)))
-        .map_err(|error| format!("stage: {error}"))
+    let mut stage =
+        Stage::kept(gpu, recipe, built, size, memory).map_err(|error| format!("stage: {error}"))?;
+    stage
+        .set_output_dither(Some(pfx_recipe_scene::Dither::default()))
+        .map_err(|error| format!("stage: {error}"))?;
+    Ok(Drawing::Stage(Box::new(stage)))
 }
 
 #[cfg(test)]
@@ -1777,7 +1811,7 @@ mod tests {
             &screen,
             &textures.borrow(),
             &primitives,
-            theme::BG_BASE,
+            crate::theme::Palette::new(&crate::theme::workbench()).bg_base,
         );
         let rgba = gpu.readback_rgba8(&target).unwrap();
         let png = crate::encode_png(WIDE, &rgba).unwrap();

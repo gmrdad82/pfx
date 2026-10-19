@@ -182,6 +182,7 @@ fn loud() -> Theme {
         card: colour(),
         card_line: colour(),
         stripe: colour(),
+        selected: colour(),
         well: colour(),
         line: colour(),
         track: colour(),

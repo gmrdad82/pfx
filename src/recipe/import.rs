@@ -194,6 +194,9 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
         Ok(imported) => imported,
         Err(text) => return refuse(COMMAND, &format!("{file}: {text}")),
     };
+    for note in gltf_io::notes(&bytes) {
+        eprintln!("pfx {COMMAND}: {file}: {note}");
+    }
     let thumb = if args.thumb {
         match thumbnail(&bytes, &out, &imported, registry) {
             Ok(png) => Some(png),

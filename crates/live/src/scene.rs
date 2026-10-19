@@ -5,7 +5,7 @@ use pfx_load::scene::{
     Camera as SceneCamera, Content, Draws, Environment, Geometry, Haze, Scene, SceneDiff,
     Sun as SceneSun,
 };
-use pfx_materials::{Family, Material};
+use pfx_materials::Material;
 use pfx_post::dof;
 
 use crate::effects::RoomHaze;
@@ -42,6 +42,7 @@ pub struct Applied {
     pub finish: bool,
     pub motion_blur: bool,
     pub shadows: bool,
+    pub live: bool,
 }
 
 impl Applied {
@@ -56,6 +57,7 @@ impl Applied {
             || self.finish
             || self.motion_blur
             || self.shadows
+            || self.live
     }
 }
 
@@ -148,6 +150,7 @@ pub struct Staged {
     focus: Option<dof::Lens>,
     leveled: Vec<MeshHandle>,
     textured: bool,
+    reflected: bool,
 }
 
 fn mesh_data(geometry: &Geometry) -> MeshData<'_> {
@@ -389,7 +392,7 @@ fn content_bytes(content: &Content) -> (ContentFormat, Vec<u8>) {
 
 fn is_glass(draws: &Draws, index: usize) -> bool {
     let material = &draws.materials[draws.items[index].material as usize];
-    material.family == Family::Glass || material.transmission > 0.0
+    material.refracts()
 }
 
 fn apply_shadows(renderer: &mut Renderer, look: &pfx_load::scene::Shadows) -> Result<(), String> {
@@ -398,6 +401,18 @@ fn apply_shadows(renderer: &mut Renderer, look: &pfx_load::scene::Shadows) -> Re
         renderer.set_shadow_quality(quality);
     }
     renderer.set_screen_shadows(crate::screen_shadows::look_screen(look))
+}
+
+fn reflects_itself(scene: &Scene) -> bool {
+    scene
+        .live
+        .and_then(|live| live.scene_reflections)
+        .unwrap_or(true)
+}
+
+fn apply_live(renderer: &mut Renderer, live: &pfx_load::scene::LiveSettings) {
+    renderer.set_stochastic_reflections(live.stochastic_reflections.unwrap_or(true));
+    renderer.set_settle(live.settle.unwrap_or(true));
 }
 
 fn set_sun_radius(renderer: &mut Renderer, radius: f32) -> bool {
@@ -492,17 +507,35 @@ impl Renderer {
             focus: None,
             leveled: Vec::new(),
             textured,
+            reflected: false,
         };
         staged.plate.load(self, scene, true)?;
         staged.place(self, scene, draws, wanted)?;
         self.set_plate_hour(staged.sun.hour);
         self.set_lights(&local_lights(scene))?;
         self.set_sky(sky_source(scene.environment()), staged.sun.hour)?;
+        if let Some(settings) = self.scene_reflections() {
+            let artifact = if reflects_itself(scene) {
+                crate::capture::capture(
+                    self.gpu(),
+                    scene,
+                    &sky_source(scene.environment()),
+                    &settings,
+                    staged.sun.hour,
+                )?
+            } else {
+                None
+            };
+            staged.reflected = artifact.is_some();
+            self.frame()
+                .set_local_reflections(artifact.map(|artifact| vec![artifact]), staged.sun.hour)?;
+        }
         apply_haze(self, scene.haze.as_ref());
         set_sun_radius(self, staged.sun.radius);
         if let Some(look) = &scene.shadows {
             apply_shadows(self, look)?;
         }
+        apply_live(self, &scene.live.unwrap_or_default());
         self.set_sky_look(scene_look(scene));
         self.set_lens(lens(&staged.camera, aspect_of(self)));
         if let Some(finish) = &scene.finish {
@@ -873,6 +906,34 @@ impl Staged {
             apply_shadows(renderer, &scene.shadows.unwrap_or_default())?;
             applied.shadows = true;
         }
+        if diff.live {
+            apply_live(renderer, &scene.live.unwrap_or_default());
+            applied.live = true;
+        }
+        if let Some(settings) = renderer.scene_reflections()
+            && (diff.draws()
+                || diff.sky
+                || diff.sun
+                || diff.camera
+                || !diff.lights.is_empty()
+                || (diff.live && self.reflected != reflects_itself(scene)))
+        {
+            let artifact = if reflects_itself(scene) {
+                crate::capture::capture(
+                    renderer.gpu(),
+                    scene,
+                    &sky_source(scene.environment()),
+                    &settings,
+                    self.sun.hour,
+                )?
+            } else {
+                None
+            };
+            self.reflected = artifact.is_some();
+            renderer
+                .frame()
+                .set_local_reflections(artifact.map(|artifact| vec![artifact]), self.sun.hour)?;
+        }
         Ok(applied)
     }
 
@@ -1179,6 +1240,9 @@ impl Staged {
         self.plate.release(renderer)?;
         if self.textured {
             renderer.set_maps(&crate::maps::MapImages::default())?;
+        }
+        if self.reflected {
+            renderer.frame().set_local_reflections(None, 0.0)?;
         }
         for handle in self.meshes.into_values() {
             renderer.release_mesh(handle)?;

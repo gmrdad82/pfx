@@ -9,7 +9,7 @@ use pfx_recipe::RouteSpec;
 use pfx_recipe_scene::Outline;
 use wgpu::util::DeviceExt;
 
-use crate::theme::{ACCENT, BG_DEEP, TEXT_PRIMARY};
+use crate::theme::Palette;
 
 pub const CREASE_DEGREES: f32 = 1.0;
 const PRECISION: f32 = 1e4;
@@ -218,6 +218,7 @@ pub struct Scene<'a> {
     pub outlines: &'a [Outline<'a>],
     pub routes: &'a [RouteSpec],
     pub selected: &'a [u32],
+    pub palette: Palette,
     pub pieces: &'a [String],
 }
 
@@ -353,7 +354,7 @@ impl Wire {
         let mut uniform = Vec::with_capacity(VIEW_BYTES as usize);
         push_matrix(&mut uniform, &view);
         push_matrix(&mut uniform, &projection);
-        push_floats(&mut uniform, linear(BG_DEEP, 1.0));
+        push_floats(&mut uniform, linear(scene.palette.bg_deep, 1.0));
         push_floats(
             &mut uniform,
             [
@@ -482,7 +483,7 @@ impl Wire {
                 put(
                     &mut bytes,
                     &outline.model,
-                    linear(ACCENT, 1.0),
+                    linear(scene.palette.accent, 1.0),
                     SELECTED_WIDTH,
                     0.0,
                 );
@@ -490,14 +491,20 @@ impl Wire {
                 put(
                     &mut bytes,
                     &outline.model,
-                    linear(TEXT_PRIMARY, LINE_ALPHA),
+                    linear(scene.palette.text_primary, LINE_ALPHA),
                     LINE_WIDTH,
                     0.0,
                 );
             }
         }
         for _ in 0..self.routes {
-            put(&mut bytes, &IDENTITY, linear(ACCENT, 1.0), ROUTE_WIDTH, 1.0);
+            put(
+                &mut bytes,
+                &IDENTITY,
+                linear(scene.palette.accent, 1.0),
+                ROUTE_WIDTH,
+                1.0,
+            );
         }
         if bytes == self.written && self.placed.is_some() {
             return;
@@ -864,6 +871,7 @@ mod tests {
             outlines,
             routes: &[],
             selected: &[],
+            palette: Palette::new(&crate::theme::workbench()),
             pieces: &[],
         };
         let target = Target {

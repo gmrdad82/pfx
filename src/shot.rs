@@ -3,7 +3,8 @@ mod lens;
 mod sets;
 mod write;
 
-pub use args::{Plan, parse};
+pub use args::{DEFAULT_FPS, MAX_FPS, Plan, parse};
+pub use write::{CHANNELS, RATE};
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -135,12 +136,27 @@ fn scored(script: &Path, frames: u64, fps: u32) -> Result<Option<Vec<f32>>, Stri
     pfx_sound::shot::render(script, frames as usize, fps).map(Some)
 }
 
+#[cfg(feature = "shot-sound")]
+pub fn script_wav(script: &Path, frames: u64, fps: u32, wav: &Path) -> Result<(), String> {
+    let samples = scored(script, frames, fps)?.unwrap_or_default();
+    if let Some(parent) = wav.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("{}: {error}", parent.display()))?;
+    }
+    write::wav(wav, samples)
+}
+
+#[cfg(feature = "shot-sound")]
+pub fn audio_frames(frames: u64, fps: u32) -> usize {
+    pfx_sound::shot::audio_frames(frames as usize, fps)
+}
+
 #[cfg(not(feature = "shot-sound"))]
 fn scored(_script: &Path, _frames: u64, _fps: u32) -> Result<Option<Vec<f32>>, String> {
     Ok(None)
 }
 
-fn audio(
+pub(crate) fn audio(
     plan: &Plan,
     script: Option<&Path>,
     out: &Path,
@@ -250,7 +266,11 @@ pub fn run(plan: &Plan) -> Result<(), String> {
     prepare(&out)?;
 
     let started = Instant::now();
-    let writers = write::Writers::new(plan.format);
+    let writers = write::Writers::new(
+        plan.format,
+        plan.dither
+            .then(|| pfx_post::quantise::Dither::seeded(plan.seed)),
+    );
     let mut gpu = Vec::new();
     let mut progress = Progress::new("pfx shot", plan.frames, !plan.json && progress::live());
     let shot = Shot {
@@ -307,6 +327,10 @@ pub fn run(plan: &Plan) -> Result<(), String> {
         json!(plan.frames as f64 / f64::from(plan.fps)),
     );
     fields.insert("format".into(), json!(plan.format.name()));
+    fields.insert(
+        "dither".into(),
+        json!(plan.format == args::Format::Png && plan.dither),
+    );
     fields.insert(
         "wav".into(),
         json!(wav.as_ref().map(|wav| wav.to_string_lossy().into_owned())),

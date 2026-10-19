@@ -11,9 +11,9 @@ use crate::migrate::{self, Migration};
 use crate::spans::{KeyPath, Part, Spans};
 use crate::types::{
     Camera, Content, Emitter, FORMAT, File, FileKind, Finish, FinishKeys, Flare, Haze, Light,
-    Material, MaterialsFile, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates, Play,
-    PrefabFile, ProjectFile, ProjectTable, ProxiesFile, Proxy, Rig, SceneFile, Shadows, Sky, Sound,
-    Sounds, Sun, Text, Tiles, Trace, Tunable,
+    LiveSettings, Material, MaterialsFile, Mesh, MotionBlur, Mover, Object, Particles, Physics,
+    Plates, Play, PrefabFile, ProjectFile, ProjectTable, ProxiesFile, Proxy, Rig, SceneFile,
+    Shadows, Sky, Sound, Sounds, Sun, Text, Tiles, Trace, Tunable,
 };
 use crate::{Diagnostic, Location, Severity};
 
@@ -85,6 +85,7 @@ pub(crate) struct Doc {
     pub(crate) motion_blur: Option<MotionBlur>,
     pub(crate) trace: Option<Trace>,
     pub(crate) shadows: Option<Shadows>,
+    pub(crate) live: Option<LiveSettings>,
     pub(crate) plates: Option<Plates>,
     pub(crate) physics: Option<Physics>,
     pub(crate) play: Option<Play>,
@@ -202,6 +203,7 @@ impl Parsed {
                 motion_blur: doc.motion_blur,
                 trace: doc.trace,
                 shadows: doc.shadows,
+                live: doc.live,
                 plates: doc.plates.clone(),
                 physics: doc.physics.clone(),
                 play: doc.play.clone(),
@@ -271,6 +273,7 @@ pub(crate) fn keys(kind: FileKind) -> &'static [&'static str] {
             "motion_blur",
             "trace",
             "shadows",
+            "live",
             "plates",
             "physics",
             "play",
@@ -649,6 +652,7 @@ pub(crate) fn parse(file: &Path, text: &str, kind: FileKind, context: &Context<'
             (FileKind::Scene, "motion_blur") => doc.motion_blur = reader.typed(value, &path),
             (_, "trace") => doc.trace = reader.typed(value, &path),
             (FileKind::Scene, "shadows") => doc.shadows = reader.typed(value, &path),
+            (FileKind::Scene, "live") => doc.live = reader.typed(value, &path),
             (_, "plates") => doc.plates = reader.typed(value, &path),
             (_, "physics") => doc.physics = reader.typed(value, &path),
             (FileKind::Scene, "play") => doc.play = reader.typed(value, &path),

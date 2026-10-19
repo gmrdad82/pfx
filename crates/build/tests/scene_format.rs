@@ -85,8 +85,8 @@ fn the_table_writes_its_format_1_golden_and_pfx_scene_finds_nothing_wrong() {
     let root = matches_golden("table", None);
     let scene = scene_of(&root, "table");
     assert_eq!(scene.format, Some(1));
-    assert_eq!(scene.materials, ["scenes/table.materials.toml"]);
-    assert!(scene.mesh.values().all(|m| m.file == "scenes/table.glb"));
+    assert_eq!(scene.materials, ["table.materials.toml"]);
+    assert!(scene.mesh.values().all(|m| m.file == "table.glb"));
     let picks: Vec<u32> = scene.object.iter().filter_map(|o| o.pick).collect();
     assert_eq!(picks, (1..=11).collect::<Vec<u32>>());
     let authoring = scene.authoring.unwrap();
@@ -166,7 +166,7 @@ fn an_object_with_its_own_id_keeps_its_ids_across_a_rename_and_the_rest_keep_the
 }
 
 #[test]
-fn cards_text_and_content_take_ids_and_paths_from_the_root() {
+fn cards_text_and_content_take_ids_and_paths_from_their_folder() {
     let (root, r) = project(
         "cards",
         "format1-cards",
@@ -176,10 +176,10 @@ fn cards_text_and_content_take_ids_and_paths_from_the_root() {
     let written = emit(&root, &r).unwrap();
     assert!(written.contains(&root.join("scenes/JetBrainsMonoNerdFont-Bold.ttf")));
     let scene = scene_of(&root, "cards");
-    assert_eq!(scene.content["badge"].image, "recipes/badge.png");
+    assert_eq!(scene.content["badge"].image, "../recipes/badge.png");
     assert_eq!(
         scene.text["name_plate"].font,
-        "scenes/JetBrainsMonoNerdFont-Bold.ttf"
+        "JetBrainsMonoNerdFont-Bold.ttf"
     );
     assert!(scene.content.values().all(|c| c.id.is_some()));
     assert!(scene.text.values().all(|t| t.id.is_some()));
@@ -278,7 +278,7 @@ fn an_asset_root_outside_the_project_is_copied_beside_the_scene_and_never_writte
         std::fs::read(shelf.join("badge.png")).unwrap()
     );
     let scene = scene_of(&root, "cards");
-    assert_eq!(scene.content["badge"].image, "scenes/assets/0/badge.png");
+    assert_eq!(scene.content["badge"].image, "assets/0/badge.png");
     let listing: Vec<_> = std::fs::read_dir(&shelf).unwrap().collect();
     assert_eq!(listing.len(), 1);
     checked(&root);
@@ -316,7 +316,10 @@ fn a_declared_project_root_holds_assets_in_place_and_must_carry_a_project_file()
     }
     let built = build(&r, &base).unwrap();
     write(&built, &r, &base, Some(&root.join("scenes"))).unwrap();
-    assert_eq!(scene_of(&root, "cards").content["badge"].image, "badge.png");
+    assert_eq!(
+        scene_of(&root, "cards").content["badge"].image,
+        "../badge.png"
+    );
     assert!(!root.join("scenes/assets").exists());
 
     std::fs::remove_file(root.join("project.toml")).unwrap();

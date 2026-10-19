@@ -10,7 +10,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 pub use read::{Entry, Named, Reader};
-pub use write::Writer;
+pub use write::{Update, Writer, compact, compacts};
 
 pub type Tag = [u8; 4];
 
@@ -24,6 +24,11 @@ pub const MAX_NAME: usize = 1024;
 pub const ALIGN: u64 = 8;
 pub const HEADER_LEN: u64 = 16;
 pub const ENTRY_LEN: u64 = 45;
+pub const TAIL: [u8; 8] = *b"PFXTAIL\0";
+pub const TAIL_LEN: u64 = 24;
+pub const MAX_FRONT: u64 =
+    HEADER_LEN + MAX_CHUNKS as u64 * ENTRY_LEN + MAX_CHUNKS as u64 * MAX_NAME as u64;
+pub const COMPACT_MIN: u64 = 1 << 20;
 pub const COMPRESSED: u32 = 1;
 pub const STORED: u32 = 2;
 

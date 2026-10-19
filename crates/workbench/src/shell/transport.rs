@@ -11,15 +11,16 @@ const MODULE: &str = "\u{f12e}";
 const GAME: f32 = 330.0;
 
 fn toggle(ui: &mut Ui, text: &str, on: bool) -> Response {
+    let palette = Palette::of(ui.ctx());
     let (fill, colour) = if on {
-        (ACCENT, ACCENT_TEXT)
+        (palette.accent, palette.accent_text)
     } else {
-        (BG_CHIP, TEXT_SECONDARY)
+        (palette.bg_chip, palette.text_secondary)
     };
     ui.add(
         Button::new(code(ui, text, colour))
             .fill(fill)
-            .stroke(Stroke::new(STROKE, LINE_BORDER))
+            .stroke(Stroke::new(STROKE, palette.line_border))
             .corner_radius(CornerRadius::same(RADIUS)),
     )
 }
@@ -207,6 +208,7 @@ impl Shell {
             self.clock.seek(&span, f64::from(along) * span.seconds());
         }
         self.scrubber = Some(track);
+        let palette = Palette::of(bar.ctx());
         self.scrubber(bar, track, &span);
         let frame = span.frame(self.clock.time);
         bar.add_space(8.0);
@@ -216,17 +218,18 @@ impl Shell {
                 "{:.2} s · {frame} / 0–{} · {} fps",
                 self.clock.time, span.frames, span.fps
             ),
-            TEXT_CODE,
+            palette.text_code,
         ));
     }
 
     fn scrubber(&self, ui: &Ui, track: Rect, span: &Span) {
+        let palette = Palette::of(ui.ctx());
         let painter = ui.painter();
         let y = track.center().y;
         let x = |time: f64| track.left() + track.width() * (time / span.seconds().max(1e-9)) as f32;
         painter.line_segment(
             [Pos2::new(track.left(), y), Pos2::new(track.right(), y)],
-            Stroke::new(2.0, TRACK),
+            Stroke::new(2.0, palette.track),
         );
         let seconds = span.seconds().floor() as u32;
         let every = (seconds / 20).max(1);
@@ -234,32 +237,32 @@ impl Shell {
             let at = x(f64::from(second));
             painter.line_segment(
                 [Pos2::new(at, y - 5.0), Pos2::new(at, y + 5.0)],
-                Stroke::new(STROKE, LINE_BORDER),
+                Stroke::new(STROKE, palette.line_border),
             );
         }
         for (name, time) in &self.document.markers {
             let at = x(*time);
             painter.line_segment(
                 [Pos2::new(at, track.top()), Pos2::new(at, y + 5.0)],
-                Stroke::new(1.5, TEXT_SECONDARY),
+                Stroke::new(1.5, palette.text_secondary),
             );
             painter.text(
                 Pos2::new(at + 2.0, track.top() - 1.0),
                 Align2::LEFT_TOP,
                 name,
                 Theme::of(painter.ctx()).font(SIZE_CODE - 2.0),
-                TEXT_SECONDARY,
+                palette.text_secondary,
             );
         }
         let now = x(self.clock.time);
         painter.line_segment(
             [Pos2::new(track.left(), y), Pos2::new(now, y)],
-            Stroke::new(2.0, ACCENT),
+            Stroke::new(2.0, palette.accent),
         );
         painter.line_segment(
             [Pos2::new(now, track.top()), Pos2::new(now, track.bottom())],
-            Stroke::new(STROKE, ACCENT),
+            Stroke::new(STROKE, palette.accent),
         );
-        painter.circle_filled(Pos2::new(now, y), KNOB, ACCENT);
+        painter.circle_filled(Pos2::new(now, y), KNOB, palette.accent);
     }
 }

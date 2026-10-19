@@ -221,8 +221,9 @@ impl Curves {
     }
 
     pub fn draw(&self, painter: &Painter, lens: &Lens, lines: &[Line]) {
-        let line_stroke = Stroke::new(1.5_f32, INFO.gamma_multiply(0.9));
-        let disc_stroke = Stroke::new(STROKE + 0.5, INFO);
+        let palette = Palette::of(painter.ctx());
+        let line_stroke = Stroke::new(1.5_f32, palette.info.gamma_multiply(0.9));
+        let disc_stroke = Stroke::new(STROKE + 0.5, palette.info);
         for line in lines {
             let dragged = self
                 .drag
@@ -253,7 +254,7 @@ impl Curves {
                     || self.point.as_ref().is_some_and(|(o, p, i)| {
                         *o == line.object && *p == line.path && *i == index
                     });
-                let fill = if held { INFO } else { BG_DEEP };
+                let fill = if held { palette.info } else { palette.bg_deep };
                 painter.circle(screen, DISC, fill, disc_stroke);
             }
         }

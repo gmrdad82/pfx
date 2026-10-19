@@ -139,7 +139,7 @@ fn the_scene_and_its_proxies_load_through_scene_open() {
     assert!(text.starts_with("format = 1\n"), "{text}");
     assert_eq!(
         table(&text, "[plates]\n"),
-        "[plates]\ndir = \"plates/desk\"\nproxies = \"scene/desk.proxies.toml\"\ncasters = \"proxies\"\n"
+        "[plates]\ndir = \"../plates/desk\"\nproxies = \"desk.proxies.toml\"\ncasters = \"proxies\"\n"
     );
     checked(&base);
     let scene = Scene::open(base.join("scene/desk.scene.toml")).unwrap();
@@ -285,10 +285,7 @@ fn with_out_the_bake_names_the_scene_in_that_folder() {
         "{bake}"
     );
     let scene = read(&out.join("desk.scene.toml"));
-    assert!(
-        scene.contains("proxies = \"out/desk.proxies.toml\""),
-        "{scene}"
-    );
+    assert!(scene.contains("proxies = \"desk.proxies.toml\""), "{scene}");
     checked(&base);
     Scene::open(out.join("desk.scene.toml")).unwrap();
 }
@@ -312,7 +309,7 @@ fn with_out_the_folder_of_the_glb_and_the_bake_the_scene_still_lands_there() {
 }
 
 #[test]
-fn format_1_carries_the_plate_keys_with_root_paths_and_proxy_ids() {
+fn format_1_carries_the_plate_keys_with_folder_paths_and_proxy_ids() {
     let root = rooted("plates-format1");
     let recipes = root.join("recipes");
     std::fs::create_dir_all(&recipes).unwrap();
@@ -329,7 +326,7 @@ fn format_1_carries_the_plate_keys_with_root_paths_and_proxy_ids() {
     let scene = read(&recipes.join("scene/desk.scene.toml"));
     assert!(scene.starts_with("format = 1\n"), "{scene}");
     assert!(
-        scene.ends_with("\n\n[plates]\ndir = \"recipes/plates/desk\"\nproxies = \"recipes/scene/desk.proxies.toml\"\ncasters = \"proxies\"\n\n[authoring]\nrecipe = \"recipes/desk.toml\"\n"),
+        scene.ends_with("\n\n[plates]\ndir = \"../plates/desk\"\nproxies = \"desk.proxies.toml\"\ncasters = \"proxies\"\n\n[authoring]\nrecipe = \"recipes/desk.toml\"\n"),
         "{scene}"
     );
     let file: toml::Table = toml::from_str(&scene).unwrap();

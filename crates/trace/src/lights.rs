@@ -265,6 +265,7 @@ pub(crate) enum Source {
     Triangle {
         vertices: [[f32; 3]; 3],
         slot: u32,
+        record: u32,
     },
     Shape {
         center: [f32; 3],
@@ -411,9 +412,11 @@ pub(crate) fn build_emitters(candidates: &[Candidate], lights: usize, tree: usiz
         cdf.push((running / total) as f32);
         let probability = (power / total) as f32;
         entries.push(match candidate.source {
-            Source::Triangle { vertices, slot } => GpuEmitter {
+            Source::Triangle {
+                vertices, record, ..
+            } => GpuEmitter {
                 a: vec4(vertices[0], 0.0),
-                b: vec4(vertices[1], slot as f32),
+                b: vec4(vertices[1], record as f32),
                 c: vec4(vertices[2], triangle_area(vertices)),
                 emission: vec4(candidate.emission, probability),
             },
@@ -467,6 +470,7 @@ mod tests {
                 source: Source::Triangle {
                     vertices,
                     slot: slot as u32,
+                    record: slot as u32,
                 },
                 emission: [1.0; 3],
             });
@@ -476,6 +480,7 @@ mod tests {
                 source: Source::Triangle {
                     vertices,
                     slot: 2 + slot as u32,
+                    record: 2 + slot as u32,
                 },
                 emission: [0.5; 3],
             });

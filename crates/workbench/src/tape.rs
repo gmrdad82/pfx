@@ -41,8 +41,6 @@ const TRACKS: [&str; 7] = [
     "shake",
     "look_ahead",
 ];
-const LIME: Color32 = pfx_editor_style::tokens::HOT;
-const INK: Color32 = pfx_editor_style::tokens::BG;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -131,6 +129,11 @@ enum Beat {
     },
     Seek(String),
     File(FileStep),
+    Timed {
+        step: Step,
+        seconds: f32,
+        linear: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -154,6 +157,54 @@ fn seconds(number: usize, text: &str) -> Result<f32, Error> {
             "line {number}: wait wants seconds, from 0 to {LONGEST_WAIT}"
         ))),
     }
+}
+
+fn timed(number: usize, command: &str, rest: &str) -> Result<Option<Beat>, Error> {
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    let at = match command {
+        "move" => 2,
+        "scroll" => 3,
+        "drag" => 4,
+        _ => return Ok(None),
+    };
+    let Some(text) = words.get(at) else {
+        return Ok(None);
+    };
+    if command == "drag" && text.parse::<f32>().is_err() {
+        return Ok(None);
+    }
+    let seconds = match text.parse::<f32>() {
+        Ok(value) if value.is_finite() && value > 0.0 && value <= LONGEST_WAIT => value,
+        _ => {
+            return Err(Error(format!(
+                "line {number}: a timed {command} wants seconds after its points, above 0 and up to {LONGEST_WAIT}"
+            )));
+        }
+    };
+    let mut kept = words[..at].to_vec();
+    let mut linear = false;
+    for word in &words[at + 1..] {
+        match *word {
+            "ease" => linear = false,
+            "linear" => linear = true,
+            _ if command == "drag" => kept.push(word),
+            _ => {
+                return Err(Error(format!(
+                    "line {number}: {word} is not a curve; a timed {command} takes ease or linear"
+                )));
+            }
+        }
+    }
+    let line = format!("{}{command} {}", "\n".repeat(number - 1), kept.join(" "));
+    let step = Script::parse(&line)?
+        .steps
+        .pop()
+        .ok_or_else(|| Error(format!("line {number}: the tape lost a step")))?;
+    Ok(Some(Beat::Timed {
+        step,
+        seconds,
+        linear,
+    }))
 }
 
 fn shading(number: usize, rest: &str) -> Result<Beat, Error> {
@@ -402,6 +453,11 @@ impl Tape {
                 script.push('\n');
                 continue;
             }
+            if let Some(beat) = timed(number, command, rest)? {
+                order.push((number, Some(beat)));
+                script.push('\n');
+                continue;
+            }
             if let Some(step) = crate::file::step(command, rest) {
                 let step = step.map_err(|why| Error(format!("line {number}: {why}")))?;
                 order.push((number, Some(Beat::File(step))));
@@ -548,6 +604,10 @@ fn ease(t: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+fn even(t: f32) -> f32 {
+    t
+}
+
 struct Plan {
     fps: f32,
     home: Pos2,
@@ -651,9 +711,12 @@ impl Plan {
         (seconds * self.fps).round() as usize
     }
 
-    fn travel(&mut self, from: Pos2, to: Pos2, frames: usize) {
+    fn travel(&mut self, from: Pos2, to: Pos2, frames: usize, curve: fn(f32) -> f32) {
         for step in 1..=frames {
-            let at = from.lerp(to, ease(step as f32 / frames as f32));
+            if self.full() {
+                return;
+            }
+            let at = from.lerp(to, curve(step as f32 / frames as f32));
             self.pointer = Some(at);
             self.frame(vec![Event::PointerMoved(at)]);
         }
@@ -667,7 +730,66 @@ impl Plan {
         }
         let seconds = (distance / GLIDE_SPEED).clamp(GLIDE_SHORTEST, GLIDE_LONGEST);
         let frames = self.count(seconds).max(1);
-        self.travel(from, to, frames);
+        self.travel(from, to, frames, ease);
+    }
+
+    fn drag(&mut self, step: &Step, frames: Option<usize>, curve: fn(f32) -> f32) {
+        let Step::Drag {
+            from,
+            to,
+            middle,
+            mods,
+        } = step
+        else {
+            return;
+        };
+        let (from, to) = (Pos2::new(from[0], from[1]), Pos2::new(to[0], to[1]));
+        self.glide(from);
+        let button = if *middle {
+            PointerButton::Middle
+        } else {
+            PointerButton::Primary
+        };
+        self.press(button, *mods);
+        let frames = frames.unwrap_or_else(|| {
+            let seconds = (from.distance(to) / DRAG_SPEED).clamp(DRAG_SHORTEST, DRAG_LONGEST);
+            self.count(seconds).max(1)
+        });
+        self.travel(from, to, frames, curve);
+        self.release();
+    }
+
+    fn wheel(&mut self, lines: f32) {
+        self.frame(vec![Event::MouseWheel {
+            unit: MouseWheelUnit::Line,
+            delta: Vec2::new(0.0, lines),
+            modifiers: self.held,
+            phase: egui::TouchPhase::Move,
+        }]);
+    }
+
+    fn timed_step(&mut self, step: &Step, seconds: f32, linear: bool) {
+        let curve = if linear { even } else { ease };
+        let frames = self.count(seconds).clamp(1, MAX_FRAMES + 1);
+        match step {
+            Step::Move([x, y]) => {
+                let from = self.pointer.unwrap_or(self.home);
+                self.travel(from, Pos2::new(*x, *y), frames, curve);
+            }
+            Step::Drag { .. } => self.drag(step, Some(frames), curve),
+            Step::Scroll { at, lines } => {
+                self.glide(Pos2::new(at[0], at[1]));
+                for step in 1..=frames {
+                    if self.full() {
+                        return;
+                    }
+                    let before = curve((step - 1) as f32 / frames as f32);
+                    let now = curve(step as f32 / frames as f32);
+                    self.wheel(lines * (now - before));
+                }
+            }
+            step => self.step(step),
+        }
     }
 
     fn button(&self, button: PointerButton, pressed: bool) -> Event {
@@ -729,33 +851,10 @@ impl Plan {
                 self.glide(Pos2::new(*x, *y));
                 self.release();
             }
-            Step::Drag {
-                from,
-                to,
-                middle,
-                mods,
-            } => {
-                let (from, to) = (Pos2::new(from[0], from[1]), Pos2::new(to[0], to[1]));
-                self.glide(from);
-                let button = if *middle {
-                    PointerButton::Middle
-                } else {
-                    PointerButton::Primary
-                };
-                self.press(button, *mods);
-                let seconds = (from.distance(to) / DRAG_SPEED).clamp(DRAG_SHORTEST, DRAG_LONGEST);
-                let frames = self.count(seconds).max(1);
-                self.travel(from, to, frames);
-                self.release();
-            }
+            Step::Drag { .. } => self.drag(step, None, ease),
             Step::Scroll { at, lines } => {
                 self.glide(Pos2::new(at[0], at[1]));
-                self.frame(vec![Event::MouseWheel {
-                    unit: MouseWheelUnit::Line,
-                    delta: Vec2::new(0.0, *lines),
-                    modifiers: self.held,
-                    phase: egui::TouchPhase::Move,
-                }]);
+                self.wheel(*lines);
             }
             Step::Frame => self.frame(Vec::new()),
         }
@@ -848,6 +947,11 @@ fn plan_from(
                 }
             }
             Beat::File(step) => plan.file(step),
+            Beat::Timed {
+                step,
+                seconds,
+                linear,
+            } => plan.timed_step(step, *seconds, *linear),
         }
         if plan.full() {
             return Err(Error(format!(
@@ -867,10 +971,11 @@ fn pointer(ctx: &Context, at: Pos2, down: bool) {
         Order::Debug,
         Id::new("workbench tape pointer"),
     ));
+    let palette = crate::theme::Palette::of(ctx);
     let point = |x: f32, y: f32| at + Vec2::new(x, y);
     if down {
-        painter.circle_filled(at, 11.0, LIME.gamma_multiply(0.35));
-        painter.circle_stroke(at, 11.0, Stroke::new(1.5_f32, LIME));
+        painter.circle_filled(at, 11.0, palette.accent.gamma_multiply(0.35));
+        painter.circle_stroke(at, 11.0, Stroke::new(1.5_f32, palette.accent));
     }
     let tail = vec![
         point(4.04, 14.32),
@@ -890,7 +995,10 @@ fn pointer(ctx: &Context, at: Pos2, down: bool) {
     ];
     painter.add(Shape::convex_polygon(tail, Color32::WHITE, Stroke::NONE));
     painter.add(Shape::convex_polygon(head, Color32::WHITE, Stroke::NONE));
-    painter.add(Shape::closed_line(outline, Stroke::new(1.2_f32, INK)));
+    painter.add(Shape::closed_line(
+        outline,
+        Stroke::new(1.2_f32, palette.bg_base),
+    ));
 }
 
 type Stamp = Option<(Option<SystemTime>, u64)>;
@@ -1241,6 +1349,137 @@ mod tests {
                 .0
                 .starts_with("line 1: hold is not a step")
         );
+    }
+
+    fn wheeled(frames: &[Frame]) -> Vec<f32> {
+        frames
+            .iter()
+            .flat_map(|frame| &frame.events)
+            .filter_map(|event| match event {
+                Event::MouseWheel { delta, .. } => Some(delta.y),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn timed_pointer_steps_parse_and_the_old_forms_stay() {
+        let tape =
+            Tape::parse("move 10 20 1.5\ndrag 1 2 3 4 2.5 linear middle\nscroll 5 6 -3 1\nmove 10 20\ndrag 1 2 3 4 middle\nscroll 5 6 2\n")
+                .unwrap();
+        let drag = Step::Drag {
+            from: [1.0, 2.0],
+            to: [3.0, 4.0],
+            middle: true,
+            mods: Mods::default(),
+        };
+        assert_eq!(
+            tape.beats,
+            vec![
+                Beat::Timed {
+                    step: Step::Move([10.0, 20.0]),
+                    seconds: 1.5,
+                    linear: false
+                },
+                Beat::Timed {
+                    step: drag.clone(),
+                    seconds: 2.5,
+                    linear: true
+                },
+                Beat::Timed {
+                    step: Step::Scroll {
+                        at: [5.0, 6.0],
+                        lines: -3.0
+                    },
+                    seconds: 1.0,
+                    linear: false
+                },
+                Beat::Step(Step::Move([10.0, 20.0])),
+                Beat::Step(drag),
+                Beat::Step(Step::Scroll {
+                    at: [5.0, 6.0],
+                    lines: 2.0
+                }),
+            ]
+        );
+        assert_eq!(
+            Tape::parse("wait 1\nmove 1 1 0\n").unwrap_err().0,
+            "line 2: a timed move wants seconds after its points, above 0 and up to 600"
+        );
+        assert_eq!(
+            Tape::parse("move 1 1 2 bounce\n").unwrap_err().0,
+            "line 1: bounce is not a curve; a timed move takes ease or linear"
+        );
+        assert_eq!(
+            Tape::parse("frame\nframe\ndrag 1 1 x 2 3\n").unwrap_err().0,
+            "line 3: x is not a coordinate in points"
+        );
+    }
+
+    #[test]
+    fn a_timed_drag_glides_its_whole_path_on_one_ease_curve_at_60_fps() {
+        let points = [800.0, 400.0];
+        let lead = plan(&Tape::parse("move 100 100 0.5\n").unwrap(), 60, points).unwrap();
+        assert_eq!(lead.len(), 1 + 30);
+        let tape = Tape::parse("move 100 100 0.5\ndrag 100 100 700 100 2.5\n").unwrap();
+        let frames = plan(&tape, 60, points).unwrap();
+        assert_eq!(frames.len(), 1 + 30 + 1 + 150 + 1);
+        assert!(frames[31].down && frames[181].down && !frames[182].down);
+        let path: Vec<f32> = moved(&frames[32..182]).iter().map(|at| at.x).collect();
+        assert_eq!(path.len(), 150);
+        for (step, x) in path.iter().enumerate() {
+            let expected = 100.0 + 600.0 * ease((step + 1) as f32 / 150.0);
+            assert!((x - expected).abs() < 1e-3, "{step}: {x} {expected}");
+        }
+        let steps: Vec<f32> = std::iter::once(path[0] - 100.0)
+            .chain(path.windows(2).map(|pair| pair[1] - pair[0]))
+            .collect();
+        let peak = steps
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .unwrap()
+            .0;
+        assert!((74..=75).contains(&peak), "{peak}");
+        assert!(
+            steps[..=peak]
+                .windows(2)
+                .all(|pair| pair[1] >= pair[0] - 1e-3)
+        );
+        assert!(
+            steps[peak..]
+                .windows(2)
+                .all(|pair| pair[1] <= pair[0] + 1e-3)
+        );
+        let linear = Tape::parse("move 100 100 0.5\ndrag 100 100 700 100 1 linear\n").unwrap();
+        let frames = plan(&linear, 60, points).unwrap();
+        assert_eq!(frames.len(), 1 + 30 + 1 + 60 + 1);
+        let path: Vec<f32> = moved(&frames[32..92]).iter().map(|at| at.x).collect();
+        for pair in path.windows(2) {
+            assert!((pair[1] - pair[0] - 10.0).abs() < 1e-3, "{pair:?}");
+        }
+    }
+
+    #[test]
+    fn a_timed_move_and_scroll_spread_over_their_frames_at_60_fps() {
+        let points = [800.0, 400.0];
+        let tape = Tape::parse("move 400 200 0.1\nmove 100 100 2\n").unwrap();
+        let frames = plan(&tape, 60, points).unwrap();
+        assert_eq!(frames.len(), 1 + 6 + 120);
+        assert_eq!(moved(&frames).last(), Some(&Pos2::new(100.0, 100.0)));
+        let tape = Tape::parse("move 50 50 0.1\nscroll 50 50 6 1.5\n").unwrap();
+        let frames = plan(&tape, 60, points).unwrap();
+        assert_eq!(frames.len(), 1 + 6 + 90);
+        let lines = wheeled(&frames);
+        assert_eq!(lines.len(), 90);
+        assert!((lines.iter().sum::<f32>() - 6.0).abs() < 1e-4);
+        assert!(lines[45] > lines[0] * 10.0);
+        let even = Tape::parse("move 50 50 0.1\nscroll 50 50 -3 0.5 linear\n").unwrap();
+        let lines = wheeled(&plan(&even, 60, points).unwrap());
+        assert_eq!(lines.len(), 30);
+        assert!(lines.iter().all(|line| (line + 0.1).abs() < 1e-5));
+        let old = Tape::parse("move 50 50 0.1\nscroll 50 50 6\n").unwrap();
+        assert_eq!(wheeled(&plan(&old, 60, points).unwrap()), vec![6.0]);
     }
 
     #[test]

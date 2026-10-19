@@ -1,4 +1,5 @@
 use crate::bloom::{self, Bloom};
+use crate::chromatic::{self, Chromatic};
 use crate::comic::{self, ModernComic};
 use crate::flare::{self, Flare};
 use crate::fx::{self, NoiseKind};
@@ -145,6 +146,7 @@ pub enum Pass {
     Scratches(fx::Scratches),
     Halation(fx::Halation),
     Aberration(f32),
+    Chromatic(Chromatic),
     Distortion(f32),
     Curvature(f32),
     Scanlines(fx::Scanlines),
@@ -174,6 +176,8 @@ pub struct Chain {
 }
 
 impl Chain {
+    pub const FRAMES_PER_SECOND: f64 = 60.0;
+
     pub fn new() -> Self {
         Self {
             passes: Vec::new(),
@@ -184,6 +188,16 @@ impl Chain {
 
     pub fn is_local(&self) -> bool {
         self.passes.iter().all(Pass::is_local)
+    }
+
+    pub fn frame_at(time: f64) -> u32 {
+        (time.max(0.0) * Self::FRAMES_PER_SECOND).round() as u32
+    }
+
+    pub fn at(mut self, time: f64, seed: u32) -> Self {
+        self.frame = Self::frame_at(time);
+        self.seed = seed;
+        self
     }
 
     pub fn apply(
@@ -221,6 +235,40 @@ impl Chain {
             })
             .unwrap_or(self.passes.len());
         self.passes.insert(index, Pass::Flare(flare));
+    }
+
+    pub fn set_chromatic(&mut self, pass: Chromatic) {
+        if let Some(slot) = self.passes.iter_mut().find_map(|pass| match pass {
+            Pass::Chromatic(slot) => Some(slot),
+            _ => None,
+        }) {
+            *slot = pass;
+            return;
+        }
+        let index = usize::from(matches!(self.passes.first(), Some(Pass::Exposure(_))));
+        self.passes.insert(index, Pass::Chromatic(pass));
+    }
+
+    pub fn set_grain(&mut self, pass: grade::Grain) {
+        if let Some(slot) = self.passes.iter_mut().find_map(|pass| match pass {
+            Pass::Grain(slot) => Some(slot),
+            _ => None,
+        }) {
+            *slot = pass;
+            return;
+        }
+        let index = self
+            .passes
+            .iter()
+            .rposition(|pass| matches!(pass, Pass::Tone(_) | Pass::Lut(_)))
+            .map(|index| index + 1)
+            .or_else(|| {
+                self.passes
+                    .iter()
+                    .position(|pass| matches!(pass, Pass::Dither(_) | Pass::Encode))
+            })
+            .unwrap_or(self.passes.len());
+        self.passes.insert(index, Pass::Grain(pass));
     }
 
     pub fn split_after_bloom(&self) -> (Self, Self) {
@@ -281,6 +329,7 @@ impl Pass {
             Self::Scratches(_) => "scratches",
             Self::Halation(_) => "halation",
             Self::Aberration(_) => "aberration",
+            Self::Chromatic(_) => "chromatic",
             Self::Distortion(_) => "distortion",
             Self::Curvature(_) => "curvature",
             Self::Scanlines(_) => "scanlines",
@@ -312,6 +361,7 @@ impl Pass {
             Self::Saturation(v) => (v.amount - 1.0).abs() < 1e-8,
             Self::Warmth(v) => v.amount.abs() < 1e-8,
             Self::Halation(v) => v.strength.abs() < 1e-8,
+            Self::Chromatic(v) => v.is_off(),
             _ => false,
         }
     }
@@ -353,6 +403,7 @@ impl Pass {
             Self::Scratches(v) => fx::scratches(image, v, frame, seed),
             Self::Halation(v) => fx::halation(image, v),
             Self::Aberration(v) => fx::aberration(image, *v),
+            Self::Chromatic(v) => chromatic::apply(image, v),
             Self::Distortion(v) | Self::Curvature(v) => fx::distort(image, *v),
             Self::Scanlines(v) => fx::scanlines(image, v),
             Self::Aperture(v) => fx::aperture(image, *v),
@@ -391,6 +442,7 @@ impl Pass {
             | Self::Tape(_)
             | Self::Distortion(_)
             | Self::Curvature(_)
+            | Self::Chromatic(_)
             | Self::Pixel(_) => None,
             Self::Grade(passes) => passes
                 .iter()
@@ -539,6 +591,7 @@ impl Pass {
             Self::Scratches(_) => wgsl::SCRATCHES,
             Self::Halation(_) => wgsl::HALATION_ADD,
             Self::Aberration(_) => wgsl::ABERRATION,
+            Self::Chromatic(_) => wgsl::CHROMATIC,
             Self::Distortion(_) | Self::Curvature(_) => wgsl::DISTORTION,
             Self::Scanlines(_) => wgsl::SCANLINES,
             Self::Aperture(_) => wgsl::APERTURE,
@@ -647,6 +700,8 @@ impl Pass {
                 (v.strength, 0),
                 (v.response, 1),
                 (if v.clamp { 1.0 } else { 0.0 }, 2),
+                (v.size, 3),
+                (v.salt() as f32, 4),
             ]),
             Self::Dither(v) => fill(&[(v.amplitude, 0)]),
             Self::Encode => [0.0; 16],
@@ -712,6 +767,11 @@ impl Pass {
             | Self::Distortion(v)
             | Self::Curvature(v)
             | Self::Aperture(v) => fill(&[(*v, 0)]),
+            Self::Chromatic(v) => fill(&[
+                (v.amount, 0),
+                (v.falloff, 1),
+                (chromatic::MAX_SAMPLES as f32, 2),
+            ]),
             Self::Scratches(v) => fill(&[(v.count as f32, 0), (v.strength, 1)]),
             Self::Halation(v) => fill(&[(v.strength, 0)]),
             Self::Scanlines(v) => fill(&[(v.strength, 0), (v.period as f32, 1)]),

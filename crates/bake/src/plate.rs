@@ -1,4 +1,5 @@
 pub mod codec;
+pub mod room;
 mod run;
 
 use std::collections::BTreeMap;

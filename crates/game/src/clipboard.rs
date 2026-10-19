@@ -16,7 +16,7 @@ pub(crate) trait Board {
 }
 
 enum Ask {
-    Set(String),
+    Set(String, u64),
     Fetch,
     Quit,
 }
@@ -25,6 +25,7 @@ enum Ask {
 struct Held {
     text: Option<String>,
     serial: u64,
+    applied: u64,
     asked: bool,
     gone: bool,
 }
@@ -42,11 +43,12 @@ pub(crate) struct Link {
 impl Clipboard for Link {
     fn set_text(&self, text: &str) -> bool {
         let mut held = hold(&self.held);
-        if held.gone || self.asks.send(Ask::Set(text.to_owned())).is_err() {
+        let serial = held.serial + 1;
+        if held.gone || self.asks.send(Ask::Set(text.to_owned(), serial)).is_err() {
             return false;
         }
         held.text = Some(text.to_owned());
-        held.serial += 1;
+        held.serial = serial;
         true
     }
 
@@ -134,13 +136,14 @@ fn serve<B: Board>(mut board: B, requests: Receiver<Ask>, held: &Mutex<Held>) {
         let mut quit = false;
         for ask in std::iter::once(first).chain(requests.try_iter()) {
             match ask {
-                Ask::Set(text) => set = Some(text),
+                Ask::Set(text, serial) => set = Some((text, serial)),
                 Ask::Fetch => fetch = true,
                 Ask::Quit => quit = true,
             }
         }
-        if let Some(text) = set {
+        if let Some((text, serial)) = set {
             board.set(&text);
+            hold(held).applied = serial;
         }
         if quit {
             return;
@@ -150,7 +153,7 @@ fn serve<B: Board>(mut board: B, requests: Receiver<Ask>, held: &Mutex<Held>) {
             let text = board.get();
             let mut held = hold(held);
             held.asked = false;
-            if held.serial == serial {
+            if held.serial == serial && held.applied == serial {
                 held.text = text;
             }
         }

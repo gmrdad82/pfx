@@ -11,6 +11,8 @@ pub struct RtGeometry {
     pub boxes: Vec<[f32; 6]>,
     pub meshes: Vec<Vec<[f32; 3]>>,
     pub instances: Vec<RtInstance>,
+    pub tail: Vec<u32>,
+    pub movers: Vec<[f32; 6]>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,6 +20,7 @@ pub struct RtInstance {
     pub mesh: u32,
     pub opaque: bool,
     pub transform: [f32; 12],
+    pub moving: bool,
 }
 
 pub const MAX_INSTANCES: usize = (1 << 24) - 2;
@@ -54,24 +57,25 @@ impl RtGeometry {
             boxes: boxes.into_iter().map(|(_, bounds)| bounds).collect(),
             meshes: Vec::new(),
             instances: Vec::new(),
+            tail: Vec::new(),
+            movers: Vec::new(),
         }
     }
 
-    pub(crate) fn place(&mut self, levels: &crate::levels::Levels, solid: &[bool]) {
+    pub(crate) fn place(&mut self, levels: &crate::levels::Levels, opaque: &[bool]) {
         self.meshes = levels
             .meshes
             .iter()
             .map(|mesh| mesh.triangles.iter().flat_map(|t| t.vertices).collect())
             .collect();
-        for placed in levels.placed.iter().flatten() {
-            let len = levels.meshes[placed.mesh].triangles.len();
-            let base = placed.base as usize;
+        for (placed, &opaque) in levels.placed.iter().flatten().zip(opaque) {
             self.map.push(placed.base);
             self.instances.push(RtInstance {
                 mesh: placed.mesh as u32,
-                opaque: solid[base..base + len].iter().all(|&solid| solid),
+                opaque,
                 transform: crate::detail::Pose::new(placed.transform)
                     .map_or([0.0; 12], |pose| pose.rows()),
+                moving: placed.moving(),
             });
         }
     }
@@ -101,9 +105,44 @@ pub fn wanted(gpu: &Gpu) -> bool {
 pub struct Rt {
     pub tlas: wgpu::Tlas,
     pub map: wgpu::Buffer,
+    pub bytes: u64,
     first_instance: usize,
+    movers: Option<(wgpu::Blas, wgpu::Buffer)>,
     _blases: Vec<wgpu::Blas>,
     _inputs: Vec<wgpu::Buffer>,
+}
+
+fn mask(moving: bool) -> u8 {
+    if moving { 0 } else { 0xff }
+}
+
+fn movers_blas(
+    gpu: &Gpu,
+    boxes: &[[f32; 6]],
+) -> Option<(
+    wgpu::Blas,
+    wgpu::Buffer,
+    wgpu::BlasAABBGeometrySizeDescriptor,
+)> {
+    if boxes.is_empty() {
+        return None;
+    }
+    let size = wgpu::BlasAABBGeometrySizeDescriptor {
+        primitive_count: boxes.len() as u32,
+        flags: wgpu::AccelerationStructureGeometryFlags::NO_DUPLICATE_ANY_HIT_INVOCATION,
+    };
+    let buffer = input(gpu, "trace rt movers", bytemuck::cast_slice(boxes));
+    let blas = gpu.device.create_blas(
+        &wgpu::CreateBlasDescriptor {
+            label: Some("trace rt movers"),
+            flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+            update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+        },
+        wgpu::BlasGeometrySizeDescriptors::AABBs {
+            descriptors: vec![size.clone()],
+        },
+    );
+    Some((blas, buffer, size))
 }
 
 const IDENTITY: [f32; 12] = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
@@ -225,7 +264,7 @@ impl Rt {
         let leading = [&tri_blas, &box_blas].into_iter().flatten().count();
         let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
             label: Some("trace rt world"),
-            max_instances: (leading + geometry.instances.len()).max(1) as u32,
+            max_instances: (leading + geometry.instances.len() + 1) as u32,
             flags,
             update_mode: wgpu::AccelerationStructureUpdateMode::Build,
         });
@@ -242,6 +281,17 @@ impl Rt {
                 blas,
                 instance.transform,
                 k as u32 + 1,
+                mask(instance.moving),
+            ));
+        }
+        let movers = movers_blas(gpu, &geometry.movers);
+        if let Some((blas, _, _)) = &movers {
+            *tlas
+                .get_mut_single(leading + geometry.instances.len())
+                .unwrap() = Some(wgpu::TlasInstance::new(
+                blas,
+                IDENTITY,
+                crate::moving::MOVERS,
                 0xff,
             ));
         }
@@ -278,6 +328,17 @@ impl Rt {
                 }]),
             });
         }
+        if let Some((blas, buffer, size)) = &movers {
+            entries.push(wgpu::BlasBuildEntry {
+                blas,
+                geometry: wgpu::BlasGeometries::AabbGeometries(vec![wgpu::BlasAabbGeometry {
+                    size,
+                    stride: 24,
+                    aabb_buffer: buffer,
+                    primitive_offset: 0,
+                }]),
+            });
+        }
         for ((mesh, _), blas, size) in &variants {
             let buffer = mesh_buffers[*mesh as usize]
                 .as_ref()
@@ -303,23 +364,64 @@ impl Rt {
         });
         encoder.build_acceleration_structures(entries.iter(), [&tlas]);
         gpu.queue.submit([encoder.finish()]);
+        let mut words = geometry.map.clone();
+        words.extend_from_slice(&geometry.tail);
         let map = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("trace rt map"),
-            contents: bytemuck::cast_slice(&geometry.map),
-            usage: wgpu::BufferUsages::STORAGE,
+            contents: bytemuck::cast_slice(&words),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
         let mut inputs = vertex_buffers;
         inputs.extend(box_buffer);
         inputs.extend(mesh_buffers.into_iter().flatten());
         let mut blases: Vec<wgpu::Blas> = [tri_blas, box_blas].into_iter().flatten().collect();
         blases.extend(variants.into_iter().map(|(_, blas, _)| blas));
+        let bytes = inputs.iter().map(wgpu::Buffer::size).sum::<u64>()
+            + map.size()
+            + 3 * inputs.iter().map(wgpu::Buffer::size).sum::<u64>() / 2
+            + 64 * (leading + geometry.instances.len()) as u64;
         Self {
             tlas,
             map,
+            bytes,
             first_instance: leading,
+            movers: movers.map(|(blas, buffer, _)| (blas, buffer)),
             _blases: blases,
             _inputs: inputs,
         }
+    }
+
+    pub(crate) fn set_movers(&mut self, gpu: &Gpu, moving: &[bool], boxes: &[[f32; 6]]) {
+        let slot = self.first_instance + moving.len();
+        for (k, &moves) in moving.iter().enumerate() {
+            if let Some(Some(instance)) = self.tlas.get_mut_single(self.first_instance + k) {
+                instance.mask = mask(moves);
+            }
+        }
+        let built = movers_blas(gpu, boxes);
+        *self.tlas.get_mut_single(slot).unwrap() = built.as_ref().map(|(blas, _, _)| {
+            wgpu::TlasInstance::new(blas, IDENTITY, crate::moving::MOVERS, 0xff)
+        });
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("trace rt movers"),
+            });
+        let entries: Vec<wgpu::BlasBuildEntry<'_>> = built
+            .iter()
+            .map(|(blas, buffer, size)| wgpu::BlasBuildEntry {
+                blas,
+                geometry: wgpu::BlasGeometries::AabbGeometries(vec![wgpu::BlasAabbGeometry {
+                    size,
+                    stride: 24,
+                    aabb_buffer: buffer,
+                    primitive_offset: 0,
+                }]),
+            })
+            .collect();
+        encoder.build_acceleration_structures(entries.iter(), [&self.tlas]);
+        gpu.queue.submit([encoder.finish()]);
+        self.movers = built.map(|(blas, buffer, _)| (blas, buffer));
     }
 
     pub(crate) fn set_transforms(&mut self, gpu: &Gpu, transforms: &[[f32; 12]]) {

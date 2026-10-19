@@ -4,6 +4,8 @@ use std::sync::{Arc, LazyLock};
 
 use pfx_materials::Material;
 
+use crate::surface::Surface;
+
 use super::{
     ALPHA_CUTOFF, DEFAULT_MATERIAL, Geometry, IDENTITY, Matrix, Object, Part, Scene, Shadow,
     multiply, pose,
@@ -164,10 +166,20 @@ pub(super) fn pick<'a>(scene: &'a Scene, object: &'a Object, part: &'a Part) -> 
     }
 }
 
+fn own(part: &Part, name: &str) -> bool {
+    part.material.as_deref().is_some_and(|material| {
+        material == name
+            || material
+                .split_once('.')
+                .is_some_and(|(head, _)| head == name)
+    })
+}
+
 pub(super) fn draws(scene: &Scene) -> Draws {
     let mut used = BTreeSet::new();
     let mut picked = Vec::new();
     let mut surfaces = BTreeMap::new();
+    let mut soaked: BTreeMap<String, Arc<Surface>> = BTreeMap::new();
     for (owner, object) in scene.objects.iter().enumerate() {
         let Some(mesh) = scene.meshes.get(&object.mesh) else {
             continue;
@@ -183,6 +195,18 @@ pub(super) fn draws(scene: &Scene) -> Draws {
             {
                 surfaces.insert(name.clone(), surface.clone());
             }
+            if let Some(surface) = &part.surface
+                && surface.maps.any()
+                && own(part, &name)
+                && scene
+                    .library
+                    .get(&name)
+                    .is_some_and(|material| !material.wet.inactive())
+            {
+                soaked
+                    .entry(name.clone())
+                    .or_insert_with(|| surface.clone());
+            }
             used.insert(name.clone());
             picked.push((owner, object, part, name));
         }
@@ -196,7 +220,13 @@ pub(super) fn draws(scene: &Scene) -> Draws {
         .iter()
         .map(|name| match scene.library.get(name) {
             None if surfaces.contains_key(name) => textures.material(&surfaces[name]),
-            Some(material) => *material,
+            Some(material) => match soaked.get(name) {
+                Some(surface) => textures.material(&Surface {
+                    material: *material,
+                    ..(**surface).clone()
+                }),
+                None => *material,
+            },
             None => match name
                 .strip_prefix("emitter ")
                 .and_then(|key| scene.emitters.get(key))

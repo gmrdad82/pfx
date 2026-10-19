@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use pfx_core::cli;
 
 pub const SWITCHES: &[&str] = &["--draft", "--final", "--json"];
-pub const FORMATS: &[&str] = &["png", "exr"];
+pub const FORMATS: &[&str] = &["png", "png16", "exr"];
+pub const DITHERS: &[&str] = &["on", "off"];
 pub const EXPOSURES: &[&str] = &["auto", "fixed"];
 pub const DEFAULT_SIZE: (u32, u32) = (1920, 1080);
 pub const DEFAULT_FPS: u32 = 60;
@@ -13,6 +14,7 @@ pub const MAX_FPS: u32 = 240;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
     Png,
+    Png16,
     Exr,
 }
 
@@ -20,6 +22,14 @@ impl Format {
     pub fn name(self) -> &'static str {
         match self {
             Format::Png => "png",
+            Format::Png16 => "png16",
+            Format::Exr => "exr",
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Format::Png | Format::Png16 => "png",
             Format::Exr => "exr",
         }
     }
@@ -44,6 +54,7 @@ pub struct Plan {
     pub sets: Vec<String>,
     pub out: Option<PathBuf>,
     pub format: Format,
+    pub dither: bool,
     pub audio: Option<PathBuf>,
     pub sound: Option<PathBuf>,
     pub json: bool,
@@ -209,8 +220,14 @@ pub fn parse(args: &[String], flags: &[&str]) -> Result<Plan, String> {
     };
     let format = match value("--format") {
         Some("png") | None => Format::Png,
+        Some("png16") => Format::Png16,
         Some("exr") => Format::Exr,
         Some(other) => return Err(cli::invalid_choice(other, "--format", FORMATS)),
+    };
+    let dither = match value("--dither") {
+        Some("on") | None => true,
+        Some("off") => false,
+        Some(other) => return Err(cli::invalid_choice(other, "--dither", DITHERS)),
     };
     let fixed_exposure = match value("--exposure") {
         Some("auto") | None => false,
@@ -245,6 +262,7 @@ pub fn parse(args: &[String], flags: &[&str]) -> Result<Plan, String> {
             .collect::<Result<_, _>>()?,
         out: value("--out").map(PathBuf::from),
         format,
+        dither,
         audio: value("--audio").map(PathBuf::from),
         sound: value("--sound").map(PathBuf::from),
         json: switches.contains(&"--json"),
@@ -260,4 +278,24 @@ pub fn parse(args: &[String], flags: &[&str]) -> Result<Plan, String> {
             .transpose()?,
         fixed_exposure,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn plan(line: &str) -> Result<Plan, String> {
+        let words: Vec<String> = line.split_whitespace().map(String::from).collect();
+        parse(&words, &["--frames", "--format", "--dither"])
+    }
+
+    #[test]
+    fn png_frames_dither_by_default_and_png16_and_dither_off_are_asked_for() {
+        let plain = plan("a.pitofx --frames 2").unwrap();
+        assert_eq!((plain.format, plain.dither), (Format::Png, true));
+        let wide = plan("a.pitofx --frames 2 --format png16 --dither off").unwrap();
+        assert_eq!((wide.format, wide.dither), (Format::Png16, false));
+        assert_eq!(wide.format.extension(), "png");
+        assert!(plan("a.pitofx --frames 2 --dither maybe").is_err());
+    }
 }

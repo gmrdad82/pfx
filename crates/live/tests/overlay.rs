@@ -6,7 +6,7 @@ use output::output;
 use pfx_gpu::{Gpu, OffscreenTarget, wgpu};
 use pfx_live::frame::{
     Camera, Instance, Matrix, MeshData, MeshHandle, Scene, SceneWind, Sun, jitter_matrix, multiply,
-    transform,
+    reversed, transform,
 };
 use pfx_live::morph::{InstanceWeights, MorphData, MorphTargetData};
 use pfx_live::renderer::{Effects, Exposure, Finish, Renderer, Text};
@@ -272,8 +272,8 @@ fn last_jitter_is_the_projections_shift_and_depth_view_holds_that_frames_depth()
     }
     assert_eq!(shifted[2].to_bits(), plain[2].to_bits());
     let depth = read_depth(renderer.gpu(), renderer.depth_view());
-    let jittered = largest_error(&depth, projection(), jitter);
-    let unjittered = largest_error(&depth, projection(), [0.0; 2]);
+    let jittered = largest_error(&depth, reversed(projection()), jitter);
+    let unjittered = largest_error(&depth, reversed(projection()), [0.0; 2]);
     println!("depth error: jittered {jittered:e}, unjittered {unjittered:e}");
     assert!(jittered < 2e-5, "jittered error {jittered}");
     assert!(

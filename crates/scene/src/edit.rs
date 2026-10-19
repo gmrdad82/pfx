@@ -624,8 +624,15 @@ fn strings(doc: &DocumentMut, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn rooted(path: &str) -> Option<PathBuf> {
-    crate::paths::rooted(path).ok().map(PathBuf::from)
+fn rooted_from(
+    root: &Project,
+    file: &Path,
+    path: &str,
+    overlay: &BTreeMap<PathBuf, String>,
+) -> Option<PathBuf> {
+    root.placed(file, path, &|near| overlay.contains_key(Path::new(near)))
+        .ok()
+        .map(PathBuf::from)
 }
 
 struct Refusal {
@@ -683,7 +690,7 @@ impl Tree {
                 tree.settle(root, visit, kind, overlay)?;
                 continue;
             };
-            let Some(path) = rooted(&include) else {
+            let Some(path) = rooted_from(root, &visit.path, &include, overlay) else {
                 continue;
             };
             let names = |from: usize| -> String {
@@ -760,9 +767,10 @@ impl Tree {
             Vec::new()
         };
         self.order.push(visit.path.clone());
+        let naming = visit.path.clone();
         self.files.insert(visit.path, visit.file);
         for library in libraries {
-            let Some(library) = rooted(&library) else {
+            let Some(library) = rooted_from(root, &naming, &library, overlay) else {
                 continue;
             };
             if self.files.contains_key(&library) {

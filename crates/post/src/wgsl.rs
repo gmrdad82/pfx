@@ -515,8 +515,15 @@ fn grade_vignette(src: vec4<f32>, p: vec2<u32>, q0: vec4<f32>, q1: vec4<f32>, q2
 }
 
 fn grade_grain(src: vec4<f32>, p: vec2<u32>, q0: vec4<f32>, q1: vec4<f32>, q2: vec4<f32>, q3: vec4<f32>) -> vec4<f32> {
-    let mixed = mixed_seed();
-    let n = grain_hash(p.x, p.y, mixed ^ 7u) + grain_hash(p.x, p.y, mixed ^ 19u) - 1.0;
+    let mixed = mixed_seed() ^ (u32(q1.x) * 0x632be5abu);
+    var n = 0.0;
+    if (q0.w <= 1.0) {
+        n = grain_hash(p.x, p.y, mixed ^ 7u) + grain_hash(p.x, p.y, mixed ^ 19u) - 1.0;
+    } else {
+        let u = (f32(p.x) + 0.5) / q0.w;
+        let v = (f32(p.y) + 0.5) / q0.w;
+        n = (value_noise(u, v, mixed ^ 7u) + value_noise(u, v, mixed ^ 19u) - 1.0) * (35.0 / 26.0);
+    }
     let add = n * q0.x * (1.0 - q0.y * luma(src.rgb));
     var out = src.rgb + vec3<f32>(add);
     if (q0.z > 0.5) { out = max(out, vec3<f32>(0.0)); }
@@ -968,6 +975,30 @@ pub const ABERRATION: &str = shader!(
     let r = sample_src(f32(p.x) + ux * post.p0.x, f32(p.y) + uy * post.p0.x);
     let b = sample_src(f32(p.x) - ux * post.p0.x, f32(p.y) - uy * post.p0.x);
     store(p, vec4<f32>(r.r, src.g, b.b, src.a));
+"#
+);
+
+pub const CHROMATIC: &str = shader!(
+    "",
+    r#"
+    if (post.p0.x <= 0.0) { store(p, src); return; }
+    let dim = vec2<f32>(src_dim());
+    let centre = max(dim - vec2<f32>(1.0), vec2<f32>(0.0)) * 0.5;
+    let corner = max(length(centre), 1e-4);
+    let to = centre - vec2<f32>(p);
+    let end = to * (post.p0.x * safe_pow(length(to) / corner, post.p0.y));
+    let count = min(u32(ceil(length(end))), u32(post.p0.z));
+    if (count <= 1u) { store(p, src); return; }
+    var sum = vec3<f32>(0.0);
+    var weight = vec3<f32>(0.0);
+    for (var i = 0u; i < count; i = i + 1u) {
+        let t = (f32(i) + 0.5) / f32(count);
+        let s = 2.0 * t;
+        let m = vec3<f32>(max(1.0 - s, 0.0), max(1.0 - abs(s - 1.0), 0.0), max(s - 1.0, 0.0));
+        sum = sum + sample_src(f32(p.x) + end.x * t, f32(p.y) + end.y * t).rgb * m;
+        weight = weight + m;
+    }
+    store(p, vec4<f32>(sum / weight, src.a));
 "#
 );
 

@@ -1,3 +1,5 @@
+use pfx_core::memory;
+
 use crate::math::{cross, dot, sub};
 
 #[repr(C)]
@@ -87,30 +89,35 @@ const INSTANCE_LEAVES: Leaves = Leaves { size: 1, most: 0 };
 
 impl Bvh {
     pub fn build(triangles: &[Triangle]) -> Self {
-        let boxes: Vec<_> = triangles
-            .iter()
-            .map(|triangle| {
-                let mut bounds = Bounds::empty();
-                for &vertex in &triangle.vertices {
-                    bounds.point(vertex);
-                }
-                bounds
-            })
-            .collect();
+        Self::try_build(triangles).unwrap_or_else(|error| panic!("{error}"))
+    }
+
+    pub fn try_build(triangles: &[Triangle]) -> Result<Self, String> {
+        let mut boxes = memory::vec(triangles.len(), "the tracer's triangle boxes")?;
+        boxes.extend(triangles.iter().map(|triangle| {
+            let mut bounds = Bounds::empty();
+            for &vertex in &triangle.vertices {
+                bounds.point(vertex);
+            }
+            bounds
+        }));
         Self::over(&boxes, TRIANGLE_LEAVES)
     }
 
     pub fn build_instances(boxes: &[Bounds]) -> Self {
-        Self::over(boxes, INSTANCE_LEAVES)
+        Self::over(boxes, INSTANCE_LEAVES).unwrap_or_else(|error| panic!("{error}"))
     }
 
-    fn over(boxes: &[Bounds], leaves: Leaves) -> Self {
-        let centers: Vec<_> = boxes
-            .iter()
-            .map(|b| [0, 1, 2].map(|axis| (b.lo[axis] + b.hi[axis]) * 0.5))
-            .collect();
-        let mut order: Vec<_> = (0..boxes.len() as u32).collect();
-        let mut nodes = Vec::new();
+    fn over(boxes: &[Bounds], leaves: Leaves) -> Result<Self, String> {
+        let mut centers = memory::vec(boxes.len(), "the tracer's box centres")?;
+        centers.extend(
+            boxes
+                .iter()
+                .map(|b| [0, 1, 2].map(|axis| (b.lo[axis] + b.hi[axis]) * 0.5)),
+        );
+        let mut order = memory::vec(boxes.len(), "the tracer's triangle order")?;
+        order.extend(0..boxes.len() as u32);
+        let mut nodes = memory::vec(2 * boxes.len(), "the tracer's bvh nodes")?;
         if !boxes.is_empty() {
             split(
                 boxes,
@@ -122,8 +129,9 @@ impl Bvh {
                 leaves,
             );
         }
-        Self { nodes, order }
+        Ok(Self { nodes, order })
     }
+
     pub fn intersect(&self, triangles: &[Triangle], ray: Ray, limit: f32) -> Option<Hit> {
         if self.nodes.is_empty() {
             return None;

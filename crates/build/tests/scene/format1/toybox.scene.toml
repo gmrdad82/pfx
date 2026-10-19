@@ -1,95 +1,95 @@
 format = 1
 
-materials = ["scenes/toybox.materials.toml"]
+materials = ["toybox.materials.toml"]
 
 [mesh.backdrop]
 id = "634pe5zbvr"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "backdrop"
 
 [mesh.block]
 id = "8f9menna8n"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "block"
 
 [mesh.body]
 id = "s5cafe8bj3"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "body"
 
 [mesh.cable]
 id = "nj58tzy50q"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "cable"
 
 [mesh.card]
 id = "cntevgpg93"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "card"
 
 [mesh.coin]
 id = "cz92d00p69"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "coin"
 
 [mesh.drawer_front]
 id = "2m8agkf4s9"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "drawer_front"
 
 [mesh.drawer_pull]
 id = "4a1kskjcb9"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "drawer_pull"
 
 [mesh.lip_dial]
 id = "49nmdv9t8p"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "lip_dial"
 
 [mesh.lip_tray]
 id = "ezr8v7fymf"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "lip_tray"
 
 [mesh.mv_knob]
 id = "z4x2hr1y1h"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "mv_knob"
 
 [mesh.mv_knob__dot]
 id = "3r4y0fb6bv"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "mv_knob__dot"
 
 [mesh.mv_lid]
 id = "1nwkb6e4wv"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "mv_lid"
 
 [mesh.mv_lid__handle]
 id = "98cdhzmjfy"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "mv_lid__handle"
 
 [mesh.mv_roller]
 id = "9vz5a7htx6"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "mv_roller"
 
 [mesh.pill]
 id = "k7zcwnaf3f"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "pill"
 
 [mesh.shade]
 id = "0he0k4p7k4"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "shade"
 
 [mesh.vase]
 id = "7hbabqrwba"
-file = "scenes/toybox.glb"
+file = "toybox.glb"
 node = "vase"
 
 [[object]]

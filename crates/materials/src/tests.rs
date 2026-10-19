@@ -458,6 +458,30 @@ fn lobe_keys_round_trip_and_stay_out_of_plain_materials() {
 }
 
 #[test]
+fn a_material_reads_any_count_of_layers_up_to_four_and_fills_unset_params() {
+    let one: Material = toml::from_str(
+        "[[layers]]\nkind = \"grime\"\nfrequency = 1.0\namplitude = 0.5\nseed = 3\n",
+    )
+    .unwrap();
+    assert_eq!(one.layers[0].kind, NoiseKind::Grime);
+    assert_eq!(one.layers[0].params, crate::Grime::SAMPLE.params());
+    assert!(
+        one.layers[1..]
+            .iter()
+            .all(|layer| layer.kind == NoiseKind::None)
+    );
+    let tuned: Material = toml::from_str(
+        "[[layers]]\nkind = \"grime\"\nfrequency = 1.0\namplitude = 0.5\nseed = 3\nparams = [1.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.25, 0.6, 0.0, 0.0]\n",
+    )
+    .unwrap();
+    assert_eq!(tuned.layers[0].params[8..10], [1.25, 0.6]);
+    let five = "[[layers]]\nkind = \"fbm\"\nfrequency = 1.0\namplitude = 0.5\nseed = 0\n".repeat(5);
+    let err = toml::from_str::<Material>(&five).unwrap_err().to_string();
+    assert!(err.contains("at most 4 noise layers"), "{err}");
+    assert!(toml::from_str::<Material>("layers = []\n").is_ok());
+}
+
+#[test]
 fn a_thin_dielectric_slab_reflects_twice_one_face_over_one_plus_it() {
     for cosine in [1.0, 0.8, 0.5, 0.2, 0.05] {
         let face = fresnel_dielectric(cosine, 1.5);
@@ -601,4 +625,46 @@ fn a_flake_layer_turns_the_amount_of_its_cells_and_tilts_them_by_the_spread() {
     assert!(paint.to_toml().unwrap().contains("[flakes]"));
     assert!(!Material::default().to_toml().unwrap().contains("flakes"));
     assert_eq!(PackedMaterial::pack(&Material::default()).flakes[0], 0.0);
+}
+
+#[test]
+fn the_fresnel_power_steepens_the_coat_and_the_base_and_keeps_the_coat_within_energy() {
+    let lacquer = |power: f32| {
+        white(Material {
+            base: [0.03, 0.03, 0.03],
+            roughness: 0.45,
+            metalness: 0.3,
+            clearcoat: 1.0,
+            clearcoat_roughness: 0.03,
+            fresnel_power: power,
+            ..Material::default()
+        })
+    };
+    let grazing = 80.0_f32.to_radians();
+    let wo = [grazing.sin(), 0.0, grazing.cos()];
+    let mirror = [-wo[0], 0.0, wo[2]];
+    let peak = |power: f32| eval(&lacquer(power), wo, mirror)[1];
+    assert!(
+        peak(12.0) < 0.5 * peak(5.0),
+        "the coat's grazing peak: {} at 5, {} at 12",
+        peak(5.0),
+        peak(12.0)
+    );
+    let near = [0.0, 0.0, 1.0];
+    let tilted = [0.05_f32.sin(), 0.0, 0.05_f32.cos()];
+    close(
+        eval(&lacquer(12.0), near, tilted)[1],
+        eval(&lacquer(5.0), near, tilted)[1],
+        0.02 * eval(&lacquer(5.0), near, tilted)[1],
+    );
+    for power in [5.0, 12.0] {
+        for angle in [0.0_f32, 60.0, 80.0] {
+            let wo = [angle.to_radians().sin(), 0.0, angle.to_radians().cos()];
+            let albedo = furnace(&lacquer(power), wo);
+            assert!(
+                albedo.iter().all(|&a| a <= 1.0),
+                "power {power} at {angle} degrees reflects {albedo:?}"
+            );
+        }
+    }
 }

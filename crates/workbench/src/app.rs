@@ -212,10 +212,7 @@ impl App for Workbench<'_> {
     }
 
     fn theme(&self) -> Theme {
-        match self.shell.session() {
-            Some(session) if session.plays_a_game() => crate::theme::game(),
-            _ => crate::theme::workbench(),
-        }
+        self.shell.theme()
     }
 
     fn label(&self) -> Option<String> {
@@ -461,7 +458,7 @@ roughness = 0.75
 "##;
 
     const PANEL: [usize; 4] = [420, 275, 520, 325];
-    const NOISE_MOST: f64 = 0.5;
+    const NOISE_MOST: f64 = 0.2;
 
     fn noise(rgba: &[u8], width: usize, [x0, y0, x1, y1]: [usize; 4]) -> f64 {
         let luma: Vec<f64> = rgba
@@ -499,6 +496,7 @@ roughness = 0.75
             .without_recent()
             .bare();
         viewer.sync(&mut shell);
+        viewer.set_dither(false).unwrap();
         let rgba = pixels(
             &mut Workbench::lent(&mut shell, &mut viewer),
             size,
@@ -558,7 +556,7 @@ roughness = 0.08
 metalness = 1.0
 "##;
 
-    const REFLECTION_NOISE_MOST: f64 = 0.7;
+    const REFLECTION_NOISE_MOST: f64 = 0.55;
 
     #[test]
     #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
@@ -578,6 +576,7 @@ metalness = 1.0
             .without_recent()
             .bare();
         viewer.sync(&mut shell);
+        viewer.set_dither(false).unwrap();
         let rgba = pixels(
             &mut Workbench::lent(&mut shell, &mut viewer),
             size,

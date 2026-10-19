@@ -8,6 +8,8 @@ mod levels;
 pub mod lights;
 mod math;
 pub mod matte;
+pub mod motion;
+mod moving;
 pub mod probe;
 pub mod record;
 pub mod rig;

@@ -146,6 +146,7 @@ impl Shell {
     }
 
     pub(super) fn curves_strip(&mut self, ui: &mut Ui) {
+        let palette = Palette::of(ui.ctx());
         let height = self.curves_height();
         let (Some(span), Some((camera, rig))) = (self.span(), self.curve_rig()) else {
             return;
@@ -166,7 +167,7 @@ impl Shell {
         let x = |t: f64| left + width * (t / seconds) as f32;
         let time = |px: f32| f64::from((px - left) / width) * seconds;
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, CornerRadius::ZERO, BG_BASE);
+        painter.rect_filled(rect, CornerRadius::ZERO, palette.bg_base);
         let header = Rect::from_min_size(rect.min, Vec2::new(rect.width(), HEADER));
         let mut bar = ui.new_child(
             UiBuilder::new()
@@ -174,7 +175,11 @@ impl Shell {
                 .layout(Layout::left_to_right(Align::Center)),
         );
         bar.spacing_mut().item_spacing.x = 4.0;
-        bar.label(code(&bar, format!("{CURVES}  curves"), TEXT_SECONDARY));
+        bar.label(code(
+            &bar,
+            format!("{CURVES}  curves"),
+            palette.text_secondary,
+        ));
         let cameras: Vec<String> = self
             .editor
             .as_ref()
@@ -189,15 +194,15 @@ impl Shell {
         for name in &cameras {
             let on = *name == camera;
             let (fill, colour) = if on {
-                (ACCENT, ACCENT_TEXT)
+                (palette.accent, palette.accent_text)
             } else {
-                (BG_CHIP, TEXT_SECONDARY)
+                (palette.bg_chip, palette.text_secondary)
             };
             let clicked = bar
                 .add(
                     Button::new(code(&bar, format!("{CAMERA}  {name}"), colour))
                         .fill(fill)
-                        .stroke(Stroke::new(STROKE, LINE_BORDER))
+                        .stroke(Stroke::new(STROKE, palette.line_border))
                         .corner_radius(CornerRadius::same(RADIUS)),
                 )
                 .clicked();
@@ -242,28 +247,28 @@ impl Shell {
         for lane in &lanes {
             painter.line_segment(
                 [lane.rect.left_top(), lane.rect.right_top()],
-                Stroke::new(STROKE, LINE_SUBTLE),
+                Stroke::new(STROKE, palette.line_subtle),
             );
             painter.text(
                 Pos2::new(lane.rect.left() + 8.0, lane.rect.top() + 4.0),
                 Align2::LEFT_TOP,
                 lane.track,
                 theme.font(SIZE_CODE),
-                TEXT_SECONDARY,
+                palette.text_secondary,
             );
             painter.text(
                 Pos2::new(lane.rect.left() + 8.0, lane.rect.bottom() - 4.0),
                 Align2::LEFT_BOTTOM,
                 format!("{:.2}", value(&lane.keys, now)),
                 theme.font(SIZE_CODE),
-                TEXT_CODE,
+                palette.text_code,
             );
             painter.line_segment(
                 [
                     Pos2::new(left, lane.y(lane.range.at(0.5))),
                     Pos2::new(right, lane.y(lane.range.at(0.5))),
                 ],
-                Stroke::new(STROKE, LINE_SUBTLE.gamma_multiply(0.6)),
+                Stroke::new(STROKE, palette.line_subtle.gamma_multiply(0.6)),
             );
             let mut points = Vec::new();
             let mut px = left;
@@ -271,19 +276,26 @@ impl Shell {
                 points.push(Pos2::new(px, lane.y(value(&lane.keys, time(px)))));
                 px += STEP_PX;
             }
-            painter.line(points, Stroke::new(1.5, ACCENT.gamma_multiply(0.85)));
+            painter.line(
+                points,
+                Stroke::new(1.5, palette.accent.gamma_multiply(0.85)),
+            );
             for (index, key) in lane.keys.iter().enumerate() {
                 let held = self
                     .curves
                     .selected
                     .as_ref()
                     .is_some_and(|(track, at)| track == lane.track && *at == index);
-                let fill = if held { ACCENT } else { BG_DEEP };
+                let fill = if held {
+                    palette.accent
+                } else {
+                    palette.bg_deep
+                };
                 painter.circle(
                     Pos2::new(x(key[0]), lane.y(key[1])),
                     DOT,
                     fill,
-                    Stroke::new(STROKE + 0.5, ACCENT),
+                    Stroke::new(STROKE + 0.5, palette.accent),
                 );
             }
         }
@@ -293,14 +305,14 @@ impl Shell {
                 Align2::LEFT_CENTER,
                 format!("{camera} has no keyed tracks; + adds one at its static value"),
                 theme.font(SIZE_CODE),
-                TEXT_MUTED,
+                palette.text_muted,
             );
         }
         let lanes_top = header.bottom();
         let head = x(now);
         painter.line_segment(
             [Pos2::new(head, lanes_top), Pos2::new(head, rect.bottom())],
-            Stroke::new(STROKE, ACCENT),
+            Stroke::new(STROKE, palette.accent),
         );
         if let Some(track) = create {
             let _ = self.curve(
