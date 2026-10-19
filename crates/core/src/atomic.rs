@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -67,7 +66,7 @@ fn sync_file(path: &Path) -> io::Result<()> {
 
 #[cfg(unix)]
 pub fn sync_dir(dir: &Path) -> Result<(), String> {
-    File::open(dir)
+    std::fs::File::open(dir)
         .and_then(|file| file.sync_all())
         .map_err(|e| shown(dir, e))
 }
