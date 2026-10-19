@@ -200,7 +200,25 @@ pub enum NoiseKind {
 }
 
 impl NoiseKind {
-    fn id(self) -> u32 {
+    pub const ALL: [NoiseKind; 15] = [
+        Self::None,
+        Self::Fibre,
+        Self::Crinkle,
+        Self::PlankWood,
+        Self::WallMottle,
+        Self::Grime,
+        Self::Leaf,
+        Self::Bark,
+        Self::Flow,
+        Self::Value,
+        Self::Fbm,
+        Self::Scratch,
+        Self::CoatWobble,
+        Self::Crack,
+        Self::Track,
+    ];
+
+    pub fn id(self) -> u32 {
         match self {
             Self::None => 0,
             Self::Fibre => 1,
@@ -1079,4 +1097,21 @@ fn placed(transform: UvTransform) -> [f32; 4] {
         transform.scale[0],
         transform.scale[1],
     ]
+}
+
+#[cfg(test)]
+mod kind_table {
+    use super::NoiseKind;
+
+    #[test]
+    fn every_layer_kind_the_packer_reads_is_listed_once_and_keeps_its_id() {
+        for (at, kind) in NoiseKind::ALL.iter().enumerate() {
+            assert_eq!(NoiseKind::from_id(kind.id()), *kind);
+            assert!(!NoiseKind::ALL[..at].contains(kind), "{kind:?} twice");
+        }
+        for id in 0..256 {
+            let kind = NoiseKind::from_id(id);
+            assert!(NoiseKind::ALL.contains(&kind), "{kind:?} is missing");
+        }
+    }
 }

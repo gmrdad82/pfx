@@ -33,7 +33,7 @@ impl Game for Hider {
 
     fn tick(&mut self, world: &mut World, _tick: &Tick, _input: &Input) {
         self.calls.ticks.set(self.calls.ticks.get() + 1);
-        for name in ["incoming/badge", "incoming/wordmark", "grid"] {
+        for name in ["title/name", "title/mark", "grid"] {
             if let Some(object) = world.object(name) {
                 world.set_hidden(object, true);
             }
@@ -86,8 +86,8 @@ fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
         "project.toml",
         "content/first.scene.toml",
         "content/materials/base.materials.toml",
-        "content/materials/incoming.materials.toml",
-        "content/prefabs/incoming.prefab.toml",
+        "content/materials/title.materials.toml",
+        "content/prefabs/title.prefab.toml",
     ] {
         found.push((relative.into(), fs::read(root.join(relative)).unwrap()));
     }
@@ -97,7 +97,7 @@ fn snapshot(root: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 #[derive(Debug)]
 struct Seen {
     light: usize,
-    violet: usize,
+    lit: usize,
     red: usize,
 }
 
@@ -105,7 +105,7 @@ fn seen(session: &Session) -> Seen {
     let pixels = session.pixels().unwrap();
     let mut out = Seen {
         light: 0,
-        violet: 0,
+        lit: 0,
         red: 0,
     };
     for pixel in pixels.chunks_exact(4) {
@@ -113,8 +113,8 @@ fn seen(session: &Session) -> Seen {
         if r > 170 && g > 170 && b > 170 {
             out.light += 1;
         }
-        if u16::from(b) > u16::from(g) + 40 && b > 80 && u16::from(b) > u16::from(r) + 10 {
-            out.violet += 1;
+        if r > 120 && g > 120 && b > 120 {
+            out.lit += 1;
         }
         if u16::from(r) > u16::from(g) + 60 && u16::from(r) > u16::from(b) + 50 {
             out.red += 1;
@@ -191,10 +191,10 @@ fn the_editor_opens_a_scaffolded_project_and_f5_plays_the_games_own_logic() {
             && still.editor.viewport.passepartout().is_some(),
         "looking through the scene's camera shows its 16:9 frame"
     );
-    let lockup = seen(&still);
+    let title = seen(&still);
     assert_eq!(
         still.editor.selection,
-        Some(Item::Object("incoming".to_string()))
+        Some(Item::Object("title".to_string()))
     );
     let viewport = &still.editor.viewport;
     let image = viewport.image().unwrap();
@@ -207,8 +207,8 @@ fn the_editor_opens_a_scaffolded_project_and_f5_plays_the_games_own_logic() {
         "the group's gizmo sits in the middle of the view: {gizmo:?} in {image:?}"
     );
     assert!(
-        lockup.light > 300 && lockup.violet > 2_000 && lockup.red > 200,
-        "the first scene shows the wordmark, the mark and the X axis: {lockup:?}"
+        title.lit > 1_000 && title.red > 200,
+        "the first scene shows the game's name and the X axis: {title:?}"
     );
     let mut orbit = Session::open_project(&root, setup(), None).unwrap();
     take(
@@ -231,7 +231,7 @@ fn the_editor_opens_a_scaffolded_project_and_f5_plays_the_games_own_logic() {
     assert_eq!(scene_game.editor.play, Play::Playing);
     let shown = seen(&scene_game);
     assert!(
-        shown.violet > 1_000 && shown.red > 200,
+        shown.light > 1_000 && shown.red > 200,
         "without a game, F5 plays the scene as it is: {shown:?}"
     );
     let [width, height] = scene_game.view.as_ref().unwrap().size();
@@ -255,8 +255,8 @@ fn the_editor_opens_a_scaffolded_project_and_f5_plays_the_games_own_logic() {
     assert!(calls.ticks.get() >= 10, "{} ticks", calls.ticks.get());
     let hidden = seen(&playing);
     assert!(
-        hidden.violet < 50 && hidden.red < 50,
-        "the game's own tick hid the mark, the wordmark and the grid: {hidden:?}"
+        hidden.light < 50 && hidden.red < 50,
+        "the game's own tick hid the name, the mark and the grid: {hidden:?}"
     );
     assert!(
         playing
@@ -284,9 +284,9 @@ fn the_editor_opens_a_scaffolded_project_and_f5_plays_the_games_own_logic() {
     assert_eq!(calls.stopped.get(), 1);
     let back = seen(&stopped);
     assert!(
-        back.light.abs_diff(lockup.light) <= lockup.light / 50
-            && back.violet.abs_diff(lockup.violet) <= lockup.violet / 50,
-        "stop restores the edited frame: {back:?} against {lockup:?}"
+        back.lit.abs_diff(title.lit) <= title.lit / 50
+            && back.red.abs_diff(title.red) <= title.red / 50,
+        "stop restores the edited frame: {back:?} against {title:?}"
     );
     let recordings: Vec<_> = fs::read_dir(root.join("tmp/pfx/recordings"))
         .unwrap()
@@ -363,7 +363,7 @@ impl Game for Turner {
         for (_, called) in self.modules.each(|_, turns, store| turns.call_turn(store)) {
             self.turned.seen.set(called.value);
             if called.value >= 1000 {
-                for name in ["incoming/badge", "incoming/wordmark", "grid"] {
+                for name in ["title/name", "title/mark", "grid"] {
                     if let Some(object) = world.object(name) {
                         world.set_hidden(object, true);
                     }
@@ -433,7 +433,7 @@ fn reload_during_play() {
     }
     let hidden = seen(&session);
     assert!(
-        hidden.violet < 50 && hidden.red < 50,
-        "the rebuilt module's turn hid the mark: {hidden:?}"
+        hidden.light < 50 && hidden.red < 50,
+        "the rebuilt module's turn hid the title: {hidden:?}"
     );
 }

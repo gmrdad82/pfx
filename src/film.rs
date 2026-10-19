@@ -4,7 +4,7 @@ use std::time::Instant;
 use pfx::harness::tools;
 use pfx_core::cli::{self, Refusal};
 use pfx_film::reel::{Planned, Roll};
-use pfx_film::write::{AUDIO, Encoder, FRAMES, Files, STILLS};
+use pfx_film::write::{AUDIO, Encoder, FRAMES, Files, Resume, STILLS};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -20,6 +20,7 @@ pub struct Command {
     pub out: Option<PathBuf>,
     pub json: bool,
     pub plan: bool,
+    pub memory_limit: Option<u64>,
 }
 
 pub fn plan(args: &[String]) -> Result<Command, Refusal> {
@@ -28,6 +29,7 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
     let mut out = None;
     let mut json = false;
     let mut plan = false;
+    let mut memory_limit = None;
     let mut words = args.iter();
     while let Some(arg) = words.next() {
         let (flag, inline) = match arg.split_once('=') {
@@ -50,6 +52,19 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
                     .ok_or_else(|| Refusal::new(cli::missing_value(flag)))?;
                 out = Some(PathBuf::from(value));
             }
+            "--memory-limit" if memory_limit.is_some() => {
+                return Err(refuse(cli::repeated(&cli::with_value(flag))));
+            }
+            "--memory-limit" => {
+                let value = inline
+                    .or_else(|| words.next().cloned())
+                    .filter(|v| !v.is_empty() && !v.starts_with('-'))
+                    .ok_or_else(|| Refusal::new(cli::missing_value(flag)))?;
+                memory_limit = Some(
+                    pfx_core::memory::gigabytes(&value)
+                        .map_err(|why| refuse(cli::invalid(&value, flag, why)))?,
+                );
+            }
             other if other.starts_with('-') => return Err(refuse(cli::unexpected(arg))),
             _ if script.is_some() => return Err(refuse(cli::unexpected(arg))),
             file => script = Some(PathBuf::from(file)),
@@ -66,6 +81,7 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
         out,
         json,
         plan,
+        memory_limit,
     })
 }
 
@@ -109,9 +125,10 @@ fn head(roll: &Roll) -> Value {
         "film": 1,
         "script": roll.path.display().to_string(),
         "frames": roll.frames(),
-        "fps": roll.fps(),
+        "fps": crate::shot::fps_value(roll.fps()),
+        "frame_rate": roll.fps().to_string(),
         "size": roll.size(),
-        "seconds": roll.frames() as f64 / f64::from(roll.fps()),
+        "seconds": roll.fps().time(roll.frames()),
         "scenes": scenes(&roll.plan()),
     })
 }
@@ -143,13 +160,53 @@ fn inside_tmp(out: &Path) -> Result<PathBuf, String> {
 struct Shown<'a> {
     files: Files,
     progress: &'a mut Progress,
+    json: bool,
+    of: u64,
+    began: Instant,
+    last: Option<Instant>,
+}
+
+impl Shown<'_> {
+    fn told(&mut self, index: u64) {
+        if !self.json {
+            return;
+        }
+        let now = Instant::now();
+        let last = index + 1 == self.of;
+        if !last
+            && self
+                .last
+                .is_some_and(|at| now < at + std::time::Duration::from_secs(1))
+        {
+            return;
+        }
+        self.last = Some(now);
+        let elapsed = self.began.elapsed().as_secs_f64();
+        let eta = elapsed / (index + 1) as f64 * self.of.saturating_sub(index + 1) as f64;
+        eprintln!(
+            "{}",
+            json!({
+                "stage": "frame",
+                "frame": index,
+                "of": self.of,
+                "elapsed_s": (elapsed * 10.0).round() / 10.0,
+                "eta_s": (eta * 10.0).round() / 10.0,
+            })
+        );
+    }
 }
 
 impl Encoder for Shown<'_> {
     fn frame(&mut self, index: u64, rgba: Vec<u8>, size: [u32; 2]) -> Result<(), String> {
         self.files.frame(index, rgba, size)?;
         self.progress.frame(index + 1);
+        self.told(index);
+        pfx_core::memory::look_gpu();
         Ok(())
+    }
+
+    fn kept(&self, index: u64) -> bool {
+        self.files.kept(index)
     }
 
     fn still(&mut self, name: &str, rgba: Vec<u8>, size: [u32; 2]) -> Result<(), String> {
@@ -161,19 +218,99 @@ impl Encoder for Shown<'_> {
     }
 }
 
-fn shoot(roll: &Roll, out: &Path, json: bool) -> Result<pfx_film::Reeled, String> {
-    let mut progress = Progress::new("pfx film", roll.frames(), !json && progress::live());
-    if !progress.shows() {
-        return roll.shoot(out);
+fn print(path: &Path) -> Result<String, String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let stamp = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |since| since.as_nanos());
+    if !meta.is_dir() {
+        return Ok(format!("{} {stamp}", meta.len()));
     }
+    let mut names: Vec<PathBuf> = std::fs::read_dir(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|entry| entry.is_file())
+        .collect();
+    names.sort();
+    let mut hash = Sha256::new();
+    for name in &names {
+        hash.update(name.file_name().unwrap_or_default().as_encoded_bytes());
+        hash.update(print(name)?.as_bytes());
+    }
+    Ok(format!(
+        "{} files {}",
+        names.len(),
+        hex::encode(hash.finalize())
+    ))
+}
+
+fn claim(roll: &Roll, script: &str) -> Result<String, String> {
+    let [w, h] = roll.size();
+    let mut text = format!(
+        "pfx film\npfx {}\nscript sha256 {script}\nsize {w}x{h}\nfps {}\nframes {}\n",
+        env!("CARGO_PKG_VERSION"),
+        roll.fps(),
+        roll.frames()
+    );
+    for planned in roll.plan() {
+        if let Some(source) = planned.source {
+            text.push_str(&format!(
+                "source {} {}\n",
+                source.display(),
+                print(&source)?
+            ));
+        }
+    }
+    Ok(text)
+}
+
+fn resuming(done: u64, of: u64, first: u64) -> String {
+    format!("resuming: {done} of {of} frames done, starting at frame {first}")
+}
+
+fn shoot(
+    roll: &Roll,
+    out: &Path,
+    script: &str,
+    json: bool,
+) -> Result<(pfx_film::Reeled, pfx_core::memory::Peak), String> {
+    let mut progress = Progress::new("pfx film", roll.frames(), !json && progress::live());
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let film = &roll.script.film;
-    let files = Files::open(out, film.frames, roll.script.stills() > 0)?;
+    let claim = claim(roll, script)?;
+    let files = Files::resume(
+        out,
+        film.frames,
+        roll.script.stills() > 0,
+        Resume {
+            claim: &claim,
+            frames: roll.frames(),
+            size: roll.size(),
+        },
+    )?;
+    let done = files.done();
+    if done > 0 {
+        let first = files.first_missing();
+        eprintln!("pfx film: {}", resuming(done, roll.frames(), first));
+        if json {
+            eprintln!(
+                "{}",
+                json!({"stage": "resume", "done": done, "of": roll.frames(), "from": first})
+            );
+        }
+    }
     let mut shown = Shown {
         files,
         progress: &mut progress,
+        json,
+        of: roll.frames(),
+        began: Instant::now(),
+        last: None,
     };
-    roll.roll(Some(&mut shown))
+    let reeled = roll.roll(Some(&mut shown))?;
+    Ok((reeled, pfx_core::memory::peak()))
 }
 
 fn sha256(path: &Path) -> Result<String, String> {
@@ -181,7 +318,14 @@ fn sha256(path: &Path) -> Result<String, String> {
     Ok(hex::encode(Sha256::digest(&bytes)))
 }
 
+fn gigabytes(bytes: Option<u64>) -> Value {
+    bytes.map_or(Value::Null, |bytes| {
+        json!((bytes as f64 / pfx_core::memory::GB as f64 * 100.0).round() / 100.0)
+    })
+}
+
 pub fn run(command: &Command) -> Result<(), String> {
+    pfx_core::memory::from_env(command.memory_limit)?;
     let script = std::path::absolute(&command.script)
         .map_err(|e| format!("{}: {e}", command.script.display()))?;
     let roll = Roll::open(&script)?;
@@ -213,7 +357,11 @@ pub fn run(command: &Command) -> Result<(), String> {
                 );
             }
             let [w, h] = roll.size();
-            println!("{} frames at {w}x{h}, {} fps", roll.frames(), roll.fps());
+            println!(
+                "{} frames at {w}x{h}, {} fps",
+                roll.frames(),
+                roll.fps().label()
+            );
             for miss in &misses {
                 println!("off grid: {miss}");
             }
@@ -222,14 +370,20 @@ pub fn run(command: &Command) -> Result<(), String> {
     }
     let out = command.out.as_ref().ok_or("a film needs --out")?;
     let out = inside_tmp(out)?;
+    let memory = pfx_core::memory::plan(
+        &pfx_core::memory::Census::default(),
+        pfx_core::memory::Run::Live { size: roll.size() },
+    );
+    memory.admit()?;
     let started = Instant::now();
-    let reeled = shoot(&roll, &out, command.json)?;
+    let script_sha = sha256(&script)?;
+    let (reeled, peak) = shoot(&roll, &out, &script_sha, command.json)?;
     let total = started.elapsed().as_secs_f64() * 1000.0;
     let film = &roll.script.film;
     let mut manifest = head(&roll);
     let wav = film.audio.then(|| out.join(AUDIO).display().to_string());
     let extra = json!({
-        "script_sha256": sha256(&script)?,
+        "script_sha256": script_sha,
         "pfx": env!("CARGO_PKG_VERSION"),
         "format": "png",
         "out": out.display().to_string(),
@@ -244,16 +398,24 @@ pub fn run(command: &Command) -> Result<(), String> {
             "total": total,
             "per_frame": total / reeled.frames.max(1) as f64,
         },
+        "memory": {
+            "limit_gb": gigabytes(pfx_core::memory::limit()),
+            "planned_cpu_gb": gigabytes(Some(memory.cpu())),
+            "planned_gpu_gb": gigabytes(Some(memory.gpu())),
+            "cpu_peak_gb": gigabytes(peak.cpu),
+            "gpu_peak_gb": gigabytes(peak.gpu),
+        },
     });
     if let (Some(m), Value::Object(e)) = (manifest.as_object_mut(), extra) {
         m.extend(e);
     }
     let path = out.join(MANIFEST);
     let text = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
-    std::fs::write(&path, format!("{text}\n")).map_err(|e| format!("{}: {e}", path.display()))?;
+    pfx_core::atomic::write(&path, format!("{text}\n").as_bytes())?;
     if command.json {
         println!("{manifest}");
     } else {
+        eprintln!("pfx film: {}", peak.line(&memory));
         println!("{}", path.display());
     }
     Ok(())
@@ -275,6 +437,12 @@ mod tests {
         assert!(c.json && !c.plan);
         assert!(plan(&words("a.film.toml --plan")).unwrap().plan);
         assert!(plan(&words("--out=tmp/f a.film.toml")).is_ok());
+        assert_eq!(
+            plan(&words("a.film.toml --out tmp/f --memory-limit 3"))
+                .unwrap()
+                .memory_limit,
+            Some(3 << 30)
+        );
         for bad in [
             "",
             "a.film.toml",
@@ -283,6 +451,8 @@ mod tests {
             "a.film.toml b.film.toml --out tmp/f",
             "a.film.toml --out tmp/f --json --json",
             "a.film.toml --out tmp/f --fast",
+            "a.film.toml --out tmp/f --memory-limit 0",
+            "a.film.toml --out tmp/f --memory-limit",
         ] {
             assert!(plan(&words(bad)).is_err(), "{bad}");
         }

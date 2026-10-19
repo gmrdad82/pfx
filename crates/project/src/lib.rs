@@ -4,6 +4,8 @@ pub mod project;
 pub mod scaffold;
 #[cfg(test)]
 mod tests;
+#[cfg(feature = "scaffold")]
+pub mod title;
 
 pub use project::{Folder, Module, Project};
 #[cfg(feature = "scaffold")]

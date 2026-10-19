@@ -45,7 +45,7 @@ pub(crate) fn speed_at(keys: &[[f64; 2]], t: f64) -> f64 {
 }
 
 pub(crate) fn distances(follow: &Follow, route: &Route, timeline: &Timeline) -> Vec<f64> {
-    let dt = 1.0 / f64::from(timeline.fps.max(1));
+    let dt = timeline.step();
     let length = route.length();
     let mut out = Vec::with_capacity(timeline.frames as usize + 1);
     let mut travelled = follow.start;
@@ -94,7 +94,7 @@ pub(crate) fn drive(
     size: (f64, f64),
 ) -> Drive {
     let distance = distances(follow, route, timeline);
-    let dt = 1.0 / f64::from(timeline.fps.max(1));
+    let dt = timeline.step();
     let seed = name_seed(timeline.seed, &follow.object);
     let offset = |t: f64| match follow.drift {
         Some(d) if d.amount != 0.0 && d.period > 0.0 => {
@@ -767,11 +767,12 @@ pub(crate) fn nodes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pfx_motion::Rate;
     use pfx_recipe::Drift;
 
     fn timeline(frames: u32) -> Timeline {
         Timeline {
-            fps: 60,
+            fps: Rate::whole(60),
             frames,
             size: [1080, 1920],
             seed: 7,

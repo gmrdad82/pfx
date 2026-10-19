@@ -1,15 +1,20 @@
 use std::path::PathBuf;
 
 use pfx_core::cli;
+use pfx_core::rate::Rate;
 
 pub const SWITCHES: &[&str] = &["--draft", "--final", "--json"];
 pub const FORMATS: &[&str] = &["png", "png16", "exr"];
 pub const DITHERS: &[&str] = &["on", "off"];
 pub const EXPOSURES: &[&str] = &["auto", "fixed"];
 pub const DEFAULT_SIZE: (u32, u32) = (1920, 1080);
-pub const DEFAULT_FPS: u32 = 60;
+pub const DEFAULT_FPS: Rate = Rate::whole(60);
 pub const MAX_SIDE: u32 = 16_384;
 pub const MAX_FPS: u32 = 240;
+
+pub fn rate(text: &str, flag: &str) -> Result<Rate, String> {
+    Rate::parse_within(text, 1, MAX_FPS).map_err(|reason| cli::invalid(text, flag, reason))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Format {
@@ -45,7 +50,7 @@ pub enum Quality {
 pub struct Plan {
     pub scene: PathBuf,
     pub size: (u32, u32),
-    pub fps: u32,
+    pub fps: Rate,
     pub frames: u64,
     pub from: u64,
     pub camera: Option<String>,
@@ -61,6 +66,7 @@ pub struct Plan {
     pub seed: u64,
     pub shutter: Option<f32>,
     pub fixed_exposure: bool,
+    pub memory_limit: Option<u64>,
 }
 
 fn size(text: &str) -> Result<(u32, u32), String> {
@@ -207,13 +213,13 @@ pub fn parse(args: &[String], flags: &[&str]) -> Result<Plan, String> {
         return Err(cli::required(&["<SCENE>"]));
     };
     let fps = match value("--fps") {
-        Some(text) => whole(text, "--fps", 1, MAX_FPS)?,
+        Some(text) => rate(text, "--fps")?,
         None => DEFAULT_FPS,
     };
     let frames = match (value("--seconds"), value("--frames")) {
         (Some(text), _) => {
             let seconds = real(text, "--seconds", 0.0, 86_400.0, true)?;
-            (seconds * f64::from(fps)).round().max(1.0) as u64
+            fps.frames(seconds).round().max(1.0) as u64
         }
         (_, Some(text)) => whole(text, "--frames", 1, 10_000_000)?,
         _ => 0,
@@ -277,6 +283,12 @@ pub fn parse(args: &[String], flags: &[&str]) -> Result<Plan, String> {
             .map(|text| real(text, "--shutter", 0.0, 1.0, true).map(|open| open as f32))
             .transpose()?,
         fixed_exposure,
+        memory_limit: value("--memory-limit")
+            .map(|text| {
+                pfx_core::memory::gigabytes(text)
+                    .map_err(|why| cli::invalid(text, "--memory-limit", why))
+            })
+            .transpose()?,
     })
 }
 

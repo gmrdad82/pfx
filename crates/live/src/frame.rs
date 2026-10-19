@@ -758,6 +758,7 @@ pub struct OpaqueKey {
     pub features: OpaqueFeatures,
     pub lit: bool,
     pub two_sided: bool,
+    pub classic_depth: bool,
 }
 
 impl OpaqueKey {
@@ -766,6 +767,7 @@ impl OpaqueKey {
             features,
             lit,
             two_sided,
+            classic_depth: false,
         })
     }
 }
@@ -777,7 +779,11 @@ pub(crate) fn opaque_pipeline(
     cache: Option<&wgpu::PipelineCache>,
     key: OpaqueKey,
 ) -> wgpu::RenderPipeline {
-    let constants = key.features.constants();
+    let mut constants = key.features.constants();
+    constants.push((
+        String::from("use_classic_depth"),
+        f64::from(u8::from(key.classic_depth)),
+    ));
     let constants: Vec<(&str, f64)> = constants
         .iter()
         .map(|(name, value)| (name.as_str(), *value))
@@ -794,10 +800,11 @@ pub(crate) fn opaque_pipeline(
             layout,
             module,
             vertex: "vertex_main",
-            fragment: Some(if key.lit {
-                "opaque_lit_main"
-            } else {
-                "opaque_main"
+            fragment: Some(match (key.lit, key.classic_depth) {
+                (true, false) => "opaque_lit_main",
+                (false, false) => "opaque_main",
+                (true, true) => "opaque_lit_classic",
+                (false, true) => "opaque_classic",
             }),
             buffers: &buffers,
             targets: &opaque_targets(),
@@ -817,6 +824,7 @@ struct CutPipelines {
 
 struct Pipelines {
     prepass: [wgpu::RenderPipeline; 2],
+    classic: [Option<[wgpu::RenderPipeline; 2]>; 2],
     shadow: [wgpu::RenderPipeline; 2],
     cut: Option<CutPipelines>,
     cut_layout: wgpu::PipelineLayout,
@@ -864,7 +872,7 @@ impl Pipelines {
             return;
         }
         let buffers = [vertex_layout()];
-        let prepass = prepass_pipelines(device, &self.layout, &self.module, true);
+        let prepass = prepass_pipelines(device, &self.layout, &self.module, true, false);
         let shadow = pipeline(
             device,
             PipelineSpec {
@@ -882,6 +890,18 @@ impl Pipelines {
             },
         );
         self.cut = Some(CutPipelines { prepass, shadow });
+    }
+
+    fn ensure_classic(&mut self, device: &wgpu::Device, cut: bool) {
+        if self.classic[usize::from(cut)].is_none() {
+            self.classic[usize::from(cut)] = Some(prepass_pipelines(
+                device,
+                &self.layout,
+                &self.module,
+                cut,
+                true,
+            ));
+        }
     }
 
     fn ensure_opaque(&mut self, device: &wgpu::Device, key: OpaqueKey) {
@@ -1109,6 +1129,8 @@ pub struct Frame {
     opaque_on: Cell<OpaqueFeatures>,
     opaque_off: Cell<OpaqueFeatures>,
     opaque_drawn: Vec<OpaqueFeatures>,
+    classic_depth: bool,
+    coat_reflections: bool,
     jitter: [f32; 2],
     profiler: Option<GpuProfiler>,
 }
@@ -1849,6 +1871,7 @@ fn prepass_pipelines(
     layout: &wgpu::PipelineLayout,
     module: &wgpu::ShaderModule,
     cut: bool,
+    classic: bool,
 ) -> [wgpu::RenderPipeline; 2] {
     let buffers = [vertex_layout()];
     [Some(wgpu::Face::Back), None].map(|cull| {
@@ -1859,7 +1882,11 @@ fn prepass_pipelines(
                 layout,
                 module,
                 vertex: "vertex_main",
-                fragment: Some("prepass_main"),
+                fragment: Some(if classic {
+                    "prepass_classic"
+                } else {
+                    "prepass_main"
+                }),
                 buffers: &buffers,
                 targets: &prepass_targets(),
                 cull,
@@ -1867,7 +1894,10 @@ fn prepass_pipelines(
                 reversed: true,
                 cache: None,
             },
-            &[("use_content_cutout", f64::from(u8::from(cut)))],
+            &[
+                ("use_content_cutout", f64::from(u8::from(cut))),
+                ("use_classic_depth", f64::from(u8::from(classic))),
+            ],
         )
     })
 }
@@ -1881,6 +1911,11 @@ fn pipeline_with(
     spec: PipelineSpec<'_>,
     constants: &[(&str, f64)],
 ) -> wgpu::RenderPipeline {
+    let vertex_constants: Vec<(&str, f64)> = constants
+        .iter()
+        .filter(|(name, _)| *name == "use_classic_depth")
+        .copied()
+        .collect();
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(spec.label),
         layout: Some(spec.layout),
@@ -1888,7 +1923,10 @@ fn pipeline_with(
             module: spec.module,
             entry_point: Some(spec.vertex),
             buffers: spec.buffers,
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &vertex_constants,
+                ..Default::default()
+            },
         },
         primitive: wgpu::PrimitiveState {
             cull_mode: spec.cull,
@@ -2251,6 +2289,8 @@ impl Frame {
             opaque_on: Cell::new(OpaqueFeatures::NONE),
             opaque_off: Cell::new(OpaqueFeatures::NONE),
             opaque_drawn: Vec::new(),
+            classic_depth: false,
+            coat_reflections: true,
             jitter: [0.0; 2],
             profiler: Some(profiler),
             gpu,
@@ -2287,7 +2327,7 @@ impl Frame {
             source: wgpu::ShaderSource::Wgsl(shader_source().into()),
         });
         let buffers = [vertex_layout()];
-        let prepass = prepass_pipelines(device, &pipeline_layout, &module, false);
+        let prepass = prepass_pipelines(device, &pipeline_layout, &module, false, false);
         let shadow = [
             ("shadow_vertex", None),
             ("shadow_clip_vertex", Some("shadow_clip_fragment")),
@@ -2333,6 +2373,7 @@ impl Frame {
         let (sender, arrivals) = channel();
         Pipelines {
             prepass,
+            classic: [None, None],
             shadow,
             cut: None,
             cut_layout,
@@ -2517,8 +2558,28 @@ impl Frame {
 
     pub fn warm_opaque(&mut self, features: OpaqueFeatures, lit: bool) {
         for key in OpaqueKey::both_sides(features, lit) {
+            let key = OpaqueKey {
+                classic_depth: self.classic_depth,
+                ..key
+            };
             self.pipelines.ensure_opaque(&self.gpu.device, key);
         }
+    }
+
+    pub fn classic_depth(&self) -> bool {
+        self.classic_depth
+    }
+
+    pub fn set_classic_depth(&mut self, on: bool) {
+        self.classic_depth = on;
+    }
+
+    pub fn coat_reflections(&self) -> bool {
+        self.coat_reflections
+    }
+
+    pub fn set_coat_reflections(&mut self, on: bool) {
+        self.coat_reflections = on;
     }
 
     pub fn warm(&mut self, first: &[OpaqueKey], later: &[OpaqueKey]) -> Warming {
@@ -2599,6 +2660,7 @@ impl Frame {
                 features,
                 lit,
                 two_sided: batch.two_sided,
+                classic_depth: self.classic_depth,
             };
             if !batch.shadow_only && !keys.contains(&key) {
                 keys.push(key);
@@ -3784,7 +3846,7 @@ impl Frame {
                 wind.current.direction[0],
                 wind.current.direction[1],
                 wind.current.direction[2],
-                0.0,
+                if self.coat_reflections { 0.0 } else { 1.0 },
             ],
             previous_wind_direction: [
                 wind.previous.direction[0],
@@ -3987,8 +4049,15 @@ impl Frame {
         ) -> Result<(), String>,
     ) -> Result<(), String> {
         let (batches, surfaces) = self.prepare(scene)?;
-        if batches.iter().any(|batch| batch.cut) {
+        let cut = batches.iter().any(|batch| batch.cut);
+        if cut {
             self.pipelines.ensure_cut(&self.gpu.device);
+        }
+        if self.classic_depth {
+            self.pipelines.ensure_classic(&self.gpu.device, false);
+            if cut {
+                self.pipelines.ensure_classic(&self.gpu.device, true);
+            }
         }
         if let Some(foliage) = &mut self.foliage {
             foliage.canopy.select_lod(
@@ -4079,6 +4148,7 @@ impl Frame {
                     features: *used,
                     lit,
                     two_sided: batch.two_sided,
+                    classic_depth: self.classic_depth,
                 }),
         );
         self.encode_surfaces(&batches, &features, encoder, profiler)?;
@@ -4332,8 +4402,13 @@ impl Frame {
             });
             crate::viewport::apply(&mut pass, self.viewport);
             self.draw_with(&mut pass, batches, lighting, |index, two_sided| {
-                let pair = match &self.pipelines.cut {
-                    Some(cut) if batches[index].cut => &cut.prepass,
+                let cut = batches[index].cut && self.pipelines.cut.is_some();
+                let pair = match (
+                    &self.pipelines.classic[usize::from(cut)],
+                    &self.pipelines.cut,
+                ) {
+                    (Some(classic), _) if self.classic_depth => classic,
+                    (_, Some(pipelines)) if cut => &pipelines.prepass,
                     _ => &self.pipelines.prepass,
                 };
                 &pair[usize::from(two_sided)]
@@ -4393,6 +4468,7 @@ impl Frame {
                     features: features[index],
                     lit,
                     two_sided,
+                    classic_depth: self.classic_depth,
                 };
                 match last.get() {
                     Some((seen, pipeline)) if seen == key => pipeline,
@@ -4536,6 +4612,7 @@ override use_canopy: bool = true;
 override use_contact: bool = true;
 override use_authored_ambient: bool = true;
 override use_caustics: bool = true;
+override use_classic_depth: bool = false;
 struct FrameUniforms {
     view_projection: mat4x4f,
     motion_view_projection: mat4x4f,
@@ -4697,6 +4774,9 @@ fn surface_shape(input: VertexInput, instance: InstanceData) -> DeformedVertex {
     var output: VertexOutput;
     output.position = frame.view_projection * world;
     output.current_clip = frame.motion_view_projection * world;
+    if (use_classic_depth) {
+        output.position.z = output.current_clip.z;
+    }
     let previous_world = select(instance.previous_model * vec4f(shape.previous_position, 1.0), world, instance.content_face.y != 0u);
     output.previous_clip = frame.previous_view_projection * previous_world;
     output.world_position = world.xyz;
@@ -4859,7 +4939,25 @@ fn motion(current_clip: vec4f, previous_clip: vec4f) -> vec2f {
     let moved = (previous - current) * vec2f(0.5, -0.5);
     return select(moved, vec2f(0.0), abs(moved) < vec2f(1e-8));
 }
+struct ClassicPrepassOutput {
+    @location(0) velocity: vec2f,
+    @location(1) id: u32,
+    @builtin(frag_depth) depth: f32,
+}
+fn split_coat() -> bool {
+    return frame.wind_direction.w == 0.0;
+}
+fn classic_depth(z: f32) -> f32 {
+    return 1.0 - z;
+}
 @fragment fn prepass_main(input: VertexOutput) -> PrepassOutput {
+    return prepass_shade(input);
+}
+@fragment fn prepass_classic(input: VertexOutput) -> ClassicPrepassOutput {
+    let shaded = prepass_shade(input);
+    return ClassicPrepassOutput(shaded.velocity, shaded.id, classic_depth(input.position.z));
+}
+fn prepass_shade(input: VertexOutput) -> PrepassOutput {
     cutout(input);
     var output: PrepassOutput;
     if (instances[input.instance].content_face.y != 0u && frame.camera_position.w != 0.0) {
@@ -4980,6 +5078,19 @@ struct OpaqueOutput {
 }
 @fragment fn opaque_lit_main(input: VertexOutput, @builtin(front_facing) front: bool) -> OpaqueOutput {
     return opaque_shade(input, front, true);
+}
+struct ClassicOpaqueOutput {
+    @location(0) colour: vec4f,
+    @location(1) normal_roughness: vec4f,
+    @builtin(frag_depth) depth: f32,
+}
+@fragment fn opaque_classic(input: VertexOutput, @builtin(front_facing) front: bool) -> ClassicOpaqueOutput {
+    let shaded = opaque_shade(input, front, false);
+    return ClassicOpaqueOutput(shaded.colour, shaded.normal_roughness, classic_depth(input.position.z));
+}
+@fragment fn opaque_lit_classic(input: VertexOutput, @builtin(front_facing) front: bool) -> ClassicOpaqueOutput {
+    let shaded = opaque_shade(input, front, true);
+    return ClassicOpaqueOutput(shaded.colour, shaded.normal_roughness, classic_depth(input.position.z));
 }
 fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     let uv_dx = dpdx(input.uv_alpha.xy);
@@ -5136,7 +5247,7 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     }
     var output: OpaqueOutput;
     output.colour = vec4f(max(direct + diffuse + specular + surface.emission, vec3f(0.0)), 1.0);
-    output.normal_roughness = vec4f(view_normal, select(surface.roughness, min(surface.roughness, surface.clearcoat_roughness), wetted || surface.clearcoat >= 0.5));
+    output.normal_roughness = vec4f(view_normal, select(surface.roughness, min(surface.roughness, surface.clearcoat_roughness), wetted || (surface.clearcoat >= 0.5 && split_coat())));
     return output;
 }
 "#;

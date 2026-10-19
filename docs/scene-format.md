@@ -561,6 +561,7 @@ Every key but `name` is optional; a key left out takes the renderer's default.
 | `blend` | `"alpha"` or `"add"` | `"alpha"` by default. |
 | `lit` | bool | lit particles are shaded by the scene. |
 | `seed` | unsigned integer | |
+| `prewarm` | number 0 to 30 | seconds simulated before t = 0 with the parent and keys held at t = 0, so the effect is formed on the first frame; 0 by default. |
 | `keys` | inline table | keyed values over time, see [Keys over time](#keys-over-time): `rate`, `speed`, `size`, `color` (`[r, g, b]`) and `alpha` (0 to 1, scaling the `alpha` curve). |
 | `authoring` | any | |
 
@@ -1009,9 +1010,12 @@ How the live renderer samples over time. A path tracer ignores the table. Withou
 
 | key | type | default | notes |
 |---|---|---|---|
-| `stochastic_reflections` | bool | `true` | screen-space reflections sample a GGX visible normal per pixel and frame on surfaces rougher than 0.18, start each ray's march at a per-pixel offset, and denoise the trace. `false` traces one fixed ray per pixel instead: the mirror direction with an 8-frame jitter, from a fixed march start, no prefilter, and a ray that ends inside a solid object misses rather than reading dark (the buried-ray test needs the per-pixel offset; on a fixed start it bands). At a grazing view the sampled lobe sends some rays back toward the camera; they leave the screen and take the environment's reflection, so a glossy silhouette shows a thin rim of the environment. `false` keeps the mirror reflection of what lies behind the edge there. |
-| `settle` | bool | `true` | a frame drawn again at an unchanged scene time steps the frame index, so temporal AA, soft shadows and reflections settle over repeated draws. `false` gives every draw at one time that time's own index, so repeated draws repeat one jitter and one noise pattern. |
+| `stochastic_reflections` | bool | `true` | screen-space reflections sample a GGX visible normal per pixel and frame on surfaces rougher than 0.18, start each ray's march at a per-pixel offset, and denoise the trace. `false` traces one fixed ray per pixel instead: the mirror direction with an 8-frame jitter, from a fixed march start, no prefilter, a ray that ends inside a solid object misses rather than reading dark (the buried-ray test needs the per-pixel offset; on a fixed start it bands), and a ray may hit the sky backdrop at the far plane, as before. At a grazing view the sampled lobe sends some rays back toward the camera; they leave the screen and take the environment's reflection, so a glossy silhouette shows a thin rim of the environment. `false` keeps the mirror reflection of what lies behind the edge there. |
+| `settle` | bool | `true` | a frame drawn again at an unchanged scene time steps the frame index, so temporal AA, soft shadows and reflections settle over repeated draws. `false` gives every draw at one time that time's own index, so repeated draws repeat one jitter and one noise pattern, and screen-space reflections keep their roughness-scaled history where nothing moves instead of settling to 0.95 of it. |
 | `scene_reflections` | bool | `true` | staging traces the scene's own reflection cube from the camera's eye, so a reflection screen-space reflections can't find reads the scene. `false` skips it, and such a reflection reads the probes and the sky. It has effect only while the renderer takes scene reflections (`Renderer::scene_reflections`, on by default). |
+| `dof_spread` | bool | `true` | depth of field treats a pixel at or beyond the camera's far plane as the sky, infinitely far, and gathers at least two rings around any circle of confusion over 2 pixels, so a blurred near edge spreads over the background as the tracer's thin lens shows it. `false` reads such a pixel at the far plane's distance and gathers one ring up to a 6-pixel circle, as before; a plate or background behind a focus pulled close to the camera then blurs less, and small circles soften less. |
+| `reversed_depth` | bool | `true` | meshes and plates draw with reversed-Z depth, so surfaces a millimetre apart resolve by their true distance. `false` gives them the standard projection's depth, as before reversed-Z, so nearly coplanar layers resolve as they did then, including where they fought. It costs early depth rejection on those passes. Text, glass, impostors and particles keep reversed-Z. |
+| `coat_reflections` | bool | `true` | a clear coat reflects by its own split-sum term over an attenuated base, and a coat of 0.5 or more writes its roughness to the reflection target, so its screen-space reflection follows the coat's mirror ray. `false` gives coats their earlier reflection: Schlick's reflectance at exponent 5 and the base's roughness in the reflection target, so the reflection takes the base's footprint and fade. |
 
 ### `[plates]`
 
@@ -1149,6 +1153,8 @@ The families: `plain`, `paper`, `plaster`, `stone`, `cloth`, `metal`, `occluder`
 | `coat_wobble` | three frequencies (fine, then two broad), two weights of the broad octaves relative to the fine one, whose weight is the layer's amplitude |
 
 Unset params are 0, and a kind with no params draws nothing visible: `plank_wood` and `coat_wobble` need a positive first param to draw at all.
+
+Every kind draws the same live, traced and baked by `bake_layers`: the same hash, octaves, scale and seed. Two exceptions: `coat_wobble` live reads a tiled noise of the same scales and strength, not the same pattern, so a small patch can shade a little differently live than traced or baked; and `flow` follows the scene's time live and traced while a bake holds it at time 0 and its baked maps carry no thin film.
 
 ### The proxies file
 

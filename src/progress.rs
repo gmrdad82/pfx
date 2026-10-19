@@ -60,10 +60,6 @@ impl Progress {
         }
     }
 
-    pub fn shows(&self) -> bool {
-        self.live
-    }
-
     pub fn frame(&mut self, done: u64) {
         if !self.live {
             return;

@@ -21,6 +21,7 @@ pick = 1
 
 [object.animation]
 clip = "timeline"
+loop = "once"
 
 [[light]]
 id = "kmg961xj62"

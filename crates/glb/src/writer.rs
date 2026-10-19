@@ -970,11 +970,8 @@ fn animate(
         return Ok(());
     };
     let count = first.keys.len();
-    if count == 0 || animation.fps == 0 {
-        return Err(Error(format!(
-            "the track of `{}` has no keys or the timeline no frame rate",
-            first.node
-        )));
+    if count == 0 {
+        return Err(Error(format!("the track of `{}` has no keys", first.node)));
     }
     if let Some(odd) = animation.tracks.iter().find(|t| t.keys.len() != count) {
         return Err(Error(format!(
@@ -1016,7 +1013,7 @@ fn animate(
                 Some(times) => times,
                 None => *input.get_or_insert_with(|| {
                     let times: Vec<[f32; 1]> = (0..count)
-                        .map(|n| [(n as f64 / f64::from(animation.fps)) as f32])
+                        .map(|n| [animation.fps.time(n as u64) as f32])
                         .collect();
                     builder.keyed(&times)
                 }),

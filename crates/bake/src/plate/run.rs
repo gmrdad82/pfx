@@ -705,10 +705,7 @@ pub fn bake_plates(mut run: PlateRun<'_>) -> Result<Vec<PlateOutcome>, String> {
         growth: adaptive.growth,
         seed: run.seed,
     };
-    let mut triangles = super::room::Triangles {
-        placed: 0,
-        distinct: 0,
-    };
+    let mut triangles = pfx_core::memory::Census::default();
     let mut meshes = std::collections::BTreeSet::new();
     for draw in &scenes[0].1.draws().items {
         let count = draw.geometry.indices.len() as u64 / 3;
@@ -779,10 +776,12 @@ pub fn bake_plates(mut run: PlateRun<'_>) -> Result<Vec<PlateOutcome>, String> {
         if written.manifest.key != key {
             return Err("the written plate does not read back".into());
         }
+        pfx_core::atomic::sync_tree(&next)?;
         if target.exists() {
             std::fs::rename(&target, &old).map_err(|e| format!("{}: {e}", target.display()))?;
         }
         std::fs::rename(&next, &target).map_err(|e| format!("{}: {e}", target.display()))?;
+        pfx_core::atomic::sync_dir(run.out)?;
         if old.exists() {
             std::fs::remove_dir_all(&old).map_err(|e| format!("{}: {e}", old.display()))?;
         }

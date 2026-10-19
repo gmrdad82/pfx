@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use pfx_build::Registry;
+use pfx_core::memory::Plan;
 use pfx_recipe_scene::Error;
 
 use super::{pair, refuse, seconds, size};
@@ -50,9 +51,12 @@ pub(super) struct Args {
     picture: super::Picture,
     #[command(flatten)]
     pick: super::Picks,
+    #[command(flatten)]
+    memory: super::Memory,
 }
 
-fn still(args: &Args, registry: &Registry) -> Result<Vec<u8>, Error> {
+fn still(args: &Args, registry: &Registry) -> Result<(Vec<u8>, Plan), Error> {
+    args.memory.set().map_err(Error)?;
     let (recipe, built) = pfx_recipe_scene::load_at(
         &args.recipe,
         args.variant.as_deref(),
@@ -65,7 +69,7 @@ fn still(args: &Args, registry: &Registry) -> Result<Vec<u8>, Error> {
         eprintln!("{line}");
     }
     let gpu = pfx_recipe_scene::headless()?;
-    pfx_recipe_scene::shoot_posed_as(
+    pfx_recipe_scene::shoot_posed_with(
         &gpu,
         (&recipe, &built),
         &args.camera,
@@ -104,12 +108,16 @@ pub(super) fn thumbnail(
 }
 
 pub fn run(args: &Args, registry: &Registry) -> ExitCode {
-    let shot = still(args, registry).and_then(|rgba| match args.picture.wide() {
-        true => pfx_recipe_scene::write_wide(&args.out, args.size, &rgba),
-        false => pfx_recipe_scene::write_png(&args.out, args.size, &rgba),
+    let shot = still(args, registry).and_then(|(rgba, plan)| {
+        match args.picture.wide() {
+            true => pfx_recipe_scene::write_wide(&args.out, args.size, &rgba),
+            false => pfx_recipe_scene::write_png(&args.out, args.size, &rgba),
+        }
+        .map(|()| plan)
     });
     match shot {
-        Ok(()) => {
+        Ok(plan) => {
+            eprintln!("pfx shot: {}", pfx_core::memory::peak().line(&plan));
             println!("{}", args.out.display());
             ExitCode::SUCCESS
         }
@@ -144,6 +152,8 @@ mod tests {
             "sky.intensity=0.4",
             "--time",
             "2",
+            "--memory-limit",
+            "8",
         ])
         .unwrap();
         assert_eq!(
@@ -159,6 +169,9 @@ mod tests {
                 time: Some(2.0),
                 picture: Default::default(),
                 pick: Default::default(),
+                memory: crate::recipe::Memory {
+                    limit: Some(8 << 30),
+                },
             }
         );
         for words in [
@@ -167,6 +180,7 @@ mod tests {
             &["a.toml", "--out", "a", "--out", "b"][..],
             &["a.toml", "--camera"][..],
             &["a.toml", "--nope", "x"][..],
+            &["a.toml", "--memory-limit", "0"][..],
         ] {
             assert!(line(words).is_err(), "{words:?}");
         }

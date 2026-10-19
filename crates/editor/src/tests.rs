@@ -779,16 +779,16 @@ fn a_project_lists_its_scenes_and_content_folders_in_the_outliner() {
             .iter()
             .map(|node| node.label.as_str())
             .collect::<Vec<_>>(),
-        ["badge.glb", "grid.glb", "wordmark.glb"]
+        ["grid.glb", "mark.glb", "name.glb"]
     );
     assert_eq!(
         editor.selection,
-        Some(Item::Object("incoming".to_string())),
+        Some(Item::Object("title".to_string())),
         "the project's select names the object the editor opens on"
     );
     assert_eq!(
         editor.viewport.selection().map(|found| found.name.as_str()),
-        Some("incoming")
+        Some("title")
     );
     let objects = &editor.outline.section("objects").unwrap().nodes;
     let tree: Vec<(String, Vec<String>)> = objects
@@ -807,22 +807,16 @@ fn a_project_lists_its_scenes_and_content_folders_in_the_outliner() {
         tree,
         [
             (
-                "incoming".to_string(),
-                vec![
-                    "incoming/badge".to_string(),
-                    "incoming/wordmark".to_string()
-                ]
+                "title".to_string(),
+                vec!["title/name".to_string(), "title/mark".to_string()]
             ),
             ("grid".to_string(), Vec::new())
         ],
-        "the outliner shows the parent, the badge and the wordmark"
+        "the outliner shows the title, its name and its mark"
     );
     assert_eq!(
         labels(editor, "materials"),
-        [
-            "axis_x", "axis_z", "dome", "grid", "lime", "lines", "tile", "violet", "white",
-            "wordmark"
-        ]
+        ["axis_x", "axis_z", "grid", "name", "plate"]
     );
     let titles: Vec<&str> = editor
         .outline
@@ -843,7 +837,7 @@ fn a_project_lists_its_scenes_and_content_folders_in_the_outliner() {
             "files"
         ]
     );
-    assert!(editor.scene().object("incoming/wordmark").is_some());
+    assert!(editor.scene().object("title/name").is_some());
     assert!(
         editor
             .log
@@ -1007,17 +1001,17 @@ fn the_version_sits_dim_at_the_right_end_of_the_bottom_bar() {
 }
 
 #[test]
-fn the_scaffolds_lockup_shows_the_games_version_and_moves_with_its_group() {
-    let root = project_copy("project-lockup-version");
+fn the_scaffolds_title_shows_the_games_version_and_moves_with_its_group() {
+    let root = project_copy("project-title-version");
     let session = crate::session::Session::open_project(&root, quiet(), None).unwrap();
     let scene = session.editor.scene();
-    let version = &scene.texts["incoming/version"];
+    let version = &scene.texts["title/version"];
     assert!(
         version.text.starts_with('v') && !version.text.contains('{'),
         "{}",
         version.text
     );
-    assert_eq!(version.place, scene.object("incoming").unwrap().model);
+    assert_eq!(version.place, scene.object("title").unwrap().model);
 }
 
 #[test]

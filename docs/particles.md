@@ -20,6 +20,7 @@ spray.sprites(&mut out);
 - **The pool.** `max` caps the live particles; a spawn past it is dropped and counted in `dropped()`.
 - **Over life** `t = age / life`: size goes linearly from `size[0]` to `size[1]` (metres across), alpha follows the `alpha` keys and colour the `colours` keys, both sampled as bevy_hanabi's `Gradient::sample` (linear between keys, held before the first and after the last). `Sprite` is what a renderer draws: position, previous position, velocity, size, angle, colour and alpha.
 - **Determinism.** No wall clock and no global RNG: the same recipe, seed, steps and parent transforms give the same particles bit for bit. `Emitter::seek(time, step, parent)` steps on a fixed grid from 0 to `time` (resetting when time goes back), so the state at a time depends on that time alone; `STEP` is 1/120 s, which divides 24, 30, 60 and 120 fps frames.
+- **Prewarm.** `prewarm` seconds (`Recipe::prewarm`, 0 to `PREWARM_MAX`, 30 s) are simulated before t = 0 on the same 1/120 s grid, as Unity's Prewarm and Godot's `preprocess` simulate before the first frame: the emitter's first step (or a seek to 0) first runs `prewarm / STEP` steps with the parent held at its t = 0 pose and the clock held at 0, so `rate_keys` and the other keys read their t = 0 values and a `burst` fires at −prewarm. The state at time t is then the one an emitter started `prewarm` seconds earlier would have, bit for bit, whatever seeks came before: a frame range or a resumed render stays byte-identical (`prewarm_starts_where_an_emitter_started_that_long_before_with_its_parent_held`). A catch-up that restarts past 120 s skips it, since the window already forms the trails. The live view, play mode and the tracer all seek through it.
 
 Tests (`crates/core/src/sim/tests_particles.rs`): the same seed gives the same particles and seeking matches stepping; inherit carries the parent's velocity and gravity pulls as integrated; the pool cap holds and counts drops; a parent moving a metre in a step leaves an even trail; `rate_keys` drive the rate deterministically.
 
@@ -27,11 +28,12 @@ Tests (`crates/core/src/sim/tests_particles.rs`): the same seed gives the same p
 
 `pfx_load::scene::Scene::particles` holds each `[[particles]]` table as `Particles { attach, at, recipe }`. `attach` names the parent object and, with `node`, a glTF node of that object's mesh; pfx-load refuses a parent that is no object of the scene and a node that is not in its mesh, with the file, line and column. A node's world transform is the object's times the node's animated joint matrix when play mode poses it, else the node's own placement in the file.
 
-`pfx_live::particles::Sprays` runs a scene's emitters in lockstep on the 1/120 s grid:
+`pfx_load::scene::sprays::Sprays` (re-exported as `pfx_live::particles::Sprays`) runs a scene's emitters in lockstep on the 1/120 s grid, for the live renderer and the path tracer alike:
 
 - `Staged::frame(aspect, time, seed)` seeks them to `time` with the objects posed by the scene's movers and, when an `[object.animation]` clip plays, the nodes posed by it at each 1/120 s step (`Sprays::seek_rigged`; `Staged::sprays()` exposes them), so the viewer, `pfx gui`'s viewport and anything that renders a `Staged` frame show them at that time; a scene watch reload restarts them when their tables or their parents change.
 - Play mode (`pfx-play`'s presenter) steps them from the last presented time to this one, with the parents' transforms interpolated between the last frame's and this frame's poses (glTF node animation included).
 - A catch-up longer than 120 s restarts from 120 s before the target, so a far seek stays bounded.
+- The path tracer seeks a fresh `Sprays` to the frame's time the way a freshly staged viewer does (`pfx_trace::stage::scene_puffs`), and a traced recipe still or clip runs the recipe's `[[particles]]` through `Sprays::of_emitters` with each emitter's parent posed from the recipe's tracks (`pfx_still::puffs`), so both draw the particles the live view shows at that time ([trace.md](trace.md#particles)).
 
 ## The live pass
 

@@ -36,7 +36,7 @@ echo "windows-check: wine prefix $prefix"
 env -u DISPLAY -u WAYLAND_DISPLAY \
   WINEPREFIX="$prefix" \
   WINEDEBUG=-all \
-  WINEDLLOVERRIDES='mscoree,mshtml=' \
+  WINEDLLOVERRIDES='mscoree,mshtml=;winemenubuilder.exe=d' \
   wine wineboot --init
 echo "windows-check: build tests"
 cargo test --target "$target" "${args[@]}" --lib --tests --no-run
@@ -50,7 +50,7 @@ echo "windows-check: cargo test under wine"
 env -u DISPLAY -u WAYLAND_DISPLAY \
   WINEPREFIX="$prefix" \
   WINEDEBUG=-all \
-  WINEDLLOVERRIDES='mscoree,mshtml=' \
+  WINEDLLOVERRIDES='mscoree,mshtml=;winemenubuilder.exe=d' \
   CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine \
   cargo test --target "$target" "${args[@]}" --lib --tests
 echo "windows-check: clean"

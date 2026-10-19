@@ -10,12 +10,13 @@ use crate::script::{Kinds, Scene, Script};
 use crate::titles::{Align, Words};
 use crate::track::{Look, look};
 use pfx_core::fx::{Shake, ShakeTuning};
+use pfx_core::rate::Rate;
 use std::collections::BTreeMap;
 
 const FOLLOW: f32 = 2.5;
 const OUTLINE: f32 = 0.045;
 const THINNEST: f32 = 2.0;
-const MARK: f32 = 48.0;
+pub(crate) const MARK: f32 = 48.0;
 const BLEED: f32 = 40.0;
 const SHAKE: ShakeTuning = ShakeTuning {
     translation: [30.0, 22.0],
@@ -112,9 +113,9 @@ impl<'a, K: Kinds> Director<'a, K> {
         self.aim = None;
     }
 
-    fn track(&mut self, target: Option<[f32; 2]>, fps: u32) -> Option<[f32; 2]> {
+    fn track(&mut self, target: Option<[f32; 2]>, fps: Rate) -> Option<[f32; 2]> {
         let to = target?;
-        let k = 1.0 - (-FOLLOW / fps.max(1) as f32).exp();
+        let k = 1.0 - (-FOLLOW * fps.den() as f32 / fps.num() as f32).exp();
         let at = self.aim.map_or(to, |a| {
             [a[0] + (to[0] - a[0]) * k, a[1] + (to[1] - a[1]) * k]
         });
@@ -292,7 +293,7 @@ impl<'a, K: Kinds> Director<'a, K> {
         &mut self,
         scene: &Scene<K>,
         s: f64,
-        fps: u32,
+        fps: Rate,
         target: Option<[f32; 2]>,
     ) -> Cut<K::Drawn> {
         for k in &scene.shake {
@@ -301,7 +302,7 @@ impl<'a, K: Kinds> Director<'a, K> {
             }
         }
         self.last = s + 1e-9;
-        self.shake.step(1.0 / fps.max(1) as f32, 1.0);
+        self.shake.step(fps.den() as f32 / fps.num() as f32, 1.0);
         let jolt = self.shake.offset(1.0);
         let l = look(&scene.key, s, self.base(scene));
         let aim = self.track(target, fps);

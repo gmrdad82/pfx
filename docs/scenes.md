@@ -215,7 +215,7 @@ Per-object motion blur in the live renderer, from its velocity buffer ([live-ren
 | `shutter` | 0 to 4 | `0.5` | Up to 1, the share of the frame the shutter is open (0.5 is a 180° shutter). Above 1, a stylised shutter: the streak covers that many frames' motion, centred on the frame (2 is twice a full frame's streak), a speed look no camera shutter gives. `0` turns the blur off. |
 | `max_px` | above 0 | `64` | The longest streak at a shutter of 1, in pixels either side of a pixel; the pass clamps it to 1..256, and a shutter above 1 multiplies it (up to 1024 at 4). It also sets the tile size, the next multiple of 8 at or above it. |
 | `samples` | 1 and up | `8` | Taps per pixel along the motion; the pass clamps it to 2..64 and takes half on each side. A shutter above 1 multiplies it, up to 128, so a longer streak keeps the tap spacing of a shutter of 1. |
-| `position` | `"start"`, `"centre"`, `"end"` | `"centre"` | Where the shutter sits against the frame's time (Cycles' motion position): `"start"` opens it at the frame, so the streak leads what moves; `"centre"` centres it on the frame; `"end"` closes it at the frame, so the streak trails. The live pass gathers to one side along the velocity and the tracer poses its steps over that interval. |
+| `position` | `"start"`, `"centre"`, `"end"` | `"centre"` | Where the shutter sits against the frame's time (Cycles' motion position): `"start"` opens it at the frame, so the streak leads what moves; `"centre"` centres it on the frame; `"end"` closes it at the frame, so the streak trails. The live pass gathers to one side along the velocity and the tracer poses its steps over that interval. On a recipe's timeline both hold its ends: no pose is taken before 0 or past the last frame ([render-a-scene.md](render-a-scene.md#motion-blurs-previous-pose)). |
 
 `Scene::motion_blur` holds it as `pfx_post::MotionBlur`. `Renderer::stage` hands it to `Renderer::set_motion_blur`; `SceneDiff::motion_blur` flags an edit and `Staged::apply` sets it again (`Applied::motion_blur`), so a scene watch turns it on, off or retunes it in the window. On the CLI, `--set motion_blur.shutter=0.25` edits it through the same path (`Target::MotionBlur`, or `Target::Scene` with the path `motion_blur.shutter`).
 
@@ -243,7 +243,7 @@ An object's glTF clips or a sprite of an image atlas, played in play mode and dr
 
 ### `[[particles]]`: 3D emitters
 
-A deterministic emitter simulated on a 1/120 s grid and drawn by the live renderer's `sprays` pass ([particles.md](particles.md)). pfx-load reads each into `Scene::particles` (`pfx_load::scene::Particles`, keyed by `name`), and `SceneDiff::particles` flags an edit; a scene watch reload restarts the emitters. Every key but `name` is optional; without `[[particles]]` nothing is drawn and the frame is byte-identical. The tracer draws no particles.
+A deterministic emitter simulated on a 1/120 s grid and drawn by the live renderer's `sprays` pass ([particles.md](particles.md)). pfx-load reads each into `Scene::particles` (`pfx_load::scene::Particles`, keyed by `name`), and `SceneDiff::particles` flags an edit; a scene watch reload restarts the emitters. Every key but `name` is optional; without `[[particles]]` nothing is drawn and the frame is byte-identical. The path tracer draws them too, from the same simulation, as camera-facing sprites ([trace.md](trace.md#particles)).
 
 | Key | Meaning | Range | Default |
 |---|---|---|---|
@@ -272,6 +272,7 @@ A deterministic emitter simulated on a 1/120 s grid and drawn by the live render
 | `blend` | `"alpha"` covers what is behind, `"add"` adds light | | `"alpha"` |
 | `lit` | lit as a scattering puff: thin parts glow toward a light behind them by the haze's phase, dense parts shade diffusely; by the sun and its shadows (lit in shade as much as the haze is), the probes or sky and local lights; unlit emits its colour | | `true` |
 | `seed` | the emitter's random stream | u64 | a hash of `name` |
+| `prewarm` | simulate this long before t = 0, the parent held at its t = 0 pose and the keys at their t = 0 values, so a shot opens with its trails formed (idling exhaust, a fire, steam), as Unity's Prewarm and Godot's `preprocess` do | 0 to 30 s | 0 |
 
 From the CLI and the editor these are keys of `Target::Particles(name)`, so `--set particles.<name>.<key>=<value>` (`--set particles.spray.rate=800`) goes through the same `SceneEdit` path as a hand edit and reaches the window through the scene watch.
 

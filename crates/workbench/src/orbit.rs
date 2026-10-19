@@ -4,6 +4,7 @@ use pfx_recipe_scene::Eye;
 pub const DEGREES_PER_POINT: f64 = 0.25;
 pub const DOLLY_PER_POINT: f64 = 0.002;
 pub const NEAREST: f64 = 0.001;
+pub const CATCH_SECONDS: f64 = 0.15;
 const WORLD_UP: DVec3 = DVec3::Y;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,6 +50,11 @@ pub fn turn(eye: &Eye, points: [f64; 2]) -> Eye {
         up: up.to_array(),
         ..*eye
     }
+}
+
+pub fn caught(seconds: f64) -> f64 {
+    let t = (seconds / CATCH_SECONDS).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 pub fn span(eye: &Eye, height_points: f64) -> f64 {
@@ -168,6 +174,21 @@ mod tests {
         assert!(turned.position.iter().all(|value| value.is_finite()));
         let angle = offset(&plan).angle_between(offset(&turned)).to_degrees();
         assert!((angle - 10.0).abs() < 1e-9, "{angle}");
+    }
+
+    #[test]
+    fn a_drags_held_back_start_is_fed_in_smoothly_and_whole() {
+        let fps = 60.0;
+        let frames = (CATCH_SECONDS * fps).round() as usize;
+        let fed: Vec<f64> = (0..=frames + 2).map(|k| caught(k as f64 / fps)).collect();
+        assert_eq!(fed[0], 0.0);
+        assert_eq!(fed[frames], 1.0);
+        assert_eq!(fed[frames + 2], 1.0);
+        let steps: Vec<f64> = fed.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        assert!(steps.iter().all(|step| *step >= 0.0));
+        let most = 1.5 / (CATCH_SECONDS * fps);
+        assert!(steps.iter().all(|step| *step <= most + 1e-12), "{steps:?}");
+        assert!(steps[0] < steps[frames / 2]);
     }
 
     #[test]

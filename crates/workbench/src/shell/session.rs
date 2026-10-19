@@ -11,6 +11,31 @@ const PLAY_WAIT: u32 = 3;
 
 const LOG_SIZE: Vec2 = Vec2::new(720.0, 260.0);
 
+pub(super) struct Brand {
+    pub(super) name: String,
+    pub(super) line: String,
+    pub(super) mark: Option<PathBuf>,
+    pub(super) wordmark: Option<PathBuf>,
+}
+
+impl Brand {
+    fn of(session: &Session) -> Option<Brand> {
+        let config = session.config().filter(|_| session.plays_a_game())?;
+        let placed = |path: &Option<PathBuf>| {
+            path.as_ref().map(|path| match session.project() {
+                Some(project) if path.is_relative() => project.root().join(path),
+                _ => path.clone(),
+            })
+        };
+        Some(Brand {
+            name: config.name.clone(),
+            line: pfx_editor::editor::version_line(&config.name, &config.version),
+            mark: placed(&config.mark),
+            wordmark: placed(&config.wordmark),
+        })
+    }
+}
+
 pub(super) struct Preparing {
     done: Receiver<Result<PathBuf, String>>,
 }
@@ -103,11 +128,17 @@ impl Shell {
         shell
     }
 
-    pub(super) fn take_session(&mut self, session: Session) {
+    pub(super) fn take_session(&mut self, mut session: Session) {
         let path = session.editor.path().to_path_buf();
         let document = crate::scenes::document(session.editor.scene(), &path.display().to_string());
         self.scene_revision = session.editor.revision;
         self.heard.listen(&session.editor.log);
+        if self.game.is_none() {
+            self.game = Brand::of(&session);
+        }
+        if let Some(game) = &self.game {
+            session.editor.app = game.line.clone();
+        }
         self.edit = Some(Box::new(session));
         self.playing_recipe = false;
         self.preparing_play = None;
@@ -128,9 +159,9 @@ impl Shell {
     }
 
     pub fn theme(&self) -> Theme {
-        match self.session() {
-            Some(session) if session.plays_a_game() => crate::theme::game(),
-            _ => crate::theme::workbench(),
+        match self.game {
+            Some(_) => crate::theme::game(),
+            None => crate::theme::workbench(),
         }
     }
 

@@ -153,6 +153,8 @@ GUIDES = [
     ("render-a-scene", 320, "pfx shot renders a scene file offline on the live renderer at a fixed clock: numbered frames, a manifest and a WAV for pcod, the same bytes every run."),
     ("particles", 321, None),
     ("alpha-master", 322, None),
+    ("memory", 323, "How pfx plans a run's memory before it loads, refuses one past --memory-limit, keeps its own allocations under it, and reports the peak beside the plan."),
+    ("jobs", 324, None),
     ("editor", 401, None),
     ("editor-crates", 402, None),
     ("play-modules", 403, None),

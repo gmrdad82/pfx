@@ -327,6 +327,15 @@ pub fn render(
     render_scene(scene, icons, None, size, None)
 }
 
+pub fn render_sprited(
+    scene: &FlatScene<'_>,
+    icons: Option<&Icons>,
+    sprites: Option<&SpriteImage>,
+    size: [u32; 2],
+) -> Result<Vec<[f32; 4]>, String> {
+    render_in(scene, icons, None, size, None, sprites)
+}
+
 pub fn render_with_text(
     scene: &FlatScene<'_>,
     icons: Option<&Icons>,
@@ -369,8 +378,19 @@ fn render_scene(
     size: [u32; 2],
     view: Option<Matrix>,
 ) -> Result<Vec<[f32; 4]>, String> {
+    render_in(scene, icons, texts, size, view, None)
+}
+
+fn render_in(
+    scene: &FlatScene<'_>,
+    icons: Option<&Icons>,
+    texts: Option<&[CpuText<'_>]>,
+    size: [u32; 2],
+    view: Option<Matrix>,
+    sprites: Option<&SpriteImage>,
+) -> Result<Vec<[f32; 4]>, String> {
     let fit = Fit::new(scene.layout, size)?.viewed(view)?;
-    let sprites = scene.sprites.map(|sprites| &sprites.image);
+    let sprites = sprites.or(scene.sprites.map(|sprites| &sprites.image));
     let mut order = Order::default();
     order.build(scene.draws, scene.groups.len())?;
     let clear = scene

@@ -437,9 +437,11 @@ fn map_layer(result_in: MapResult, layer: vec4f, pa: vec4f, pb: vec4f, pc: vec4f
     } else if (kind == 7u) {
         let spots = fbm3(vec3f(uv * 12.0, 2.0), 4, true);
         result.base *= mix(1.0, 0.7 + 0.6 * spots, clamp(amp, 0.0, 1.0));
+        result.normal = layer_relief(result.normal, uv, position, amp, false, select(max(length(dpdx(uv)), length(dpdy(uv))) * 30.0, 0.0, use_fine_noise));
     } else if (kind == 8u) {
         let value = fbm3(p * 300.0, 4, true);
         result.base *= mix(1.0, 0.75 + 0.5 * value, clamp(amp, 0.0, 1.0));
+        result.normal = layer_relief(result.normal, uv, position, amp, true, select(map_pixel * 200.0, 0.0, use_fine_noise));
     } else if (use_scratch && kind == 17u) {
         if (coated) {
             let scratched = map_scratch(result.base, result.coat_roughness, amp, p, seed, true, tile, pa, pd.x);
@@ -675,7 +677,7 @@ impl GpuMapMaterial {
         let layer = |i: usize| {
             let layer = material.layers[i];
             let kind = if layer.active() || layer.amplitude == 0.0 {
-                noise_id(layer.kind)
+                layer.kind.id()
             } else {
                 0
             };
@@ -765,26 +767,6 @@ fn content_row(material: &Material) -> [f32; 4] {
         layer.ink_roughness,
         layer.emboss,
     ]
-}
-
-fn noise_id(kind: NoiseKind) -> u32 {
-    match kind {
-        NoiseKind::None => 0,
-        NoiseKind::Fibre => 1,
-        NoiseKind::Crinkle => 2,
-        NoiseKind::PlankWood => 3,
-        NoiseKind::WallMottle => 4,
-        NoiseKind::Grime => 5,
-        NoiseKind::Leaf => 7,
-        NoiseKind::Bark => 8,
-        NoiseKind::Flow => 14,
-        NoiseKind::Value => 15,
-        NoiseKind::Fbm => 16,
-        NoiseKind::Scratch => 17,
-        NoiseKind::CoatWobble => 18,
-        NoiseKind::Crack => 19,
-        NoiseKind::Track => 20,
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -2438,6 +2420,24 @@ mod tests {
         screen_gain: 1.5,
         photo_window: [0.0, 0.0, 1.0, 1.0],
     };
+
+    #[test]
+    fn the_live_material_shader_has_a_branch_for_every_layer_kind_the_cpu_evaluates() {
+        for kind in NoiseKind::ALL {
+            if kind == NoiseKind::None {
+                continue;
+            }
+            let branch = format!("kind == {}u)", kind.id());
+            assert!(
+                MAPS_WGSL.contains(&branch),
+                "{kind:?} draws plain live: no `{branch}` in the material shader"
+            );
+            let mut material = Material::default();
+            material.layers[0] = NoiseLayer::new(kind, 1.0, 0.5, 0).filled();
+            let packed = GpuMapMaterial::new(&material, MapIndices::default());
+            assert_eq!(packed.layers[0][0], kind.id() as f32, "{kind:?}");
+        }
+    }
 
     const PLANE_WGSL: &str = r#"
 @group(0) @binding(0) var<uniform> plane_age: vec4f;

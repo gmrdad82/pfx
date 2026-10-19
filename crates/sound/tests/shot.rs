@@ -1,3 +1,4 @@
+use pfx_core::rate::Rate;
 use pfx_sound::shot::{self, RATE, Script};
 use std::path::{Path, PathBuf};
 
@@ -8,17 +9,19 @@ fn example() -> PathBuf {
 #[test]
 fn the_mix_is_exactly_the_clip_long() {
     for (frames, fps) in [(600, 60), (37, 24), (1, 30), (250, 25)] {
-        let out = shot::render(&example(), frames, fps).unwrap();
+        let out = shot::render(&example(), frames, Rate::whole(fps)).unwrap();
         let expected = frames as u64 * u64::from(RATE) / u64::from(fps);
         assert_eq!(out.len() as u64, expected * 2, "{frames} at {fps}");
     }
-    assert!(shot::render(&example(), 10, 0).is_err());
+    let film: Rate = "24000/1001".parse().unwrap();
+    let out = shot::render(&example(), 37, film).unwrap();
+    assert_eq!(out.len(), 37 * 2002 * 2);
 }
 
 #[test]
 fn the_same_script_gives_the_same_samples() {
-    let a = shot::render(&example(), 240, 60).unwrap();
-    let b = shot::render(&example(), 240, 60).unwrap();
+    let a = shot::render(&example(), 240, Rate::whole(60)).unwrap();
+    let b = shot::render(&example(), 240, Rate::whole(60)).unwrap();
     assert_eq!(a, b);
     assert!(a.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
     assert!(a.iter().any(|s| s.abs() > 0.01));
@@ -163,7 +166,7 @@ fn a_recorded_engine_mixes_to_the_exact_length_and_repeats_by_seed() {
     let curve = "[[0.0, 900], [1.0, 2500], [2.0, 4000]]";
     let script = engine_script("cylinders = 4\nblend = 0.3", curve);
     for frames in [1, 37, 120] {
-        let n = shot::audio_frames(frames, 60);
+        let n = shot::audio_frames(frames, Rate::whole(60));
         assert_eq!(script.mix(n).unwrap().len(), n * 2);
     }
     let a = script.mix(RATE as usize * 2).unwrap();

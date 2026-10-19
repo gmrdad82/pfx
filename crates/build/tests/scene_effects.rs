@@ -464,3 +464,26 @@ fn keyed_values_reach_the_scene_s_keys_tables_and_pfx_scene_finds_nothing_wrong(
     let lines: Vec<String> = diagnostics.iter().map(ToString::to_string).collect();
     assert!(lines.is_empty(), "{}", lines.join("\n"));
 }
+
+#[test]
+fn a_traced_recipe_runs_the_emitters_its_scene_file_loads() {
+    let root = project("effects-emitters", &[]);
+    let base = root.join("recipes");
+    let r = load(&base.join("street.toml")).unwrap().recipe;
+    let built = build(&r, &base).unwrap();
+    write(&built, &r, &base, Some(&root.join("scenes"))).unwrap();
+    let scene = pfx_load::scene::Scene::open(root.join("scenes/street.scene.toml")).unwrap();
+    let emitted = pfx_build::emitters(&r, &built).unwrap();
+    assert_eq!(emitted.len(), 2);
+    for emitter in &emitted {
+        let loaded = &scene.particles[&emitter.name];
+        assert_eq!(emitter.recipe, loaded.recipe, "{}", emitter.name);
+        assert_eq!(emitter.at, loaded.at, "{}", emitter.name);
+        assert_eq!(
+            emitter.node.as_deref(),
+            loaded.attach.as_ref().map(|attach| attach.object.as_str()),
+            "{}",
+            emitter.name
+        );
+    }
+}

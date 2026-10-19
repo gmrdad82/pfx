@@ -1,3 +1,4 @@
+use pfx_core::rate::Rate;
 use pfx_film::{
     Cast, Crew, Drawn, FilmFrame, Kinds, Known, Posed, RATE, Rig, Scheme, Score, Script, Show,
     Take, frames,
@@ -72,13 +73,13 @@ seconds = "2bar+1b"
     assert_eq!(at100.scenes[0].sound[0].at, 2.4);
     assert_eq!(at100.scenes[0].sound[0].every, Some(0.6));
     assert_eq!(at100.scenes[1].seconds, 5.4);
-    assert_eq!(frames(at100.scenes[0].seconds, 30), 144);
-    assert_eq!(at100.frames(60), 288 + 324);
+    assert_eq!(frames(at100.scenes[0].seconds, Rate::whole(30)), 144);
+    assert_eq!(at100.frames(Rate::whole(60)), 288 + 324);
     let at128 = film("bpm = 128", scenes).unwrap();
     assert_eq!(at128.scenes[0].seconds, 3.75);
     assert_eq!(at128.scenes[0].key[0].at, 0.703125);
     assert_eq!(at128.scenes[1].seconds, 4.21875);
-    assert_eq!(at128.frames(60), 225 + 253);
+    assert_eq!(at128.frames(Rate::whole(60)), 225 + 253);
     let waltz = film("bpm = 100\nsignature = [3, 4]", scenes).unwrap();
     assert_eq!(waltz.scenes[1].seconds, 7.0 * 0.6);
     assert!(film("bpm = 100\nsignature = [3, 4]\nbeats_per_bar = 3", scenes).is_err());
@@ -108,7 +109,7 @@ at = "1b"
     assert_eq!(s.scenes[0].seconds, 2.4);
     assert_eq!(s.scenes[1].seconds, 1.875);
     assert_eq!(s.scenes[1].flash[0].at, 0.46875);
-    assert!(s.off_grid(60).unwrap().is_empty());
+    assert!(s.off_grid(Rate::whole(60)).unwrap().is_empty());
     let late = film(
         "bpm = 100\n[[film.tempo]]\nat = 1.2\nbpm = 128\n[[film.tempo]]\nat = 1.0\nbpm = 90",
         scenes,
@@ -136,7 +137,7 @@ name = "tail"
 seconds = 2.1
 "#;
     let warn = film("bpm = 120\noffset = 0.5", scenes).unwrap();
-    let misses = warn.off_grid(60).unwrap();
+    let misses = warn.off_grid(Rate::whole(60)).unwrap();
     assert_eq!(misses.len(), 2, "{misses:?}");
     assert!(
         misses[0].starts_with("scene 'drop': a key at 1.4b is off the 1/4-beat grid"),
@@ -149,16 +150,16 @@ seconds = 2.1
         "{misses:?}"
     );
     let strict = film("bpm = 120\noffset = 0.5\nstrict = true", scenes).unwrap();
-    let err = strict.off_grid(60).unwrap_err();
+    let err = strict.off_grid(Rate::whole(60)).unwrap_err();
     assert_eq!(err, misses[0]);
     let fine = film("bpm = 120\noffset = 0.5\nsnap = \"1/8\"", scenes).unwrap();
-    assert!(fine.off_grid(30).unwrap().is_empty());
+    assert!(fine.off_grid(Rate::whole(30)).unwrap().is_empty());
     let shifted = film(
         "bpm = 120\noffset = 0.5\nstrict = true",
         &scenes.replace("seconds = 0.5", "seconds = 0.6"),
     )
     .unwrap();
-    let err = shifted.off_grid(60).unwrap_err();
+    let err = shifted.off_grid(Rate::whole(60)).unwrap_err();
     assert!(
         err.starts_with("scene 'drop': the cut into it lands 0.2b from beat 1"),
         "{err}"
@@ -187,7 +188,7 @@ fn chopped() -> Script<Bare> {
 #[test]
 fn half_and_quarter_beat_scenes_keep_every_cut_within_half_a_frame() {
     let s = chopped();
-    let fps = 30;
+    let fps = Rate::whole(30);
     let starts = s.starts();
     let total = *starts.last().unwrap();
     assert_eq!(s.frames(fps), (total * 30.0).round() as u64);
@@ -212,14 +213,14 @@ name = "hit"
 seconds = "4b"
 "#;
     let s = film("bpm = 120\noffset = 0.5", scenes).unwrap();
-    let misses = s.off_grid(30).unwrap();
+    let misses = s.off_grid(Rate::whole(30)).unwrap();
     assert_eq!(misses.len(), 1, "{misses:?}");
     assert!(
         misses[0].starts_with("scene 'hit': the cut into it lands"),
         "{misses:?}"
     );
     let on = film("bpm = 120\noffset = 0.5", &scenes.replace("0.52", "0.51")).unwrap();
-    assert!(on.off_grid(30).unwrap().is_empty());
+    assert!(on.off_grid(Rate::whole(30)).unwrap().is_empty());
 }
 
 struct Lamp {
@@ -292,14 +293,14 @@ fn a_key_lands_on_the_film_clock_after_drifting_scenes() {
     };
     let rig = Rig {
         size: [64, 36],
-        fps: 30,
+        fps: Rate::whole(30),
     };
     let done = pfx_film::shoot(&s, rig, crew).unwrap();
-    assert_eq!(done.frames, s.frames(30));
+    assert_eq!(done.frames, s.frames(Rate::whole(30)));
     let drop = s.starts()[s.scenes.len() - 1];
     let grid = s.film.beat.as_ref().unwrap();
     let flip = grid.seconds(grid.beat(drop) + 1.25);
-    let cut = s.cuts(30)[s.scenes.len() - 1] as usize;
+    let cut = s.cuts(Rate::whole(30))[s.scenes.len() - 1] as usize;
     assert_eq!(lamp.black[cut], 1.0);
     let first = (cut + lamp.black[cut..].iter().position(|b| *b == 0.0).unwrap()) as f64;
     assert!(

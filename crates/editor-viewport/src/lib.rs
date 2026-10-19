@@ -14,4 +14,4 @@ pub use gizmo::{Gizmo, Handle, Mode, Pose, Snap, Space};
 pub use lens::{Lens, Ray};
 pub use pick::{Picker, Selection};
 pub use viewport::{Event, Look, Viewport, posed, scrolled};
-pub use watched::{Watched, is_scene, worded};
+pub use watched::{Watched, worded};

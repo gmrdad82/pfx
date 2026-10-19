@@ -54,3 +54,29 @@ fn particles_attach_to_an_object_or_its_node_and_refuse_what_names_none() {
     .unwrap_err();
     assert!(missing.message.contains("wheel_rl"), "{missing}");
 }
+
+#[test]
+fn a_prewarmed_spray_is_formed_at_time_zero_and_refuses_a_prewarm_past_its_cap() {
+    let scene = open(
+        "prewarm",
+        "[[particles]]\nname = \"steam\"\nparent = \"car\"\nrate = 30.0\nlifetime = [2.0, 2.0]\nprewarm = 1.5\n",
+    )
+    .unwrap();
+    assert_eq!(scene.particles["steam"].recipe.prewarm, 1.5);
+    let mut sprays = super::sprays::Sprays::of(&scene);
+    sprays.seek_posed(0.0, |_| None);
+    let formed = sprays.live();
+    assert!((40..=50).contains(&formed), "{formed}");
+    sprays.seek_posed(1.0, |_| None);
+    sprays.seek_posed(0.0, |_| None);
+    assert_eq!(sprays.live(), formed);
+    assert_eq!(
+        pfx_core::sim::particles::PREWARM_MAX,
+        pfx_scene::types::PREWARM_MAX
+    );
+    let refused = open(
+        "prewarm-long",
+        "[[particles]]\nname = \"steam\"\nprewarm = 31.0\n",
+    );
+    assert!(refused.is_err());
+}

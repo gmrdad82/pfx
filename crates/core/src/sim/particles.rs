@@ -10,6 +10,7 @@ pub const IDENTITY: Matrix = [
 ];
 
 pub const STEP: f32 = 1.0 / 120.0;
+pub const PREWARM_MAX: f32 = 30.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Blend {
@@ -114,6 +115,7 @@ pub struct Recipe {
     pub blend: Blend,
     pub lit: bool,
     pub seed: u64,
+    pub prewarm: f32,
 }
 
 impl Default for Recipe {
@@ -138,6 +140,7 @@ impl Default for Recipe {
             blend: Blend::Alpha,
             lit: true,
             seed: 0,
+            prewarm: 0.0,
         }
     }
 }
@@ -156,6 +159,13 @@ impl Recipe {
             .speed
             .as_ref()
             .map_or(self.speed, |keys| keys.sample(time))
+    }
+
+    pub fn prewarm_steps(&self) -> u64 {
+        if !(self.prewarm.is_finite() && self.prewarm > 0.0) {
+            return 0;
+        }
+        (self.prewarm.min(PREWARM_MAX) / STEP + 1e-3).floor() as u64
     }
 
     pub fn size_at(&self, time: f32) -> [f32; 2] {
@@ -197,6 +207,7 @@ pub struct Emitter {
     time: f32,
     steps: u64,
     started: bool,
+    warmed: bool,
     dropped: u64,
     particles: Vec<Particle>,
 }
@@ -213,6 +224,7 @@ impl Emitter {
             time: 0.0,
             steps: 0,
             started: false,
+            warmed: false,
             dropped: 0,
             particles: Vec::with_capacity(capacity),
         }
@@ -232,8 +244,23 @@ impl Emitter {
         self.time = 0.0;
         self.steps = 0;
         self.started = false;
+        self.warmed = false;
         self.dropped = 0;
         self.particles.clear();
+    }
+
+    pub fn skip_prewarm(&mut self) {
+        self.warmed = true;
+    }
+
+    pub fn warm(&mut self, at: Matrix) {
+        if self.warmed {
+            return;
+        }
+        self.warmed = true;
+        for _ in 0..self.recipe.prewarm_steps() {
+            self.advance(STEP, at, at, true);
+        }
     }
 
     pub fn time(&self) -> f32 {
@@ -256,6 +283,13 @@ impl Emitter {
         if !(dt.is_finite() && dt > 0.0) {
             return;
         }
+        self.warm(from);
+        self.advance(dt, from, to, false);
+        self.time += dt;
+        self.steps += 1;
+    }
+
+    fn advance(&mut self, dt: f32, from: Matrix, to: Matrix, held: bool) {
         let keep = (-self.recipe.drag.max(0.0) * dt).exp();
         let gravity = self.recipe.gravity;
         let mut index = 0;
@@ -270,7 +304,12 @@ impl Emitter {
             integrate(particle, gravity, keep, dt);
             index += 1;
         }
-        let rate = 0.5 * (self.recipe.rate_at(self.time) + self.recipe.rate_at(self.time + dt));
+        let rate = if held {
+            self.recipe.rate_at(self.time)
+        } else {
+            0.5 * (self.recipe.rate_at(self.time) + self.recipe.rate_at(self.time + dt))
+        };
+        let late = if held { 0.0 } else { dt };
         self.remainder += rate * dt;
         let count = self.remainder.floor();
         self.remainder -= count;
@@ -284,22 +323,22 @@ impl Emitter {
         if !self.started {
             self.started = true;
             for _ in 0..self.recipe.burst {
-                self.spawn(0.0, dt, start, end, parent, axis);
+                self.spawn(0.0, dt, late, start, end, parent, axis);
             }
         }
         let count = count as u32;
         for i in 0..count {
             let born = (i as f32 + 0.5) / count as f32;
-            self.spawn(born, dt, start, end, parent, axis);
+            self.spawn(born, dt, late, start, end, parent, axis);
         }
-        self.time += dt;
-        self.steps += 1;
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn(
         &mut self,
         born: f32,
         dt: f32,
+        late: f32,
         start: [f32; 3],
         end: [f32; 3],
         parent: [f32; 3],
@@ -312,7 +351,7 @@ impl Emitter {
         let recipe = &self.recipe;
         let rng = &mut self.rng;
         let direction = cone(rng, unit(axis[0].lerp(axis[1], born)), recipe.cone);
-        let speed = between(rng, recipe.speed_at(self.time + dt * born));
+        let speed = between(rng, recipe.speed_at(self.time + late * born));
         let life = between(rng, recipe.lifetime).max(1e-3);
         let angle = rng.next_f32() * std::f32::consts::TAU;
         let spin = between(rng, recipe.spin) * if rng.next_bool() { 1.0 } else { -1.0 };
@@ -345,6 +384,9 @@ impl Emitter {
         let target = (time.max(0.0) / step + 1e-3).floor() as u64;
         if target < self.steps {
             self.reset();
+        }
+        if self.steps == 0 {
+            self.warm(parent(0.0));
         }
         while self.steps < target {
             let t0 = self.steps as f32 * step;

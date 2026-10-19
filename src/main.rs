@@ -9,6 +9,7 @@ mod bake;
 mod cache_report;
 mod film;
 mod help;
+mod job;
 mod progress;
 mod project;
 mod recipe;
@@ -39,12 +40,12 @@ const USAGE: &str = "usage:
   pfx
   pfx <file.pitofx>
   pfx gui [<file.pitofx|file.glb|project folder|folder>] [--play <module.wasm>] [flags]
-  pfx new <game> [--path <dir>] [--with-module]
+  pfx new <game> [--path <dir>] [--with-module] [--mark <png>]
   pfx bench <scene.pitofx> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
-  pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|png16|exr] [--dither on|off] [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
+  pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|png16|exr] [--dither on|off] [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--memory-limit GB] [--json]
   pfx scene migrate <file.toml|file.pfx|folder|scene.pitofx> [--dry-run]
   pfx scene fix <scene.pitofx> [--dry-run]
-  pfx film <script.film.toml> --out <dir> [--json] [--plan]
+  pfx film <script.film.toml> --out <dir> [--memory-limit GB] [--json] [--plan]
   pfx sound clean <in.wav> <out.wav> [--keep harmonic [--f0 LOW,HIGH]] [--remove transients] [--gate [--noise START,END] [--reduce DB]] [--mask <png>] [--json]
   pfx sound mix <script.sound.toml> --frames N [--fps N] --out <out.wav> [--json]
   pfx render --recipe <file.pitofx> --camera <name> --out <png|exr|hdr> [flags]
@@ -68,6 +69,12 @@ const USAGE: &str = "usage:
   pfx asset list|sources [--json]
   pfx asset settings [--stdin] [--json]
   pfx credits <scene.pitofx> [--json]
+  pfx job start <name> [--frames A..B] [--json] -- <clip|film|render|bake> <args...>
+  pfx job list|clean [--json]
+  pfx job status <name|pid> [--watch] [--json]
+  pfx job pause|log <name|pid> [--json]
+  pfx job resume (<name|pid> | --all) [--json]
+  pfx job stop <name|pid> [--now] [--json]
   pfx --version
   pfx --help
 clip masters are H.264 (pito-codecs) at 60 fps; pcod (pito-codecs) makes video deliveries
@@ -85,7 +92,8 @@ film assembles a script of clips, rendered frame folders and cards into PNG fram
 sound clean cleans a field recording offline and keeps its length: --keep harmonic tracks a moving fundamental (default 40..400 Hz) and keeps only its harmonic series, --remove transients finds short events that stand out of the background (barks, slams, voices, clicks) and inpaints them from the frames around them, --gate gates the noise under a print taken from --noise or the quietest second (fully, or by --reduce dB); it reports what it removed and --mask writes a time by frequency PNG, kept grey and removed red (docs/sound.md, Cleaning recordings)
 sound mix renders a *.sound.toml shot mix script to a 48 kHz stereo float WAV, N frames at --fps (default 60) long, with no scene and no GPU: the same mixer and the same bytes as pfx shot --audio for that script (docs/sound.md, Shot mix)
 a recipe is a TOML scene recipe (it starts `recipe = 1`), kept inside a .pitofx, that pfx builds into a GLB and a scene headless, draws live (shot --still) or path-traces (render --recipe); each recipe verb prints its own flags with --help (docs/recipes.md)
-new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)";
+new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)
+job runs a pfx clip, film, render or bake detached under a name, its state in a job.json in pfx's state folder; pause and stop land once the frame in flight is written, resume carries on from the last finished frame, a frame that fails 3 times fails the job, and --frames A..B makes only part of a clip so parts made on several machines join in one folder (docs/jobs.md)";
 
 const SWITCHES: &[&str] = &[
     "--clip",
@@ -302,6 +310,7 @@ const SHOT_FLAGS: &[&str] = &[
     "--from",
     "--hour",
     "--json",
+    "--memory-limit",
     "--out",
     "--seconds",
     "--seed",
@@ -337,6 +346,7 @@ const BAKE_FLAGS: &[&str] = &[
     "--name",
     "--force",
     "--detail",
+    "--memory-limit",
 ];
 
 const STEAM_FLAGS: &[&str] = &["--manifest", "--out"];
@@ -378,6 +388,7 @@ const COMMANDS: &[&str] = &[
     "align",
     "asset",
     "credits",
+    "job",
     "help",
 ];
 
@@ -1345,6 +1356,10 @@ fn os_launch(_exe: Option<&std::path::Path>, _args: &[String]) -> Option<std::pr
 
 fn main() -> std::process::ExitCode {
     quiet_mesa();
+    let asked = help::asked(&std::env::args().skip(1).collect::<Vec<_>>());
+    if job::claims(&asked) {
+        return job::main(&asked);
+    }
     if let Err(error) = pfx_run::ending::install() {
         eprintln!("pfx: {error}");
         std::process::exit(1);
@@ -1424,6 +1439,8 @@ mod tests {
                 let args = help::asked(&words(&line));
                 let text = if recipe::claims(&args) {
                     recipe::help_text(&args)
+                } else if job::claims(&args) {
+                    job::help_text(&args)
                 } else {
                     match plan(&args) {
                         Ok(Plan::VerbHelp(text)) => Some(text),
@@ -1507,7 +1524,7 @@ mod tests {
         use std::path::Path;
         assert!(matches!(
             plan(&words("new my-game")).unwrap(),
-            Plan::Project(project::Command { name, path, module: false }) if name == "my-game" && path == Path::new("my-game")
+            Plan::Project(project::Command { name, path, module: false, mark: None }) if name == "my-game" && path == Path::new("my-game")
         ));
         assert!(matches!(
             plan(&words("new my-game --with-module")).unwrap(),
@@ -1517,10 +1534,21 @@ mod tests {
             plan(&words("new my-game --path repos/mine")).unwrap(),
             Plan::Project(project::Command { path, .. }) if path == Path::new("repos/mine")
         ));
-        for bad in ["new", "new a b", "new a --path", "new a --force"] {
+        assert!(matches!(
+            plan(&words("new my-game --mark art/mark.png")).unwrap(),
+            Plan::Project(project::Command { mark: Some(mark), .. }) if mark == Path::new("art/mark.png")
+        ));
+        for bad in [
+            "new",
+            "new a b",
+            "new a --path",
+            "new a --force",
+            "new a --mark",
+            "new a --mark x.png --mark y.png",
+        ] {
             assert!(plan(&words(bad)).is_err(), "{bad}");
         }
-        assert!(USAGE.contains("pfx new <game> [--path <dir>] [--with-module]"));
+        assert!(USAGE.contains("pfx new <game> [--path <dir>] [--with-module] [--mark <png>]"));
     }
 
     #[test]
@@ -1824,7 +1852,7 @@ mod tests {
         for (line, message, usage) in [
             (
                 "",
-                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, gui, new, bench, shot, scene, film, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, align, asset, credits, help]",
+                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, gui, new, bench, shot, scene, film, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, align, asset, credits, job, help]",
                 TOP,
             ),
             ("tui", "unrecognized subcommand 'tui'", TOP),

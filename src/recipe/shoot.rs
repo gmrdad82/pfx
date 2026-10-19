@@ -57,6 +57,8 @@ pub(super) struct Args {
         help = "One JSON line per frame, then shoot.json as the last line"
     )]
     json: bool,
+    #[command(flatten)]
+    memory: super::Memory,
 }
 
 fn frames(text: &str) -> Result<RangeInclusive<u32>, String> {
@@ -104,7 +106,7 @@ pub(super) enum Quality {
 pub(super) struct Plan<'a> {
     pub(super) scene: &'a Path,
     pub(super) camera: &'a str,
-    pub(super) fps: u32,
+    pub(super) fps: pfx_recipe::Rate,
     pub(super) size: [u32; 2],
     pub(super) quality: Quality,
     pub(super) from: u32,
@@ -323,7 +325,14 @@ impl Shoot<'_> {
                 audio,
             };
             let line = pfx_line(&plan, queue);
-            let mut child = Command::new(&line[0])
+            let mut command = Command::new(&line[0]);
+            if let Some(limit) = args.memory.limit {
+                command.env(
+                    pfx_core::memory::LIMIT_ENV,
+                    (limit as f64 / pfx_core::memory::GB as f64).to_string(),
+                );
+            }
+            let mut child = command
                 .args(&line[1..])
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
@@ -390,7 +399,8 @@ impl Shoot<'_> {
                 Quality::Final => "final",
             }),
         );
-        manifest.insert("fps".into(), json!(timeline.fps));
+        manifest.insert("fps".into(), crate::shot::fps_value(timeline.fps));
+        manifest.insert("frame_rate".into(), json!(timeline.fps.to_string()));
         manifest.insert("size".into(), json!(timeline.size));
         manifest.insert("range".into(), json!([range.start(), range.end()]));
         manifest.insert("frames".into(), json!(total));
@@ -434,6 +444,9 @@ impl Shoot<'_> {
 }
 
 pub fn run(args: &Args, registry: &Registry) -> ExitCode {
+    if let Err(message) = args.memory.set() {
+        return refuse("shoot", &message);
+    }
     let mut stdout = std::io::stdout();
     let mut shoot = Shoot {
         args,
@@ -476,7 +489,7 @@ mod tests {
             &Plan {
                 scene: &shot,
                 camera: "camera.chase",
-                fps: 60,
+                fps: pfx_recipe::Rate::whole(60),
                 size: [108, 192],
                 quality: Quality::Draft,
                 from: 0,
@@ -534,7 +547,7 @@ mod tests {
         let plan = Plan {
             scene: Path::new("out/scene.pitofx"),
             camera: "camera.chase",
-            fps: 60,
+            fps: pfx_recipe::Rate::whole(60),
             size: [1080, 1920],
             quality: Quality::Final,
             from: 30,

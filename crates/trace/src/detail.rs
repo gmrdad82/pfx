@@ -96,6 +96,28 @@ pub struct InstanceSurface {
     pub cutout: bool,
     pub casts_shadow: bool,
     pub alpha_cutoff: f32,
+    pub sprite: Option<SpriteLook>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpriteLook {
+    pub colour: [f32; 3],
+    pub alpha: f32,
+    pub lit: bool,
+    pub additive: bool,
+    pub soft: f32,
+}
+
+impl SpriteLook {
+    pub fn valid(&self) -> bool {
+        self.colour
+            .iter()
+            .chain([&self.alpha, &self.soft])
+            .all(|value| value.is_finite())
+            && self.colour.iter().all(|&value| value >= 0.0)
+            && (0.0..=1.0).contains(&self.alpha)
+            && self.soft >= 0.0
+    }
 }
 
 impl Default for InstanceSurface {
@@ -110,6 +132,7 @@ impl Default for InstanceSurface {
             cutout: false,
             casts_shadow: true,
             alpha_cutoff: 0.5,
+            sprite: None,
         }
     }
 }
@@ -129,6 +152,7 @@ impl InstanceSurface {
             ])
             .all(|value| value.is_finite())
             && (0.0..=1.0).contains(&self.alpha_cutoff)
+            && self.sprite.is_none_or(|sprite| sprite.valid())
     }
 
     pub fn cuts(&self, point: [f32; 3]) -> bool {

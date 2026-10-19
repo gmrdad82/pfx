@@ -6,13 +6,14 @@ use crate::score::{CHANNELS, Sounds};
 use crate::script::Script;
 use crate::show::{FilmFrame, Show, plan};
 use crate::write::Encoder;
+use pfx_core::rate::Rate;
 
 pub const RATE: u32 = 48_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rig {
     pub size: [u32; 2],
-    pub fps: u32,
+    pub fps: Rate,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -30,16 +31,12 @@ pub struct Crew<'a, S: Show> {
     pub encoder: Option<&'a mut dyn Encoder>,
 }
 
-pub fn samples(frame: u64, fps: u32) -> u64 {
-    frame * u64::from(RATE) / u64::from(fps.max(1))
+pub fn samples(frame: u64, fps: Rate) -> u64 {
+    fps.samples(frame, RATE)
 }
 
-pub fn clock(frame: u64, lag: f64, fps: u32) -> f64 {
-    if lag == 0.0 {
-        frame as f64 / f64::from(fps.max(1))
-    } else {
-        ((frame as f64 - lag) / f64::from(fps.max(1))).max(0.0)
-    }
+pub fn clock(frame: u64, start: f64, fps: Rate) -> f64 {
+    (fps.time(frame) - start).max(0.0)
 }
 
 pub fn shoot<S: Show>(
@@ -69,14 +66,14 @@ pub fn shoot<S: Show>(
         show.seek(scene, take)?;
         director.begin();
         mix.cut();
-        let lag = start * f64::from(fps.max(1)) - count.frames as f64;
+        let first = count.frames;
         let last = take.frames - 1;
         for i in 0..take.frames {
-            let s = clock(i, lag, fps);
+            let s = clock(first + i, *start, fps);
             let next = if i == last {
                 scene.seconds
             } else {
-                clock(i + 1, lag, fps)
+                clock(first + i + 1, *start, fps)
             };
             let aim = show.aim(scene);
             show.tick(count.frames, &input::events(&scene.input, (s, next)));
@@ -104,12 +101,14 @@ pub fn shoot<S: Show>(
             if !script.film.frames && still.is_none() {
                 continue;
             }
+            if still.is_none() && out.kept(at) {
+                continue;
+            }
             let mut rgba = show.readback()?;
             if let Some(t) = &scene.transition
                 && let Some(out) = tail.get(i as usize)
             {
-                let at_time =
-                    |f: u64| ((f as f64 / f64::from(fps.max(1)) - start) / t.seconds) as f32;
+                let at_time = |f: u64| ((fps.time(f) - start) / t.seconds) as f32;
                 rgba = t
                     .mix(
                         out,
@@ -135,13 +134,13 @@ pub fn shoot<S: Show>(
         if !pictures {
             continue;
         }
-        let end = ((starts[k + 1] + t.seconds) * f64::from(fps.max(1))).round() as u64;
+        let end = fps.frames(starts[k + 1] + t.seconds).round() as u64;
         let overlap = end
             .saturating_sub(cuts[k + 1])
             .clamp(1, takes[k + 1].frames);
-        let held = clock(last, lag, fps);
+        let held = clock(first + last, *start, fps);
         for j in 0..overlap {
-            let s = clock(take.frames + j, lag, fps);
+            let s = clock(first + take.frames + j, *start, fps);
             let aim = show.aim(scene);
             show.tick(count.frames + j, &[]);
             let cut = director.cut(scene, s.min(held), fps, aim);

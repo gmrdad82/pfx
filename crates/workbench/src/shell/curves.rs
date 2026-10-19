@@ -370,11 +370,10 @@ impl Shell {
             && let Some(pointer) = pointer
         {
             let at = pointer + Vec2::new(drag.offset[0], drag.offset[1]);
-            let fps = f64::from(span.fps);
             let t = if shift {
                 drag.start[0]
             } else {
-                (time(at.x) * fps).round() / fps
+                span.fps.snap(time(at.x))
             };
             let along = f64::from((drag.rows[1] - at.y) / (drag.rows[1] - drag.rows[0]).max(1.0));
             let next = [
@@ -409,13 +408,12 @@ impl Shell {
                     .iter()
                     .find(|lane| lane.rect.contains(at) && at.x >= left && at.x <= right);
                 if let Some(lane) = lane {
-                    let fps = f64::from(span.fps);
                     let _ = self.curve(
                         CurveEdit {
                             camera: camera.clone(),
                             track: lane.track.to_string(),
                             change: Change::Add {
-                                t: (time(at.x) * fps).round() / fps,
+                                t: span.fps.snap(time(at.x)),
                             },
                         },
                         None,

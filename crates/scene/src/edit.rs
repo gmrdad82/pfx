@@ -333,6 +333,7 @@ const ORDER_PARTICLES: &[&str] = &[
     "blend",
     "lit",
     "seed",
+    "prewarm",
     "keys",
     "authoring",
 ];

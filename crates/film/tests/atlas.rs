@@ -168,3 +168,62 @@ width = 100
     assert!(near(px(160, 90), [0, 0, 0]));
     std::fs::remove_dir_all(at).unwrap();
 }
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_mark_with_a_glow_filter_draws_its_glow_from_the_atlas() {
+    let at = dir("filtered-mark");
+    std::fs::write(
+        at.join("glow.svg"),
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100"><defs><filter id="g" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="8" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><circle cx="50" cy="50" r="20" fill="#00ff00" filter="url(#g)"/></svg>"##,
+    )
+    .unwrap();
+    let script = at.join("glow.film.toml");
+    std::fs::write(
+        &script,
+        r##"[film]
+size = [320, 180]
+layout = [320, 180]
+fps = 30
+background = "#000000"
+
+[[scene]]
+name = "mark"
+kind = "card"
+seconds = 0.1
+
+[[scene.art]]
+kind = "mark"
+file = "glow.svg"
+at = 0
+fade = 0
+out = 0
+place = [160, 90]
+size = 100
+outline = 0
+"##,
+    )
+    .unwrap();
+    let roll = Roll::open(&script).unwrap();
+    let mut tape = Tape::default();
+    roll.roll(Some(&mut tape)).unwrap();
+    let frame = &tape.frames[1];
+    let px = |x: u32, y: u32| {
+        let i = ((y * 320 + x) * 4) as usize;
+        [frame[i], frame[i + 1], frame[i + 2]]
+    };
+    let centre = px(160, 90);
+    assert!(
+        centre[1] > 240 && centre[0] < 20 && centre[2] < 20,
+        "{centre:?}"
+    );
+    let glow = px(186, 90);
+    assert!(
+        glow[1] > 15 && glow[1] < 230 && glow[0] < 30 && glow[2] < 30,
+        "the glow shows past the disc: {glow:?}"
+    );
+    assert!(px(186, 90)[1] > px(196, 90)[1], "the glow fades out");
+    let far = px(20, 20);
+    assert!(far.iter().all(|c| *c < 4), "{far:?}");
+    std::fs::remove_dir_all(at).unwrap();
+}

@@ -6,6 +6,7 @@ use std::fmt;
 use std::path::Path;
 
 mod cards;
+mod census;
 mod eye;
 mod light;
 mod maps;
@@ -21,6 +22,7 @@ pub use cards::{
     Card, Cards, Face, Picture, clips, decode, facing, layered, layered_as, linear, placeholder,
     premultiplied,
 };
+pub use census::{admit, census, census_of};
 pub use light::{Lighting, Lit, Shine};
 pub use maps::Set as MapSet;
 pub use memory::Memory;
@@ -97,7 +99,11 @@ pub fn load(
     )
 }
 
-pub fn poses(built: &Built, fps: u32, time: f64) -> std::collections::BTreeMap<String, Matrix> {
+pub fn poses(
+    built: &Built,
+    fps: pfx_build::Rate,
+    time: f64,
+) -> std::collections::BTreeMap<String, Matrix> {
     let mut posed = std::collections::BTreeMap::new();
     for track in built.tracks.iter().filter(|track| track.camera.is_none()) {
         if track.keys.is_empty() {
@@ -230,7 +236,7 @@ pub fn unapplied(recipe: &Recipe, traced: bool) -> Vec<&'static str> {
                 .as_ref()
                 .is_some_and(|haze| !traced || !outdoor(haze)),
         ),
-        ("particles", !recipe.effects.particles.is_empty()),
+        ("particles", !traced && !recipe.effects.particles.is_empty()),
     ]
     .into_iter()
     .filter_map(|(key, left)| left.then_some(key))
@@ -281,12 +287,23 @@ pub fn shoot_posed_as(
     time: Option<f64>,
     output: Output,
 ) -> Result<Vec<u8>, Error> {
+    shoot_posed_with(gpu, (recipe, built), camera_name, size, time, output).map(|(rgba, _)| rgba)
+}
+
+pub fn shoot_posed_with(
+    gpu: &Gpu,
+    (recipe, built): (&Recipe, &Built),
+    camera_name: &str,
+    size: [u32; 2],
+    time: Option<f64>,
+    output: Output,
+) -> Result<(Vec<u8>, pfx_core::memory::Plan), Error> {
     let lens = camera(recipe, camera_name)?;
     let mut reel = Reel::with_output(gpu, recipe, &built.parts, size, output)?;
     if let (Some(time), Some(timeline)) = (time, recipe.timeline)
         && reel.blurs()
     {
-        let before = time - 1.0 / f64::from(timeline.fps.max(1));
+        let before = timeline.fps.before(time);
         reel.set_poses(poses(built, timeline.fps, before));
         if built.skinned() {
             reel.reshape(&built.skinned_parts(before))?;
@@ -300,10 +317,12 @@ pub fn shoot_posed_as(
             reel.reshape_from(&built.skinned_parts(time), &built.skinned_parts(before))?;
         }
         let eye = reel.through(lens);
-        return reel.develop(&eye).map(|(rgba, _)| rgba);
+        let plan = reel.plan().clone();
+        return reel.develop(&eye).map(|(rgba, _)| (rgba, plan));
     }
     let eye = reel.through(lens);
-    reel.shoot(&eye).map(|(rgba, _)| rgba)
+    let plan = reel.plan().clone();
+    reel.shoot(&eye).map(|(rgba, _)| (rgba, plan))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -353,6 +372,7 @@ pub struct Reel {
     turns: TurnState,
     size: [u32; 2],
     output: Output,
+    plan: pfx_core::memory::Plan,
 }
 
 impl Reel {
@@ -370,6 +390,11 @@ impl Reel {
         if size[0] == 0 || size[1] == 0 {
             return Err(Error(format!("the size {}x{} is empty", size[0], size[1])));
         }
+        let plan = pfx_core::memory::plan(
+            &census_of(parts, light::sky_size(recipe)),
+            pfx_core::memory::Run::Live { size },
+        );
+        plan.admit().map_err(Error)?;
         let format = if output.wide {
             wgpu::TextureFormat::Rgba16Float
         } else {
@@ -391,11 +416,16 @@ impl Reel {
             turns: TurnState::default(),
             size,
             output,
+            plan,
         })
     }
 
     pub fn output(&self) -> Output {
         self.output
+    }
+
+    pub fn plan(&self) -> &pfx_core::memory::Plan {
+        &self.plan
     }
 
     pub fn pose(&mut self, recipe: &Recipe, parts: &[Part]) -> Result<(), Error> {
@@ -462,6 +492,7 @@ impl Reel {
     }
 
     fn read(&mut self, gpu_ms: f64) -> Result<(Vec<u8>, f64), Error> {
+        pfx_core::memory::look_gpu();
         let gpu = self.stage.gpu();
         let bytes = if self.output.wide {
             let halves = gpu.readback_rgba16(&self.target).map_err(Error)?;

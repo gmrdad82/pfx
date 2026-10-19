@@ -58,8 +58,13 @@ fn scaffolded_with(name: &str, module: bool) -> PathBuf {
     let root = workspace().join("tmp/scaffold").join(name);
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
-    pfx_project::scaffold::scaffold_with(&game(name), &root, env!("CARGO_PKG_VERSION"), module)
-        .unwrap();
+    pfx_project::scaffold::scaffold_with(
+        &game(name),
+        &root,
+        env!("CARGO_PKG_VERSION"),
+        &pfx_project::scaffold::Options { module, mark: None },
+    )
+    .unwrap();
     let manifest = root.join("Cargo.toml");
     let text = std::fs::read_to_string(&manifest).unwrap();
     std::fs::write(&manifest, patched(&text)).unwrap();

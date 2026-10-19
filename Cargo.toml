@@ -68,7 +68,7 @@ terminal_size = { version = "0.4", optional = true }
 libc = "0.2"
 
 [dev-dependencies]
-pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.14.3", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"] }
+pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.16.2", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"] }
 
 [[bin]]
 name = "pfx"

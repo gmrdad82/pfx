@@ -14,7 +14,7 @@ pub use writer::{
 
 pub use glam::DMat4;
 use pfx_mesh::{Mesh, Morph};
-pub use pfx_motion::Trs;
+pub use pfx_motion::{Rate, Trs};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -52,13 +52,12 @@ pub struct Track {
 }
 
 impl Track {
-    pub fn keyed(&self, fps: u32) -> Vec<(f64, Trs)> {
-        let step = 1.0 / f64::from(fps.max(1));
+    pub fn keyed(&self, fps: Rate) -> Vec<(f64, Trs)> {
         let mut out: Vec<(f64, Trs)> = self
             .keys
             .iter()
             .enumerate()
-            .map(|(n, key)| (n as f64 * step, *key))
+            .map(|(n, key)| (fps.time(n as u64), *key))
             .collect();
         if !self.between.is_empty() {
             out.extend(self.between.iter().copied());
@@ -67,7 +66,7 @@ impl Track {
         out
     }
 
-    pub fn sample(&self, fps: u32, time: f64) -> Trs {
+    pub fn sample(&self, fps: Rate, time: f64) -> Trs {
         if self.between.is_empty() {
             return pfx_motion::sample(&self.keys, fps, time);
         }
@@ -83,7 +82,7 @@ impl Track {
                 } else {
                     0.0
                 };
-                pfx_motion::sample(&[a, *b], 1, s)
+                pfx_motion::sample(&[a, *b], Rate::whole(1), s)
             }
         }
     }
@@ -103,7 +102,7 @@ impl Track {
 
 #[derive(Clone, Copy, Debug)]
 pub struct Animation<'a> {
-    pub fps: u32,
+    pub fps: Rate,
     pub tracks: &'a [Track],
     pub markers: &'a [(String, f64)],
 }

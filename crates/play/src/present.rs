@@ -445,7 +445,7 @@ impl Presenter {
             }
         };
         sprays.seek_between([from, time], &self.spray_parents, &self.spray_next);
-        sprays.pack(&mut self.spray_instances);
+        pfx_live::particles::pack(sprays, &mut self.spray_instances);
         std::mem::swap(&mut self.spray_parents, &mut self.spray_next);
         self.spray_time = Some(time);
     }

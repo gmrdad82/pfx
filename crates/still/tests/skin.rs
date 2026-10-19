@@ -114,7 +114,7 @@ fn a_live_frame_of_a_skinned_mesh_matches_the_shot_posed_at_its_time() {
     let camera = pfx_recipe_scene::camera(&r, "main").unwrap().clone();
     let mut frames = Vec::new();
     for time in [0.0, 0.5] {
-        let fps = r.timeline.map_or(1, |t| t.fps);
+        let fps = r.timeline.map_or(pfx_build::Rate::whole(1), |t| t.fps);
         reel.set_poses(pfx_recipe_scene::poses(&built, fps, time));
         reel.reshape(&built.skinned_parts(time)).unwrap();
         let (rgba, _) = reel.shoot(&reel.eye(&camera)).unwrap();

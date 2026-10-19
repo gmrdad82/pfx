@@ -3,14 +3,15 @@ mod lens;
 mod sets;
 mod write;
 
-pub use args::{DEFAULT_FPS, MAX_FPS, Plan, parse};
+pub use args::{DEFAULT_FPS, Plan, parse, rate};
 pub use write::{CHANNELS, RATE};
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use pfx::harness::tools;
-use pfx_bench::shot::{self as play, Follow, Lens, Quality, Shot};
+use pfx_bench::shot::{self as play, Follow, Lens, Played, Quality, Shot};
+use pfx_core::rate::Rate;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
@@ -65,6 +66,7 @@ fn prepare(dir: &Path) -> Result<(), String> {
         ));
     }
     if dir.is_dir() {
+        pfx_core::atomic::sweep(dir)?;
         let entries: Vec<_> = std::fs::read_dir(dir)
             .map_err(|error| format!("{}: {error}", dir.display()))?
             .filter_map(Result::ok)
@@ -102,7 +104,14 @@ fn quoted(path: &Path) -> String {
     }
 }
 
-pub fn pcod(out: &Path, wav: Option<&Path>, fps: u32) -> String {
+pub fn fps_value(fps: Rate) -> Value {
+    match fps.whole_fps() {
+        Some(whole) => json!(whole),
+        None => json!(fps.fps()),
+    }
+}
+
+pub fn pcod(out: &Path, wav: Option<&Path>, fps: Rate) -> String {
     let video = out.with_extension("mp4");
     let video = if video == out {
         out.join("shot.mp4")
@@ -132,12 +141,12 @@ fn rounded(value: f64) -> f64 {
 }
 
 #[cfg(feature = "shot-sound")]
-fn scored(script: &Path, frames: u64, fps: u32) -> Result<Option<Vec<f32>>, String> {
+fn scored(script: &Path, frames: u64, fps: Rate) -> Result<Option<Vec<f32>>, String> {
     pfx_sound::shot::render(script, frames as usize, fps).map(Some)
 }
 
 #[cfg(feature = "shot-sound")]
-pub fn script_wav(script: &Path, frames: u64, fps: u32, wav: &Path) -> Result<(), String> {
+pub fn script_wav(script: &Path, frames: u64, fps: Rate, wav: &Path) -> Result<(), String> {
     let samples = scored(script, frames, fps)?.unwrap_or_default();
     if let Some(parent) = wav.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)
@@ -147,12 +156,12 @@ pub fn script_wav(script: &Path, frames: u64, fps: u32, wav: &Path) -> Result<()
 }
 
 #[cfg(feature = "shot-sound")]
-pub fn audio_frames(frames: u64, fps: u32) -> usize {
+pub fn audio_frames(frames: u64, fps: Rate) -> usize {
     pfx_sound::shot::audio_frames(frames as usize, fps)
 }
 
 #[cfg(not(feature = "shot-sound"))]
-fn scored(_script: &Path, _frames: u64, _fps: u32) -> Result<Option<Vec<f32>>, String> {
+fn scored(_script: &Path, _frames: u64, _fps: Rate) -> Result<Option<Vec<f32>>, String> {
     Ok(None)
 }
 
@@ -210,7 +219,24 @@ fn sha256(path: &Path) -> Result<String, String> {
     Ok(hex::encode(Sha256::digest(&bytes)))
 }
 
+fn gigabytes(bytes: Option<u64>) -> Value {
+    bytes.map_or(Value::Null, |bytes| {
+        json!((bytes as f64 / pfx_core::memory::GB as f64 * 100.0).round() / 100.0)
+    })
+}
+
+fn memory(played: &Played) -> Value {
+    json!({
+        "limit_gb": gigabytes(pfx_core::memory::limit()),
+        "planned_cpu_gb": gigabytes(Some(played.plan.cpu())),
+        "planned_gpu_gb": gigabytes(Some(played.plan.gpu())),
+        "cpu_peak_gb": gigabytes(played.peak.cpu),
+        "gpu_peak_gb": gigabytes(played.peak.gpu),
+    })
+}
+
 pub fn run(plan: &Plan) -> Result<(), String> {
+    pfx_core::memory::from_env(plan.memory_limit)?;
     if plan.scene.is_dir() {
         return Err(format!(
             "{} is a folder; pfx shot renders one scene file offline and opens no window (a project folder opens with pfx gui)",
@@ -320,12 +346,10 @@ pub fn run(plan: &Plan) -> Result<(), String> {
     fields.insert("frames".into(), json!(plan.frames));
     fields.insert("from".into(), json!(plan.from));
     fields.insert("first_number".into(), json!(plan.from));
-    fields.insert("fps".into(), json!(plan.fps));
+    fields.insert("fps".into(), fps_value(plan.fps));
+    fields.insert("frame_rate".into(), json!(plan.fps.to_string()));
     fields.insert("size".into(), json!([plan.size.0, plan.size.1]));
-    fields.insert(
-        "seconds".into(),
-        json!(plan.frames as f64 / f64::from(plan.fps)),
-    );
+    fields.insert("seconds".into(), json!(plan.fps.time(plan.frames)));
     fields.insert("format".into(), json!(plan.format.name()));
     fields.insert(
         "dither".into(),
@@ -372,10 +396,10 @@ pub fn run(plan: &Plan) -> Result<(), String> {
     fields.insert("pcod".into(), json!(pcod(&out, wav.as_deref(), plan.fps)));
     fields.insert("adapter".into(), json!(played.adapter));
     fields.insert("warnings".into(), json!(warnings));
+    fields.insert("memory".into(), memory(&played));
     let manifest = Value::Object(fields);
     let text = serde_json::to_string_pretty(&manifest).map_err(|error| error.to_string())?;
-    std::fs::write(out.join(MANIFEST), format!("{text}\n"))
-        .map_err(|error| format!("{}: {error}", out.join(MANIFEST).display()))?;
+    pfx_core::atomic::write(&out.join(MANIFEST), format!("{text}\n").as_bytes())?;
     if plan.json {
         println!("{manifest}");
     } else {
@@ -384,10 +408,11 @@ pub fn run(plan: &Plan) -> Result<(), String> {
             plan.frames,
             plan.size.0,
             plan.size.1,
-            plan.fps,
+            plan.fps.label(),
             out.display()
         );
         println!("{}", pcod(&out, wav.as_deref(), plan.fps));
+        eprintln!("pfx shot: {}", played.peak.line(&played.plan));
     }
     Ok(())
 }

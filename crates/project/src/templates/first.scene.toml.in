@@ -6,8 +6,8 @@ materials = ["content/materials/base.materials.toml"]
 file = "content/meshes/grid.glb"
 
 [[object]]
-name = "incoming"
-prefab = "content/prefabs/incoming.prefab.toml"
+name = "title"
+prefab = "content/prefabs/title.prefab.toml"
 at = [0.0, 0.495, 0.0]
 
 [[object]]

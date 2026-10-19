@@ -5,6 +5,26 @@ use crate::project::FILE;
 pub const SOURCE: &str = "https://github.com/gmrdad82/pfx.git";
 pub const SCENE: &str = "content/first.scene.toml";
 pub const DOCUMENT: &str = "content/first.pitofx";
+pub const MARK: &str = "content/marks/mark.png";
+pub const PREFAB: &str = "content/prefabs/title.prefab.toml";
+const FONT: &[u8] = include_bytes!("templates/IBMPlexMono-Regular.ttf");
+const TITLE: &str = include_str!("templates/title.prefab.toml.in");
+const FACE: &str = "
+[materials.face]
+family = \"lacquer\"
+base = [0.16, 0.16, 0.18]
+roughness = 0.35
+clearcoat = 0.4
+
+[materials.face.content_layer]
+slot = 0
+";
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Options {
+    pub module: bool,
+    pub mark: Option<PathBuf>,
+}
 
 const RESERVED: [&str; 12] = [
     "self",
@@ -21,7 +41,7 @@ const RESERVED: [&str; 12] = [
     "examples",
 ];
 
-const TEMPLATES: [(&str, &str); 13] = [
+const TEMPLATES: [(&str, &str); 11] = [
     ("Cargo.toml", include_str!("templates/Cargo.toml.in")),
     ("src/lib.rs", include_str!("templates/lib.rs.in")),
     ("src/main.rs", include_str!("templates/main.rs.in")),
@@ -31,14 +51,6 @@ const TEMPLATES: [(&str, &str); 13] = [
     (
         "content/materials/base.materials.toml",
         include_str!("templates/base.materials.toml.in"),
-    ),
-    (
-        "content/materials/incoming.materials.toml",
-        crate::marks::MATERIALS,
-    ),
-    (
-        "content/prefabs/incoming.prefab.toml",
-        include_str!("templates/incoming.prefab.toml.in"),
     ),
     ("AGENTS.md", include_str!("templates/AGENTS.md.in")),
     ("CLAUDE.md", "@AGENTS.md\n"),
@@ -64,17 +76,12 @@ const MODULE: [(&str, &str); 3] = [
 const MODULE_LIB: &str = include_str!("templates/lib.module.rs.in");
 const MODULE_AGENTS: &str = include_str!("templates/AGENTS.module.md.in");
 
-const FILES: [(&str, &[u8]); 5] = [
-    ("content/meshes/badge.glb", crate::marks::BADGE),
-    ("content/meshes/wordmark.glb", crate::marks::WORDMARK),
+const FILES: [(&str, &[u8]); 3] = [
     (
         "content/meshes/grid.glb",
         include_bytes!("templates/grid.glb"),
     ),
-    (
-        "content/fonts/IBMPlexMono-Regular.ttf",
-        include_bytes!("templates/IBMPlexMono-Regular.ttf"),
-    ),
+    ("content/fonts/IBMPlexMono-Regular.ttf", FONT),
     (
         "content/fonts/IBMPlexMono-OFL.txt",
         include_bytes!("templates/IBMPlexMono-OFL.txt"),
@@ -278,27 +285,107 @@ fn with_module(relative: &str, text: String, name: &str, version: &str) -> Strin
     }
 }
 
+fn point(at: [f32; 3]) -> String {
+    let round = |value: f32| (f64::from(value) * 1e4).round() / 1e4;
+    format!(
+        "[{:?}, {:?}, {:?}]",
+        round(at[0]),
+        round(at[1]),
+        round(at[2])
+    )
+}
+
+fn with_mark(relative: &str, text: String) -> String {
+    match relative {
+        "src/lib.rs" => text.replacen(
+            ".exposure(pfx_game::Exposure::Fixed(1.0));",
+            &format!(".exposure(pfx_game::Exposure::Fixed(1.0))\n        .mark(project.root().join(\"{MARK}\"));"),
+            1,
+        ),
+        _ => text,
+    }
+}
+
+struct Picture {
+    bytes: Vec<u8>,
+    size: [u32; 2],
+}
+
+fn picture(path: &Path) -> Result<Picture, String> {
+    let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
+    let size = crate::title::picture_size(&bytes)
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(Picture { bytes, size })
+}
+
+fn title(
+    folder: &Path,
+    name: &str,
+    mark: Option<&Picture>,
+    written: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if let Some(mark) = mark {
+        written.push(write(folder, MARK, &mark.bytes)?);
+    }
+    let picture = mark.map(|mark| mark.size);
+    let title = crate::title::build(FONT, name, picture)?;
+    written.push(write(folder, "content/meshes/name.glb", &title.name)?);
+    written.push(write(folder, "content/meshes/mark.glb", &title.mark)?);
+    let content = if picture.is_some() {
+        "content = \"mark\"\n"
+    } else {
+        ""
+    };
+    let mut prefab = TITLE
+        .replace("{{name_at}}", &point(title.name_at))
+        .replace("{{mark_at}}", &point(title.mark_at))
+        .replace("{{version_at}}", &point(title.version_at))
+        .replace(
+            "{{version_size}}",
+            &format!("{:?}", (f64::from(title.version_size) * 1e4).round() / 1e4),
+        )
+        .replace("{{mark_content}}", content);
+    let mut materials = include_str!("templates/title.materials.toml").to_string();
+    if picture.is_some() {
+        prefab.push_str(&format!("\n[content.mark]\nimage = \"{MARK}\"\n"));
+        materials.push_str(FACE);
+    }
+    written.push(write(folder, PREFAB, prefab.as_bytes())?);
+    written.push(write(
+        folder,
+        "content/materials/title.materials.toml",
+        materials.as_bytes(),
+    )?);
+    Ok(())
+}
+
 pub fn scaffold(name: &str, folder: &Path, version: &str) -> Result<Vec<PathBuf>, String> {
-    scaffold_with(name, folder, version, false)
+    scaffold_with(name, folder, version, &Options::default())
 }
 
 pub fn scaffold_with(
     name: &str,
     folder: &Path,
     version: &str,
-    module: bool,
+    options: &Options,
 ) -> Result<Vec<PathBuf>, String> {
     check_name(name)?;
+    let mark = options.mark.as_deref().map(picture).transpose()?;
     let folder = std::path::absolute(folder).map_err(|error| error.to_string())?;
     empty(&folder)?;
+    let module = options.module;
     let mut written = Vec::new();
     for (relative, template) in TEMPLATES {
         let mut text = fill(template, name, version);
         if module {
             text = with_module(relative, text, name, version);
         }
+        if mark.is_some() {
+            text = with_mark(relative, text);
+        }
         written.push(write(&folder, relative, text.as_bytes())?);
     }
+    title(&folder, name, mark.as_ref(), &mut written)?;
     if module {
         for (relative, template) in MODULE {
             let text = fill(template, name, version);

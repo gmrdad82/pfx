@@ -413,6 +413,30 @@ fn hdr_file(recipe: &Recipe, sky: &pfx_recipe::Sky) -> Option<PathBuf> {
     })
 }
 
+pub(crate) fn sky_size(recipe: &Recipe) -> [u32; 2] {
+    let Some(sky) = &recipe.sky else {
+        return [0, 0];
+    };
+    if sky.kind == SkyKind::Room {
+        return sky
+            .room
+            .as_ref()
+            .map_or([0, 0], |room| [room.width, room.width / 2]);
+    }
+    let Some(file) = hdr_file(recipe, sky) else {
+        return [0, 0];
+    };
+    let mut head = Vec::new();
+    let read = std::fs::File::open(&file).and_then(|opened| {
+        use std::io::Read;
+        opened.take(1 << 16).read_to_end(&mut head)
+    });
+    match read {
+        Ok(_) => Sky::size(&head).unwrap_or([0, 0]),
+        Err(_) => [0, 0],
+    }
+}
+
 fn hdr(recipe: &Recipe, sky: &pfx_recipe::Sky) -> Result<Sky, Error> {
     let Some(mut file) = hdr_file(recipe, sky) else {
         return Err(Error("sky.path: an HDR sky needs a path".into()));

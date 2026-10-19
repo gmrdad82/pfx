@@ -220,6 +220,12 @@ where
         .collect()
 }
 
+pub fn engine_material(extras: &Value) -> Option<Material> {
+    extras
+        .get(ENGINE_MATERIAL)
+        .and_then(|value| serde_json::from_value::<Material>(value.clone()).ok())
+}
+
 fn surface<F>(material: &gltf::Material<'_>, images: &mut Images<'_, F>) -> Result<Surface, String>
 where
     F: Fn(&str) -> Result<Vec<u8>, String>,
@@ -230,10 +236,7 @@ where
         .extras()
         .as_ref()
         .and_then(|raw| serde_json::from_str::<Value>(raw.get()).ok());
-    let carried = extras
-        .as_ref()
-        .and_then(|extras| extras.get(ENGINE_MATERIAL))
-        .and_then(|value| serde_json::from_value::<Material>(value.clone()).ok());
+    let carried = extras.as_ref().and_then(engine_material);
     let mut out = Material {
         base: [factor[0], factor[1], factor[2]],
         roughness: pbr.roughness_factor(),

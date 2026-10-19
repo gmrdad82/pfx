@@ -929,6 +929,10 @@
         "parent": {
           "type": "string"
         },
+        "prewarm": {
+          "format": "float",
+          "type": "number"
+        },
         "rate": {
           "format": "float",
           "type": "number"

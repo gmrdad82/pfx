@@ -57,7 +57,7 @@ impl IconShape {
         }
     }
 
-    fn bounds(&self) -> Option<[f32; 4]> {
+    pub(crate) fn bounds(&self) -> Option<[f32; 4]> {
         let mut points = self
             .polygons
             .iter()

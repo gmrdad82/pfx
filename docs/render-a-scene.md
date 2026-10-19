@@ -7,14 +7,14 @@
 ```
 pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>]
          [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|png16|exr] [--dither on|off]
-         [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--json]
+         [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--memory-limit GB] [--json]
 ```
 
 | Flag | Default | What it does |
 |---|---|---|
 | `--seconds S` or `--frames N` | one is required | the shot's length; seconds become `round(S × fps)` frames |
 | `--size WxH` | 1920x1080 | any even size from 2 to 16384 a side, within the GPU's texture limit; 2160x3840 is a vertical 4K frame |
-| `--fps N` | 60 | 1 to 240 |
+| `--fps N` | 60 | 1 to 240: a whole number, `num/den` such as `24000/1001`, or `23.976`, `29.97`, `47.952`, `59.94`, `119.88` (the exact NTSC ratios); another decimal is refused naming the ratio to use. Frame n is at exactly n × den / num seconds |
 | `--from F` | 0 | the first frame to write; the frames before it are simulated, not written, and the files still number from `000000` (file k is frame F + k) |
 | `--camera <name>` | the scene's camera | follows an object, or an animated glTF node, every frame (below) |
 | `--draft` or `--final` | draft | quality, below |
@@ -28,6 +28,7 @@ pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--fro
 | `--shutter S` | off | poses the previous frame at t − S / fps for motion blur (below) |
 | `--exposure auto` or `fixed` | auto | auto meters each frame; fixed holds the exposure at 1.0, as `pfx shot --still` and `pfx render --recipe` draw a recipe |
 | `--seed S` | 0 | the play session's seed |
+| `--memory-limit GB` | `PFX_MEMORY_LIMIT`, else none | refuses, in one line after the scene is read and before it is staged, a shot planned past this many GB on the CPU or the GPU ([memory.md](memory.md)) |
 | `--json` | off | one JSON line per frame and the summary as JSON |
 
 Input pfx can't parse gets clap's short answer with exit 2. A refusal after the parse is one line, `pfx: …`, with exit 1: a missing scene file, a `--set` the scene's checks refuse, a camera name the scene doesn't hold, a size over the GPU's limit, an `--out` folder holding files pfx shot did not write, or a degenerate camera at a drawn frame (a `look_at` equal to its `at`, an `up` within 1e-4 of the view direction or of zero length, a field of view outside 0 to 180 degrees, a near plane at or below 0, a far plane not beyond the near one): `pfx: <scene>: at frame N the scene's camera looks from [..] at [..], no direction to look along; pfx shot renders no degenerate view`. A folder pfx shot wrote before (it has its `manifest.json`, or holds only numbered `NNNNNN.png` or `.exr` frames and `audio.wav`, as an interrupted run leaves it) is cleared of every numbered frame and its manifest and written again, so no frame of an earlier, longer run survives.
@@ -59,7 +60,9 @@ The live renderer's TAA jitter follows the scene clock (its sample index is roun
 
 ## Motion blur's previous pose
 
-By default each frame's previous pose (`Instance::previous_model`, the skin palettes, the morph weights and the camera's previous view-projection) is the last frame's, as live. TAA stays intact, and the blur pass scales that whole-frame motion by `[motion_blur] shutter`. `--shutter S` instead presents the scene at t − S / fps just before t, so the previous pose is the true pose at the shutter's opening: a fast-spinning wheel or a curved path blurs along its real arc, not along the chord between two whole frames. A `[motion_blur] shutter` above 1 is a stylised multiplier on top of it: the pass scales the true velocity by that shutter, so `--shutter 1` with a key of 2 streaks two frames' worth along the real arc; a key of 1 or below leaves the velocity as it is. It trades away TAA stability. The renderer's history check sees a previous view-projection that is not the last rendered frame's, so in a shot whose camera moves TAA restarts every frame, and the shot shows the jittered single samples.
+By default each frame's previous pose (`Instance::previous_model`, the skin palettes, the morph weights and the camera's previous view-projection) is the last frame's, as live. A shot started with `--from N` presents frame N − 1 without drawing it, so its first frame streaks as frame N of a run from 0 does; frame 0 has no frame before it and holds its pose, sharp. TAA stays intact, and the blur pass scales that whole-frame motion by `[motion_blur] shutter`. `--shutter S` instead presents the scene at t − S / fps just before t, so the previous pose is the true pose at the shutter's opening: a fast-spinning wheel or a curved path blurs along its real arc, not along the chord between two whole frames. A `[motion_blur] shutter` above 1 is a stylised multiplier on top of it: the pass scales the true velocity by that shutter, so `--shutter 1` with a key of 2 streaks two frames' worth along the real arc; a key of 1 or below leaves the velocity as it is. It trades away TAA stability. The renderer's history check sees a previous view-projection that is not the last rendered frame's, so in a shot whose camera moves TAA restarts every frame, and the shot shows the jittered single samples.
+
+On a recipe's timeline scene the clip holds the timeline's ends (`loop = "once"`, [recipe-format.md](recipe-format.md#timeline)): the last frame, at t = the timeline's length, takes the last pose and its previous pose is the frame before, so it streaks as its neighbours do, as do the camera's and every parent's motion. The tracer holds its shutter to the same span ([trace.md](trace.md#motion-blur)): its first and last frames keep only the part of the shutter inside the timeline, the whole streak where the shutter closes at the last frame or opens at the first, half of it centred, none where it reaches wholly past the end (`the_first_and_last_timeline_frames_streak_like_their_neighbours_live_and_traced`).
 
 ## Sound
 
@@ -83,7 +86,8 @@ The out folder holds `000000.png`, `000001.png`, … (or `.exr`), numbered from 
 | Key | |
 |---|---|
 | `shot` | the manifest's schema, 1 |
-| `frames`, `from`, `fps`, `size`, `seconds` | what was written; `seconds` is frames / fps |
+| `frames`, `from`, `fps`, `size`, `seconds` | what was written; `fps` is a whole number, or for a ratio its value as a float (23.976023976023978); `seconds` is frames × den / num |
+| `frame_rate` | the exact rate as text, `60` or `24000/1001`; a reader that needs the exact rate reads this |
 | `first_number` | the scene frame `000000` holds, equal to `from`; file k is frame `first_number + k` |
 | `format` | `png`, `png16` or `exr` |
 | `dither` | true when the PNG frames were dithered |

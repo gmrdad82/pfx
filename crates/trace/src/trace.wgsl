@@ -31,6 +31,7 @@ override TRACE_ALPHA: bool = true;
 override TRACE_FLAKES: bool = true;
 override TRACE_MOTION: bool = false;
 override TRACE_FOG: bool = false;
+override TRACE_SPRITES: bool = false;
 override SOBOL_LENGTH: u32 = 256u;
 override STEAM_SPREAD_BASE: f32 = 0.7;
 override STEAM_SPREAD_GROWTH: f32 = 4.0;
@@ -108,6 +109,9 @@ var<private> traced_flaked: bool = false;
 var<private> traced_flake: vec3f = vec3f(0.0, 0.0, 1.0);
 var<private> traced_thin: bool = false;
 var<private> volume_vertex: bool = false;
+var<private> sprites_hidden: bool = false;
+const SPRITE: u32 = 16777216u;
+const SPRITE_PASSES: u32 = 256u;
 fn record_at(at: u32) -> Material {
     return Material(materials[at],materials[at+1u],materials[at+2u],materials[at+3u],
         materials[at+4u],materials[at+5u],materials[at+6u],materials[at+7u]);
@@ -222,6 +226,48 @@ fn octave_weight(footprint: f32) -> f32 {
     let t = clamp((footprint - 0.5) * 2.0, 0.0, 1.0);
     return 1.0 - t * t * (3.0 - 2.0 * t);
 }
+fn fbm3_filtered(p: vec3f, octaves: i32, footprint: f32, nested: bool) -> f32 {
+    var sum = 0.0;
+    var amp = 0.5;
+    var q = p;
+    var width = footprint;
+    for (var i = 0; i < max(octaves, 0); i++) {
+        let weight = octave_weight(width);
+        if (weight == 1.0) {
+            sum += amp * value_noise3(q, nested);
+        } else if (weight == 0.0) {
+            sum += amp * 0.5;
+        } else {
+            sum += amp * (weight * value_noise3(q, nested) + (1.0 - weight) * 0.5);
+        }
+        q = q * 2.03 + vec3f(1.7, 9.2, 3.1);
+        amp *= 0.5;
+        width *= 2.03;
+    }
+    return sum;
+}
+fn hash21(p: vec2f) -> f32 {
+    var q = fract(p * vec2f(123.34, 456.21));
+    let d = q.x * (q.x + 45.32) + q.y * (q.y + 45.32);
+    q += vec2f(d);
+    return fract(q.x * q.y);
+}
+fn value_noise2_signed(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(hash21(i), hash21(i + vec2f(1.0, 0.0)), u.x);
+    let b = mix(hash21(i + vec2f(0.0, 1.0)), hash21(i + vec2f(1.0, 1.0)), u.x);
+    return mix(a, b, u.y) * 2.0 - 1.0;
+}
+fn flow(p: vec2f, time: f32) -> f32 {
+    let warp = vec2f(
+        value_noise2_signed(p * 0.006 + vec2f(time * 0.010, 3.1)),
+        value_noise2_signed(p * 0.006 + vec2f(7.7, -time * 0.008)),
+    );
+    return value_noise2_signed(p * 0.009 + warp * 1.6 + vec2f(time * 0.006, 0.0)) * 0.65
+        + value_noise2_signed(p * 0.021 - warp + vec2f(0.0, time * 0.009)) * 0.35;
+}
 fn voronoi_point2(cell: vec2i, seed: u32, randomness: f32) -> vec2f {
     return vec2f(hash2(cell, seed), hash2(cell, seed ^ 0x9e3779b9u)) * randomness;
 }
@@ -294,6 +340,82 @@ fn pavement_track(uv: vec2f, a: vec4f, b: vec4f, seed: u32, pixel: f32) -> f32 {
     let streak = 0.6 + 0.8 * value_noise3(vec3f(uv.x * b.z, uv.y * b.w, slice + 5.0), false);
     let weight = octave_weight(pixel * max(b.z, b.w));
     return clamp(band * (1.0 + (streak - 1.0) * weight), 0.0, 1.0);
+}
+
+fn value_noise3_trio(a: vec3f, b: vec3f, c: vec3f, nested: bool) -> vec3f {
+    let cell = floor(a);
+    if (any(floor(b) != cell) || any(floor(c) != cell)) {
+        return vec3f(value_noise3(a, nested), value_noise3(b, nested), value_noise3(c, nested));
+    }
+    let i = vec3i(cell);
+    var h0: vec4f;
+    var h1: vec4f;
+    if (nested) {
+        h0 = vec4f(hash3_nested(i), hash3_nested(i + vec3i(1, 0, 0)), hash3_nested(i + vec3i(0, 1, 0)), hash3_nested(i + vec3i(1, 1, 0)));
+        h1 = vec4f(hash3_nested(i + vec3i(0, 0, 1)), hash3_nested(i + vec3i(1, 0, 1)), hash3_nested(i + vec3i(0, 1, 1)), hash3_nested(i + vec3i(1, 1, 1)));
+    } else {
+        h0 = vec4f(hash3_xor(i), hash3_xor(i + vec3i(1, 0, 0)), hash3_xor(i + vec3i(0, 1, 0)), hash3_xor(i + vec3i(1, 1, 0)));
+        h1 = vec4f(hash3_xor(i + vec3i(0, 0, 1)), hash3_xor(i + vec3i(1, 0, 1)), hash3_xor(i + vec3i(0, 1, 1)), hash3_xor(i + vec3i(1, 1, 1)));
+    }
+    return vec3f(lattice_mix(h0, h1, fract(a)), lattice_mix(h0, h1, fract(b)), lattice_mix(h0, h1, fract(c)));
+}
+
+fn lattice_mix(h0: vec4f, h1: vec4f, f: vec3f) -> f32 {
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(mix(h0.x, h0.y, u.x), mix(h0.z, h0.w, u.x), u.y);
+    let b = mix(mix(h1.x, h1.y, u.x), mix(h1.z, h1.w, u.x), u.y);
+    return mix(a, b, u.z);
+}
+
+fn fbm3_trio(a: vec3f, b: vec3f, c: vec3f, octaves: i32, footprint: f32) -> vec3f {
+    var sum = vec3f(0.0);
+    var amp = 0.5;
+    var qa = a;
+    var qb = b;
+    var qc = c;
+    var width = footprint;
+    for (var i = 0; i < octaves; i++) {
+        let weight = octave_weight(width);
+        if (weight == 1.0) {
+            sum += amp * value_noise3_trio(qa, qb, qc, true);
+        } else if (weight == 0.0) {
+            sum += vec3f(amp * 0.5);
+        } else {
+            sum += amp * (weight * value_noise3_trio(qa, qb, qc, true) + (1.0 - weight) * 0.5);
+        }
+        qa = qa * 2.03 + vec3f(1.7, 9.2, 3.1);
+        qb = qb * 2.03 + vec3f(1.7, 9.2, 3.1);
+        qc = qc * 2.03 + vec3f(1.7, 9.2, 3.1);
+        amp *= 0.5;
+        width *= 2.03;
+    }
+    return sum;
+}
+
+fn layer_leaf_vein(uv: vec2f) -> f32 {
+    let s = abs(sin(uv.y * 40.0 + uv.x * 3.0));
+    let s4 = s * s * s * s;
+    return s4 * s4 * s4;
+}
+
+fn layer_relief(normal: vec3f, uv: vec2f, position: vec3f, amp: f32, bark: bool, footprint: f32) -> vec3f {
+    let s = select(-1.0, 1.0, normal.z >= 0.0);
+    let a = -1.0 / (s + normal.z);
+    let b = normal.x * normal.y * a;
+    let t = vec3f(1.0 + s * normal.x * normal.x * a, s * b, -s * normal.x);
+    let bt = vec3f(b, s + normal.y * normal.y * a, -normal.y);
+    let e = 0.00012;
+    var h: vec3f;
+    if (bark) {
+        let k = vec3f(200.0, 60.0, 200.0);
+        h = 0.0006 * fbm3_trio(position * k, (position + t * e) * k, (position + bt * e) * k, 4, footprint);
+    } else {
+        let u = uv + vec2f(e, 0.0);
+        let v = uv + vec2f(0.0, e);
+        h = 0.0002 * fbm3_trio(vec3f(uv * 30.0, 1.0), vec3f(u * 30.0, 1.0), vec3f(v * 30.0, 1.0), 3, footprint) - 0.00008 * vec3f(layer_leaf_vein(uv), layer_leaf_vein(u), layer_leaf_vein(v));
+    }
+    let bent = normalize(normal - t * ((h.y - h.x) / e * amp) - bt * ((h.z - h.x) / e * amp));
+    return select(normal, bent, dot(bent, normal) > 0.05);
 }
 fn trace_noise_end() {}
 
@@ -595,8 +717,22 @@ fn alpha_cut(i: u32, u: f32, v: f32, m: Material, o: vec3f, d: vec3f) -> bool {
     if (coverage.z<1.5) { return alpha<coverage.y; }
     return alpha<=alpha_hash(i,o,d);
 }
+fn sprite_shape(uv: vec2f) -> f32 {
+    let c=uv*2.0-1.0;
+    let r2=dot(c,c);
+    return select(0.0,(1.0-r2)*(1.0-r2),r2<1.0);
+}
+fn sprite_cut(i: u32, record: u32, u: f32, v: f32, o: vec3f, d: vec3f) -> bool {
+    if (sprites_hidden) { return true; }
+    let tri=triangles[i];
+    let uv_v=triangle_uv_v[i];
+    let uv=vec2f(tri.na.w*(1.0-u-v)+tri.nb.w*u+tri.nc.w*v,uv_v.x*(1.0-u-v)+uv_v.y*u+uv_v.z*v);
+    let coverage=instance_surfaces[record].transform.w*sprite_shape(uv);
+    return coverage<=alpha_hash(i^pcg(record^0x5bd1e995u),o,d);
+}
 fn cut_out(i: u32, record: u32, u: f32, v: f32, o: vec3f, d: vec3f) -> bool {
     let surface=instance_surfaces[record];
+    if (TRACE_SPRITES && (surface.info.x&SPRITE)!=0u) { return sprite_cut(i,record,u,v,o,d); }
     let tri = triangles[i];
     let material=record_material(surface.info,tri);
     if (TRACE_ALPHA) {
@@ -887,6 +1023,7 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
             let node=nodes[index];
             if (!box_hit(node,ro,rd,hit.t)) { continue; }
             if (node.pad.x==INSTANCE_LEAF) {
+                if (TRACE_SPRITES && sprites_hidden && (instance_surfaces[bitcast<u32>(node.lo.w)].info.x&SPRITE)!=0u) { continue; }
                 if (top+2u<=64u) {
                     stack[top]=ENTRYPOINT_SENTINEL;
                     stack[top+1u]=node.first;
@@ -982,6 +1119,7 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
             let node=nodes[index];
             if (!box_hit(node,ro,rd,limit)) { continue; }
             if (node.pad.x==INSTANCE_LEAF) {
+                if (TRACE_SPRITES && sprites_hidden && (instance_surfaces[bitcast<u32>(node.lo.w)].info.x&SPRITE)!=0u) { continue; }
                 if (top+2u<=64u) {
                     stack[top]=ENTRYPOINT_SENTINEL;
                     stack[top+1u]=node.first;
@@ -1068,6 +1206,7 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
             let node=nodes[index];
             if (!box_hit(node,ro,rd,limit)) { continue; }
             if (node.pad.x==INSTANCE_LEAF) {
+                if (TRACE_SPRITES && sprites_hidden && (instance_surfaces[bitcast<u32>(node.lo.w)].info.x&SPRITE)!=0u) { continue; }
                 if (top+2u<=64u) {
                     stack[top]=ENTRYPOINT_SENTINEL;
                     stack[top+1u]=node.first;
@@ -1199,6 +1338,14 @@ fn detail_layer(value: Shaded, normal_in: vec3f, layer: vec4f, pa: vec4f, pb: ve
         let wear=smoothstep(0.35,0.75,grime);
         base*=mix(vec3f(1.0),mix(vec3f(pa.z,pa.w,pb.x),vec3f(pb.y,pb.z,pb.w),wear),clamp(amp,0.0,1.0));
         roughness=mix(roughness,sqrt(min(roughness*roughness*mix(pc.x,pc.y,wear),1.0)),clamp(amp,0.0,1.0));
+    } else if (kind==7u) {
+        base*=mix(1.0,0.7+0.6*detail_fbm(vec3f(uv*12.0,2.0)),clamp(amp,0.0,1.0));
+        n=layer_relief(n,uv,position,amp,false,0.0);
+    } else if (kind==8u) {
+        base*=mix(1.0,0.75+0.5*detail_fbm(p*300.0),clamp(amp,0.0,1.0));
+        n=layer_relief(n,uv,position,amp,true,0.0);
+    } else if (kind==14u) {
+        shade.thin_film=max(shade.thin_film+amp*(flow(uv*layer.y,pa.x)-0.5)*2.0,0.0);
     } else if (kind==15u) {
         base*=mix(1.0,1.0+(value_noise3(p*layer.y,false)-0.5)*2.0,clamp(amp,0.0,1.0));
     } else if (kind==16u) {
@@ -1212,7 +1359,7 @@ fn detail_layer(value: Shaded, normal_in: vec3f, layer: vec4f, pa: vec4f, pb: ve
         if (value.clearcoat>0.0) {
             coat_roughness=sqrt(mix(coat_roughness*coat_roughness,min(coat_roughness*coat_roughness*4.0+0.02,0.35),breakup));
         } else {
-            roughness=sqrt(mix(roughness*roughness,min(roughness*roughness*4.0+0.02,0.35),breakup));
+            roughness=sqrt(mix(roughness*roughness,min(roughness*roughness*3.0+0.03,0.5),breakup));
         }
         base=mix(base,base*0.9+vec3f(0.06),speck*min(amp,1.0));
     } else if (kind==19u) {
@@ -1909,6 +2056,88 @@ fn fog_direct(o: vec3f, d: vec3f, span: vec2f, attenuation: f32, mis: bool, stat
     }
     return total;
 }
+fn sprite_phase() -> f32 {
+    return select(0.5,frame.fog_tint.w,TRACE_FOG);
+}
+fn sprite_lobe(d: vec3f, n: vec3f, wi: vec3f, thick: f32) -> f32 {
+    return mix(fog_phase(dot(d,wi),sprite_phase()),max(dot(n,wi)+0.5,0.0)/(2.25*PI),thick);
+}
+fn sprite_sample(d: vec3f, n: vec3f, thick: f32, u: vec3f) -> vec3f {
+    if (u.z>=thick) { return fog_phase_sample(d,sprite_phase(),u.xy).xyz; }
+    let cosine=1.5*sqrt(u.x)-0.5;
+    let sine=sqrt(max(1.0-cosine*cosine,0.0));
+    let phi=2.0*PI*u.y;
+    return normalize(basis(n)*vec3f(sine*cos(phi),sine*sin(phi),cosine));
+}
+fn sprite_lit(k: u32, x: vec3f, d: vec3f, n: vec3f, thick: f32, state: ptr<function,u32>, u: vec4f) -> vec3f {
+    var direction=vec3f(0.0,0.0,1.0);
+    var strength=vec3f(0.0);
+    var limit=1e19;
+    var pdf=0.0;
+    var shape=0u;
+    if (k==0u) {
+        if (frame.sun_color.w<=0.0) { return vec3f(0.0); }
+        direction=normalize(frame.sun_dir.xyz);
+        if (frame.sun_dir.w<1.0) {
+            let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
+            let radius=sqrt(max(0.0,1.0-height*height));
+            let phi=2.0*PI*rnd(state,u.y);
+            direction=normalize(basis(direction)*vec3f(radius*cos(phi),radius*sin(phi),height));
+        }
+        strength=frame.sun_color.xyz*frame.sun_color.w;
+    } else if (k==1u) {
+        if (sky_cdf.width==0u) { return vec3f(0.0); }
+        let light=sky_sample(vec2f(rnd(state,u.x),rnd(state,u.y)));
+        direction=light.direction;
+        strength=sky_surface_radiance(direction);
+        pdf=light.pdf;
+        if (!(pdf>0.0)) { return vec3f(0.0); }
+    } else {
+        let transform=basis(n);
+        volume_vertex=true;
+        let picked=direct_light(k-2u,transform,x,x,n,state,u);
+        volume_vertex=false;
+        if (picked.limit<0.0) { return vec3f(0.0); }
+        direction=normalize(transform*picked.wi);
+        strength=picked.scale;
+        pdf=picked.pdf;
+        limit=picked.limit;
+        shape=picked.shape;
+    }
+    let lobe=sprite_lobe(d,n,direction,thick);
+    if (pdf>0.0) {
+        if (k==1u) {
+            strength/=pdf+lobe;
+        } else {
+            let ratio=lobe/pdf;
+            strength/=pdf*(1.0+ratio*ratio);
+        }
+    }
+    let origin=spawn_point(x,direction,x,0.0);
+    if (shape>0u) {
+        let i=shape-1u;
+        var t=1e20;
+        if (u32(shapes[i].a.w)==5u) { t=union_hit(i,origin,direction,1e20); } else { t=primitive_hit(i,origin,direction,1e20); }
+        if (t<=0.0001 || t>=1e19) { return vec3f(0.0); }
+        limit=t*0.9999-0.0002;
+    }
+    var seen=vec3f(1.0);
+    if (limit>0.0) {
+        sprites_hidden=true;
+        if (TRANSMISSIVE_SHADOWS) { seen=shadow_passed(origin,direction,limit); } else if (occluded(origin,direction,limit)) { seen=vec3f(0.0); }
+        sprites_hidden=false;
+        if (TRACE_FOG) { seen*=fog_transmit(origin,direction,limit); }
+    }
+    if (k==0u && TRACE_FOG) { seen=mix(vec3f(1.0),seen,frame.fog_light.x); }
+    return strength*lobe*seen;
+}
+fn sprite_direct(x: vec3f, d: vec3f, n: vec3f, thick: f32, state: ptr<function,u32>) -> vec3f {
+    var total=vec3f(0.0);
+    for (var k=0u;k<2u+light_slots();k++) {
+        total+=sprite_lit(k,x,d,n,thick,state,sobol(light_dim(k)));
+    }
+    return total;
+}
 fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<function,vec4f>, first_normal: ptr<function,vec4f>) -> vec3f {
     var o=o0;
     var d=d0;
@@ -1924,6 +2153,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
     var fog_albedo=vec3f(0.0);
     var medium=false;
     var scatters=0u;
+    var passes=0u;
     for (var bounce=0u;bounce<=TOTAL_BOUNCES+1u;bounce++) {
         if (SOBOL) { rng.z=16u*(bounce+1u); }
         let hit=scene(o,d,1e20,false);
@@ -1989,6 +2219,60 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             break;
         }
         let p=o+d*hit.t;
+        if (TRACE_SPRITES && hit.shape==0u && (instance_surfaces[hit.record].info.x&SPRITE)!=0u) {
+            let look=instance_surfaces[hit.record];
+            var keep=1.0;
+            if (look.crop.z>0.0) {
+                sprites_hidden=true;
+                let behind=scene(p,d,look.crop.z,false);
+                sprites_hidden=false;
+                keep=clamp(behind.t/look.crop.z,0.0,1.0);
+            }
+            let additive=look.crop.y>0.5;
+            let thick=look.transform.w*sprite_shape(hit.uv)*keep;
+            let c=hit.uv*2.0-1.0;
+            let sn=normalize(hit.tangent*c.x+hit.bitangent*c.y-d*sqrt(max(1.0-dot(c,c),0.0)));
+            let shown=keep>=1.0 || alpha_hash(hit.surface^pcg(hit.record^0x27d4eb2du),o,d)<keep;
+            if (shown) {
+                let lit=look.crop.x>0.5;
+                if (bounce==0u && !additive) {
+                    *first_albedo=vec4f(select(vec3f(0.0),look.transform.xyz,lit),1.0);
+                    *first_normal=vec4f(sn,1.0);
+                }
+                if (!lit) {
+                    result+=indirect_capped(throughput*look.transform.xyz,bounce>1u);
+                } else if (!last) {
+                    result+=indirect_capped(throughput*look.transform.xyz*sprite_direct(p,d,sn,thick,state),bounce>0u);
+                }
+                if (!additive) {
+                    if (!lit || last) { break; }
+                    let u=sobol(3u);
+                    let wi=sprite_sample(d,sn,thick,vec3f(rnd(state,u.x),rnd(state,u.y),rnd(state,u.z)));
+                    throughput*=look.transform.xyz;
+                    previous_pdf=sprite_lobe(d,sn,wi,thick);
+                    if (!(previous_pdf>0.0)) { break; }
+                    diffused=true;
+                    lobes.x+=1u;
+                    last=bounce>=TOTAL_BOUNCES || lobes.x>DIFFUSE_BOUNCES;
+                    through=false;
+                    lit_vertex=true;
+                    medium=false;
+                    d=wi;
+                    o=spawn_point(p,d,o,hit.t);
+                    if (bounce>=3u) {
+                        let keep=clamp(max(throughput.r,max(throughput.g,throughput.b)),0.05,0.95);
+                        if (rnd(state,sobol(0u).x)>keep) { break; }
+                        throughput/=keep;
+                    }
+                    continue;
+                }
+            }
+            passes+=1u;
+            if (passes>=SPRITE_PASSES) { break; }
+            o=spawn_point(p,d,o,hit.t);
+            bounce-=1u;
+            continue;
+        }
         var n=select(hit.n,-hit.n,dot(hit.n,d)>0.0);
         if (bounce==0u && frame.forward.w>1.5 && hit.material==u32(frame.forward.w)-2u) {
             *first_albedo=vec4f(0.0,0.0,0.0,catcher_shadow(p,n,o,hit.t,state));

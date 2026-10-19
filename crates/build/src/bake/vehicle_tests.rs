@@ -2,7 +2,7 @@ use super::follow::{self, Drive};
 use crate::{Built, Registry, build_with};
 use glam::{DMat4, DQuat, DVec3, EulerRot};
 use pfx_motion::vehicle::Chassis;
-use pfx_motion::{Route, Trs};
+use pfx_motion::{Rate, Route, Trs};
 use pfx_recipe::{Recipe, parse};
 use std::f64::consts::{PI, TAU};
 use std::path::Path;
@@ -207,7 +207,7 @@ fn a_wheel_past_half_a_turn_a_frame_is_keyed_between_frames_and_spins_forward() 
         .iter()
         .find(|t| t.node == "hero.wheel_rl")
         .unwrap();
-    let keyed = track.keyed(30);
+    let keyed = track.keyed(Rate::whole(30));
     let inside = track
         .between
         .iter()
@@ -221,12 +221,12 @@ fn a_wheel_past_half_a_turn_a_frame_is_keyed_between_frames_and_spins_forward() 
     let n = 10;
     let mid = (n as f64 + 0.5) * r.dt;
     let pose = DQuat::from_mat4(&r.drive.pose[n]).normalize();
-    let between = pose.inverse() * turn(&track.sample(30, mid));
+    let between = pose.inverse() * turn(&track.sample(Rate::whole(30), mid));
     let want =
         0.5 * (spin_of(&r, "hero.wheel_rl", n) + spin_of(&r, "hero.wheel_rl", n) + per_frame);
     let wanted = DQuat::from_axis_angle(DVec3::X, want);
     assert!(between.angle_between(wanted) < 1e-3);
-    let naive = pfx_motion::sample(&track.keys, 30, mid);
+    let naive = pfx_motion::sample(&track.keys, Rate::whole(30), mid);
     let backwards = pose.inverse() * turn(&naive);
     assert!(backwards.angle_between(wanted) > 1.0);
     let glb = r.built.try_glb().unwrap();

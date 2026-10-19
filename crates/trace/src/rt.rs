@@ -21,6 +21,7 @@ pub struct RtInstance {
     pub opaque: bool,
     pub transform: [f32; 12],
     pub moving: bool,
+    pub sprite: bool,
 }
 
 pub const MAX_INSTANCES: usize = (1 << 24) - 2;
@@ -76,6 +77,7 @@ impl RtGeometry {
                 transform: crate::detail::Pose::new(placed.transform)
                     .map_or([0.0; 12], |pose| pose.rows()),
                 moving: placed.moving(),
+                sprite: placed.word & crate::gpu::SPRITE != 0,
             });
         }
     }
@@ -107,13 +109,20 @@ pub struct Rt {
     pub map: wgpu::Buffer,
     pub bytes: u64,
     first_instance: usize,
+    sprites: Vec<bool>,
     movers: Option<(wgpu::Blas, wgpu::Buffer)>,
     _blases: Vec<wgpu::Blas>,
     _inputs: Vec<wgpu::Buffer>,
 }
 
-fn mask(moving: bool) -> u8 {
-    if moving { 0 } else { 0xff }
+pub const SPRITE_MASK: u8 = 1;
+
+fn mask(moving: bool, sprite: bool) -> u8 {
+    match (moving, sprite) {
+        (true, _) => 0,
+        (false, true) => SPRITE_MASK,
+        (false, false) => 0xff,
+    }
 }
 
 fn movers_blas(
@@ -281,7 +290,7 @@ impl Rt {
                 blas,
                 instance.transform,
                 k as u32 + 1,
-                mask(instance.moving),
+                mask(instance.moving, instance.sprite),
             ));
         }
         let movers = movers_blas(gpu, &geometry.movers);
@@ -385,6 +394,7 @@ impl Rt {
             map,
             bytes,
             first_instance: leading,
+            sprites: geometry.instances.iter().map(|i| i.sprite).collect(),
             movers: movers.map(|(blas, buffer, _)| (blas, buffer)),
             _blases: blases,
             _inputs: inputs,
@@ -395,7 +405,7 @@ impl Rt {
         let slot = self.first_instance + moving.len();
         for (k, &moves) in moving.iter().enumerate() {
             if let Some(Some(instance)) = self.tlas.get_mut_single(self.first_instance + k) {
-                instance.mask = mask(moves);
+                instance.mask = mask(moves, self.sprites.get(k).copied().unwrap_or(false));
             }
         }
         let built = movers_blas(gpu, boxes);

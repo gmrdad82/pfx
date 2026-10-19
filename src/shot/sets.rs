@@ -95,7 +95,7 @@ fn worded(error: &EditError) -> String {
 }
 
 pub fn applied(path: &Path, sets: &[String]) -> Result<Applied, String> {
-    let mut edit = SceneEdit::open(path).map_err(|error| format!("{error:?}"))?;
+    let mut edit = SceneEdit::open(path).map_err(|error| error.to_string())?;
     let group = edit
         .dry_run(|edit| {
             for set in sets {

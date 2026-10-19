@@ -208,7 +208,7 @@ impl App for Workbench<'_> {
     }
 
     fn name(&self) -> &str {
-        "pfx"
+        self.shell.name()
     }
 
     fn theme(&self) -> Theme {
@@ -607,6 +607,210 @@ metalness = 1.0
             "reflection noise {measured:.3}"
         );
     }
+
+    const TAKEOVER: &str = r##"recipe = 1
+name = "takeover"
+seed = 9
+
+[[object]]
+name = "floor"
+kind = "plane"
+size = [30.0, 30.0]
+material = "floor"
+
+[[object]]
+name = "block"
+kind = "box"
+at = [0.0, 0.5, 0.0]
+size = [1.0, 1.0, 1.0]
+material = "block"
+
+[[object]]
+name = "post"
+kind = "box"
+at = [1.6, 0.9, 0.8]
+size = [0.3, 1.8, 0.3]
+material = "post"
+
+[[camera]]
+name = "main"
+position = [3.2, 1.8, -4.0]
+target = [0.2, 0.6, 0.0]
+fov_y_deg = 38.0
+shift = [0.06, -0.04]
+
+[sun]
+model = "authored"
+toward = [-0.5, 0.6, -0.6]
+radius_deg = 0.8
+color = [1.0, 0.9, 0.8]
+irradiance = 3.0
+
+[sky]
+kind = "analytic"
+intensity = 0.8
+
+[materials.floor]
+base = [0.45, 0.45, 0.45]
+roughness = 0.8
+
+[materials.block]
+base = [0.7, 0.2, 0.15]
+roughness = 0.5
+
+[materials.post]
+base = [0.2, 0.4, 0.75]
+roughness = 0.4
+"##;
+
+    fn mean_difference(a: &[u8], b: &[u8], width: usize, area: egui::Rect) -> f64 {
+        let (x0, y0) = (area.min.x as usize, area.min.y as usize);
+        let (x1, y1) = (area.max.x as usize, area.max.y as usize);
+        let mut total = 0.0;
+        let mut count = 0.0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let at = (y * width + x) * 4;
+                for channel in 0..3 {
+                    total += (f64::from(a[at + channel]) - f64::from(b[at + channel])).abs();
+                    count += 1.0;
+                }
+            }
+        }
+        total / count
+    }
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+    fn an_orbit_drag_takes_over_from_the_scene_camera_without_a_pop() {
+        let path = crate::scratch("takeover");
+        std::fs::write(&path, TAKEOVER).unwrap();
+        let mut viewer = Viewer::with(Follow::new_with(&path, Mode::Stage, Registry::new()));
+        let mut shell = Shell::open(&path.display().to_string()).without_recent();
+        viewer.sync(&mut shell);
+        viewer.set_dither(false).unwrap();
+        let layout = crate::Layout::plain([1280, 800]);
+        let fps = 30;
+        crate::tape::play_seen(
+            &mut Workbench::lent(&mut shell, &mut viewer),
+            &crate::Tape::parse("frame\n").unwrap(),
+            layout,
+            fps,
+            |_, _, _| Ok(()),
+        )
+        .unwrap();
+        let image = shell.viewport().unwrap();
+        let from = image.min + image.size() * egui::vec2(0.2, 0.15);
+        let points = 240.0;
+        let tape = format!(
+            "key 0\nwait 0.4\ndrag {} {} {} {} 1.0\nwait 0.4\n",
+            from.x,
+            from.y,
+            from.x + points,
+            from.y
+        );
+        let mut seen: Vec<(Vec<u8>, bool, f32)> = Vec::new();
+        let mut yaws: Vec<f64> = Vec::new();
+        let mut framed = None;
+        crate::tape::play_seen(
+            &mut Workbench::lent(&mut shell, &mut viewer),
+            &crate::Tape::parse(&tape).unwrap(),
+            layout,
+            fps,
+            |app, _, rgba| {
+                let eye = app.shell.view_eye().unwrap();
+                framed = app.shell.camera_frame().or(framed);
+                yaws.push((eye.position[0] - eye.target[0]).atan2(eye.position[2] - eye.target[2]));
+                seen.push((
+                    rgba.to_vec(),
+                    app.shell.through().is_some(),
+                    app.shell.frame_alpha(),
+                ));
+                Ok(())
+            },
+        )
+        .unwrap();
+        let jumped = seen.iter().position(|(_, through, _)| *through).unwrap();
+        let before = seen.iter().rposition(|(_, through, _)| *through).unwrap();
+        let first = before + 1;
+        assert!(!seen[first].1, "the drag left the scene camera");
+        let ppp = layout.pixels_per_point();
+        let area = egui::Rect::from_min_max(
+            (image.min.to_vec2() * ppp).to_pos2(),
+            (image.max.to_vec2() * ppp).to_pos2(),
+        );
+        let width = layout.size[0] as usize;
+        let framed = framed.unwrap().shrink(2.0);
+        let inside = egui::Rect::from_min_max(
+            (framed.min.to_vec2() * ppp).to_pos2(),
+            (framed.max.to_vec2() * ppp).to_pos2(),
+        );
+        let rise: Vec<f64> = (1..=6)
+            .map(|k| mean_difference(&seen[before + k - 1].0, &seen[before + k].0, width, inside))
+            .collect();
+        let pop = mean_difference(&seen[before].0, &seen[first].0, width, area);
+        let step = mean_difference(&seen[first + 1].0, &seen[first + 2].0, width, area);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for (name, index) in [("before", before), ("first", first), ("next", first + 1)] {
+            std::fs::write(
+                root.join(format!("tmp/takeover-{name}.png")),
+                encode_png(layout.size, &seen[index].0).unwrap(),
+            )
+            .unwrap();
+        }
+        let alphas: Vec<f32> = seen[first..].iter().map(|(_, _, alpha)| *alpha).collect();
+        eprintln!(
+            "takeover pop {pop:.2}, next step {step:.2}, frame alpha {alphas:?}, inside the frame {rise:?}, first steps {:?}",
+            [1, 2, 3, 4].map(|k| mean_difference(
+                &seen[before + k - 1].0,
+                &seen[before + k].0,
+                width,
+                area
+            ))
+        );
+        assert!(pop < TAKEOVER_POP_MOST, "takeover pop {pop:.2}");
+        assert!(
+            rise.windows(2).all(|pair| pair[0] <= pair[1] + RISE_SLACK),
+            "the orbit's first frames inside the camera frame {rise:?}"
+        );
+        assert!(
+            pop < step * 1.5 + 1.0,
+            "takeover pop {pop:.2} against the orbit's step {step:.2}"
+        );
+        let ease = |t: f64| t * t * (3.0 - 2.0 * t);
+        let travel = f64::from(fps);
+        let turned: Vec<f64> = yaws[before..]
+            .windows(2)
+            .map(|pair| (pair[0] - pair[1]).to_degrees().abs())
+            .take(8)
+            .collect();
+        for (k, turn) in turned.iter().enumerate() {
+            let curve = (ease((k + 1) as f64 / travel) - ease(k as f64 / travel))
+                * points as f64
+                * crate::orbit::DEGREES_PER_POINT;
+            assert!(*turn <= curve + 1e-3, "orbit steps {turned:?}");
+            assert!(*turn >= curve - 1e-3, "orbit steps {turned:?}");
+        }
+        let frames = (crate::viewport::FADE_SECONDS * f64::from(fps)).round() as usize;
+        let rising: Vec<f32> = seen[jumped..jumped + frames + 1]
+            .iter()
+            .map(|(_, _, alpha)| *alpha)
+            .collect();
+        for (k, alpha) in rising.iter().enumerate() {
+            let expected = ((k + 1) as f32 / frames as f32).min(1.0);
+            assert!((alpha - expected).abs() < 1e-3, "{rising:?}");
+        }
+        assert_eq!(seen[before].2, 1.0);
+        assert_eq!(alphas[0], 1.0);
+        for (k, alpha) in alphas.iter().enumerate().take(frames + 1).skip(1) {
+            let expected = 1.0 - k as f32 / frames as f32;
+            assert!((alpha - expected).abs() < 1e-3, "{alphas:?}");
+        }
+        assert!(alphas[frames..].iter().all(|alpha| *alpha == 0.0));
+    }
+
+    const TAKEOVER_POP_MOST: f64 = 9.0;
+    const RISE_SLACK: f64 = 0.25;
 
     #[test]
     #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]

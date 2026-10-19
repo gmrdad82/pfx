@@ -24,3 +24,4 @@ pfx-load = { path = "../load", features = ["fixture"] }
 pfx-build = { path = "../build" }
 pfx-recipe = { path = "../recipe" }
 pfx-recipe-scene = { path = "../recipe-scene" }
+pfx-still = { path = "../still" }

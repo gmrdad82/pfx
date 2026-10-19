@@ -67,25 +67,19 @@ fn encode_as(
     color: png::ColorType,
     depth: png::BitDepth,
 ) -> Result<(), Error> {
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(|e| Error(format!("{}: {e}", parent.display())))?;
-    }
-    let file =
-        std::fs::File::create(path).map_err(|e| Error(format!("{}: {e}", path.display())))?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size[0], size[1]);
-    encoder.set_color(color);
-    encoder.set_depth(depth);
-    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-    encoder.set_compression(png::Compression::Fast);
-    let mut writer = encoder
-        .write_header()
-        .map_err(|e| Error(format!("{}: {e}", path.display())))?;
-    writer
-        .write_image_data(data)
-        .map_err(|e| Error(format!("{}: {e}", path.display())))?;
-    writer
-        .finish()
-        .map_err(|e| Error(format!("{}: {e}", path.display())))
+    let failed = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    pfx_core::atomic::write_with(path, |temp| {
+        let file = std::fs::File::create(temp).map_err(|e| failed(&e))?;
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size[0], size[1]);
+        encoder.set_color(color);
+        encoder.set_depth(depth);
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+        encoder.set_compression(png::Compression::Fast);
+        let mut writer = encoder.write_header().map_err(|e| failed(&e))?;
+        writer.write_image_data(data).map_err(|e| failed(&e))?;
+        writer.finish().map_err(|e| failed(&e))
+    })
+    .map_err(Error)
 }
 
 pub fn read_png(path: &Path) -> Result<([u32; 2], Vec<u8>), Error> {

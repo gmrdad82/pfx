@@ -12,14 +12,14 @@ authors.workspace = true
 video = ["dep:pito-codecs"]
 
 [dependencies]
-pfx-core = { path = "../core" }
+pfx-core = { path = "../core", features = ["serde"] }
 pfx-gpu = { path = "../gpu" }
 pfx-input = { path = "../input", default-features = false }
 pfx-live = { path = "../live" }
 pfx-post = { path = "../post" }
 pfx-sound = { path = "../sound" }
 pfx-text = { path = "../text" }
-pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.14.3", default-features = false, features = ["h264", "hevc", "vp9", "av1", "aac", "ac3", "mp3", "opus", "mp4", "mkv", "gpu", "filter"], optional = true }
+pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.16.2", default-features = false, features = ["h264", "hevc", "vp9", "av1", "aac", "ac3", "mp3", "opus", "mp4", "mkv", "gpu", "filter"], optional = true }
 png = "0.18"
 pollster = "0.4"
 serde = { version = "1", features = ["derive"] }

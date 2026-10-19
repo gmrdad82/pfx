@@ -21,6 +21,7 @@ pub struct Config {
     pub name: String,
     pub title: Option<String>,
     pub mark: Option<PathBuf>,
+    pub wordmark: Option<PathBuf>,
     pub crash: Option<Crash>,
     pub version: String,
     pub scene: Option<PathBuf>,
@@ -80,6 +81,7 @@ impl Config {
             name: name.into(),
             title: None,
             mark: None,
+            wordmark: None,
             crash: None,
             version: version.into(),
             scene: None,
@@ -126,6 +128,11 @@ impl Config {
 
     pub fn mark(mut self, path: impl Into<PathBuf>) -> Self {
         self.mark = Some(path.into());
+        self
+    }
+
+    pub fn wordmark(mut self, path: impl Into<PathBuf>) -> Self {
+        self.wordmark = Some(path.into());
         self
     }
 

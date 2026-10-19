@@ -1,3 +1,4 @@
+use pfx_core::rate::Rate;
 use pfx_film::mix::Mixdown;
 use pfx_film::shoot::samples;
 use pfx_film::{Drawn, Kinds, Known, RATE, Score, Script};
@@ -5,7 +6,7 @@ use pfx_sound::{Clip, decibels, true_peak};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-const FPS: u32 = 30;
+const FPS: Rate = Rate::whole(30);
 const BEAT: usize = 22_500;
 const OFFSET: usize = 12_000;
 

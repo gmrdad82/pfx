@@ -484,12 +484,22 @@ pub fn write_reflection_artifact(input: ReflectionWrite<'_>) -> Result<Reflectio
     {
         return Err("invalid reflection output folder".into());
     }
-    fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    let parent = out.parent().ok_or("invalid reflection output folder")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let name = out
+        .file_name()
+        .ok_or("invalid reflection output folder")?
+        .to_string_lossy();
+    let stage = parent.join(format!(".{name}.bake-partial"));
+    if stage.exists() {
+        fs::remove_dir_all(&stage).map_err(|e| e.to_string())?;
+    }
+    fs::create_dir(&stage).map_err(|e| e.to_string())?;
     let mut files = Vec::new();
     for (index, cube) in cubes.iter().enumerate() {
         let path = format!("cube-{index:03}.bin");
         let bytes = cube.bytes();
-        fs::write(out.join(&path), &bytes).map_err(|e| e.to_string())?;
+        fs::write(stage.join(&path), &bytes).map_err(|e| e.to_string())?;
         files.push(FileEntry {
             path,
             bytes: bytes.len() as u64,
@@ -509,9 +519,15 @@ pub fn write_reflection_artifact(input: ReflectionWrite<'_>) -> Result<Reflectio
         files,
     };
     let json = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
-    fs::write(out.join("manifest.json"), &json).map_err(|e| e.to_string())?;
-    fs::write(out.join("manifest.sha256"), format!("{}\n", digest(&json)))
-        .map_err(|e| e.to_string())?;
+    fs::write(stage.join("manifest.json"), &json).map_err(|e| e.to_string())?;
+    fs::write(
+        stage.join("manifest.sha256"),
+        format!("{}\n", digest(&json)),
+    )
+    .map_err(|e| e.to_string())?;
+    pfx_core::atomic::sync_tree(&stage)?;
+    fs::rename(&stage, &out).map_err(|e| e.to_string())?;
+    pfx_core::atomic::sync_dir(parent)?;
     Ok(manifest)
 }
 

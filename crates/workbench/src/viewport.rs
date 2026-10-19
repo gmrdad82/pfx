@@ -18,6 +18,8 @@ pub const ASPECT: f32 = 16.0 / 10.0;
 pub const CHECKER: [usize; 2] = [320, 200];
 pub const MARGIN: f32 = 24.0;
 const PASSEPARTOUT: f32 = 0.6;
+pub const FADE_SECONDS: f64 = 0.2;
+const FADE_SNAP: f32 = 1e-4;
 const SQUARE: usize = 20;
 const GRID_REACH: f64 = 3.0;
 const GRID_CELLS: i64 = 24;
@@ -25,6 +27,53 @@ const GRID_NEAR: f64 = 0.02;
 const AXIS_ALPHA: f32 = 0.75;
 const GRID_SLICES: usize = 16;
 const GRID_SLACK: f64 = 1e-4;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Fade {
+    alpha: f32,
+    frame: Option<Rect>,
+    looked: Option<usize>,
+    at: Option<f64>,
+}
+
+impl Fade {
+    pub fn advance(&mut self, now: f64, shown: Option<(Rect, Option<usize>)>) -> bool {
+        let goal = if shown.is_some() { 1.0 } else { 0.0 };
+        if let Some((frame, looked)) = shown {
+            self.frame = Some(frame);
+            self.looked = looked;
+        }
+        let step = self
+            .at
+            .map_or(1.0, |at| ((now - at).max(0.0) / FADE_SECONDS) as f32);
+        self.at = Some(now);
+        let alpha = if goal > self.alpha {
+            (self.alpha + step).min(goal)
+        } else {
+            (self.alpha - step).max(goal)
+        };
+        self.alpha = if (alpha - goal).abs() < FADE_SNAP {
+            goal
+        } else {
+            alpha
+        };
+        self.alpha != goal
+    }
+
+    pub fn alpha(&self) -> f32 {
+        self.alpha
+    }
+
+    pub fn frame(&self) -> Option<(Rect, f32)> {
+        self.frame
+            .filter(|_| self.alpha > 0.0)
+            .map(|frame| (frame, self.alpha))
+    }
+
+    pub fn left(&self) -> Option<(usize, f32)> {
+        self.looked.map(|looked| (looked, 1.0 - self.alpha))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rule {
@@ -184,15 +233,7 @@ pub fn widen(eye: &Eye, frame: Rect, image: Rect) -> Eye {
     if frame.width() <= 0.0 || frame.height() <= 0.0 {
         return *eye;
     }
-    let k = [
-        f64::from(image.width() / frame.width()),
-        f64::from(image.height() / frame.height()),
-    ];
-    let offset = frame.center() - image.center();
-    let centre = [
-        f64::from(offset.x / (image.width() * 0.5).max(1e-6)),
-        -f64::from(offset.y / (image.height() * 0.5).max(1e-6)),
-    ];
+    let (k, centre) = scales(frame, image);
     let half = (eye.fov_y_deg.to_radians() * 0.5).tan() * k[1];
     Eye {
         fov_y_deg: (half.atan() * 2.0).to_degrees(),
@@ -205,9 +246,39 @@ pub fn widen(eye: &Eye, frame: Rect, image: Rect) -> Eye {
     }
 }
 
-pub fn passepartout(painter: &Painter, image: Rect, frame: Rect) {
+fn scales(frame: Rect, image: Rect) -> ([f64; 2], [f64; 2]) {
+    let k = [
+        f64::from(image.width() / frame.width()),
+        f64::from(image.height() / frame.height()),
+    ];
+    let offset = frame.center() - image.center();
+    let centre = [
+        f64::from(offset.x / (image.width() * 0.5).max(1e-6)),
+        -f64::from(offset.y / (image.height() * 0.5).max(1e-6)),
+    ];
+    (k, centre)
+}
+
+pub fn narrow(eye: &Eye, frame: Rect, image: Rect) -> Eye {
+    if frame.width() <= 0.0 || frame.height() <= 0.0 {
+        return *eye;
+    }
+    let (k, centre) = scales(frame, image);
+    let half = (eye.fov_y_deg.to_radians() * 0.5).tan() / k[1];
+    Eye {
+        fov_y_deg: (half.atan() * 2.0).to_degrees(),
+        ortho_height: eye.ortho_height.map(|height| height / k[1]),
+        shift: [
+            (eye.shift[0] + centre[0]) * k[0],
+            (eye.shift[1] + centre[1]) * k[1],
+        ],
+        ..*eye
+    }
+}
+
+pub fn passepartout(painter: &Painter, image: Rect, frame: Rect, alpha: f32) {
     let palette = Palette::of(painter.ctx());
-    let shade = palette.bg_deep.gamma_multiply(PASSEPARTOUT);
+    let shade = palette.bg_deep.gamma_multiply(PASSEPARTOUT * alpha);
     for band in [
         Rect::from_min_max(image.min, Pos2::new(image.right(), frame.top())),
         Rect::from_min_max(Pos2::new(image.left(), frame.bottom()), image.max),
@@ -227,7 +298,7 @@ pub fn passepartout(painter: &Painter, image: Rect, frame: Rect) {
     painter.rect_stroke(
         frame,
         CornerRadius::ZERO,
-        Stroke::new(STROKE, palette.line_border),
+        Stroke::new(STROKE, palette.line_border.gamma_multiply(alpha)),
         StrokeKind::Outside,
     );
 }
@@ -588,6 +659,62 @@ mod tests {
         }
     }
 
+    #[test]
+    fn narrowing_undoes_widening_so_a_view_hands_over_to_another_frame_unchanged() {
+        let image = area(1000.0, 600.0);
+        let frame = fit(image.shrink(MARGIN), 2.39);
+        let free = fit(image, ASPECT);
+        for start in [
+            Eye {
+                shift: [0.1, -0.05],
+                ..eye([1.0, 2.0, 3.0], [0.0, 0.5, 0.0])
+            },
+            Eye {
+                ortho_height: Some(2.5),
+                ..eye([0.0, 5.0, 0.1], [0.0, 0.0, 0.0])
+            },
+        ] {
+            let shown = widen(&start, frame, image);
+            let back = narrow(&shown, frame, image);
+            assert!((back.fov_y_deg - start.fov_y_deg).abs() < 1e-9);
+            assert!((back.shift[0] - start.shift[0]).abs() < 1e-9);
+            assert!((back.shift[1] - start.shift[1]).abs() < 1e-9);
+            let handed = widen(&narrow(&shown, free, image), free, image);
+            assert!((handed.fov_y_deg - shown.fov_y_deg).abs() < 1e-9);
+            assert!((handed.shift[0] - shown.shift[0]).abs() < 1e-9);
+            assert!((handed.shift[1] - shown.shift[1]).abs() < 1e-9);
+            match (handed.ortho_height, shown.ortho_height) {
+                (Some(a), Some(b)) => assert!((a - b).abs() < 1e-9),
+                (a, b) => assert_eq!(a, b),
+            }
+        }
+    }
+
+    #[test]
+    fn the_camera_frame_fades_out_and_back_in_over_its_seconds() {
+        let frame = area(300.0, 200.0);
+        let mut fade = Fade::default();
+        assert!(!fade.advance(0.0, Some((frame, Some(1)))));
+        assert_eq!(fade.frame(), Some((frame, 1.0)));
+        let fps = 30.0;
+        let mut seen = Vec::new();
+        let mut index = 1;
+        while fade.advance(index as f64 / fps, None) {
+            seen.push(fade.alpha());
+            fade.advance(index as f64 / fps, None);
+            index += 1;
+        }
+        seen.push(fade.alpha());
+        assert_eq!(seen.len(), (FADE_SECONDS * fps).round() as usize);
+        assert!(seen.windows(2).all(|pair| pair[1] < pair[0]), "{seen:?}");
+        assert_eq!(fade.alpha(), 0.0);
+        assert_eq!(fade.frame(), None);
+        assert_eq!(fade.left(), Some((1, 1.0)));
+        fade.advance(index as f64 / fps + 0.1, Some((frame, Some(1))));
+        assert!((fade.alpha() - 0.5).abs() < 1e-6);
+        assert_eq!(fade.left(), Some((1, 0.5)));
+    }
+
     fn floor(lens: &Lens, at: Pos2) -> DVec3 {
         let ray = lens.ray(at);
         ray.at(-ray.origin.y / ray.direction.y)
@@ -717,7 +844,7 @@ mod tests {
     #[test]
     fn the_start_mark_s_parts_are_solids_that_name_their_parents() {
         let state = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/viewport-start");
-        let path = crate::start_recipe(&state).unwrap();
+        let path = crate::start::unpacked(&crate::start_recipe(&state).unwrap());
         let loaded = pfx_recipe::load(&path).unwrap();
         let recipe = &loaded.recipe;
         let built = pfx_build::build(recipe, path.parent().unwrap()).unwrap();

@@ -288,3 +288,79 @@ fn pavement_track(uv: vec2f, a: vec4f, b: vec4f, seed: u32, pixel: f32) -> f32 {
     let weight = octave_weight(pixel * max(b.z, b.w));
     return clamp(band * (1.0 + (streak - 1.0) * weight), 0.0, 1.0);
 }
+
+fn value_noise3_trio(a: vec3f, b: vec3f, c: vec3f, nested: bool) -> vec3f {
+    let cell = floor(a);
+    if (any(floor(b) != cell) || any(floor(c) != cell)) {
+        return vec3f(value_noise3(a, nested), value_noise3(b, nested), value_noise3(c, nested));
+    }
+    let i = vec3i(cell);
+    var h0: vec4f;
+    var h1: vec4f;
+    if (nested) {
+        h0 = vec4f(hash3_nested(i), hash3_nested(i + vec3i(1, 0, 0)), hash3_nested(i + vec3i(0, 1, 0)), hash3_nested(i + vec3i(1, 1, 0)));
+        h1 = vec4f(hash3_nested(i + vec3i(0, 0, 1)), hash3_nested(i + vec3i(1, 0, 1)), hash3_nested(i + vec3i(0, 1, 1)), hash3_nested(i + vec3i(1, 1, 1)));
+    } else {
+        h0 = vec4f(hash3_xor(i), hash3_xor(i + vec3i(1, 0, 0)), hash3_xor(i + vec3i(0, 1, 0)), hash3_xor(i + vec3i(1, 1, 0)));
+        h1 = vec4f(hash3_xor(i + vec3i(0, 0, 1)), hash3_xor(i + vec3i(1, 0, 1)), hash3_xor(i + vec3i(0, 1, 1)), hash3_xor(i + vec3i(1, 1, 1)));
+    }
+    return vec3f(lattice_mix(h0, h1, fract(a)), lattice_mix(h0, h1, fract(b)), lattice_mix(h0, h1, fract(c)));
+}
+
+fn lattice_mix(h0: vec4f, h1: vec4f, f: vec3f) -> f32 {
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = mix(mix(h0.x, h0.y, u.x), mix(h0.z, h0.w, u.x), u.y);
+    let b = mix(mix(h1.x, h1.y, u.x), mix(h1.z, h1.w, u.x), u.y);
+    return mix(a, b, u.z);
+}
+
+fn fbm3_trio(a: vec3f, b: vec3f, c: vec3f, octaves: i32, footprint: f32) -> vec3f {
+    var sum = vec3f(0.0);
+    var amp = 0.5;
+    var qa = a;
+    var qb = b;
+    var qc = c;
+    var width = footprint;
+    for (var i = 0; i < octaves; i++) {
+        let weight = octave_weight(width);
+        if (weight == 1.0) {
+            sum += amp * value_noise3_trio(qa, qb, qc, true);
+        } else if (weight == 0.0) {
+            sum += vec3f(amp * 0.5);
+        } else {
+            sum += amp * (weight * value_noise3_trio(qa, qb, qc, true) + (1.0 - weight) * 0.5);
+        }
+        qa = qa * 2.03 + vec3f(1.7, 9.2, 3.1);
+        qb = qb * 2.03 + vec3f(1.7, 9.2, 3.1);
+        qc = qc * 2.03 + vec3f(1.7, 9.2, 3.1);
+        amp *= 0.5;
+        width *= 2.03;
+    }
+    return sum;
+}
+
+fn layer_leaf_vein(uv: vec2f) -> f32 {
+    let s = abs(sin(uv.y * 40.0 + uv.x * 3.0));
+    let s4 = s * s * s * s;
+    return s4 * s4 * s4;
+}
+
+fn layer_relief(normal: vec3f, uv: vec2f, position: vec3f, amp: f32, bark: bool, footprint: f32) -> vec3f {
+    let s = select(-1.0, 1.0, normal.z >= 0.0);
+    let a = -1.0 / (s + normal.z);
+    let b = normal.x * normal.y * a;
+    let t = vec3f(1.0 + s * normal.x * normal.x * a, s * b, -s * normal.x);
+    let bt = vec3f(b, s + normal.y * normal.y * a, -normal.y);
+    let e = 0.00012;
+    var h: vec3f;
+    if (bark) {
+        let k = vec3f(200.0, 60.0, 200.0);
+        h = 0.0006 * fbm3_trio(position * k, (position + t * e) * k, (position + bt * e) * k, 4, footprint);
+    } else {
+        let u = uv + vec2f(e, 0.0);
+        let v = uv + vec2f(0.0, e);
+        h = 0.0002 * fbm3_trio(vec3f(uv * 30.0, 1.0), vec3f(u * 30.0, 1.0), vec3f(v * 30.0, 1.0), 3, footprint) - 0.00008 * vec3f(layer_leaf_vein(uv), layer_leaf_vein(u), layer_leaf_vein(v));
+    }
+    let bent = normalize(normal - t * ((h.y - h.x) / e * amp) - bt * ((h.z - h.x) / e * amp));
+    return select(normal, bent, dot(bent, normal) > 0.05);
+}

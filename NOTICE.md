@@ -43,7 +43,7 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 
 ## Cycles, under the Apache License 2.0
 
-`crates/trace/src/sobol.rs` and `crates/trace/src/sobol.wgsl` (in the package `pfx-trace`) are a port of Cycles' tabulated Sobol sampler (https://github.com/blender/cycles, tag `v5.2.0`, commit `3b97e190c5ff1a2ed2160d879ad5bf95bea7b8ba`), SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0. Its text ships in [crates/trace/LICENSE-APACHE](crates/trace/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Cycles. The port is a translation into Rust and WGSL, changed by pfx's authors: the 4D table generator after Helmer, Christensen and Kensler's "Stochastic Generation of (t, s) Sample Sequences" with its xor tables (`scene/tabulated_sobol.cpp`), the shuffled lookup (`kernel/sample/tabulated_sobol.h`), the Owen scramble (`kernel/sample/util.h`), the hashes (`util/hash.h`), the per-pixel seed and the table sizes (`kernel/sample/pattern.h`, `kernel/types.h`, `scene/integrator.cpp`). `crates/trace/src/levels.rs` and the instance traversal in `crates/trace/src/trace.wgsl` port, from the same tag, Cycles' BVH2 instance traversal (`kernel/bvh/traversal.h`, its `ENTRYPOINT_SENTINEL`) and its instance push and pop (`kernel/geom/object.h`), translated to Rust and WGSL and changed by pfx's authors. `crates/trace/src/tree.rs` and the light tree functions in `crates/trace/src/lights.wgsl` port, from the same tag, Cycles' many-light tree (`scene/light_tree.cpp`, `scene/light_tree.h`, `kernel/light/tree.h`, and the point and spot terms of `kernel/light/point.h` and `kernel/light/spot.h`), after Conty Estevez and Kulla's "Importance Sampling of Many Lights with Adaptive Tree Splitting", translated to Rust and WGSL and changed by pfx's authors. `hash_uint2` and `animated_seed` in `crates/trace/src/sobol.rs` and `Adaptive::automatic_min_samples` in `crates/trace/src/adaptive.rs` port, from the same tag, Cycles' lookup3 hash (`util/hash.h`) and its automatic adaptive minimum samples (`scene/integrator.cpp`), and the animated seed of Cycles' Blender integration (`intern/cycles/blender/sync.cpp` in Blender, tag `v4.5.0`, commit `8cb6b388974a817afedf1317ce26f0c75aa5f181`, SPDX-FileCopyrightText: 2011-2022 Blender Foundation, SPDX-License-Identifier: Apache-2.0), translated to Rust and changed by pfx's authors. `crates/trace/src/motion.rs`, `crates/trace/src/moving.rs` and the motion functions in `crates/trace/src/trace.wgsl` and `crates/trace/src/rt.wgsl` port, from the same tag, Cycles' motion blur: the decomposed motion transforms and their interpolation (`util/transform.cpp`, `util/transform.h`), the swept object bounds (`scene/object.cpp`), the shutter curve and its table and the shutter position (`scene/camera.cpp`, `scene/camera.h`, `util/math_cdf.h`, `util/math_cdf.cpp`, `kernel/util/lookup_table.h`), the camera and ray time over the shutter (`kernel/camera/camera.h`), the object motion push (`kernel/geom/object.h`) and the motion triangles (`kernel/geom/motion_triangle.h`), translated to Rust and WGSL and changed by pfx's authors. `crates/trace/src/fog.rs` and the fog functions in `crates/trace/src/trace.wgsl` and `crates/trace/src/lights.wgsl` port, from the same tag, Cycles' volume integration (`kernel/integrator/shade_volume.h`: the homogeneous scatter decision and distance sample, the equiangular sample and its pdf, the one-sample MIS between equiangular and distance sampling, the direct light at a volume point, the phase scatter and the maximum volume bounces of `kernel/integrator/path_state.h`), its Henyey-Greenstein phase (`kernel/closure/volume_henyey_greenstein.h`, `kernel/closure/volume_util.h`), the bounded exponential distribution (`kernel/sample/mapping.h`) and the volume denoising features (`kernel/film/denoising_passes.h`), translated to Rust and WGSL and changed by pfx's authors.
+`crates/trace/src/sobol.rs` and `crates/trace/src/sobol.wgsl` (in the package `pfx-trace`) are a port of Cycles' tabulated Sobol sampler (https://github.com/blender/cycles, tag `v5.2.0`, commit `3b97e190c5ff1a2ed2160d879ad5bf95bea7b8ba`), SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0. Its text ships in [crates/trace/LICENSE-APACHE](crates/trace/LICENSE-APACHE); the package is MIT like the rest of pfx, and this notice and that licence go with the parts ported from Cycles. The port is a translation into Rust and WGSL, changed by pfx's authors: the 4D table generator after Helmer, Christensen and Kensler's "Stochastic Generation of (t, s) Sample Sequences" with its xor tables (`scene/tabulated_sobol.cpp`), the shuffled lookup (`kernel/sample/tabulated_sobol.h`), the Owen scramble (`kernel/sample/util.h`), the hashes (`util/hash.h`), the per-pixel seed and the table sizes (`kernel/sample/pattern.h`, `kernel/types.h`, `scene/integrator.cpp`). `crates/trace/src/levels.rs` and the instance traversal in `crates/trace/src/trace.wgsl` port, from the same tag, Cycles' BVH2 instance traversal (`kernel/bvh/traversal.h`, its `ENTRYPOINT_SENTINEL`) and its instance push and pop (`kernel/geom/object.h`), translated to Rust and WGSL and changed by pfx's authors. `crates/trace/src/tree.rs` and the light tree functions in `crates/trace/src/lights.wgsl` port, from the same tag, Cycles' many-light tree (`scene/light_tree.cpp`, `scene/light_tree.h`, `kernel/light/tree.h`, and the point and spot terms of `kernel/light/point.h` and `kernel/light/spot.h`), after Conty Estevez and Kulla's "Importance Sampling of Many Lights with Adaptive Tree Splitting", translated to Rust and WGSL and changed by pfx's authors. `hash_uint2` and `animated_seed` in `crates/trace/src/sobol.rs` and `Adaptive::automatic_min_samples` in `crates/trace/src/adaptive.rs` port, from the same tag, Cycles' lookup3 hash (`util/hash.h`) and its automatic adaptive minimum samples (`scene/integrator.cpp`), and the animated seed of Cycles' Blender integration (`intern/cycles/blender/sync.cpp` in Blender, tag `v4.5.0`, commit `8cb6b388974a817afedf1317ce26f0c75aa5f181`, SPDX-FileCopyrightText: 2011-2022 Blender Foundation, SPDX-License-Identifier: Apache-2.0), translated to Rust and changed by pfx's authors. `crates/trace/src/motion.rs`, `crates/trace/src/moving.rs` and the motion functions in `crates/trace/src/trace.wgsl` and `crates/trace/src/rt.wgsl` port, from the same tag, Cycles' motion blur: the decomposed motion transforms and their interpolation (`util/transform.cpp`, `util/transform.h`), the swept object bounds (`scene/object.cpp`), the shutter curve and its table and the shutter position (`scene/camera.cpp`, `scene/camera.h`, `util/math_cdf.h`, `util/math_cdf.cpp`, `kernel/util/lookup_table.h`), the camera and ray time over the shutter (`kernel/camera/camera.h`), the object motion push (`kernel/geom/object.h`) and the motion triangles (`kernel/geom/motion_triangle.h`), translated to Rust and WGSL and changed by pfx's authors. `crates/trace/src/fog.rs` and the fog functions in `crates/trace/src/trace.wgsl` and `crates/trace/src/lights.wgsl` port, from the same tag, Cycles' volume integration (`kernel/integrator/shade_volume.h`: the homogeneous scatter decision and distance sample, the equiangular sample and its pdf, the one-sample MIS between equiangular and distance sampling, the direct light at a volume point, the phase scatter and the maximum volume bounces of `kernel/integrator/path_state.h`), its Henyey-Greenstein phase (`kernel/closure/volume_henyey_greenstein.h`, `kernel/closure/volume_util.h`), the bounded exponential distribution (`kernel/sample/mapping.h`) and the volume denoising features (`kernel/film/denoising_passes.h`), translated to Rust and WGSL and changed by pfx's authors. `crates/trace/src/sprites.rs` and the sprite functions in `crates/trace/src/trace.wgsl` draw particles with the Henyey-Greenstein phase and sample ported above, and place each particle as an instance of one object as Cycles does (`scene/object.h`, `scene/particles.h`, from the same tag), an idea taken without its code.
 
 `voronoi_edge2` in `crates/materials/src/pavement.rs` and `crates/materials/src/wgsl/noise.wgsl` (in the package `pfx-materials`) is a port, from the same tag, of Cycles' two-dimensional Voronoi distance to edge (`voronoi_distance_to_edge` for `float2` in `kernel/svm/voronoi.h`), SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0, whose text ships in [crates/materials/LICENSE-APACHE](crates/materials/LICENSE-APACHE). It is translated to Rust and WGSL and changed by pfx's authors: the feature points come from pfx's own `hash2` in place of Cycles' `hash_int2_to_float2`, and the search keeps Cycles' two passes over the 3 × 3 neighbourhood.
 
@@ -257,7 +257,7 @@ The live renderer's glossy screen-space reflections in `crates/live/src/reflect.
 pfx's mark and wordmark are © Catalin Ilinca, all rights reserved, and not covered by the MIT licence ([TRADEMARKS.md](TRADEMARKS.md)):
 
 - `assets/marks/` and `.github/icon.png`, copied by `bin/marks` from the PITO MD brand masters at `1bd7ff234db9487b517ce5fed50c76a94d0dbd3f`; the README shows the lockup at its Licence section, `lockup.svg` on a dark theme and `lockup-light.svg` on a light one;
-- `crates/project/src/templates/badge.glb` and `crates/project/src/templates/wordmark.glb`, the mark and wordmark in 3D that `pfx new` places in a new game's first scene.
+- `crates/project/src/templates/badge.glb` and `crates/project/src/templates/wordmark.glb`, the mark and wordmark in 3D that pfx's own start page shows; `pfx new` never writes them into a game.
 
 ## Bevy, under the MIT licence
 
@@ -863,6 +863,62 @@ The zip archive reader in `crates/source/src/zip.rs` (in the package `pfx-source
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
+
+## resvg, under the MIT licence
+
+`crates/live/src/flat/svg/filter.rs` and `crates/live/src/flat/svg/blur.rs` (in the package `pfx-live`) are a port of parts of resvg 0.47.0's filter module and of usvg 0.47.0's filter reader (https://github.com/linebender/resvg, commit `3a0fdba53ccf2d346b54cc53ba7adf0ee60d0707`), altered, licensed Apache-2.0 OR MIT and used here under the MIT licence, as its `LICENSE-MIT` file reads:
+
+> Copyright 2017 the Resvg Authors
+>
+> Permission is hereby granted, free of charge, to any
+> person obtaining a copy of this software and associated
+> documentation files (the "Software"), to deal in the
+> Software without restriction, including without
+> limitation the rights to use, copy, modify, merge,
+> publish, distribute, sublicense, and/or sell copies of
+> the Software, and to permit persons to whom the Software
+> is furnished to do so, subject to the following
+> conditions:
+>
+> The above copyright notice and this permission notice
+> shall be included in all copies or substantial portions
+> of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+> ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+> TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+> PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+> SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+> CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+> OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+> IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+> DEALINGS IN THE SOFTWARE.
+
+resvg's box blur is based on fastblur (https://github.com/fschutt/fastblur, MIT), after Ivan Kuckir's fast Gaussian blur. Its IIR blur, which `blur.rs` ports for deviations under 2 pixels, is based on Pascal Getreuer's gaussianiir (http://www.getreuer.info/home/gaussianiir), the fast Gaussian convolution of Alvarez and Mazorra, under the Simplified BSD License:
+
+> Copyright (c) 2011, Pascal Getreuer
+> All rights reserved.
+>
+> Redistribution and use in source and binary forms, with or without
+> modification, are permitted provided that the following conditions are met:
+>
+> * Redistributions of source code must retain the above copyright notice, this
+>   list of conditions and the following disclaimer.
+> * Redistributions in binary form must reproduce the above copyright notice,
+>   this list of conditions and the following disclaimer in the documentation
+>   and/or other materials provided with the distribution.
+>
+> THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+> AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+> IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+> ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+> LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+> CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+> SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+> INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+> CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+> ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+> POSSIBILITY OF SUCH DAMAGE.
 
 ## Free blue noise textures, under CC0 1.0
 

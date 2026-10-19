@@ -1214,6 +1214,16 @@ pub fn play(
     fps: u32,
     mut sink: impl FnMut(usize, &[u8]) -> Result<(), String>,
 ) -> Result<usize, Error> {
+    play_seen(app, tape, layout, fps, |_, index, rgba| sink(index, rgba))
+}
+
+pub fn play_seen(
+    app: &mut Workbench<'_>,
+    tape: &Tape,
+    layout: Layout,
+    fps: u32,
+    mut sink: impl FnMut(&Workbench<'_>, usize, &[u8]) -> Result<(), String>,
+) -> Result<usize, Error> {
     let mut turns = Turns::default();
     turns.turn();
     check(layout.size)?;
@@ -1228,6 +1238,7 @@ pub fn play(
     let target = gpu.offscreen(drawn[0], drawn[1], format).map_err(Error)?;
     turns.turn();
     let ctx = context(&theme);
+    ctx.options_mut(|options| options.input_options.max_click_dist = 0.0);
     app.steady();
     app.forget();
     app.waker(Arc::new(|| {}));
@@ -1268,7 +1279,7 @@ pub fn play(
         }
         let output = player.settle(frame, time, first)?;
         let rgba = player.paint(output)?;
-        sink(index, &rgba).map_err(Error)?;
+        sink(player.app, index, &rgba).map_err(Error)?;
     }
     Ok(frames.len())
 }

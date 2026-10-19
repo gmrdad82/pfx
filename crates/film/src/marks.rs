@@ -1,7 +1,8 @@
 use crate::sheet::{Sheet, painted};
 use crate::titles::{Align, Setter, Words};
 use pfx_live::flat::{
-    Draw, Fill, Icon, IconShape, Matrix, Shape, Srgba, multiply, scaling, svg, translation,
+    Draw, Fill, Icon, IconShape, Matrix, Shape, SpriteFill, Srgba, multiply, scaling, svg,
+    translation,
 };
 
 pub const LABEL: f32 = 0.62;
@@ -12,11 +13,31 @@ const ELEVATION: f32 = 20.0;
 const RING: usize = 16;
 const INNER: usize = 8;
 
+pub const MOST_RASTER: u32 = 4096;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Mark {
     pub name: String,
     pub view: [f32; 2],
     draws: Vec<Draw>,
+    rasters: Vec<Placed>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Placed {
+    raster: svg::Raster,
+    icons: usize,
+    sprite: Option<([f32; 4], u32)>,
+}
+
+pub struct Rastered {
+    pub name: String,
+    pub size: [u32; 2],
+    pub rgba: Vec<u8>,
+}
+
+fn raster_name(mark: &str, index: usize) -> String {
+    format!("\u{1}mark/{mark}/{index}")
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -76,10 +97,20 @@ fn parse(name: &str, source: &str, shapes: &mut Vec<IconShape>) -> Result<Mark, 
     if draws.is_empty() {
         return Err(fail("no shapes".into()));
     }
+    let icons = base as usize;
     Ok(Mark {
         name: name.to_string(),
         view: board.size,
         draws,
+        rasters: board
+            .rasters
+            .into_iter()
+            .map(|raster| Placed {
+                raster,
+                icons,
+                sprite: None,
+            })
+            .collect(),
     })
 }
 
@@ -107,6 +138,36 @@ impl Marks {
         self.list.iter().map(|m| m.name.as_str()).collect()
     }
 
+    pub fn rasters(&self, scale: impl Fn(&Mark) -> Option<f32>) -> Result<Vec<Rastered>, String> {
+        let mut out = Vec::new();
+        for mark in &self.list {
+            let Some(s) = scale(mark).filter(|s| s.is_finite() && *s > 0.0) else {
+                continue;
+            };
+            for (i, placed) in mark.rasters.iter().enumerate() {
+                let pixels = placed.raster.pixels(s, MOST_RASTER);
+                let painted = placed
+                    .raster
+                    .paint(&self.shapes[placed.icons..], pixels)
+                    .map_err(|e| format!("{}: {e}", mark.name))?;
+                out.push(Rastered {
+                    name: raster_name(&mark.name, i),
+                    size: painted.size,
+                    rgba: painted.rgba,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn place(&mut self, find: impl Fn(&str) -> Option<([f32; 4], u32)>) {
+        for mark in &mut self.list {
+            for (i, placed) in mark.rasters.iter_mut().enumerate() {
+                placed.sprite = find(&raster_name(&mark.name, i));
+            }
+        }
+    }
+
     fn icons(
         &self,
         mark: &Mark,
@@ -115,8 +176,22 @@ impl Marks {
         ring: &Ring,
         out: &mut Layers,
     ) {
-        for part in &mark.draws {
+        for (index, part) in mark.draws.iter().enumerate() {
             let mut draw = *part;
+            if matches!(draw.fill, Fill::Image(_)) {
+                let Some((uv, id)) = mark
+                    .rasters
+                    .iter()
+                    .find(|p| p.raster.draw == index)
+                    .and_then(|p| p.sprite)
+                else {
+                    continue;
+                };
+                draw.fill = Fill::Image(SpriteFill::new(uv));
+                draw.id = id;
+                out.put(None, draw.transform(multiply(frame, draw.transform)));
+                continue;
+            }
             if let Shape::Icon(Icon(i)) = draw.shape {
                 draw.shape = Shape::Icon(Icon(self.base + i));
             }

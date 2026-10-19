@@ -1,4 +1,5 @@
 use crate::script::{Kinds, MAX_SECONDS, Scene, cuts};
+use pfx_core::rate::Rate;
 use serde::Deserialize;
 use toml::{Table, Value};
 
@@ -280,7 +281,7 @@ fn grid_name(d: u32) -> String {
     }
 }
 
-pub fn misses<K: Kinds>(grid: &Grid, scenes: &[Scene<K>], fps: u32) -> Vec<String> {
+pub fn misses<K: Kinds>(grid: &Grid, scenes: &[Scene<K>], rate: Rate) -> Vec<String> {
     let mut starts = Vec::with_capacity(scenes.len() + 1);
     let mut start = 0.0;
     starts.push(start);
@@ -288,10 +289,10 @@ pub fn misses<K: Kinds>(grid: &Grid, scenes: &[Scene<K>], fps: u32) -> Vec<Strin
         start += s.seconds;
         starts.push(start);
     }
-    let cuts = cuts(&starts, fps);
-    let fps = f64::from(fps.max(1));
-    let frame = 1.0 / fps + EARLY;
-    let half = 0.5 / fps + EARLY;
+    let cuts = cuts(&starts, rate);
+    let fps = rate.fps();
+    let frame = rate.step() + EARLY;
+    let half = 0.5 * rate.step() + EARLY;
     let lead = |t: f64| t + EARLY < grid.offset;
     let off = |t: f64, d: u32, most: f64| {
         let by = (t - grid.near(t, d)).abs();
@@ -301,7 +302,7 @@ pub fn misses<K: Kinds>(grid: &Grid, scenes: &[Scene<K>], fps: u32) -> Vec<Strin
     for (i, s) in scenes.iter().enumerate() {
         let at = |why: String| format!("scene '{}': {why}", s.name);
         let start = starts[i];
-        let cut = cuts[i] as f64 / fps;
+        let cut = rate.time(cuts[i]);
         if !lead(start) {
             let end = start + s.seconds;
             let (b0, b1) = (grid.beat(start), grid.beat(end));
@@ -326,7 +327,7 @@ pub fn misses<K: Kinds>(grid: &Grid, scenes: &[Scene<K>], fps: u32) -> Vec<Strin
             if let Some(d) = grid.snap
                 && let Some(t) = &s.transition
             {
-                let end = ((start + t.seconds) * fps).round() / fps;
+                let end = rate.time(rate.frames(start + t.seconds).round() as u64);
                 if let Some(by) = off(end, d, half) {
                     out.push(at(format!(
                         "the {} into it ends {} from beat 1, off the {} by {by:.1} frames",

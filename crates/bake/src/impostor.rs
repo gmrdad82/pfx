@@ -668,6 +668,9 @@ pub fn write_prop_artifact(
         ".{}.prop-partial",
         out.file_name().unwrap().to_string_lossy()
     ));
+    if stage.exists() {
+        fs::remove_dir_all(&stage).map_err(|e| e.to_string())?;
+    }
     fs::create_dir(&stage).map_err(|e| e.to_string())?;
     let mut manifest = artifact.manifest.clone();
     manifest.files.clear();
@@ -692,7 +695,9 @@ pub fn write_prop_artifact(
         format!("{}\n", digest(&json)),
     )
     .map_err(|e| e.to_string())?;
-    fs::rename(stage, out).map_err(|e| e.to_string())?;
+    pfx_core::atomic::sync_tree(&stage)?;
+    fs::rename(&stage, &out).map_err(|e| e.to_string())?;
+    pfx_core::atomic::sync_dir(parent)?;
     Ok(manifest)
 }
 

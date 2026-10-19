@@ -3,6 +3,7 @@ use pfx_gpu::Gpu;
 use pfx_gpu::pace::{Pacer, Stats, Turned};
 use wgpu::util::DeviceExt;
 
+use crate::checkpoint::{Keeper, Rounds, read_buffer};
 use crate::gpu::Trace;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -125,8 +126,22 @@ impl Trace {
         adaptive: Adaptive,
         seed: u32,
         pacer: &mut Pacer,
+        between: impl FnMut(f64) -> T,
+        reached: impl FnMut(Round),
+    ) -> Result<Converged, String> {
+        self.sample_adaptive_kept(gpu, adaptive, seed, pacer, between, reached, None)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn sample_adaptive_kept<T: Turned>(
+        &mut self,
+        gpu: &Gpu,
+        adaptive: Adaptive,
+        seed: u32,
+        pacer: &mut Pacer,
         mut between: impl FnMut(f64) -> T,
         mut reached: impl FnMut(Round),
+        mut keeper: Option<&mut dyn Keeper>,
     ) -> Result<Converged, String> {
         if !adaptive.valid() {
             return Err("adaptive sampling needs a positive threshold, a growth over 1 and at least 2 samples".into());
@@ -166,7 +181,9 @@ impl Trace {
         let snaps = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trace convergence snapshots"),
             size: pixels * 32,
-            usage: wgpu::BufferUsages::STORAGE,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let active = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -217,9 +234,48 @@ impl Trace {
             pixels,
             ..Converged::default()
         };
-        for (step, target) in adaptive.rounds().into_iter().enumerate() {
-            let count = target - self.samples;
-            let stats = self.sample_paced(gpu, count, seed, pacer, &mut between)?;
+        let rounds = adaptive.rounds();
+        let resumed = keeper.as_deref_mut().and_then(Keeper::resume);
+        if let Some(saved) = resumed {
+            let Some(kept) = saved
+                .adaptive
+                .as_ref()
+                .filter(|kept| kept.reached.len() < rounds.len())
+            else {
+                return Err("the checkpoint holds no adaptive rounds for this render".into());
+            };
+            self.restore(gpu, &saved)?;
+            gpu.queue.write_buffer(&snaps, 0, &kept.snaps);
+            gpu.queue.submit(None);
+            for &round in &kept.reached {
+                converged.rounds.push(round);
+                reached(round);
+            }
+        }
+        let first = converged.rounds.len();
+        for (step, &target) in rounds.iter().enumerate().skip(first) {
+            let count = target.saturating_sub(self.samples);
+            let stats = match keeper.as_deref_mut() {
+                None => self.sample_paced(gpu, count, seed, pacer, &mut between)?,
+                Some(keeper) => {
+                    let mut stats = Stats::default();
+                    for _ in 0..count {
+                        let one = self.sample_paced(gpu, 1, seed, pacer, &mut between)?;
+                        stats.milliseconds.extend(one.milliseconds);
+                        stats.timings.extend(one.timings);
+                        stats.wall_ms += one.wall_ms;
+                        if keeper.due(self.samples) {
+                            let mut saved = self.save(gpu)?;
+                            saved.adaptive = Some(Rounds {
+                                reached: converged.rounds.clone(),
+                                snaps: read_buffer(gpu, &snaps)?,
+                            });
+                            keeper.keep(saved)?;
+                        }
+                    }
+                    stats
+                }
+            };
             converged.stats.milliseconds.extend(stats.milliseconds);
             converged.stats.timings.extend(stats.timings);
             converged.stats.wall_ms += stats.wall_ms;
@@ -292,7 +348,7 @@ impl Trace {
     }
 }
 
-fn mapped(gpu: &Gpu, buffer: &wgpu::Buffer) -> Result<Vec<u8>, String> {
+pub(crate) fn mapped(gpu: &Gpu, buffer: &wgpu::Buffer) -> Result<Vec<u8>, String> {
     let (send, receive) = std::sync::mpsc::channel();
     let slice = buffer.slice(..);
     slice.map_async(wgpu::MapMode::Read, move |result| {

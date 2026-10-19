@@ -220,6 +220,10 @@ fn film(root: &Path, factory: Factory, config: Config, options: &Offscreen) -> R
             .mark
             .as_deref()
             .map(|mark| rerooted(mark, &root, &copy)),
+        wordmark: config
+            .wordmark
+            .as_deref()
+            .map(|wordmark| rerooted(wordmark, &root, &copy)),
         ..config
     };
     let session = Session::open_game(&copy, pfx_editor::setup(), factory, config)?;

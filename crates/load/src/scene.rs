@@ -1,6 +1,7 @@
 mod anim;
 mod bind;
 mod build;
+mod census;
 mod diff;
 mod draws;
 mod edit;
@@ -19,6 +20,7 @@ mod plates;
 mod play;
 mod pose;
 mod rewrite;
+pub mod sprays;
 pub mod textures;
 pub mod tiles;
 mod watch;
@@ -67,7 +69,7 @@ pub use mounted::{container_of, held_text, is_pfx_path, pack, unpack};
 pub fn from_pfx_bytes(name: impl AsRef<Path>, bytes: &[u8]) -> Result<Scene, SceneError> {
     Scene::from_pfx_bytes(name, bytes)
 }
-pub use particles::{Attach, Node as ParticleNode, Particles};
+pub use particles::{Attach, Node as ParticleNode, Particles, recipe as particle_recipe};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
 pub use pfx_scene::types::{
@@ -745,6 +747,10 @@ impl Scene {
 
     pub fn draws(&self) -> Draws {
         draws::draws(self)
+    }
+
+    pub fn census(&self) -> pfx_core::memory::Census {
+        census::census(self)
     }
 
     pub fn diff(&self, newer: &Scene) -> SceneDiff {

@@ -50,7 +50,7 @@ Every pixel samples adaptively to a noise threshold of 0.01, and the frame then 
 
 ## Clip masters
 
-A clip's `<stem>.master.mp4` is encoded by pfx itself through [pito-codecs](https://github.com/gmrdad82/pito-codecs) v1.14.3 (MIT, pinned by tag, `pfx_run::encode`); no other program runs and nothing needs installing. The same frames give the same bytes on the same machine, on any thread count.
+A clip's `<stem>.master.mp4` is encoded by pfx itself through [pito-codecs](https://github.com/gmrdad82/pito-codecs) v1.16.2 (MIT, pinned by tag, `pfx_run::encode`); no other program runs and nothing needs installing. The same frames give the same bytes on the same machine, on any thread count.
 
 - Video: H.264 High, CRF 12, preset `Quality`, 2 B-frames, a keyframe at least every second (`gop` = fps), 4:2:0 8-bit, encoded on the CPU. Each 16-bit sRGB frame is rounded to 8 bits, then turned to BT.709 limited-range YUV with left-sited chroma; the stream's VUI tags BT.709 primaries, transfer and matrix, limited range.
 - Audio, when the adapter sends some: AAC-LC, 48 kHz stereo, 320 kbit/s, padded or cut to `round(frames x 48000 / fps)` samples so it ends with the picture, its encoder delay hidden by an edit list.

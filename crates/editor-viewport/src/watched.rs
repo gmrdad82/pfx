@@ -16,12 +16,6 @@ pub fn worded(error: &SceneError, scene: &Path) -> String {
     }
 }
 
-pub fn is_scene(path: &Path) -> bool {
-    path.file_name()
-        .is_some_and(|name| name.to_string_lossy().ends_with(".scene.toml"))
-        || path.file_name().is_some_and(|name| name == "scene.toml")
-}
-
 #[derive(Debug)]
 pub enum Event {
     Reloaded(Box<Reload>),

@@ -1044,7 +1044,13 @@ fn material_of(m: &Value) -> Value {
             json!(ext(CLEARCOAT, "clearcoatRoughnessFactor").unwrap_or(0.0)),
         );
     }
-    let family = if emission.is_some() {
+    let carried = m
+        .get("extras")
+        .and_then(pfx_load::surface::engine_material)
+        .map(stated);
+    let family = if carried.is_some() {
+        None
+    } else if emission.is_some() {
         Some("emissive")
     } else if transmission.is_some() {
         Some("glass")
@@ -1058,7 +1064,24 @@ fn material_of(m: &Value) -> Value {
     if let Some(family) = family {
         out.insert("family".into(), json!(family));
     }
-    Value::Object(out)
+    match carried {
+        Some(mut carried) => {
+            carried.extend(out);
+            Value::Object(carried)
+        }
+        None => Value::Object(out),
+    }
+}
+
+fn stated(material: Material) -> Map<String, Value> {
+    let plain = serde_json::to_value(Material::default()).unwrap_or_default();
+    match serde_json::to_value(material) {
+        Ok(Value::Object(keys)) => keys
+            .into_iter()
+            .filter(|(key, value)| plain.get(key) != Some(value))
+            .collect(),
+        _ => Map::new(),
+    }
 }
 
 fn has_index(dir: &Path) -> bool {
@@ -1446,10 +1469,9 @@ fn sampled(
         return Ok(Vec::new());
     };
     let grounded = grounded(recipe, object);
-    let fps = f64::from(timeline.fps.max(1));
     let frames: Vec<Vec<DMat4>> = (0..=timeline.frames)
         .map(|n| {
-            let t = f64::from(n) / fps;
+            let t = timeline.time(n);
             posed(tree, &playing(found, grounded, t))
         })
         .collect();

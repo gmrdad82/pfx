@@ -6,7 +6,7 @@ scene = "content/first.scene.toml"
 
 [authoring.pfx]
 play = "content/first.scene.toml"
-select = "incoming"
+select = "title"
 
 [authoring.pfx.screen]
 desktop = ["16:9"]

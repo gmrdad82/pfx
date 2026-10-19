@@ -1,4 +1,6 @@
-use super::particles::{Emitter, Gradient, IDENTITY, Matrix, Recipe, RecipeKeys, STEP};
+use super::particles::{
+    Emitter, Gradient, IDENTITY, Matrix, PREWARM_MAX, Recipe, RecipeKeys, STEP,
+};
 
 fn moved(x: f32) -> Matrix {
     let mut m = IDENTITY;
@@ -187,4 +189,53 @@ fn keyed_size_colour_and_alpha_follow_the_scene_time() {
         );
         assert!(near(sprite.alpha, 0.75), "{sprite:?}");
     }
+}
+
+#[test]
+fn prewarm_starts_where_an_emitter_started_that_long_before_with_its_parent_held() {
+    let moving = |t: f32| {
+        let mut m = IDENTITY;
+        m[3][0] = 3.0 + 2.0 * t;
+        m
+    };
+    let held = |_: f32| moving(0.0);
+    let base = Recipe {
+        rate: 50.0,
+        lifetime: [0.5, 3.0],
+        speed: [0.5, 2.0],
+        cone: 40.0,
+        gravity: [0.0, 0.4, 0.0],
+        drag: 0.7,
+        burst: 12,
+        max: 2_000,
+        seed: 11,
+        ..Recipe::default()
+    };
+    let warmed = Recipe {
+        prewarm: 2.0,
+        keys: RecipeKeys {
+            rate: Some(Gradient::new(vec![(0.0, 50.0), (1.0, 500.0)], 0.0)),
+            ..RecipeKeys::default()
+        },
+        ..base.clone()
+    };
+    let mut early = Emitter::new(base, [0.0, 0.5, 0.0]);
+    early.seek(2.0, STEP, held);
+    let mut opened = Emitter::new(warmed.clone(), [0.0, 0.5, 0.0]);
+    opened.seek(0.0, STEP, moving);
+    assert!(opened.live() > 50, "{}", opened.live());
+    assert_eq!(opened.particles(), early.particles());
+    assert_eq!(opened.time(), 0.0);
+    opened.seek(1.5, STEP, moving);
+    let mut straight = Emitter::new(warmed.clone(), [0.0, 0.5, 0.0]);
+    straight.seek(1.5, STEP, moving);
+    assert_eq!(opened.particles(), straight.particles());
+    opened.seek(0.5, STEP, moving);
+    opened.seek(1.5, STEP, moving);
+    assert_eq!(opened.particles(), straight.particles());
+    let capped = Recipe {
+        prewarm: 1e9,
+        ..warmed
+    };
+    assert_eq!(capped.prewarm_steps(), (PREWARM_MAX / STEP).round() as u64);
 }

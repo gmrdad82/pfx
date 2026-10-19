@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use pfx_motion::Timeline;
+use pfx_motion::{Rate, Timeline};
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value};
 
 use crate::Error;
@@ -43,6 +43,13 @@ pub(crate) struct Params<'a> {
     line: Option<usize>,
     src: &'a Sources,
     read: Vec<&'static str>,
+}
+
+fn rate_of(item: &Item) -> Option<Rate> {
+    if let Some(text) = item.as_str() {
+        return text.parse().ok();
+    }
+    Rate::from_f64(number_of(item)?).ok()
 }
 
 fn number_of(item: &Item) -> Option<f64> {
@@ -274,15 +281,12 @@ impl Clock {
         let Some(table) = root.get("timeline").and_then(Item::as_table_like) else {
             return Clock { seconds: None };
         };
-        let fps = table
-            .get("fps")
-            .and_then(number_of)
-            .unwrap_or(f64::from(Timeline::FPS));
+        let fps = table.get("fps").and_then(rate_of).unwrap_or(Timeline::FPS);
         let seconds = table.get("seconds").and_then(number_of).or_else(|| {
             table
                 .get("frames")
                 .and_then(number_of)
-                .map(|frames| frames / fps)
+                .map(|frames| frames * f64::from(fps.den()) / f64::from(fps.num()))
         });
         Clock {
             seconds: seconds.filter(|s| s.is_finite() && *s > 0.0),

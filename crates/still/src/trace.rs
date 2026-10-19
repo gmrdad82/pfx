@@ -2,6 +2,7 @@ use crate::picture::{Film, Reach};
 use crate::staging::{IDENTITY, Staging, Steps, View, eyepiece};
 use crate::text::Overlay;
 use pfx_build::{Built, Registry};
+use pfx_core::memory::{Plan as MemoryPlan, Run};
 use pfx_denoise::Denoiser;
 use pfx_gpu::Gpu;
 use pfx_gpu::pace::{Pacer, Stats};
@@ -9,9 +10,11 @@ use pfx_live::frame::Matrix;
 use pfx_post::Chain;
 use pfx_recipe::{Camera, Recipe};
 use pfx_recipe_scene::pace::{Report, TurnState, turn_reporting};
+use pfx_trace::checkpoint::Keeper;
 use pfx_trace::gpu::Builds;
 use pfx_trace::sky::Environment;
 use pfx_trace::sobol::Sampler;
+use pfx_trace::sprites::Spray;
 use pfx_trace::stage::Staged;
 use pfx_trace::{Adaptive, Round, Trace, TraceError};
 use std::borrow::Cow;
@@ -306,6 +309,7 @@ pub struct Paced {
     pub wall_ms: f64,
     pub trace_bytes: u64,
     pub gpu_resident: Option<u64>,
+    pub planned: [u64; 2],
 }
 
 impl Paced {
@@ -401,6 +405,15 @@ pub fn render(
     registry: &Registry,
     progress: &mut dyn FnMut(Step),
 ) -> Result<Rendered, Fault> {
+    render_kept(request, registry, progress, None)
+}
+
+pub fn render_kept(
+    request: &Request<'_>,
+    registry: &Registry,
+    progress: &mut dyn FnMut(Step),
+    keeper: Option<&mut dyn Keeper>,
+) -> Result<Rendered, Fault> {
     if request.samples == 0 {
         return Err(Fault::Failed("a render needs at least one sample".into()));
     }
@@ -414,8 +427,24 @@ pub fn render(
         registry,
         request.time,
     )?;
+    let plan = pfx_core::memory::plan(
+        &pfx_recipe_scene::census(&recipe, &built),
+        Run::Trace {
+            size: planned_size(request),
+            denoise: request.denoise,
+            held: false,
+        },
+    );
+    plan.admit().map_err(Fault::Refused)?;
     turn(Report::default());
     let mut staging = Staging::of(&recipe, &built.parts)?;
+    let emitted = pfx_build::emitters(&recipe, &built).map_err(|e| Fault::Failed(e.to_string()))?;
+    let puffs = crate::sprays::puffs(
+        &emitted,
+        &built,
+        recipe.timeline.map_or(pfx_build::Rate::whole(1), |t| t.fps),
+        request.time.unwrap_or(0.0),
+    );
     drop(built);
     staging.shed();
     let camera = pfx_recipe_scene::camera(&recipe, request.camera)?;
@@ -434,6 +463,10 @@ pub fn render(
         _ => Reach::NONE,
     };
     let mut staged = staging.stage(eyepiece(camera, request.view, request.size)?)?;
+    let facing = staged.scene.camera;
+    staged
+        .spray(&Spray::new(&puffs, facing))
+        .map_err(Fault::Failed)?;
     staging.images = Vec::new();
     staging.textures = Default::default();
     staged.detail.sampler = Sampler::Sobol {
@@ -465,7 +498,7 @@ pub fn render(
         .seed
         .unwrap_or_else(|| pfx_recipe_scene::seed(&recipe));
     let mut denoiser = request.denoise.then(|| denoiser(&gpu)).transpose()?;
-    let (film, paced, mean_samples, most_samples) = match adaptive {
+    let (film, mut paced, mean_samples, most_samples) = match adaptive {
         Some(adaptive) => converge(
             &gpu,
             &staged,
@@ -477,6 +510,7 @@ pub fn render(
             adaptive,
             progress,
             &mut turn,
+            keeper,
         )?,
         None => {
             let (film, paced) = trace_in(
@@ -490,10 +524,12 @@ pub fn render(
                 request.samples,
                 progress,
                 &mut turn,
+                keeper,
             )?;
             (film, paced, f64::from(request.samples), request.samples)
         }
     };
+    paced.planned = [plan.cpu(), plan.gpu()];
     let film = if frame == region {
         film
     } else {
@@ -533,6 +569,9 @@ pub struct Reel {
     kept: Option<Kept>,
     moving_cameras: Vec<Camera>,
     time: f64,
+    emitted: Vec<pfx_build::Emitted>,
+    shutter: Vec<f64>,
+    plan: MemoryPlan,
 }
 
 pub const MOTION_STEPS: u32 = 1;
@@ -551,9 +590,31 @@ impl Reel {
         seed: Option<u32>,
         registry: &Registry,
     ) -> Result<Reel, Fault> {
+        Reel::open_for(recipe, variant, set, seed, registry, [0, 0])
+    }
+
+    pub fn open_for(
+        recipe: &Path,
+        variant: Option<&str>,
+        set: &[String],
+        seed: Option<u32>,
+        registry: &Registry,
+        size: [u32; 2],
+    ) -> Result<Reel, Fault> {
         let (recipe, built) = pfx_recipe_scene::load(recipe, variant, set, registry)?;
+        let plan = pfx_core::memory::plan(
+            &pfx_recipe_scene::census(&recipe, &built),
+            Run::Trace {
+                size,
+                denoise: true,
+                held: true,
+            },
+        );
+        plan.admit().map_err(Fault::Refused)?;
         turn_reporting(Report::default());
         let staging = Staging::of(&recipe, &built.parts)?;
+        let emitted =
+            pfx_build::emitters(&recipe, &built).map_err(|e| Fault::Failed(e.to_string()))?;
         let gpu = pfx_recipe_scene::headless()?;
         let seed = seed.unwrap_or_else(|| pfx_recipe_scene::seed(&recipe));
         Ok(Reel {
@@ -568,7 +629,14 @@ impl Reel {
             kept: None,
             moving_cameras: Vec::new(),
             time: 0.0,
+            emitted,
+            shutter: Vec::new(),
+            plan,
         })
+    }
+
+    pub fn plan(&self) -> &MemoryPlan {
+        &self.plan
     }
 
     pub fn builds(&self) -> Option<Builds> {
@@ -583,6 +651,7 @@ impl Reel {
         self.time = time;
         self.staging.steps = None;
         self.moving_cameras.clear();
+        self.shutter.clear();
         self.posed_at(time)?;
         self.staging.refog(&self.recipe);
         if self.built.skinned() {
@@ -607,7 +676,10 @@ impl Reel {
     fn posed_at(&mut self, time: f64) -> Result<(), Fault> {
         self.recipe = pfx_build::pose_cameras(&self.base, &self.built, time)
             .map_err(|e| Fault::Failed(e.to_string()))?;
-        let fps = self.base.timeline.map_or(1, |t| t.fps);
+        let fps = self
+            .base
+            .timeline
+            .map_or(pfx_build::Rate::whole(1), |t| t.fps);
         let posed = pfx_recipe_scene::poses(&self.built, fps, time);
         for (model, piece) in self.staging.posed.iter_mut().zip(&self.staging.pieces) {
             *model = posed.get(&piece.name).copied().unwrap_or(IDENTITY);
@@ -625,13 +697,9 @@ impl Reel {
             self.pose(time)?;
             return Ok(pfx_recipe_scene::camera(&self.recipe, camera)?.clone());
         };
-        let fps = f64::from(self.base.timeline.map_or(1, |t| t.fps));
-        let shutter = pfx_trace::motion::Shutter::around(
-            time,
-            1.0 / fps,
-            f64::from(blur.shutter),
-            blur.position,
-        );
+        let step = self.base.timeline.map_or(1.0, |t| t.step());
+        let shutter =
+            pfx_trace::motion::Shutter::around(time, step, f64::from(blur.shutter), blur.position);
         let steps = pfx_trace::motion::steps_of(self.motion_steps);
         let times = match self.base.timeline {
             Some(timeline) => shutter.times_held(steps, 0.0, timeline.seconds()),
@@ -664,6 +732,7 @@ impl Reel {
         self.pose(time)?;
         shapes.retain(|(_, steps)| steps.len() == times.len());
         self.moving_cameras = cameras;
+        self.shutter = times;
         self.staging.steps = Some(Steps {
             posed,
             shapes,
@@ -694,6 +763,16 @@ impl Reel {
         take: Take,
         progress: &mut dyn FnMut(Step),
     ) -> Result<Rendered, Fault> {
+        self.frame_kept(camera, take, progress, None)
+    }
+
+    pub fn frame_kept(
+        &mut self,
+        camera: &Camera,
+        take: Take,
+        progress: &mut dyn FnMut(Step),
+        keeper: Option<&mut dyn Keeper>,
+    ) -> Result<Rendered, Fault> {
         let Take { size, samples, .. } = take;
         if samples == 0 {
             return Err(Fault::Failed("a render needs at least one sample".into()));
@@ -712,7 +791,17 @@ impl Reel {
         let moves = self.staging.steps.as_ref().is_some_and(Steps::moves);
         let mut kept = match self.kept.take() {
             Some(mut kept)
-                if kept.size == size && kept.samples == samples && kept.trace.moving() == moves =>
+                if kept.size == size
+                    && kept.samples == samples
+                    && kept.trace.moving() == moves
+                    && self.emitted.is_empty()
+                    && kept.trace.sky_halvings()
+                        == pfx_trace::gpu::sky_halvings(
+                            &self.staging.sky,
+                            &lens.camera,
+                            lens.projection,
+                            size,
+                        ) =>
             {
                 let placements = self.staging.placements(&lens.eye);
                 let models: Vec<Matrix> =
@@ -765,6 +854,7 @@ impl Reel {
                 adaptive,
                 progress,
                 &mut turn,
+                keeper,
             ),
             None => traced(
                 &self.gpu,
@@ -773,11 +863,13 @@ impl Reel {
                 samples,
                 progress,
                 &mut turn,
+                keeper,
             )
             .map(|(film, paced)| (film, paced, f64::from(samples), samples)),
         };
         self.kept = Some(kept);
-        let (film, paced, mean_samples, most_samples) = traced?;
+        let (film, mut paced, mean_samples, most_samples) = traced?;
+        paced.planned = [self.plan.cpu(), self.plan.gpu()];
         Ok(Rendered {
             film,
             overlay: Overlay::of(&self.staging.text),
@@ -806,6 +898,36 @@ impl Reel {
         samples: u32,
     ) -> Result<Kept, Fault> {
         let mut staged = self.staging.stage(lens)?;
+        let puffs = crate::sprays::puffs(
+            &self.emitted,
+            &self.built,
+            self.base
+                .timeline
+                .map_or(pfx_build::Rate::whole(1), |t| t.fps),
+            self.time,
+        );
+        let blurred = !puffs.is_empty() && self.staging.steps.is_some() && self.shutter.len() >= 2;
+        if blurred && staged.detail.motion.is_none() {
+            staged.detail.motion = Some(pfx_trace::motion::Motion {
+                steps: self.shutter.len(),
+                cameras: Vec::new(),
+                curve: Vec::new(),
+            });
+        }
+        let steps: Vec<f32> = if blurred {
+            self.shutter
+                .iter()
+                .map(|at| (at - self.time) as f32)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        staged
+            .spray(&Spray {
+                steps: &steps,
+                ..Spray::new(&puffs, lens.camera)
+            })
+            .map_err(Fault::Failed)?;
         staged.detail.sampler = Sampler::Sobol { samples };
         staged.detail.fit_textures = Some(size);
         Ok(Kept {
@@ -813,6 +935,19 @@ impl Reel {
             size,
             samples,
         })
+    }
+}
+
+fn planned_size(request: &Request<'_>) -> [u32; 2] {
+    match request.crop {
+        Some(crop) => {
+            let [_, _, width, height] = crop.rect;
+            [
+                (width + 2 * crop.apron).min(request.size[0]),
+                (height + 2 * crop.apron).min(request.size[1]),
+            ]
+        }
+        None => request.size,
     }
 }
 
@@ -836,6 +971,7 @@ pub fn trace(
         samples,
         progress,
         turn,
+        None,
     )
 }
 
@@ -852,6 +988,7 @@ fn trace_in(
     samples: u32,
     progress: &mut dyn FnMut(Step),
     turn: &mut dyn FnMut(Report),
+    keeper: Option<&mut dyn Keeper>,
 ) -> Result<(Film, Paced), Fault> {
     let Shot {
         region,
@@ -866,6 +1003,7 @@ fn trace_in(
         samples,
         progress,
         turn,
+        keeper,
     )
 }
 
@@ -876,15 +1014,44 @@ fn traced(
     samples: u32,
     progress: &mut dyn FnMut(Step),
     turn: &mut dyn FnMut(Report),
+    mut keeper: Option<&mut dyn Keeper>,
 ) -> Result<(Film, Paced), Fault> {
     let mut turns = Turns::new(turn);
-    let resident = crate::memory::gpu_resident();
-    let mut paced = sampled(samples, &mut turns, progress, |pacer, between| {
-        trace.sample_paced(gpu, 1, seed, pacer, between)
-    })?;
+    pfx_core::memory::look_gpu();
+    let failed = |e: String| Fault::Failed(format!("the tracer's checkpoint: {e}"));
+    let resumed = keeper.as_deref_mut().and_then(Keeper::resume);
+    if let Some(saved) = resumed {
+        if saved.adaptive.is_some() || saved.samples > samples {
+            return Err(failed("it was made by another render".into()));
+        }
+        trace.restore(gpu, &saved).map_err(failed)?;
+    }
+    let from = trace.samples();
+    let trace = RefCell::new(trace);
+    let mut paced = sampled(
+        (from, samples),
+        &mut turns,
+        progress,
+        |pacer, between| {
+            trace
+                .borrow_mut()
+                .sample_paced(gpu, 1, seed, pacer, between)
+        },
+        &mut |done| {
+            let Some(keeper) = keeper.as_deref_mut() else {
+                return Ok(());
+            };
+            if done >= samples || !keeper.due(done) {
+                return Ok(());
+            }
+            let saved = trace.borrow().save(gpu).map_err(failed)?;
+            keeper.keep(saved).map_err(failed)
+        },
+    )?;
+    let trace = trace.into_inner();
     paced.trace_bytes = trace.gpu_bytes();
-    paced.gpu_resident = resident;
     let film = developed(gpu, trace, size, samples, denoiser)?;
+    paced.gpu_resident = pfx_core::memory::peak().gpu;
     turns.now();
     Ok((film, paced))
 }
@@ -896,6 +1063,7 @@ pub fn converge(
     adaptive: Adaptive,
     progress: &mut dyn FnMut(Step),
     turn: &mut dyn FnMut(Report),
+    keeper: Option<&mut dyn Keeper>,
 ) -> Result<(Film, Paced, f64, u32), Fault> {
     let Shot {
         region,
@@ -910,6 +1078,7 @@ pub fn converge(
         adaptive,
         progress,
         turn,
+        keeper,
     )
 }
 
@@ -920,8 +1089,9 @@ fn adapted(
     adaptive: Adaptive,
     progress: &mut dyn FnMut(Step),
     turn: &mut dyn FnMut(Report),
+    keeper: Option<&mut dyn Keeper>,
 ) -> Result<(Film, Paced, f64, u32), Fault> {
-    let resident = crate::memory::gpu_resident();
+    pfx_core::memory::look_gpu();
     let mut turns = Turns::new(turn);
     let mut pacer = Pacer::default();
     let cap = adaptive.max_samples;
@@ -939,7 +1109,7 @@ fn adapted(
     turns.now();
     tell(&mut watch.borrow_mut());
     let converged = trace
-        .sample_adaptive_with(
+        .sample_adaptive_kept(
             gpu,
             adaptive,
             seed,
@@ -956,16 +1126,17 @@ fn adapted(
                 watch.0.reach(round, gpu_ms);
                 tell(&mut watch);
             },
+            keeper,
         )
         .map_err(|e| Fault::Failed(format!("the tracer: {e}")))?;
     let mut paced = Paced {
         trace_bytes: trace.gpu_bytes(),
-        gpu_resident: resident,
         ..Paced::default()
     };
     paced.add(&converged.stats);
     turns.now();
     let film = developed(gpu, trace, size, cap, denoiser)?;
+    paced.gpu_resident = pfx_core::memory::peak().gpu;
     turns.now();
     Ok((
         film,
@@ -997,6 +1168,7 @@ fn developed(
         })
         .transpose()
         .map_err(|e| Fault::Failed(format!("the denoiser: {e}")))?;
+    pfx_core::memory::look_gpu();
     let failed = |e: String| Fault::Failed(format!("the tracer's readback: {e}"));
     let (color, albedo, normal) = if denoised.is_some() {
         let color = trace.readback_color(gpu).map_err(failed)?;
@@ -1020,22 +1192,24 @@ fn developed(
 }
 
 fn sampled(
-    samples: u32,
+    (from, samples): (u32, u32),
     turns: &mut Turns<'_>,
     progress: &mut dyn FnMut(Step),
     mut sample: impl FnMut(&mut Pacer, &mut dyn FnMut(f64) -> bool) -> Result<Stats, String>,
+    sampled: &mut dyn FnMut(u32) -> Result<(), Fault>,
 ) -> Result<Paced, Fault> {
     let mut pacer = Pacer::default();
     let mut paced = Paced::default();
     turns.now();
     progress(Step::Trace {
-        done: 0,
+        done: from,
         total: samples,
     });
-    for done in 1..=samples {
+    for done in from + 1..=samples {
         let stats = sample(&mut pacer, &mut |ms| turns.soon(ms))
             .map_err(|e| Fault::Failed(format!("the tracer: {e}")))?;
         paced.add(&stats);
+        sampled(done)?;
         progress(Step::Trace {
             done,
             total: samples,
@@ -1108,7 +1282,7 @@ mod tests {
             turn: &mut turn,
         };
         let paced = sampled(
-            samples,
+            (0, samples),
             &mut turns,
             &mut |step| {
                 if let Step::Trace { done, .. } = step {
@@ -1122,6 +1296,7 @@ mod tests {
                 }
                 Ok(slices(slice_ms))
             },
+            &mut |_| Ok(()),
         )
         .unwrap();
         (events.into_inner(), paced)
@@ -1172,9 +1347,15 @@ mod tests {
             state: TurnState::new(50.0).with_wall_ms(1e9),
             turn: &mut turn,
         };
-        let fault = sampled(4, &mut turns, &mut |_| {}, |_, _| Err("lost".into()))
-            .err()
-            .unwrap();
+        let fault = sampled(
+            (0, 4),
+            &mut turns,
+            &mut |_| {},
+            |_, _| Err("lost".into()),
+            &mut |_| Ok(()),
+        )
+        .err()
+        .unwrap();
         assert_eq!(fault, Fault::Failed("the tracer: lost".into()));
         assert_eq!(turned, 1);
     }

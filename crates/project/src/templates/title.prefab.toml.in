@@ -1,0 +1,26 @@
+format = 1
+
+materials = ["content/materials/title.materials.toml"]
+
+[mesh.name]
+file = "content/meshes/name.glb"
+
+[mesh.mark]
+file = "content/meshes/mark.glb"
+
+[[object]]
+name = "name"
+mesh = "name"
+at = {{name_at}}
+
+[[object]]
+name = "mark"
+mesh = "mark"
+at = {{mark_at}}
+{{mark_content}}
+[text.version]
+text = "v{version}"
+font = "content/fonts/IBMPlexMono-Regular.ttf"
+size = {{version_size}}
+color = [0.25, 0.25, 0.27, 1.0]
+at = {{version_at}}

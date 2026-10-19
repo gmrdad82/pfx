@@ -15,6 +15,7 @@ pub struct Header<'a> {
     width: Option<f32>,
     id: Option<Id>,
     mark: Option<(TextureId, Vec2)>,
+    wordmark: Option<(TextureId, Vec2)>,
 }
 
 impl<'a> Header<'a> {
@@ -27,6 +28,7 @@ impl<'a> Header<'a> {
             width: None,
             id: None,
             mark: None,
+            wordmark: None,
         }
     }
 
@@ -47,6 +49,11 @@ impl<'a> Header<'a> {
 
     pub fn mark(mut self, texture: TextureId, size: Vec2) -> Header<'a> {
         self.mark = Some((texture, size));
+        self
+    }
+
+    pub fn wordmark(mut self, texture: TextureId, size: Vec2) -> Header<'a> {
+        self.wordmark = Some((texture, size));
         self
     }
 
@@ -104,9 +111,9 @@ impl Widget for Header<'_> {
             code_text,
         );
         let mut after = code_rect.right_center() + Vec2::new(HEADER_GAP, 0.0);
-        if let Some((texture, size)) = self.mark {
-            let scale = ui.ctx().pixels_per_point();
-            let snap = |value: f32| (value * scale).round() / scale;
+        let scale = ui.ctx().pixels_per_point();
+        let snap = |value: f32| (value * scale).round() / scale;
+        for (texture, size) in [self.mark, self.wordmark].into_iter().flatten() {
             let min = Pos2::new(snap(after.x), snap(rect.center().y - size.y / 2.0));
             let image = Rect::from_min_size(min, size);
             painter.image(

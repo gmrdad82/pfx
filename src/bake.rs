@@ -32,6 +32,7 @@ struct Options {
     name: Option<String>,
     force: bool,
     detail: bool,
+    memory_limit: Option<u64>,
 }
 
 pub fn check(args: &[String]) -> Result<(), String> {
@@ -63,7 +64,13 @@ fn parse(args: &[String]) -> Result<Options, String> {
         }
         if !matches!(
             flag,
-            "--scene" | "--assets" | "--out" | "--anchors" | "--samples" | "--name"
+            "--scene"
+                | "--assets"
+                | "--out"
+                | "--anchors"
+                | "--samples"
+                | "--name"
+                | "--memory-limit"
         ) {
             return Err(cli::unexpected(flag));
         }
@@ -103,6 +110,13 @@ fn parse(args: &[String]) -> Result<Options, String> {
     if let Some(name) = name.as_deref().filter(|v| !label(v)) {
         return Err(cli::invalid(name, "--name", "expected an ASCII label"));
     }
+    let memory_limit = values
+        .get("--memory-limit")
+        .map(|text| {
+            pfx_core::memory::gigabytes(text)
+                .map_err(|why| cli::invalid(text, "--memory-limit", why))
+        })
+        .transpose()?;
     Ok(Options {
         scene: PathBuf::from(*scene),
         assets: values.get("--assets").map(|value| PathBuf::from(*value)),
@@ -112,6 +126,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         name,
         force,
         detail,
+        memory_limit,
     })
 }
 
@@ -302,6 +317,15 @@ fn assets_folder(recipe: &toml::Value, flag: Option<&Path>) -> Result<Option<Pat
 }
 
 fn bake(options: Options) -> Result<(), String> {
+    let mut plan = None;
+    baked(options, &mut plan)?;
+    if let Some(plan) = plan {
+        eprintln!("pfx bake: {}", pfx_core::memory::peak().line(&plan));
+    }
+    Ok(())
+}
+
+fn baked(options: Options, plan: &mut Option<pfx_core::memory::Plan>) -> Result<(), String> {
     let tmp = caller_tmp()?;
     let recipe_bytes = fs::read(options.scene.join("bake.toml")).map_err(|e| e.to_string())?;
     let mut recipe: toml::Value =
@@ -336,6 +360,23 @@ fn bake(options: Options) -> Result<(), String> {
             .map_or(options.scene.as_path(), |v| v.0.as_path()),
         assets.as_deref(),
     )?;
+    let triangles = source.scene.triangles.len() as u64;
+    let memory = pfx_core::memory::plan(
+        &pfx_core::memory::Census {
+            built: size_of_val(source.scene.triangles.as_slice()) as u64,
+            placed: triangles,
+            distinct: triangles,
+            pieces: 1,
+            ..pfx_core::memory::Census::default()
+        },
+        pfx_core::memory::Run::Trace {
+            size: [0, 0],
+            denoise: false,
+            held: false,
+        },
+    );
+    memory.admit()?;
+    *plan = Some(memory);
     let scene_folder = assets.as_deref().unwrap_or(options.scene.as_path());
     let flag_anchors = options.anchors.clone();
     if let Some(anchors) = options.anchors {
@@ -767,13 +808,15 @@ fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
             let next = path.with_file_name(format!(".{}.next", prop.name));
             let next_target = tmp.join(&next);
             if next_target.exists() {
-                return Err(format!("{} already exists", next_target.display()));
+                fs::remove_dir_all(&next_target)
+                    .map_err(|e| format!("{}: {e}", next_target.display()))?;
             }
             write_prop_artifact(tmp, &next, &artifact)?;
             let old = path.with_file_name(format!(".{}.old", prop.name));
             let old_target = tmp.join(&old);
             if old_target.exists() {
-                return Err(format!("{} already exists", old_target.display()));
+                fs::remove_dir_all(&old_target)
+                    .map_err(|e| format!("{}: {e}", old_target.display()))?;
             }
             fs::rename(&target, &old_target).map_err(|e| e.to_string())?;
             if let Err(error) = fs::rename(&next_target, &target) {
@@ -868,6 +911,7 @@ fn turn_soon(turns: &mut TurnState, slice_ms: f64) -> Result<bool, String> {
 
 #[track_caller]
 fn item_turn(turns: &mut TurnState) -> Result<(), String> {
+    pfx_core::memory::look_gpu();
     turns.add(f64::NAN);
     pgpu_turn(&turns.take_args())
 }
@@ -894,6 +938,7 @@ fn recipe_product(scene: &Path) -> String {
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let options = parse(args)?;
+    pfx_core::memory::from_env(options.memory_limit)?;
     if options.detail || std::env::var("PFX_BAKE_GPU").ok().as_deref() == Some("1") {
         return bake(options);
     }

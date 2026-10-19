@@ -185,7 +185,10 @@ impl Shell {
     }
 
     fn loose(&mut self) -> Eye {
-        if let Some((eye, _)) = self.chase_view() {
+        let taken = self.take_over();
+        if taken.is_some() {
+            self.eye = taken;
+        } else if let Some((eye, _)) = self.chase_view() {
             self.eye = Some(eye);
         } else if let Some(camera) = self.through() {
             self.eye = Some(Eye::from_camera(camera, f64::from(self.render_aspect())));
@@ -427,6 +430,19 @@ impl Shell {
         self.wire.on() || self.wire.clay > 0.0
     }
 
+    pub(super) fn looked(&self) -> Option<usize> {
+        if self.chase_view().is_some() {
+            self.document
+                .views
+                .iter()
+                .position(|view| view.rig.is_some())
+        } else if self.through().is_some() {
+            Some(self.camera)
+        } else {
+            None
+        }
+    }
+
     pub(super) fn overlays(&self, painter: &Painter, eye: &Eye, image: Rect) {
         let palette = Palette::of(painter.ctx());
         if !self.overlays_on() || self.view_error.is_some() {
@@ -438,16 +454,7 @@ impl Shell {
         let aspect = self.span().map_or(f64::from(self.render_aspect()), |span| {
             f64::from(span.aspect)
         });
-        let looked = if self.chase_view().is_some() {
-            self.document
-                .views
-                .iter()
-                .position(|view| view.rig.is_some())
-        } else if self.through().is_some() {
-            Some(self.camera)
-        } else {
-            None
-        };
+        let looked = self.looked();
         for (index, view) in self.document.views.iter().enumerate() {
             if Some(index) == looked {
                 continue;
@@ -456,8 +463,14 @@ impl Shell {
                 (Some(_), Some(chase)) => chase,
                 _ => Eye::from_camera(view, aspect),
             };
+            let stroke = match self.fade.left() {
+                Some((left, alpha)) if left == index => {
+                    Stroke::new(GUIDE_WIDTH, palette.accent.gamma_multiply(alpha))
+                }
+                _ => accent,
+            };
             for line in overlay::frustum(&eye, aspect, overlay::FAR) {
-                overlay::polyline(&painter, &lens, &line, accent);
+                overlay::polyline(&painter, &lens, &line, stroke);
             }
         }
         overlay::polyline(
@@ -493,8 +506,9 @@ impl Shell {
             &self.guides.dots,
             palette.accent.gamma_multiply(0.85),
         );
-        if let Some(frame) = self.camera_frame() {
-            painter.rect_stroke(frame, CornerRadius::ZERO, accent, StrokeKind::Outside);
+        if let Some((frame, alpha)) = self.fade.frame() {
+            let stroke = Stroke::new(GUIDE_WIDTH, palette.accent.gamma_multiply(alpha));
+            painter.rect_stroke(frame, CornerRadius::ZERO, stroke, StrokeKind::Outside);
         }
         if let Some([x0, y0, x1, y1]) = self.region_shown() {
             let at = |x: f32, y: f32| image.min + Vec2::new(x * image.width(), y * image.height());

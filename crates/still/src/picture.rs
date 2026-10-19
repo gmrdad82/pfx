@@ -382,19 +382,18 @@ fn fast_png(
             size[1]
         ));
     }
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
-    }
     let failed = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
-    let file = std::fs::File::create(path).map_err(|e| failed(&e))?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size[0], size[1]);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(depth);
-    encoder.set_compression(png::Compression::Fast);
-    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-    let mut writer = encoder.write_header().map_err(|e| failed(&e))?;
-    writer.write_image_data(bytes).map_err(|e| failed(&e))?;
-    writer.finish().map_err(|e| failed(&e))
+    pfx_core::atomic::write_with(path, |temp| {
+        let file = std::fs::File::create(temp).map_err(|e| failed(&e))?;
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), size[0], size[1]);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(depth);
+        encoder.set_compression(png::Compression::Fast);
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+        let mut writer = encoder.write_header().map_err(|e| failed(&e))?;
+        writer.write_image_data(bytes).map_err(|e| failed(&e))?;
+        writer.finish().map_err(|e| failed(&e))
+    })
 }
 
 pub fn rgbe(rgb: [f32; 3]) -> [u8; 4] {
@@ -476,11 +475,13 @@ pub fn write_exr(path: &Path, size: [u32; 2], pixels: &[[f32; 4]]) -> Result<(),
             (r, g, b, f16::ONE)
         }),
     );
-    Image::from_layer(layer)
-        .write()
-        .non_parallel()
-        .to_file(path)
-        .map_err(|e| format!("{}: {e}", path.display()))
+    pfx_core::atomic::write_with(path, |temp| {
+        Image::from_layer(layer)
+            .write()
+            .non_parallel()
+            .to_file(temp)
+            .map_err(|e| format!("{}: {e}", path.display()))
+    })
 }
 
 pub fn read_exr(path: &Path) -> Result<([u32; 2], Vec<[f32; 4]>), String> {
@@ -523,8 +524,7 @@ pub fn write_linear(path: &Path, size: [u32; 2], pixels: &[[f32; 4]]) -> Result<
     }
     match format {
         Format::Exr => write_exr(path, size, pixels)?,
-        _ => std::fs::write(path, hdr(size, pixels)?)
-            .map_err(|e| format!("{}: {e}", path.display()))?,
+        _ => pfx_core::atomic::write(path, &hdr(size, pixels)?)?,
     }
     Ok(format)
 }
@@ -554,8 +554,7 @@ pub fn write_with<'a>(
             pfx_recipe_scene::write_png(path, film.size, &rgba).map_err(|e| e.0)?;
         }
         Format::Exr => write_exr(path, film.size, &film.color)?,
-        Format::Hdr => std::fs::write(path, hdr(film.size, &film.color)?)
-            .map_err(|e| format!("{}: {e}", path.display()))?,
+        Format::Hdr => pfx_core::atomic::write(path, &hdr(film.size, &film.color)?)?,
     }
     Ok(format)
 }

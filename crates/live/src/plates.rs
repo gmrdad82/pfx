@@ -285,6 +285,10 @@ fn plate_sunlit(world: vec3f, normal: vec3f) -> f32 {
     let front = eye + jittered * hit.t * (1.0 + plate.params.x);
     let clip = plate.view_projection * vec4f(front, 1.0);
     out.depth = clamp(clip.z / clip.w, 0.0, 1.0);
+    if (plate.params.w > 0.5) {
+        let standard = plate.current * vec4f(front, 1.0);
+        out.depth = 1.0 - clamp(standard.z / standard.w, 0.0, 1.0);
+    }
     let now = plate.current * vec4f(world, 1.0);
     let before = plate.previous * vec4f(world, 1.0);
     let moved = (before.xy / before.w - now.xy / now.w) * vec2f(0.5, -0.5);
@@ -358,6 +362,7 @@ pub struct PlateFrame<'a> {
     pub sun_light: [f32; 3],
     pub sun_up: bool,
     pub instances: &'a [Instance],
+    pub classic_depth: bool,
 }
 
 pub struct Plates {
@@ -1083,7 +1088,7 @@ impl Plates {
             self.settings.depth_bias,
             self.settings.iterations.max(1) as f32,
             self.shadow_texel,
-            0.0,
+            if frame.classic_depth { 1.0 } else { 0.0 },
             frame.toward_sun[0],
             frame.toward_sun[1],
             frame.toward_sun[2],

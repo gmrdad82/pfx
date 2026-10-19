@@ -1,7 +1,7 @@
-use super::icons::Icon;
+use super::icons::{Icon, Icons};
 use super::{
-    Draw, Fill, Glow, Gradient, Group, IDENTITY, IconShape, Matrix, Shadow, Shape, Srgba, Stroke,
-    multiply, rotation, scaling, translation,
+    Draw, Fill, FlatScene, Glow, Gradient, Group, IDENTITY, IconShape, Light, Matrix, Shadow,
+    ShadowCurve, Shape, SpriteFill, Srgba, Stroke, cpu, multiply, rotation, scaling, translation,
 };
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::float::simplify::SimplifyShape;
@@ -13,6 +13,11 @@ const MARK_REACH: f32 = 0.04;
 const ARC_STEP: f32 = 0.1;
 const MITER_LIMIT: f32 = 4.0;
 const ELLIPSE_STEPS: usize = 72;
+
+mod blur;
+pub mod filter;
+#[cfg(test)]
+mod filter_tests;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Filter {
@@ -26,6 +31,215 @@ pub struct Board {
     pub draws: Vec<Draw>,
     pub groups: Vec<Group>,
     pub icons: Vec<IconShape>,
+    pub rasters: Vec<Raster>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Raster {
+    pub draw: usize,
+    pub region: [f32; 4],
+    pub place: Matrix,
+    bounds: [f32; 4],
+    view: [f32; 2],
+    filter: filter::Filter,
+    source: Vec<Draw>,
+    groups: Vec<Group>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Painted {
+    pub size: [u32; 2],
+    pub rgba: Vec<u8>,
+}
+
+fn apply(m: &Matrix, p: [f32; 2]) -> [f32; 2] {
+    [
+        m[0][0] * p[0] + m[1][0] * p[1] + m[3][0],
+        m[0][1] * p[0] + m[1][1] * p[1] + m[3][1],
+    ]
+}
+
+fn inverted(m: &Matrix) -> Result<Matrix, String> {
+    let (a, b, c, d) = (m[0][0], m[0][1], m[1][0], m[1][1]);
+    let det = a * d - b * c;
+    if det.abs() <= f32::EPSILON * (a.abs() + b.abs() + c.abs() + d.abs()).max(1.0) {
+        return Err("a filtered shape's transform cannot be inverted".into());
+    }
+    let mut out = IDENTITY;
+    out[0][0] = d / det;
+    out[0][1] = -b / det;
+    out[1][0] = -c / det;
+    out[1][1] = a / det;
+    let [tx, ty] = [m[3][0], m[3][1]];
+    out[3][0] = -(out[0][0] * tx + out[1][0] * ty);
+    out[3][1] = -(out[0][1] * tx + out[1][1] * ty);
+    Ok(out)
+}
+
+fn stretch(m: &Matrix) -> f32 {
+    let column = |c: usize| (m[c][0] * m[c][0] + m[c][1] * m[c][1]).sqrt();
+    column(0).max(column(1))
+}
+
+fn shape_bounds(draw: &Draw, icons: &[IconShape]) -> Option<[f32; 4]> {
+    let half = match draw.shape {
+        Shape::Rect { half, .. } => half,
+        Shape::Circle { radius } => [radius; 2],
+        Shape::Ring { radius, width } | Shape::Arc { radius, width, .. } => {
+            [radius + width * 0.5; 2]
+        }
+        Shape::Icon(Icon(i)) => return icons.get(i as usize)?.bounds(),
+        Shape::Text(_) => return None,
+    };
+    Some([-half[0], -half[1], half[0], half[1]])
+}
+
+fn union(draws: &[Draw], icons: &[IconShape], to_user: &Matrix) -> Option<[f32; 4]> {
+    let mut out: Option<[f32; 4]> = None;
+    for d in draws {
+        let Some([x0, y0, x1, y1]) = shape_bounds(d, icons) else {
+            continue;
+        };
+        let m = multiply(*to_user, d.transform);
+        for corner in [[x0, y0], [x1, y0], [x0, y1], [x1, y1]] {
+            let [x, y] = apply(&m, corner);
+            out = Some(match out {
+                None => [x, y, x, y],
+                Some([a, b, c, e]) => [a.min(x), b.min(y), c.max(x), e.max(y)],
+            });
+        }
+    }
+    out
+}
+
+impl Raster {
+    fn new(
+        filter: filter::Filter,
+        source: Vec<Draw>,
+        place: Matrix,
+        board: &Board,
+    ) -> Result<Raster, String> {
+        let to_user = inverted(&place)?;
+        let bounds = union(&source, &board.icons, &to_user).unwrap_or([0.0; 4]);
+        let region = filter.region(bounds, board.size)?;
+        Ok(Raster {
+            draw: board.draws.len(),
+            region,
+            place,
+            bounds,
+            view: board.size,
+            filter,
+            source,
+            groups: board.groups.clone(),
+        })
+    }
+
+    fn placeholder(&self, opacity: f32, group: Option<u16>, elevation: f32) -> Draw {
+        let [x0, y0, x1, y1] = self.region;
+        let mut d = Draw::new(Shape::Rect {
+            half: [(x1 - x0) * 0.5, (y1 - y0) * 0.5],
+            radii: [0.0; 4],
+        })
+        .transform(multiply(
+            self.place,
+            translation((x0 + x1) * 0.5, (y0 + y1) * 0.5),
+        ));
+        d.fill = Fill::Image(SpriteFill::new([0.0, 0.0, 1.0, 1.0]));
+        d.opacity = opacity;
+        d.group = group;
+        d.elevation = elevation;
+        d.shadow = Shadow::None;
+        d
+    }
+
+    pub fn pixels(&self, scale: f32, most: u32) -> [u32; 2] {
+        let k = scale * stretch(&self.place);
+        let size = [
+            (self.region[2] - self.region[0]) * k,
+            (self.region[3] - self.region[1]) * k,
+        ];
+        let fit = (most.max(1) as f32 / size[0].max(size[1])).min(1.0);
+        size.map(|v| ((v * fit).ceil() as u32).clamp(1, most.max(1)))
+    }
+
+    pub fn paint(&self, icons: &[IconShape], pixels: [u32; 2]) -> Result<Painted, String> {
+        let [x0, y0, x1, y1] = self.region;
+        let to_pixels = multiply(
+            scaling(pixels[0] as f32 / (x1 - x0), pixels[1] as f32 / (y1 - y0)),
+            multiply(translation(-x0, -y0), inverted(&self.place)?),
+        );
+        let mut used: Vec<u32> = Vec::new();
+        let mut draws: Vec<Draw> = self
+            .source
+            .iter()
+            .map(|d| {
+                let mut d = d.transform(multiply(to_pixels, d.transform));
+                if let Shape::Icon(Icon(i)) = d.shape {
+                    let at = used.iter().position(|u| *u == i).unwrap_or_else(|| {
+                        used.push(i);
+                        used.len() - 1
+                    });
+                    d.shape = Shape::Icon(Icon(at as u32));
+                }
+                d
+            })
+            .collect();
+        let shapes = used
+            .iter()
+            .map(|i| {
+                icons
+                    .get(*i as usize)
+                    .cloned()
+                    .ok_or_else(|| format!("a filtered shape names icon {i}, which is missing"))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let baked = if shapes.is_empty() {
+            None
+        } else {
+            Some(Icons::bake(&shapes)?)
+        };
+        for d in &mut draws {
+            if let Some(g) = d.group
+                && usize::from(g) >= self.groups.len()
+            {
+                d.group = None;
+            }
+        }
+        let curve = ShadowCurve::none();
+        let scene = FlatScene {
+            layout: [pixels[0] as f32, pixels[1] as f32],
+            clear: None,
+            curve: &curve,
+            light: Light::default(),
+            draws: &draws,
+            groups: &self.groups,
+            text: &[],
+            icons: None,
+            sprites: None,
+            environment: None,
+            post: false,
+            frame: 0,
+            seed: 0,
+        };
+        let source = cpu::render(&scene, baked.as_ref(), pixels)?;
+        let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let source = source.iter().map(|p| p.map(byte)).collect();
+        let steps = self
+            .filter
+            .plan(self.bounds, self.region, self.view, pixels)?;
+        let out = filter::run(&steps, source, pixels);
+        let mut rgba = Vec::with_capacity(out.len() * 4);
+        for p in out {
+            if p[3] == 0 {
+                rgba.extend_from_slice(&[0; 4]);
+                continue;
+            }
+            let a = p[3] as f32 / 255.0;
+            let c = |v: u8| ((v as f32 / a + 0.5) as u32).min(255) as u8;
+            rgba.extend_from_slice(&[c(p[0]), c(p[1]), c(p[2]), p[3]]);
+        }
+        Ok(Painted { size: pixels, rgba })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -635,7 +849,20 @@ struct Context {
     first: bool,
     rotated: bool,
     paint: Paint,
+    filtered: Option<Filtering>,
 }
+
+#[derive(Clone)]
+struct Filtering {
+    start: usize,
+    groups: usize,
+    filter: filter::Filter,
+    transform: Matrix,
+    opacity: f32,
+    group: Option<u16>,
+}
+
+const NESTED: &str = "a filter inside a filtered group is unsupported";
 
 #[derive(Clone, Default)]
 struct Paint {
@@ -914,8 +1141,23 @@ fn read_in(
     let mut in_text = 0usize;
     let mut gradient: Option<String> = None;
     let mut symbol: Option<String> = None;
+    let mut documented: HashMap<String, Result<filter::Filter, String>> = HashMap::new();
+    let mut building: Option<(String, filter::Builder)> = None;
     for tag in all {
         match (tag.name.as_str(), tag.closing) {
+            ("filter", _) => {
+                if let Some((id, b)) = building.take() {
+                    documented.insert(id, b.finish());
+                }
+                if !tag.closing {
+                    building = Some((tag.need("id")?.to_string(), filter::Builder::new(&tag)));
+                }
+            }
+            (name, _) if name.starts_with("fe") && building.is_some() => {
+                if let Some((_, b)) = building.as_mut() {
+                    b.add(&tag);
+                }
+            }
             ("svg", false) => (size, view) = root(&tag)?,
             ("svg", true) => {}
             ("defs", closing) => in_defs = !closing,
@@ -955,6 +1197,9 @@ fn read_in(
             _ => body.push(tag),
         }
     }
+    if let Some((id, b)) = building.take() {
+        documented.insert(id, b.finish());
+    }
     resolve(&mut gradients);
     let reach_of_mark = MARK_REACH * size[1] / view[1][1].abs().max(f32::MIN_POSITIVE);
     let mut board = Board {
@@ -970,30 +1215,67 @@ fn read_in(
         first: false,
         rotated: false,
         paint: Paint::default(),
+        filtered: None,
     }];
+    let documented_of = |value: &str| -> Option<Result<filter::Filter, String>> {
+        let id = value.strip_prefix("url(#")?.strip_suffix(')')?;
+        if filters.iter().any(|(name, _)| *name == id) {
+            return None;
+        }
+        documented.get(id).cloned()
+    };
     for tag in body {
         let top = stack.last().ok_or("a group closed twice")?.clone();
         let rotates = tag.get("transform").is_some_and(|t| t.contains("rotate"));
+        let inside = stack.iter().any(|c| c.filtered.is_some());
         if tag.name == "g" {
             if tag.closing {
-                stack.pop();
+                if let Some(f) = stack.pop().and_then(|c| c.filtered) {
+                    let mut source: Vec<Draw> = board.draws.drain(f.start..).collect();
+                    for d in &mut source {
+                        if d.group.is_some_and(|g| usize::from(g) < f.groups) {
+                            d.group = None;
+                        }
+                    }
+                    let raster = Raster::new(f.filter, source, f.transform, &board)?;
+                    let d = raster.placeholder(f.opacity, f.group, level);
+                    board.rasters.push(raster);
+                    board.draws.push(d);
+                }
                 continue;
             }
             let own = tag.get("transform").map_or(Ok(IDENTITY), transform)?;
             let opacity = tag.get("opacity").map_or(Ok(1.0), number)?;
-            let group = if opacity < 1.0 {
+            let document = tag.get("filter").and_then(documented_of).transpose()?;
+            if document.is_some() && inside {
+                return Err(NESTED.into());
+            }
+            let group = if opacity < 1.0 && document.is_none() {
                 board.groups.push(Group { opacity });
                 Some(u16::try_from(board.groups.len() - 1).map_err(|_| "too many groups")?)
             } else {
                 top.group
             };
+            let placed = multiply(top.transform, own);
+            let filtered = document.map(|filter| Filtering {
+                start: board.draws.len(),
+                groups: board.groups.len(),
+                filter,
+                transform: placed,
+                opacity,
+                group: top.group,
+            });
             stack.push(Context {
-                transform: multiply(top.transform, own),
-                filter: tag.get("filter").map(str::to_string).or(top.filter.clone()),
+                transform: placed,
+                filter: match filtered {
+                    Some(_) => top.filter.clone(),
+                    None => tag.get("filter").map(str::to_string).or(top.filter.clone()),
+                },
                 group,
-                first: tag.get("filter").is_some(),
+                first: tag.get("filter").is_some() && filtered.is_none(),
                 rotated: top.rotated || rotates,
                 paint: top.paint.under(&tag),
+                filtered,
             });
             continue;
         }
@@ -1238,6 +1520,31 @@ fn read_in(
         }
         draw.group = top.group;
         draw.shadow = Shadow::None;
+        if let Some(found) = tag.get("filter").and_then(documented_of).transpose()? {
+            if inside {
+                return Err(NESTED.into());
+            }
+            let clean = |mut d: Draw| {
+                d.opacity = 1.0;
+                d.group = None;
+                d.elevation = 0.0;
+                d.shadow = Shadow::None;
+                d
+            };
+            let mut source = Vec::new();
+            if !(geometric && fill.is_none()) {
+                source.push(clean(draw));
+            }
+            source.extend(stroke_draw.map(clean));
+            let raster = Raster::new(found, source, base, &board)?;
+            let d = raster.placeholder(opacity, top.group, level);
+            board.rasters.push(raster);
+            board.draws.push(d);
+            if let Some(context) = stack.last_mut() {
+                context.first = false;
+            }
+            continue;
+        }
         if let Some(filter) = filter {
             match *filter_of(filters, &filter)? {
                 Filter::Elevation(elevation) => {

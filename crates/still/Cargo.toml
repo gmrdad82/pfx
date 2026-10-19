@@ -9,6 +9,8 @@ authors.workspace = true
 description = "pfx's renders: path-traced stills, equirect and ortho, PNG, EXR and HDR out"
 
 [dependencies]
+pfx-core = { path = "../core" }
+pfx-load = { path = "../load" }
 pfx-trace = { path = "../trace" }
 pfx-denoise = { path = "../denoise" }
 pfx-gpu = { path = "../gpu" }

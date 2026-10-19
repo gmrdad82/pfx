@@ -216,7 +216,9 @@ impl Shell {
             bar,
             format!(
                 "{:.2} s · {frame} / 0–{} · {} fps",
-                self.clock.time, span.frames, span.fps
+                self.clock.time,
+                span.frames,
+                span.fps.label()
             ),
             palette.text_code,
         ));

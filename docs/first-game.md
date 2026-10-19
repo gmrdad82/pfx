@@ -15,6 +15,8 @@ my-game: scaffolded 15 files into my-game on pfx v1.0.0
 next: cargo run --release (the game), cargo run --release -- edit (the editor)
 ```
 
+The first scene shows the game's name in 3D on the floor grid, beside a plain plate. `pfx new my-game --mark art/mark.png` puts the game's own mark, a PNG, on that plate and in the editor's header ([pfx new](projects.md#--mark)).
+
 The game pins the engine's crates at the tag the `pfx` tool was built from:
 
 ```toml
@@ -32,9 +34,10 @@ project.toml               the project: its first scene and what the editor sele
 src/lib.rs                 the game: MyGame implements pfx_game::Game, doing nothing yet
 src/main.rs                hands the game to the launcher, with `edit` opening the editor
 tests/first.rs             a GPU test of the first frame, ignored by default
-content/first.pitofx       the empty world: a grid, pfx's mark, a light and a camera; inside it,
-                           the mark and wordmark's prefab and the grid's, the axes' and the mark's materials
-content/meshes/            badge.glb, wordmark.glb and grid.glb
+content/first.pitofx       the empty world: a grid, the game's name in 3D beside its mark, a light
+                           and a camera; inside it, the title's prefab and the grid's, the axes'
+                           and the title's materials
+content/meshes/            name.glb and mark.glb, made for the game, and grid.glb
 content/fonts/             IBM Plex Mono and its licence
 ```
 

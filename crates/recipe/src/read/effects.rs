@@ -112,6 +112,7 @@ const PARTICLES: &[(&str, Shape)] = &[
     ("blend", Shape::Word(&["alpha", "add"])),
     ("lit", Shape::Flag),
     ("seed", Shape::Whole(0, u64::MAX)),
+    ("prewarm", Shape::Num(Rule::Within(0.0, 30.0))),
 ];
 
 const FLARE: &[(&str, Shape)] = &[

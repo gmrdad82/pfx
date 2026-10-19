@@ -1,6 +1,7 @@
 use crate::camera::{Picture, picture_in};
 use crate::cut::Cut;
 use crate::script::{Kinds, Scene, Scheme, Script};
+use pfx_core::rate::Rate;
 use pfx_input::InputEvent;
 use pfx_live::flat::Matrix;
 use pfx_live::flat::look::Look;
@@ -18,7 +19,7 @@ pub struct Take<C> {
 
 pub struct FilmFrame<'a, D> {
     pub index: u64,
-    pub fps: u32,
+    pub fps: Rate,
     pub speed: f32,
     pub cut: &'a Cut<D>,
 }
@@ -41,7 +42,7 @@ impl<D> FilmFrame<'_, D> {
     }
 
     pub fn seconds(&self) -> f64 {
-        f64::from(self.speed.max(0.0)) / f64::from(self.fps.max(1))
+        f64::from(self.speed.max(0.0)) * f64::from(self.fps.den()) / f64::from(self.fps.num())
     }
 }
 
@@ -72,7 +73,7 @@ pub trait Show {
 pub fn plan<S: Show>(
     show: &mut S,
     script: &Script<S::Kinds>,
-    fps: u32,
+    fps: Rate,
 ) -> Result<Vec<Take<S::Cue>>, String> {
     script.off_grid(fps)?;
     let cues = show.plan(script)?;

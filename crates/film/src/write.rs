@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::sync::{Arc, Mutex};
@@ -8,11 +8,16 @@ use std::thread::JoinHandle;
 pub const FRAMES: &str = "frames";
 pub const STILLS: &str = "stills";
 pub const AUDIO: &str = "audio.wav";
+pub const CLAIM: &str = "film.txt";
+const IEND: [u8; 12] = [0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82];
 
 pub trait Encoder {
     fn frame(&mut self, index: u64, rgba: Vec<u8>, size: [u32; 2]) -> Result<(), String>;
     fn still(&mut self, name: &str, rgba: Vec<u8>, size: [u32; 2]) -> Result<(), String>;
     fn finish(&mut self, audio: Option<&[f32]>, rate: u32, channels: u16) -> Result<(), String>;
+    fn kept(&self, _index: u64) -> bool {
+        false
+    }
 }
 
 pub struct Shot {
@@ -38,16 +43,37 @@ pub fn png(shot: &Shot) -> Result<(), String> {
     if shot.rgba.len() != w as usize * h as usize * 4 {
         return Err(show(&"the frame's bytes don't match its size"));
     }
-    let file = File::create(&shot.path).map_err(|e| show(&e))?;
-    let mut encoder = png::Encoder::new(BufWriter::new(file), w, h);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.set_compression(png::Compression::Fast);
-    let mut writer = encoder.write_header().map_err(|e| show(&e))?;
-    writer
-        .write_image_data(&rgb(&shot.rgba))
-        .map_err(|e| show(&e))?;
-    writer.finish().map_err(|e| show(&e))
+    pfx_core::atomic::write_with(&shot.path, |temp| {
+        let file = File::create(temp).map_err(|e| show(&e))?;
+        let mut encoder = png::Encoder::new(BufWriter::new(file), w, h);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(png::Compression::Fast);
+        let mut writer = encoder.write_header().map_err(|e| show(&e))?;
+        writer
+            .write_image_data(&rgb(&shot.rgba))
+            .map_err(|e| show(&e))?;
+        writer.finish().map_err(|e| show(&e))
+    })
+}
+
+pub fn finished(path: &Path, size: [u32; 2]) -> bool {
+    let read = || -> Option<[u32; 2]> {
+        let mut file = File::open(path).ok()?;
+        let mut end = [0u8; 12];
+        file.seek(SeekFrom::End(-12)).ok()?;
+        file.read_exact(&mut end).ok()?;
+        if end != IEND {
+            return None;
+        }
+        file.rewind().ok()?;
+        let reader = png::Decoder::new(std::io::BufReader::new(file))
+            .read_info()
+            .ok()?;
+        let info = reader.info();
+        (info.bit_depth == png::BitDepth::Eight).then_some([info.width, info.height])
+    };
+    read() == Some(size)
 }
 
 fn work(queue: Arc<Mutex<Receiver<Shot>>>) -> Result<(), String> {
@@ -101,6 +127,10 @@ impl Press {
 }
 
 pub fn wav(path: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<(), String> {
+    pfx_core::atomic::write_with(path, |temp| wav_to(temp, samples, rate, channels))
+}
+
+fn wav_to(path: &Path, samples: &[f32], rate: u32, channels: u16) -> Result<(), String> {
     let show = |e: std::io::Error| format!("{}: {e}", path.display());
     let bytes = u32::try_from(samples.len() * 2).map_err(|_| "the audio is too long")?;
     let mut out = BufWriter::new(File::create(path).map_err(show)?);
@@ -142,27 +172,73 @@ fn fresh(dir: &Path, make: bool) -> Result<(), String> {
 pub struct Files {
     out: PathBuf,
     press: Press,
+    kept: Vec<bool>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Resume<'a> {
+    pub claim: &'a str,
+    pub frames: u64,
+    pub size: [u32; 2],
+}
+
+fn frame_path(out: &Path, index: u64) -> PathBuf {
+    out.join(FRAMES).join(format!("{index:06}.png"))
 }
 
 impl Files {
     pub fn open(out: &Path, frames: bool, stills: bool) -> Result<Files, String> {
         fresh(&out.join(FRAMES), frames)?;
+        Files::opened(out, stills, Vec::new())
+    }
+
+    pub fn resume(out: &Path, frames: bool, stills: bool, resume: Resume) -> Result<Files, String> {
+        let claim = out.join(CLAIM);
+        let same =
+            frames && std::fs::read_to_string(&claim).is_ok_and(|found| found == resume.claim);
+        let kept = if same {
+            pfx_core::atomic::sweep(&out.join(FRAMES))?;
+            (0..resume.frames)
+                .map(|index| finished(&frame_path(out, index), resume.size))
+                .collect()
+        } else {
+            fresh(&out.join(FRAMES), frames)?;
+            Vec::new()
+        };
+        pfx_core::atomic::write(&claim, resume.claim.as_bytes())?;
+        Files::opened(out, stills, kept)
+    }
+
+    fn opened(out: &Path, stills: bool, kept: Vec<bool>) -> Result<Files, String> {
         fresh(&out.join(STILLS), stills)?;
         let audio = out.join(AUDIO);
         if audio.exists() {
             std::fs::remove_file(&audio).map_err(|e| format!("{}: {e}", audio.display()))?;
         }
+        pfx_core::atomic::sweep(out)?;
         Ok(Files {
             out: out.to_path_buf(),
             press: Press::open(),
+            kept,
         })
+    }
+
+    pub fn done(&self) -> u64 {
+        self.kept.iter().filter(|&&kept| kept).count() as u64
+    }
+
+    pub fn first_missing(&self) -> u64 {
+        self.kept
+            .iter()
+            .position(|&kept| !kept)
+            .unwrap_or(self.kept.len()) as u64
     }
 }
 
 impl Encoder for Files {
     fn frame(&mut self, index: u64, rgba: Vec<u8>, size: [u32; 2]) -> Result<(), String> {
         self.press.put(Shot {
-            path: self.out.join(FRAMES).join(format!("{index:06}.png")),
+            path: frame_path(&self.out, index),
             rgba,
             size,
         })
@@ -183,4 +259,14 @@ impl Encoder for Files {
             None => Ok(()),
         }
     }
+
+    fn kept(&self, index: u64) -> bool {
+        usize::try_from(index)
+            .ok()
+            .and_then(|at| self.kept.get(at))
+            .is_some_and(|&kept| kept)
+    }
 }
+
+#[cfg(test)]
+mod tests;

@@ -8,9 +8,9 @@ use pfx_gpu::Gpu;
 use pfx_load::Sky;
 use pfx_load::scene::{
     Camera as SceneCamera, Environment as SceneEnvironment, Geometry, Posed,
-    Projection as SceneProjection, Scene as LoadedScene, surface as sprite_surface,
+    Projection as SceneProjection, Scene as LoadedScene, sprays::Sprays, surface as sprite_surface,
 };
-use pfx_materials::{ContentLayer, Material};
+use pfx_materials::{ContentLayer, Material, NoiseKind};
 
 use crate::detail::{
     ContentFace, ContentImage, Detail, Instance, InstanceSurface, Lens, Transform, TriangleDetail,
@@ -19,6 +19,7 @@ use crate::gpu::{Camera, Projection, Scene, Sun, Trace, TraceError};
 use crate::lights::{LightShape, LocalLight};
 use crate::motion::InstanceMotion;
 use crate::sky::Environment;
+use crate::sprites::{Puff, Spray};
 use crate::text::TextContent;
 
 pub const ALPHA_CUTOFF: f32 = 0.5;
@@ -571,6 +572,23 @@ pub fn scene_posed(
         });
     }
     let mut materials = Cow::Borrowed(draws.materials.as_slice());
+    let flows = |material: &Material| {
+        material
+            .layers
+            .iter()
+            .any(|layer| layer.kind == NoiseKind::Flow)
+    };
+    if materials.iter().any(flows) {
+        for layer in materials
+            .to_mut()
+            .iter_mut()
+            .flat_map(|m| m.layers.iter_mut())
+        {
+            if layer.kind == NoiseKind::Flow {
+                layer.params[0] = posed.time;
+            }
+        }
+    }
     let text_material = materials.len() as u32;
     if !letterings.is_empty() {
         materials
@@ -633,7 +651,31 @@ pub fn scene_posed(
         staged.detail.sky_look = sky.look;
     }
     staged.detail.fog = scene_fog(scene, posed.time);
+    let puffs = scene_puffs(scene, &viewpoint, posed.time);
+    staged.spray(&Spray::new(&puffs, camera))?;
     Ok(staged)
+}
+
+pub fn scene_puffs(scene: &LoadedScene, camera: &SceneCamera, time: f32) -> Vec<Puff> {
+    let mut sprays = Sprays::of(scene);
+    if sprays.is_empty() {
+        return Vec::new();
+    }
+    if scene.animated() {
+        sprays.seek_posed(time, |t| Some(scene.posed(camera, t)));
+    } else {
+        sprays.seek_posed(time, |_| None);
+    }
+    let mut puffs = Vec::with_capacity(sprays.live());
+    sprays.each(|recipe, sprites| {
+        puffs.extend(sprites.iter().map(|&sprite| Puff {
+            sprite,
+            stretch: recipe.stretch,
+            blend: recipe.blend,
+            lit: recipe.lit,
+        }));
+    });
+    puffs
 }
 
 pub fn scene_fog(scene: &LoadedScene, time: f32) -> Option<crate::fog::Fog> {

@@ -1670,6 +1670,15 @@
     "LiveSettings": {
       "additionalProperties": false,
       "properties": {
+        "coat_reflections": {
+          "type": "boolean"
+        },
+        "dof_spread": {
+          "type": "boolean"
+        },
+        "reversed_depth": {
+          "type": "boolean"
+        },
         "scene_reflections": {
           "type": "boolean"
         },
@@ -2230,6 +2239,10 @@
         },
         "parent": {
           "type": "string"
+        },
+        "prewarm": {
+          "format": "float",
+          "type": "number"
         },
         "rate": {
           "format": "float",

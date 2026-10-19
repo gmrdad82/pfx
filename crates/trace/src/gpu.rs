@@ -51,7 +51,7 @@ impl GpuSurface {
         forward: [f32; 12],
         inverse: [f32; 12],
     ) -> Self {
-        Self {
+        let mut packed = Self {
             clip0: surface.clip[0],
             clip1: surface.clip[1],
             transform: [
@@ -64,7 +64,18 @@ impl GpuSurface {
             info,
             forward: rows3(forward),
             inverse: rows3(inverse),
+        };
+        if let Some(sprite) = surface.sprite {
+            let [r, g, b] = sprite.colour;
+            packed.transform = [r, g, b, sprite.alpha];
+            packed.crop = [
+                f32::from(u8::from(sprite.lit)),
+                f32::from(u8::from(sprite.additive)),
+                sprite.soft,
+                0.0,
+            ];
         }
+        packed
     }
 
     fn world() -> Self {
@@ -119,6 +130,7 @@ pub const CUTOUT: u32 = 4;
 pub const FACE_SHIFT: u32 = 3;
 pub const LAYER_SHIFT: u32 = 5;
 pub const ONE_SIDED: u32 = 1 << 23;
+pub const SPRITE: u32 = 1 << 24;
 pub const LAYER_MASK: u32 = (1 << 18) - 1;
 const LAYER_LIMIT: usize = 1 << 18;
 
@@ -320,6 +332,7 @@ pub struct Trace {
     builds: Builds,
     gpu_bytes: u64,
     half_sky: bool,
+    sky_halvings: u32,
     moving: Option<MovingState>,
     fogged: bool,
 }
@@ -515,6 +528,9 @@ impl SceneBuffers {
             }
             if !instance.two_sided {
                 word |= ONE_SIDED;
+            }
+            if surface.sprite.is_some() {
+                word |= SPRITE;
             }
             words.push(word);
         }
@@ -722,7 +738,8 @@ impl SceneBuffers {
                     material.transmitted() <= 0.0 && material.alpha_mode.opaque()
                 };
                 opaque.push(
-                    placed.word & (SHADOW_ONLY | CASTS_NO_SHADOW | CUTOUT | ONE_SIDED) == 0
+                    placed.word & (SHADOW_ONLY | CASTS_NO_SHADOW | CUTOUT | ONE_SIDED | SPRITE)
+                        == 0
                         && instance.surface.clip[0][..3] == [0.0; 3]
                         && instance.surface.clip[1][..3] == [0.0; 3]
                         && match placed.material {
@@ -1017,6 +1034,13 @@ fn pipeline_constants(
     }
     if detail.fog.is_some() {
         constants.push(("TRACE_FOG", 1.0));
+    }
+    if detail
+        .instances
+        .iter()
+        .any(|instance| instance.surface.sprite.is_some())
+    {
+        constants.push(("TRACE_SPRITES", 1.0));
     }
     constants.extend(features.constants());
     constants.push((
@@ -1441,7 +1465,9 @@ pub(crate) fn texture(gpu: &Gpu, width: u32, height: u32, label: &'static str) -
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
@@ -1538,14 +1564,14 @@ fn halved_sky(sky: &Sky) -> Result<Sky, String> {
     })
 }
 
-fn fitted(
-    sky: Environment,
+pub fn sky_halvings(
+    sky: &Environment,
     camera: &Camera,
     projection: Projection,
     size: [u32; 2],
-) -> Result<Environment, String> {
-    let Environment::Hdr(mut hdr) = sky else {
-        return Ok(sky);
+) -> u32 {
+    let Environment::Hdr(hdr) = sky else {
+        return 0;
     };
     let length = |v: [f32; 3]| f64::from(dot3f(v, v)).sqrt();
     let needed = match projection {
@@ -1554,9 +1580,22 @@ fn fitted(
             (std::f64::consts::TAU * f64::from(size[0]) / (2.0 * tangent)).ceil()
         }
         Projection::Equirectangular => f64::from(size[0]),
-        Projection::Orthographic { .. } => return Ok(Environment::Hdr(hdr)),
+        Projection::Orthographic { .. } => return 0,
     };
-    while f64::from(hdr.width / 2) >= needed && hdr.height >= 2 {
+    let (mut width, mut height, mut halvings) = (hdr.width, hdr.height, 0);
+    while f64::from(width / 2) >= needed && height >= 2 {
+        width = width.div_ceil(2);
+        height = height.div_ceil(2);
+        halvings += 1;
+    }
+    halvings
+}
+
+fn fitted(sky: Environment, halvings: u32) -> Result<Environment, String> {
+    let Environment::Hdr(mut hdr) = sky else {
+        return Ok(sky);
+    };
+    for _ in 0..halvings {
         hdr = halved_sky(&hdr)?;
     }
     Ok(Environment::Hdr(hdr))
@@ -1859,6 +1898,24 @@ impl Trace {
             mapped_at_creation: false,
         });
         let placed = buffers.levels.is_some();
+        memory::admit_gpu(
+            "the tracer's buffers",
+            [
+                &buffers.triangles,
+                &buffers.uv,
+                &buffers.content,
+                &buffers.surfaces,
+                &buffers.layers,
+                &buffers.content_info,
+                &buffers.nodes,
+                &buffers.shapes,
+                &buffers.materials,
+            ]
+            .iter()
+            .map(|data| data.len() as u64)
+            .sum::<u64>()
+                + pixels * (48 + 3 * 16),
+        )?;
         let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let mut gpu_bytes = 0u64;
         let mut upload = |label: &'static str, data: &mut Vec<u8>, read_write: bool| {
@@ -1887,7 +1944,9 @@ impl Trace {
         let accum_buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("trace accumulation"),
             size: pixels * 48,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let color = texture(gpu, width, height, "trace color");
@@ -2041,15 +2100,15 @@ impl Trace {
                 Some(environment) => environment.try_clone()?,
                 None => scene.sky.clone().into(),
             };
-        let sky = match detail.fit_textures {
-            Some(size) => fitted(
-                sky,
+        let halvings = detail.fit_textures.map_or(0, |size| {
+            sky_halvings(
+                &sky,
                 &scene.camera,
                 detail.projection,
                 [size[0].max(width), size[1].max(height)],
-            )?,
-            None => sky,
-        };
+            )
+        });
+        let sky = fitted(sky, halvings)?;
         let (environment_binding, sky_bytes) =
             environment_binding(gpu, &pipeline, &sky, look, detail.fit_textures.is_some())?;
         drop(sky);
@@ -2114,6 +2173,7 @@ impl Trace {
             },
             gpu_bytes,
             half_sky: detail.fit_textures.is_some(),
+            sky_halvings: halvings,
             moving,
             fogged: detail.fog.is_some(),
         })
@@ -2233,6 +2293,10 @@ impl Trace {
         self.builds.top += 1;
         self.samples = 0;
         Ok(())
+    }
+
+    pub fn sky_halvings(&self) -> u32 {
+        self.sky_halvings
     }
 
     pub fn hardware_rays(&self) -> bool {
@@ -3042,6 +3106,20 @@ mod tests {
             retargeted.readback(&gpu).unwrap(),
             fresh.readback(&gpu).unwrap()
         );
+    }
+    #[test]
+    fn the_tracer_has_a_branch_for_every_layer_kind_the_cpu_evaluates() {
+        let source = include_str!("trace.wgsl");
+        for kind in pfx_materials::NoiseKind::ALL {
+            if kind == pfx_materials::NoiseKind::None {
+                continue;
+            }
+            let branch = format!("kind=={}u", kind.id());
+            assert!(
+                source.contains(&format!("({branch})")) || source.contains(&format!("({branch} ")),
+                "{kind:?} draws plain traced: no `{branch}` in the tracer"
+            );
+        }
     }
     #[test]
     fn shader_assembles() {

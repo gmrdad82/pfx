@@ -1,16 +1,19 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::time::Instant;
 
 use pfx_build::{Built, Registry};
 use pfx_glb::DMat4;
-use pfx_recipe::{Camera, CameraPath, Recipe};
+use pfx_recipe::{Camera, CameraPath, Rate, Recipe};
 use pfx_still::{NOISE, Noise, Step};
 
+use super::checkpoint::{self, Checkpoint, Every};
+use super::ledger::{Ledger, Verified};
 use super::process::on_path;
 use super::{pair, refuse, size};
 
 const SAMPLES: u32 = 64;
-const MAX_FPS: i64 = 240;
+const MAX_FPS: u32 = 240;
 const MANIFEST: &str = "clip.txt";
 
 type Matrix = [[f32; 4]; 4];
@@ -20,6 +23,10 @@ fn turns(text: &str) -> Result<f64, String> {
         Ok(turns) if turns.is_finite() => Ok(turns),
         _ => Err("is not a finite number of turns".into()),
     }
+}
+
+fn rate(text: &str) -> Result<Rate, String> {
+    Rate::parse_within(text, 1, MAX_FPS)
 }
 
 fn video(text: &str) -> Result<PathBuf, String> {
@@ -52,12 +59,12 @@ pub(super) struct Args {
     #[arg(
         long,
         value_name = "F",
-        value_parser = clap::value_parser!(u32).range(1..=MAX_FPS),
+        value_parser = rate,
         required_unless_present = "timeline",
         conflicts_with = "timeline",
-        help = "Frames per second, from 1 to 240"
+        help = "Frames per second, from 1 to 240: a whole number, num/den such as 24000/1001, or 23.976 (23.98), 29.97, 47.952 (47.95), 59.94, 119.88"
     )]
-    fps: Option<u32>,
+    fps: Option<Rate>,
     #[arg(
         long,
         help = "Film the recipe's [timeline], frames 0 to its last at its fps, the camera from its rig when it has one"
@@ -79,6 +86,14 @@ pub(super) struct Args {
         help = "How many turns --spin makes over the clip, negative the other way [default: 1]"
     )]
     turns: Option<f64>,
+    #[arg(
+        long,
+        value_name = "A..B",
+        value_parser = pfx_run::jobs::state::range,
+        conflicts_with = "film",
+        help = "Make only frames A to B of the clip, both kept, numbered, named and seeded as in a whole run, so ranges made apart join in one folder"
+    )]
+    range: Option<[u32; 2]>,
     #[arg(long, value_name = "WxH", value_parser = size, help = "Each frame's size in pixels")]
     size: [u32; 2],
     #[arg(
@@ -107,6 +122,25 @@ pub(super) struct Args {
     threshold: Option<f32>,
     #[arg(
         long,
+        value_name = "every",
+        requires = "trace",
+        value_parser = checkpoint::every,
+        help = "Save a traced frame's samples this often, in minutes or as samples like 64spp, so a stopped run resumes inside the frame"
+    )]
+    checkpoint: Option<Every>,
+    #[arg(
+        long,
+        help = "Progress on stderr as JSON lines: the frame, of how many, its samples and an ETA"
+    )]
+    json: bool,
+    #[arg(
+        long = "rerender-from",
+        value_name = "frame",
+        help = "Remove this frame and every later one, then make them again"
+    )]
+    rerender_from: Option<u32>,
+    #[arg(
+        long,
         value_name = "name",
         help = "Film this variant instead of the recipe"
     )]
@@ -127,6 +161,8 @@ pub(super) struct Args {
     film: Option<PathBuf>,
     #[command(flatten)]
     picture: super::Picture,
+    #[command(flatten)]
+    memory: super::Memory,
 }
 
 impl Args {
@@ -142,12 +178,24 @@ impl Args {
         self.frames.unwrap_or(1)
     }
 
-    fn rate(&self) -> u32 {
-        self.fps.unwrap_or(1)
+    fn rate(&self) -> Rate {
+        self.fps.unwrap_or(Rate::whole(1))
     }
 
     fn spun(&self) -> f64 {
         self.turns.unwrap_or(1.0)
+    }
+
+    fn span(&self) -> Result<[u32; 2], String> {
+        let count = self.count();
+        match self.range {
+            None => Ok([0, count - 1]),
+            Some([first, last]) if last < count => Ok([first, last]),
+            Some([first, last]) => Err(format!(
+                "--range {first}..{last}: the clip has frames 0 to {}",
+                count - 1
+            )),
+        }
     }
 }
 
@@ -234,11 +282,8 @@ fn name(frame: u32, frames: u32) -> String {
     format!("frame-{frame:0digits$}.png")
 }
 
-fn partial(frame: u32, frames: u32) -> String {
-    format!(
-        ".{}.partial.png",
-        name(frame, frames).trim_end_matches(".png")
-    )
+fn checkpoint_of(dir: &Path, frame: u32, frames: u32) -> PathBuf {
+    checkpoint::path_beside(&dir.join(name(frame, frames)))
 }
 
 fn manifest(args: &Args) -> String {
@@ -291,23 +336,13 @@ fn claim(dir: &Path, wanted: &str) -> Result<(), String> {
             path.display()
         )),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::write(&path, wanted).map_err(|e| format!("{}: {e}", path.display()))
+            pfx_core::atomic::write(&path, wanted.as_bytes())
         }
         Err(e) => Err(format!("{}: {e}", path.display())),
     }
 }
 
-fn finished(path: &Path, size: [u32; 2], bits: u8) -> bool {
-    pfx_recipe_scene::read_png_shape(path).is_ok_and(|found| found == (size, bits))
-}
-
-fn pending(dir: &Path, frames: u32, size: [u32; 2], bits: u8) -> Vec<u32> {
-    (0..frames)
-        .filter(|&frame| !finished(&dir.join(name(frame, frames)), size, bits))
-        .collect()
-}
-
-fn encode_line(frames: &Path, video: &Path, fps: u32) -> Result<Vec<String>, String> {
+fn encode_line(frames: &Path, video: &Path, fps: Rate) -> Result<Vec<String>, String> {
     let absolute = |path: &Path| {
         std::path::absolute(path)
             .map(|path| path.display().to_string())
@@ -375,7 +410,7 @@ impl Renderer {
         match self {
             Renderer::Live(reel, base) => {
                 let (recipe, built) = (&base.0, &base.1);
-                let fps = recipe.timeline.map_or(1, |t| t.fps);
+                let fps = recipe.timeline.map_or(Rate::whole(1), |t| t.fps);
                 reel.set_poses(pfx_recipe_scene::poses(built, fps, time));
                 if built.skinned() {
                     let now = built.skinned_parts(time);
@@ -420,9 +455,10 @@ impl Renderer {
     fn frame(
         &mut self,
         camera: &Camera,
-        size: [u32; 2],
-        to: &Path,
+        (size, to): ([u32; 2], &Path),
         settled: Option<f64>,
+        step: &mut dyn FnMut(Step),
+        keeper: Option<&mut dyn pfx_still::Keeper>,
     ) -> Result<String, String> {
         match self {
             Renderer::Live(reel, _) => {
@@ -439,7 +475,11 @@ impl Renderer {
                     false => pfx_recipe_scene::write_frame(to, size, &rgba),
                 }
                 .map_err(|e| e.0)?;
-                Ok(format!("{gpu_ms:.0} ms on the GPU"))
+                let peak = pfx_core::memory::peak();
+                Ok(format!(
+                    "{gpu_ms:.0} ms on the GPU; {}",
+                    peak.line(reel.plan())
+                ))
             }
             Renderer::Traced(reel, samples, noise, picture) => {
                 let take = pfx_still::Take {
@@ -449,7 +489,7 @@ impl Renderer {
                     seed: pfx_still::Seed::Locked,
                 };
                 let rendered = reel
-                    .frame(camera, take, &mut |_: Step| {})
+                    .frame_kept(camera, take, step, keeper)
                     .map_err(|e| e.to_string())?;
                 let pixels = pfx_still::finished(
                     &rendered.film,
@@ -521,12 +561,13 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
             (Renderer::Live(Box::new(reel), base), recipe)
         }
         Some(samples) => {
-            let reel = pfx_still::Reel::open(
+            let reel = pfx_still::Reel::open_for(
                 &args.recipe,
                 args.variant.as_deref(),
                 &args.set,
                 None,
                 registry,
+                args.size,
             )
             .map_err(|e| e.to_string())?;
             let recipe = reel.recipe.clone();
@@ -556,16 +597,295 @@ fn noise(args: &Args, trace: &pfx_recipe::Trace, samples: u32) -> Option<Noise> 
     })
 }
 
-fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Result<(), String> {
-    claim(&args.out, &manifest(args))?;
+struct Told {
+    json: bool,
+    began: Instant,
+    of: u32,
+    todo: u32,
+    made: u32,
+    last: Option<Instant>,
+}
+
+impl Told {
+    fn new(json: bool, of: u32, todo: u32) -> Told {
+        Told {
+            json,
+            began: Instant::now(),
+            of,
+            todo,
+            made: 0,
+            last: None,
+        }
+    }
+
+    fn eta(&self, fraction: f64) -> serde_json::Value {
+        let progress = f64::from(self.made) + fraction;
+        let elapsed = self.began.elapsed().as_secs_f64();
+        if progress <= 0.0 {
+            return serde_json::Value::Null;
+        }
+        let left = (f64::from(self.todo) - progress).max(0.0);
+        super::render::rounded(elapsed / progress * left, 1)
+    }
+
+    fn line<const N: usize>(&self, stage: &str, fields: [(&str, serde_json::Value); N]) {
+        eprintln!(
+            "{}",
+            super::render::json_line(stage, self.began.elapsed().as_secs_f64(), fields)
+        );
+    }
+
+    fn step(&mut self, frame: u32, step: Step, pixels: u64) {
+        if !self.json {
+            return;
+        }
+        let (samples, spp, fraction) = match step {
+            Step::Trace { done, total } => (
+                f64::from(done),
+                total,
+                f64::from(done) / f64::from(total.max(1)),
+            ),
+            Step::Converge {
+                cap, done, total, ..
+            } => (
+                done as f64 / pixels.max(1) as f64,
+                cap,
+                if total == 0 {
+                    0.0
+                } else {
+                    (done as f64 / total as f64).min(1.0)
+                },
+            ),
+            _ => return,
+        };
+        let now = Instant::now();
+        if self
+            .last
+            .is_some_and(|last| now < last + std::time::Duration::from_secs(1))
+        {
+            return;
+        }
+        self.last = Some(now);
+        self.line(
+            "trace",
+            [
+                ("frame", frame.into()),
+                ("of", self.of.into()),
+                ("samples", (samples.round() as u64).into()),
+                ("spp", spp.into()),
+                ("fraction", super::render::rounded(fraction, 4)),
+                ("eta_s", self.eta(fraction)),
+            ],
+        );
+    }
+
+    fn frame(&mut self, frame: u32, done: u32, to: &Path) {
+        self.made += 1;
+        self.last = None;
+        if self.json {
+            self.line(
+                "frame",
+                [
+                    ("frame", frame.into()),
+                    ("of", self.of.into()),
+                    ("done", done.into()),
+                    ("out", to.display().to_string().into()),
+                    ("eta_s", self.eta(0.0)),
+                ],
+            );
+        }
+    }
+}
+
+fn resuming(done: u32, count: u32, first: u32, samples: Option<u32>) -> String {
+    let inside = samples.map_or(String::new(), |samples| {
+        format!(", from its checkpoint at {samples} samples")
+    });
+    format!("resuming: {done} of {count} frames done, starting at frame {first}{inside}")
+}
+
+fn plural(count: usize, one: &str) -> String {
+    format!("{count} {one}{}", if count == 1 { "" } else { "s" })
+}
+
+fn verified_line(found: &Verified) -> String {
+    let mut line = format!(
+        "{} verified by their sha256",
+        plural(found.verified.len() - found.adopted.len(), "frame")
+    );
+    if !found.adopted.is_empty() {
+        line.push_str(&format!(
+            ", {} without one decoded whole and recorded",
+            plural(found.adopted.len(), "frame")
+        ));
+    }
+    if found.redone.is_empty() {
+        line.push_str(", none redone");
+    } else {
+        let redone: Vec<String> = found
+            .redone
+            .iter()
+            .map(|(frame, why)| format!("frame {frame} {why}"))
+            .collect();
+        line.push_str(&format!(
+            "; redoing {}: {}",
+            plural(found.redone.len(), "frame"),
+            redone.join(", ")
+        ));
+    }
+    line
+}
+
+fn differs(frame: u32, out: &Path) -> String {
+    format!(
+        "frame {frame} rendered again differs from the one in {}: this pfx build, the GPU driver or state carried between frames now makes other bytes, so nothing more is rendered and old and new frames never mix; --rerender-from {frame} makes it and every later frame again",
+        out.display()
+    )
+}
+
+fn checked_path(dir: &Path, frame: u32, frames: u32) -> PathBuf {
+    let name = name(frame, frames);
+    dir.join(format!(
+        ".{}.recheck.partial.png",
+        name.trim_end_matches(".png")
+    ))
+}
+
+fn rerender(args: &Args, ledger: &mut Ledger, last: u32) -> Result<(), String> {
     let count = args.count();
-    let todo = pending(&args.out, count, args.size, args.bits());
-    let done = count - todo.len() as u32;
+    let Some(from) = args.rerender_from else {
+        return Ok(());
+    };
+    if from >= count {
+        return Err(format!(
+            "--rerender-from {from}: the clip's frames run from 0 to {}",
+            count - 1
+        ));
+    }
+    for frame in from..=last {
+        for path in [
+            args.out.join(name(frame, count)),
+            checkpoint_of(&args.out, frame, count),
+        ] {
+            if path.exists() {
+                std::fs::remove_file(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            }
+        }
+    }
+    ledger.forget([from, last]);
+    Ok(())
+}
+
+fn frame_in(name: &str) -> Option<u32> {
+    let rest = &name[name.find("frame-")? + "frame-".len()..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
+fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Result<(), String> {
+    let [first, last] = args.span()?;
+    let line = manifest(args);
+    claim(&args.out, &line)?;
+    let count = args.count();
+    let ours = |name: &str| frame_in(name).is_none_or(|frame| (first..=last).contains(&frame));
+    let (swept, found, before) = Ledger::update(&args.out, |ledger| {
+        let swept = pfx_core::atomic::sweep_matching(&args.out, ours)?;
+        rerender(args, ledger, last)?;
+        let found = ledger.verify(
+            &args.out,
+            |frame| name(frame, count),
+            ([first, last], count, args.size, args.bits()),
+        )?;
+        let before = found
+            .todo
+            .first()
+            .and_then(|frame| frame.checked_sub(1))
+            .filter(|before| !found.todo.contains(before))
+            .filter(|&before| {
+                before >= first
+                    || ledger.holds(&args.out.join(name(before, count)), before, args.size)
+            });
+        Ok((swept, found, before))
+    })?;
+    let todo = found.todo.clone();
+    for frame in (first..=last).filter(|frame| !todo.contains(frame)) {
+        let stale = checkpoint_of(&args.out, frame, count);
+        if stale.exists() {
+            std::fs::remove_file(&stale).map_err(|e| format!("{}: {e}", stale.display()))?;
+        }
+    }
+    let made = last - first + 1;
+    let done = made - todo.len() as u32;
+    let part = match args.range {
+        Some(_) => format!(", frames {first} to {last} of {count}"),
+        None => String::new(),
+    };
     eprintln!(
-        "pfx clip: {} of {count} frames to make, {done} already finished in {}",
+        "pfx clip: {} of {made} frames to make, {done} already finished in {}{part}",
         todo.len(),
         args.out.display()
     );
+    if !swept.is_empty() {
+        eprintln!(
+            "pfx clip: removed {} a stopped run left",
+            plural(swept.len(), "unfinished file")
+        );
+    }
+    let check = before.filter(|_| args.rerender_from.is_none());
+    let jobs: Vec<(u32, bool)> = check
+        .map(|frame| (frame, true))
+        .into_iter()
+        .chain(todo.iter().map(|&frame| (frame, false)))
+        .collect();
+    let mut told = Told::new(args.json, count, jobs.len() as u32);
+    let key = |frame: u32| checkpoint::key(&format!("{line}frame {frame}\n"), &args.recipe);
+    if let Some(&next) = todo.first() {
+        let mut quiet = |_: &Path, _: u32| {};
+        let found_samples = args.samples().and_then(|cap| {
+            Checkpoint::open(
+                checkpoint_of(&args.out, next, count),
+                key(next),
+                (None, cap),
+                &mut quiet,
+            )
+            .found()
+        });
+        if done > 0 || !found.redone.is_empty() || found_samples.is_some() {
+            eprintln!("pfx clip: {}", resuming(done, made, next, found_samples));
+            eprintln!("pfx clip: {}", verified_line(&found));
+            match (check, args.rerender_from) {
+                (Some(before), _) => eprintln!(
+                    "pfx clip: frame {before} renders again first and must match its stored bytes"
+                ),
+                (None, Some(from)) => eprintln!(
+                    "pfx clip: frames from {from} are made again, without checking frame {}",
+                    from.saturating_sub(1)
+                ),
+                (None, None) => {}
+            }
+            if told.json {
+                let redone: Vec<serde_json::Value> = found
+                    .redone
+                    .iter()
+                    .map(|(frame, why)| serde_json::json!({"frame": frame, "why": why}))
+                    .collect();
+                told.line(
+                    "resume",
+                    [
+                        ("done", done.into()),
+                        ("of", made.into()),
+                        ("from", next.into()),
+                        ("checkpoint_samples", found_samples.into()),
+                        ("verified", found.verified.clone().into()),
+                        ("adopted", found.adopted.clone().into()),
+                        ("redone", redone.into()),
+                        ("check", check.into()),
+                        ("rerender_from", args.rerender_from.into()),
+                    ],
+                );
+            }
+        }
+    }
     progress(done);
     if todo.is_empty() {
         return Ok(());
@@ -600,13 +920,16 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
             }
             (None, Some(path)) => camera.at(path.time(frame, count)),
             (None, None) => {
-                let at = |frame: u32| f64::from(frame) / f64::from(args.rate());
+                let at = |frame: u32| args.rate().time(u64::from(frame));
                 let before = frame.checked_sub(1).filter(|_| renderer.blurs()).map(at);
                 renderer.pose(at(frame), before, &args.camera)?
             }
         })
     };
-    for (made, &frame) in todo.iter().enumerate() {
+    let pixels = u64::from(args.size[0]) * u64::from(args.size[1]);
+    let json = args.json;
+    let mut written = 0;
+    for &(frame, checking) in &jobs {
         let settled = match frame.checked_sub(1).filter(|_| renderer.blurs()) {
             Some(prior) => {
                 let before = place(&mut renderer, prior)?;
@@ -615,13 +938,96 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
             None => None,
         };
         let pose = place(&mut renderer, frame)?;
-        let part = args.out.join(partial(frame, count));
-        let to = args.out.join(name(frame, count));
-        let summary = renderer.frame(&pose, args.size, &part, settled)?;
-        std::fs::rename(&part, &to).map_err(|e| format!("{}: {e}", to.display()))?;
-        eprintln!("pfx clip: {}, {summary}", to.display());
-        println!("{}", to.display());
-        progress(done + made as u32 + 1);
+        let stored = args.out.join(name(frame, count));
+        let to = if checking {
+            checked_path(&args.out, frame, count)
+        } else {
+            stored.clone()
+        };
+        let mut tell = |path: &Path, samples: u32| {
+            if json {
+                eprintln!(
+                    "{}",
+                    super::render::json_line(
+                        "checkpoint",
+                        0.0,
+                        [
+                            ("checkpoint", path.display().to_string().into()),
+                            ("frame", frame.into()),
+                            ("at_samples", samples.into()),
+                        ]
+                    )
+                );
+            } else {
+                eprintln!(
+                    "pfx clip: checkpoint {} at {samples} samples",
+                    path.display()
+                );
+            }
+        };
+        let mut kept = args
+            .samples()
+            .filter(|_| !checking)
+            .map(|cap| {
+                Checkpoint::open(
+                    checkpoint_of(&args.out, frame, count),
+                    key(frame),
+                    (args.checkpoint, cap),
+                    &mut tell,
+                )
+            })
+            .filter(|kept| args.checkpoint.is_some() || kept.found().is_some());
+        if let Some(samples) = kept
+            .as_ref()
+            .and_then(Checkpoint::found)
+            .filter(|_| todo.first() != Some(&frame))
+        {
+            eprintln!("pfx clip: frame {frame} resumes from its checkpoint at {samples} samples");
+        }
+        let summary = renderer.frame(
+            &pose,
+            (args.size, &to),
+            settled,
+            &mut |step| told.step(frame, step, pixels),
+            kept.as_mut().map(|kept| kept as &mut dyn pfx_still::Keeper),
+        )?;
+        if checking {
+            let again = std::fs::read(&to).map_err(|e| format!("{}: {e}", to.display()));
+            let _ = std::fs::remove_file(&to);
+            let same = again?
+                == std::fs::read(&stored).map_err(|e| format!("{}: {e}", stored.display()))?;
+            Ledger::update(&args.out, |ledger| {
+                ledger.checked(frame, same);
+                Ok(())
+            })?;
+            if json {
+                told.line(
+                    "check",
+                    [
+                        ("frame", frame.into()),
+                        ("result", if same { "same" } else { "differs" }.into()),
+                    ],
+                );
+            }
+            if !same {
+                return Err(differs(frame, &args.out));
+            }
+            eprintln!(
+                "pfx clip: frame {frame} rendered again to its stored bytes; carrying on at frame {}",
+                frame + 1
+            );
+            told.made += 1;
+            continue;
+        }
+        if let Some(kept) = &kept {
+            kept.clear()?;
+        }
+        Ledger::update(&args.out, |ledger| ledger.record(frame, args.size, &stored))?;
+        written += 1;
+        eprintln!("pfx clip: {}, {summary}", stored.display());
+        println!("{}", stored.display());
+        told.frame(frame, done + written, &stored);
+        progress(done + written);
     }
     Ok(())
 }
@@ -638,16 +1044,19 @@ fn encode(args: &Args, video: &Path, pcod: bool) -> Result<(), String> {
     if !pcod {
         return Err(unencoded(args, video));
     }
-    let line = encode_line(&args.out, video, args.rate())?;
-    eprintln!("pfx clip: pcod {}", line.join(" "));
-    let status = Command::new("pcod")
-        .args(&line)
-        .stdout(std::process::Stdio::null())
-        .status()
-        .map_err(|e| format!("cannot start pcod: {e}"))?;
-    if !status.success() {
-        return Err(format!("pcod failed ({status}) making {}", video.display()));
-    }
+    pfx_core::atomic::write_with(video, |partial| {
+        let line = encode_line(&args.out, partial, args.rate())?;
+        eprintln!("pfx clip: pcod {}", line.join(" "));
+        let status = Command::new("pcod")
+            .args(&line)
+            .stdout(std::process::Stdio::null())
+            .status()
+            .map_err(|e| format!("cannot start pcod: {e}"))?;
+        if !status.success() {
+            return Err(format!("pcod failed ({status}) making {}", video.display()));
+        }
+        Ok(())
+    })?;
     println!("{}", video.display());
     Ok(())
 }
@@ -657,6 +1066,9 @@ pub fn run(parsed: &Args, args: &[String], registry: &Registry) -> ExitCode {
         Ok(parsed) => parsed,
         Err(message) => return refuse("clip", &message),
     };
+    if let Err(message) = parsed.memory.set() {
+        return refuse("clip", &message);
+    }
     if parsed.samples().is_some() {
         if let Err(message) = precheck(parsed) {
             return refuse("clip", &message);
@@ -698,6 +1110,17 @@ mod tests {
         }
     }
 
+    fn pending(dir: &Path, frames: u32, size: [u32; 2], bits: u8) -> Vec<u32> {
+        Ledger::default()
+            .verify(
+                dir,
+                |frame| name(frame, frames),
+                ([0, frames.saturating_sub(1)], frames, size, bits),
+            )
+            .unwrap()
+            .todo
+    }
+
     fn scratch(name: &str) -> PathBuf {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tmp/clip-tests")
@@ -724,9 +1147,28 @@ mod tests {
     }
 
     #[test]
+    fn a_range_makes_part_of_the_clip_in_the_same_folder_a_whole_run_uses() {
+        let line = "a.toml --camera main --frames 8 --fps 24 --size 8x8 --out d";
+        let whole = parse(&strings(line)).unwrap();
+        let part = parse(&strings(&format!("{line} --range 2..5"))).unwrap();
+        assert_eq!(part.range, Some([2, 5]));
+        assert_eq!(whole.span(), Ok([0, 7]));
+        assert_eq!(part.span(), Ok([2, 5]));
+        assert_eq!(manifest(&part), manifest(&whole));
+        let over = parse(&strings(&format!("{line} --range 6..8"))).unwrap();
+        assert_eq!(
+            over.span(),
+            Err("--range 6..8: the clip has frames 0 to 7".into())
+        );
+        for bad in ["--range 5..2", "--range 3", "--range 2..5 --video c.mp4"] {
+            assert!(parse(&strings(&format!("{line} {bad}"))).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
-            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16",
+            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --checkpoint 30 --json --rerender-from 3 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16 --memory-limit 6",
         ))
         .unwrap();
         assert_eq!(
@@ -735,21 +1177,28 @@ mod tests {
                 recipe: "table.toml".into(),
                 camera: "main".into(),
                 frames: Some(24),
-                fps: Some(30),
+                fps: Some(Rate::whole(30)),
                 timeline: false,
                 spin: Some("body".into()),
                 turns: Some(-0.5),
+                range: None,
                 size: [320, 200],
                 out: "tmp/c".into(),
                 trace: true,
                 spp: Some(16),
                 threshold: Some(0.02),
+                checkpoint: Some(Every::Minutes(30.0)),
+                json: true,
+                rerender_from: Some(3),
                 variant: Some("bare".into()),
                 set: vec!["sky.intensity=0.4".into()],
                 film: Some("tmp/c.webm".into()),
                 picture: super::super::Picture {
                     format: Some(true),
                     dither: None,
+                },
+                memory: super::super::Memory {
+                    limit: Some(6 << 30),
                 },
             }
         );
@@ -816,7 +1265,7 @@ mod tests {
             pending(&dir, live.count(), live.size, 8),
             (0..24).collect::<Vec<_>>()
         );
-        assert_eq!(live.rate(), 24);
+        assert_eq!(live.rate(), Rate::whole(24));
         let traced = planned(
             "samples/figurine.toml --camera orbit --frames 8 --fps 8 --size 320x200 --trace --spp 16 --variant grin --set object.head.morph.smile=0.6 --out tmp/f",
         );
@@ -866,6 +1315,9 @@ mod tests {
         assert!(filmed.timeline && filmed.frames.is_none() && filmed.fps.is_none());
         for extra in [
             "--spp 8",
+            "--checkpoint 10",
+            "--trace --checkpoint 0",
+            "--trace --checkpoint 8x",
             "--trace --spp 0",
             "--video a.gif",
             "--video a",
@@ -907,7 +1359,14 @@ mod tests {
         assert_eq!(name(23, 24), "frame-0023.png");
         assert_eq!(name(9999, 10000), "frame-9999.png");
         assert_eq!(name(7, 10001), "frame-00007.png");
-        assert_eq!(partial(3, 24), ".frame-0003.partial.png");
+        assert_eq!(
+            pfx_core::atomic::partial(Path::new(&name(3, 24))),
+            Path::new(".frame-0003.partial.png")
+        );
+        assert_eq!(
+            checkpoint_of(Path::new("d"), 3, 24),
+            Path::new("d/.frame-0003.checkpoint")
+        );
     }
 
     #[test]
@@ -937,7 +1396,10 @@ mod tests {
                 pfx_recipe_scene::read_png(&path).unwrap(),
                 ([4, 2], rgba.clone())
             );
-            assert!(finished(&path, [4, 2], 8));
+            assert_eq!(
+                pfx_recipe_scene::read_png_shape(&path).unwrap(),
+                ([4, 2], 8)
+            );
         }
     }
 
@@ -952,7 +1414,11 @@ mod tests {
         pfx_recipe_scene::write_png(&dir.join(name(3, 5)), [2, 2], &rgba[..16]).unwrap();
         let whole = std::fs::read(dir.join(name(0, 5))).unwrap();
         std::fs::write(dir.join(name(4, 5)), &whole[..whole.len() - 20]).unwrap();
-        std::fs::write(dir.join(partial(1, 5)), &whole).unwrap();
+        std::fs::write(
+            dir.join(pfx_core::atomic::partial(Path::new(&name(1, 5)))),
+            &whole,
+        )
+        .unwrap();
         assert_eq!(pending(&dir, 5, size, 8), [1, 3, 4]);
         assert_eq!(pending(&dir, 5, size, 16), [0, 1, 2, 3, 4]);
         assert_eq!(pending(&dir, 5, [4, 4], 8), [0, 1, 2, 3, 4]);
@@ -982,7 +1448,7 @@ mod tests {
 
     #[test]
     fn pcod_reads_the_frames_folder_at_the_clips_rate() {
-        let line = encode_line(Path::new("-d"), Path::new("-c.webm"), 24).unwrap();
+        let line = encode_line(Path::new("-d"), Path::new("-c.webm"), Rate::whole(24)).unwrap();
         let here = std::env::current_dir().unwrap();
         assert_eq!(
             line,
@@ -996,6 +1462,49 @@ mod tests {
                 "--force".into(),
             ]
         );
+        let film = rate("23.976").unwrap();
+        let line = encode_line(Path::new("-d"), Path::new("-c.webm"), film).unwrap();
+        assert_eq!(
+            line,
+            [
+                here.join("-d").display().to_string(),
+                here.join("-c.webm").display().to_string(),
+                "--fps".into(),
+                "24000/1001".into(),
+                "--profile".into(),
+                "best".into(),
+                "--force".into(),
+            ]
+        );
+    }
+
+    #[test]
+    fn fps_takes_whole_rational_and_ntsc_rates_and_refuses_the_rest_in_clap_shape() {
+        let base = "a.toml --camera main --frames 3 --size 8x8 --out d --fps";
+        for (fps, num, den) in [
+            ("24", 24, 1),
+            ("24000/1001", 24000, 1001),
+            ("30000/1001", 30000, 1001),
+            ("60000/1001", 60000, 1001),
+            ("23.976", 24000, 1001),
+            ("29.97", 30000, 1001),
+            ("59.94", 60000, 1001),
+            ("47.952", 48000, 1001),
+            ("119.88", 120000, 1001),
+        ] {
+            let parsed = parse(&strings(&format!("{base} {fps}"))).unwrap();
+            let found = parsed.rate();
+            assert_eq!((found.num(), found.den()), (num, den), "{fps}");
+        }
+        let refused = parse(&strings(&format!("{base} 23.97"))).unwrap_err();
+        assert!(
+            refused.contains("invalid value '23.97' for '--fps <F>': ")
+                && refused.contains("use 24000/1001"),
+            "{refused}"
+        );
+        for bad in ["12.5", "0", "241", "1/2", "abc"] {
+            assert!(parse(&strings(&format!("{base} {bad}"))).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -1254,5 +1763,82 @@ mod tests {
         );
         let (_, second) = pfx_recipe_scene::read_png(&out.join(name(1, 3))).unwrap();
         assert!(second != first);
+    }
+
+    const NTSC: &str = r#"recipe = 1
+name = "ntsc"
+
+[timeline]
+fps = "24000/1001"
+frames = 12
+
+[motion_blur]
+shutter = 0.5
+
+[sun]
+model = "authored"
+toward = [0.3, 0.6, 1.0]
+radius_deg = 0.5
+color = [1.0, 1.0, 1.0]
+irradiance = 4.0
+
+[[camera]]
+name = "main"
+position = [0.75, 0.5, 4.0]
+target = [0.75, 0.5, 0.0]
+fov_y_deg = 45.0
+
+[materials.white]
+base = [0.9, 0.9, 0.9]
+roughness = 0.8
+
+[[object]]
+name = "block"
+kind = "box"
+size = [0.5, 0.5, 0.5]
+material = "white"
+at = [0.0, 0.5, 0.0]
+keys = { at = [[0.0, [0.0, 0.5, 0.0]], [0.5, [1.5, 0.5, 0.0]]] }
+"#;
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+    fn a_ntsc_traced_range_resumes_to_the_bytes_of_a_full_run() {
+        let dir = scratch("ntsc");
+        let recipe = dir.join("ntsc.toml");
+        std::fs::write(&recipe, NTSC).unwrap();
+        let out = dir.join("frames");
+        let args = resolved(
+            &parse(&strings(&format!(
+                "{} --camera main --timeline --size 96x48 --out {} --trace --spp 2",
+                recipe.display(),
+                out.display()
+            )))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            (args.count(), args.rate().to_string()),
+            (13, "24000/1001".into())
+        );
+        frames(&args, &Registry::new(), &mut |_| {}).unwrap();
+        let read = |frame: u32| {
+            pfx_recipe_scene::read_png(&out.join(name(frame, 13)))
+                .unwrap()
+                .1
+        };
+        let made: Vec<Vec<u8>> = (0..13).map(read).collect();
+        assert!(made[10] != made[11] && made[11] != made[12]);
+        for frame in 10..13 {
+            std::fs::remove_file(out.join(name(frame, 13))).unwrap();
+        }
+        assert_eq!(pending(&out, 13, args.size, 8), [10, 11, 12]);
+        frames(&args, &Registry::new(), &mut |_| {}).unwrap();
+        for frame in 0..13 {
+            assert!(
+                read(frame) == made[frame as usize],
+                "frame {frame} after resuming"
+            );
+        }
     }
 }

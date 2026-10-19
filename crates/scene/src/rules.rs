@@ -5,9 +5,9 @@ use crate::types::{
     Animation, BlendClip, Body, BodyShape, Camera, Casters, Character, CharacterKind, Color,
     Emitter, Finish, FinishKeys, Flare, Haze, Ink, KeyShape, KeyValue, Keys, LAYER_CAP,
     LAYER_COUNT, Light, LightKind, Lut, LutKey, Material, MotionBlur, Mover, MoverKind, Object,
-    Particles, Physics, Plates, Preset, Projection, Proxy, ProxyKind, Rig, RigKind, Room,
-    Scratches, Shadows, Sky, SkyKind, Sound, Sun, SunModel, Tape, Text, Tiles, Tone, ToneKind,
-    Trace, Trigger, Tunable, TunableKind, TunableValue,
+    PREWARM_MAX, Particles, Physics, Plates, Preset, Projection, Proxy, ProxyKind, Rig, RigKind,
+    Room, Scratches, Shadows, Sky, SkyKind, Sound, Sun, SunModel, Tape, Text, Tiles, Tone,
+    ToneKind, Trace, Trigger, Tunable, TunableKind, TunableValue,
 };
 
 pub(crate) struct Issue {
@@ -1416,6 +1416,14 @@ pub(crate) fn particles(particles: &Particles) -> Issues {
         );
     }
     at_least(&mut issues, "stretch", particles.stretch, 0.0);
+    if let Some(prewarm) = particles.prewarm
+        && !(0.0..=PREWARM_MAX).contains(&prewarm)
+    {
+        issues.at(
+            &["prewarm"],
+            format!("particle system {name}: prewarm is 0 to {PREWARM_MAX} seconds"),
+        );
+    }
     issues
 }
 

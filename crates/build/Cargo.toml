@@ -34,3 +34,4 @@ pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }
 pfx-live = { path = "../live" }
 pfx-recipe-scene = { path = "../recipe-scene" }
 pfx-still = { path = "../still" }
+half = "2.7.1"

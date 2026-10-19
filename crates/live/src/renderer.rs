@@ -1013,7 +1013,7 @@ fn depth_pipeline(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::Comput
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("live linear depth"), source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let z = textureLoad(source, id.xy, 0); let distance = select(limits.y / (z + limits.x), (limits.y - z) / limits.x, limits.w > 0.5); textureStore(destination, id.xy, vec4f(select(limits.z, distance, z > 0.0 && distance > 0.0), 0.0, 0.0, 0.0)); }".into()) });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("live linear depth"), source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let raw = textureLoad(source, id.xy, 0); let z = select(raw, 1.0 - raw, limits.w > 1.5); let distance = select(limits.y / (z + limits.x), (limits.y - z) / limits.x, limits.w == 1.0 || limits.w == 3.0); textureStore(destination, id.xy, vec4f(select(limits.z, distance, raw > 0.0 && distance > 0.0), 0.0, 0.0, 0.0)); }".into()) });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("live linear depth"),
         layout: Some(&pipeline_layout),
@@ -2166,8 +2166,43 @@ impl Renderer {
         self.settle
     }
 
+    pub fn reversed_depth(&self) -> bool {
+        !self.frame.classic_depth()
+    }
+
+    pub fn set_reversed_depth(&mut self, on: bool) {
+        if on == self.frame.classic_depth() {
+            self.touch();
+            self.history_valid = false;
+            self.frame.set_classic_depth(!on);
+        }
+    }
+
+    pub fn coat_reflections(&self) -> bool {
+        self.frame.coat_reflections()
+    }
+
+    pub fn set_coat_reflections(&mut self, on: bool) {
+        if on != self.frame.coat_reflections() {
+            self.touch();
+            self.frame.set_coat_reflections(on);
+        }
+    }
+
+    pub fn dof_spreads(&self) -> bool {
+        self.dof.spreads()
+    }
+
+    pub fn set_dof_spread(&mut self, on: bool) {
+        if on != self.dof.spreads() {
+            self.touch();
+            self.dof.set_spread(on);
+        }
+    }
+
     pub fn set_settle(&mut self, on: bool) {
         self.settle = on;
+        self.reflections.set_settle(on);
     }
 
     pub fn set_reflection_occlusion(&mut self, threshold: f32) -> Result<(), String> {
@@ -3139,6 +3174,7 @@ impl Renderer {
                         .map(|channel| channel * scene.sun.intensity),
                     sun_up: scene.sun.intensity > 0.0,
                     instances: dynamic,
+                    classic_depth: self.frame.classic_depth(),
                 },
                 Some(&mut self.profiler),
             )?;
@@ -3169,18 +3205,21 @@ impl Renderer {
         self.depth_index = 1 - self.depth_index;
         let current_depth = &self.depths[self.depth_index].1;
         self.dof.set_sky(view.far);
+        let classic = self.frame.classic_depth();
+        let limits = if classic {
+            scene.camera.projection
+        } else {
+            frame::reversed(scene.camera.projection)
+        };
+        let orthographic = scene.camera.projection[2][3] == 0.0;
         queue.write_buffer(
             &self.depth_limits,
             0,
             bytemuck::cast_slice(&[
-                frame::reversed(scene.camera.projection)[2][2],
-                frame::reversed(scene.camera.projection)[3][2],
+                limits[2][2],
+                limits[3][2],
                 view.far,
-                if scene.camera.projection[2][3] == 0.0 {
-                    1.0
-                } else {
-                    0.0
-                },
+                f32::from(u8::from(orthographic)) + if classic { 2.0 } else { 0.0 },
             ]),
         );
         let bind = self.depth_groups[self.depth_index].get(

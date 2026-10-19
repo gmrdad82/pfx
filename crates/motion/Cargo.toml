@@ -9,5 +9,6 @@ authors.workspace = true
 description = "pfx's motion: routes as centripetal Catmull-Rom splines with an arc-length table, seeded smooth noise, the timeline, and poses as translation, rotation and scale with their interpolation"
 
 [dependencies]
+pfx-core = { path = "../core" }
 glam = { version = "0.33", features = ["libm"] }
 libm = "0.2"

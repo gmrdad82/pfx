@@ -2,6 +2,7 @@ use crate::bake::{Section, absolute, list, number, shade_at, string};
 use crate::{Built, Error, GeneratedLight, Look, Part, local_matrix, world};
 use glam::{DMat4, DVec3};
 use pfx_core::daylight::{Authored, Daylight};
+use pfx_core::rate::Rate;
 use pfx_glb::LIGHT_PREFIX;
 use pfx_load::{RoomLamp, RoomSky, Sky};
 use pfx_materials::{Blend, ContentLayer, Library, Material};
@@ -908,12 +909,12 @@ fn focus_keys(recipe: &Recipe, built: &Built, camera: &Camera) -> Option<Result<
         .find(|t| t.node == node)?
         .focus
         .as_ref()?;
-    let fps = f64::from(recipe.timeline.map_or(1, |t| t.fps).max(1));
+    let fps = recipe.timeline.map_or(Rate::whole(1), |t| t.fps);
     let at = format!("camera[{}].rig.focus", camera.name);
     let keys: Result<Vec<String>, Error> = focus
         .iter()
         .enumerate()
-        .map(|(n, metres)| list(&[n as f64 / fps, *metres], &at))
+        .map(|(n, metres)| list(&[fps.time(n as u64), *metres], &at))
         .collect();
     Some(keys.map(|keys| format!("[{}]", keys.join(", "))))
 }
@@ -1474,6 +1475,7 @@ fn animated(
     }
     let mut s = Section::new(out, "[object.animation]", &ip);
     s.put("clip", &string(pfx_glb::ANIMATION));
+    s.put("loop", &string("once"));
     Ok(())
 }
 
@@ -2164,4 +2166,40 @@ mod tests {
             pfx_live::lights::MAX_LIGHTS + pfx_live::lights::MAX_CLUSTERED
         );
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Emitted {
+    pub name: String,
+    pub node: Option<String>,
+    pub at: [f32; 3],
+    pub recipe: pfx_core::sim::particles::Recipe,
+}
+
+pub fn emitters(recipe: &Recipe, built: &Built) -> Result<Vec<Emitted>, Error> {
+    if recipe.effects.particles.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = String::new();
+    effects::particles(&mut out, recipe, built, None)?;
+    let table: toml::Table =
+        toml::from_str(&out).map_err(|e| Error::new("particles", e.to_string()))?;
+    let Some(toml::Value::Array(entries)) = table.get("particles") else {
+        return Ok(Vec::new());
+    };
+    entries
+        .iter()
+        .map(|entry| {
+            let value: pfx_scene::types::Particles = entry
+                .clone()
+                .try_into()
+                .map_err(|e: toml::de::Error| Error::new("particles", e.to_string()))?;
+            Ok(Emitted {
+                name: value.name.clone(),
+                node: value.parent.clone(),
+                at: value.at.unwrap_or([0.0; 3]),
+                recipe: pfx_load::scene::particle_recipe(&value.name, &value),
+            })
+        })
+        .collect()
 }

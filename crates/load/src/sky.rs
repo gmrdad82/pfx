@@ -14,6 +14,10 @@ pub struct Distribution {
 }
 
 impl Sky {
+    pub fn size(bytes: &[u8]) -> Result<[u32; 2], String> {
+        header(bytes).map(|(width, height, _)| [width, height])
+    }
+
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let (width, height, mut data) = header(bytes)?;
         let least = u64::from(height) * shortest_line(width);

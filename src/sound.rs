@@ -22,7 +22,7 @@ pub enum Command {
 pub struct Mix {
     pub script: PathBuf,
     pub frames: u64,
-    pub fps: u32,
+    pub fps: pfx_core::rate::Rate,
     pub output: PathBuf,
     pub json: bool,
 }
@@ -138,7 +138,7 @@ fn plan_mix(args: &[String]) -> Result<Mix, Refusal> {
         10_000_000,
     )?;
     let fps = match &fps {
-        Some(value) => whole(value, "--fps", u64::from(crate::shot::MAX_FPS))? as u32,
+        Some(value) => crate::shot::rate(value, "--fps").map_err(Refusal::new)?,
         None => crate::shot::DEFAULT_FPS,
     };
     Ok(Mix {
@@ -425,7 +425,8 @@ fn run_mix(mix: &Mix) -> Result<(), String> {
                 "script": mix.script.display().to_string(),
                 "output": mix.output.display().to_string(),
                 "frames": mix.frames,
-                "fps": mix.fps,
+                "fps": crate::shot::fps_value(mix.fps),
+                "frame_rate": mix.fps.to_string(),
                 "samples": frames,
                 "seconds": (seconds * 1000.0).round() / 1000.0,
                 "rate": crate::shot::RATE,
@@ -439,7 +440,7 @@ fn run_mix(mix: &Mix) -> Result<(), String> {
             mix.script.display(),
             mix.output.display(),
             mix.frames,
-            mix.fps,
+            mix.fps.label(),
             crate::shot::RATE,
         );
     }
@@ -498,7 +499,10 @@ mod tests {
             panic!("not a mix");
         };
         assert_eq!(mix.script, PathBuf::from("a.sound.toml"));
-        assert_eq!((mix.frames, mix.fps, mix.json), (90, 30, true));
+        assert_eq!(
+            (mix.frames, mix.fps, mix.json),
+            (90, pfx_core::rate::Rate::whole(30), true)
+        );
         assert_eq!(mix.output, PathBuf::from("b.wav"));
         let Command::Mix(mix) = plan(&words("mix a.sound.toml --frames=12 --out=b.wav")).unwrap()
         else {
@@ -574,7 +578,7 @@ mod tests {
             assert_eq!((clip.rate, clip.channels), (48_000, 2));
             assert_eq!(
                 clip.frames() as usize,
-                crate::shot::audio_frames(frames, fps)
+                crate::shot::audio_frames(frames, pfx_core::rate::Rate::whole(fps))
             );
             assert!(clip.samples.iter().any(|s| s.abs() > 0.01));
         }

@@ -1,5 +1,5 @@
 use glam::{DMat4, DVec3};
-use pfx_build::{Built, Track};
+use pfx_build::{Built, Rate, Track};
 use pfx_recipe::Recipe;
 use pfx_recipe_scene::Eye;
 pub use pfx_recipe_scene::poses;
@@ -8,7 +8,7 @@ const LONGEST_STEP: f64 = 0.25;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Span {
-    pub fps: u32,
+    pub fps: Rate,
     pub frames: u32,
     pub aspect: f32,
 }
@@ -18,7 +18,7 @@ impl Span {
         let timeline = recipe.timeline.as_ref()?;
         let [width, height] = timeline.size;
         Some(Span {
-            fps: timeline.fps.max(1),
+            fps: timeline.fps,
             frames: timeline.frames.max(1),
             aspect: width.max(1) as f32 / height.max(1) as f32,
         })
@@ -29,11 +29,11 @@ impl Span {
     }
 
     pub fn time(&self, frame: u32) -> f64 {
-        f64::from(frame) / f64::from(self.fps)
+        self.fps.time(u64::from(frame))
     }
 
     pub fn frame(&self, time: f64) -> u32 {
-        ((time * f64::from(self.fps) + 1e-6).floor().max(0.0) as u32).min(self.frames)
+        ((self.fps.frames(time) + 1e-6).floor().max(0.0) as u32).min(self.frames)
     }
 
     fn clamp(&self, time: f64) -> f64 {
@@ -126,11 +126,11 @@ impl Clock {
     }
 }
 
-fn at(track: &Track, fps: u32, time: f64) -> Option<DMat4> {
+fn at(track: &Track, fps: Rate, time: f64) -> Option<DMat4> {
     (!track.keys.is_empty()).then(|| pfx_build::matrix(&pfx_build::sample(&track.keys, fps, time)))
 }
 
-pub fn chase(built: &Built, fps: u32, time: f64) -> Option<Eye> {
+pub fn chase(built: &Built, fps: Rate, time: f64) -> Option<Eye> {
     let track = built.tracks.iter().find(|track| track.camera.is_some())?;
     let lens = track.camera?;
     let world = at(track, fps, time)?;
@@ -156,7 +156,7 @@ mod tests {
 
     fn span() -> Span {
         Span {
-            fps: 10,
+            fps: Rate::whole(10),
             frames: 20,
             aspect: 0.5625,
         }
@@ -231,14 +231,14 @@ mod tests {
                 between: Vec::new(),
             },
         ];
-        let posed = poses(&built, 1, 0.5);
+        let posed = poses(&built, Rate::whole(1), 0.5);
         assert_eq!(posed.len(), 1);
         assert_eq!(posed[&name][3][0], 1.0);
-        assert_eq!(poses(&built, 1, 0.0)[&name][3][0], 0.0);
-        let start = chase(&built, 1, 0.0).unwrap();
+        assert_eq!(poses(&built, Rate::whole(1), 0.0)[&name][3][0], 0.0);
+        let start = chase(&built, Rate::whole(1), 0.0).unwrap();
         assert_eq!(start.target, [0.0, 0.0, -1.0]);
         assert!((start.fov_y_deg - 0.5f64.to_degrees()).abs() < 1e-9);
-        let half = chase(&built, 1, 0.5).unwrap();
+        let half = chase(&built, Rate::whole(1), 0.5).unwrap();
         assert!((half.target[0] + 1.0).abs() < 1e-9, "{:?}", half.target);
     }
 

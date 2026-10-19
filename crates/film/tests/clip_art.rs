@@ -1,5 +1,6 @@
 #![cfg(feature = "video")]
 
+use pfx_core::rate::Rate;
 use pfx_film::reel::Roll;
 use pfx_film::{Encoder, RATE};
 use pito_codecs::media::{
@@ -9,7 +10,7 @@ use pito_codecs::media::{
 use std::path::{Path, PathBuf};
 
 const SIZE: [u32; 2] = [320, 180];
-const FPS: u32 = 30;
+const FPS: Rate = Rate::whole(30);
 const SOURCE: [u32; 2] = [64, 48];
 const COUNT: u32 = 30;
 const BACK: [u8; 3] = [192, 128, 64];
@@ -26,7 +27,7 @@ fn video(path: &Path) {
     let canvas = Canvas {
         width: w,
         height: h,
-        fps: (FPS, 1),
+        fps: (FPS.num(), FPS.den()),
         frames: Some(u64::from(COUNT)),
     };
     let opts = ExportOptions {
@@ -45,8 +46,13 @@ fn video(path: &Path) {
             if n >= u64::from(COUNT) {
                 return Ok(None);
             }
-            let mut frame =
-                Frame::new(PixelFormat::Yuv420p8, w, h, n as i64, TimeBase::new(1, FPS));
+            let mut frame = Frame::new(
+                PixelFormat::Yuv420p8,
+                w,
+                h,
+                n as i64,
+                TimeBase::new(FPS.den(), FPS.num()),
+            );
             let luma = 30 + 6 * n as u8;
             for (plane, value) in frame.planes.iter_mut().zip([luma, 128, 128]) {
                 plane.data.fill(value);

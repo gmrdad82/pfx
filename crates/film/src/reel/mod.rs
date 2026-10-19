@@ -5,9 +5,11 @@ pub mod pack;
 pub mod paint;
 pub mod wav;
 
+use crate::art::{Shape, What};
 use crate::colour::hex;
+use crate::cut::MARK;
 use crate::cut::{Cast, Posed};
-use crate::marks::{Check, Marks};
+use crate::marks::{Check, Mark, Marks};
 use crate::overlay::Overlay;
 use crate::score::Score;
 use crate::script::{Drawn, Kinds, Known, Scene, Scheme, Script};
@@ -16,6 +18,7 @@ use crate::show::{Cue, FilmFrame, Show, Take};
 use crate::write::{AUDIO, Encoder, FRAMES, Files};
 use footage::{Card, Folder, Sequence, Source, sample};
 use paint::{Backdrop, Font, Painter};
+use pfx_core::rate::Rate;
 use pfx_gpu::Gpu;
 use pfx_input::InputEvent;
 use pfx_live::flat::{Icons, Srgba};
@@ -23,7 +26,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-pub const FPS: u32 = 60;
+pub const FPS: Rate = Rate::whole(60);
 pub const SIZE: [u32; 2] = [1920, 1080];
 pub const MOST_FPS: u32 = 240;
 pub const SIDES: [u32; 2] = [16, 16_384];
@@ -143,7 +146,7 @@ pub struct Footage {
 #[serde(default, deny_unknown_fields)]
 pub struct Setup {
     pub size: [u32; 2],
-    pub fps: u32,
+    pub fps: Rate,
     pub score: Option<String>,
     pub font: Option<String>,
     pub background: Option<String>,
@@ -238,8 +241,10 @@ impl Kinds for Reel {
                 "[film] size is an even width and height in [{low}, {high}]"
             ));
         }
-        if !(1..=MOST_FPS).contains(&film.fps) {
-            return Err(format!("[film] fps is in [1, {MOST_FPS}]"));
+        if !film.fps.within(1, MOST_FPS) {
+            return Err(format!(
+                "[film] fps is from 1 to {MOST_FPS}: a whole number, \"24000/1001\" or 23.976 (23.98), 29.97, 47.952 (47.95), 59.94, 119.88"
+            ));
         }
         colour_ok(&film.background, "[film] background")?;
         colour_ok(&film.check_colour, "[film] check_colour")
@@ -625,7 +630,7 @@ impl Roll {
         self.script.film.app.size
     }
 
-    pub fn fps(&self) -> u32 {
+    pub fn fps(&self) -> Rate {
         self.script.film.app.fps
     }
 
@@ -670,10 +675,34 @@ impl Roll {
         Ok((marks, tick))
     }
 
+    fn mark_scale(&self, mark: &Mark) -> Option<f32> {
+        let size = self.size();
+        let layout = crate::camera::layout(size);
+        let screen = (size[0] as f32 / layout[0]).max(size[1] as f32 / layout[1]);
+        let peak = |grow: Option<f32>, smash: Option<f32>| {
+            (1.0 + grow.unwrap_or(0.0)).max(1.0) * (1.0 + smash.unwrap_or(0.0)).max(1.0)
+        };
+        self.script
+            .scenes
+            .iter()
+            .flat_map(|scene| &scene.art)
+            .filter_map(|art| match &art.what {
+                What::Plain(p)
+                    if p.kind == Shape::Mark && p.file.as_deref() == Some(mark.name.as_str()) =>
+                {
+                    Some(p.size.unwrap_or(MARK) * peak(art.grow, art.smash))
+                }
+                _ => None,
+            })
+            .reduce(f32::max)
+            .map(|most| most * screen / mark.view[1].max(f32::MIN_POSITIVE))
+    }
+
     pub fn roll(&self, encoder: Option<&mut dyn Encoder>) -> Result<Reeled, String> {
         let gpu = pollster::block_on(Gpu::headless())?;
-        let (marks, tick) = self.marks()?;
+        let (mut marks, tick) = self.marks()?;
         let icons = Icons::bake(&marks.shapes)?;
+        let rastered = marks.rasters(|m| self.mark_scale(m))?;
         let font = match &self.font {
             Some(bytes) => Some(Font {
                 engine: pfx_text::TextEngine::new(bytes)
@@ -683,7 +712,25 @@ impl Roll {
             None => None,
         };
         let seed = self.script.film.seed as u32;
-        let atlas = atlas(&self.images)?;
+        let atlas = if rastered.is_empty() {
+            atlas(&self.images)?
+        } else {
+            let mut images = self.images.clone();
+            images.extend(rastered.into_iter().map(|r| (r.name, r.size, r.rgba)));
+            atlas(&images)?
+        };
+        if let Some(a) = &atlas {
+            marks.place(|name| {
+                a.slots.get(name).map(|slot| {
+                    let id = if slot.page > 0 {
+                        paint::PAGE | slot.page as u32
+                    } else {
+                        0
+                    };
+                    (slot.uv, id)
+                })
+            });
+        }
         let words = Words {
             images: atlas.as_ref().map(|a| a.slots.clone()).unwrap_or_default(),
             clips: self

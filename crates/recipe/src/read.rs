@@ -2,6 +2,7 @@ use pfx_mesh::math::Real;
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use pfx_motion::Rate;
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 
 use crate::include::{self, Assembly, Edit, File, Files, Role, Sources};
@@ -215,6 +216,28 @@ fn as_num(cx: &mut Cx, path: &str, item: &Item) -> Result<f64, Error> {
     }
 }
 
+fn as_rate(cx: &mut Cx, path: &str, item: &Item) -> Result<Rate, Error> {
+    let read = match item.as_value() {
+        Some(Value::Integer(i)) => u64::try_from(*i.value())
+            .map_err(|_| "is not a frame rate above 0".to_string())
+            .and_then(|whole| Rate::new(whole, 1)),
+        Some(Value::Float(f)) => Rate::from_f64(*f.value()),
+        Some(Value::String(s)) => s.value().parse(),
+        _ => return Err(bad_item(cx, path, item, RATE.0)),
+    };
+    read.map_err(|reason| {
+        Error::new(
+            path,
+            Some(cx.item_line(item)),
+            format!(
+                "expected frames per second from 1 to {}: {} {reason}",
+                Timeline::MAX_FPS,
+                item.to_string().trim()
+            ),
+        )
+    })
+}
+
 fn as_u32(cx: &mut Cx, path: &str, item: &Item) -> Result<u32, Error> {
     match item.as_value() {
         Some(value) => int_value(cx, path, value),
@@ -368,6 +391,7 @@ fn as_nums(cx: &mut Cx, path: &str, item: &Item) -> Result<Vec<f64>, Error> {
 
 const NUM: Rd<f64> = Rd("a number", as_num);
 const UINT: Rd<u32> = Rd("a whole number", as_u32);
+const RATE: Rd<Rate> = Rd("a frame rate", as_rate);
 const STR: Rd<String> = Rd("a string", as_str);
 const BOOL: Rd<bool> = Rd("true or false", as_bool);
 const V2: Rd<[f64; 2]> = Rd("an array of 2 numbers", as_n::<2>);
@@ -3462,12 +3486,15 @@ fn read_timeline(cx: &mut Cx, root: &mut Tab<'_>, seed: u64) -> Result<Option<Ti
     let at = |cx: &Cx, tab: &Tab<'_>, key: &str| {
         cx.lines.get(&tab.kipath(key)).copied().or(Some(tab.line))
     };
-    let fps = tab.or(cx, "fps", Timeline::FPS, UINT)?;
-    if !(1..=Timeline::MAX_FPS).contains(&fps) {
+    let fps = tab.or(cx, "fps", Timeline::FPS, RATE)?;
+    if !fps.within(1, Timeline::MAX_FPS) {
         return Err(Error::new(
             tab.kpath("fps"),
             at(cx, &tab, "fps"),
-            format!("expected frames per second from 1 to {}", Timeline::MAX_FPS),
+            format!(
+                "expected frames per second from 1 to {}: a whole number, \"24000/1001\" or 23.976 (23.98), 29.97, 47.952 (47.95), 59.94, 119.88",
+                Timeline::MAX_FPS
+            ),
         ));
     }
     let seconds = tab.opt(cx, "seconds", NUM)?;
@@ -3489,7 +3516,7 @@ fn read_timeline(cx: &mut Cx, root: &mut Tab<'_>, seed: u64) -> Result<Option<Ti
                     "expected a number above 0",
                 ));
             }
-            (seconds * f64::from(fps)).round().max(1.0)
+            fps.frames(seconds).round().max(1.0)
         }
         (None, Some(frames)) => {
             if frames == 0 {

@@ -1,4 +1,5 @@
 use glam::{DMat4, DQuat, DVec3};
+use pfx_core::rate::Rate;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Trs {
@@ -42,11 +43,22 @@ pub fn matrix(trs: &Trs) -> DMat4 {
     )
 }
 
-pub fn sample(keys: &[Trs], fps: u32, time: f64) -> Trs {
+const ON_FRAME: f64 = 1e-12;
+
+pub fn on_frame(at: f64) -> f64 {
+    let near = at.round();
+    if (at - near).abs() <= ON_FRAME * near.abs().max(1.0) {
+        near
+    } else {
+        at
+    }
+}
+
+pub fn sample(keys: &[Trs], fps: Rate, time: f64) -> Trs {
     let Some(last) = keys.len().checked_sub(1) else {
         return Trs::IDENTITY;
     };
-    let at = time * f64::from(fps.max(1));
+    let at = on_frame(fps.frames(time));
     let at = if at.is_finite() {
         at.clamp(0.0, last as f64)
     } else {

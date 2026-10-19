@@ -1,5 +1,8 @@
 @group(0) @binding(17) var rt_world: acceleration_structure;
 @group(0) @binding(18) var<storage, read> rt_map: array<u32>;
+fn rt_mask() -> u32 {
+    return select(0xffu,0xfeu,TRACE_SPRITES && sprites_hidden);
+}
 fn rt_triangle(c: RayIntersection) -> u32 {
     if (c.instance_custom_data>0u) { return rt_map[rt_map[2]+c.instance_custom_data-1u]+c.primitive_index; }
     return rt_map[3u+select(0u,rt_map[0],c.geometry_index==1u)+c.primitive_index];
@@ -90,7 +93,7 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
     var hit=Hit(limit,vec3f(0.0),vec3f(0.0),0u,vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,0u,0u);
     if (!rt_valid(o,d,limit)) { return hit; }
     var rq: ray_query;
-    rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_NONE,0xffu,0.0001,limit,o,d));
+    rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_NONE,rt_mask(),0.0001,limit,o,d));
     var best=limit;
     var shape=0u;
     var mover=0u;
@@ -172,7 +175,7 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
 fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
     if (!rt_valid(o,d,limit)) { return true; }
     var rq: ray_query;
-    rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT,0xffu,0.0001,limit,o,d));
+    rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT,rt_mask(),0.0001,limit,o,d));
     var blocked=false;
     var pending=array<u32,4>(0u,0u,0u,0u);
     var waiting=0u;
@@ -224,7 +227,7 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
     var rq: ray_query;
     var pending=array<u32,4>(0u,0u,0u,0u);
     var waiting=0u;
-    rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT,0xffu,0.0001,limit,o,d));
+    rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT,rt_mask(),0.0001,limit,o,d));
     while (rayQueryProceed(&rq)) {
         let c=rayQueryGetCandidateIntersection(&rq);
         if (c.kind==RAY_QUERY_INTERSECTION_TRIANGLE) {

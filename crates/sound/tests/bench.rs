@@ -186,7 +186,7 @@ fn bench_shot_mix() {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/car-pass.sound.toml");
     let full = Script::load(&path).unwrap();
-    let frames = shot::audio_frames(600, 60);
+    let frames = shot::audio_frames(600, pfx_core::rate::Rate::whole(60));
     let time = |script: &Script| {
         (0..5)
             .map(|_| {

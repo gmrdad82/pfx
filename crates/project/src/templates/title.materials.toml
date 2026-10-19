@@ -1,0 +1,13 @@
+format = 1
+
+[materials.name]
+family = "lacquer"
+base = [0.84, 0.83, 0.83]
+roughness = 0.3
+clearcoat = 0.4
+
+[materials.plate]
+family = "lacquer"
+base = [0.16, 0.16, 0.18]
+roughness = 0.35
+clearcoat = 0.4

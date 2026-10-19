@@ -21,7 +21,7 @@ fn save(pixels: &[u8]) {
 
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
-fn the_first_scene_shows_the_mark_the_wordmark_and_the_axes() {
+fn the_first_scene_shows_the_games_name_and_the_axes() {
     let project = {{crate}}::project().unwrap();
     let config = {{crate}}::config(&project)
         .unwrap()
@@ -39,20 +39,16 @@ fn the_first_scene_shows_the_mark_the_wordmark_and_the_axes() {
     assert!(count.frames >= 10, "{count:?}");
     let pixels = run.readback().unwrap();
     save(&pixels);
-    let (mut light, mut violet, mut red) = (0, 0, 0);
+    let (mut light, mut red) = (0, 0);
     for pixel in pixels.chunks_exact(4) {
         let [r, g, b] = [pixel[0], pixel[1], pixel[2]].map(u16::from);
         if r > 170 && g > 170 && b > 170 {
             light += 1;
         }
-        if b > g + 40 && b > r + 10 && b > 80 {
-            violet += 1;
-        }
         if r > g + 60 && r > b + 50 {
             red += 1;
         }
     }
-    assert!(light > 800, "the wordmark: {light} light pixels");
-    assert!(violet > 1_500, "the mark: {violet} violet pixels");
+    assert!(light > 800, "the name: {light} light pixels");
     assert!(red > 300, "the X axis: {red} red pixels");
 }

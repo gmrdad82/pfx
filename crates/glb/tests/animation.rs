@@ -65,7 +65,7 @@ fn a_track_writes_the_timeline_animation_and_a_camera_track_its_camera_node() {
         Order::File,
         "pfx test",
         Some(Animation {
-            fps: 2,
+            fps: pfx_glb::Rate::whole(2),
             tracks: &tracks,
             markers: &[],
         }),
@@ -168,7 +168,7 @@ fn no_tracks_write_the_same_bytes_as_before() {
         Order::File,
         "pfx test",
         Some(Animation {
-            fps: 60,
+            fps: pfx_glb::Rate::whole(60),
             tracks: &[],
             markers: &[],
         }),
@@ -196,7 +196,7 @@ fn a_track_naming_no_node_is_refused() {
         Order::File,
         "pfx test",
         Some(Animation {
-            fps: 60,
+            fps: pfx_glb::Rate::whole(60),
             tracks: &tracks,
             markers: &[],
         }),
@@ -224,7 +224,7 @@ fn markers_ride_in_the_timeline_animation_s_extras() {
         Order::File,
         "pfx test",
         Some(Animation {
-            fps: 2,
+            fps: pfx_glb::Rate::whole(2),
             tracks: &tracks,
             markers: &markers,
         }),

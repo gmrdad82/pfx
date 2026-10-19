@@ -3226,6 +3226,7 @@ dependencies = [
  "pfx-play",
  "pfx-recipe",
  "pfx-recipe-scene",
+ "pfx-still",
  "pollster",
  "serde_json",
 ]
@@ -3236,6 +3237,7 @@ version = "3.1.0"
 dependencies = [
  "glam 0.33.12",
  "gltf",
+ "half",
  "pfx-bake",
  "pfx-core",
  "pfx-file",
@@ -3594,6 +3596,7 @@ version = "3.1.0"
 dependencies = [
  "glam 0.33.12",
  "libm",
+ "pfx-core",
 ]
 
 [[package]]
@@ -3652,9 +3655,14 @@ name = "pfx-project"
 version = "3.1.0"
 dependencies = [
  "pfx-file",
+ "pfx-geom",
+ "pfx-glb",
+ "pfx-mesh",
  "pfx-mod",
  "pfx-scene",
+ "png 0.18.1",
  "toml 0.9.12+spec-1.1.0",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -3786,6 +3794,7 @@ version = "3.1.0"
 dependencies = [
  "exr",
  "pfx-build",
+ "pfx-core",
  "pfx-denoise",
  "pfx-gpu",
  "pfx-live",
@@ -3906,8 +3915,8 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
 name = "pito-codecs"
-version = "1.14.3"
-source = "git+https://github.com/gmrdad82/pito-codecs?tag=v1.14.3#5f0680cc6a39f26243b5ffb70766f4ba2bf3524c"
+version = "1.16.2"
+source = "git+https://github.com/gmrdad82/pito-codecs?tag=v1.16.2#940dc0ac52fbe51fe393b03fb4d4e8e042d110b4"
 dependencies = [
  "libloading",
  "objc2-core-foundation",

@@ -14,16 +14,16 @@ pfx build <file.pitofx> [--variant <name> | --all-variants] [--set key=value]...
 pfx check <file.pitofx>                                       validate and list problems
 pfx diff <a.glb> <b.glb> [--json] [--render --recipe <file.pitofx> [--camera <name>] [--size WxH] [--floor <dB>]]
                                                           structure, side by side, or both drawn alike and compared by PSNR
-pfx shot <file.pitofx> --still --camera <name> --size WxH --out <png> [--variant <name>] [--set key=value]... [--stage N|name] [--only <glob>,...] [--time S] [--format png|png16] [--dither on|off]
+pfx shot <file.pitofx> --still --camera <name> --size WxH --out <png> [--variant <name>] [--set key=value]... [--stage N|name] [--only <glob>,...] [--time S] [--format png|png16] [--dither on|off] [--memory-limit GB]
                                                           one still on the live renderer, headless; --set overrides a value the recipe has
-pfx render --recipe <file.pitofx> --camera <name> [--spp N] [--threshold T] [--min-samples N] [--draft] [--seed S] [--size WxH] [--equirect|--ortho] [--crop x,y,w,h] [--variant V] [--set key=value]... [--stage N|name] [--only <glob>,...] [--time S] [--denoise off|on] [--format png|png16] [--dither on|off] [--master <file.png>] [--progress plain|json] --out <file.png|file.exr|file.hdr>
+pfx render --recipe <file.pitofx> --camera <name> [--spp N] [--threshold T] [--min-samples N] [--draft] [--seed S] [--size WxH] [--equirect|--ortho] [--crop x,y,w,h] [--variant V] [--set key=value]... [--stage N|name] [--only <glob>,...] [--time S] [--denoise off|on] [--format png|png16] [--dither on|off] [--master <file.png>] [--progress plain|json] [--checkpoint <minutes|Nspp>] [--memory-limit GB] --out <file.png|file.exr|file.hdr>
                                                           path-traced on the engine's tracer
-pfx clip <file.pitofx> --camera <name> (--frames N --fps F [--spin <object> [--turns N]] | --timeline) --size WxH --out <dir> [--trace [--spp N] [--threshold T]] [--variant V] [--set key=value]... [--video <file.mp4|file.webm>] [--format png|png16] [--dither on|off]
+pfx clip <file.pitofx> --camera <name> (--frames N --fps F [--spin <object> [--turns N]] | --timeline) [--range A..B] --size WxH --out <dir> [--trace [--spp N] [--threshold T] [--checkpoint <minutes|Nspp>]] [--json] [--rerender-from <frame>] [--variant V] [--set key=value]... [--video <file.mp4|file.webm>] [--format png|png16] [--dither on|off] [--memory-limit GB]
                                                           a camera moving along the recipe's path, as frames and a video
 pfx new <out.pitofx> --from street [--seed N] [--json]
                                                           writes a starter chase shot: a 9:16 timeline, a route, a low-rise street, a drifting hero car, traffic, a low chase camera, road spray behind each rear wheel, a golden-hour sun about 5 degrees up dead ahead down the route, a top camera over the route, five stages (street, car, city, camera, look) and lilac.cube, all inside the new .pitofx; it is built on first use
 pfx timeline <file.pitofx> [--json]                           builds the recipe and reports its frames, keyed nodes, camera node, each followed object's distance and top speed, and the markers with their frames
-pfx shoot <file.pitofx> --out <dir> [--draft|--final] [--range a..b] [--camera <name>] [--json]
+pfx shoot <file.pitofx> --out <dir> [--draft|--final] [--range a..b] [--camera <name>] [--memory-limit GB] [--json]
                                                           builds the recipe and renders its timeline with `pfx shot` on the live renderer: frames, the scene's sound as a WAV and shoot.json; resumes where it stopped
 pfx library list|index|check [--kind <kind>] [--library <dir>] [--json]
                                                           the library's objects, its index rewritten from the folders, or every object checked against the index

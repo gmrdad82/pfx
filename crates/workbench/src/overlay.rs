@@ -143,7 +143,7 @@ fn triple(settings: &Settings, key: &str) -> Option<DVec3> {
         })
 }
 
-fn node_world(built: &Built, fps: u32, time: f64, node: &str) -> Option<DMat4> {
+fn node_world(built: &Built, fps: pfx_build::Rate, time: f64, node: &str) -> Option<DMat4> {
     if let Some(track) = built
         .tracks
         .iter()
@@ -162,8 +162,8 @@ fn node_world(built: &Built, fps: u32, time: f64, node: &str) -> Option<DMat4> {
         .map(|part| part.node.transform)
 }
 
-pub fn guides(recipe: &Recipe, built: &Built, at: Option<(u32, f64)>) -> Guides {
-    let (fps, time) = at.unwrap_or((1, 0.0));
+pub fn guides(recipe: &Recipe, built: &Built, at: Option<(pfx_build::Rate, f64)>) -> Guides {
+    let (fps, time) = at.unwrap_or((pfx_build::Rate::whole(1), 0.0));
     let place = |parent: Option<&str>, local: DVec3| match parent {
         Some(node) => node_world(built, fps, time, node).map(|world| world.transform_point3(local)),
         None => Some(local),

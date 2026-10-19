@@ -1,5 +1,6 @@
 pub mod adaptive;
 pub mod bvh;
+pub mod checkpoint;
 pub mod denoise;
 pub mod detail;
 pub mod film;
@@ -18,6 +19,7 @@ pub mod rt;
 pub mod shapes;
 pub mod sky;
 pub mod sobol;
+pub mod sprites;
 pub mod stage;
 pub mod text;
 pub mod textured;

@@ -80,8 +80,8 @@ fn slack(distance: f32) -> f32 {
     0.005 + 0.02 * distance
 }
 
-fn rings(radius: f32) -> u32 {
-    let inner = ((radius / INNER_SPACING).ceil() as u32).min(INNER_RINGS);
+fn rings(radius: f32, inner_rings: u32) -> u32 {
+    let inner = ((radius / INNER_SPACING).ceil() as u32).min(inner_rings);
     ((radius / RING_SPACING).ceil() as u32)
         .max(inner)
         .clamp(1, MAX_RINGS)
@@ -95,10 +95,24 @@ pub fn gather(
     image: &[[f32; 4]],
     depth: &[f32],
     heights: &[f32],
-    (width, height): (usize, usize),
+    size: (usize, usize),
     lens: Lens,
     sky: f32,
 ) -> Vec<[f32; 4]> {
+    gather_with(image, depth, heights, size, lens, sky, true)
+}
+
+pub fn gather_with(
+    image: &[[f32; 4]],
+    depth: &[f32],
+    heights: &[f32],
+    (width, height): (usize, usize),
+    lens: Lens,
+    sky: f32,
+    spread: bool,
+) -> Vec<[f32; 4]> {
+    let sky = if spread { sky } else { f32::INFINITY };
+    let inner_rings = if spread { INNER_RINGS } else { 0 };
     let count = width * height;
     if !lens.enabled() || image.len() != count || depth.len() != count || heights.len() != count {
         return image.to_vec();
@@ -149,7 +163,7 @@ pub fn gather(
             if radius < 1.0 {
                 continue;
             }
-            let ring_count = rings(radius);
+            let ring_count = rings(radius, inner_rings);
             let share = radius * radius / (4 * ring_count * (ring_count + 1)) as f32;
             let centre = [x as f32 + 0.5, y as f32 + 0.5];
             let mut back = image[index];
@@ -304,7 +318,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
         textureStore(output_tex, pixel, sharp);
         return;
     }
-    let rings = clamp(max(u32(ceil(radius / 6.0)), min(u32(ceil(radius / 2.0)), 2u)), 1u, 5u);
+    let rings = clamp(max(u32(ceil(radius / 6.0)), min(u32(ceil(radius / 2.0)), u32(lens.sky.z))), 1u, 5u);
     let share = radius * radius / f32(4u * rings * (rings + 1u));
     let last = vec2i(lens.size) - vec2i(1);
     var back = sharp;
@@ -465,6 +479,7 @@ pub struct GpuDof {
     height: u32,
     viewport: (u32, u32),
     sky: f32,
+    spread: bool,
     targets: Targets,
     tile_layout: wgpu::BindGroupLayout,
     tile_pipeline: wgpu::ComputePipeline,
@@ -506,6 +521,7 @@ impl GpuDof {
             height,
             viewport: (width, height),
             sky: f32::INFINITY,
+            spread: true,
             targets: Targets::new(device, width, height),
             tile_layout,
             tile_pipeline,
@@ -546,6 +562,14 @@ impl GpuDof {
         };
     }
 
+    pub fn set_spread(&mut self, on: bool) {
+        self.spread = on;
+    }
+
+    pub fn spreads(&self) -> bool {
+        self.spread
+    }
+
     fn params(&self, lens: Lens, height: [f32; 4]) -> [f32; 24] {
         let (width, rows) = self.viewport;
         let (tiles_x, tiles_y) = (width.div_ceil(TILE), rows.div_ceil(TILE));
@@ -570,9 +594,13 @@ impl GpuDof {
             height[1],
             height[2],
             height[3],
-            self.sky.min(f32::MAX),
+            if self.spread {
+                self.sky.min(f32::MAX)
+            } else {
+                f32::MAX
+            },
             FAR_AWAY,
-            0.0,
+            if self.spread { INNER_RINGS as f32 } else { 0.0 },
             0.0,
         ]
     }
@@ -867,6 +895,29 @@ mod tests {
     }
 
     #[test]
+    fn without_spread_the_sky_reads_as_its_distance_and_a_small_circle_gathers_one_ring() {
+        let open = Lens {
+            aperture: 2.0,
+            ..plain()
+        };
+        let (width, height) = (160, 48);
+        let image: Vec<_> = (0..width * height)
+            .map(|i| colour((i % width) as u32, (i / width) as u32))
+            .collect();
+        let sky = 3.0;
+        let depth: Vec<_> = (0..width * height)
+            .map(|i| if i % width < 80 { 0.6 } else { sky })
+            .collect();
+        let heights = vec![0.0; width * height];
+        let size = (width, height);
+        let kept = gather_with(&image, &depth, &heights, size, open, sky, false);
+        let unbounded = gather_with(&image, &depth, &heights, size, open, f32::INFINITY, false);
+        assert!(kept == unbounded);
+        assert!(kept != gather(&image, &depth, &heights, size, open, f32::INFINITY));
+        assert!(kept != gather(&image, &depth, &heights, size, open, sky));
+    }
+
+    #[test]
     fn blur_keeps_surface_detail_above_the_ground() {
         let lens = Lens {
             ground_m: Some(0.1),
@@ -1040,6 +1091,23 @@ mod tests {
             }
             assert!(blurred > 1000, "{viewport:?} blurred only {blurred} pixels");
         }
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn without_spread_the_gpu_ignores_the_sky_and_gathers_as_before() {
+        let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
+        let whole = frame(&gpu, CAPACITY, CAPACITY);
+        let mut plain = GpuDof::new(&gpu.device, CAPACITY.0, CAPACITY.1);
+        plain.set_spread(false);
+        let want = render(&gpu, &plain, &whole);
+        let mut dof = GpuDof::new(&gpu.device, CAPACITY.0, CAPACITY.1);
+        dof.set_sky(2.0);
+        let spread = render(&gpu, &dof, &whole);
+        dof.set_spread(false);
+        assert!(!dof.spreads());
+        assert!(render(&gpu, &dof, &whole) == want);
+        assert!(spread != want);
     }
 
     #[test]

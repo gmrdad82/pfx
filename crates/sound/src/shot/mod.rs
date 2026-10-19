@@ -10,6 +10,7 @@ mod surface;
 pub use curve::{Curve, Ease};
 
 use curve::Track;
+use pfx_core::rate::Rate;
 use read::{Fields, tables};
 use std::path::{Path, PathBuf};
 
@@ -163,17 +164,13 @@ pub struct Script {
     pub samples: Vec<Sample>,
 }
 
-pub fn render(script_path: &Path, frames: usize, fps: u32) -> Result<Vec<f32>, String> {
-    if fps == 0 {
-        return Err("fps must be above 0".into());
-    }
+pub fn render(script_path: &Path, frames: usize, fps: Rate) -> Result<Vec<f32>, String> {
     let script = Script::load(script_path)?;
     script.mix(audio_frames(frames, fps))
 }
 
-pub fn audio_frames(frames: usize, fps: u32) -> usize {
-    let fps = u64::from(fps.max(1));
-    ((frames as u64 * u64::from(RATE) + fps / 2) / fps) as usize
+pub fn audio_frames(frames: usize, fps: Rate) -> usize {
+    fps.samples_nearest(frames as u64, RATE) as usize
 }
 
 const KINDS: [&str; 6] = ["engine", "road", "squeal", "spray", "whoosh", "ambience"];

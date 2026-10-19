@@ -145,7 +145,7 @@ fn shot_from(scene: &Scene, follow: &str, fps: u32, from: u64) -> Vec<[f32; 3]> 
         &Shot {
             scene,
             size: (WIDTH, HEIGHT),
-            fps,
+            fps: pfx_core::rate::Rate::whole(fps),
             from,
             frames: 1,
             camera: Some(Follow {

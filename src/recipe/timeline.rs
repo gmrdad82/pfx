@@ -95,7 +95,11 @@ pub(super) fn followed(recipe: &Recipe) -> Vec<String> {
     }
 }
 
-pub(super) fn travel(facts: &Facts, object: &str, fps: u32) -> Option<(String, f64, f64)> {
+pub(super) fn travel(
+    facts: &Facts,
+    object: &str,
+    fps: pfx_recipe::Rate,
+) -> Option<(String, f64, f64)> {
     let prefix = format!("{object}.");
     let node = [object.to_string(), format!("{object}.body")]
         .into_iter()
@@ -116,7 +120,7 @@ pub(super) fn travel(facts: &Facts, object: &str, fps: u32) -> Option<(String, f
         })
         .collect();
     let distance = steps.iter().sum();
-    let top = steps.iter().copied().fold(0.0, f64::max) * f64::from(fps);
+    let top = steps.iter().copied().fold(0.0, f64::max) * fps.fps();
     Some((node, distance, top))
 }
 
@@ -181,7 +185,7 @@ fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), S
             json!({
                 "name": m.name,
                 "t": m.t,
-                "frame": (m.t * f64::from(timeline.fps) + 1e-6).floor() as u64,
+                "frame": (timeline.fps.frames(m.t) + 1e-6).floor() as u64,
             })
         })
         .collect();
@@ -195,7 +199,8 @@ fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), S
             "recipe": pfx_recipe::files::shown(file),
             "frames": u64::from(timeline.frames) + 1,
             "last_frame": timeline.frames,
-            "fps": timeline.fps,
+            "fps": crate::shot::fps_value(timeline.fps),
+            "frame_rate": timeline.fps.to_string(),
             "seconds": timeline.seconds(),
             "size": timeline.size,
             "camera": camera,
@@ -213,7 +218,7 @@ fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), S
         pfx_recipe::files::shown(file),
         u64::from(timeline.frames) + 1,
         timeline.frames,
-        timeline.fps,
+        timeline.fps.label(),
         timeline.seconds(),
         timeline.size[0],
         timeline.size[1]

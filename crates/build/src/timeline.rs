@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use glam::{DMat4, DQuat, DVec3};
 use pfx_glb::{CAMERA_PREFIX, Lens, Node, Track, ZNEAR};
-use pfx_motion::{Route, Timeline, Trs, matrix, trs_from_matrix};
+use pfx_motion::{Rate, Route, Timeline, Trs, matrix, trs_from_matrix};
 use pfx_recipe::{Camera, Recipe};
 
 use crate::{Built, Error, Registry};
@@ -195,9 +195,9 @@ pub(crate) fn bake(
     Ok(tracks)
 }
 
-fn lerp(values: &[f64], fps: u32, time: f64) -> Option<f64> {
+fn lerp(values: &[f64], fps: Rate, time: f64) -> Option<f64> {
     let last = values.len().checked_sub(1)?;
-    let at = (time * f64::from(fps.max(1))).clamp(0.0, last as f64);
+    let at = pfx_motion::on_frame(fps.frames(time)).clamp(0.0, last as f64);
     let low = (at.floor() as usize).min(last);
     let high = (low + 1).min(last);
     let s = at - low as f64;
@@ -237,7 +237,7 @@ pub fn pose_cameras(recipe: &Recipe, built: &Built, time: f64) -> Result<Recipe,
     if let Some(text) = time_refusal(recipe, time) {
         return Err(Error::new("timeline", text));
     }
-    let fps = recipe.timeline.map_or(1, |t| t.fps);
+    let fps = recipe.timeline.map_or(Rate::whole(1), |t| t.fps);
     let mut recipe = recipe.keyed_at(time);
     for track in &built.tracks {
         if let Some(name) = track.light_name()
@@ -271,7 +271,7 @@ pub fn pose_cameras(recipe: &Recipe, built: &Built, time: f64) -> Result<Recipe,
 
 pub fn pose(recipe: &Recipe, built: &Built, time: f64) -> Result<(Recipe, Built), Error> {
     let recipe = pose_cameras(recipe, built, time)?;
-    let fps = recipe.timeline.map_or(1, |t| t.fps);
+    let fps = recipe.timeline.map_or(Rate::whole(1), |t| t.fps);
     let mut built = built.clone();
     for track in built.tracks.iter().filter(|t| t.camera_name().is_none()) {
         let trs = track.sample(fps, time);

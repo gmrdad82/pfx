@@ -353,9 +353,15 @@ struct ReflectParams {
     thickness: f32,
     history_half: vec2u,
     far: f32,
-    stochastic: u32,
+    modes: u32,
 }
 @group(0) @binding(0) var<uniform> params: ReflectParams;
+fn stochastic_trace() -> bool {
+    return (params.modes & 1u) != 0u;
+}
+fn settled_history() -> bool {
+    return (params.modes & 2u) != 0u;
+}
 fn inside(uv: vec2f) -> bool {
     return all(uv >= vec2f(0.0)) && all(uv < vec2f(1.0));
 }
@@ -390,7 +396,7 @@ fn to_pixel(p: vec3f) -> vec3f {
 fn scene_depth(pixel: vec2f) -> f32 {
     let at = vec2i(clamp(pixel, vec2f(0.0), vec2f(params.size) - vec2f(1.0)));
     let depth = textureLoad(depth_tex, at, 0).r;
-    return select(depth, 3.0e38, depth >= params.far * 0.999);
+    return select(depth, 3.0e38, stochastic_trace() && depth >= params.far * 0.999);
 }
 fn ray_depth(k: vec2f, s: f32) -> f32 {
     return 1.0 / mix(k.x, k.y, s);
@@ -490,7 +496,7 @@ fn march(origin: vec3f, direction: vec3f, steps: u32, jitter: f32) -> vec3f {
                 return vec3f(pixel, edge_weight(pixel / size) * fade);
             }
         }
-        if (params.stochastic != 0u && ray > scene * (1.0 + params.thickness) && ray <= scene * (1.0 + SSR_SOLID)) {
+        if (stochastic_trace() && ray > scene * (1.0 + params.thickness) && ray <= scene * (1.0 + SSR_SOLID)) {
             if (buried < 0.0) {
                 buried = travelled;
             } else if (travelled - buried >= run) {
@@ -541,7 +547,7 @@ fn trace_pass(@builtin(global_invocation_id) id: vec3u) {
     let roughness = clamp(nr.w, 0.0, 1.0);
     let view_ray = normalize(origin);
     var direction = vec3f(0.0);
-    if (params.stochastic != 0u && roughness > SSR_GLOSSY) {
+    if (stochastic_trace() && roughness > SSR_GLOSSY) {
         direction = ssr_sample_reflection(view_ray, normal, roughness * roughness, ssr_random(pixel, params.frame_index));
     } else {
         let angle = 6.2831853 * f32(params.frame_index % 8u) * 0.125;
@@ -556,7 +562,7 @@ fn trace_pass(@builtin(global_invocation_id) id: vec3u) {
     var hit = vec3f(0.0);
     let fade = 1.0 - smoothstep(0.6, 0.75, roughness);
     if (fade > 0.0) {
-        let jitter = select(0.0, ssr_random(pixel + vec2u(17u, 59u), params.frame_index + 2654435769u).x, params.stochastic != 0u);
+        let jitter = select(0.0, ssr_random(pixel + vec2u(17u, 59u), params.frame_index + 2654435769u).x, stochastic_trace());
         hit = march(origin + surface * depth * 0.002, direction, march_steps(roughness), jitter);
     }
     if (hit.z < 0.0) {
@@ -568,7 +574,7 @@ fn trace_pass(@builtin(global_invocation_id) id: vec3u) {
         let confidence = hit.z * fade * clamp(1.0 - 4.0 * (facing - 0.1), 0.0, 1.0);
         let top = f32(textureNumLevels(source_colour) - 1u);
         var lod = clamp(roughness * 4.0 - 0.5, 0.0, top);
-        if (params.stochastic != 0u && roughness > SSR_GLOSSY) {
+        if (stochastic_trace() && roughness > SSR_GLOSSY) {
             let footprint = 2.0 * distance(hit.xy, vec2f(pixel) + vec2f(0.5)) * roughness * roughness;
             lod = clamp(max(lod, log2(max(footprint, 1.0))), 0.0, top);
         }
@@ -626,7 +632,7 @@ fn resolve_pass(@builtin(global_invocation_id) id: vec3u) {
     let pixel = trace_pixel(id.xy);
     let motion = textureLoad(motion_tex, vec2i(pixel), 0).rg;
     let prev = (vec2f(pixel) + vec2f(0.5)) / vec2f(params.size) + motion;
-    let settled = 1.0 - smoothstep(0.05, 0.5, length(motion * vec2f(params.size)));
+    let settled = select(0.0, 1.0 - smoothstep(0.05, 0.5, length(motion * vec2f(params.size))), settled_history());
     if (params.history_valid != 0u && inside(prev)) {
         let history_last = vec2i(params.history_half) - vec2i(1);
         let f = prev * vec2f(params.history_half) - vec2f(0.5);
@@ -682,7 +688,7 @@ fn prefilter_pass(@builtin(global_invocation_id) id: vec3u) {
     let centre = textureLoad(raw_tex, cell, 0);
     let guide = textureLoad(guide_tex, cell, 0);
     let spread = smoothstep(SSR_GLOSSY, 0.45, guide.w);
-    if (guide.x <= 0.0 || spread <= 0.0 || params.stochastic == 0u) {
+    if (guide.x <= 0.0 || spread <= 0.0 || !stochastic_trace()) {
         textureStore(output_tex, cell, centre);
         return;
     }
@@ -956,6 +962,9 @@ fn coat_reflectance(surface: Shaded, ndv: f32) -> f32 {
     if (coat <= 0.0) {
         return 0.0;
     }
+    if (!split_coat()) {
+        return coat * schlick(vec3f(0.04), ndv, 5.0).r;
+    }
     let dfg = reflection_dfg(surface.clearcoat_roughness, ndv);
     let grazing = dfg.y * reflection_steepness(surface, ndv);
     return coat * clamp(0.04 * (dfg.x - grazing) + grazing, 0.0, 1.0);
@@ -1070,7 +1079,7 @@ struct TraceUniform {
     thickness: f32,
     history_half: [u32; 2],
     far: f32,
-    stochastic: u32,
+    modes: u32,
 }
 
 fn sampled(binding: u32, filterable: bool) -> wgpu::BindGroupLayoutEntry {
@@ -1178,6 +1187,7 @@ pub struct Pass {
     next: usize,
     valid: bool,
     stochastic: bool,
+    settle: bool,
     trace_layout: wgpu::BindGroupLayout,
     prefilter_layout: wgpu::BindGroupLayout,
     resolve_layout: wgpu::BindGroupLayout,
@@ -1302,6 +1312,7 @@ impl Pass {
             next: 0,
             valid: false,
             stochastic: true,
+            settle: true,
             trace_layout,
             prefilter_layout,
             resolve_layout,
@@ -1341,6 +1352,14 @@ impl Pass {
 
     pub fn set_stochastic(&mut self, on: bool) {
         self.stochastic = on;
+    }
+
+    pub fn settles(&self) -> bool {
+        self.settle
+    }
+
+    pub fn set_settle(&mut self, on: bool) {
+        self.settle = on;
     }
 
     pub fn set_viewport(&mut self, width: u32, height: u32) -> Result<(), String> {
@@ -1384,7 +1403,7 @@ impl Pass {
             thickness: inputs.thickness,
             history_half: self.history,
             far: inputs.far,
-            stochastic: u32::from(self.stochastic),
+            modes: u32::from(self.stochastic) | (u32::from(self.settle) << 1),
         };
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("reflection uniforms"),
@@ -2057,7 +2076,11 @@ mod tests {
             TRACE_WGSL.to_string(),
             PREFILTER_WGSL.to_string(),
             RESOLVE_WGSL.to_string(),
-            format!("{}\n{}", pfx_materials::BRDF, PROBE_WGSL),
+            format!(
+                "{}\n{}\nfn split_coat() -> bool {{ return true; }}",
+                pfx_materials::BRDF,
+                PROBE_WGSL
+            ),
         ] {
             let module = naga::front::wgsl::parse_str(&source).unwrap();
             naga::valid::Validator::new(
@@ -2410,6 +2433,47 @@ mod tests {
             traced(true, 0).0,
             traced(true, 8).0,
             "stochastic reflections sample new rays each frame"
+        );
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn gpu_without_stochastic_reflections_a_ray_still_meets_the_backdrop() {
+        let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
+        let desk = desk(640, 360);
+        let views = rough_views(&gpu, &desk, [1.0, 0.0, 0.0], 0.05);
+        let traced = |stochastic: bool, far: f32| {
+            let mut pass = Pass::new(&gpu.device, desk.width, desk.height);
+            pass.set_stochastic(stochastic);
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            pass.encode(
+                &gpu.device,
+                &mut encoder,
+                &Inputs {
+                    far,
+                    ..inputs(&views, &desk, 0, false)
+                },
+                None,
+            );
+            gpu.queue.submit(Some(encoder.finish()));
+            read(&gpu, &pass._raw[0])
+        };
+        let card = desk
+            .depth
+            .iter()
+            .zip(&desk.surface)
+            .filter(|(_, surface)| !matches!(surface, Surface::Floor | Surface::Sky))
+            .map(|(depth, _)| *depth)
+            .fold(f32::INFINITY, f32::min);
+        assert_eq!(
+            traced(false, card),
+            traced(false, f32::MAX),
+            "without stochastic reflections the far plane is no backdrop"
+        );
+        assert_ne!(
+            traced(true, card),
+            traced(true, f32::MAX),
+            "stochastic reflections miss what lies at the far plane"
         );
     }
 

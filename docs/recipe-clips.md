@@ -50,8 +50,31 @@ pfx clip samples/workshop.pitofx --camera orbit --frames 120 --fps 30 --size 128
 The first draws each frame on the live renderer; `--trace` path-traces them (64 samples a frame by default). Frames are written as `frame-0000.png`, `frame-0001.png`… and each finished frame is printed on stdout.
 
 - **An orbit loops:** frame `i` of `N` is at `i / N`, so a whole number of turns repeats no frame. Keys end on their last key.
-- **A run resumes:** a frame is written whole or not at all, and a second run into the same folder skips the finished frames. A run with different settings into that folder is refused, so frames never mix.
-- **Same input, same bytes:** each frame depends on its pose, the recipe and the flags only.
+- **A run resumes:** a frame is written whole or not at all, and a second run into the same folder makes only what is missing (see [Stop and resume](#stop-and-resume)). A run with different settings into that folder is refused, so frames never mix.
+- **Part of a clip:** `--range A..B` makes only frames A to B, both kept, numbered and seeded as in a whole run, into the same folder a whole run uses, so ranges made on several machines join by copying their frames together (`docs/jobs.md`). A long clip runs detached, pausable and resumable as a `pfx job` there.
+- **Same input, same bytes:** each frame depends on its pose, the recipe and the flags only, never on the frames rendered before it in the same run.
+
+## Stop and resume
+
+A long clip survives a stop, a crash, a reboot or the GPU queue taking the card away: run the same line into the same `--out` and it carries on.
+
+- **Whole files only.** Every frame, the `--video`, `clip.txt` and `frames.json` go to a hidden `.<name>.partial.<ext>` beside the file, are synced to disk and then renamed into place. A run sweeps any leftover `.partial` file before it starts.
+- **`frames.json`** lists each finished frame with its number, size and sha256, rewritten whole after every frame. On resume each frame on disk is read against it: a frame that is missing, cut short or doesn't match its hash is made again. A frame the ledger doesn't know yet (a folder from an older pfx, or a stop between the rename and the ledger) is decoded whole first and only then recorded. Several `--range` runs into one folder share the ledger under `frames.lock`: each verifies, sweeps and redoes only its own frames, and a range checks the frame before its first missing one only when that frame is finished and recorded there.
+- **The previous frame is made again first.** Before continuing at frame K, frame K−1 is rendered once more and compared byte for byte with the one on disk. When they match the run carries on; when they don't (another pfx build, another GPU driver, or state carried between frames), it stops with one line naming the frame, records the result under `checks` in `frames.json`, and renders nothing more, so old and new frames never mix. `--rerender-from <frame>` removes that frame and every later one, from the folder and from the ledger, and makes them again without the check.
+- **Checkpoints inside a frame.** `--checkpoint <every>` (with `--trace`) saves the frame's accumulated samples to `.frame-NNNN.checkpoint` every so many minutes (`--checkpoint 10`) or samples (`--checkpoint 64spp`). The file holds the tracer's sums, its three output layers, the sample index and, for adaptive sampling, the rounds reached and the per-pixel noise estimates, so a resumed frame continues at the next sample and ends on the same bytes as an uninterrupted one. A checkpoint is kept only for the render that made it (the line, the recipe's sha256 and the pfx version); any other is removed. It is deleted once its frame is written. At 3840×2160 a checkpoint is about 1.1 GB.
+- **What it says.** A resumed run prints `resuming: 37 of 120 frames done, starting at frame 37` (with `, from its checkpoint at 96 samples` when one is used), a line with the frames verified and redone, and the K−1 check's result.
+
+`--json` prints the same on stderr as JSON lines, one object a line:
+
+| `stage` | fields |
+|---|---|
+| `resume` | `done`, `of`, `from`, `checkpoint_samples`, `verified`, `adopted`, `redone` (`frame`, `why`), `check`, `rerender_from` |
+| `check` | `frame`, `result` (`same` or `differs`) |
+| `trace` | `frame`, `of`, `samples` (the mean so far under adaptive sampling), `spp`, `fraction` of the frame, `eta_s` for the run |
+| `checkpoint` | `checkpoint` (its path), `frame`, `at_samples` |
+| `frame` | `frame`, `of`, `done`, `out`, `eta_s` |
+
+`trace` lines come at most once a second, plus the first of every frame.
 
 ## Turn an object on a turntable
 
@@ -90,7 +113,9 @@ Frame `i` of `N` turns `body` by `turns × 360° × i / N` (`--turns` is 1 by de
 pfx clip chase.pitofx --camera chase --timeline --size 1080x1920 --out chase
 ```
 
-A recipe with a `[timeline]` (the recipe guide's "Timeline") films with `--timeline` in place of `--frames` and `--fps`: frames 0 to the timeline's last at its `fps`, each the scene posed at `n / fps`, through `--camera`, which the timeline moves when it keys that camera. `--video` encodes at the timeline's `fps`.
+`--fps` takes a whole number, `num/den` such as `24000/1001`, or `23.976`, `29.97`, `47.952`, `59.94`, `119.88`, read as the exact NTSC ratios; any other decimal is refused naming the ratio to use. A ratio reaches pcod as the exact ratio (`--fps 24000/1001`), to `.mp4` or `.webm` alike.
+
+A recipe with a `[timeline]` (the recipe guide's "Timeline") films with `--timeline` in place of `--frames` and `--fps`: frames 0 to the timeline's last at its `fps`, each the scene posed at exactly `n × den / num` seconds, so a resumed folder's frames match a full run's byte for byte, through `--camera`, which the timeline moves when it keys that camera. `--video` encodes at the timeline's `fps`.
 
 ## Make the video
 
@@ -101,3 +126,5 @@ pfx clip samples/workshop.pitofx --camera orbit --frames 120 --fps 30 --size 128
 With [pcod](https://github.com/gmrdad82/pito-codecs) on the `PATH`, `--video` encodes the frames into an `.mp4` (H.264) or a `.webm` (VP9). Opaque frames are written as RGB PNGs, which both take; a frame with transparent pixels keeps its alpha, which only `.webm` carries. Without pcod, `--video` says it needs pcod, the frames stay in the folder and the command exits 1.
 
 The list holds each frame for exactly its share of a second, so the video has every frame once.
+
+`--memory-limit <GB>` (or `PFX_MEMORY_LIMIT`) plans the clip's memory before its scene is staged, live or `--trace`, and refuses one past the limit in one line; each frame's line ends with the peaks so far beside the plan ([memory.md](memory.md)). A traced clip keeps its built scene for the whole clip, so it plans more than a traced still of the same recipe.

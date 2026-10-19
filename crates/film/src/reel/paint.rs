@@ -31,7 +31,7 @@ const TICK_LOW: f32 = 2.0;
 const TICK_PER_OCTAVE: f32 = 4.0;
 const TICK_STEPS: u32 = 36;
 const CLIP: u32 = 0x4000_0000;
-const PAGE: u32 = 0x2000_0000;
+pub(crate) const PAGE: u32 = 0x2000_0000;
 const SHARP: f32 = 0.5;
 const SILENT: usize = usize::MAX;
 

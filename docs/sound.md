@@ -319,7 +319,7 @@ mixer.stream_vorbis(ChannelId::DIALOG, &source, None, Level::default())?;
 
 ## Media files (feature `media`)
 
-`Decode::start(&DecodeSpec)` and `Output::stream` decode a media file to f32 PCM at the spec's rate and channel count, on their own thread two seconds ahead of the mixer, through [pito-codecs](https://github.com/gmrdad82/pito-codecs) v1.14.3 (MIT, pinned by tag, CPU decoders only); no other program runs. The feature is off by default and the `pfx` tool turns it on. The build takes pito-codecs' audio-only set (`audio`, AAC, AC-3, MP3, Opus, MP4 and MKV), so no video decoder or GPU code is compiled in.
+`Decode::start(&DecodeSpec)` and `Output::stream` decode a media file to f32 PCM at the spec's rate and channel count, on their own thread two seconds ahead of the mixer, through [pito-codecs](https://github.com/gmrdad82/pito-codecs) v1.16.2 (MIT, pinned by tag, CPU decoders only); no other program runs. The feature is off by default and the `pfx` tool turns it on. The build takes pito-codecs' audio-only set (`audio`, AAC, AC-3, MP3, Opus, MP4 and MKV), so no video decoder or GPU code is compiled in.
 
 ```rust
 let spec = DecodeSpec {
@@ -466,7 +466,7 @@ let wav = Clip { rate: pfx_sound::shot::RATE, channels: 2, samples: mix }.to_wav
 pfx sound mix <script.sound.toml> --frames N [--fps N] --out <out.wav> [--json]
 ```
 
-renders a script to a WAV with no scene and no GPU: `render(script, N, fps)` (`--fps` 60 by default, as `pfx shot`'s), written as a 48 kHz stereo 32-bit float WAV, the very function and writer `pfx shot --audio` uses, so the two give the same bytes for the same script, frames and fps (a test in `src/sound.rs` checks it byte for byte at 90 frames at 30 fps and 37 at 24). The output's folder is made if missing. It prints one line (the frames, the length, the rate and the time it took), or with `--json` an object with `mix` (1), `script`, `output`, `frames`, `fps`, `samples` (frames of audio), `seconds`, `rate`, `channels` and `ms`. Input it can't parse is refused the way clap refuses it (exit 2, `Usage: pfx sound mix [OPTIONS] --frames <FRAMES> --out <OUT> <SCRIPT>`); a script that fails to load is one line, `pfx: …`, exit 1. The car-pass example, 600 frames at 60 fps (10 s of audio), mixes and writes in 155 ms, median of five runs (release build, one core, Ryzen 9 9950X under a load average of 24).
+renders a script to a WAV with no scene and no GPU: `render(script, N, fps)` (`--fps` 60 by default and the same rates as `pfx shot`'s, `24000/1001` and `23.976` included; the length is N × 48000 × den / num samples, rounded to the nearest), written as a 48 kHz stereo 32-bit float WAV, the very function and writer `pfx shot --audio` uses, so the two give the same bytes for the same script, frames and fps (a test in `src/sound.rs` checks it byte for byte at 90 frames at 30 fps and 37 at 24). The output's folder is made if missing. It prints one line (the frames, the length, the rate and the time it took), or with `--json` an object with `mix` (1), `script`, `output`, `frames`, `fps`, `samples` (frames of audio), `seconds`, `rate`, `channels` and `ms`. Input it can't parse is refused the way clap refuses it (exit 2, `Usage: pfx sound mix [OPTIONS] --frames <FRAMES> --out <OUT> <SCRIPT>`); a script that fails to load is one line, `pfx: …`, exit 1. The car-pass example, 600 frames at 60 fps (10 s of audio), mixes and writes in 155 ms, median of five runs (release build, one core, Ryzen 9 9950X under a load average of 24).
 
 ### Script keys
 

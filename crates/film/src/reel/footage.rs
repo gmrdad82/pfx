@@ -1,5 +1,6 @@
 use super::wav;
 use crate::shoot::RATE;
+use pfx_core::rate::Rate;
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -26,7 +27,8 @@ pub fn sample(seconds: f64) -> u64 {
 
 #[derive(Default, Deserialize)]
 struct Manifest {
-    fps: Option<f64>,
+    rate: Option<Rate>,
+    fps: Option<Rate>,
     frames: Option<u64>,
     wav: Option<String>,
 }
@@ -34,7 +36,7 @@ struct Manifest {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sequence {
     pub dir: PathBuf,
-    pub fps: f64,
+    pub fps: Rate,
     pub count: u64,
     pub wav: Option<PathBuf>,
 }
@@ -52,7 +54,7 @@ fn counted(dir: &Path) -> u64 {
 }
 
 impl Sequence {
-    pub fn find(dir: &Path, film_fps: u32) -> Result<Sequence, String> {
+    pub fn find(dir: &Path, film_fps: Rate) -> Result<Sequence, String> {
         let show = |e: &dyn std::fmt::Display| format!("{}: {e}", dir.display());
         if !dir.is_dir() {
             return Err(show(&"no such folder"));
@@ -74,8 +76,8 @@ impl Sequence {
         if count == 0 {
             return Err(show(&"no 000000.png in the folder or its frames/"));
         }
-        let fps = manifest.fps.unwrap_or(f64::from(film_fps));
-        if !(fps.is_finite() && fps > 0.0 && fps <= 1000.0) {
+        let fps = manifest.rate.or(manifest.fps).unwrap_or(film_fps);
+        if !fps.within(0, 1000) {
             return Err(show(&format!("a frame rate of {fps}")));
         }
         let wav = manifest
@@ -92,7 +94,7 @@ impl Sequence {
     }
 
     pub fn index(&self, at: f64) -> u64 {
-        ((at * self.fps + EPSILON).floor().max(0.0) as u64).min(self.count - 1)
+        ((self.fps.frames(at) + EPSILON).floor().max(0.0) as u64).min(self.count - 1)
     }
 }
 

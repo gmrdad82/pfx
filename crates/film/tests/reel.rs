@@ -1,3 +1,4 @@
+use pfx_core::rate::Rate;
 use pfx_film::reel::{Kind, Roll};
 use pfx_film::score::CHANNELS;
 use pfx_film::{Encoder, RATE};
@@ -6,7 +7,7 @@ use std::path::{Path, PathBuf};
 const MARK: &str = include_str!("fixtures/mark.svg");
 const SCORE: &str = include_str!("fixtures/score.toml");
 const SIZE: [u32; 2] = [320, 180];
-const FPS: u32 = 30;
+const FPS: Rate = Rate::whole(30);
 const FOLDER: [u32; 2] = [64, 36];
 const FOLDER_FPS: u32 = 15;
 const TONE: f32 = 330.0;
@@ -65,7 +66,7 @@ fn clip(at: &Path) {
     let canvas = Canvas {
         width: w,
         height: h,
-        fps: (FPS, 1),
+        fps: (FPS.num(), FPS.den()),
         frames: Some(15),
     };
     let opts = ExportOptions {
@@ -84,8 +85,13 @@ fn clip(at: &Path) {
             if n >= 15 {
                 return Ok(None);
             }
-            let mut frame =
-                Frame::new(PixelFormat::Yuv420p8, w, h, n as i64, TimeBase::new(1, FPS));
+            let mut frame = Frame::new(
+                PixelFormat::Yuv420p8,
+                w,
+                h,
+                n as i64,
+                TimeBase::new(FPS.den(), FPS.num()),
+            );
             for (plane, value) in frame.planes.iter_mut().zip([81u8, 90, 240]) {
                 plane.data.fill(value);
             }
@@ -206,6 +212,26 @@ fn a_footage_film_plans_its_scenes_and_refuses_what_it_cannot_play() {
     }
 }
 
+#[test]
+fn a_film_reads_its_rate_as_an_exact_rational() {
+    let at = dir("reel-rate");
+    let path = script(&at, false);
+    let good = std::fs::read_to_string(&path).unwrap();
+    let film: Rate = "24000/1001".parse().unwrap();
+    for fps in ["\"24000/1001\"", "23.976", "\"23.976\""] {
+        std::fs::write(&path, good.replacen("fps = 30", &format!("fps = {fps}"), 1)).unwrap();
+        let roll = Roll::open(&path).unwrap();
+        assert_eq!(roll.fps(), film, "{fps}");
+        assert_eq!(roll.frames(), 5 + 2 + 7);
+        let pcod = roll.pcod(Path::new("/o"), Path::new("/o/f.mp4")).join(" ");
+        assert!(pcod.contains("--fps 24000/1001 "), "{pcod}");
+    }
+    for fps in ["23.97", "\"1/2\"", "\"241\"", "0"] {
+        std::fs::write(&path, good.replacen("fps = 30", &format!("fps = {fps}"), 1)).unwrap();
+        assert!(Roll::open(&path).is_err(), "{fps}");
+    }
+}
+
 #[derive(Default)]
 struct Tape {
     frames: Vec<Vec<u8>>,
@@ -288,7 +314,7 @@ fn a_footage_film_renders_the_same_frames_and_audio_every_time() {
             shade(i as u32 / 2)
         );
     }
-    let from = (lead * RATE as usize / FPS as usize) * 2;
+    let from = FPS.samples(lead as u64, RATE) as usize * 2;
     let folder_audio = &one.audio[from..from + (RATE as usize / 10) * 2];
     assert!(energy(folder_audio) > 0.05, "the folder's WAV plays");
     for f in &one.frames[lead + 6..lead + 9] {

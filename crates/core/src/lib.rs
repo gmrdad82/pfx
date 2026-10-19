@@ -1,4 +1,5 @@
 pub mod anim;
+pub mod atomic;
 pub mod camera;
 pub mod cli;
 pub mod clock;
@@ -9,6 +10,7 @@ pub mod memory;
 pub mod modules;
 pub mod motion;
 pub mod numbers;
+pub mod rate;
 pub mod rig;
 pub mod sim;
 pub mod sky;

@@ -2,6 +2,7 @@ mod align;
 mod asset;
 mod build;
 mod check;
+mod checkpoint;
 mod clip;
 mod credits;
 mod curve;
@@ -17,6 +18,7 @@ mod gui_shot;
 mod gui_tape;
 mod import;
 mod key;
+mod ledger;
 mod library;
 mod library_add;
 mod library_bake;
@@ -288,6 +290,23 @@ impl Picks {
             stage: self.stage.clone(),
             only: self.only.clone(),
         }
+    }
+}
+
+#[derive(clap::Args, Clone, Copy, Debug, Default, PartialEq)]
+pub(super) struct Memory {
+    #[arg(
+        long = "memory-limit",
+        value_name = "GB",
+        value_parser = pfx_core::memory::gigabytes,
+        help = "Refuse, before loading anything heavy, a run planned past this many GB on the CPU or the GPU [default: PFX_MEMORY_LIMIT, else none]"
+    )]
+    pub(super) limit: Option<u64>,
+}
+
+impl Memory {
+    pub(super) fn set(&self) -> Result<Option<u64>, String> {
+        pfx_core::memory::from_env(self.limit)
     }
 }
 

@@ -1,10 +1,11 @@
+use pfx_core::rate::Rate;
 use pfx_film::mix::Mixdown;
 use pfx_film::shoot::samples;
 use pfx_film::{Drawn, Kinds, Known, RATE, Score, Script};
 use serde::Deserialize;
 
 const DROP: &str = include_str!("fixtures/drop.toml");
-const FPS: u32 = 30;
+const FPS: Rate = Rate::whole(30);
 const BEAT: usize = 22_500;
 
 #[derive(Clone, Debug, PartialEq)]

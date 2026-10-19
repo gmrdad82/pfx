@@ -212,6 +212,8 @@ pub enum ParticleBlend {
     Add,
 }
 
+pub const PREWARM_MAX: f32 = 30.0;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -265,6 +267,8 @@ pub struct Particles {
     pub lit: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prewarm: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keys: Option<Keys>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -840,6 +844,12 @@ pub struct LiveSettings {
     pub settle: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scene_reflections: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dof_spread: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reversed_depth: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coat_reflections: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -7,6 +7,7 @@ use crate::input::Touch;
 use crate::layers::{Flash, Shake, Sound, Style, Text};
 use crate::track::Key;
 use crate::transition::Transition;
+use pfx_core::rate::Rate;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
@@ -270,14 +271,14 @@ pub fn read<T: DeserializeOwned>(table: toml::Table) -> Result<T, String> {
     T::deserialize(table).map_err(|e| e.to_string().trim().to_string())
 }
 
-pub fn frames(seconds: f64, fps: u32) -> u64 {
-    ((seconds * f64::from(fps)).round() as u64).max(1)
+pub fn frames(seconds: f64, fps: Rate) -> u64 {
+    (fps.frames(seconds).round() as u64).max(1)
 }
 
-pub fn cuts(starts: &[f64], fps: u32) -> Vec<u64> {
+pub fn cuts(starts: &[f64], fps: Rate) -> Vec<u64> {
     let mut out: Vec<u64> = Vec::with_capacity(starts.len());
     for t in starts {
-        let at = (t * f64::from(fps)).round() as u64;
+        let at = fps.frames(*t).round() as u64;
         out.push(match out.last() {
             Some(last) => at.max(last + 1),
             None => at,
@@ -547,7 +548,7 @@ impl<K: Kinds> Script<K> {
         Ok(script)
     }
 
-    pub fn frames(&self, fps: u32) -> u64 {
+    pub fn frames(&self, fps: Rate) -> u64 {
         self.cuts(fps).last().copied().unwrap_or(0)
     }
 
@@ -562,7 +563,7 @@ impl<K: Kinds> Script<K> {
         out
     }
 
-    pub fn cuts(&self, fps: u32) -> Vec<u64> {
+    pub fn cuts(&self, fps: Rate) -> Vec<u64> {
         cuts(&self.starts(), fps)
     }
 
@@ -570,7 +571,7 @@ impl<K: Kinds> Script<K> {
         self.scenes.iter().map(|s| s.seconds).sum()
     }
 
-    pub fn off_grid(&self, fps: u32) -> Result<Vec<String>, String> {
+    pub fn off_grid(&self, fps: Rate) -> Result<Vec<String>, String> {
         let Some(grid) = &self.film.beat else {
             return Ok(Vec::new());
         };

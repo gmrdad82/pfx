@@ -82,6 +82,15 @@ pub fn status_version() -> String {
     format!("pfx v{VERSION}")
 }
 
+fn picture(
+    ctx: &Context,
+    path: &Path,
+) -> Option<Result<(String, std::sync::Arc<crate::mark::Mark>), String>> {
+    let key = path.display().to_string();
+    let mark = crate::mark::source(ctx, &key, || crate::mark::Mark::open(path));
+    Some(mark.map(|mark| (key, mark)))
+}
+
 fn search_id() -> Id {
     Id::new("workbench search")
 }
@@ -146,6 +155,8 @@ struct Grab {
     eye: Eye,
     origin: Pos2,
     pan: bool,
+    held: Vec2,
+    since: f64,
 }
 
 pub struct Shell {
@@ -228,10 +239,12 @@ pub struct Shell {
     strip: bool,
     region: Option<[f32; 4]>,
     guides: crate::overlay::Guides,
+    fade: viewport::Fade,
     held: Option<Held>,
     file_note: Option<(String, bool)>,
     titled_dirty: bool,
     edit: Option<Box<pfx_editor::session::Session>>,
+    game: Option<session::Brand>,
     playing_recipe: bool,
     preparing_play: Option<session::Preparing>,
     play_frames: u32,
@@ -438,11 +451,15 @@ impl Shell {
     }
 
     pub fn start(path: &str) -> Shell {
-        Shell {
+        let mut shell = Shell {
             calm: true,
             first: Some(crate::start::MARK),
             ..Shell::open(path)
+        };
+        if let Some(held) = shell.held.as_mut() {
+            held.target = None;
         }
+        shell
     }
 
     pub fn empty() -> Shell {
@@ -558,10 +575,12 @@ impl Shell {
             strip: true,
             region: None,
             guides: crate::overlay::Guides::default(),
+            fade: viewport::Fade::default(),
             held: None,
             file_note: None,
             titled_dirty: false,
             edit: None,
+            game: None,
             playing_recipe: false,
             preparing_play: None,
             play_frames: 0,
@@ -1230,6 +1249,31 @@ impl Shell {
         viewport::fit(image, self.document.aspect)
     }
 
+    fn take_over(&mut self) -> Option<Eye> {
+        if self.chase_view().is_none() && self.through().is_none() {
+            return None;
+        }
+        let image = self.viewport?;
+        let shown = self.view_eye()?;
+        let eye = viewport::narrow(&shown, self.free_frame(image), image);
+        self.eye = Some(eye);
+        self.through = false;
+        self.clock.chase = false;
+        Some(eye)
+    }
+
+    fn fade_frame(&mut self, ctx: &Context) {
+        let now = ctx.input(|input| input.time);
+        let shown = self.camera_frame().map(|frame| (frame, self.looked()));
+        if self.fade.advance(now, shown) {
+            ctx.request_repaint();
+        }
+    }
+
+    pub fn frame_alpha(&self) -> f32 {
+        self.fade.alpha()
+    }
+
     pub fn view_eye(&self) -> Option<Eye> {
         let image = self.viewport?;
         if let Some((eye, frame)) = self.chase_view() {
@@ -1528,6 +1572,7 @@ impl Shell {
         self.keyboard(ctx);
         self.pointer(ctx);
         self.tick(ctx);
+        self.fade_frame(ctx);
         self.panels.clear();
         let palette = self.palette();
         let texture = match &self.texture {
@@ -2599,27 +2644,36 @@ impl Shell {
         &self,
         ctx: &Context,
     ) -> Option<Result<(String, std::sync::Arc<crate::mark::Mark>), String>> {
-        let Some(session) = self.session().filter(|session| session.plays_a_game()) else {
+        let Some(game) = &self.game else {
             let mark =
                 crate::mark::source(ctx, "pfx", || crate::mark::Mark::read(crate::mark::PFX));
             return Some(mark.map(|mark| ("pfx".to_string(), mark)));
         };
-        let path = session.config()?.mark.as_ref()?;
-        let path = match session.project() {
-            Some(project) if path.is_relative() => project.root().join(path),
-            _ => path.clone(),
-        };
-        let key = path.display().to_string();
-        let mark = crate::mark::source(ctx, &key, || crate::mark::Mark::open(&path));
-        Some(mark.map(|mark| (key, mark)))
+        picture(ctx, game.mark.as_deref()?)
+    }
+
+    fn header_wordmark(
+        &self,
+        ctx: &Context,
+    ) -> Option<Result<(String, std::sync::Arc<crate::mark::Mark>), String>> {
+        picture(ctx, self.game.as_ref()?.wordmark.as_deref()?)
     }
 
     fn header_title(&self) -> String {
-        match self.session().filter(|session| session.plays_a_game()) {
-            Some(session) => session
-                .config()
-                .map_or_else(String::new, |config| config.name.clone()),
-            None => String::new(),
+        match &self.game {
+            Some(game) if game.wordmark.is_none() => game.name.clone(),
+            _ => String::new(),
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        self.game.as_ref().map_or("pfx", |game| game.name.as_str())
+    }
+
+    pub fn status_version(&self) -> String {
+        match &self.game {
+            Some(game) => game.line.clone(),
+            None => status_version(),
         }
     }
 
@@ -2636,6 +2690,16 @@ impl Shell {
                 width += size.x + pfx_editor_style::tokens::HEADER_GAP;
             }
             Some(Err(error)) => about = format!("{about}; the mark: {error}"),
+            None => {}
+        }
+        match self.header_wordmark(ui.ctx()) {
+            Some(Ok((key, wordmark))) => {
+                let (texture, size) =
+                    crate::mark::texture(ui.ctx(), &key, &wordmark, theme.row_height);
+                header = header.wordmark(texture, size);
+                width += size.x + pfx_editor_style::tokens::HEADER_GAP;
+            }
+            Some(Err(error)) => about = format!("{about}; the wordmark: {error}"),
             None => {}
         }
         let shown = ui
@@ -2814,7 +2878,7 @@ impl Shell {
 
     fn status_tools(&mut self, ui: &mut Ui) {
         let palette = Palette::of(ui.ctx());
-        ui.label(code(ui, status_version(), palette.text_muted));
+        ui.label(code(ui, self.status_version(), palette.text_muted));
         divider(ui);
         let tone = match self.pgpu {
             Pgpu::Free => Tone::Ok,
@@ -3161,6 +3225,7 @@ impl Shell {
         self.spans = crate::spans::Spans::default();
         self.clock = Clock::default();
         self.chase_eye = None;
+        self.fade = viewport::Fade::default();
         self.picker.close();
         self.calm = false;
         self.first = None;
@@ -3219,6 +3284,7 @@ impl Shell {
                 input.modifiers.ctrl,
             )
         });
+        let (now, delta) = ui.input(|input| (input.time, input.pointer.delta()));
         let object_route = self.object_route();
         if response.drag_started() {
             self.settle = None;
@@ -3248,10 +3314,16 @@ impl Shell {
                         _ => false,
                     };
             if !handled {
+                let eye = match origin {
+                    Some(_) => self.take_over().unwrap_or(eye),
+                    None => eye,
+                };
                 self.grab = origin.map(|origin| Grab {
                     eye,
                     origin,
                     pan: middle || shift,
+                    held: pointer.map_or(Vec2::ZERO, |at| at - origin - delta),
+                    since: now,
                 });
             }
         }
@@ -3281,9 +3353,14 @@ impl Shell {
             && let Some(grab) = self.grab
             && let Some(at) = pointer
         {
+            let caught = orbit::caught(now - grab.since);
+            if caught < 1.0 {
+                ui.ctx().request_repaint();
+            }
+            let held = grab.held * (1.0 - caught) as f32;
             let moved = [
-                f64::from(at.x - grab.origin.x),
-                f64::from(at.y - grab.origin.y),
+                f64::from(at.x - grab.origin.x - held.x),
+                f64::from(at.y - grab.origin.y - held.y),
             ];
             self.eye = Some(if grab.pan {
                 orbit::pan(&grab.eye, moved, tall)
@@ -3324,7 +3401,7 @@ impl Shell {
             let options = ui.ctx().options(|options| options.input_options);
             let scroll = ui.input(|input| scrolled(input, &options));
             if scroll != 0.0
-                && let Some(eye) = chased.or(self.eye)
+                && let Some(eye) = self.take_over().or(self.eye)
             {
                 self.eye = Some(orbit::dolly(&eye, f64::from(scroll)));
                 self.through = false;
@@ -3366,8 +3443,8 @@ impl Shell {
             if self.view_error.is_none() {
                 viewport::grid(painter, &eye, image, &self.solids_shown());
             }
-            if let Some(frame) = self.camera_frame() {
-                viewport::passepartout(painter, image, frame);
+            if let Some((frame, alpha)) = self.fade.frame() {
+                viewport::passepartout(painter, image, frame, alpha);
             }
             self.overlays(painter, &eye, image);
             viewport::axes(painter, image, &orbit::basis(&eye));
@@ -5159,7 +5236,7 @@ heading = 0.0
         let (mut shell, _, _) = live("shell-markers", SCENE);
         let mut document = shell.document().clone();
         document.timeline = Some(Span {
-            fps: 10,
+            fps: pfx_build::Rate::whole(10),
             frames: 20,
             aspect: 0.5625,
         });
@@ -5187,7 +5264,7 @@ heading = 0.0
     fn the_timeline_bar_plays_steps_and_scrubs_and_a_rebuild_keeps_the_time() {
         let (mut shell, _, _) = live("shell-timeline", SCENE);
         let span = Span {
-            fps: 10,
+            fps: pfx_build::Rate::whole(10),
             frames: 20,
             aspect: 0.5625,
         };
@@ -5643,6 +5720,11 @@ fov_y_deg = 30.0
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         pfx_project::scaffold("sample-game", &root, "0.0.0").unwrap();
+        game_shell_with(&root, mark, None)
+    }
+
+    fn game_shell_with(root: &Path, mark: Option<&str>, wordmark: Option<&str>) -> Shell {
+        let root = root.to_path_buf();
         let project = pfx_project::Project::folder(&root).unwrap();
         let mut config = pfx_game::Config::new("sample-game", "0.0.0", project.play());
         if let Some(mark) = mark {
@@ -5664,6 +5746,9 @@ fov_y_deg = 30.0
             writer.finish().unwrap();
             std::fs::write(root.join(mark), bytes).unwrap();
             config = config.mark(mark);
+        }
+        if let Some(wordmark) = wordmark {
+            config = config.wordmark(wordmark);
         }
         let setup = pfx_editor::session::Setup {
             pgpu: false,
@@ -5697,6 +5782,81 @@ fov_y_deg = 30.0
         assert!(!crate::mark::read_into(&ctx, "pfx"));
     }
 
+    fn window_texts(shell: &mut Shell, script: &str) -> (Vec<String>, Context) {
+        let ctx = Context::default();
+        let theme = shell.theme();
+        theme::apply_theme(&ctx, &theme);
+        let output = drive(&ctx, SIZE, &Script::parse(script).unwrap(), |ui| {
+            shell.ui(ui)
+        });
+        let mut texts = Vec::new();
+        for clipped in &output.shapes {
+            painted(&clipped.shape, &mut texts);
+        }
+        let texts = texts.into_iter().map(|(text, _, _)| text).collect();
+        (texts, ctx)
+    }
+
+    fn no_pfx(shell: &mut Shell, script: &str) {
+        let (texts, ctx) = window_texts(shell, script);
+        let workbench = crate::Workbench::new(shell, None);
+        let title = pfx_editor_shell::App::name(&workbench).to_string();
+        let label = pfx_editor_shell::App::label(&workbench).unwrap_or_default();
+        assert_eq!(title, "sample-game");
+        let said: Vec<&String> = texts
+            .iter()
+            .chain([&title, &label])
+            .filter(|text| text.to_ascii_lowercase().contains("pfx"))
+            .collect();
+        assert!(said.is_empty(), "a game's window says pfx: {said:?}");
+        assert!(texts.iter().any(|text| text == "sample-game v0.0.0"));
+        assert!(!crate::mark::read_into(&ctx, "pfx"));
+        assert_eq!(shell.theme(), theme::game());
+    }
+
+    #[test]
+    fn a_game_s_window_shows_nothing_of_pfx_even_after_opening_another_file() {
+        let mut game = game_shell("game-unbranded", Some("mark.png"));
+        no_pfx(&mut game, "frame\nkey F6\nframe\nframe");
+        let theme = game.theme();
+        let (texts, images, _) = header_drawn(&mut game, &theme);
+        assert_eq!(
+            (texts, images),
+            (vec!["A".to_string(), "SAMPLE-GAME".to_string()], 1)
+        );
+        let other = scratch("game-unbranded-other");
+        std::fs::write(&other, SCENE).unwrap();
+        game.open_file(&other);
+        assert!(game.session().is_none_or(|session| !session.plays_a_game()));
+        no_pfx(&mut game, "frame\nkey F6\nframe\nframe");
+        let theme = game.theme();
+        let (texts, images, _) = header_drawn(&mut game, &theme);
+        assert_eq!(
+            (texts, images),
+            (vec!["A".to_string(), "SAMPLE-GAME".to_string()], 1),
+            "the game's mark and name stay for the whole game session"
+        );
+    }
+
+    #[test]
+    fn a_game_s_wordmark_takes_the_typed_name_s_place_in_the_header() {
+        let game = game_shell("game-wordmark", Some("mark.png"));
+        let root = game
+            .session()
+            .unwrap()
+            .project()
+            .unwrap()
+            .root()
+            .to_path_buf();
+        std::fs::copy(root.join("mark.png"), root.join("wordmark.png")).unwrap();
+        let mut game = game_shell_with(&root, Some("mark.png"), Some("wordmark.png"));
+        let theme = game.theme();
+        let (texts, images, ctx) = header_drawn(&mut game, &theme);
+        assert_eq!((texts, images), (vec!["A".to_string()], 2));
+        assert!(!crate::mark::read_into(&ctx, "pfx"));
+        assert_eq!(game.name(), "sample-game");
+    }
+
     #[test]
     fn a_tape_s_directing_steps_reach_a_game_opened_scene() {
         use crate::tape::Act;
@@ -5726,7 +5886,7 @@ fov_y_deg = 30.0
         let away = eye(&shell);
         shell
             .direct(&Act::Fit {
-                objects: vec!["incoming".into()],
+                objects: vec!["title".into()],
                 before: 0.0,
                 now: 1.0,
             })
@@ -7521,8 +7681,8 @@ clearcoat_roughness = 0.07
         let _ = std::fs::remove_dir_all(&state);
         let path = crate::start_recipe(&state).unwrap();
         let path_text = path.display().to_string();
-        let mut viewer = Viewer::new(&path, Mode::Fake);
         let mut shell = Shell::start(&path_text);
+        let mut viewer = Viewer::new(Path::new(&shell.document().path), Mode::Fake);
         viewer.sync(&mut shell);
         run(&mut shell, SIZE, "frame");
         assert!(shell.live());
@@ -7533,7 +7693,13 @@ clearcoat_roughness = 0.07
             shell.object
         );
         assert!(!shell.picker.showing(shell.live()));
-        assert_eq!(shell.document().path, path_text);
+        assert_eq!(shell.label().as_deref(), Some(crate::start::DOCUMENT));
+        assert!(
+            shell
+                .held
+                .as_ref()
+                .is_some_and(|held| held.target.is_none())
+        );
         for name in ["mark", "wordmark"] {
             assert!(shell.document().object(name).is_some(), "{name}");
         }
@@ -7545,9 +7711,10 @@ clearcoat_roughness = 0.07
     fn the_start_mark_is_selected_with_its_gizmo_in_the_middle_and_a_drag_moves_it_whole() {
         let state = scratch("start-drag").parent().unwrap().join("state");
         let _ = std::fs::remove_dir_all(&state);
-        let path = crate::start_recipe(&state).unwrap();
+        let document = crate::start_recipe(&state).unwrap();
+        let mut shell = Shell::start(&document.display().to_string());
+        let path = PathBuf::from(&shell.document().path);
         let mut viewer = Viewer::new(&path, Mode::Fake);
-        let mut shell = Shell::start(&path.display().to_string());
         shell.drains = true;
         viewer.sync(&mut shell);
         run(&mut shell, SIZE, "frame");
@@ -7599,7 +7766,9 @@ clearcoat_roughness = 0.07
         }
         assert_ne!(after_text, crate::start::start_text());
         assert_eq!(
-            std::fs::read_to_string(crate::start_recipe(&state).unwrap()).unwrap(),
+            pfx_build::Document::open(&crate::start_recipe(&state).unwrap())
+                .unwrap()
+                .recipe_text,
             crate::start::start_text()
         );
     }

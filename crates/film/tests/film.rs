@@ -1,3 +1,4 @@
+use pfx_core::rate::Rate;
 use pfx_film::score::CHANNELS;
 use pfx_film::{
     Camera, Cast, Crew, Drawn, Encoder, FilmFrame, Grade, Kinds, Known, Letter, Marks, Overlay,
@@ -10,7 +11,7 @@ use serde::Deserialize;
 const FILM: &str = include_str!("fixtures/film.toml");
 const SCORE: &str = include_str!("fixtures/score.toml");
 const MARK: &str = include_str!("fixtures/mark.svg");
-const FPS: u32 = 30;
+const FPS: Rate = Rate::whole(30);
 
 #[derive(Clone, Debug, PartialEq)]
 struct Toy;

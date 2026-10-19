@@ -1,4 +1,5 @@
 use glam::{DMat4, DVec3};
+use pfx_build::Rate;
 use pfx_build::{Bake, Registry, Track, Trs, build_with, camera_track, pose, trs_from_matrix};
 use pfx_recipe::{Recipe, apply_set, parse};
 use std::path::Path;
@@ -59,13 +60,24 @@ fn the_timeline_reads_its_keys_and_defaults() {
     let t = recipe("[timeline]\nseconds = 2.0\n").timeline.unwrap();
     assert_eq!(
         (t.fps, t.frames(), t.size, t.seed),
-        (60, 120, [1080, 1920], 5)
+        (Rate::whole(60), 120, [1080, 1920], 5)
     );
     assert_eq!(t.time(30), 0.5);
     let t = recipe("[timeline]\nfps = 24\nframes = 10\nsize = [640, 360]\nseed = 9\n")
         .timeline
         .unwrap();
-    assert_eq!((t.fps, t.frames(), t.size, t.seed), (24, 10, [640, 360], 9));
+    assert_eq!(
+        (t.fps, t.frames(), t.size, t.seed),
+        (Rate::whole(24), 10, [640, 360], 9)
+    );
+    let film: Rate = "24000/1001".parse().unwrap();
+    for fps in ["\"24000/1001\"", "23.976", "\"23.976\""] {
+        let t = recipe(&format!("[timeline]\nfps = {fps}\nseconds = 10.0\n"))
+            .timeline
+            .unwrap();
+        assert_eq!((t.fps, t.frames()), (film, 240), "{fps}");
+        assert_eq!(t.time(1000), 1_001_000.0 / 24000.0);
+    }
     assert!(recipe("").timeline.is_none());
     for (body, wanted) in [
         ("seconds = 1.0\nframes = 3\n", "both give the length"),
@@ -73,6 +85,8 @@ fn the_timeline_reads_its_keys_and_defaults() {
         ("seconds = 0.0\n", "above 0"),
         ("frames = 0\n", "from 1 up"),
         ("fps = 0\nframes = 3\n", "from 1 to 240"),
+        ("fps = 23.97\nframes = 3\n", "use 24000/1001"),
+        ("fps = \"241\"\nframes = 3\n", "from 1 to 240"),
         ("frames = 3\nsize = [0, 10]\n", "each side"),
         ("frames = 3\nspeed = 2\n", "unknown key"),
     ] {
@@ -86,7 +100,10 @@ fn the_timeline_reads_its_keys_and_defaults() {
         &["timeline.fps=12".into(), "timeline.frames=4".into()],
     )
     .unwrap();
-    assert_eq!(set.timeline.map(|t| (t.fps, t.frames)), Some((12, 4)));
+    assert_eq!(
+        set.timeline.map(|t| (t.fps, t.frames)),
+        Some((Rate::whole(12), 4))
+    );
 }
 
 #[test]

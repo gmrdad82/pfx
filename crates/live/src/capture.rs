@@ -49,8 +49,13 @@ fn transform(model: &[[f32; 4]; 4], p: [f32; 3]) -> [f32; 3] {
     })
 }
 
-pub fn world_triangles(draws: &Draws) -> Vec<Triangle> {
-    let mut out = Vec::new();
+pub fn world_triangles(draws: &Draws) -> Result<Vec<Triangle>, String> {
+    let count = draws
+        .items
+        .iter()
+        .map(|draw| draw.geometry.indices.len() / 3)
+        .sum();
+    let mut out = pfx_core::memory::vec(count, "the scene reflections' triangles")?;
     for draw in &draws.items {
         let geometry = &draw.geometry;
         let world: Vec<[f32; 3]> = geometry
@@ -65,7 +70,7 @@ pub fn world_triangles(draws: &Draws) -> Vec<Triangle> {
             });
         }
     }
-    out
+    Ok(out)
 }
 
 pub fn bounds(triangles: &[Triangle]) -> Option<[[f32; 3]; 2]> {
@@ -128,7 +133,7 @@ pub fn capture(
     if !settings.valid() {
         return Err("scene reflections need a power-of-two resolution from 4 to 1024, samples and a finite fade and margin".into());
     }
-    let triangles = world_triangles(&scene.draws());
+    let triangles = world_triangles(&scene.draws())?;
     let Some([lo, hi]) = bounds(&triangles) else {
         return Ok(None);
     };
@@ -140,7 +145,7 @@ pub fn capture(
     let mut trace = staged.trace(gpu, size, size).map_err(|e| e.to_string())?;
     trace.set_projection(Projection::Perspective)?;
     trace.set_lens(Lens::default())?;
-    let bvh = Bvh::build(&triangles);
+    let bvh = Bvh::try_build(&triangles).map_err(|e| format!("the scene reflections: {e}"))?;
     let mut colours = Vec::with_capacity(6);
     for (face, &(forward, right, up)) in FACES.iter().enumerate() {
         trace.set_camera(Camera {

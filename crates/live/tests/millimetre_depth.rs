@@ -80,15 +80,16 @@ fn sheet(cells: u16) -> Vec<u8> {
     glb(&json.to_string(), &bin)
 }
 
-fn generated(gap: f32) -> PathBuf {
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("millimetre-depth");
+fn generated(gap: f32, live: &str) -> PathBuf {
+    let root =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("millimetre-depth{}", live.len()));
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("coarse.glb"), sheet(1)).unwrap();
     std::fs::write(root.join("fine.glb"), sheet(24)).unwrap();
     std::fs::write(root.join("sheets.materials.toml"), MATERIALS).unwrap();
     let text = format!(
-        "format = 1\nmaterials = [\"sheets.materials.toml\"]\n\n[mesh.coarse]\nfile = \"coarse.glb\"\n\n[mesh.fine]\nfile = \"fine.glb\"\n\n[camera]\nat = [0.0, 0.0, 5.0]\nlook_at = [0.0, 0.0, 0.0]\nfov = 12.0\nnear = 0.001\nfar = 400.0\n\n[[object]]\nname = \"near\"\nmesh = \"coarse\"\nmaterial = \"near\"\nat = [0.0, 0.0, {gap}]\n\n[[object]]\nname = \"far\"\nmesh = \"fine\"\nmaterial = \"far\"\n"
+        "format = 1\nmaterials = [\"sheets.materials.toml\"]\n\n[mesh.coarse]\nfile = \"coarse.glb\"\n\n[mesh.fine]\nfile = \"fine.glb\"\n\n[camera]\nat = [0.0, 0.0, 5.0]\nlook_at = [0.0, 0.0, 0.0]\nfov = 12.0\nnear = 0.001\nfar = 400.0\n\n[[object]]\nname = \"near\"\nmesh = \"coarse\"\nmaterial = \"near\"\nat = [0.0, 0.0, {gap}]\n\n[[object]]\nname = \"far\"\nmesh = \"fine\"\nmaterial = \"far\"\n{live}"
     );
     std::fs::write(root.join("sheets.scene.toml"), text).unwrap();
     root.join("sheets.scene.toml")
@@ -128,7 +129,7 @@ fn pixels(scene: &Scene) -> Vec<[f32; 3]> {
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
 fn two_sheets_a_millimetre_apart_at_five_metres_draw_the_nearer_one_everywhere() {
-    let scene = Scene::open(generated(0.001)).unwrap();
+    let scene = Scene::open(generated(0.001, "")).unwrap();
     let image = pixels(&scene);
     let covered: Vec<&[f32; 3]> = image.iter().filter(|p| p[0] + p[1] > 0.5).collect();
     assert!(
@@ -143,4 +144,22 @@ fn two_sheets_a_millimetre_apart_at_five_metres_draw_the_nearer_one_everywhere()
         "{far} of {} pixels show the farther sheet",
         covered.len()
     );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn without_reversed_depth_two_sheets_a_millimetre_apart_fight_as_standard_depth_does() {
+    let live = "\n[live]\nreversed_depth = false\n";
+    let image = pixels(&Scene::open(generated(0.001, live)).unwrap());
+    let covered: Vec<&[f32; 3]> = image.iter().filter(|p| p[0] + p[1] > 0.5).collect();
+    assert!(covered.len() > (WIDTH * HEIGHT) as usize / 4);
+    let far = covered.iter().filter(|p| p[1] > p[0]).count();
+    assert!(
+        far > covered.len() / 20 && far < covered.len() - covered.len() / 20,
+        "{far} of {} pixels show the farther sheet",
+        covered.len()
+    );
+    let apart = pixels(&Scene::open(generated(0.05, live)).unwrap());
+    let shown: Vec<&[f32; 3]> = apart.iter().filter(|p| p[0] + p[1] > 0.5).collect();
+    assert_eq!(shown.iter().filter(|p| p[1] > p[0]).count(), 0);
 }

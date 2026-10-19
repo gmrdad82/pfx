@@ -19,7 +19,7 @@ scene = "content/first.pitofx"
 
 [authoring.pfx]
 play = "content/first.pitofx"
-select = "incoming"
+select = "title"
 ```
 
 | Key | What it says | Read by |
@@ -48,13 +48,14 @@ select = "incoming"
 ## pfx new
 
 ```sh
-pfx new <game> [--path <dir>] [--with-module]
+pfx new <game> [--path <dir>] [--with-module] [--mark <png>]
 ```
 
 scaffolds a game into an existing, empty repo folder (default `./<game>`). You make the repo; pfx never creates a git repo, writes nothing outside the folder and never overwrites a file. It refuses:
 
 - a folder that does not exist, or holds anything but `.git`;
-- a name that is not a lowercase slug (letters a to z, digits and single dashes, starting with a letter), and `pfx`, `pfx-*` and the names cargo or Rust reserve (`test`, `self`, `std`, …).
+- a name that is not a lowercase slug (letters a to z, digits and single dashes, starting with a letter), and `pfx`, `pfx-*` and the names cargo or Rust reserve (`test`, `self`, `std`, …);
+- a `--mark` that is not a PNG, before it writes anything.
 
 It writes:
 
@@ -63,11 +64,12 @@ It writes:
 | `Cargo.toml` | one package `<game>`; `pfx-game`, `pfx-project` and, optional, `pfx-workbench`, all from `https://github.com/gmrdad82/pfx.git` at the tag pfx was built from (`v` and its own version); `default = ["tools"]`, `tools = ["pfx-game/tools", "dep:pfx-workbench"]` |
 | `src/lib.rs` | the game: a unit struct named after the game (`my-game` gives `my_game::MyGame`) implementing `pfx_game::Game`, doing nothing yet; `project()` (`Project::locate`); and `config(&project)`, the game's `pfx_game::Config` on `project.play()` with the project's screen policy and `Exposure::Fixed(1.0)`, the exposure the editor's viewport draws with, instead of auto exposure (delete the line for auto) |
 | `src/main.rs` | `#![cfg_attr(not(feature = "tools"), windows_subsystem = "windows")]`, then `pfx_game::launch(<Game>::new, config(&project), …)`; with `tools` it sets the launcher's edit hook to `pfx_workbench::edit_project(project.root(), factory, config(&project)?, args)`, the hook's factory, the game's own config and the arguments after `edit` |
-| `tests/first.rs` | a GPU test, ignored by default: the first scene runs headless (`pfx_game::Headless::with_gpu`) for half a second at 960 × 540, writes `tmp/first-frame.png` and checks the wordmark's light, the mark's violet and the X axis's red |
-| `project.toml` | the project, as above: `scene` and `play` name `content/first.pitofx`, `select` names `incoming`, and `[authoring.pfx.screen]` holds 16:9 on a desktop and 16:10 on a Deck |
-| `content/first.pitofx` | the empty world, below, with inside it `content/first.scene.toml`, `content/prefabs/incoming.prefab.toml` (pfx's mark as a group: the badge, the wordmark and the game's version, placed by the scene's `incoming`) and `content/materials/base.materials.toml` and `incoming.materials.toml` (the grid's and the axes' materials; the badge's and the wordmark's); `pfx scene print content/first.pitofx <file>` shows each |
-| `content/meshes/badge.glb`, `wordmark.glb`, `grid.glb` | the meshes, below |
-| `content/fonts/IBMPlexMono-Regular.ttf`, `IBMPlexMono-OFL.txt` | the version's face, IBM Plex Mono as IBM ships it, and its SIL Open Font License (Reserved Font Name "Plex", so it is never subset or renamed here) |
+| `tests/first.rs` | a GPU test, ignored by default: the first scene runs headless (`pfx_game::Headless::with_gpu`) for half a second at 960 × 540, writes `tmp/first-frame.png` and checks the name's light and the X axis's red |
+| `project.toml` | the project, as above: `scene` and `play` name `content/first.pitofx`, `select` names `title`, and `[authoring.pfx.screen]` holds 16:9 on a desktop and 16:10 on a Deck |
+| `content/first.pitofx` | the empty world, below, with inside it `content/first.scene.toml`, `content/prefabs/title.prefab.toml` (the game's title as a group: its name, its mark and its version, placed by the scene's `title`) and `content/materials/base.materials.toml` and `title.materials.toml` (the grid's and the axes' materials; the name's and the mark's); `pfx scene print content/first.pitofx <file>` shows each |
+| `content/meshes/name.glb`, `mark.glb`, `grid.glb` | the meshes, below; `name.glb` and `mark.glb` are made for the game when it scaffolds |
+| `content/marks/mark.png` | with `--mark` only: the game's mark as given |
+| `content/fonts/IBMPlexMono-Regular.ttf`, `IBMPlexMono-OFL.txt` | the name's and the version's face, IBM Plex Mono as IBM ships it, and its SIL Open Font License (Reserved Font Name "Plex", so it is never subset or renamed here) |
 | `AGENTS.md`, `CLAUDE.md`, `prompts/RESUME.md` | the repo's own session starts there |
 | `.gitignore` | `/target` and `/tmp` |
 
@@ -101,17 +103,22 @@ After writing, it fills the scene's ids through pfx-scene (`Project::fix`, as `p
 
 `content/first.pitofx` opens like a 3D tool's default scene and reads like Blender's cube:
 
-- **pfx's mark is one group, `incoming`,** at the origin, standing on the floor (`at = [0, 0.495, 0]`, half the group's height). It is a prefab placement (`content/prefabs/incoming.prefab.toml`, inside the `.pitofx`), pfx-scene's group: it draws nothing itself and is the parent of the prefab's two objects, so the outliner shows `incoming` with `incoming/badge` and `incoming/wordmark` under it. Its origin is the centre of the group's bounds, so the move gizmo sits in the middle of the group, and `select = "incoming"` opens the editor on it.
-- **The badge** (`badge.glb`) is one mesh, one primitive per material: manfred's build of `brand/recipes/incoming-full.toml` (`manfred build`), merged by `crates/project/src/templates/recipes/merge.py` into one node and stood upright, with the recipe's `ground` left out. The recipe's 86 materials collapse into six by look, each the average of its members: `tile`, `dome` (the ball), `lines` (its lattice), `white` (the rim and the bright streaks), `violet` (the darker streaks, rim bands and dust) and `lime`.
-- **The wordmark** (`wordmark.glb`) is one mesh with one material, `wordmark`: `assets/marks/wordmark.svg` extruded 7 cm with a rounded edge by manfred (0.16, which extrudes an outline with holes as one closed solid) from `recipes/wordmark.toml`, merged the same way. `recipes/make.py` writes that recipe: one object per glyph, its outline's quadratic curves in eight steps, 0.65 mm per SVG unit, and a glyph with a counter (the `p`'s bowl) as `difference = [outer, counter]`, so the `p` is one seamless solid.
-- **One plane.** The badge's front face and the wordmark's stand on one plane: `merge.py` places the wordmark so its front meets the badge tile's front, its x-height centred on the badge, 12 cm to its right. The seven materials are in `content/materials/incoming.materials.toml`, the prefab's own library.
-- **The version** is the prefab's `[text.version]`: the version of the pfx that made the game, written as text when it scaffolds (`text = "v0.25.0"` from pfx 0.25.0), in IBM Plex Mono at 7.5 cm, in the mark's violet, under the wordmark's `x`. It stays as written when the game moves to a newer pfx, until the game edits it; a `{version}` token in its place shows the game's own version instead (`docs/scenes.md`, "Bound text"). It is part of the group, so it moves with `incoming`.
+- **The game's title is one group, `title`,** at the origin, standing on the floor (`at = [0, 0.495, 0]`, half the group's height). It is a prefab placement (`content/prefabs/title.prefab.toml`, inside the `.pitofx`), pfx-scene's group: it draws nothing itself and is the parent of the prefab's two objects, so the outliner shows `title` with `title/name` and `title/mark` under it. Its origin is the centre of the group's bounds, so the move gizmo sits in the middle of the group, and `select = "title"` opens the editor on it.
+- **The name** (`name.glb`, material `name`) is the game's name as `pfx new` was given it, in 3D: each letter's outline from the scaffold's IBM Plex Mono (ttf-parser), extruded 7 cm with a rounded 6 mm edge by `pfx_geom::mark` (the extrusion pfx's SVG marks use, so a counter such as the `e`'s is a hole through one closed solid). Its capital height is 36 cm, and a long name shrinks to fit 2.4 m. `pfx_project::title::build` makes it.
+- **The mark** (`mark.glb`) is a rounded 99 cm square plate, 8 cm thick, in the material `plate`, to the name's left. With `--mark <png>` it also carries a face, a quad just in front of the plate fitted to 80 % of it at the picture's aspect, in the material `face`, whose content layer shows `content/marks/mark.png` (`content = "mark"` and `[content.mark]` in the prefab); without it the plate stands alone, a neutral shape to replace.
+- **The version** is the prefab's `[text.version]`, `v{version}`: the game's own version, bound when the game or its editor opens the scene (`docs/scenes.md`, "Bound text"), in IBM Plex Mono at 7 cm, in a dim grey, under the name. It is part of the group, so it moves with `title`.
 - **The floor grid and the axes** (`grid`, `grid.glb`, from `recipes/grid.toml`): ten by ten one-metre squares, the X axis in red and the Z axis in blue through the origin.
 - **One light** and a room sky, and a **three-quarter perspective camera** from the front right that looks at the group's origin.
 
-All of it is data. Delete the objects, the prefab, meshes and materials, or point `play` and `scene` at another scene, and nothing of pfx's world is left; nothing of it is in pfx's code. The scaffold's files sit in `crates/project/src/templates/`, the glbs and libraries as built.
+All of it is data. Delete the objects, the prefab, meshes and materials, or point `play` and `scene` at another scene, and nothing of the starter is left. Nothing of pfx's own brand reaches a game: no mark, wordmark or pfx version (the scaffold's unit tests fail on one). The scaffold's files sit in `crates/project/src/templates/`, the grid's glb as built.
 
-To rebuild them, from the repo's root:
+### --mark
+
+`pfx new <game> --mark <png>` copies the PNG to `content/marks/mark.png`, shows it on the title's plate, and sets `config(&project)`'s `.mark(project.root().join("content/marks/mark.png"))`, so the editor's header shows the same mark beside the game's name ([The game runtime](game.md)). To change the mark later, replace the PNG; to add one to a game made without it, add the face to the prefab and the `.mark(...)` line to `config`.
+
+### pfx's own start meshes
+
+`crates/project/src/templates/badge.glb` and `wordmark.glb` are pfx's mark and wordmark in 3D, held in `pfx_project::marks` for pfx's own start page and never written into a game. To rebuild them, from the repo's root:
 
 ```sh
 mkdir -p tmp/marks3d
@@ -178,7 +185,7 @@ A folder without `project.toml`, like the engine's fixture folders, opens as a b
   - `the_scaffold_builds_with_and_without_tools_and_only_tools_links_the_editor` scaffolds into `tmp/scaffold/build`, points every pfx crate at this workspace through a `[patch]` written only for the test, builds with `--no-default-features` and checks the binary carries nothing of `pfx_editor`, `pfx_workbench`, `egui`, `pfx_editor_shell` or pfx-game's tools marker, then builds with the defaults and checks it carries all five, and runs `help`, `version` and a refused `edit extra`;
   - `the_scaffolded_games_tests_build` builds the scaffold's own tests, so the GPU run below only compiles the game;
   - `the_scaffolded_game_runs_headless_and_shows_its_world` runs the scaffold's `tests/first.rs` under pgpu and copies its frame to `tmp/scaffold/first-frame.png`.
-- `crates/editor/tests/project.rs` (GPU, ignored): the editor's offscreen harness opens a scaffolded project, shows the group `incoming` selected with the move gizmo's centre within 5 % of the viewport's middle, the badge's violet, the wordmark and the X axis; the 3D view covers the same rect through the scene's camera and the editor's, with the scene camera's 16:9 frame shown only through the scene's camera, and the scene-camera shot is compared with the stored `crates/editor/tests/shots/project-scene-camera.png` (`PFX_EDIT_BLESS=1` rewrites it); F5 without a game plays the scene as it is, inside the project's 16:9 frame with black bars; F5 with a game factory plays the game's own logic (it hides the badge, the wordmark and the grid on its first tick; `start` once, ticks counted); F9 saves its input; F8 stops it (`stop` once) and the viewport comes back; no file changes. The shots go to `tmp/editor-shots/project-*.png`.
+- `crates/editor/tests/project.rs` (GPU, ignored): the editor's offscreen harness opens a scaffolded project, shows the group `title` selected with the move gizmo's centre within 5 % of the viewport's middle, the name and the X axis; the 3D view covers the same rect through the scene's camera and the editor's, with the scene camera's 16:9 frame shown only through the scene's camera, and the scene-camera shot is compared with the stored `crates/editor/tests/shots/project-scene-camera.png` (`PFX_EDIT_BLESS=1` rewrites it); F5 without a game plays the scene as it is, inside the project's 16:9 frame with black bars; F5 with a game factory plays the game's own logic (it hides the name, the mark and the grid on its first tick; `start` once, ticks counted); F9 saves its input; F8 stops it (`stop` once) and the viewport comes back; no file changes. The shots go to `tmp/editor-shots/project-*.png`.
 - `crates/project/src/tests.rs` also checks `modules` and its refusals, and `--with-module`'s files, workspace, feature, world, project entry and docs, and that a plain scaffold has none of them.
 - `src/main.rs`: `pfx new`'s arguments, `--with-module` included.
 - `crates/editor/src/tests.rs` (in the gate): the scenes and content sections, the selection on open, Enter, the `open` button and a double-click asking to open a scene, and the switch keeping the project and the log; a folder without scenes refused and a bare fixture folder opened.
@@ -189,8 +196,8 @@ A folder without `project.toml`, like the engine's fixture folders, opens as a b
   - `the_scaffold_with_a_module_builds_and_its_module_compiles` builds a `--with-module` scaffold with the defaults and checks its module crate;
   - `the_scaffolds_module_builds_to_wasm_and_the_host_swaps_it_keeping_its_state` (needs the `wasm32-unknown-unknown` target) builds the module to wasm, loads it through `Host::load_module`, ticks it twice and swaps it keeping its count.
 - `crates/project/src/tests.rs` reads `[authoring.pfx] flat` and refuses a value that is not a boolean, and the scaffold's `main.rs` hands the edit hook's factory and the game's config to `run_project`. `crates/game/src/tests.rs` (with `tools`) checks the edit hook gets a factory that builds no game until it is called and one fresh game each call. `crates/editor/src/tests.rs` opens a flat project with no scene on the empty world, and `crates/editor/tests/play.rs` (GPU) plays it: see `docs/editor.md`, "Tests".
-- `crates/editor/tests/project.rs` (GPU, ignored), `the_editor_swaps_a_rebuilt_gameplay_module_during_play_and_keeps_its_state`: a project whose game ticks one module, rebuilt during play at its tick 12 (the game writes the new build, as cargo would); the editor sees it, the module swaps at the next tick, its count carries on through `save` and `restore`, the rebuilt module's turn hides the mark, and the log has each step. The shot is `tmp/editor-shots/project-module-reload.png`.
-- `crates/editor/tests/project.rs` (GPU, ignored): the editor's offscreen harness opens a scaffolded project, shows the group `incoming` selected with the move gizmo's centre within 5 % of the viewport's middle, the badge's violet, the wordmark and the X axis; the 3D view covers the same rect through the scene's camera and the editor's; F5 without a game plays the scene as it is; F5 with a game factory plays the game's own logic (it hides the badge, the wordmark and the grid on its first tick; `start` once, ticks counted); F9 saves its input; F8 stops it (`stop` once) and the viewport comes back; no file changes. The shots go to `tmp/editor-shots/project-*.png`.
+- `crates/editor/tests/project.rs` (GPU, ignored), `the_editor_swaps_a_rebuilt_gameplay_module_during_play_and_keeps_its_state`: a project whose game ticks one module, rebuilt during play at its tick 12 (the game writes the new build, as cargo would); the editor sees it, the module swaps at the next tick, its count carries on through `save` and `restore`, the rebuilt module's turn hides the title, and the log has each step. The shot is `tmp/editor-shots/project-module-reload.png`.
+- `crates/editor/tests/project.rs` (GPU, ignored): the editor's offscreen harness opens a scaffolded project, shows the group `title` selected with the move gizmo's centre within 5 % of the viewport's middle, the name and the X axis; the 3D view covers the same rect through the scene's camera and the editor's; F5 without a game plays the scene as it is; F5 with a game factory plays the game's own logic (it hides the name, the mark and the grid on its first tick; `start` once, ticks counted); F9 saves its input; F8 stops it (`stop` once) and the viewport comes back; no file changes. The shots go to `tmp/editor-shots/project-*.png`.
 
 ```sh
 cargo test -q -p pfx-project --features scaffold

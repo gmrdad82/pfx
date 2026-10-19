@@ -62,7 +62,7 @@ fn keys(value: &file::Particles) -> RecipeKeys {
     }
 }
 
-pub(super) fn recipe(name: &str, value: &file::Particles) -> Recipe {
+pub fn recipe(name: &str, value: &file::Particles) -> Recipe {
     let base = Recipe::default();
     let colour = match (&value.colors, &value.color) {
         (Some(keys), _) if !keys.is_empty() => Gradient::new(
@@ -100,6 +100,7 @@ pub(super) fn recipe(name: &str, value: &file::Particles) -> Recipe {
         },
         lit: value.lit.unwrap_or(base.lit),
         seed: value.seed.unwrap_or_else(|| seed_of(name)),
+        prewarm: value.prewarm.unwrap_or(base.prewarm),
     }
 }
 

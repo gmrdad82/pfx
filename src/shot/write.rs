@@ -87,21 +87,18 @@ fn encode(
     depth: png::BitDepth,
     rgb: &[u8],
 ) -> Result<(), String> {
-    let file = std::fs::File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(depth);
-    encoder.set_compression(png::Compression::Fast);
-    encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
-    let mut writer = encoder
-        .write_header()
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    writer
-        .write_image_data(rgb)
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-    writer
-        .finish()
-        .map_err(|e| format!("{}: {e}", path.display()))
+    let failed = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    pfx_core::atomic::write_with(path, |temp| {
+        let file = std::fs::File::create(temp).map_err(|e| failed(&e))?;
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+        encoder.set_color(png::ColorType::Rgb);
+        encoder.set_depth(depth);
+        encoder.set_compression(png::Compression::Fast);
+        encoder.set_source_srgb(png::SrgbRenderingIntent::Perceptual);
+        let mut writer = encoder.write_header().map_err(|e| failed(&e))?;
+        writer.write_image_data(rgb).map_err(|e| failed(&e))?;
+        writer.finish().map_err(|e| failed(&e))
+    })
 }
 
 pub fn exr(path: &Path, width: u32, height: u32, pixels: &[u16]) -> Result<(), String> {
@@ -132,15 +129,17 @@ pub fn exr(path: &Path, width: u32, height: u32, pixels: &[u16]) -> Result<(), S
         blue: Vec2(0.15, 0.06),
         white: Vec2(0.3127, 0.3290),
     });
-    image
-        .write()
-        .non_parallel()
-        .to_file(path)
-        .map_err(|e| format!("{}: {e}", path.display()))
+    pfx_core::atomic::write_with(path, |temp| {
+        image
+            .write()
+            .non_parallel()
+            .to_file(temp)
+            .map_err(|e| format!("{}: {e}", path.display()))
+    })
 }
 
-pub fn audio_frames(frames: u64, fps: u32) -> usize {
-    ((frames as f64 * f64::from(RATE) / f64::from(fps.max(1))).round()) as usize
+pub fn audio_frames(frames: u64, fps: pfx_core::rate::Rate) -> usize {
+    fps.samples_nearest(frames, RATE) as usize
 }
 
 pub fn wav(path: &Path, samples: Vec<f32>) -> Result<(), String> {
@@ -149,7 +148,7 @@ pub fn wav(path: &Path, samples: Vec<f32>) -> Result<(), String> {
         channels: CHANNELS,
         samples,
     };
-    std::fs::write(path, clip.to_wav()).map_err(|e| format!("{}: {e}", path.display()))
+    pfx_core::atomic::write(path, &clip.to_wav())
 }
 
 struct Job {

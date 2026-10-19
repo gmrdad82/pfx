@@ -413,6 +413,9 @@ fn reflects_itself(scene: &Scene) -> bool {
 fn apply_live(renderer: &mut Renderer, live: &pfx_load::scene::LiveSettings) {
     renderer.set_stochastic_reflections(live.stochastic_reflections.unwrap_or(true));
     renderer.set_settle(live.settle.unwrap_or(true));
+    renderer.set_dof_spread(live.dof_spread.unwrap_or(true));
+    renderer.set_reversed_depth(live.reversed_depth.unwrap_or(true));
+    renderer.set_coat_reflections(live.coat_reflections.unwrap_or(true));
 }
 
 fn set_sun_radius(renderer: &mut Renderer, radius: f32) -> bool {
@@ -1136,7 +1139,7 @@ impl Staged {
                 })
             });
         }
-        self.sprays.pack(&mut self.spray_instances);
+        crate::particles::pack(&mut self.sprays, &mut self.spray_instances);
     }
 
     pub fn sprays(&self) -> &crate::particles::Sprays {

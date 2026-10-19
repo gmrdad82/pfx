@@ -1,3 +1,4 @@
+use pfx_core::rate::Rate;
 use pfx_gpu::pace::{Pace, WallClock, gpu_ms};
 use pfx_gpu::{Gpu, wgpu};
 use pfx_live::renderer::{Exposure, Renderer};
@@ -47,7 +48,7 @@ pub struct Follow {
 pub struct Shot<'a> {
     pub scene: &'a Scene,
     pub size: (u32, u32),
-    pub fps: u32,
+    pub fps: Rate,
     pub from: u64,
     pub frames: u64,
     pub camera: Option<Follow>,
@@ -76,14 +77,16 @@ pub struct Played {
     pub warm_frames: u64,
     pub adapter: String,
     pub followed: Option<String>,
+    pub plan: pfx_core::memory::Plan,
+    pub peak: pfx_core::memory::Peak,
 }
 
 fn whole(value: f64) -> bool {
     (value - value.round()).abs() < 1e-4
 }
 
-pub fn tick_rate(scene_rate: f64, fps: u32, shutter: Option<f32>) -> f64 {
-    let fps = f64::from(fps.max(1));
+pub fn tick_rate(scene_rate: f64, fps: Rate, shutter: Option<f32>) -> f64 {
+    let fps = fps.fps();
     let floor = (scene_rate / fps).ceil().max(1.0) as u32;
     let fits = |steps: u32| shutter.is_none_or(|open| whole(f64::from(open) * f64::from(steps)));
     let steps = (floor..=floor.max(MAX_STEPS))
@@ -262,7 +265,7 @@ pub fn play(
     mut each: impl FnMut(Frame) -> Result<(), String>,
 ) -> Result<Played, String> {
     let (width, height) = shot.size;
-    let fps = shot.fps.max(1);
+    let fps = shot.fps;
     let mut scene = shot.scene.clone();
     let physics = scene.physics_or_default();
     let rate = tick_rate(f64::from(physics.rate), fps, shot.shutter);
@@ -270,6 +273,19 @@ pub fn play(
         rate: rate as f32,
         ..physics
     });
+    let reflects = scene
+        .live
+        .and_then(|live| live.scene_reflections)
+        .unwrap_or(true);
+    let plan = pfx_core::memory::plan(
+        &scene.census(),
+        pfx_core::memory::Run::Scene {
+            size: [width, height],
+            reflections: reflects,
+            loaded: pfx_core::memory::resident().unwrap_or(0),
+        },
+    );
+    plan.admit()?;
 
     let gpu = pollster::block_on(Gpu::headless())?;
     let limit = gpu.device.limits().max_texture_dimension_2d;
@@ -287,6 +303,7 @@ pub fn play(
     }
     let staged = renderer.stage(&scene)?;
     renderer.wait_sky()?;
+    pfx_core::memory::look_gpu();
     let shadows = match shot.quality {
         Quality::Draft => draft_shadows(renderer.shadows().quality()),
         Quality::Final => renderer.shadows().quality(),
@@ -348,11 +365,11 @@ pub fn play(
     let finish = staged.finish();
     let mut pace = Pace::with_clock(WallClock::new(), None);
     for number in 0..last {
-        let time = number as f64 / f64::from(fps);
+        let time = fps.time(number);
         if number >= first
             && let Some(open) = shot.shutter
         {
-            let before = time - f64::from(open) / f64::from(fps);
+            let before = time - f64::from(open) * f64::from(fps.den()) / f64::from(fps.num());
             if before + LEAD_SECONDS > session.world().clock().time() {
                 advance_to(&mut session, before + LEAD_SECONDS);
                 place(&mut session);
@@ -368,6 +385,12 @@ pub fn play(
             return Err(format!("the scene stopped at frame {number}: {exit:?}"));
         }
         if number < first {
+            if number + 1 == first {
+                sound(&session, number)?;
+                session
+                    .present(&staged, &mut renderer, aspect, seed)
+                    .map_err(|error| error.to_string())?;
+            }
             continue;
         }
         sound(&session, number)?;
@@ -394,6 +417,7 @@ pub fn play(
         gpu.device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|error| format!("{error:?}"))?;
+        pfx_core::memory::look_gpu();
         if number < shot.from {
             continue;
         }
@@ -417,6 +441,8 @@ pub fn play(
         warm_frames: warm,
         adapter,
         followed: follow.map(|(_, named, _)| named),
+        plan,
+        peak: pfx_core::memory::peak(),
     })
 }
 
@@ -426,12 +452,12 @@ mod tests {
 
     #[test]
     fn every_frame_and_every_shutter_opening_lands_on_a_tick() {
-        assert_eq!(tick_rate(60.0, 60, None), 60.0);
-        assert_eq!(tick_rate(60.0, 30, None), 60.0);
-        assert_eq!(tick_rate(60.0, 24, None), 72.0);
-        assert_eq!(tick_rate(60.0, 60, Some(0.5)), 120.0);
-        assert_eq!(tick_rate(60.0, 24, Some(0.5)), 96.0);
-        assert_eq!(tick_rate(120.0, 60, Some(0.25)), 240.0);
+        assert_eq!(tick_rate(60.0, Rate::whole(60), None), 60.0);
+        assert_eq!(tick_rate(60.0, Rate::whole(30), None), 60.0);
+        assert_eq!(tick_rate(60.0, Rate::whole(24), None), 72.0);
+        assert_eq!(tick_rate(60.0, Rate::whole(60), Some(0.5)), 120.0);
+        assert_eq!(tick_rate(60.0, Rate::whole(24), Some(0.5)), 96.0);
+        assert_eq!(tick_rate(120.0, Rate::whole(60), Some(0.25)), 240.0);
         assert_eq!(warm_frames(Quality::Draft, 300, true), 300);
         assert_eq!(warm_frames(Quality::Final, 300, true), 300);
         assert_eq!(warm_frames(Quality::Draft, 300, false), 0);

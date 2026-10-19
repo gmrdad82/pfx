@@ -67,6 +67,28 @@ fn baked_layers_land_in_the_glb_as_the_objects_own_maps_and_leave_the_others_lay
     );
 }
 
+#[test]
+fn a_recipe_that_imports_a_baked_glb_takes_the_layered_materials_parameters() {
+    let b = build(&parse(RECIPE).unwrap(), Path::new(".")).unwrap();
+    let dir = common::scratch("layers-baked-import");
+    std::fs::write(dir.join("baked.glb"), b.try_glb().unwrap()).unwrap();
+    let view = parse(
+        "recipe = 1\nname = \"v\"\n\n[[object]]\nname = \"wall\"\nkind = \"mesh\"\npath = \"baked.glb\"\nnode = \"wall\"\n",
+    )
+    .unwrap();
+    let imported = build(&view, &dir).unwrap();
+    let slot = imported.parts[0].node.mesh.slots[0].material.clone();
+    assert!(slot.ends_with("plaster+wall"), "{slot}");
+    let merged = imported.recipe(&view);
+    let material: pfx_materials::Material =
+        serde_json::from_value(merged.materials[&slot].clone()).unwrap();
+    assert_eq!(material.specular, 0.3);
+    assert_eq!(material.subsurface, 0.2);
+    assert_eq!(material.base, [1.0; 3]);
+    assert_eq!(material.roughness, 1.0);
+    assert!(material.layers.iter().all(|layer| !layer.active()));
+}
+
 const LAYERED: &str = "[materials.plaster]\nbase = [0.7, 0.66, 0.6]\nroughness = 0.6\nlayers = [\n  { kind = \"fbm\", frequency = 4.0, amplitude = 0.6, seed = 0 },\n  { kind = \"value\", frequency = 9.0, amplitude = 0.3, seed = 2 },\n]\n\n";
 
 fn built(text: &str, dir: &Path) -> Built {

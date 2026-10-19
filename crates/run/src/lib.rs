@@ -7,5 +7,6 @@ pub mod cache;
 pub mod encode;
 pub mod ending;
 pub mod job;
+pub mod jobs;
 pub mod pin;
 pub mod queue;

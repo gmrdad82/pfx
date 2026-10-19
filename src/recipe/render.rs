@@ -179,8 +179,17 @@ pub(super) struct Args {
         help = "Progress on stderr: plain lines, or JSON lines with the fraction and an ETA"
     )]
     progress: Progress,
+    #[arg(
+        long,
+        value_name = "every",
+        value_parser = super::checkpoint::every,
+        help = "Save the trace's samples this often, in minutes or as samples like 64spp, so a stopped render resumes where it was"
+    )]
+    checkpoint: Option<super::checkpoint::Every>,
     #[command(flatten)]
     pick: super::Picks,
+    #[command(flatten)]
+    memory: super::Memory,
     #[arg(skip)]
     trace: Trace,
 }
@@ -420,18 +429,31 @@ impl Watch {
                         "trace_gb",
                         rounded(gigabytes(rendered.paced.trace_bytes), 2),
                     ),
+                    (
+                        "planned_cpu_gb",
+                        rounded(gigabytes(rendered.paced.planned[0]), 2),
+                    ),
+                    (
+                        "planned_gpu_gb",
+                        rounded(gigabytes(rendered.paced.planned[1]), 2),
+                    ),
+                    (
+                        "memory_limit_gb",
+                        pfx_core::memory::limit()
+                            .map_or(serde_json::Value::Null, |b| rounded(gigabytes(b), 2)),
+                    ),
                 ],
             )
         })
     }
 }
 
-fn rounded(value: f64, places: i32) -> serde_json::Value {
+pub(super) fn rounded(value: f64, places: i32) -> serde_json::Value {
     let scale = 10f64.powi(places);
     serde_json::json!((value * scale).round() / scale)
 }
 
-fn json_line<const N: usize>(
+pub(super) fn json_line<const N: usize>(
     stage: &str,
     elapsed: f64,
     fields: [(&str, serde_json::Value); N],
@@ -491,7 +513,39 @@ fn traced(
         denoise: args.denoising(),
         time: args.time,
     };
-    let rendered = pfx_still::render(&request, registry, progress)?;
+    let key = super::checkpoint::key(
+        &format!(
+            "{:?}\n",
+            Args {
+                progress: Progress::Plain,
+                checkpoint: None,
+                ..args.clone()
+            }
+        ),
+        &args.recipe,
+    );
+    let mut tell = |path: &Path, samples: u32| {
+        eprintln!(
+            "pfx render --recipe: checkpoint {} at {samples} samples",
+            path.display()
+        );
+    };
+    let mut kept = super::checkpoint::Checkpoint::open(
+        super::checkpoint::path_beside(&args.out),
+        key,
+        (args.checkpoint, args.samples()),
+        &mut tell,
+    );
+    if let Some(samples) = kept.found() {
+        eprintln!("pfx render --recipe: resuming from its checkpoint at {samples} samples");
+    }
+    let keeping = args.checkpoint.is_some() || kept.found().is_some();
+    let rendered = pfx_still::render_kept(
+        &request,
+        registry,
+        progress,
+        keeping.then_some(&mut kept as &mut dyn pfx_still::Keeper),
+    )?;
     if !rendered.left_out.is_empty() {
         eprintln!(
             "pfx render: the traced renderer leaves out {}",
@@ -500,6 +554,7 @@ fn traced(
     }
     progress(Step::Write);
     written(args, &rendered)?;
+    kept.clear()?;
     let paced = rendered.paced;
     let samples = match args.noise() {
         Some(noise) => format!(
@@ -532,10 +587,12 @@ pub(super) fn memory_line(paced: &Paced) -> String {
         value.map_or("unknown".to_string(), |b| format!("{:.2} GB", gigabytes(b)))
     };
     format!(
-        "peak memory {} on the CPU, {} on the GPU ({:.2} GB in the tracer's buffers)",
+        "peak memory {} on the CPU, {} on the GPU ({:.2} GB in the tracer's buffers), planned {:.2} GB on the CPU, {:.2} GB on the GPU",
         known(pfx_still::memory::peak_cpu()),
         known(paced.gpu_resident),
-        gigabytes(paced.trace_bytes)
+        gigabytes(paced.trace_bytes),
+        gigabytes(paced.planned[0]),
+        gigabytes(paced.planned[1])
     )
 }
 
@@ -566,6 +623,9 @@ pub fn run(parsed: &Args, args: &[String], registry: &Registry) -> ExitCode {
         Ok(trace) => parsed.with(trace),
         Err(message) => return refuse("render", &message),
     };
+    if let Err(message) = parsed.memory.set() {
+        return refuse("render", &message);
+    }
     if let Some(code) = requeue(args) {
         return code;
     }
@@ -691,7 +751,7 @@ mod tests {
     #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
-            "table.toml --camera main --spp 64 --threshold 0.02 --min-samples 16 --seed 9 --size 320x200 --ortho --crop 10,20,30,40 --variant bare --set sky.intensity=0.4 --set object.a.params.b=/x/y --time 1.5 --denoise off --out tmp/a.exr --master tmp/a.master.png --progress json",
+            "table.toml --camera main --spp 64 --threshold 0.02 --min-samples 16 --seed 9 --size 320x200 --ortho --crop 10,20,30,40 --variant bare --set sky.intensity=0.4 --set object.a.params.b=/x/y --time 1.5 --denoise off --out tmp/a.exr --master tmp/a.master.png --progress json --checkpoint 64spp --memory-limit 12.5",
         ))
         .unwrap();
         assert_eq!(
@@ -716,7 +776,11 @@ mod tests {
                 master: Some("tmp/a.master.png".into()),
                 picture: Default::default(),
                 progress: Progress::Json,
+                checkpoint: Some(super::super::checkpoint::Every::Samples(64)),
                 pick: Default::default(),
+                memory: crate::recipe::Memory {
+                    limit: Some(25 << 29),
+                },
                 trace: Trace::default(),
             }
         );

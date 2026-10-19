@@ -18,7 +18,7 @@ pub(crate) fn rigged(
     up: DVec3,
     route: Option<&Route>,
 ) -> Result<Vec<DMat4>, String> {
-    let dt = 1.0 / f64::from(b.timeline.fps.max(1));
+    let dt = b.timeline.step();
     let times: Vec<f64> = (0..frames.len())
         .map(|n| b.timeline.time(n as u32))
         .collect();
@@ -218,7 +218,7 @@ fn looks(rig: &Rig, times: &[f64], dt: f64) -> Option<Vec<DVec3>> {
 }
 
 pub(crate) fn zoom(b: &Bake, rig: &Rig, camera: &Camera, count: usize) -> Option<Vec<f64>> {
-    let dt = 1.0 / f64::from(b.timeline.fps.max(1));
+    let dt = b.timeline.step();
     let times: Vec<f64> = (0..count).map(|n| b.timeline.time(n as u32)).collect();
     let aspect = b.timeline.aspect();
     if rig.tracks.fov.is_some() {
@@ -407,13 +407,13 @@ mod tests {
     use crate::bake::constraint::bake;
     use crate::{Lens, Track};
     use pfx_motion::matrix;
-    use pfx_motion::{Route, Timeline, Trs};
+    use pfx_motion::{Rate, Route, Timeline, Trs};
     use pfx_recipe::RigFocus;
     use pfx_recipe::{RigShake, RigTracks};
     use std::collections::BTreeMap;
 
     const TIMELINE: Timeline = Timeline {
-        fps: 30,
+        fps: Rate::whole(30),
         frames: 60,
         size: [1080, 1920],
         seed: 7,

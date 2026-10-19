@@ -398,6 +398,9 @@ fn write(
         .ok_or("artifact has no name")?
         .to_string_lossy();
     let stage = parent.join(format!(".{name}.bake-partial"));
+    if stage.exists() {
+        fs::remove_dir_all(&stage).map_err(|e| e.to_string())?;
+    }
     fs::create_dir(&stage).map_err(|e| e.to_string())?;
     let mut files = Vec::with_capacity(grids.len());
     for (index, grid) in grids.iter().enumerate() {
@@ -454,7 +457,9 @@ fn write(
     fs::write(stage.join("manifest.json"), &json).map_err(|e| e.to_string())?;
     fs::write(stage.join("manifest.sha256"), format!("{}\n", hash(&json)))
         .map_err(|e| e.to_string())?;
-    fs::rename(stage, out).map_err(|e| e.to_string())?;
+    pfx_core::atomic::sync_tree(&stage)?;
+    fs::rename(&stage, &out).map_err(|e| e.to_string())?;
+    pfx_core::atomic::sync_dir(parent)?;
     Ok(manifest)
 }
 

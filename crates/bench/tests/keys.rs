@@ -91,7 +91,7 @@ fn shot(scene: &Scene) -> Vec<Vec<u16>> {
         &Shot {
             scene,
             size: (WIDTH, HEIGHT),
-            fps: FPS,
+            fps: pfx_core::rate::Rate::whole(FPS),
             from: 0,
             frames: FRAMES,
             camera: None,

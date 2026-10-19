@@ -62,7 +62,7 @@ Every control acts: a test clicks every control the shell draws, in every state 
 
 **Scenes** (a scene file, a packed `.pitofx` scene, a project, a game) are edited through pfx-editor, inside the same panels: "Scenes in the window" below.
 
-**The start screen** is a recipe of the window's own (`crates/workbench/start/start.toml`): pfx's mark and wordmark from `assets/marks/`, the version of the binary that drew it, on the theme's black, with the mark selected; `docs/editor-recipes.md`, "The start scene".
+**The start screen** is a recipe of the window's own, compiled in from `crates/workbench/start/start.toml` and opened as a packed copy, `start.pitofx`, in pfx's state folder: pfx's mark and wordmark from `assets/marks/`, the version of the binary that drew it, on the theme's black, with the mark selected; `docs/editor-recipes.md`, "The start scene".
 
 ## Edit: undo, history and the clipboard
 

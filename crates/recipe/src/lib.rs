@@ -46,7 +46,7 @@ pub use text::{ANCHORS, MONO, anchor_names, anchor_point, default_anchor};
 pub use validate::{bake_product, missing_material_text, slug, validate};
 pub use variant::apply_variant;
 
-pub use pfx_motion::Timeline;
+pub use pfx_motion::{Rate, Timeline};
 pub use toml_edit;
 
 pub const SCHEMA: u32 = 1;

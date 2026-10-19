@@ -44,11 +44,11 @@ pub use pfx_glb::{
 };
 pub use pfx_glb::{Image, Look, Looks, Map, Mime};
 pub use pfx_glb::{Lens, Track};
-pub use pfx_motion::{Route, Timeline, Trs, matrix, sample, trs_from_matrix};
+pub use pfx_motion::{Rate, Route, Timeline, Trs, matrix, sample, trs_from_matrix};
 pub use pfx_recipe::NO_SIDECAR;
 pub use pfx_recipe::files;
 pub use pfx_recipe::{apply_only as only, apply_stage as staged};
-pub use scene::object_ids;
+pub use scene::{Emitted, emitters, object_ids};
 pub use timeline::{Animates, Bake, Baker, camera_track, lens, pose, pose_cameras, time_refusal};
 
 pub const GENERATOR: &str = "pfx";

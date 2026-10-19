@@ -330,8 +330,42 @@ mod scaffold {
     }
 
     use crate::scaffold::{
-        DOCUMENT, SCENE, check_name, fill, module_path, scaffold, scaffold_with,
+        DOCUMENT, MARK, Options, PREFAB, SCENE, check_name, fill, module_path, scaffold,
+        scaffold_with,
     };
+
+    fn unbranded(root: &std::path::Path, written: &[std::path::PathBuf]) {
+        let marks = [crate::marks::BADGE, crate::marks::WORDMARK];
+        let reader = pfx_file::Reader::open(root.join(DOCUMENT)).unwrap();
+        let mut texts: Vec<(String, String)> = reader
+            .entries()
+            .iter()
+            .filter(|entry| entry.tag == pfx_file::SCNE)
+            .map(|entry| (entry.name.clone(), held(root, &entry.name)))
+            .collect();
+        for path in written {
+            let bytes = std::fs::read(path).unwrap();
+            let name = path.display().to_string();
+            assert!(
+                !marks.contains(&bytes.as_slice()),
+                "{name} is pfx's own mark or wordmark"
+            );
+            if path.starts_with(root.join("content"))
+                && let Ok(text) = String::from_utf8(bytes)
+            {
+                texts.push((name, text));
+            }
+        }
+        for (name, text) in texts {
+            for brand in ["badge", "wordmark", "incoming", "pfx-icon", "assets/marks"] {
+                assert!(!text.contains(brand), "{name} names pfx's {brand}:\n{text}");
+            }
+            assert!(
+                !text.contains("text = \"v9.8.7\""),
+                "{name} writes pfx's version as text"
+            );
+        }
+    }
 
     fn held(root: &std::path::Path, name: &str) -> String {
         let reader = pfx_file::Reader::open(root.join(DOCUMENT)).unwrap();
@@ -377,8 +411,8 @@ mod scaffold {
             "tests/first.rs",
             "project.toml",
             DOCUMENT,
-            "content/meshes/badge.glb",
-            "content/meshes/wordmark.glb",
+            "content/meshes/name.glb",
+            "content/meshes/mark.glb",
             "content/meshes/grid.glb",
             "content/fonts/IBMPlexMono-Regular.ttf",
             "content/fonts/IBMPlexMono-OFL.txt",
@@ -414,8 +448,8 @@ mod scaffold {
         for gone in [
             SCENE,
             "content/materials/base.materials.toml",
-            "content/materials/incoming.materials.toml",
-            "content/prefabs/incoming.prefab.toml",
+            "content/materials/title.materials.toml",
+            PREFAB,
         ] {
             assert!(!root.join(gone).exists(), "{gone} is inside the .pitofx");
             assert!(!written.contains(&root.join(gone)), "{gone}");
@@ -426,28 +460,32 @@ mod scaffold {
             scene.contains("\nid = "),
             "the scaffold writes ids:\n{scene}"
         );
-        let prefab = held(&root, "content/prefabs/incoming.prefab.toml");
-        assert!(held(&root, "content/materials/incoming.materials.toml").contains("format = 1"));
-        assert!(scene.contains("prefab = \"content/prefabs/incoming.prefab.toml\""));
+        let prefab = held(&root, PREFAB);
+        let materials = held(&root, "content/materials/title.materials.toml");
+        assert!(materials.contains("format = 1") && !materials.contains("content_layer"));
+        assert!(scene.contains("prefab = \"content/prefabs/title.prefab.toml\""));
         assert!(scene.contains("file = \"content/meshes/grid.glb\""));
         assert!(
             prefab.contains("\nid = "),
             "the scaffold writes the prefab's ids:\n{prefab}"
         );
-        for mesh in ["badge", "wordmark", "grid"] {
+        for mesh in ["name", "mark", "grid"] {
             assert!(
                 std::fs::read(root.join(format!("content/meshes/{mesh}.glb")))
                     .unwrap()
                     .starts_with(b"glTF")
             );
         }
-        for mesh in ["badge", "wordmark"] {
+        for mesh in ["name", "mark"] {
             assert!(prefab.contains(&format!("file = \"content/meshes/{mesh}.glb\"")));
         }
-        assert!(prefab.contains("[text.version]\ntext = \"v9.8.7\""));
+        assert!(!prefab.contains("content = ") && !prefab.contains("[content."));
+        assert!(!read("src/lib.rs").contains(".mark("));
+        assert!(prefab.contains("[text.version]\ntext = \"v{version}\""));
         assert!(prefab.contains("font = \"content/fonts/IBMPlexMono-Regular.ttf\""));
         assert!(read("content/fonts/IBMPlexMono-OFL.txt").contains("SIL Open Font License"));
-        assert_eq!(project.select(), Some("incoming"));
+        assert_eq!(project.select(), Some("title"));
+        unbranded(&root, &written);
         let screen = project.screen().unwrap();
         assert_eq!(
             screen["desktop"].as_array().unwrap()[0].as_str(),
@@ -467,6 +505,60 @@ mod scaffold {
                 "{relative} is the same bytes every time"
             );
         }
+    }
+
+    #[test]
+    fn the_scaffold_shows_the_games_name_and_its_own_mark_when_given_one() {
+        let art = folder("scaffold-art");
+        let picture = art.join("mark.png");
+        let file = std::fs::File::create(&picture).unwrap();
+        let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 4, 2);
+        encoder.set_color(png::ColorType::Rgba);
+        let mut writer = encoder.write_header().unwrap();
+        writer.write_image_data(&[200; 32]).unwrap();
+        writer.finish().unwrap();
+        let root = folder("scaffold-marked");
+        let options = Options {
+            module: false,
+            mark: Some(picture.clone()),
+        };
+        let written = scaffold_with("space-2-go", &root, "9.8.7", &options).unwrap();
+        assert_eq!(
+            std::fs::read(root.join(MARK)).unwrap(),
+            std::fs::read(&picture).unwrap()
+        );
+        let lib = std::fs::read_to_string(root.join("src/lib.rs")).unwrap();
+        assert!(lib.contains(".mark(project.root().join(\"content/marks/mark.png\"))"));
+        let prefab = held(&root, PREFAB);
+        assert!(prefab.contains("content = \"mark\""));
+        assert!(prefab.contains("[content.mark]\nimage = \"content/marks/mark.png\""));
+        let materials = held(&root, "content/materials/title.materials.toml");
+        assert!(materials.contains("[materials.face.content_layer]\nslot = 0"));
+        let plain = folder("scaffold-unmarked");
+        scaffold("space-2-go", &plain, "9.8.7").unwrap();
+        let mark = std::fs::read(root.join("content/meshes/mark.glb")).unwrap();
+        let bare = std::fs::read(plain.join("content/meshes/mark.glb")).unwrap();
+        assert!(mark.len() > bare.len(), "the mark's plate carries a face");
+        let name = std::fs::read(root.join("content/meshes/name.glb")).unwrap();
+        let summary = pfx_glb::summary(&name).unwrap();
+        let [low, high] = summary.nodes[0].bounds;
+        assert!(
+            (high[0] - low[0]) > 1.5 && (high[0] - low[0]) <= 2.41,
+            "ten letters fill the title's width: {low:?} {high:?}"
+        );
+        unbranded(&root, &written);
+        let bad = folder("scaffold-bad-mark");
+        std::fs::write(art.join("mark.txt"), "not a picture").unwrap();
+        let options = Options {
+            module: false,
+            mark: Some(art.join("mark.txt")),
+        };
+        let error = scaffold_with("my-game", &bad, "1.0.0", &options).unwrap_err();
+        assert!(
+            error.contains("mark.txt") && error.contains("PNG"),
+            "{error}"
+        );
+        assert_eq!(std::fs::read_dir(&bad).unwrap().count(), 0);
     }
 
     #[test]
@@ -492,7 +584,16 @@ mod scaffold {
     #[test]
     fn the_scaffold_with_a_module_adds_a_gameplay_module_its_world_and_its_build() {
         let root = folder("scaffold-module");
-        let written = scaffold_with("my-game", &root, "9.8.7", true).unwrap();
+        let written = scaffold_with(
+            "my-game",
+            &root,
+            "9.8.7",
+            &crate::scaffold::Options {
+                module: true,
+                mark: None,
+            },
+        )
+        .unwrap();
         for relative in ["module/Cargo.toml", "module/src/lib.rs", "wit/gameplay.wit"] {
             assert!(written.contains(&root.join(relative)), "{relative}");
         }

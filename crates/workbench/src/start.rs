@@ -12,6 +12,7 @@ const MESHES: [(&str, &[u8]); 2] = [
 ];
 
 pub const MARK: &str = "pfx";
+pub const DOCUMENT: &str = "start.pitofx";
 const SHIPPED_VERSION: &str = "text = \"vX.Y.Z\"";
 
 const PALETTE: [(&str, Color32); 1] = [("ground", tokens::BG)];
@@ -55,19 +56,51 @@ pub fn start_text() -> String {
     recipe.to_string()
 }
 
+fn current(document: &Path) -> bool {
+    pfx_build::Document::open(document).is_ok_and(|held| {
+        held.recipe_text == start_text()
+            && held.overrides.is_empty()
+            && MESHES
+                .iter()
+                .all(|(_, bytes)| held.files.values().any(|file| file == bytes))
+    })
+}
+
 pub fn start_recipe(state: &Path) -> io::Result<PathBuf> {
     let folder = state.join("start");
-    std::fs::create_dir_all(folder.join("start"))?;
-    for (path, bytes) in MESHES {
-        std::fs::write(folder.join(path), bytes)?;
+    let document = folder.join(DOCUMENT);
+    if current(&document) {
+        return Ok(document);
     }
-    let recipe = folder.join("start.toml");
+    let scratch = folder.join("scratch");
+    let _ = std::fs::remove_dir_all(&scratch);
+    std::fs::create_dir_all(scratch.join("start"))?;
+    for (path, bytes) in MESHES {
+        std::fs::write(scratch.join(path), bytes)?;
+    }
+    let recipe = scratch.join("start.toml");
     std::fs::write(&recipe, start_text())?;
-    Ok(recipe)
+    if document.exists() {
+        std::fs::remove_file(&document)?;
+    }
+    let packed = crate::file::pack(&recipe, &pfx_build::Registry::new(), &document, true);
+    std::fs::remove_dir_all(&scratch)?;
+    packed.map_err(io::Error::other)
 }
 
 pub fn start_recipe_here() -> io::Result<PathBuf> {
     start_recipe(&crate::open::state_dir())
+}
+
+#[cfg(test)]
+pub(crate) fn unpacked(document: &Path) -> PathBuf {
+    let folder = document.with_extension("unpacked");
+    let _ = std::fs::remove_dir_all(&folder);
+    std::fs::create_dir_all(&folder).unwrap();
+    pfx_build::Document::open(document)
+        .unwrap()
+        .unpack(&folder)
+        .unwrap()
 }
 
 #[cfg(test)]
@@ -88,7 +121,7 @@ mod tests {
     }
 
     fn opened(name: &str) -> (Recipe, Built) {
-        let loaded = pfx_recipe::load(&start_recipe(&state(name)).unwrap()).unwrap();
+        let loaded = pfx_recipe::load(&unpacked(&start_recipe(&state(name)).unwrap())).unwrap();
         let built = pfx_build::build(&loaded.recipe, loaded.path.parent().unwrap()).unwrap();
         (loaded.recipe, built)
     }
@@ -167,8 +200,9 @@ mod tests {
     #[test]
     fn the_outliner_lists_the_ground_and_the_mark_with_its_two_meshes() {
         let dir = state("reads");
-        let path = start_recipe(&dir).unwrap();
-        assert_eq!(path, dir.join("start/start.toml"));
+        let document = start_recipe(&dir).unwrap();
+        assert_eq!(document, dir.join("start/start.pitofx"));
+        let path = unpacked(&document);
         let loaded = pfx_recipe::load(&path).unwrap();
         let document = crate::document::Document::from_recipe(&loaded.recipe, "start.toml");
         let rows: Vec<(usize, &str)> = document
@@ -290,23 +324,31 @@ mod tests {
     }
 
     #[test]
-    fn three_files_are_written_and_the_copy_starts_fresh_each_time() {
+    fn one_pitofx_is_written_and_the_copy_starts_fresh_each_time() {
         let dir = state("fresh");
         let path = start_recipe(&dir).unwrap();
         let folder = dir.join("start");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), start_text());
-        for (name, bytes) in MESHES {
-            assert!(std::fs::read(folder.join(name)).unwrap() == bytes, "{name}");
-        }
-        assert!(!folder.join("parts").exists());
-        std::fs::write(&path, "recipe = 1\nname = \"edited\"\n").unwrap();
-        std::fs::write(folder.join(MESHES[0].0), b"not a glb").unwrap();
-        std::fs::remove_file(folder.join(MESHES[1].0)).unwrap();
-        start_recipe(&dir).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), start_text());
-        for (name, bytes) in MESHES {
-            assert!(std::fs::read(folder.join(name)).unwrap() == bytes, "{name}");
-        }
+        let listed = |folder: &Path| {
+            let mut names: Vec<String> = std::fs::read_dir(folder)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            names
+        };
+        assert_eq!(listed(&folder), [DOCUMENT]);
+        let held = |path: &Path| {
+            let document = pfx_build::Document::open(path).unwrap();
+            assert_eq!(document.recipe_text, start_text());
+            for (name, bytes) in MESHES {
+                assert!(document.files.values().any(|held| held == bytes), "{name}");
+            }
+        };
+        held(&path);
+        std::fs::write(&path, b"not a document").unwrap();
+        assert_eq!(start_recipe(&dir).unwrap(), path);
+        held(&path);
+        assert_eq!(listed(&folder), [DOCUMENT]);
     }
 
     #[test]

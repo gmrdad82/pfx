@@ -1,3 +1,4 @@
+use pfx_core::rate::Rate;
 use pfx_film::{
     Cast, Crew, Drawn, Encoder, FilmFrame, Kinds, Known, Posed, RATE, Rig, Scheme, Score, Script,
     Show, Take,
@@ -6,7 +7,7 @@ use pfx_input::InputEvent;
 use serde::Deserialize;
 
 const SCORE: &str = include_str!("fixtures/score.toml");
-const FPS: u32 = 30;
+const FPS: Rate = Rate::whole(30);
 
 #[derive(Clone, Debug, PartialEq)]
 struct Flat;
