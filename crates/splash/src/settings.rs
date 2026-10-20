@@ -42,10 +42,26 @@ impl<'de> Deserialize<'de> for Colour {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Show {
+    #[default]
+    Auto,
+    Always,
+}
+
+impl Show {
+    fn is_auto(&self) -> bool {
+        *self == Show::Auto
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub background: Colour,
+    #[serde(skip_serializing_if = "Show::is_auto")]
+    pub show: Show,
     pub hide: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
@@ -55,6 +71,7 @@ impl Default for Settings {
     fn default() -> Settings {
         Settings {
             background: Colour::GROUND,
+            show: Show::Auto,
             hide: false,
             key: None,
         }

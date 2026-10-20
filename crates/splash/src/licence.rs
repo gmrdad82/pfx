@@ -3,7 +3,7 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::Deserialize;
 
-use crate::settings::Settings;
+use crate::settings::{Settings, Show};
 
 pub const PUBLIC_KEY: Option<&str> = Some("jeSuvgBw+ExXNw32a/dbweivyLRLNGyE67aSb8BBfdg=");
 const PREFIX: &str = "PITO1";
@@ -97,8 +97,12 @@ pub fn covers(claims: &Claims, build_date: Option<&str>) -> bool {
 }
 
 pub fn hidden(settings: &Settings, public_key: Option<&str>, build_date: Option<&str>) -> bool {
-    let (true, Some(key), Some(public_key)) = (settings.hide, settings.key.as_deref(), public_key)
-    else {
+    let (true, Show::Auto, Some(key), Some(public_key)) = (
+        settings.hide,
+        settings.show,
+        settings.key.as_deref(),
+        public_key,
+    ) else {
         return false;
     };
     verify(public_key, key).is_ok_and(|claims| covers(&claims, build_date))

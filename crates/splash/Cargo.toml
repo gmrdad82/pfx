@@ -3,13 +3,14 @@ name = "pfx-splash"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-description = "pfx's start-up splash: the mark, the wordmark and the site on a dark ground for two seconds while the game loads, hidden only by a valid offline-verified pro key"
+description = "pfx's start-up splash: the mark, the wordmark and the site on a dark ground for two seconds while the game or app loads, hidden only by a valid offline-verified pro key"
 publish.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [dependencies]
 pfx-core = { path = "../core" }
+pfx-gpu = { path = "../gpu" }
 pfx-sound = { path = "../sound" }
 pfx-live = { path = "../live" }
 serde = { version = "1", features = ["derive"] }

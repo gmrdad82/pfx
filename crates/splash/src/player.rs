@@ -3,7 +3,8 @@ use std::thread::JoinHandle;
 use pfx_gpu::{Gpu, wgpu};
 use pfx_live::flat::{FlatIcons, FlatPass, FlatScene, FlatSprites, Light, ShadowCurve};
 use pfx_sound::Clip;
-use pfx_splash::{Composition, Phase, Settings, Timeline};
+
+use crate::{Composition, LENGTH, Phase, Settings, Timeline};
 
 struct Shown {
     composition: Composition,
@@ -14,7 +15,7 @@ struct Shown {
 type Composing = JoinHandle<Result<Composition, String>>;
 type Chiming = JoinHandle<Clip>;
 
-pub(crate) struct Splash {
+pub struct Player {
     settings: Settings,
     shown: Option<Shown>,
     composing: Option<([u32; 2], Composing)>,
@@ -30,19 +31,19 @@ fn compose(settings: &Settings, size: [u32; 2]) -> Composing {
     std::thread::spawn(move || Composition::new(size, ground))
 }
 
-impl Splash {
+impl Player {
     fn wanted(settings: &Settings, build_date: Option<&str>) -> bool {
-        let built = pfx_splash::build_date(build_date);
-        !pfx_splash::hidden(settings, pfx_splash::PUBLIC_KEY, built.as_deref())
+        let built = crate::build_date(build_date);
+        !crate::hidden(settings, crate::PUBLIC_KEY, built.as_deref())
     }
 
-    pub(crate) fn start(
+    pub fn start(
         settings: &Settings,
         build_date: Option<&str>,
         size: [u32; 2],
         sound: bool,
-    ) -> Option<Splash> {
-        Self::wanted(settings, build_date).then(|| Splash {
+    ) -> Option<Player> {
+        Self::wanted(settings, build_date).then(|| Player {
             settings: settings.clone(),
             shown: None,
             composing: Some((size, compose(settings, size))),
@@ -50,11 +51,15 @@ impl Splash {
             timeline: Timeline,
             start_ns: None,
             curve: ShadowCurve::none(),
-            chime: sound.then(|| std::thread::spawn(pfx_splash::chime)),
+            chime: sound.then(|| std::thread::spawn(crate::chime)),
         })
     }
 
-    pub(crate) fn phase(&mut self, now_ns: u64, loaded: bool) -> Phase {
+    pub fn ready(&self) -> bool {
+        self.shown.is_some()
+    }
+
+    pub fn phase(&mut self, now_ns: u64, loaded: bool) -> Phase {
         if self.shown.is_none() {
             return Phase::Showing {
                 at: 0.0,
@@ -66,7 +71,7 @@ impl Splash {
             .phase(now_ns.saturating_sub(start) as f64 / 1e9, loaded)
     }
 
-    pub(crate) fn chime(&mut self, at: f64) -> Option<Clip> {
+    pub fn chime(&mut self, at: f64) -> Option<Clip> {
         if self.start_ns.is_none() || !self.chime.as_ref().is_some_and(|job| job.is_finished()) {
             return None;
         }
@@ -74,7 +79,7 @@ impl Splash {
         from(&clip, at)
     }
 
-    pub(crate) fn settle(&mut self, gpu: &Gpu, size: [u32; 2]) -> Result<(), String> {
+    pub fn settle(&mut self, gpu: &Gpu, size: [u32; 2]) -> Result<(), String> {
         if self
             .composing
             .as_ref()
@@ -103,7 +108,7 @@ impl Splash {
         Ok(())
     }
 
-    pub(crate) fn draw(
+    pub fn draw(
         &mut self,
         gpu: &Gpu,
         output: &wgpu::TextureView,
@@ -114,7 +119,7 @@ impl Splash {
         let ground = self.settings.background.srgba();
         let (at, opacity) = match phase {
             Phase::Showing { at, opacity } => (at, opacity),
-            Phase::Waiting | Phase::Done => (pfx_splash::LENGTH, 0.0),
+            Phase::Waiting | Phase::Done => (LENGTH, 0.0),
         };
         let frame = self
             .shown
@@ -166,7 +171,7 @@ impl Splash {
     }
 }
 
-pub(crate) fn from(clip: &Clip, at: f64) -> Option<Clip> {
+fn from(clip: &Clip, at: f64) -> Option<Clip> {
     let channels = usize::from(clip.channels);
     let skip = (at.max(0.0) * f64::from(clip.rate)).round() as usize * channels;
     (skip < clip.samples.len()).then(|| Clip {

@@ -11,6 +11,8 @@ use pfx_live::flat::Srgba;
 use pfx_load::scene::Scene;
 use pfx_play::{Cursor, Game, Scheme};
 use pfx_sound::{ChannelId, Level, Output, PcmSender};
+#[cfg(feature = "splash")]
+use pfx_splash::Player;
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{DeviceEvent, DeviceId, WindowEvent};
@@ -23,8 +25,6 @@ use crate::cursor::{Pointer, nudge};
 use crate::driver::{Driver, Event};
 use crate::painter::{Painter, Warmup};
 use crate::scheme::{self, FROM_WINDOW, of_theme, system_scheme};
-#[cfg(feature = "splash")]
-use crate::splash::Splash;
 use crate::start;
 
 pub const AUDIO_SECONDS: f32 = 0.25;
@@ -51,7 +51,7 @@ struct Live {
     resize: Option<Size>,
     stale: bool,
     #[cfg(feature = "splash")]
-    splash: Option<Splash>,
+    splash: Option<Player>,
     pacing: Pacing,
     dirty: bool,
     asked: bool,
@@ -237,7 +237,7 @@ fn open(
     #[cfg(feature = "splash")]
     let splash = {
         let size = size_of(&window);
-        Splash::start(
+        Player::start(
             &config.splash,
             config.build_date.as_deref(),
             [size.width, size.height],

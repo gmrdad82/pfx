@@ -5,8 +5,8 @@ use pfx_live::flat::{FlatScene, Light, ShadowCurve, cpu};
 
 use crate::licence::{civil_day, date};
 use crate::{
-    Colour, Composition, FADE_IN, KeyError, LENGTH, Phase, Settings, Timeline, build_date, built,
-    covers, hidden, verify,
+    Colour, Composition, FADE_IN, KeyError, LENGTH, Phase, Settings, Show, Timeline, build_date,
+    built, covers, hidden, verify,
 };
 
 fn pair() -> (SigningKey, String) {
@@ -44,6 +44,24 @@ fn a_pro_key_covering_the_build_date_hides_the_splash() {
     let timed = settings(mint(&signing, &claims("pro", Some(("2026-12-31", 14)))));
     assert!(hidden(&timed, Some(&public), Some("2026-10-19")));
     assert!(hidden(&timed, Some(&public), Some("2027-01-14")));
+}
+
+#[test]
+fn a_pro_key_hides_the_splash_under_auto_but_never_under_always() {
+    let (signing, public) = pair();
+    let auto = settings(mint(&signing, &claims("pro", Some(("2026-12-31", 14)))));
+    assert_eq!(auto.show, Show::Auto);
+    assert!(hidden(&auto, Some(&public), Some("2026-10-19")));
+    let always = Settings {
+        show: Show::Always,
+        ..auto
+    };
+    assert!(!hidden(&always, Some(&public), Some("2026-10-19")));
+    let keyless = Settings {
+        show: Show::Always,
+        ..Settings::default()
+    };
+    assert!(!hidden(&keyless, Some(&public), None));
 }
 
 #[test]
@@ -150,6 +168,23 @@ fn settings_read_from_toml_and_refuse_unknown_keys() {
     assert!(toml::from_str::<Settings>("skippable = true").is_err());
     assert!(toml::from_str::<Settings>("colour = \"#000000\"").is_err());
     assert!(toml::from_str::<Settings>("background = \"red\"").is_err());
+    let always: Settings = toml::from_str("show = \"always\"").unwrap();
+    assert_eq!(always.show, Show::Always);
+    assert_eq!(
+        toml::from_str::<Settings>(&toml::to_string(&always).unwrap()).unwrap(),
+        always
+    );
+    assert!(
+        !toml::to_string(&Settings::default())
+            .unwrap()
+            .contains("show")
+    );
+    assert_eq!(
+        toml::from_str::<Settings>("show = \"auto\"").unwrap(),
+        Settings::default()
+    );
+    assert!(toml::from_str::<Settings>("show = \"never\"").is_err());
+    assert!(toml::from_str::<Settings>("show = true").is_err());
     assert_eq!(Colour::parse("#0c0a12").unwrap(), Colour::GROUND);
 }
 
@@ -221,4 +256,101 @@ fn the_rule_grows_from_the_centre_before_the_site_appears() {
     let (wide, centre_b) = rule(0.84);
     assert!(narrow < wide);
     assert!((centre_a - centre_b).abs() < 0.5);
+}
+
+fn reference(
+    gpu: &pfx_gpu::Gpu,
+    size: [u32; 2],
+    at: f64,
+    opacity: f32,
+    output: &pfx_gpu::OffscreenTarget,
+) -> Vec<u8> {
+    use pfx_live::flat::{FlatIcons, FlatPass, FlatSprites};
+    let ground = Colour::GROUND.srgba();
+    let c = Composition::new(size, ground).unwrap();
+    let icons = FlatIcons::new(&gpu.device, &gpu.queue, c.icons().clone());
+    let sprites = c
+        .sprites()
+        .map(|s| FlatSprites::new(&gpu.device, &gpu.queue, s.clone()));
+    let frame = c.frame(at, opacity);
+    let curve = ShadowCurve::none();
+    let scene = FlatScene {
+        layout: size.map(|v| v as f32),
+        clear: Some(ground),
+        curve: &curve,
+        light: Light::default(),
+        draws: &frame.draws,
+        groups: &[],
+        text: &[],
+        icons: Some(&icons),
+        sprites: sprites.as_ref(),
+        environment: None,
+        post: false,
+        frame: 0,
+        seed: 0,
+    };
+    let mut pass = FlatPass::new(&gpu.device, &gpu.queue);
+    pass.prepare(&gpu.device, &gpu.queue, &scene, size).unwrap();
+    let target = pass.colour_target(&gpu.device, size);
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    pass.encode_colour(&mut encoder, &target, Some(ground.premultiplied()), None);
+    pass.encode_finish(
+        &gpu.device,
+        &mut encoder,
+        &target,
+        &output.view,
+        output.format,
+        output.format.is_srgb(),
+        false,
+        None,
+    );
+    gpu.queue.submit([encoder.finish()]);
+    gpu.readback_rgba8(output).unwrap()
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn the_player_draws_the_same_bytes_as_its_composition_through_a_flat_pass() {
+    use pfx_gpu::wgpu::TextureFormat;
+    let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
+    let size = [320, 180];
+    let mut player = crate::Player::start(&Settings::default(), None, size, false).unwrap();
+    for _ in 0..2500 {
+        if player.ready() {
+            break;
+        }
+        player.settle(&gpu, size).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert!(player.ready(), "the splash composes within five seconds");
+    assert_eq!(
+        player.phase(5_000_000_000, true),
+        Phase::Showing {
+            at: 0.0,
+            opacity: 0.0
+        }
+    );
+    let output = gpu
+        .offscreen(size[0], size[1], TextureFormat::Rgba8UnormSrgb)
+        .unwrap();
+    let phase = player.phase(6_000_000_000, false);
+    let Phase::Showing { at, opacity } = phase else {
+        panic!("one second in, the splash shows: {phase:?}");
+    };
+    player
+        .draw(&gpu, &output.view, output.format, size, phase)
+        .unwrap();
+    let drawn = gpu.readback_rgba8(&output).unwrap();
+    let ground = drawn[..4].to_vec();
+    let lit = drawn.chunks_exact(4).filter(|p| *p != ground).count();
+    assert!(lit > 500, "the player drew {lit} pixels off the ground");
+    assert!(drawn == reference(&gpu, size, at, opacity, &output));
+    let waiting = player.phase(7_500_000_000, false);
+    assert_eq!(waiting, Phase::Waiting);
+    player
+        .draw(&gpu, &output.view, output.format, size, waiting)
+        .unwrap();
+    let held = gpu.readback_rgba8(&output).unwrap();
+    assert!(held.chunks_exact(4).all(|p| p == ground));
+    assert_eq!(player.phase(7_500_000_000, true), Phase::Done);
 }

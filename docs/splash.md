@@ -53,6 +53,7 @@ The same settings read from TOML, and an unknown key is refused:
 
 ```toml
 background = "#0c0a12"
+show = "auto"
 hide = false
 key = "PITO1.…"
 ```
@@ -60,6 +61,7 @@ key = "PITO1.…"
 | Key | Default | Meaning |
 |---|---|---|
 | `background` | `#0c0a12` | The ground colour, `#rrggbb`. |
+| `show` | `"auto"` | `"auto"`: with `hide = true`, a verified Pro key covering the build date hides the splash, as in [Hiding it](#hiding-it). `"always"`: the splash shows with any key or none. Anything else is refused. |
 | `hide` | `false` | Hide the splash. It takes effect only with a valid pfx Pro key in `key`. |
 | `key` | none | A pfx licence key, as issued or with its armour lines. |
 
@@ -73,11 +75,63 @@ Only a pfx Pro key hides the splash. With `hide = true`, the key is checked offl
 
 A game made with `pfx new` takes its key from the user's pfx settings, where `pfx settings unlock` or the editor's Unlock keeps it, or from `PFX_LICENCE_KEY` at build time, and sets `hide` with it ([settings.md](settings.md#the-licence)).
 
+With `show = "always"` the splash shows whatever the key: no key is read or checked, and `hide` and `key` are ignored. Products that always carry the splash set it so (`pfx_splash::Show::Always`, `pfx_game::SplashShow::Always` in a game's `Config::splash`).
+
 No key, an Indie key, an expired key or a key that does not verify shows the splash. A splash that fails to compose or draw is left out and the game starts; it never stops a game.
+
+## Showing the splash in your own window
+
+An app that opens its own window instead of running through pfx-game shows the same splash with `pfx_splash::Player`, the player pfx-game itself runs: the same composition on a worker thread, the same timeline, look and chime, and the same build-date and Pro-key rules. Add the crate `pfx-splash` and drive the player from the window's frame loop until it says it is done:
+
+```rust
+use pfx_splash::{Phase, Player};
+
+let mut splash = Player::start(&settings, Some(BUILD_DATE), [width, height], sound_on);
+
+if let Some(player) = &mut splash {
+    let phase = player.phase(now_ns, loaded);
+    if let Phase::Showing { at, .. } = phase
+        && let Some(clip) = player.chime(at)
+        && !muted
+    {
+        mixer.play(clip, master_volume);
+    }
+    if phase == Phase::Done {
+        splash = None;
+        start_intro();
+    } else if player.settle(&gpu, [width, height]).is_err() {
+        splash = None;
+    } else {
+        match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+                let view = frame.texture.create_view(&Default::default());
+                if player.draw(&gpu, &view, format, [width, height], phase).is_err() {
+                    splash = None;
+                }
+                gpu.queue.present(frame);
+            }
+            _ => reconfigure_surface(),
+        }
+        window.request_redraw();
+    }
+}
+```
+
+- The splash runs on the app's clock, not on frames, so the app redraws every frame while it lives (`request_redraw` each frame, the event loop polling) and goes on loading on its own threads meanwhile. An app that draws only on input would show a still splash that then jumps to its end.
+- A `Suboptimal` texture is drawn and presented like a `Success` one, and the surface reconfigured after; `Lost` and `Outdated` take the app's usual reconfigure.
+- `gpu` is the app's `pfx_gpu::Gpu`, the one pfx's present layer gives it; an app that made its own device builds one from its adapter, device and queue, whose fields are public.
+- `Player::start(settings, build_date, size, sound)` starts composing at the window's pixel size, and making the chime when `sound` is true, each on its own thread, and returns at once. It returns `None` when a verified Pro key hides the splash, which happens only under `show = "auto"`; then the app starts as if the splash had played. `build_date` is the app's own `YYYY-MM-DD` build date, as in [Hiding it](#hiding-it).
+- `phase(now_ns, loaded)` reads the app's clock in nanoseconds; the splash's 2 s start at the first call after the composition is ready (`ready()` says when). `loaded` is whether the app has finished its own loading: `Phase::Waiting` holds the ground after the fade until it has, and `Phase::Done` is the app's cue to start its own intro.
+- `settle(gpu, size)` takes the finished composition onto the GPU and recomposes on the worker thread when the window's size changes; call it each frame before `draw`.
+- `draw(gpu, view, format, size, phase)` clears the view to the ground and draws the frame for that phase in one flat pass, and submits it. The ground is `settings.background.srgba()`, a `pfx_splash::Srgba`, for clearing the window's first frames before the composition is ready.
+- `chime(at)` hands over the chime once, when it is ready, cut to start at `at` seconds into the splash so it never drifts: a `pfx_sound::Clip` of 48 kHz stereo samples for the app's own mixer. The app plays it at its master volume, and not at all when muted.
+- A resize during the splash shows the previous composition scaled to the new size until the worker thread has recomposed it, 140–240 ms later.
+- A splash that fails to compose or draw is dropped and the app goes on; it never stops an app.
 
 ## Speed
 
-The art is compiled in (the lockup's and the site's SVGs, `include_str!`), so nothing is read from disk. Composing it at the window's pixel size (reading the SVGs, painting the mark's glow and blur at that size and baking the shapes' distance fields) takes 140–240 ms on a Ryzen 9 9950X, on the worker thread. Each frame then rebuilds a few dozen draws and runs one flat pass: under 0.1 ms of CPU, and 3.5 ms median, 7.0 ms p99 for the whole frame at 3840x2160 on a Radeon RX 9060 XT (built, submitted and waited for, before present), well inside a 60 fps frame.
+The art is compiled in (the lockup's and the site's SVGs, `include_str!`), so nothing is read from disk. Composing it at the window's pixel size (reading the SVGs, painting the mark's glow and blur at that size and baking the shapes' distance fields) takes 140–240 ms on a Ryzen 9 9950X, on the worker thread. Each frame then rebuilds a few dozen draws and runs one flat pass: under 0.1 ms of CPU, and 3.5 ms median, 7.0 ms p99 for the whole frame at 3840x2160 on a Radeon RX 9060 XT (built, submitted and waited for, before present), inside the 8.33 ms frame of the 120 fps budget every GUI holds, with 1.3 ms to spare at p99.
 
 ## Making the pictures
 

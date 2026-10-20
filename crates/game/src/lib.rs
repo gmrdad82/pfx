@@ -17,8 +17,6 @@ pub mod modules {
 mod painter;
 pub mod prompt;
 mod scheme;
-#[cfg(feature = "splash")]
-mod splash;
 mod start;
 #[cfg(feature = "steam")]
 pub mod steam;
@@ -57,6 +55,6 @@ pub use pfx_play::{
 pub use pfx_play::{MenuLook, SettingsMenu, menu};
 pub use pfx_settings::{Effect, Effects, Graphics, Quality};
 #[cfg(feature = "splash")]
-pub use pfx_splash::{Colour as SplashColour, Settings as SplashSettings};
+pub use pfx_splash::{Colour as SplashColour, Settings as SplashSettings, Show as SplashShow};
 pub use prompt::Part;
 pub use scheme::system_scheme;
