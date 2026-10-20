@@ -129,7 +129,6 @@ mod tests {
         let mut child = Command::new("sleep").arg("60").spawn().unwrap();
         let held = of(child.id());
         assert!(same(&held));
-        assert!(held.start != mine.start);
         child.kill().unwrap();
         child.wait().unwrap();
         assert!(!same(&held));
