@@ -71,6 +71,7 @@ fn traced(recipe: &Path, time: f64) -> Vec<u8> {
         crop: None,
         denoise: true,
         time: Some(time),
+        transparent: false,
     };
     let rendered = pfx_still::render(&request, &Registry::new(), &mut |_| {}).unwrap();
     looked_with(&rendered.film, (&rendered.finish, &rendered.overlay), true).unwrap()

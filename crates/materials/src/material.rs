@@ -197,10 +197,11 @@ pub enum NoiseKind {
     CoatWobble,
     Crack,
     Track,
+    FilmRamp,
 }
 
 impl NoiseKind {
-    pub const ALL: [NoiseKind; 15] = [
+    pub const ALL: [NoiseKind; 16] = [
         Self::None,
         Self::Fibre,
         Self::Crinkle,
@@ -216,6 +217,7 @@ impl NoiseKind {
         Self::CoatWobble,
         Self::Crack,
         Self::Track,
+        Self::FilmRamp,
     ];
 
     pub fn id(self) -> u32 {
@@ -235,6 +237,7 @@ impl NoiseKind {
             Self::CoatWobble => 18,
             Self::Crack => 19,
             Self::Track => 20,
+            Self::FilmRamp => 21,
         }
     }
 
@@ -254,6 +257,7 @@ impl NoiseKind {
             18 => Self::CoatWobble,
             19 => Self::Crack,
             20 => Self::Track,
+            21 => Self::FilmRamp,
             _ => Self::None,
         }
     }
@@ -378,7 +382,11 @@ impl NoiseLayer {
             && self.amplitude != 0.0
             && (!matches!(
                 self.kind,
-                NoiseKind::PlankWood | NoiseKind::CoatWobble | NoiseKind::Crack | NoiseKind::Track
+                NoiseKind::PlankWood
+                    | NoiseKind::CoatWobble
+                    | NoiseKind::Crack
+                    | NoiseKind::Track
+                    | NoiseKind::FilmRamp
             ) || self.params[0] > 0.0)
     }
 }
@@ -905,7 +913,7 @@ impl PackedMaterial {
             ],
             texture_extra: [
                 m.textures.anisotropy as f32,
-                0.0,
+                m.textures.thin_film as f32,
                 m.textures.main.rotation,
                 m.textures.detail_uv.rotation,
             ],
@@ -927,7 +935,7 @@ impl PackedMaterial {
                 m.textures.normal_transform().rotation,
                 m.textures.orm_transform().rotation,
                 (m.textures.normal_transform().set + 2 * m.textures.orm_transform().set) as f32,
-                0.0,
+                m.textures.thin_film_min,
             ],
             coverage: [m.alpha, m.alpha_cutoff, pack_id(m.alpha_mode.id()), 0.0],
             flakes: [
@@ -1054,6 +1062,8 @@ impl PackedMaterial {
                 orm: self.textures[2] as i32,
                 detail: self.textures[3] as i32,
                 anisotropy: self.texture_extra[0] as i32,
+                thin_film: self.texture_extra[1] as i32,
+                thin_film_min: self.map_turns[3],
                 normal_scale: self.texture_scales[0],
                 occlusion: self.texture_scales[1],
                 detail_scale: self.texture_scales[2],

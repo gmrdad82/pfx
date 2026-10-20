@@ -1474,6 +1474,9 @@ impl Renderer {
                 .map_err(|_| String::from("the live frame's thread stopped"))??,
         };
         renderer.frame.set_reflections_planned(true);
+        if let Some(store) = pfx_cache::shared() {
+            renderer.use_pipeline_cache_in(store.clone());
+        }
         Ok(renderer)
     }
 
@@ -1696,6 +1699,20 @@ impl Renderer {
 
     pub fn use_pipeline_cache(&mut self, path: &std::path::Path) -> CacheLoad {
         self.frame.use_pipeline_cache(path)
+    }
+
+    pub fn use_pipeline_cache_in(&mut self, store: pfx_cache::Store) -> CacheLoad {
+        self.frame.use_pipeline_cache_in(store)
+    }
+
+    pub fn use_machine_pipeline_cache(&mut self) -> CacheLoad {
+        if let Some(store) = pfx_cache::shared() {
+            return self.use_pipeline_cache_in(store.clone());
+        }
+        match pfx_cache::Store::open() {
+            Ok(store) => self.use_pipeline_cache_in(store),
+            Err(reason) => CacheLoad::Ignored(reason),
+        }
     }
 
     pub fn save_pipeline_cache(&self) -> Result<Option<usize>, String> {
@@ -5834,6 +5851,41 @@ mod tests {
         assert_eq!(merged.frame().opaque_made_on_render_thread(), made);
     }
 
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn a_machine_cache_hit_draws_the_same_bytes_as_a_cold_start() {
+        let root = cache_path("machine-store");
+        let _ = std::fs::remove_dir_all(&root);
+        let store = pfx_cache::Store::at(&root);
+        let (mut cold, target, instances, materials) = varied_still(64);
+        let fresh = cold.use_pipeline_cache_in(store.clone());
+        let supported = fresh != CacheLoad::Unsupported;
+        if supported {
+            assert_eq!(fresh, CacheLoad::Fresh);
+        }
+        let cold_frames = draw_frames(&mut cold, &target, &instances, &materials, 2);
+        drop(cold);
+        let (mut warm, target, instances, materials) = varied_still(64);
+        let load = warm.use_pipeline_cache_in(store.clone());
+        if supported {
+            assert!(matches!(load, CacheLoad::Loaded { .. }), "{load:?}");
+            let info = store.info();
+            assert!(
+                info.kinds
+                    .iter()
+                    .any(|kind| kind.kind == crate::pipeline_cache::KIND && kind.entries == 1)
+            );
+        }
+        let warm_frames = draw_frames(&mut warm, &target, &instances, &materials, 2);
+        for (number, (warm, cold)) in warm_frames.iter().zip(&cold_frames).enumerate() {
+            assert!(
+                warm == cold,
+                "frame {number} differs with the cached pipelines"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn cache_path(name: &str) -> std::path::PathBuf {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tmp/pipeline-cache-tests")
@@ -5902,10 +5954,11 @@ mod tests {
         let (mut renderer, target, instances, materials) = sphere_still(32);
         for (name, bytes) in [
             ("garbage.bin", b"not a cache at all".to_vec()),
-            (
-                "foreign.bin",
-                crate::pipeline_cache::wrap(&key.replace("pito-engine", "older engine"), b"x"),
-            ),
+            ("foreign.bin", {
+                let older = key.replace("|pfx ", "|older engine ");
+                assert_ne!(older, key);
+                crate::pipeline_cache::wrap(&older, b"x")
+            }),
             ("damaged.bin", {
                 let mut bytes = crate::pipeline_cache::wrap(&key, b"pipelines");
                 let last = bytes.len() - 1;

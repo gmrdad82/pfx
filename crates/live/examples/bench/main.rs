@@ -24,6 +24,7 @@ use pfx_bake::reflection::{
     ReflectionSpec, ReflectionWrite, bake_reflection, read_reflection_artifact,
     write_reflection_artifact,
 };
+use pfx_bake::shelf;
 use pfx_bake::{
     Anchor, Artifact, BakeScene, GridSpec, SceneSource, bake, read_artifact, scene_hash,
     write_artifact,
@@ -1081,6 +1082,20 @@ pub fn probe_artifacts() -> (Artifact, Vec<Artifact>) {
     (main, artifacts.collect())
 }
 
+fn shelf_key(renderer: &Renderer, what: &str, inputs: &str) -> pfx_cache::Key {
+    shelf::key(what, inputs, &shelf::adapter(renderer.gpu()))
+}
+
+fn unshelve(key: &pfx_cache::Key, folder: &Path) -> bool {
+    pfx_cache::Store::open().is_ok_and(|store| shelf::restore(&store, key, folder))
+}
+
+fn shelve(key: &pfx_cache::Key, folder: &Path) {
+    if let Ok(store) = pfx_cache::Store::open() {
+        let _ = shelf::keep(&store, key, folder);
+    }
+}
+
 fn bake_light(renderer: &mut Renderer, lighting: &Lighting) {
     let scene = bake_scene(lighting);
     let root = root();
@@ -1089,7 +1104,16 @@ fn bake_light(renderer: &mut Renderer, lighting: &Lighting) {
         let dims = spec.dimensions().unwrap();
         let folder = root.join(format!("probes-{name}"));
         let wanted = scene_hash(&scene, spec, SAMPLES, SEED).unwrap();
-        if read_artifact(&folder).is_ok_and(|artifact| artifact.manifest.scene_hash == wanted) {
+        let key = shelf_key(renderer, "bench-probes", &wanted);
+        let fresh = |folder: &Path| {
+            read_artifact(folder).is_ok_and(|artifact| artifact.manifest.scene_hash == wanted)
+        };
+        let reused = fresh(&folder);
+        let restored = !reused && unshelve(&key, &folder) && fresh(&folder);
+        if restored {
+            println!("probe bake {name}: restored from the machine cache");
+        }
+        if reused || restored {
             println!(
                 "probe bake {name}: {}x{}x{} probes every {} m at {ANCHORS:?} h, reused, scene hash unchanged",
                 dims[0], dims[1], dims[2], spec.spacing
@@ -1118,6 +1142,7 @@ fn bake_light(renderer: &mut Renderer, lighting: &Lighting) {
             SEED,
         )
         .unwrap();
+        shelve(&key, &folder);
     }
     let (main, locals) = probe_artifacts();
     let lighting_probes = ProbeLighting::from_artifacts(
@@ -1134,12 +1159,25 @@ fn bake_light(renderer: &mut Renderer, lighting: &Lighting) {
     for spec in reflections() {
         let name = spec.name.clone().unwrap();
         let dir = root.join(format!("reflection-{name}"));
-        let fresh = read_reflection_artifact(&dir).is_ok_and(|artifact| {
-            artifact.manifest.scene_hash == hash
-                && artifact.manifest.spec == spec
-                && artifact.manifest.sample_count == SAMPLES
-                && artifact.manifest.seed == SEED
-        });
+        let key = shelf_key(
+            renderer,
+            "bench-reflection",
+            &format!("{hash}|{spec:?}|{SAMPLES}|{SEED}"),
+        );
+        let current = |dir: &Path| {
+            read_reflection_artifact(dir).is_ok_and(|artifact| {
+                artifact.manifest.scene_hash == hash
+                    && artifact.manifest.spec == spec
+                    && artifact.manifest.sample_count == SAMPLES
+                    && artifact.manifest.seed == SEED
+            })
+        };
+        let reused = current(&dir);
+        let restored = !reused && unshelve(&key, &dir) && current(&dir);
+        if restored {
+            println!("reflection bake {name}: restored from the machine cache");
+        }
+        let fresh = reused || restored;
         if fresh {
             println!("reflection bake {name}: one 128² cube at {ANCHORS:?} h, reused");
         } else {
@@ -1166,6 +1204,7 @@ fn bake_light(renderer: &mut Renderer, lighting: &Lighting) {
                 seed: SEED,
             })
             .unwrap();
+            shelve(&key, &dir);
         }
         artifacts.push(read_reflection_artifact(&dir).unwrap());
     }

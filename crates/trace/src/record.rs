@@ -87,7 +87,9 @@ impl Records {
 }
 
 pub fn maps_on(packed: &PackedMaterial) -> bool {
-    packed.textures.iter().any(|&slot| slot >= 0.0) || packed.texture_extra[0] >= 0.0
+    packed.textures.iter().any(|&slot| slot >= 0.0)
+        || packed.texture_extra[0] >= 0.0
+        || packed.texture_extra[1] >= 0.0
 }
 
 pub fn lobes_on(packed: &PackedMaterial) -> bool {
@@ -197,7 +199,7 @@ mod tests {
         plain.emission_film = [1.0, 2.0, 3.0, 0.5];
         plain.age_b = [9.0, 9.0, 9.0, 5.0];
         plain.textures = [-1.0; 4];
-        plain.texture_extra = [-1.0, 0.0, 0.0, 0.0];
+        plain.texture_extra = [-1.0, -1.0, 0.0, 0.0];
         plain.wet = [0.3, 0.0, 2.0, 1.0];
         let mut rich = plain;
         rich.textures = [-1.0, 2.0, -1.0, -1.0];

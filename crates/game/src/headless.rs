@@ -158,6 +158,9 @@ impl Headless {
             pads,
         )?;
         driver.set_layout(config.layout.take());
+        if let Some(browser) = config.browser.take() {
+            driver.session_mut().world_mut().attach_browser(browser);
+        }
         let mut headless = Self {
             driver,
             clock: FakeClock::default(),

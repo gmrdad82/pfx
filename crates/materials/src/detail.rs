@@ -1,6 +1,6 @@
 use crate::ageing::{apply, scratch_marked, scratch_marked_coat};
 use crate::kinds::{
-    CoatWobble, Crack, Crinkle, Fibre, Grime, PlankWood, Scratch, Track, WallMottle,
+    CoatWobble, Crack, Crinkle, Fibre, FilmRamp, Grime, PlankWood, Scratch, Track, WallMottle,
 };
 use crate::material::{At, Material, NoiseKind, NoiseLayer};
 use crate::math::{
@@ -113,6 +113,10 @@ fn sample_layer(material: &mut Material, normal: &mut [f32; 3], layer: NoiseLaye
         NoiseKind::Flow => {
             let n = flow([uv[0] * layer.frequency, uv[1] * layer.frequency], at.time);
             material.thin_film = (material.thin_film + amp * (n - 0.5) * 2.0).max(0.0);
+        }
+        NoiseKind::FilmRamp => {
+            let ramp = FilmRamp::from_params(&layer.params).thickness_at(at.position, uv);
+            material.thin_film = lerp(material.thin_film, ramp, clamp01(amp));
         }
         NoiseKind::Value => {
             let n = noise(scale3(p, layer.frequency));

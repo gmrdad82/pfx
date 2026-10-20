@@ -189,3 +189,27 @@ k = √((r·(n + 1)² − (n − 1)²) / (1 − r))
 - `the_film_costs_this_much_at_4k` (GPU): 40 parts covering a 3840 × 2160 frame, the median of 32 frames each. The opaque pass is 0.95 ms without film; with half the parts an oil slick (420 nm of index 1.45 over a lacquer of 1.5) and half anodised titanium (160 nm of 2.4) it is 3.54 ms. All oil slick costs 1.27 ms over the bare frame, all anodised titanium 3.76 ms: a metal takes three substrates per wavelength. The cost is per filmed pixel; a part without film pays nothing. Before the film was evaluated once per pixel and angle, the half-and-half frame cost 8.0 ms over the bare one.
 
 Frames without film are byte-identical to 0.18.19's: a live frame of plain, metal, clear-coated and grimy parts, with every opaque feature compiled in and with none, and a traced frame of plain, metal, clear-coated, glass and sheen materials, hash the same before and after.
+
+## Thickness across a surface
+
+Cycles takes the Principled BSDF's `Thin Film Thickness` as a socket, so any texture node drives it at each shading point (Blender 4.2 and later), and glTF's `KHR_materials_iridescence` carries the same as a thickness texture read between a minimum and a maximum. pfx follows both. `thin_film` is the thickness where nothing drives it, and two inputs change it at each point before the film's reflectance is evaluated, the same in the live renderer, the tracer and the CPU `resolve`:
+
+- **A ramp:** the `film_ramp` noise layer ([materials.md](materials.md#noise-layers)). Its params are `space` (1 for the surface's position, 2 for its TEXCOORD_0), the `axis` (three numbers; in UV space the first two weigh u and v), `from` and `to` (where the ramp starts and ends along the axis: metres in position space, UV units in UV space) and the `start` and `end` thickness in nanometres. A point's place along the ramp is `t = clamp((axis · point − from) / (to − from), 0, 1)` (a step at `to` when the two are equal), its thickness `mix(start, end, t)`, never below 0, and the layer moves `thin_film` toward it by its amplitude: `thin_film = mix(thin_film, ramp, amplitude)`, amplitude 0 to 1. Layers run in order, so a `flow` layer after the ramp adds its moving noise on top. A ramp layer with its params left out is the sample: UV space along u, from 0 to 1, 250 to 750 nm.
+- **A thickness map:** `thin_film_map` on a recipe's `[materials.<name>]` ([Recipe format](recipe-format.md#texture-maps)), `KHR_materials_iridescence`'s thickness texture: the thickness is `mix(thin_film_min, T, g)`, with `g` the map's green channel (linear), `T` the thickness after the layers and `thin_film_min` 100 nm unless set (the extension's own default). It reads TEXCOORD_0 through the material's main UV transform, and runs after the layers.
+
+Position space is the space the renderers shade a mesh in: a scene object's own mesh space (the tracer moves the hit into it through the instance's inverse transform, the live renderer interpolates it per vertex; an emitting surface, whose triangles the tracer flattens for light sampling, reads it in world space there), so a position ramp turns and moves with the object. A recipe's objects are built with their placement in their geometry, so there a position ramp is laid in the recipe's metres, and a ramp that should follow a plaque wherever it stands is a UV ramp, laid on the plaque's own TEXCOORD_0.
+
+A plaque whose film thickens from 250 nm to 750 nm along u, sweeping its interference colours across its face:
+
+```toml
+[materials.plaque]
+base = [0.9, 0.9, 0.92]
+metalness = 1.0
+roughness = 0.15
+thin_film = 250.0
+thin_film_ior = 1.8
+thin_film_amount = 1.0
+layers = [{ kind = "film_ramp", frequency = 1.0, amplitude = 1.0, seed = 0, params = [2.0, 1.0, 0.0, 0.0, 0.0, 1.0, 250.0, 750.0, 0.0, 0.0, 0.0, 0.0] }]
+```
+
+Documents written before keep their meaning: `thin_film`, `thin_film_ior`, `thin_film_amount` and a `flow` layer read and draw as before, the noise kinds keep their ids (`film_ramp` is 21), and a material without a ramp or a map packs the same GPU rows apart from the thickness map's slot (−1) and minimum. `an_old_thin_film_document_reads_as_before` and `a_film_ramp_sweeps_the_thickness_and_round_trips_through_toml_and_packing` (`crates/materials/src/tests.rs`), `a_thin_film_library_reads_and_writes_as_before_and_takes_a_film_ramp` (`crates/scene/tests/types.rs`) and `a_thin_film_map_reaches_the_glb_as_khr_materials_iridescence` (`crates/build/tests/maps.rs`) hold this.

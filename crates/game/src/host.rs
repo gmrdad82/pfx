@@ -9,7 +9,7 @@ use pfx_gpu::{Gpu, WindowTarget, wgpu};
 use pfx_input::{Backend, InputEvent, LayoutSource, SteamPrecedence};
 use pfx_live::flat::Srgba;
 use pfx_load::scene::Scene;
-use pfx_play::{Cursor, Game, Scheme};
+use pfx_play::{Configuring, Cursor, Game, Scheme};
 use pfx_sound::{ChannelId, Level, Output, PcmSender};
 #[cfg(feature = "splash")]
 use pfx_splash::Player;
@@ -26,6 +26,7 @@ use crate::driver::{Driver, Event};
 use crate::painter::{Painter, Warmup};
 use crate::scheme::{self, FROM_WINDOW, of_theme, system_scheme};
 use crate::start;
+use crate::surface::{Attempt, Retry};
 
 pub const AUDIO_SECONDS: f32 = 0.25;
 
@@ -50,6 +51,9 @@ struct Live {
     schemes: Option<Receiver<Option<Scheme>>>,
     resize: Option<Size>,
     stale: bool,
+    retry: Retry,
+    configuring: Configuring,
+    refollow: bool,
     #[cfg(feature = "splash")]
     splash: Option<Player>,
     pacing: Pacing,
@@ -165,6 +169,9 @@ fn decode(c: f32) -> f64 {
 }
 
 fn present_ground(gpu: &Gpu, target: &WindowTarget, window: &Window, ground: Srgba) -> bool {
+    if !target.configured() {
+        return false;
+    }
     let texture = match target.surface.get_current_texture() {
         wgpu::CurrentSurfaceTexture::Success(texture)
         | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
@@ -281,6 +288,12 @@ fn open(
         pads,
     )?;
     driver.set_layout(layout(&mut config));
+    let browser = config
+        .browser
+        .take()
+        .unwrap_or_else(|| Box::new(crate::SystemBrowser::default()));
+    driver.session_mut().world_mut().attach_browser(browser);
+    let configuring = driver.session().world().configuring();
     let clipboard = clipboard::system(&window);
     if let Some(service) = &clipboard {
         driver
@@ -314,6 +327,9 @@ fn open(
         schemes,
         resize: None,
         stale: false,
+        retry: Retry::default(),
+        configuring,
+        refollow: false,
         #[cfg(feature = "splash")]
         splash,
         pacing: Pacing::from_env(GUI_BUDGET_NS),
@@ -372,17 +388,26 @@ impl Live {
                 self.stale = true;
             }
         }
-        if std::mem::take(&mut self.stale) || !self.target.configured() {
-            let gpu = self.painter.renderer().gpu();
-            self.target.reconfigure(gpu);
+        let ready = if std::mem::take(&mut self.stale) || !self.target.configured() {
             self.dirty = true;
-        }
+            self.configure(now_ns)?
+        } else {
+            true
+        };
         #[cfg(feature = "splash")]
         if self.splash.is_some() {
-            return self.splash_frame(now_ns);
+            return if ready {
+                self.splash_frame(now_ns)
+            } else {
+                Ok(false)
+            };
         }
         if self.warming.is_some() {
-            return self.warm(now_ns).map(|()| false);
+            return if ready {
+                self.warm(now_ns).map(|()| false)
+            } else {
+                Ok(false)
+            };
         }
         self.driver.update(now_ns);
         self.cursor();
@@ -403,13 +428,24 @@ impl Live {
         if settled {
             switched = true;
         }
-        let gpu = self.painter.renderer().gpu();
-        if switched {
+        switched |= std::mem::take(&mut self.refollow);
+        if switched && !self.idle() {
+            self.refollow = true;
+            self.configuring.set_pending(true);
+        } else if switched {
             let present = self.driver.present();
+            let gpu = self.painter.renderer().gpu();
             self.target.follow(gpu, &self.window, present);
             self.driver.set_vrr_in_effect(self.target.vrr_in_effect());
             self.pacing.set(self.target.setting(&self.window, present));
             self.dirty = true;
+            if self.target.configured() && !self.stale {
+                self.configuring.set_pending(false);
+            }
+        }
+        if !self.target.configured() || self.stale {
+            self.audio();
+            return Ok(false);
         }
         if self.driver.exit().is_some() {
             return Ok(false);
@@ -421,7 +457,6 @@ impl Live {
             return Ok(false);
         }
         self.dirty = true;
-        let gpu = self.painter.renderer().gpu();
         let asking = Instant::now();
         let acquired = self.target.surface.get_current_texture();
         self.pacing
@@ -433,7 +468,7 @@ impl Live {
                 texture
             }
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                self.target.reconfigure(gpu);
+                self.stale = true;
                 return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
@@ -458,6 +493,33 @@ impl Live {
         self.dirty = false;
         self.audio();
         Ok(true)
+    }
+
+    fn idle(&self) -> bool {
+        let gpu = self.painter.renderer().gpu();
+        matches!(
+            gpu.device.poll(wgpu::PollType::Poll),
+            Ok(wgpu::PollStatus::QueueEmpty)
+        )
+    }
+
+    fn configure(&mut self, now_ns: u64) -> Result<bool, String> {
+        self.configuring.set_pending(true);
+        let attempt = if !self.idle() {
+            Attempt::Busy
+        } else if self.target.reconfigure(self.painter.renderer().gpu()) {
+            Attempt::Configured
+        } else {
+            Attempt::Refused
+        };
+        self.retry.record(attempt, now_ns)?;
+        let configured = attempt == Attempt::Configured;
+        if configured {
+            self.configuring.set_pending(false);
+        } else {
+            self.stale = true;
+        }
+        Ok(configured)
     }
 
     fn tick_ns(&self) -> u64 {
@@ -515,9 +577,7 @@ impl Live {
                 texture
             }
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                self.target
-                    .surface
-                    .configure(&gpu.device, &self.target.config);
+                self.stale = true;
                 return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {

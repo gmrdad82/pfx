@@ -720,6 +720,8 @@ fn read_textures(cx: &Cx, name: &str, keys: &dyn TableLike) -> Result<Option<Tex
         uv_scale: pair("uv_scale")?,
         uv_offset: pair("uv_offset")?,
         uv_rotation: number("uv_rotation", None)?,
+        thin_film_map: file("thin_film_map")?,
+        thin_film_min: number("thin_film_min", Some([0.0, 10000.0]))?,
     };
     Ok((found != Textures::default()).then_some(found))
 }

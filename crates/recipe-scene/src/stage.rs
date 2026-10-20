@@ -567,6 +567,10 @@ impl Stage {
         self.renderer.set_output_dither(dither).map_err(Error)
     }
 
+    pub fn set_alpha_from_coverage(&mut self, on: bool) -> Result<(), Error> {
+        self.renderer.set_alpha_from_coverage(on).map_err(Error)
+    }
+
     pub fn materials(&self) -> &[String] {
         &self.names
     }

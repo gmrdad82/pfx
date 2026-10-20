@@ -348,3 +348,45 @@ fn a_malformed_uv_key_is_refused_at_the_key() {
     let e = parse(text).unwrap_err();
     assert_eq!(e.path, "materials.skin.uv_scale");
 }
+
+#[test]
+fn a_thin_film_map_reaches_the_glb_as_khr_materials_iridescence() {
+    let dir = common::scratch("maps-film");
+    std::fs::create_dir_all(dir.join("tex")).unwrap();
+    let film = png(|x, _| [0, (x * 40) as u8, 0, 255]);
+    std::fs::write(dir.join("tex/film.png"), &film).unwrap();
+    let r = parse(
+        "recipe = 1\nname = \"t\"\n\n[[object]]\nname = \"plaque\"\nkind = \"box\"\nsize = [1.0, 0.6, 0.02]\nmaterial = \"film\"\n\n[materials.film]\nbase = [0.1, 0.1, 0.1]\nmetalness = 1.0\nthin_film = 600.0\nthin_film_ior = 1.4\nthin_film_amount = 1.0\nthin_film_map = \"tex/film.png\"\nthin_film_min = 150.0\n",
+    )
+    .unwrap();
+    let b = build(&r, &dir).unwrap();
+    let look = &b.parts[0].looks["film"];
+    assert!(look.thin_film.is_some());
+    assert_eq!(look.thin_film_min, Some(150.0));
+    let glb = b.glb();
+    let parsed = gltf::Gltf::from_slice(&glb).unwrap();
+    let used: Vec<&str> = parsed.document.extensions_used().collect();
+    assert!(used.contains(&"KHR_materials_iridescence"), "{used:?}");
+    let length = u32::from_le_bytes([glb[12], glb[13], glb[14], glb[15]]) as usize;
+    let root: serde_json::Value = serde_json::from_slice(&glb[20..20 + length]).unwrap();
+    let material = root["materials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["name"] == "film")
+        .unwrap()
+        .clone();
+    let iridescence = &material["extensions"]["KHR_materials_iridescence"];
+    let number = |key: &str| iridescence[key].as_f64().unwrap();
+    assert_eq!(number("iridescenceFactor"), 1.0);
+    assert!((number("iridescenceIor") - 1.4).abs() < 1e-4);
+    assert_eq!(number("iridescenceThicknessMinimum"), 150.0);
+    assert_eq!(number("iridescenceThicknessMaximum"), 600.0);
+    let texture = iridescence["iridescenceThicknessTexture"]["index"]
+        .as_u64()
+        .unwrap() as usize;
+    let blob = parsed.blob.clone().unwrap();
+    let texture = parsed.document.textures().nth(texture).unwrap();
+    assert_eq!(bytes(&texture, &blob), film);
+    assert!(parse("recipe = 1\nname = \"t\"\n\n[materials.film]\nthin_film_min = -1.0\n").is_err());
+}

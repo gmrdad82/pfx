@@ -1,4 +1,4 @@
-use super::{Error, Event, Fake, Hub, Lobby, LobbyKind, SteamApi, User, connect_lobby};
+use super::{Error, Event, Fake, Hub, Lobby, LobbyKind, SteamApi, User, connect_lobby, web_link};
 
 const A: User = User(76_561_197_960_265_731);
 const B: User = User(76_561_197_960_265_732);
@@ -85,4 +85,25 @@ fn a_launch_with_connect_lobby_is_a_join_request() {
     steam.shutdown();
     assert_eq!(steam.launched(&args("game +connect_lobby 42")), None);
     assert_eq!(steam.invite_dialog(Lobby(1)).unwrap_err(), Error::Closed);
+}
+
+#[test]
+fn the_overlay_opens_only_web_links_and_says_when_it_is_off() {
+    let mut steam = Fake::new();
+    for bad in [
+        "file:///etc/passwd",
+        "javascript:alert(1)",
+        "steam://run/1",
+        "https://example.com/\0",
+        "https://example.com/a b",
+        "https://example.com/\"--new-window",
+    ] {
+        assert_eq!(steam.web_page(bad), Err(Error::Rejected), "{bad:?}");
+    }
+    assert_eq!(steam.web_page("https://example.com/news"), Ok(true));
+    steam.set_overlay(false);
+    assert_eq!(steam.web_page("https://example.com/off"), Ok(false));
+    assert_eq!(steam.web_pages(), ["https://example.com/news"]);
+    assert!(web_link("HTTP://example.com"));
+    assert!(!web_link("http:/example.com"));
 }

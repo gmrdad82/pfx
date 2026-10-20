@@ -55,6 +55,7 @@ impl Game for Flat {
             .borrow_mut()
             .push(Step::Warm(warm.pass(), warm.elapsed()));
         assert!(warm.renderer().is_none());
+        assert_eq!(warm.format(), None);
         assert_eq!(warm.glyphs("DM Sans", 400, &[24.0], "0123")?, 0);
         if warm.pass() + 1 < self.passes {
             Ok(Warming::More)

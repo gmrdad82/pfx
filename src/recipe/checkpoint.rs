@@ -2,6 +2,8 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use pfx_build::Document;
+use pfx_build::document::is_pfx;
 use pfx_still::{Keeper, Saved};
 use sha2::{Digest, Sha256};
 
@@ -42,11 +44,22 @@ pub(super) fn recipe_sha(recipe: &Path) -> String {
 }
 
 pub(super) fn key(line: &str, recipe: &Path) -> String {
-    format!(
+    let mut key = format!(
         "pfx {}\n{line}recipe sha256 {}\n",
         env!("CARGO_PKG_VERSION"),
         recipe_sha(recipe)
-    )
+    );
+    if is_pfx(recipe) {
+        match Document::open(recipe).and_then(|document| document.beside(recipe)) {
+            Ok(files) => {
+                for (name, file) in files {
+                    key.push_str(&format!("beside {name} sha256 {}\n", recipe_sha(&file)));
+                }
+            }
+            Err(_) => key.push_str("beside unread\n"),
+        }
+    }
+    key
 }
 
 pub(super) struct Checkpoint<'a> {
@@ -195,5 +208,61 @@ mod tests {
         assert_eq!(other.found(), None);
         assert!(!path.exists());
         other.clear().unwrap();
+    }
+
+    #[test]
+    fn the_key_changes_with_an_hdri_kept_beside_the_document() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/checkpoint-beside");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("assets/sky")).unwrap();
+        let sky = |texel: u8| {
+            let mut bytes = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n".to_vec();
+            bytes.extend([texel, 128, 128, 129, 128, 128, 128, 129]);
+            bytes
+        };
+        let hdr = dir.join("assets/sky/softbox.hdr");
+        std::fs::write(&hdr, sky(128)).unwrap();
+        let object = "\n[[object]]\nname = \"b\"\nkind = \"box\"\nsize = [1.0, 1.0, 1.0]\n";
+        let lit = dir.join("plaque.toml");
+        std::fs::write(
+            &lit,
+            format!(
+                "recipe = 1\nname = \"plaque\"\n\n[sky]\nkind = \"hdr\"\npath = \"assets/sky/softbox.hdr\"\nsource = \"generated\"\n{object}"
+            ),
+        )
+        .unwrap();
+        let plain = dir.join("plain.toml");
+        std::fs::write(&plain, format!("recipe = 1\nname = \"plain\"\n{object}")).unwrap();
+        let registry = pfx_build::Registry::new();
+        let written = |recipe: &Path, name: &str| {
+            let out = dir.join(name);
+            Document::pack_for(recipe, &registry, &out)
+                .unwrap()
+                .write(&out)
+                .unwrap();
+            out
+        };
+        let kept = written(&lit, "plaque.pitofx");
+        let alone = written(&plain, "plain.pitofx");
+
+        let before = key("line\n", &kept);
+        assert!(
+            before.ends_with(&format!(
+                "beside assets/sky/softbox.hdr sha256 {}\n",
+                recipe_sha(&hdr)
+            )),
+            "{before}"
+        );
+        assert_eq!(key("line\n", &kept), before);
+        std::fs::write(&hdr, sky(64)).unwrap();
+        assert_ne!(key("line\n", &kept), before);
+
+        let bare = format!(
+            "pfx {}\nline\nrecipe sha256 {}\n",
+            env!("CARGO_PKG_VERSION"),
+            recipe_sha(&alone)
+        );
+        assert_eq!(key("line\n", &alone), bare);
+        assert!(!key("line\n", &lit).contains("beside"));
     }
 }

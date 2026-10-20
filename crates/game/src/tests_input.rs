@@ -289,3 +289,59 @@ fn steam_input_plays_rumble_through_trigger_vibration() {
     assert!(input.set_motors(&command));
     assert_eq!(input.steam().vibrations(), &[(7, 30_000, 12_000)]);
 }
+
+#[cfg(feature = "steam")]
+#[test]
+fn a_link_under_steam_opens_in_the_overlay_on_the_next_poll() {
+    use pfx_play::{Browser, Url};
+    use pfx_steam::{Fake, SteamPads};
+
+    use crate::steam::SteamInput;
+
+    let mut input = SteamInput::new(Fake::new(), SteamPads::new("play", &["fire"], &[]));
+    let browser = input.browser();
+    let url = Url::parse("https://example.com/news").unwrap();
+    let mut opening = browser.open(&url);
+    assert_eq!(opening.poll(), None);
+    assert!(input.steam().web_pages().is_empty());
+    input.poll(&mut Vec::new());
+    assert_eq!(input.steam().web_pages(), ["https://example.com/news"]);
+    assert_eq!(opening.poll(), Some(&Ok(())));
+}
+
+#[cfg(feature = "steam")]
+#[test]
+fn a_link_under_steam_with_the_overlay_off_goes_to_the_fallback_browser() {
+    use std::sync::{Arc, Mutex};
+
+    use pfx_play::{Browser, Opening, Url, UrlError};
+    use pfx_steam::{Fake, SteamPads};
+
+    use crate::steam::SteamInput;
+
+    struct Recorded(Arc<Mutex<Vec<String>>>);
+
+    impl Browser for Recorded {
+        fn open(&self, url: &Url) -> Opening {
+            self.0.lock().unwrap().push(url.as_str().into());
+            Opening::done(Ok(()))
+        }
+    }
+
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let mut input = SteamInput::new(Fake::new(), SteamPads::new("play", &["fire"], &[]))
+        .fallback(Box::new(Recorded(opened.clone())));
+    input.steam_mut().set_overlay(false);
+    let browser = input.browser();
+    let url = Url::parse("https://example.com/news").unwrap();
+    let mut opening = browser.open(&url);
+    assert_eq!(
+        browser.open(&url).poll(),
+        Some(&Err(UrlError::Busy)),
+        "a second link waits for the first"
+    );
+    input.poll(&mut Vec::new());
+    assert!(input.steam().web_pages().is_empty());
+    assert_eq!(*opened.lock().unwrap(), ["https://example.com/news"]);
+    assert_eq!(opening.poll(), Some(&Ok(())));
+}

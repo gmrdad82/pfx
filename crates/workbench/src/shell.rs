@@ -852,7 +852,14 @@ impl Shell {
 
     fn pack_to(&mut self, target: &Path, whole: bool) -> bool {
         let recipe = PathBuf::from(&self.document.path);
-        match file::pack(&recipe, &self.registry, target, whole) {
+        if let Some(held) = self.held.as_mut()
+            && let Err(error) = file::keep_beside(held, &recipe)
+        {
+            self.fail(error);
+            return false;
+        }
+        let keep = self.held.as_ref().map(|held| held.kept.clone());
+        match file::pack(&recipe, &self.registry, target, whole, keep.as_deref()) {
             Ok(written) => {
                 let undo = self.editor.as_ref().map_or(0, |editor| editor.steps().0);
                 if let Some(held) = self.held.as_mut() {
@@ -883,7 +890,7 @@ impl Shell {
             return self.pack_to(path, true);
         }
         let recipe = PathBuf::from(&self.document.path);
-        match file::pack(&recipe, &self.registry, path, true) {
+        match file::pack(&recipe, &self.registry, path, true, None) {
             Ok(written) => {
                 self.open_file(&written);
                 if self.held.is_none() {

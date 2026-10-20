@@ -465,6 +465,17 @@ fn map_layer(result_in: MapResult, layer: vec4f, pa: vec4f, pb: vec4f, pc: vec4f
     } else if (kind == 14u) {
         let value = flow(uv * layer.y, time);
         result.thin_film = max(result.thin_film + amp * (value - 0.5) * 2.0, 0.0);
+    } else if (kind == 21u) {
+        var along = dot(position, pa.yzw);
+        if (pa.x >= 1.5) {
+            along = dot(uv, pa.yz);
+        }
+        let span = pb.y - pb.x;
+        var t = select(0.0, 1.0, along >= pb.y);
+        if (abs(span) > 1e-12) {
+            t = clamp((along - pb.x) / span, 0.0, 1.0);
+        }
+        result.thin_film = mix(result.thin_film, max(mix(pb.z, pb.w, t), 0.0), clamp(amp, 0.0, 1.0));
     } else if (kind == 15u) {
         let value = map_noise(p * layer.y, abs(layer.y));
         result.base *= mix(1.0, 1.0 + (value - 0.5) * 2.0, clamp(amp, 0.0, 1.0));

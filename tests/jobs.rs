@@ -10,6 +10,7 @@ const FRAMES: u32 = 8;
 
 fn pfx(state: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .env("PFX_STATE", state)
         .args(args)
         .output()

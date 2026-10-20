@@ -221,6 +221,9 @@ pub(crate) fn look(
             None => None,
         },
         detail_normal: None,
+        thin_film: None,
+        thin_film_min: None,
+        thin_film_factors: None,
         alpha_cutoff: (material.alpha_mode() == gltf::material::AlphaMode::Mask)
             .then(|| material.alpha_cutoff().unwrap_or(0.5)),
         double_sided: None,
@@ -291,6 +294,7 @@ fn place(look: &mut Look, textures: &Textures) {
         &mut look.normal,
         &mut look.metal_roughness,
         &mut look.occlusion,
+        &mut look.thin_film,
     ]
     .into_iter()
     .flatten()
@@ -327,6 +331,11 @@ pub(crate) fn factors(look: &mut Look, material: &Material) {
         strength: material.anisotropy.strength,
         rotation: material.anisotropy.rotation,
     });
+    look.thin_film_factors = look.thin_film.is_some().then_some([
+        material.thin_film_amount,
+        material.thin_film_ior,
+        material.thin_film,
+    ]);
 }
 
 pub(crate) fn resolve(
@@ -345,6 +354,7 @@ pub(crate) fn resolve(
             &mut look.metal_roughness,
             &mut look.occlusion,
             &mut look.detail_normal,
+            &mut look.thin_film,
         ]
         .into_iter()
         .flatten()
@@ -376,6 +386,12 @@ pub(crate) fn resolve(
                 tex_coord: DETAIL_SET,
                 ..map
             });
+        }
+        if let Some(map) = read("thin_film_map", &textures.thin_film_map)? {
+            look.thin_film = Some(map);
+        }
+        if let Some(min) = textures.thin_film_min {
+            look.thin_film_min = Some(min as f32);
         }
         set(&mut look.normal, textures.normal_scale);
         set(&mut look.occlusion, textures.occlusion_strength);

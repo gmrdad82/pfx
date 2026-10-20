@@ -18,6 +18,10 @@ denoiser.denoise_textures_into(&gpu, &trace.color.texture, &trace.albedo.texture
 - `denoise_textures` and `denoise_textures_into` read `Rgba32Float` textures with `COPY_SRC`, which is what `Trace::color`, `Trace::albedo` and `Trace::normal` are, so a trace feeds the denoiser with GPU copies and no readback. `denoise_textures` reads the result back; `denoise_textures_into` copies it into an `Rgba32Float` texture with `COPY_DST` and returns without waiting.
 - Normals may be in any space, in [-1, 1]; albedo in [0, 1]. Colour is linear HDR; its exposure is found the way OIDN finds it.
 
+## A traced frame
+
+The denoiser runs once on a frame of `pfx render --recipe` (a `.png` or master by default, an `.exr` or `.hdr` with `--denoise on`) or of `pfx clip --trace` (by default), after its last sample. It is OIDN's RT filter (the `rt_hdr_alb_nrm` weights, OIDN's default quality, the only one pfx ships), run on the beauty with its albedo and normal guides, all three as the tracer averaged them, from its textures on the GPU. The guides are not prefiltered first (OIDN's `cleanAux` path, which denoises the albedo and normal before the beauty, is not used), and the filter runs at the one quality whatever the samples. Its output then goes through the recipe's finish. `--denoise off` skips it, and `pfx clip --trace --passes <dir>` writes the three inputs as 32-bit float EXR into a folder of their own ([recipe-clips.md](recipe-clips.md#denoise-and-the-raw-passes)), so a frame can be compared denoised against raw, or denoised again elsewhere, from the same inputs.
+
 ## What is ported
 
 Everything that decides the output follows OIDN's source:

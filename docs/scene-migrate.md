@@ -19,6 +19,7 @@ imported scenes/room.scene.toml into scenes/room.pitofx
 - `--dry-run` says what it would import or migrate and writes nothing.
 - A `.pitofx` that already exists beside the file is refused: the import happens once, and edits go to the `.pitofx`.
 - A recipe (`recipe = 1`) is imported the same way, with its includes and files; `--bare` keeps only the recipe and the files it reads, and the build comes the first time a command needs it.
+- An HDRI the recipe's `[sky]` reads from inside the recipe's folder is not packed, because the `.pitofx` is written in that folder and reads it from the disk beside it. The import says so: `kept assets/sky/softbox.hdr beside the .pitofx, which reads it from the disk there`. Copy it with the `.pitofx` to render elsewhere: a `.pitofx` copied away from it refuses to render with `sky.path: …`. An HDRI outside the folder is packed, as every file from outside it is (`packed ../sky/softbox.hdr from outside scenes`). Saving the document elsewhere from the window packs it. `--dry-run` names the files it would import, not what each one keeps or packs.
 
 Every other command given a `.toml` refuses with one line naming the import: `pfx: room.scene.toml is a plain TOML file; import it once with `pfx scene migrate room.scene.toml`, which writes room.pitofx beside it`.
 

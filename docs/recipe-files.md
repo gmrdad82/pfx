@@ -134,7 +134,7 @@ One JSON object on stdout, the property as the recipe holds it after the edit: `
 `pfx clip --out <dir>` writes:
 
 - `frame-0000.png`, `frame-0001.png`…: 8-bit RGB PNGs, or RGBA for a frame with any transparent pixel, wider than four digits when the last frame needs it. A frame under its own name is whole;
-- `clip.txt`: the line that made the frames (recipe, camera, frames, size, timeline, spin and its turns, renderer and samples, variant, sets). A run with a different line into the folder is refused;
+- `clip.txt`: the line that made the frames (recipe, camera, frames, size, timeline, spin and its turns, renderer and samples, `denoise off` and `passes` when given, variant, sets). A run with a different line into the folder is refused;
 
 ## A shoot's folder
 

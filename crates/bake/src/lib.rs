@@ -7,6 +7,7 @@ pub mod impostor;
 pub mod plate;
 mod recipe;
 pub mod reflection;
+pub mod shelf;
 mod trace;
 
 pub use artifact::{

@@ -107,7 +107,7 @@ pub struct Recipe {
     pub twins: Vec<Problem>,
 }
 
-pub const TEXTURE_KEYS: [&str; 11] = [
+pub const TEXTURE_KEYS: [&str; 13] = [
     "base_map",
     "normal_map",
     "normal_scale",
@@ -119,6 +119,8 @@ pub const TEXTURE_KEYS: [&str; 11] = [
     "uv_scale",
     "uv_offset",
     "uv_rotation",
+    "thin_film_map",
+    "thin_film_min",
 ];
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -134,6 +136,8 @@ pub struct Textures {
     pub uv_scale: Option<[f64; 2]>,
     pub uv_offset: Option<[f64; 2]>,
     pub uv_rotation: Option<f64>,
+    pub thin_film_map: Option<String>,
+    pub thin_film_min: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default)]

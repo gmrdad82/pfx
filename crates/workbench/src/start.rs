@@ -83,7 +83,7 @@ pub fn start_recipe(state: &Path) -> io::Result<PathBuf> {
     if document.exists() {
         std::fs::remove_file(&document)?;
     }
-    let packed = crate::file::pack(&recipe, &pfx_build::Registry::new(), &document, true);
+    let packed = crate::file::pack(&recipe, &pfx_build::Registry::new(), &document, true, None);
     std::fs::remove_dir_all(&scratch)?;
     packed.map_err(io::Error::other)
 }

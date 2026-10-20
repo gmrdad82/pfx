@@ -330,6 +330,7 @@ pub fn shoot_posed_with(
 pub struct Output {
     pub wide: bool,
     pub dither: Option<pfx_post::quantise::Dither>,
+    pub transparent: bool,
 }
 
 impl Output {
@@ -405,6 +406,14 @@ impl Reel {
         stage.blur_motion(true);
         if !output.wide {
             stage.set_output_dither(output.dither)?;
+        }
+        if output.transparent {
+            if output.wide {
+                return Err(Error(
+                    "a transparent background needs the 8-bit output; the 16-bit one has no alpha from coverage".into(),
+                ));
+            }
+            stage.set_alpha_from_coverage(true)?;
         }
         let target = if output.wide {
             wide_target(gpu, size)

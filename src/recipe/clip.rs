@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Instant;
 
+use clap::builder::{PossibleValuesParser, TypedValueParser};
 use pfx_build::{Built, Registry};
 use pfx_glb::DMat4;
 use pfx_recipe::{Camera, CameraPath, Rate, Recipe};
@@ -130,6 +131,23 @@ pub(super) struct Args {
     checkpoint: Option<Every>,
     #[arg(
         long,
+        value_name = "off|on",
+        action = clap::ArgAction::Set,
+        hide_possible_values = true,
+        requires = "trace",
+        value_parser = PossibleValuesParser::new(["off", "on"]).map(|v| v == "on"),
+        help = "Denoise the trace [default: on]"
+    )]
+    denoise: Option<bool>,
+    #[arg(
+        long,
+        value_name = "dir",
+        requires = "trace",
+        help = "Also write each traced frame's raw beauty, albedo and normal into this folder as linear .exr, the denoiser's inputs"
+    )]
+    passes: Option<PathBuf>,
+    #[arg(
+        long,
         help = "Progress on stderr as JSON lines: the frame, of how many, its samples and an ETA"
     )]
     json: bool,
@@ -168,6 +186,10 @@ pub(super) struct Args {
 impl Args {
     fn bits(&self) -> u8 {
         if self.picture.wide() { 16 } else { 8 }
+    }
+
+    fn denoised(&self) -> bool {
+        self.denoise != Some(false)
     }
 
     fn samples(&self) -> Option<u32> {
@@ -309,6 +331,12 @@ fn manifest(args: &Args) -> String {
                 text.push_str(&format!(", threshold {threshold}"));
             }
             text.push('\n');
+            if !args.denoised() {
+                text.push_str("denoise off\n");
+            }
+            if args.passes.is_some() {
+                text.push_str("passes\n");
+            }
         }
         None => text.push_str("renderer live\n"),
     }
@@ -360,6 +388,20 @@ fn encode_line(frames: &Path, video: &Path, fps: Rate) -> Result<Vec<String>, St
 }
 
 fn precheck(args: &Args) -> Result<(), String> {
+    let same = |a: &Path, b: &Path| match (std::path::absolute(a), std::path::absolute(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    if args
+        .passes
+        .as_deref()
+        .is_some_and(|passes| same(passes, &args.out))
+    {
+        return Err(format!(
+            "--passes {}: the passes go to a folder of their own, not the frames' --out",
+            args.out.display()
+        ));
+    }
     let (camera, _) = super::precheck(
         &args.recipe,
         args.variant.as_deref(),
@@ -468,6 +510,7 @@ impl Renderer {
         settled: Option<f64>,
         step: &mut dyn FnMut(Step),
         keeper: Option<&mut dyn pfx_still::Keeper>,
+        passes: Option<&Path>,
     ) -> Result<(String, Option<pfx_still::Paced>), String> {
         match self {
             Renderer::Live(reel, _) => {
@@ -497,13 +540,21 @@ impl Renderer {
                     noise: *noise,
                     seed: pfx_still::Seed::Locked,
                 };
+                reel.guides = passes.is_some();
                 let rendered = reel
                     .frame_kept(camera, take, step, keeper)
                     .map_err(|e| e.to_string())?;
+                if let Some(dir) = passes {
+                    let name = to
+                        .file_stem()
+                        .and_then(|stem| stem.to_str())
+                        .unwrap_or("frame");
+                    pfx_still::write_passes(dir, name, &rendered.film)?;
+                }
                 let pixels = pfx_still::finished(
                     &rendered.film,
                     (&rendered.finish, &rendered.overlay),
-                    true,
+                    reel.denoise,
                 )?;
                 let size = rendered.film.size;
                 match picture.wide() {
@@ -564,14 +615,14 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
                 &recipe,
                 &built.parts,
                 args.size,
-                args.picture.output(0),
+                args.picture.output(0, crate::recipe::Background::Sky),
             )
             .map_err(|e| e.0)?;
             let base = Box::new((recipe.clone(), built));
             (Renderer::Live(Box::new(reel), base), recipe)
         }
         Some(samples) => {
-            let reel = pfx_still::Reel::open_for(
+            let mut reel = pfx_still::Reel::open_for(
                 &args.recipe,
                 args.variant.as_deref(),
                 &args.set,
@@ -580,6 +631,7 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
                 args.size,
             )
             .map_err(|e| e.to_string())?;
+            reel.denoise = args.denoised();
             let recipe = reel.recipe.clone();
             let noise = noise(args, &recipe.trace, samples);
             (
@@ -838,7 +890,10 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
     let count = args.count();
     let ours = |name: &str| frame_in(name).is_none_or(|frame| (first..=last).contains(&frame));
     let (swept, found, before) = Ledger::update(&args.out, |ledger| {
-        let swept = pfx_core::atomic::sweep_matching(&args.out, ours)?;
+        let mut swept = pfx_core::atomic::sweep_matching(&args.out, ours)?;
+        if let Some(passes) = &args.passes {
+            swept.extend(pfx_core::atomic::sweep_matching(passes, ours)?);
+        }
         rerender(args, ledger, last)?;
         let found = ledger.verify(
             &args.out,
@@ -1066,6 +1121,7 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
             settled,
             &mut |step| told.step(frame, step, pixels),
             kept.as_mut().map(|kept| kept as &mut dyn pfx_still::Keeper),
+            args.passes.as_deref().filter(|_| !checking),
         )?;
         if checking {
             let again = std::fs::read(&to).map_err(|e| format!("{}: {e}", to.display()));
@@ -1244,7 +1300,7 @@ mod tests {
     #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
-            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --checkpoint 30 --json --rerender-from 3 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16 --memory-limit 6",
+            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --checkpoint 30 --json --rerender-from 3 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16 --memory-limit 6 --denoise off --passes tmp/p",
         ))
         .unwrap();
         assert_eq!(
@@ -1264,6 +1320,8 @@ mod tests {
                 spp: Some(16),
                 threshold: Some(0.02),
                 checkpoint: Some(Every::Minutes(30.0)),
+                denoise: Some(false),
+                passes: Some("tmp/p".into()),
                 json: true,
                 rerender_from: Some(3),
                 variant: Some("bare".into()),
@@ -1290,6 +1348,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(traced.samples(), Some(64));
+        assert!(traced.denoised() && traced.passes.is_none());
     }
 
     #[test]
@@ -1395,6 +1454,11 @@ mod tests {
             "--trace --checkpoint 0",
             "--trace --checkpoint 8x",
             "--trace --spp 0",
+            "--denoise off",
+            "--passes p",
+            "--trace --denoise",
+            "--trace --denoise maybe",
+            "--trace --passes",
             "--video a.gif",
             "--video a",
             "--nope",
@@ -1518,6 +1582,17 @@ mod tests {
         assert_eq!(manifest(&line("--fps 30 --video a.mp4")), first);
         let traced = manifest(&line("--fps 24 --trace --spp 32 --set sky.intensity=0.5"));
         assert!(traced.contains("renderer traced, 32 spp\nset sky.intensity=0.5\n"));
+        assert_eq!(
+            manifest(&line(
+                "--fps 24 --trace --spp 32 --denoise on --set sky.intensity=0.5"
+            )),
+            traced
+        );
+        let raw = manifest(&line("--fps 24 --trace --spp 32 --denoise off --passes p"));
+        assert!(
+            raw.contains("renderer traced, 32 spp\ndenoise off\npasses\n"),
+            "{raw}"
+        );
         let refused = claim(&dir, &traced).unwrap_err();
         assert!(refused.contains("made by another line"), "{refused}");
     }
@@ -1775,7 +1850,7 @@ mod tests {
             "main",
             args.size,
             None,
-            args.picture.output(0),
+            args.picture.output(0, crate::recipe::Background::Sky),
         )
         .unwrap();
         assert!(
@@ -1821,6 +1896,7 @@ mod tests {
             crop: None,
             denoise: true,
             time: None,
+            transparent: false,
         };
         let rendered = pfx_still::render(&request, &Registry::new(), &mut |_| {}).unwrap();
         let pixels =
@@ -1839,6 +1915,78 @@ mod tests {
         );
         let (_, second) = pfx_recipe_scene::read_png(&out.join(name(1, 3))).unwrap();
         assert!(second != first);
+    }
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+    fn the_passes_are_the_same_denoised_or_not_and_off_is_the_raw_trace() {
+        let dir = scratch("passes");
+        let recipe = table_orbit(&dir);
+        let stem = name(0, 3).trim_end_matches(".png").to_string();
+        let made = |denoise: &str| {
+            let out = dir.join(format!("frames-{denoise}"));
+            let passes = dir.join(format!("passes-{denoise}"));
+            let args = table_line(
+                &recipe,
+                &out,
+                &format!(
+                    "--size 160x100 --trace --spp 4 --range 0..0 --denoise {denoise} --passes {}",
+                    passes.display()
+                ),
+            );
+            frames(&args, &Registry::new(), &mut |_| {}).unwrap();
+            let (_, png) = pfx_recipe_scene::read_png(&out.join(name(0, 3))).unwrap();
+            let files =
+                pfx_still::pass_paths(&passes, &stem).map(|path| std::fs::read(path).unwrap());
+            (args, png, files, passes)
+        };
+        let (_, on, on_files, on_passes) = made("on");
+        let (args, off, off_files, _) = made("off");
+        assert!(
+            on_files == off_files,
+            "the passes differ with --denoise on and off"
+        );
+        assert!(on != off);
+        let [_, albedo, normal] = pfx_still::pass_paths(&on_passes, &stem);
+        for guide in [albedo, normal] {
+            let (size, pixels) = pfx_still::read_exr(&guide).unwrap();
+            assert_eq!(size, args.size);
+            assert!(
+                pixels.iter().any(|p| p[..3] != [0.0; 3]),
+                "{}",
+                guide.display()
+            );
+        }
+        let request = pfx_still::Request {
+            recipe: &recipe,
+            camera: "main",
+            size: args.size,
+            samples: 4,
+            noise: None,
+            seed: None,
+            view: pfx_still::View::Lens,
+            variant: None,
+            set: &[],
+            pick: &pfx_recipe::Pick::default(),
+            crop: None,
+            denoise: false,
+            time: None,
+            transparent: false,
+        };
+        let rendered = pfx_still::render(&request, &Registry::new(), &mut |_| {}).unwrap();
+        let pixels =
+            pfx_still::finished(&rendered.film, (&rendered.finish, &rendered.overlay), false)
+                .unwrap();
+        let render = pfx_still::dithered_at(
+            args.size,
+            [0, 0],
+            args.picture.dither(u64::from(rendered.seed)),
+            &pixels,
+        );
+        assert!(
+            off == render,
+            "a --denoise off frame differs from pfx render --recipe --denoise off of the camera"
+        );
     }
 
     const NTSC: &str = r#"recipe = 1

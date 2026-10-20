@@ -731,6 +731,7 @@ mod tests {
             .arg(&base)
             .arg("--force")
             .env("PFX_BAKE_GPU", "1")
+            .env("PFX_CACHE_DIR", "off")
             .output();
         let output = run.unwrap_or_else(|error| panic!("pfx must be on PATH to bake: {error}"));
         assert!(

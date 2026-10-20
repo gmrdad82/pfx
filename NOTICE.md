@@ -149,6 +149,30 @@ These stay under the MIT licence, so a game that uses them or starts from them c
 
 The splash chime's room in `crates/splash/src/chime/reverb.rs` (in the package `pfx-splash`) is ported from Freeverb by Jezar at Dreampoint (version 3, June 2000, `revmodel.cpp`, `revmodel.hpp`, `comb.hpp`, `allpass.hpp` and `tuning.h`), which its author released into the public domain. The port keeps its eight low-pass feedback combs and four allpasses per side, its comb and allpass tunings (1116, 1188, 1277, 1356, 1422, 1491, 1557 and 1617; 556, 441, 341 and 225 samples), the right side's spread of 23 samples, the fixed input gain of 0.015, the wet scale of 3, the damping scale of 0.4, the room scale of 0.28 with its offset of 0.7, the allpass feedback of 0.5 and the wet1 and wet2 width mix. The tunings are scaled from 44.1 kHz to the output rate.
 
+## Sonic Pi, under the MIT licence
+
+The composer's scales in `crates/compose/src/theory/scale.rs`, its chords in `crates/compose/src/theory/chord.rs` and its Euclidean rhythms in `crates/compose/src/theory/spread.rs` (in the package `pfx-compose`) are ported from Sonic Pi (https://github.com/sonic-pi-net/sonic-pi, commit `abbb2fdfe5820ea73c47957a453f4667ea52f0b3`): the twelve-tone scale table of `app/server/ruby/lib/sonicpi/scale.rb` with its step sequences and rotations, the chord table of `app/server/ruby/lib/sonicpi/chord.rb` with every name and interval list, `Chord.resolve_degree`'s chords stacked in thirds on a scale degree, and `spread` with `redistribute` and its rotation to the next accent from `app/server/ruby/lib/sonicpi/lang/core.rb` (Bjorklund's algorithm after Toussaint, "The Euclidean Algorithm Generates Traditional Musical Rhythms", 2005). The `app/` tree outside `app/web/` is licensed MIT; no synth definition or other part of Sonic Pi under another licence is used. Copyright (c) 2012 - 2026 Samuel Aaron and contributors, licensed MIT; the MIT section of its `LICENSE.md` at that commit (its heading, its scope line naming the `app/` directory, the MIT title, the copyright line with its author's address and the permission notice) ships verbatim as `crates/compose/LICENSE-sonic-pi.md` in the source and next to this file in every release.
+
+## tonal, under the MIT licence
+
+The composer's Roman numerals in `crates/compose/src/theory/numeral.rs` and its voicings in `crates/compose/src/theory/voicing.rs` (in the package `pfx-compose`) are ported from tonal (https://github.com/tonaljs/tonal, commit `e555422aef910daa87cb924028f71f0a013f3ed7`): the numeral tokens (accidentals, the numeral and its case, the chord type) of `packages/roman-numeral/index.ts`, the interval names to semitones of `packages/pitch-interval/index.ts`, the triad and left-hand voicing tables of `packages/voicing-dictionary/data.ts`, `search` over a range from `packages/voicing/index.ts` and `topNoteDiff` from `packages/voice-leading/index.ts`.
+
+> Copyright (c) 2015 danigb
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+> Copyright (c) 2020 felixroos
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 ## mda VST plug-ins, under the MIT licence
 
 In the package `pfx-sound` (feature `voicefx`), the channel vocoder in `crates/sound/src/voicefx/vocoder.rs` (its 8 and 16 band tables, the 4th-order resonator bank run at half rate with its zeros applied once, the pre-emphasis, the high band and high thru, the envelope followers and their speeds, the gain and Q formulas and the denormal and instability catches) is ported from mda Vocoder (`src/mdaVocoder.cpp`), the bit and rate reducer in `crates/sound/src/voicefx/crush.rs` (the hold counter, the averaging mode, the truncating quantiser and the 8-pole post filter with its `filterFreq` constants) from mda Degrade (`src/mdaDegrade.cpp`), and the ring modulator in `crates/sound/src/voicefx/ring.rs` (the sine carrier and its 0.95 feedback) from mda RingMod (`src/mdaRingMod.cpp`), all from https://sourceforge.net/p/mda-vst/code/ at SVN revision 12, Copyright (c) 2008 Paul Kellett, released under the MIT licence or the GPL version 2 or later and used here under the MIT licence:
@@ -983,3 +1007,15 @@ resvg's box blur is based on fastblur (https://github.com/fschutt/fastblur, MIT)
 ## Harmony Agreements, under CC BY 3.0
 
 [CLA.md](CLA.md), pfx's Individual Contributor Licence Agreement, is adapted from the Harmony Individual Contributor License Agreement (HA-CLA-I), version 1.0 of July 4, 2011, by Harmony Agreements (https://www.harmonyagreements.org/), licensed under the Creative Commons Attribution 3.0 Unported License (https://creativecommons.org/licenses/by/3.0/). The changes are listed at its foot, and the adapted agreement is under the same licence.
+
+## open, under the MIT licence
+
+`launchers` in `crates/game/src/browser.rs` (in the package `pfx-game`), the system openers tried in turn for a link (`xdg-open`, `gio open`, `gnome-open` and `kde-open --` on Linux and the BSDs, `/usr/bin/open --` on macOS) and the Windows `ShellExecuteW` open, is ported from open (https://github.com/Byron/open-rs, `src/unix.rs`, `src/macos.rs` and `src/windows.rs`, version 5.4.4), Copyright 2015 Sebastian Thiel, licensed under the MIT licence:
+
+> Copyright © 2015 Sebastian Thiel
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

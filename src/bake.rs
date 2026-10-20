@@ -14,6 +14,7 @@ use pfx_bake::reflection::{
     ReflectionWrite, bake_reflection_paced, read_reflection_artifact, reflection_hash,
     write_reflection_artifact,
 };
+use pfx_bake::shelf;
 use pfx_bake::{
     Emitters, Paced, Recording, Rounds, SceneSource, bake_anchor_paced, bake_emitters_paced,
     read_artifact, write_artifact_recorded,
@@ -22,6 +23,7 @@ use pfx_core::cli;
 use pfx_gpu::Gpu;
 use pfx_gpu::pace::Pacer;
 use pfx_run::job::{Job, TOOL, stages};
+use sha2::Digest;
 
 struct Options {
     scene: PathBuf,
@@ -33,6 +35,7 @@ struct Options {
     force: bool,
     detail: bool,
     memory_limit: Option<u64>,
+    cache: Option<pfx_cache::Store>,
 }
 
 pub fn check(args: &[String]) -> Result<(), String> {
@@ -127,6 +130,7 @@ fn parse(args: &[String]) -> Result<Options, String> {
         force,
         detail,
         memory_limit,
+        cache: None,
     })
 }
 
@@ -433,6 +437,7 @@ fn baked(options: Options, plan: &mut Option<pfx_core::memory::Plan>) -> Result<
             tmp: &tmp,
             relative: &relative,
             force: options.force,
+            cache: options.cache.clone(),
         },
         &mut job,
     );
@@ -570,6 +575,91 @@ fn rounds_line(path: &Path, hour: f32, rounds: &Rounds, seconds: f64) -> String 
     )
 }
 
+const PROBES: &str = "probes";
+const PROPS: &str = "props";
+const REFLECTIONS: &str = "reflections";
+const HOST: &str = include_str!("bake.rs");
+
+fn host() -> &'static str {
+    HOST.split("\n#[cfg(test)]\nmod tests {")
+        .next()
+        .unwrap_or(HOST)
+}
+
+fn unlinked(tmp: &Path, relative: &Path) -> bool {
+    let mut path = tmp.to_path_buf();
+    relative.components().all(|part| {
+        path.push(part.as_os_str());
+        matches!(part, std::path::Component::Normal(_))
+            && fs::symlink_metadata(&path)
+                .ok()
+                .is_none_or(|meta| !meta.file_type().is_symlink())
+    })
+}
+
+struct Shelf {
+    store: Option<pfx_cache::Store>,
+    gpu: String,
+    host: String,
+    fresh: bool,
+}
+
+impl Shelf {
+    fn open(gpu: &Gpu, store: Option<pfx_cache::Store>, fresh: bool) -> Shelf {
+        Shelf {
+            store,
+            fresh,
+            gpu: shelf::adapter(gpu),
+            host: hex::encode(sha2::Sha256::digest(host())),
+        }
+    }
+
+    fn key(&self, what: &str, hash: &str) -> pfx_cache::Key {
+        shelf::key(what, &format!("{hash}|{}", self.host), &self.gpu)
+    }
+
+    fn restore(
+        &self,
+        what: &str,
+        hash: &str,
+        tmp: &Path,
+        relative: &Path,
+        check: &dyn Fn(&Path) -> bool,
+    ) -> bool {
+        let Some(store) = self.store.as_ref().filter(|_| !self.fresh) else {
+            return false;
+        };
+        if !unlinked(tmp, relative) {
+            return false;
+        }
+        let target = &tmp.join(relative);
+        if !shelf::restore(store, &self.key(what, hash), target) {
+            return false;
+        }
+        if check(target) {
+            println!(
+                "{} (from the machine cache)",
+                target.join("manifest.json").display()
+            );
+            return true;
+        }
+        let _ = fs::remove_dir_all(target);
+        false
+    }
+
+    fn keep(&self, what: &str, hash: &str, target: &Path) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        if let Err(error) = shelf::keep(store, &self.key(what, hash), target) {
+            eprintln!(
+                "{TOOL}: {} stays out of the machine cache: {error}",
+                target.display()
+            );
+        }
+    }
+}
+
 struct BakeInputs<'a> {
     source: &'a SceneSource,
     props: &'a [PropSpec],
@@ -579,6 +669,7 @@ struct BakeInputs<'a> {
     tmp: &'a Path,
     relative: &'a Path,
     force: bool,
+    cache: Option<pfx_cache::Store>,
 }
 
 fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
@@ -591,6 +682,7 @@ fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
         tmp,
         relative,
         force,
+        cache,
     } = input;
     let many = source.recipe.volumes.len() > 1
         || !props.is_empty()
@@ -648,7 +740,7 @@ fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
             }
             replaceable_prop_artifact(&target)?;
         }
-        prop_todo.push((path, prop, scene, bounds));
+        prop_todo.push((path, prop, scene, bounds, hash));
     }
     let mut reflection_todo = Vec::new();
     for (index, spec) in source.recipe.reflections.iter().enumerate() {
@@ -682,6 +774,27 @@ fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
     if todo.is_empty() && prop_todo.is_empty() && reflection_todo.is_empty() {
         return Ok(());
     }
+    let gpu = pollster::block_on(Gpu::headless())?;
+    let shelf = Shelf::open(&gpu, cache, force);
+    todo.retain(|(path, _, hash)| {
+        !shelf.restore(PROBES, hash, tmp, path, &|target| {
+            read_artifact(target).is_ok_and(|artifact| artifact.manifest.scene_hash == *hash)
+        })
+    });
+    prop_todo.retain(|(path, _, _, _, hash)| {
+        !shelf.restore(PROPS, hash, tmp, path, &|target| {
+            read_prop_artifact(target).is_ok_and(|artifact| artifact.manifest.scene_hash == *hash)
+        })
+    });
+    reflection_todo.retain(|(path, _, _, hash)| {
+        !shelf.restore(REFLECTIONS, hash, tmp, path, &|target| {
+            read_reflection_artifact(target)
+                .is_ok_and(|artifact| artifact.manifest.scene_hash == *hash)
+        })
+    });
+    if todo.is_empty() && prop_todo.is_empty() && reflection_todo.is_empty() {
+        return Ok(());
+    }
     let planned: Vec<&'static str> = [
         (!todo.is_empty(), stages::TRACE),
         (!prop_todo.is_empty(), stages::TRACE_PROP),
@@ -691,7 +804,6 @@ fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
     .filter_map(|(wanted, name)| wanted.then_some(name))
     .collect();
     job.plan(&planned);
-    let gpu = pollster::block_on(Gpu::headless())?;
     job.device(&format!("{:?}: {}", gpu.info.backend, gpu.info.name));
     let mut pacer = Pacer::default();
     let mut turns = TurnState::default();
@@ -764,7 +876,7 @@ fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
                     Recording {
                         emitters: Some(&emitters),
                         rounds: &recorded,
-                        source_hash: hash,
+                        source_hash: hash.clone(),
                     },
                     samples,
                     source.recipe.seed,
@@ -778,19 +890,20 @@ fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
                 Recording {
                     emitters: None,
                     rounds: &recorded,
-                    source_hash: hash,
+                    source_hash: hash.clone(),
                 },
                 samples,
                 source.recipe.seed,
             )?,
         };
+        shelf.keep(PROBES, &hash, &tmp.join(&path));
         println!(
             "{} ({})",
             tmp.join(&path).join("manifest.json").display(),
             manifest.scene_hash
         );
     }
-    for (index, (path, prop, scene, bounds)) in prop_todo.into_iter().enumerate() {
+    for (index, (path, prop, scene, bounds, hash)) in prop_todo.into_iter().enumerate() {
         job.stage(stages::TRACE_PROP, Some(1), "props");
         job.note(&format!("{}", path.display()));
         let artifact = bake_prop_with_turn(
@@ -827,6 +940,7 @@ fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
         } else {
             write_prop_artifact(tmp, &path, &artifact)?;
         }
+        shelf.keep(PROPS, &hash, &target);
         println!(
             "{} ({})",
             target.join("manifest.json").display(),
@@ -867,13 +981,14 @@ fn bake_run(input: BakeInputs<'_>, job: &mut Job) -> Result<(), String> {
         let manifest = write_reflection_artifact(ReflectionWrite {
             tmp_root: tmp,
             relative: &path,
-            scene_hash: hash,
+            scene_hash: hash.clone(),
             spec,
             anchors: &scene.anchors,
             cubes: &cubes,
             samples,
             seed: source.recipe.seed,
         })?;
+        shelf.keep(REFLECTIONS, &hash, &target);
         println!(
             "{} ({})",
             target.join("manifest.json").display(),
@@ -937,7 +1052,8 @@ fn recipe_product(scene: &Path) -> String {
 }
 
 pub fn run(args: &[String]) -> Result<(), String> {
-    let options = parse(args)?;
+    let mut options = parse(args)?;
+    options.cache = pfx_cache::shared().cloned();
     pfx_core::memory::from_env(options.memory_limit)?;
     if options.detail || std::env::var("PFX_BAKE_GPU").ok().as_deref() == Some("1") {
         return bake(options);
@@ -962,6 +1078,26 @@ pub fn run(args: &[String]) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_restore_never_goes_through_a_link_or_out_of_tmp() {
+        let tmp = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tmp")
+            .join(format!("bake-unlinked-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("plain/inner")).unwrap();
+        fs::create_dir_all(tmp.join("elsewhere")).unwrap();
+        std::os::unix::fs::symlink(tmp.join("elsewhere"), tmp.join("linked")).unwrap();
+        assert!(unlinked(&tmp, Path::new("plain/inner/probes")));
+        assert!(unlinked(&tmp, Path::new("missing/probes")));
+        assert!(!unlinked(&tmp, Path::new("linked/probes")));
+        assert!(!unlinked(&tmp, Path::new("linked")));
+        assert!(!unlinked(&tmp, Path::new("plain/../linked/probes")));
+        assert!(!unlinked(&tmp, Path::new("../probes")));
+        assert!(!unlinked(&tmp, &tmp.join("plain")));
+        fs::remove_dir_all(&tmp).ok();
+    }
 
     fn scene_with(label: &str, recipe: &str) -> PathBuf {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -1360,6 +1496,65 @@ mod tests {
         assert_eq!(artifact.rounds, second.rounds);
         assert_eq!(artifact.manifest, second.manifest);
         eprintln!("pfx bake box room: {:.3} s", first_time.as_secs_f64());
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn a_bake_from_the_machine_cache_is_the_same_bytes_as_a_traced_one() {
+        assert_eq!(std::env::var("PFX_DIRECT").ok().as_deref(), Some("1"));
+        let tmp = caller_tmp().unwrap();
+        let id = std::process::id();
+        let store = tmp.join(format!("bake-cache-store-{id}"));
+        let outs: Vec<PathBuf> = ["traced", "cached", "forced"]
+            .iter()
+            .map(|run| tmp.join(format!("bake-cache-{run}-{id}")))
+            .collect();
+        for dir in outs.iter().chain([&store]) {
+            let _ = fs::remove_dir_all(dir);
+        }
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("crates/bake/tests/data/box-room");
+        let mut recipe = fs::read_to_string(fixture.join("bake.toml")).unwrap();
+        recipe.push_str(
+            "\n[[prop]]\nname = 'room-prop'\nnode = 'Room'\nframes_per_side = 2\natlas_size = 16\n\n[[reflection]]\nname = 'room-cube'\nposition = [0.0, 1.0, 0.0]\nmin = [-2.0, 0.0, -2.0]\nmax = [2.0, 2.0, 2.0]\nresolution = 16\n",
+        );
+        let scene = scene_with("cache-every-kind", &recipe);
+        let gltf = fs::read_to_string(fixture.join("room.gltf")).unwrap();
+        let named = gltf.replace(
+            r#""nodes":[{"mesh":0}]"#,
+            r#""nodes":[{"name":"Room","mesh":0}]"#,
+        );
+        assert_ne!(named, gltf);
+        fs::write(scene.join("room.gltf"), named).unwrap();
+        let options = |out: &Path, force: bool| {
+            let mut args = vec![
+                "--scene".to_string(),
+                scene.to_string_lossy().into_owned(),
+                "--out".to_string(),
+                out.to_string_lossy().into_owned(),
+            ];
+            if force {
+                args.push("--force".into());
+            }
+            let mut options = parse(&args).unwrap();
+            options.cache = Some(pfx_cache::Store::at(&store));
+            options
+        };
+        bake(options(&outs[0], false)).unwrap();
+        let kept = pfx_cache::Store::at(&store).info();
+        let bakes = kept
+            .kinds
+            .iter()
+            .find(|kind| kind.kind == shelf::KIND)
+            .unwrap();
+        assert_eq!(bakes.entries, 3);
+        bake(options(&outs[1], false)).unwrap();
+        bake(options(&outs[2], true)).unwrap();
+        let traced = pfx_cache::pack_dir(&outs[0], u64::MAX).unwrap();
+        assert!(pfx_cache::pack_dir(&outs[1], u64::MAX).unwrap() == traced);
+        assert!(pfx_cache::pack_dir(&outs[2], u64::MAX).unwrap() == traced);
+        for dir in outs.iter().chain([&store, &scene]) {
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 
     #[test]

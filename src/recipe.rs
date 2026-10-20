@@ -349,12 +349,20 @@ impl Picture {
             .then(|| pfx_post::quantise::Dither::seeded(seed))
     }
 
-    pub(super) fn output(&self, seed: u64) -> pfx_recipe_scene::Output {
+    pub(super) fn output(&self, seed: u64, background: Background) -> pfx_recipe_scene::Output {
         pfx_recipe_scene::Output {
             wide: self.wide(),
             dither: self.dither(seed),
+            transparent: background == Background::Transparent,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
+pub(super) enum Background {
+    #[default]
+    Sky,
+    Transparent,
 }
 
 fn pair(text: &str) -> Result<String, String> {

@@ -38,12 +38,14 @@ pub use flakes::{
     voronoi_f1,
 };
 pub use kinds::{
-    CoatWobble, Crack, Crinkle, Fibre, Grime, PlankWood, Scratch, Track, WallMottle, sample_params,
+    CoatWobble, Crack, Crinkle, Fibre, FilmRamp, Grime, PlankWood, RampSpace, Scratch, Track,
+    WallMottle, sample_params,
 };
 pub use library::{FIXTURE, Library};
 pub use lobes::{
-    Anisotropy, Fabric, SHEEN_ROUGHNESS_FLOOR, SHEEN_TABLE, SHEEN_TABLE_SIDE, Scatter, Textures,
-    UvTransform, d_charlie, sheen_albedo, sheen_albedo_exact, sheen_alpha, v_neubelt,
+    Anisotropy, Fabric, SHEEN_ROUGHNESS_FLOOR, SHEEN_TABLE, SHEEN_TABLE_SIDE, Scatter,
+    THIN_FILM_MIN, Textures, UvTransform, d_charlie, sheen_albedo, sheen_albedo_exact, sheen_alpha,
+    v_neubelt,
 };
 pub use material::{
     ALPHA_CUTOFF, Ageing, AlphaMode, At, Content, Family, GPU_PARAMS, LAYER_CAP, LOBE_ROWS, Maps,

@@ -668,3 +668,99 @@ fn the_fresnel_power_steepens_the_coat_and_the_base_and_keeps_the_coat_within_en
         }
     }
 }
+
+#[test]
+fn an_old_thin_film_document_reads_as_before() {
+    let old = "thin_film = 420.0\nthin_film_ior = 1.33\nthin_film_amount = 0.8\n\n[[layers]]\nkind = \"flow\"\nfrequency = 10.0\namplitude = 50.0\nseed = 2\n";
+    let read: Material = toml::from_str(old).unwrap();
+    let mut expected = Material {
+        thin_film: 420.0,
+        thin_film_ior: 1.33,
+        thin_film_amount: 0.8,
+        ..Material::default()
+    };
+    expected.layers[0] = crate::NoiseLayer::new(NoiseKind::Flow, 10.0, 50.0, 2);
+    assert_eq!(read, expected);
+    assert_eq!(read.textures, crate::Textures::default());
+    assert_eq!(read.textures.thin_film, -1);
+    assert_eq!(PackedMaterial::pack(&read).unpack(), read);
+    assert_eq!(Material::from_toml(&read.to_toml().unwrap()).unwrap(), read);
+    let ids: Vec<u32> = NoiseKind::ALL.iter().map(|kind| kind.id()).collect();
+    assert_eq!(
+        ids,
+        [0, 1, 2, 3, 4, 5, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21]
+    );
+    let unchanged = resolve(&read, 0.0, &At::default()).material;
+    let plain = resolve(&expected, 0.0, &At::default()).material;
+    assert_eq!(unchanged.thin_film, plain.thin_film);
+}
+
+#[test]
+fn a_film_ramp_sweeps_the_thickness_and_round_trips_through_toml_and_packing() {
+    let ramp = crate::FilmRamp {
+        space: crate::RampSpace::Position,
+        axis: [0.0, 1.0, 0.0],
+        from: -0.5,
+        to: 0.5,
+        thickness: [200.0, 800.0],
+    };
+    assert_eq!(crate::FilmRamp::from_params(&ramp.params()), ramp);
+    let mut material = Material {
+        thin_film: 300.0,
+        thin_film_amount: 1.0,
+        ..Material::default()
+    };
+    material.layers[0] = ramp.layer(1.0, 0);
+    let text = material.to_toml().unwrap();
+    assert!(text.contains("film_ramp"), "{text}");
+    assert_eq!(Material::from_toml(&text).unwrap(), material);
+    assert_eq!(PackedMaterial::pack(&material).unpack(), material);
+    let at = |y: f32| At {
+        position: [3.0, y, -2.0],
+        ..At::default()
+    };
+    for (y, wanted) in [
+        (-1.0, 200.0),
+        (-0.5, 200.0),
+        (0.0, 500.0),
+        (0.25, 650.0),
+        (2.0, 800.0),
+    ] {
+        close(
+            resolve(&material, 0.0, &at(y)).material.thin_film,
+            wanted,
+            1e-3,
+        );
+    }
+    material.layers[0] = ramp.layer(0.5, 0);
+    close(
+        resolve(&material, 0.0, &at(0.0)).material.thin_film,
+        400.0,
+        1e-3,
+    );
+    let sample = crate::FilmRamp::SAMPLE;
+    close(sample.thickness_at([9.0; 3], [0.25, 0.9]), 375.0, 1e-3);
+    let flat = crate::FilmRamp {
+        to: 0.0,
+        from: 0.0,
+        ..ramp
+    };
+    assert_eq!(flat.thickness_at([0.0, -0.1, 0.0], [0.0; 2]), 200.0);
+    assert_eq!(flat.thickness_at([0.0, 0.0, 0.0], [0.0; 2]), 800.0);
+    let read: Material = toml::from_str(
+        "thin_film_amount = 1.0\n[[layers]]\nkind = \"film_ramp\"\nfrequency = 1.0\namplitude = 1.0\nseed = 0\n",
+    )
+    .unwrap();
+    assert_eq!(read.layers[0].params, crate::FilmRamp::SAMPLE.params());
+    let unset = crate::NoiseLayer {
+        params: [0.0; crate::PARAMS],
+        ..ramp.layer(1.0, 0)
+    };
+    assert!(!unset.active());
+    material.layers[0] = unset;
+    close(
+        resolve(&material, 0.0, &at(0.0)).material.thin_film,
+        300.0,
+        1e-3,
+    );
+}

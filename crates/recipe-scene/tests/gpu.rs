@@ -346,17 +346,20 @@ fn the_eight_bit_frame_dithers_by_about_one_level_and_the_wide_frame_keeps_the_s
     let dithered = draw(Output {
         wide: false,
         dither: Some(Dither::seeded(0)),
+        transparent: false,
     });
     assert_eq!(
         dithered,
         draw(Output {
             wide: false,
             dither: Some(Dither::seeded(0)),
+            transparent: false,
         })
     );
     let wide = draw(Output {
         wide: true,
         dither: None,
+        transparent: false,
     });
     assert_eq!(wide.len(), plain.len() * 2);
     let colour = |bytes: &[u8]| -> Vec<f64> {
@@ -398,4 +401,42 @@ fn the_eight_bit_frame_dithers_by_about_one_level_and_the_wide_frame_keeps_the_s
         drift(&b),
         drift(&a)
     );
+}
+
+#[test]
+#[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+fn a_transparent_live_frame_takes_its_alpha_from_coverage_with_clear_corners() {
+    let recipe = fixture("box.toml");
+    let gpu = headless().unwrap();
+    let parts = vec![part("box", 0, cube([0.0, 0.1, 0.0], 0.1), "orange")];
+    let plan = camera(&recipe, "plan").unwrap();
+    let transparent = Output {
+        wide: false,
+        dither: None,
+        transparent: true,
+    };
+    let mut reel = Reel::with_output(&gpu, &recipe, &parts, SIZE, transparent).unwrap();
+    let eye = reel.through(plan);
+    let rgba = reel.shoot(&eye).unwrap().0;
+    turn();
+    let at = |x: u32, y: u32| {
+        let n = ((y * SIZE[0] + x) * 4) as usize;
+        [rgba[n], rgba[n + 1], rgba[n + 2], rgba[n + 3]]
+    };
+    assert_eq!(at(2, 2), [0; 4]);
+    assert_eq!(at(SIZE[0] - 3, SIZE[1] - 3), [0; 4]);
+    let centre = at(SIZE[0] / 2, SIZE[1] / 2);
+    assert_eq!(centre[3], 255, "{centre:?}");
+    assert!(centre[..3].iter().any(|&c| c > 0), "{centre:?}");
+    let wide = Output {
+        wide: true,
+        dither: None,
+        transparent: true,
+    };
+    assert!(Reel::with_output(&gpu, &recipe, &parts, SIZE, wide).is_err());
+    let mut opaque = Reel::with_output(&gpu, &recipe, &parts, SIZE, Output::default()).unwrap();
+    let eye = opaque.through(plan);
+    let rgba = opaque.shoot(&eye).unwrap().0;
+    turn();
+    assert!(rgba.chunks_exact(4).all(|p| p[3] == 255));
 }

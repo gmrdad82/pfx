@@ -436,10 +436,15 @@ depth = 0.01
     }
 
     #[test]
-    fn a_hidden_pocket_text_or_generator_object_needs_no_material() {
+    fn a_hidden_pocket_text_empty_or_generator_object_needs_no_material() {
         let text = format!(
             "{SLAB}{}",
             r#"
+[[object]]
+name = "pivot"
+kind = "empty"
+at = [0.0, 1.0, 0.0]
+
 [[object]]
 name = "notch"
 kind = "pocket"

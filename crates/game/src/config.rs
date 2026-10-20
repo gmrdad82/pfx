@@ -5,7 +5,7 @@ use pfx_input::{Backend, LayoutSource};
 use pfx_live::flat::{Icons, SpriteImage, Srgba};
 use pfx_live::renderer::Exposure;
 use pfx_live::upscale::Filter;
-use pfx_play::Settings;
+use pfx_play::{Browser, Settings};
 
 pub const WARM_BUDGET: f64 = 2.0;
 
@@ -52,6 +52,7 @@ pub struct Config {
     pub warm_budget: f64,
     pub clear: Option<Srgba>,
     pub redraw: Redraw,
+    pub browser: Option<Box<dyn Browser>>,
     #[cfg(feature = "splash")]
     pub splash: pfx_splash::Settings,
 }
@@ -116,6 +117,7 @@ impl Config {
             warm_budget: WARM_BUDGET,
             clear: None,
             redraw: Redraw::OnDemand,
+            browser: None,
             #[cfg(feature = "splash")]
             splash: pfx_splash::Settings::default(),
         }
@@ -149,6 +151,11 @@ impl Config {
 
     pub fn warm_budget(mut self, seconds: f64) -> Self {
         self.warm_budget = seconds;
+        self
+    }
+
+    pub fn browser(mut self, browser: impl Browser + 'static) -> Self {
+        self.browser = Some(Box::new(browser));
         self
     }
 

@@ -199,6 +199,7 @@ fn recipe_traced(recipe: &Path) -> [f64; 3] {
             crop: None,
             denoise: false,
             time: None,
+            transparent: false,
         },
         &Registry::new(),
         &mut |_| {},

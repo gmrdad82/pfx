@@ -82,7 +82,7 @@ All primitives are instances of one shared quad: four vertices, a triangle strip
 | `Circle { radius }` | circle on the origin | the disc |
 | `Ring { radius, width }` | band of `width` on the circle | the band |
 | `Arc { radius, width, start, sweep }` | the band from `start` through `sweep` radians, measured from +x toward +y (clockwise on screen), with round caps | the band |
-| `Icon(Icon)` | a field from the scene's icon atlas, in the icon's own path units | a filled icon's inside; a line icon has no fill, and without a stroke it packs no instance at all |
+| `Icon(Icon)` | a field from the scene's icon atlas, in the icon's own path units; outside its cell the field is the cell edge's distance plus the way out to it, so an icon drawn a few pixels tall never reads the cell packed beside it | a filled icon's inside; a line icon has no fill, and without a stroke it packs no instance at all |
 | `Text(index)` | `scene.text[index]`, placed by the transform | |
 
 **Corners.** `Shape::Rect` carries one radius per corner, clockwise from the top left (y runs down, so top is −y). `Draw::rect(centre, size, radius)` and `Shape::rounded(half, radius)` give all four the same radius; `Draw::rect_corners(centre, size, radii)` and `Shape::corners(half, radii)` take four.

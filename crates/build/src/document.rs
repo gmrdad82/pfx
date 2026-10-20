@@ -70,6 +70,7 @@ pub struct Document {
     pub scene_hash: Option<String>,
     pub outside: Vec<String>,
     pub unread: Vec<String>,
+    pub referenced: Vec<String>,
     pub notes: Vec<String>,
     foreign: Vec<(Tag, String, Vec<u8>)>,
 }
@@ -445,6 +446,14 @@ fn strings_in(value: &toml::Value, out: &mut Vec<String>) {
     }
 }
 
+fn same_bytes(file: &Path, other: &Path) -> bool {
+    let length = |path: &Path| std::fs::metadata(path).map(|meta| meta.len()).ok();
+    file == other
+        || (length(file).is_some()
+            && length(file) == length(other)
+            && matches!((std::fs::read(file), std::fs::read(other)), (Ok(a), Ok(b)) if a == b))
+}
+
 fn path_between(folder: &Path, file: &Path) -> String {
     let from: Vec<_> = folder.components().collect();
     let to: Vec<_> = file.components().collect();
@@ -505,6 +514,33 @@ fn outside_paths(
     (found, unread)
 }
 
+fn sky_reads(recipe: &Recipe, base: &Path) -> Vec<PathBuf> {
+    assets(
+        recipe,
+        base,
+        recipe.sky.iter().filter_map(|sky| sky.path.as_deref()),
+    )
+    .into_iter()
+    .filter(|file| reads_as_sky(file))
+    .collect()
+}
+
+fn reads_as_sky(file: &Path) -> bool {
+    use std::io::Read;
+    let mut head = Vec::new();
+    std::fs::File::open(file)
+        .and_then(|opened| opened.take(1 << 16).read_to_end(&mut head))
+        .is_ok_and(|_| pfx_load::Sky::size(&head).is_ok())
+}
+
+fn assets<'a>(recipe: &Recipe, base: &Path, named: impl Iterator<Item = &'a str>) -> Vec<PathBuf> {
+    named
+        .filter_map(|path| recipe.asset(base, path).ok())
+        .map(|found| files::clean(&found))
+        .filter(|file| file.is_file())
+        .collect()
+}
+
 fn render_reads(recipe: &Recipe, base: &Path) -> Vec<PathBuf> {
     let mut named: Vec<&str> = Vec::new();
     if let Some(path) = recipe.sky.as_ref().and_then(|sky| sky.path.as_deref()) {
@@ -524,12 +560,7 @@ fn render_reads(recipe: &Recipe, base: &Path) -> Vec<PathBuf> {
             _ => {}
         }
     }
-    named
-        .into_iter()
-        .filter_map(|path| recipe.asset(base, path).ok())
-        .map(|found| files::clean(&found))
-        .filter(|file| file.is_file())
-        .collect()
+    assets(recipe, base, named.into_iter())
 }
 
 fn real_folder(pfx: &Path) -> PathBuf {
@@ -643,6 +674,14 @@ fn same(old: &Reader<'_>, tag: Tag, name: &str, bytes: &[u8]) -> Option<usize> {
 
 impl Document {
     pub fn pack(recipe: &Path, registry: &Registry) -> Result<Document, String> {
+        Document::packed(recipe, registry, None)
+    }
+
+    pub fn pack_for(recipe: &Path, registry: &Registry, out: &Path) -> Result<Document, String> {
+        Document::packed(recipe, registry, Some(out))
+    }
+
+    fn packed(recipe: &Path, registry: &Registry, out: Option<&Path>) -> Result<Document, String> {
         let shown = recipe.display().to_string();
         let recorder = files::record();
         let loaded = pfx_recipe::load(recipe).map_err(|e| format!("{shown}: {e}"))?;
@@ -667,9 +706,25 @@ impl Document {
         }
         let main = files::clean(recipe);
         seen.remove(&main);
+        let folder = main.parent().map(Path::to_path_buf).unwrap_or_default();
+        let there = out.and_then(|out| files::clean(out).parent().map(Path::to_path_buf));
+        let skies: BTreeSet<PathBuf> = std::iter::once(&loaded.recipe)
+            .chain(&variants)
+            .flat_map(|recipe| sky_reads(recipe, &base))
+            .filter(|file| file.starts_with(&folder) && !files::mounted(file))
+            .filter(|file| {
+                there
+                    .as_ref()
+                    .is_some_and(|there| same_bytes(file, &there.join(path_between(&folder, file))))
+            })
+            .collect();
+        seen.retain(|file| !skies.contains(file));
+        doc.referenced = skies
+            .iter()
+            .map(|file| path_between(&folder, file))
+            .collect();
         let records = asset_records(&seen);
         seen.extend(records);
-        let folder = main.parent().map(Path::to_path_buf).unwrap_or_default();
         let (found, unread) = outside_paths(&main, &seen, &folder);
         seen.extend(found);
         doc.unread = unread;
@@ -1033,6 +1088,29 @@ impl Document {
             mounted.insert(placed.path(&safe_name(&name_of(name))?), bytes.clone());
         }
         Ok((placed.recipe, files::mount(mounted)))
+    }
+
+    pub fn beside(&self, pfx: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+        let (recipe_path, _mount) = self.mount(pfx)?;
+        let loaded =
+            pfx_recipe::load(&recipe_path).map_err(|e| format!("{}: {e}", pfx.display()))?;
+        let base = real_folder(&recipe_path);
+        let folder = files::clean(&base);
+        let variants: Vec<Recipe> = loaded
+            .recipe
+            .variants
+            .keys()
+            .filter_map(|name| apply_variant(&loaded.recipe, name).ok())
+            .collect();
+        let found: BTreeSet<PathBuf> = std::iter::once(&loaded.recipe)
+            .chain(&variants)
+            .flat_map(|recipe| sky_reads(recipe, &base))
+            .filter(|file| file.starts_with(&folder) && !files::mounted(file))
+            .collect();
+        Ok(found
+            .into_iter()
+            .map(|file| (path_between(&folder, &file), file))
+            .collect())
     }
 
     pub fn take_changes(&mut self, pfx: &Path, mount: &files::Mount) -> bool {

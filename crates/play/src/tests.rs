@@ -717,6 +717,7 @@ mod characters;
 mod live;
 mod queries;
 mod rig;
+mod url;
 
 #[test]
 fn a_backdrop_alone_is_not_an_empty_ui_and_the_frame_defaults_to_no_bars() {

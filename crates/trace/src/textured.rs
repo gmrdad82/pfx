@@ -37,6 +37,7 @@ impl Slots {
             slot(detail, self.linear),
         ];
         packed.texture_extra[0] = slot(packed.texture_extra[0], self.linear);
+        packed.texture_extra[1] = slot(packed.texture_extra[1], self.linear);
     }
 }
 
@@ -182,7 +183,8 @@ pub(crate) fn wants_uvs1(packed: &PackedMaterial) -> bool {
     let main = packed.textures[0] >= 0.0
         || packed.textures[1] >= 0.0
         || packed.textures[2] >= 0.0
-        || packed.texture_extra[0] >= 0.0;
+        || packed.texture_extra[0] >= 0.0
+        || packed.texture_extra[1] >= 0.0;
     let own = packed.map_turns[2].round() as u32;
     (main && sets & 1 != 0)
         || (packed.textures[3] >= 0.0 && sets & 2 != 0)
@@ -389,7 +391,7 @@ pub(crate) fn budget<E>(scene: &Scene<E>, detail: &Detail, width: u32, height: u
                 full[kind][index as usize] = true;
             }
         }
-        for index in [maps.detail, maps.anisotropy] {
+        for index in [maps.detail, maps.anisotropy, maps.thin_film] {
             if index >= 0 && (index as usize) < full[1].len() {
                 full[1][index as usize] = true;
             }

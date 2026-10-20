@@ -49,6 +49,15 @@ pub(super) struct Args {
     time: Option<f64>,
     #[command(flatten)]
     picture: super::Picture,
+    #[arg(
+        long,
+        value_name = "sky|transparent",
+        value_enum,
+        default_value = "sky",
+        hide_possible_values = true,
+        help = "sky: the recipe's sky behind the scene; transparent: an RGBA PNG whose alpha is the geometry's coverage, straight colour (8-bit only)"
+    )]
+    background: super::Background,
     #[command(flatten)]
     pick: super::Picks,
     #[command(flatten)]
@@ -56,6 +65,11 @@ pub(super) struct Args {
 }
 
 fn still(args: &Args, registry: &Registry) -> Result<(Vec<u8>, Plan), Error> {
+    if args.background == super::Background::Transparent && args.picture.wide() {
+        return Err(Error(
+            "--background transparent writes an 8-bit PNG; the live renderer's 16-bit output has no alpha from coverage".into(),
+        ));
+    }
     args.memory.set().map_err(Error)?;
     let (recipe, built) = pfx_recipe_scene::load_at(
         &args.recipe,
@@ -75,7 +89,7 @@ fn still(args: &Args, registry: &Registry) -> Result<(Vec<u8>, Plan), Error> {
         &args.camera,
         args.size,
         args.time,
-        args.picture.output(0),
+        args.picture.output(0, args.background),
     )
 }
 
@@ -168,6 +182,7 @@ mod tests {
                 set: vec!["sky.intensity=0.4".into()],
                 time: Some(2.0),
                 picture: Default::default(),
+                background: super::super::Background::Sky,
                 pick: Default::default(),
                 memory: crate::recipe::Memory {
                     limit: Some(8 << 30),

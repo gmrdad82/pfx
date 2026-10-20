@@ -378,6 +378,7 @@ fn overlay_text_is_painted_after_the_finish_only_where_it_lies() {
         normal: Vec::new(),
         denoised: None,
         samples: 1,
+        transparent: false,
     };
     let bare = pfx_still::looked_with(&film, &staging.finish, false).unwrap();
     let empty = Overlay::default();

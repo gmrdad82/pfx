@@ -1,5 +1,6 @@
 pub mod characters;
 mod clipboard;
+mod configuring;
 mod events;
 mod game;
 mod hooks;
@@ -14,12 +15,14 @@ mod session;
 mod settings;
 pub mod tunables;
 mod ui;
+mod url;
 mod world;
 
 #[cfg(test)]
 mod tests;
 
 pub use clipboard::Clipboard;
+pub use configuring::Configuring;
 pub use events::{Phase, TriggerEvent, WorldEvent};
 pub use game::{FrameTime, Game, GameError, SceneGame};
 pub use hooks::{NoHooks, PlayHooks};
@@ -35,6 +38,7 @@ pub use session::{MOTORS_KEPT, Options, PlaySession, Stopped};
 pub use settings::{Audio, Pacing, Settings};
 pub use tunables::{Kind, Tunable, TunableValue, Tunables};
 pub use ui::{Anchor, Label, Prompt, PromptOf, Ui, UiFrame, UiLook};
+pub use url::{Answer, Browser, Opening, URL_LIMIT, Url, UrlError};
 pub use world::{
     Animate, AnimationEvent, Contact, Cursor, Exit, Fx, Hit, Look, ObjectId, Overlap, PcmStream,
     Query, QueryError, RumbleRequest, Scheme, SoundLevel, Sounds, World, body_volume,

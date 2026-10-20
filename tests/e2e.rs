@@ -25,6 +25,7 @@ fn a_clip_renders_the_same_frames_twice_and_lands_by_the_conventions() {
     for run in ["a", "b"] {
         let out = base.join(run);
         let result = Command::new(env!("CARGO_BIN_EXE_pfx"))
+            .env("PFX_CACHE_DIR", "off")
             .env("PFX_DIRECT", "1")
             .env("PFX_CACHE", root.join("tmp").join("e2e-cache"))
             .env("PITO_ARCHIVE", root.join("tmp").join("e2e-archive"))
@@ -110,6 +111,7 @@ fn a_still_lands_as_a_master_a_delivery_and_web_copies() {
     std::fs::write(fixtures.join("readme.txt"), "empty set").unwrap();
     let out = base.join("out");
     let result = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .env("PFX_DIRECT", "1")
         .env("PFX_CACHE", root.join("tmp").join("e2e-cache"))
         .env("PITO_ARCHIVE", root.join("tmp").join("e2e-archive"))
@@ -169,6 +171,7 @@ fn a_web_copy_never_upscales_the_master() {
     std::fs::create_dir_all(&fixtures).unwrap();
     std::fs::write(fixtures.join("readme.txt"), "empty set").unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .env("PFX_DIRECT", "1")
         .env("PFX_CACHE", root.join("tmp").join("e2e-cache"))
         .env("PITO_ARCHIVE", root.join("tmp").join("e2e-archive"))
@@ -199,6 +202,7 @@ fn a_web_copy_never_upscales_the_master() {
 fn hd_renderer_refuses_to_write_outside_the_callers_tmp() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let out = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .env("PFX_DIRECT", "1")
         .env("PFX_CACHE", root.join("tmp").join("e2e-cache"))
         .env("PITO_ARCHIVE", root.join("tmp").join("e2e-archive"))
@@ -224,6 +228,7 @@ fn hd_renderer_refuses_to_write_outside_the_callers_tmp() {
 #[test]
 fn pfx_version_is_the_package_version() {
     let out = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .arg("--version")
         .output()
         .unwrap();
@@ -240,6 +245,7 @@ fn pfx_version_is_the_package_version() {
     );
     assert_eq!(lines.next(), None);
     let help = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .arg("--help")
         .output()
         .unwrap();
@@ -256,6 +262,7 @@ fn pfx_in(
 ) -> std::process::Output {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_pfx"));
+    cmd.env("PFX_CACHE_DIR", "off");
     cmd.env("PFX_DIRECT", "1")
         .env("PFX_CACHE", root.join("tmp").join("e2e-cache"))
         .env("PITO_ARCHIVE", root.join("tmp").join("e2e-archive"))
@@ -392,6 +399,7 @@ fn encode_accepts_a_pfx_manifest_and_an_older_hd_one() {
     };
     let accept = |path: PathBuf| {
         let out = Command::new(env!("CARGO_BIN_EXE_pfx"))
+            .env("PFX_CACHE_DIR", "off")
             .current_dir(&root)
             .args(["encode", "--manifest"])
             .arg(&path)
@@ -406,6 +414,7 @@ fn encode_accepts_a_pfx_manifest_and_an_older_hd_one() {
     accept(write("earlier.json", "pito-hd-renderer"));
     let other = write("other.json", "prender-assets");
     let out = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .current_dir(&root)
         .args(["encode", "--manifest"])
         .arg(&other)
@@ -443,6 +452,7 @@ fn clip_with(base: &std::path::Path, run: &str, audio: Option<&str>) -> serde_js
     std::fs::create_dir_all(&fixtures).unwrap();
     std::fs::write(fixtures.join("readme.txt"), "empty set").unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_pfx"));
+    command.env("PFX_CACHE_DIR", "off");
     command
         .env("PFX_DIRECT", "1")
         .env("PITO_ARCHIVE", base.join("archive"))
@@ -544,6 +554,7 @@ fn cutout_clip(base: &std::path::Path, run: &str, encode: bool) -> (PathBuf, ser
     std::fs::create_dir_all(&fixtures).unwrap();
     std::fs::write(fixtures.join("readme.txt"), "empty set").unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_pfx"));
+    command.env("PFX_CACHE_DIR", "off");
     command
         .env("PFX_DIRECT", "1")
         .env("CHECKER_CUTOUTS", "1")

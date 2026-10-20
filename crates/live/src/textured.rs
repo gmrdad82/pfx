@@ -2,7 +2,7 @@ pub const TEXTURED_WGSL: &str = r#"
 var<private> textured_occlusion: f32 = 1.0;
 var<private> textured_direction: vec3f = vec3f(1.0, 0.0, 1.0);
 fn textured_on(material: MaterialData) -> bool {
-    return any(material.textures >= vec4f(0.0)) || material.texture_extra.x >= 0.0;
+    return any(material.textures >= vec4f(0.0)) || material.texture_extra.x >= 0.0 || material.texture_extra.y >= 0.0;
 }
 fn textured_normal(sample: vec4f, scale: f32) -> vec3f {
     let raw = sample.xyz * 2.0 - vec3f(1.0);
@@ -55,6 +55,11 @@ fn textured_maps(mapped: MapResult, material: MaterialData, tangent: vec4f, uv0:
         let t = normalize(tangent.xyz - n * dot(tangent.xyz, n));
         let b = cross(n, t) * tangent.w;
         result.normal = normalize(t * local.x + b * local.y + n * local.z);
+    }
+    let film = i32(round(material.texture_extra.y));
+    if (film >= 0) {
+        let sample = textureSampleGrad(map_normal, map_sampler, uv, film, dx, dy);
+        result.thin_film = max(mix(material.map_turns.w, result.thin_film, sample.g), 0.0);
     }
     let anisotropy = i32(round(material.texture_extra.x));
     if (anisotropy >= 0) {

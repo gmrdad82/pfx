@@ -20,6 +20,7 @@ mod shot;
 #[cfg(feature = "sound-clean")]
 mod sound;
 mod steam;
+mod store;
 
 const ABOUT: &str = "pfx, a game and render engine: scaffold, edit, bench and bake games and scenes, stage Steam builds, and render apps' shots, logos, icons and scenes offline on its path tracer.";
 const SUPPORT: &str =
@@ -39,6 +40,8 @@ const USAGE: &str = "usage:
   pfx cache [--prune]
   pfx cache --json
   pfx cache prune --json [--dry-run]
+  pfx cache info [--json]
+  pfx cache clean [--kind <kind>] [--older-than <30d|12h|90m>] [--json]
   pfx font subset --font <ttf> --out <ttf> [--chars <file>]... [--base gb2312-1|none] [--no-closure]
   pfx
   pfx <file.pitofx>
@@ -102,7 +105,8 @@ sound mix renders a *.sound.toml shot mix script to a 48 kHz stereo float WAV, N
 a recipe is a TOML scene recipe (it starts `recipe = 1`), kept inside a .pitofx, that pfx builds into a GLB and a scene headless, draws live (shot --still) or path-traces (render --recipe); each recipe verb prints its own flags with --help (docs/recipes.md)
 new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)
 settings reads and sets pfx's own settings, kept in settings.pitofx in pfx's state folder: vrr, frame_rate (60, 120, uncapped or auto), stats, quality (appearance or performance), effects.<effect> on or off, and the licence, which unlock sets from a key checked offline (docs/settings.md)
-job runs a pfx clip, film, render or bake detached under a name, its state in a job.json in pfx's state folder; pause and stop land once the frame in flight is written, resume carries on from the last finished frame, a frame that fails 3 times fails the job, and --frames A..B makes only part of a clip so parts made on several machines join in one folder (docs/jobs.md)";
+job runs a pfx clip, film, render or bake detached under a name, its state in a job.json in pfx's state folder; pause and stop land once the frame in flight is written, resume carries on from the last finished frame, a frame that fails 3 times fails the job, and --frames A..B makes only part of a clip so parts made on several machines join in one folder (docs/jobs.md)
+cache alone shows the build cache (adapters, checkouts and target folders, at PFX_CACHE); cache info and cache clean work on the shared cache every checkout and run reuses (PFX_CACHE_DIR, default ~/.cache/pfx): compiled pipelines and bakes, keyed by their inputs, checked on read and kept under PFX_CACHE_CAP (default 4GB) by last use (docs/cache.md)";
 
 const SWITCHES: &[&str] = &[
     "--clip",
@@ -346,6 +350,10 @@ const ENCODE_FLAGS: &[&str] = &["--manifest"];
 
 const CACHE_FLAGS: &[&str] = &["--prune", "--json", "--dry-run"];
 
+const CACHE_INFO_FLAGS: &[&str] = &["--json"];
+
+const CACHE_CLEAN_FLAGS: &[&str] = &["--kind", "--older-than", "--json"];
+
 const BAKE_FLAGS: &[&str] = &[
     "--scene",
     "--assets",
@@ -476,6 +484,8 @@ struct AppRender {
 enum CachePlan {
     Show(bool),
     Json(cache_report::Request),
+    Info(bool),
+    Clean(store::Clean),
 }
 
 enum Plan {
@@ -529,6 +539,7 @@ fn known(flag: &str) -> bool {
         || SCENES_FLAGS.contains(&flag)
         || ENCODE_FLAGS.contains(&flag)
         || CACHE_FLAGS.contains(&flag)
+        || CACHE_CLEAN_FLAGS.contains(&flag)
         || BAKE_FLAGS.contains(&flag)
         || STEAM_FLAGS.contains(&flag)
 }
@@ -848,6 +859,47 @@ fn plan_encode(args: &[String]) -> Result<Plan, String> {
 }
 
 fn plan_cache(args: &[String]) -> Result<Plan, String> {
+    match args.first().map(String::as_str) {
+        Some("info") => {
+            let bag = bag_of(&args[1..])?;
+            foreign(&bag, CACHE_INFO_FLAGS)?;
+            return Ok(Plan::Cache(CachePlan::Info(
+                bag.switches.contains("--json"),
+            )));
+        }
+        Some("clean") => {
+            let bag = bag_of(&args[1..])?;
+            foreign(&bag, CACHE_CLEAN_FLAGS)?;
+            let kind = one(&bag, "--kind")?
+                .map(|kind| {
+                    pfx_cache::valid_kind(kind)
+                        .then(|| kind.to_string())
+                        .ok_or_else(|| {
+                            cli::invalid(
+                                kind,
+                                "--kind",
+                                "a kind is lowercase letters, digits and dashes, such as pipelines or bakes",
+                            )
+                        })
+                })
+                .transpose()?;
+            let older_than = one(&bag, "--older-than")?
+                .map(|age| {
+                    pfx_cache::parse_age(age)
+                        .map_err(|reason| cli::invalid(age, "--older-than", reason))
+                })
+                .transpose()?;
+            return Ok(Plan::Cache(CachePlan::Clean(store::Clean {
+                kind,
+                older_than,
+                json: bag.switches.contains("--json"),
+            })));
+        }
+        Some(word) if !word.starts_with('-') && word != "prune" => {
+            return Err(cli::unrecognized(word));
+        }
+        _ => {}
+    }
     let (word, flags) = match args.split_first() {
         Some((first, rest)) if first == "prune" => (true, rest),
         _ => (false, args),
@@ -1043,7 +1095,7 @@ fn help_flags(verb: &str) -> Vec<&'static str> {
         "render" => &[APP_FLAGS, ASSET_FLAGS, ICONS_FLAGS, SCENE_FLAGS],
         "list" => &[SHOTS_FLAGS, PRESETS_FLAGS, SCENES_FLAGS],
         "encode" => &[ENCODE_FLAGS],
-        "cache" => &[CACHE_FLAGS],
+        "cache" => &[CACHE_FLAGS, CACHE_CLEAN_FLAGS],
         "bake" => &[BAKE_FLAGS],
         "steam" => &[STEAM_FLAGS],
         "shot" => &[SHOT_FLAGS],
@@ -1232,6 +1284,8 @@ fn perform(plan: Plan) -> Result<(), String> {
         }
         Plan::Cache(CachePlan::Show(prune)) => show_cache(prune),
         Plan::Cache(CachePlan::Json(request)) => cache_report::run(&request),
+        Plan::Cache(CachePlan::Info(json)) => store::info(json),
+        Plan::Cache(CachePlan::Clean(clean)) => store::clean(&clean),
         Plan::Bake(args) => bake::run(&args),
         Plan::Steam(args) => steam::run(&args),
         Plan::Bench(args) => bench(&args),
@@ -1367,6 +1421,19 @@ fn os_launch(_exe: Option<&std::path::Path>, _args: &[String]) -> Option<std::pr
 
 fn main() -> std::process::ExitCode {
     quiet_mesa();
+    match pfx_cache::Store::open() {
+        Ok(store) => {
+            pfx_cache::share(store);
+        }
+        Err(reason)
+            if std::env::var_os(pfx_cache::VARIABLE)
+                .is_none_or(|value| value != pfx_cache::OFF)
+                && std::env::var_os("PFX_BAKE_GPU").is_none() =>
+        {
+            eprintln!("pfx: the machine cache is off: {reason}");
+        }
+        Err(_) => {}
+    }
     let asked = help::asked(&std::env::args().skip(1).collect::<Vec<_>>());
     if job::claims(&asked) {
         return job::main(&asked);
@@ -1487,6 +1554,65 @@ mod tests {
             }
             _ => panic!("scene migrate --help prints its own help"),
         }
+    }
+
+    #[test]
+    fn cache_info_and_clean_parse_and_refuse_in_the_shared_shape() {
+        assert!(matches!(
+            plan(&words("cache info")).unwrap(),
+            Plan::Cache(CachePlan::Info(false))
+        ));
+        assert!(matches!(
+            plan(&words("cache info --json")).unwrap(),
+            Plan::Cache(CachePlan::Info(true))
+        ));
+        match plan(&words("cache clean --kind bakes --older-than 30d --json")).unwrap() {
+            Plan::Cache(CachePlan::Clean(clean)) => {
+                assert_eq!(clean.kind.as_deref(), Some("bakes"));
+                assert_eq!(
+                    clean.older_than,
+                    Some(std::time::Duration::from_secs(30 * 86_400))
+                );
+                assert!(clean.json);
+            }
+            _ => panic!("expected a clean"),
+        }
+        match plan(&words("cache clean")).unwrap() {
+            Plan::Cache(CachePlan::Clean(clean)) => {
+                assert!(clean.kind.is_none() && clean.older_than.is_none() && !clean.json);
+            }
+            _ => panic!("expected a clean"),
+        }
+        match plan(&words("cache clean --kind made-by-a-game")).unwrap() {
+            Plan::Cache(CachePlan::Clean(clean)) => {
+                assert_eq!(clean.kind.as_deref(), Some("made-by-a-game"));
+            }
+            _ => panic!("expected a clean"),
+        }
+        let refusal = refused("cache clean --kind ../Fonts");
+        assert!(
+            refusal.starts_with("error: invalid value '../Fonts' for '--kind <KIND>': "),
+            "{refusal}"
+        );
+        assert!(
+            refused("cache clean --older-than 3y")
+                .starts_with("error: invalid value '3y' for '--older-than <OLDER_THAN>'")
+        );
+        assert!(
+            refused("cache info --kind bakes")
+                .starts_with("error: unexpected argument '--kind' found")
+        );
+        assert!(
+            refused("cache --kind bakes").starts_with("error: unexpected argument '--kind' found")
+        );
+        let refusal = refused("cache wipe");
+        assert!(
+            refusal.starts_with(
+                "error: unrecognized subcommand 'wipe'\n\nUsage: pfx cache [OPTIONS] [COMMAND]\n\n"
+            ),
+            "{refusal}"
+        );
+        assert!(refusal.ends_with("For more information, try '--help'."));
     }
 
     #[test]

@@ -454,6 +454,81 @@ impl Track {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RampSpace {
+    Position,
+    Uv,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FilmRamp {
+    pub space: RampSpace,
+    pub axis: [f32; 3],
+    pub from: f32,
+    pub to: f32,
+    pub thickness: [f32; 2],
+}
+
+impl FilmRamp {
+    pub const SAMPLE: Self = Self {
+        space: RampSpace::Uv,
+        axis: [1.0, 0.0, 0.0],
+        from: 0.0,
+        to: 1.0,
+        thickness: [250.0, 750.0],
+    };
+
+    pub fn layer(self, amplitude: f32, seed: u32) -> NoiseLayer {
+        layer(NoiseKind::FilmRamp, self.params(), amplitude, seed)
+    }
+
+    pub fn params(self) -> [f32; PARAMS] {
+        fill(&[
+            match self.space {
+                RampSpace::Position => 1.0,
+                RampSpace::Uv => 2.0,
+            },
+            self.axis[0],
+            self.axis[1],
+            self.axis[2],
+            self.from,
+            self.to,
+            self.thickness[0],
+            self.thickness[1],
+        ])
+    }
+
+    pub fn from_params(p: &[f32; PARAMS]) -> Self {
+        Self {
+            space: if p[0] >= 1.5 {
+                RampSpace::Uv
+            } else {
+                RampSpace::Position
+            },
+            axis: [p[1], p[2], p[3]],
+            from: p[4],
+            to: p[5],
+            thickness: [p[6], p[7]],
+        }
+    }
+
+    pub fn thickness_at(self, position: [f32; 3], uv: [f32; 2]) -> f32 {
+        let along = match self.space {
+            RampSpace::Position => {
+                position[0] * self.axis[0] + position[1] * self.axis[1] + position[2] * self.axis[2]
+            }
+            RampSpace::Uv => uv[0] * self.axis[0] + uv[1] * self.axis[1],
+        };
+        let span = self.to - self.from;
+        let t = if span.abs() <= 1e-12 {
+            if along >= self.to { 1.0 } else { 0.0 }
+        } else {
+            ((along - self.from) / span).clamp(0.0, 1.0)
+        };
+        (self.thickness[0] + (self.thickness[1] - self.thickness[0]) * t).max(0.0)
+    }
+}
+
 pub fn sample_params(kind: NoiseKind) -> Option<[f32; PARAMS]> {
     match kind {
         NoiseKind::Fibre => Some(Fibre::SAMPLE.params()),
@@ -465,6 +540,7 @@ pub fn sample_params(kind: NoiseKind) -> Option<[f32; PARAMS]> {
         NoiseKind::CoatWobble => Some(CoatWobble::SAMPLE.params()),
         NoiseKind::Crack => Some(Crack::SAMPLE.params()),
         NoiseKind::Track => Some(Track::SAMPLE.params()),
+        NoiseKind::FilmRamp => Some(FilmRamp::SAMPLE.params()),
         NoiseKind::None
         | NoiseKind::Leaf
         | NoiseKind::Bark

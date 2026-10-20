@@ -237,19 +237,23 @@ pub struct Look {
     pub metal_roughness: Option<Map>,
     pub occlusion: Option<Map>,
     pub detail_normal: Option<Map>,
+    pub thin_film: Option<Map>,
+    pub thin_film_min: Option<f32>,
+    pub thin_film_factors: Option<[f32; 3]>,
     pub alpha_cutoff: Option<f32>,
     pub double_sided: Option<bool>,
     pub material: Option<serde_json::Value>,
 }
 
 impl Look {
-    pub fn maps(&self) -> [Option<&Map>; 5] {
+    pub fn maps(&self) -> [Option<&Map>; 6] {
         [
             self.base.as_ref(),
             self.normal.as_ref(),
             self.metal_roughness.as_ref(),
             self.occlusion.as_ref(),
             self.detail_normal.as_ref(),
+            self.thin_film.as_ref(),
         ]
     }
 

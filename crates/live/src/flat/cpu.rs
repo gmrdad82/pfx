@@ -25,8 +25,13 @@ pub(crate) fn field(instance: &Instance, icons: Option<&Icons>, p: [f32; 2]) -> 
         KIND_ARC => sdf::arc(p, shape[0], shape[1], shape[2], shape[3]),
         _ => {
             let icon = instance.icon;
+            let c = [
+                p[0].clamp(shape[0] - shape[2], shape[0] + shape[2]),
+                p[1].clamp(shape[1] - shape[3], shape[1] + shape[3]),
+            ];
+            let outside = ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2)).sqrt();
             let distance = icons.map_or(1.0e4, |icons| {
-                icons.sample([icon[0] + p[0] * icon[2], icon[1] + p[1] * icon[3]])
+                icons.sample([icon[0] + c[0] * icon[2], icon[1] + c[1] * icon[3]]) + outside
             });
             [distance, 0.0, 0.0]
         }

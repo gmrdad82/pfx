@@ -436,7 +436,12 @@ fn flat_field(v: FlatVaryings, kind: u32, p: vec2f) -> vec3f {
     } else if (kind == FLAT_ARC) {
         return flat_arc(p, v.shape.x, v.shape.y, v.shape.z, v.shape.w);
     }
-    return vec3f(textureSampleLevel(flat_icons, flat_icon_sampler, v.icon.xy + p * v.icon.zw, 0.0).r, 0.0, 0.0);
+    return vec3f(flat_icon_distance(v, p), 0.0, 0.0);
+}
+
+fn flat_icon_distance(v: FlatVaryings, p: vec2f) -> f32 {
+    let c = clamp(p, v.shape.xy - v.shape.zw, v.shape.xy + v.shape.zw);
+    return textureSampleLevel(flat_icons, flat_icon_sampler, v.icon.xy + c * v.icon.zw, 0.0).r + length(p - c);
 }
 
 fn flat_stroke_cover(v: FlatVaryings, kind: u32, p: vec2f, field: vec3f, inverse: mat2x2f) -> f32 {
@@ -615,8 +620,7 @@ fn flat_footprint(p: vec2f, v: FlatVaryings, kind: u32) -> f32 {
     if (kind == FLAT_RECT) {
         return flat_rect(p, v.shape.xy, v.corners).x;
     } else if (kind == FLAT_ICON_FILL || kind == FLAT_ICON_LINE) {
-        return textureSampleLevel(flat_icons, flat_icon_sampler, v.icon.xy + p * v.icon.zw, 0.0).r
-            - v.stroke.x * 0.5;
+        return flat_icon_distance(v, p) - v.stroke.x * 0.5;
     }
     return length(p) - v.shape.x;
 }

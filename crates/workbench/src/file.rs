@@ -77,6 +77,7 @@ pub struct Held {
     pub work: PathBuf,
     pub saved: usize,
     pub edited: bool,
+    pub kept: Vec<String>,
 }
 
 impl Held {
@@ -121,6 +122,8 @@ pub fn hold(path: &Path) -> Result<(Held, PathBuf), String> {
             let document = Document::open(path)?;
             fresh_dir(&work)?;
             let recipe = document.unpack(&work)?;
+            let edited = document.edited();
+            let kept = bring_beside(document, path, &recipe).unwrap_or_default();
             Ok((
                 Held {
                     kind: Kind::Pfx,
@@ -128,7 +131,8 @@ pub fn hold(path: &Path) -> Result<(Held, PathBuf), String> {
                     target: Some(path.to_path_buf()),
                     work,
                     saved: 0,
-                    edited: document.edited(),
+                    edited,
+                    kept,
                 },
                 recipe,
             ))
@@ -161,12 +165,56 @@ pub fn hold(path: &Path) -> Result<(Held, PathBuf), String> {
                     work,
                     saved: 0,
                     edited: false,
+                    kept: Vec::new(),
                 },
                 recipe,
             ))
         }
         _ => Err(format!("{}: not a .pitofx or a .glb", path.display())),
     }
+}
+
+fn bring_beside(
+    mut document: Document,
+    source: &Path,
+    recipe: &Path,
+) -> Result<Vec<String>, String> {
+    document.recipe_text = std::fs::read_to_string(recipe)
+        .map_err(|error| format!("{}: {error}", recipe.display()))?;
+    let dir = recipe.parent().unwrap_or(Path::new(""));
+    let mut kept = Vec::new();
+    for (name, file) in document.beside(source)? {
+        let copy = dir.join(&name);
+        if !same_file_bytes(&file, &copy) {
+            if let Some(parent) = copy.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|error| format!("{}: {error}", parent.display()))?;
+            }
+            std::fs::copy(&file, &copy).map_err(|error| format!("{}: {error}", file.display()))?;
+        }
+        kept.push(name);
+    }
+    Ok(kept)
+}
+
+fn same_file_bytes(file: &Path, other: &Path) -> bool {
+    let len = |path: &Path| std::fs::metadata(path).map(|meta| meta.len()).ok();
+    len(file).is_some()
+        && len(file) == len(other)
+        && std::fs::read(file).ok() == std::fs::read(other).ok()
+}
+
+pub fn keep_beside(held: &mut Held, recipe: &Path) -> Result<(), String> {
+    if held.kind != Kind::Pfx || !held.source.is_file() {
+        return Ok(());
+    }
+    let document = Document::open(&held.source)?;
+    for name in bring_beside(document, &held.source, recipe)? {
+        if !held.kept.contains(&name) {
+            held.kept.push(name);
+        }
+    }
+    Ok(())
 }
 
 pub fn with_extension(path: &Path, ext: &str) -> PathBuf {
@@ -204,7 +252,7 @@ pub fn import_beside(path: &Path, registry: &Registry) -> Result<Option<PathBuf>
             pfx_load::scene::pack(path, &target).map_err(|error| error.to_string())?;
         }
         Some(Kind::Recipe) => {
-            pack(path, registry, &target, true)?;
+            pack(path, registry, &target, true, None)?;
         }
         _ => return Ok(None),
     }
@@ -216,9 +264,13 @@ pub fn pack(
     registry: &Registry,
     out: &Path,
     whole: bool,
+    keep: Option<&[String]>,
 ) -> Result<PathBuf, String> {
     let out = with_extension(out, pfx_file::EXTENSION);
-    let mut document = Document::pack(recipe, registry)?;
+    let mut document = Document::pack_for(recipe, registry, &out)?;
+    if keep.is_some_and(|keep| document.referenced.iter().any(|name| !keep.contains(name))) {
+        document = Document::pack(recipe, registry)?;
+    }
     if let Ok(old) = Document::open(&out) {
         document.overrides = old.overrides;
         if document.thumb.is_none() {
@@ -398,7 +450,7 @@ mod tests {
         };
         let (_, recipe) = hold(&glb).unwrap();
         assert_eq!(drawn(&recipe), Ok(()));
-        let packed = pack(&recipe, &registry, &glb.with_file_name("model"), true).unwrap();
+        let packed = pack(&recipe, &registry, &glb.with_file_name("model"), true, None).unwrap();
         let (_, recipe) = hold(&packed).unwrap();
         assert_eq!(drawn(&recipe), Ok(()));
     }
@@ -430,5 +482,80 @@ mod tests {
         assert!(crate::scenes::is_scene(&packed_scene));
         assert_eq!(kind(&packed_scene), Some(Kind::Scene));
         assert_eq!(kind(&target), Some(Kind::Pfx));
+    }
+
+    #[test]
+    fn a_held_document_keeps_its_hdri_beside_when_saved_back_and_packs_it_when_saved_elsewhere() {
+        let dir = crate::scratch("held-sky").with_file_name("source");
+        let other = dir.with_file_name("other");
+        for folder in [&dir, &other] {
+            let _ = std::fs::remove_dir_all(folder);
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("assets/sky")).unwrap();
+        let mut sky = b"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y 1 +X 2\n".to_vec();
+        sky.extend([128, 128, 128, 129, 128, 128, 128, 129]);
+        std::fs::write(dir.join("assets/sky/softbox.hdr"), &sky).unwrap();
+        let toml = dir.join("plaque.toml");
+        std::fs::write(
+            &toml,
+            "recipe = 1\nname = \"plaque\"\n\n[sky]\nkind = \"hdr\"\npath = \"assets/sky/softbox.hdr\"\nsource = \"generated\"\n\n[[object]]\nname = \"b\"\nkind = \"box\"\nsize = [1.0, 1.0, 1.0]\n",
+        )
+        .unwrap();
+        let registry = Registry::new();
+        let kept_pfx = pack(&toml, &registry, &dir.join("plaque"), true, None).unwrap();
+        let packed_pfx = pack(&toml, &registry, &dir.join("packed"), true, Some(&[][..])).unwrap();
+        std::fs::remove_file(&toml).unwrap();
+        let packs_sky = |pfx: &Path| {
+            Document::open(pfx)
+                .unwrap()
+                .files
+                .keys()
+                .any(|name| name.to_string_lossy().ends_with("softbox.hdr"))
+        };
+        let lit = |pfx: &Path| -> Result<(), String> {
+            let document = Document::open(pfx)?;
+            let (recipe, _mount) = document.mount(pfx)?;
+            let loaded = pfx_recipe::load(&recipe).map_err(|error| error.to_string())?;
+            pfx_recipe_scene::Lighting::of(&loaded.recipe)
+                .map(|_| ())
+                .map_err(|error| error.0)
+        };
+        assert!(!packs_sky(&kept_pfx));
+        assert!(packs_sky(&packed_pfx));
+
+        let (mut held, recipe) = hold(&packed_pfx).unwrap();
+        assert!(held.kept.is_empty());
+        keep_beside(&mut held, &recipe).unwrap();
+        pack(&recipe, &registry, &packed_pfx, false, Some(&held.kept)).unwrap();
+        assert!(packs_sky(&packed_pfx));
+
+        let (mut held, recipe) = hold(&kept_pfx).unwrap();
+        assert_eq!(held.kept, ["assets/sky/softbox.hdr"]);
+        let copy = recipe.parent().unwrap().join("assets/sky/softbox.hdr");
+        assert_eq!(std::fs::read(&copy).unwrap(), sky);
+        keep_beside(&mut held, &recipe).unwrap();
+        pack(&recipe, &registry, &kept_pfx, false, Some(&held.kept)).unwrap();
+        assert!(!packs_sky(&kept_pfx));
+        lit(&kept_pfx).unwrap();
+
+        std::fs::remove_file(&copy).unwrap();
+        held.kept.clear();
+        keep_beside(&mut held, &recipe).unwrap();
+        assert_eq!(held.kept, ["assets/sky/softbox.hdr"]);
+        assert_eq!(std::fs::read(&copy).unwrap(), sky);
+        let away = pack(
+            &recipe,
+            &registry,
+            &other.join("plaque"),
+            true,
+            Some(&held.kept),
+        )
+        .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(packs_sky(&away));
+        lit(&away).unwrap();
+        let (held, _) = hold(&away).unwrap();
+        assert!(held.kept.is_empty());
     }
 }

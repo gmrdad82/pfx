@@ -164,6 +164,13 @@ pub const GUIDES: &[(&str, u32, Option<&str>)] = &[
         ),
     ),
     ("jobs", 324, None),
+    (
+        "cache",
+        325,
+        Some(
+            "The shared cache every pfx run and checkout reuses: compiled pipelines and bakes keyed by their inputs, checked on read, capped by last use, and pfx cache info and clean.",
+        ),
+    ),
     ("editor", 401, None),
     ("editor-crates", 402, None),
     ("play-modules", 403, None),
@@ -333,7 +340,17 @@ pub const FLAG_GROUPS: &[(&str, &str, &str)] = &[
         "Re-encode a master from its manifest.",
         "ENCODE_FLAGS",
     ),
-    ("cache", "The machine cache.", "CACHE_FLAGS"),
+    ("cache", "The build cache.", "CACHE_FLAGS"),
+    (
+        "cache info",
+        "The shared cache: its kinds, entries and size.",
+        "CACHE_INFO_FLAGS",
+    ),
+    (
+        "cache clean",
+        "Remove shared cache entries by kind or age.",
+        "CACHE_CLEAN_FLAGS",
+    ),
     (
         "bake",
         "Path-traced probes, lightmaps, plates and detail maps.",

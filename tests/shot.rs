@@ -182,6 +182,7 @@ fn folder(name: &str) -> PathBuf {
     std::fs::write(folder.join("rig.glb"), rig_glb()).unwrap();
     std::fs::write(folder.join("shot.scene.toml"), SCENE).unwrap();
     let imported = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .args(["scene", "migrate"])
         .arg(folder.join("shot.scene.toml"))
         .output()
@@ -200,6 +201,7 @@ fn shot(folder: &Path, out: &str, extra: &[&str]) -> Output {
 
 fn shot_of(folder: &Path, out: &str, range: &[&str], extra: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .arg("shot")
         .arg(folder.join("shot.pitofx"))
@@ -236,6 +238,7 @@ fn frames(dir: &Path) -> Vec<Vec<u8>> {
 fn a_plain_scene_toml_is_refused_with_the_import_it_needs() {
     let folder = folder("plain");
     let output = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .arg("shot")
         .arg(folder.join("shot.scene.toml"))
         .args(["--frames", "1", "--size", "64x64", "--out"])

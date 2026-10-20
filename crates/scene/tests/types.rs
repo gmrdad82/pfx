@@ -126,3 +126,26 @@ fn a_number_or_list_key_refuses_a_list_of_another_length() {
     assert_eq!(errors[0].code, pfx_scene::code::BAD_TYPE);
     assert_eq!(errors[0].key, "object.0bj000000f.scale");
 }
+
+#[test]
+fn a_thin_film_library_reads_and_writes_as_before_and_takes_a_film_ramp() {
+    let old = "format = 1\n\n[materials.slick]\nthin_film = 420.0\nthin_film_ior = 1.33\nthin_film_amount = 0.8\n\n[[materials.slick.layers]]\nkind = \"flow\"\nfrequency = 10.0\namplitude = 50.0\nseed = 2\n";
+    let library: MaterialsFile = toml::from_str(old).unwrap();
+    let slick = &library.materials["slick"];
+    assert_eq!(
+        (slick.thin_film, slick.thin_film_ior, slick.thin_film_amount),
+        (420.0, 1.33, 0.8)
+    );
+    assert_eq!(slick.layers.len(), 1);
+    assert_eq!(slick.layers[0].kind, NoiseKind::Flow);
+    let again: MaterialsFile = toml::from_str(&toml::to_string(&library).unwrap()).unwrap();
+    assert_eq!(again, library);
+    let ramped: Material = toml::from_str(
+        "thin_film_amount = 1.0\n\n[[layers]]\nkind = \"film_ramp\"\nfrequency = 1.0\namplitude = 1.0\nseed = 0\nparams = [2.0, 1.0, 0.0, 0.0, 0.0, 1.0, 250.0, 750.0, 0.0, 0.0, 0.0, 0.0]\n",
+    )
+    .unwrap();
+    assert_eq!(ramped.layers[0].kind, NoiseKind::FilmRamp);
+    assert_eq!(ramped.layers[0].params[6..8], [250.0, 750.0]);
+    let text = toml::to_string(&ramped).unwrap();
+    assert!(text.contains("kind = \"film_ramp\""), "{text}");
+}

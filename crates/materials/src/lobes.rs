@@ -104,6 +104,8 @@ impl UvTransform {
     }
 }
 
+pub const THIN_FILM_MIN: f32 = 100.0;
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Textures {
     pub base: i32,
@@ -111,6 +113,8 @@ pub struct Textures {
     pub orm: i32,
     pub detail: i32,
     pub anisotropy: i32,
+    pub thin_film: i32,
+    pub thin_film_min: f32,
     pub normal_scale: f32,
     pub occlusion: f32,
     pub detail_scale: f32,
@@ -128,6 +132,8 @@ impl Default for Textures {
             orm: -1,
             detail: -1,
             anisotropy: -1,
+            thin_film: -1,
+            thin_film_min: THIN_FILM_MIN,
             normal_scale: 1.0,
             occlusion: 1.0,
             detail_scale: 1.0,

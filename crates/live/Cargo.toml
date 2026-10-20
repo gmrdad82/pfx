@@ -13,6 +13,7 @@ pfx-gpu = { path = "../gpu" }
 pfx-text = { path = "../text" }
 pfx-materials = { path = "../materials" }
 pfx-core = { path = "../core" }
+pfx-cache = { path = "../cache" }
 pfx-physics = { path = "../physics" }
 pfx-post = { path = "../post" }
 pfx-geom = { path = "../geom" }

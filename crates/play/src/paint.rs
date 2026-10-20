@@ -36,6 +36,10 @@ pub trait Warmer {
     fn looks(&mut self, looks: &[Look]) -> Result<(), String>;
 
     fn renderer(&mut self) -> Option<&mut Renderer>;
+
+    fn format(&self) -> Option<wgpu::TextureFormat> {
+        None
+    }
 }
 
 pub struct Warm<'a> {
@@ -71,6 +75,10 @@ impl<'a> Warm<'a> {
 
     pub fn renderer(&mut self) -> Option<&mut Renderer> {
         self.warmer.renderer()
+    }
+
+    pub fn format(&self) -> Option<wgpu::TextureFormat> {
+        self.warmer.format()
     }
 
     pub fn pass(&self) -> u32 {

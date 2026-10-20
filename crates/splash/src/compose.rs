@@ -1,14 +1,13 @@
-use pfx_live::flat::svg::{self, Board};
+use pfx_live::flat::svg;
 use pfx_live::flat::{
-    Draw, Fill, Icon, IconShape, Icons, Matrix, Shadow, Shape, SpriteFill, SpriteFilter,
-    SpriteImage, Srgba, multiply, scaling, translation,
+    Draw, Icon, IconShape, Icons, Matrix, Shadow, Shape, SpriteImage, Srgba, multiply, scaling,
+    translation,
 };
 
 use crate::art;
+use crate::lockup::{Painted, atlas, bake};
 use crate::timeline::LENGTH;
 
-const MOST_RASTER: u32 = 4096;
-const GUTTER: u32 = 2;
 const SITE: Srgba = Srgba::hex(0xb6abcb);
 const SITE_ON_LIGHT: Srgba = Srgba::hex(0x5331a8);
 const DOLLY: f32 = 0.05;
@@ -44,18 +43,12 @@ pub struct Frame {
     pub draws: Vec<Draw>,
 }
 
-struct Piece {
+pub(crate) struct Piece {
     source: String,
     colour: Srgba,
-    height: f32,
-    at: [f32; 2],
+    pub(crate) height: f32,
+    pub(crate) at: [f32; 2],
     motion: Motion,
-}
-
-struct Painted {
-    size: [u32; 2],
-    rgba: Vec<u8>,
-    draw: usize,
 }
 
 fn rule(width: f32, height: f32) -> String {
@@ -69,7 +62,7 @@ fn aspect(source: &str) -> Result<f32, String> {
     Ok(board.size[0] / board.size[1])
 }
 
-fn pieces(size: [u32; 2], light: bool) -> Result<Vec<Piece>, String> {
+pub(crate) fn pieces(size: [u32; 2], light: bool) -> Result<Vec<Piece>, String> {
     let [w, h] = size.map(|v| v as f32);
     let u = w.min(h);
     let centre = w * 0.5;
@@ -142,34 +135,27 @@ impl Composition {
         let mut parts = Vec::new();
         let mut painted: Vec<Painted> = Vec::new();
         for piece in pieces(size, is_light(background))? {
-            let board: Board = svg::read_mark(&piece.source, piece.colour)?;
-            let scale = piece.height / board.size[1];
-            let left = piece.at[0] - board.size[0] * scale * 0.5;
-            let place = multiply(translation(left, piece.at[1]), scaling(scale, scale));
-            for raster in &board.rasters {
-                let pixels = raster.pixels(scale, MOST_RASTER);
-                let out = raster.paint(&board.icons, pixels)?;
-                painted.push(Painted {
-                    size: out.size,
-                    rgba: out.rgba,
-                    draw: draws.len() + raster.draw,
-                });
-            }
+            let baked = bake(
+                &piece.source,
+                piece.colour,
+                piece.height,
+                piece.at,
+                0.5,
+                1.0,
+            )?;
             let base = shapes.len() as u32;
             let start = draws.len();
-            for mut draw in board.draws {
+            painted.extend(baked.painted.into_iter().map(|p| Painted {
+                draw: start + p.draw,
+                ..p
+            }));
+            for mut draw in baked.draws {
                 if let Shape::Icon(Icon(i)) = draw.shape {
                     draw.shape = Shape::Icon(Icon(base + i));
                 }
-                if let Some(g) = draw.group.take() {
-                    draw.opacity *= board.groups.get(usize::from(g)).map_or(1.0, |g| g.opacity);
-                }
-                draw.transform = multiply(place, draw.transform);
-                draw.shadow = Shadow::None;
-                draw.elevation = 0.0;
                 draws.push(draw);
             }
-            shapes.extend(board.icons);
+            shapes.extend(baked.shapes);
             parts.push(Part {
                 draws: start..draws.len(),
                 motion: piece.motion,
@@ -240,37 +226,6 @@ impl Composition {
             draws,
         }
     }
-}
-
-fn atlas(painted: &[Painted], draws: &mut [Draw]) -> Result<Option<SpriteImage>, String> {
-    if painted.is_empty() {
-        return Ok(None);
-    }
-    let width = painted.iter().map(|p| p.size[0]).max().unwrap_or(1) + 2 * GUTTER;
-    let height: u32 = painted.iter().map(|p| p.size[1] + 2 * GUTTER).sum();
-    let mut rgba = vec![0u8; (width * height * 4) as usize];
-    let mut top = 0;
-    for p in painted {
-        let [x0, y0] = [GUTTER, top + GUTTER];
-        for row in 0..p.size[1] {
-            let from = (row * p.size[0] * 4) as usize;
-            let to = (((y0 + row) * width + x0) * 4) as usize;
-            let len = (p.size[0] * 4) as usize;
-            rgba[to..to + len].copy_from_slice(&p.rgba[from..from + len]);
-        }
-        let uv = [
-            x0 as f32 / width as f32,
-            y0 as f32 / height as f32,
-            (x0 + p.size[0]) as f32 / width as f32,
-            (y0 + p.size[1]) as f32 / height as f32,
-        ];
-        let draw = draws
-            .get_mut(p.draw)
-            .ok_or("a filtered shape lost its place")?;
-        draw.fill = Fill::Image(SpriteFill::new(uv));
-        top += p.size[1] + 2 * GUTTER;
-    }
-    SpriteImage::new(width, height, rgba, SpriteFilter::Linear).map(Some)
 }
 
 pub(crate) fn is_light(colour: Srgba) -> bool {

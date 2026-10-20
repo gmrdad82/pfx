@@ -56,6 +56,8 @@ pub struct Fake {
     user: User,
     calls: u64,
     invites: Vec<Lobby>,
+    overlay: bool,
+    web_pages: Vec<String>,
     items: BTreeMap<Item, FakeItem>,
     created: u64,
     submitted: Vec<(Item, ItemUpdate)>,
@@ -95,6 +97,8 @@ impl Fake {
             user,
             calls: 0,
             invites: Vec::new(),
+            overlay: true,
+            web_pages: Vec::new(),
             items: BTreeMap::new(),
             created: 0,
             submitted: Vec::new(),
@@ -164,6 +168,14 @@ impl Fake {
 
     pub fn invite_dialogs(&self) -> &[Lobby] {
         &self.invites
+    }
+
+    pub fn set_overlay(&mut self, enabled: bool) {
+        self.overlay = enabled;
+    }
+
+    pub fn web_pages(&self) -> &[String] {
+        &self.web_pages
     }
 
     pub fn subscribe(&mut self, item: Item) {
@@ -704,6 +716,18 @@ impl SteamApi for Fake {
         }
         self.invites.push(lobby);
         Ok(())
+    }
+
+    fn web_page(&mut self, url: &str) -> Result<bool, Error> {
+        self.open()?;
+        if !crate::web_link(url) {
+            return Err(Error::Rejected);
+        }
+        if !self.overlay {
+            return Ok(false);
+        }
+        self.web_pages.push(url.to_owned());
+        Ok(true)
     }
 
     fn launched(&mut self, args: &[String]) -> Option<Lobby> {

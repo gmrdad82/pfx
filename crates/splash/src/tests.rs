@@ -1,12 +1,12 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signer, SigningKey};
-use pfx_live::flat::{FlatScene, Light, ShadowCurve, cpu};
+use pfx_live::flat::{Draw, Fill, FlatScene, Icons, Light, ShadowCurve, SpriteImage, Srgba, cpu};
 
 use crate::licence::{civil_day, date};
 use crate::{
-    Colour, Composition, FADE_IN, KeyError, LENGTH, Phase, Settings, Show, Timeline, build_date,
-    built, covers, hidden, verify,
+    Colour, Composition, FADE_IN, KeyError, LENGTH, Lockup, Phase, Settings, Show, Timeline,
+    build_date, built, covers, hidden, verify,
 };
 
 fn pair() -> (SigningKey, String) {
@@ -353,4 +353,110 @@ fn the_player_draws_the_same_bytes_as_its_composition_through_a_flat_pass() {
     let held = gpu.readback_rgba8(&output).unwrap();
     assert!(held.chunks_exact(4).all(|p| p == ground));
     assert_eq!(player.phase(7_500_000_000, true), Phase::Done);
+}
+
+fn board(
+    size: [u32; 2],
+    ground: Srgba,
+    draws: &[Draw],
+    icons: &Icons,
+    sprites: Option<&SpriteImage>,
+) -> Vec<[f32; 4]> {
+    let curve = ShadowCurve::none();
+    let scene = FlatScene {
+        layout: size.map(|v| v as f32),
+        clear: Some(ground),
+        curve: &curve,
+        light: Light::default(),
+        draws,
+        groups: &[],
+        text: &[],
+        icons: None,
+        sprites: None,
+        environment: None,
+        post: false,
+        frame: 0,
+        seed: 0,
+    };
+    cpu::render_sprited(&scene, Some(icons), sprites, size).unwrap()
+}
+
+#[test]
+fn a_lockup_on_a_board_draws_exactly_the_splashs_lockup() {
+    for ground in [Colour::GROUND.srgba(), Srgba::hex(0xf4f1ea)] {
+        for size in [[320, 180], [180, 320]] {
+            let c = Composition::new(size, ground).unwrap();
+            let pieces = crate::compose::pieces(size, crate::compose::is_light(ground)).unwrap();
+            let lockup = Lockup::new(ground, pieces[0].height, 1.0).unwrap();
+            let at = [pieces[0].at[0] - lockup.size()[0] * 0.5, pieces[0].at[1]];
+            let own = lockup.draws(at);
+            let dense = Lockup::new(ground, pieces[0].height, 2.0).unwrap();
+            assert_eq!(dense.size(), lockup.size());
+            assert_eq!(dense.draws(at).len(), own.len());
+            assert!(
+                dense
+                    .draws(at)
+                    .iter()
+                    .zip(&own)
+                    .all(|(a, b)| a.transform == b.transform)
+            );
+            let (thin, thick) = (lockup.sprites().unwrap(), dense.sprites().unwrap());
+            assert!(thick.width * 2 >= thin.width * 3 && thick.height * 2 >= thin.height * 3);
+            assert!(own.iter().all(|d| d.group.is_none()));
+            assert!(own.iter().any(|d| matches!(d.fill, Fill::Image(_))));
+            let frame = c.frame(LENGTH, 1.0);
+            assert!(frame.draws.len() > own.len());
+            let splash = board(
+                size,
+                ground,
+                &frame.draws[..own.len()],
+                c.icons(),
+                c.sprites(),
+            );
+            let g = ground.0;
+            let lit = splash
+                .iter()
+                .filter(|p| (0..3).any(|k| (p[k] - g[k]).abs() > 0.1))
+                .count();
+            assert!(lit > 200, "{size:?} drew {lit} lockup pixels");
+            let alone = board(
+                size,
+                ground,
+                &own,
+                &lockup.icons().unwrap(),
+                lockup.sprites(),
+            );
+            let mut shapes = vec![pfx_live::flat::icons::tick()];
+            shapes.extend_from_slice(lockup.shapes());
+            let icons = Icons::bake(&shapes).unwrap();
+            let sheet = lockup.sprites().unwrap();
+            let row = (sheet.width * 4) as usize;
+            let mut rgba = Vec::with_capacity(row * 2 * sheet.height as usize);
+            for line in sheet.rgba.chunks_exact(row) {
+                rgba.extend([255, 0, 0, 255].repeat(sheet.width as usize));
+                rgba.extend_from_slice(line);
+            }
+            let atlas =
+                SpriteImage::new(sheet.width * 2, sheet.height, rgba, sheet.filter).unwrap();
+            let shared = board(
+                size,
+                ground,
+                &lockup.draws_in(at, 1, [0.5, 0.0, 1.0, 1.0]),
+                &icons,
+                Some(&atlas),
+            );
+            for (name, drawn) in [("alone", &alone), ("shared", &shared)] {
+                let worst = splash
+                    .iter()
+                    .zip(drawn.iter())
+                    .flat_map(|(a, b)| (0..4).map(move |k| (a[k] - b[k]).abs()))
+                    .fold(0.0f32, f32::max);
+                assert!(
+                    worst <= 2.0 / 255.0,
+                    "{name} at {size:?} on {g:?} differs from the splash by {}/255",
+                    worst * 255.0
+                );
+            }
+        }
+    }
 }

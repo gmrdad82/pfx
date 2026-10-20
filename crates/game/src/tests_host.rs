@@ -511,3 +511,44 @@ fn a_game_streams_its_own_pcm_into_a_mixer_channel_deterministically() {
     let quieter = rms(&half[window]);
     assert!((quieter / level - 0.5).abs() < 0.01, "{quieter} {level}");
 }
+
+#[test]
+fn a_surface_configure_that_fails_is_retried_until_its_bound_then_errors() {
+    use crate::surface::{Attempt, CONFIGURE_NS, CONFIGURE_TRIES, Retry};
+    let frame = 8_000_000;
+    let mut retry = Retry::default();
+    let mut now = 5_000_000_000;
+    for _ in 0..CONFIGURE_TRIES - 1 {
+        assert_eq!(retry.record(Attempt::Refused, now), Ok(()));
+        now += CONFIGURE_NS;
+    }
+    assert_eq!(retry.record(Attempt::Configured, now), Ok(()));
+    assert_eq!(retry.failed(), 0);
+    let start = now;
+    for _ in 0..1000 {
+        assert_eq!(retry.record(Attempt::Busy, now), Ok(()));
+        now += (CONFIGURE_NS - 1) / 1000;
+    }
+    let mut tries = 0;
+    let error = loop {
+        tries += 1;
+        assert!(tries < 10_000, "the retry never gave up");
+        match retry.record(Attempt::Busy, now) {
+            Ok(()) => now += frame,
+            Err(error) => break error,
+        }
+    };
+    assert!(now - start >= CONFIGURE_NS);
+    assert!(now - start <= CONFIGURE_NS + frame);
+    assert!(error.contains("the window's surface"), "{error}");
+    assert!(error.contains("never went idle"), "{error}");
+    assert_eq!(retry.record(Attempt::Configured, now), Ok(()));
+    assert_eq!(retry.record(Attempt::Refused, now), Ok(()));
+    let mut error = Ok(());
+    for _ in 0..CONFIGURE_TRIES {
+        now += CONFIGURE_NS;
+        error = retry.record(Attempt::Busy, now);
+    }
+    let error = error.unwrap_err();
+    assert!(error.contains("refused 1 of them"), "{error}");
+}

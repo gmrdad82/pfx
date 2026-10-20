@@ -1217,6 +1217,18 @@ impl SteamApi for Steam {
         Ok(())
     }
 
+    fn web_page(&mut self, url: &str) -> Result<bool, Error> {
+        if !crate::web_link(url) {
+            return Err(Error::Rejected);
+        }
+        let client = self.client()?;
+        if !client.utils().is_overlay_enabled() {
+            return Ok(false);
+        }
+        client.friends().activate_game_overlay_to_web_page(url);
+        Ok(true)
+    }
+
     fn launched(&mut self, args: &[String]) -> Option<Lobby> {
         let lobby = crate::connect_lobby(args)?;
         self.client().ok()?;

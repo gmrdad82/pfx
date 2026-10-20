@@ -1301,7 +1301,15 @@ fn detail_fbm(p: vec3f) -> f32 {
     }
     return sum;
 }
-fn detail_layer(value: Shaded, normal_in: vec3f, layer: vec4f, pa: vec4f, pb: vec4f, pc: vec4f, pd: vec4f, position: vec3f, uv: vec2f) -> DetailResult {
+fn film_ramp(pa: vec4f, pb: vec4f, local: vec3f, uv: vec2f) -> f32 {
+    var along=dot(local,pa.yzw);
+    if (pa.x>=1.5) { along=dot(uv,pa.yz); }
+    let span=pb.y-pb.x;
+    var t=select(0.0,1.0,along>=pb.y);
+    if (abs(span)>1e-12) { t=clamp((along-pb.x)/span,0.0,1.0); }
+    return max(mix(pb.z,pb.w,t),0.0);
+}
+fn detail_layer(value: Shaded, normal_in: vec3f, layer: vec4f, pa: vec4f, pb: vec4f, pc: vec4f, pd: vec4f, position: vec3f, local: vec3f, uv: vec2f) -> DetailResult {
     var shade=value;
     var base=value.base;
     var roughness=value.roughness;
@@ -1347,6 +1355,8 @@ fn detail_layer(value: Shaded, normal_in: vec3f, layer: vec4f, pa: vec4f, pb: ve
         n=layer_relief(n,uv,position,amp,true,0.0);
     } else if (kind==14u) {
         shade.thin_film=max(shade.thin_film+amp*(flow(uv*layer.y,pa.x)-0.5)*2.0,0.0);
+    } else if (kind==21u && pa.x>0.5) {
+        shade.thin_film=mix(shade.thin_film,film_ramp(pa,pb,local,uv),clamp(amp,0.0,1.0));
     } else if (kind==15u) {
         base*=mix(1.0,1.0+(value_noise3(p*layer.y,false)-0.5)*2.0,clamp(amp,0.0,1.0));
     } else if (kind==16u) {
@@ -2293,7 +2303,9 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
             let first=extension_layers(m);
             for (var i=0u;i<layered;i++) {
                 let at=first+i*5u;
-                let detailed=detail_layer(s,n,materials[at],materials[at+1u],materials[at+2u],materials[at+3u],materials[at+4u],p,hit.uv);
+                var local=p;
+                if (u32(round(materials[at].x))==21u && hit.shape==0u && hit.record>0u) { local=hit_ray(hit.record,p,1.0); }
+                let detailed=detail_layer(s,n,materials[at],materials[at+1u],materials[at+2u],materials[at+3u],materials[at+4u],p,local,hit.uv);
                 s=detailed.shade;
                 n=detailed.normal;
             }

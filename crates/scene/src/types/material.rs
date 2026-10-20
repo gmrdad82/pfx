@@ -74,6 +74,7 @@ pub enum NoiseKind {
     CoatWobble,
     Crack,
     Track,
+    FilmRamp,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

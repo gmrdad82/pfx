@@ -3,7 +3,7 @@
 `pfx render --recipe` traces a recipe through pfx's offline path tracer (`pfx_trace`). It stages the same parts, materials, sky, sun and lights the live renderer draws, so a render and a `pfx shot --still` of one recipe show one scene.
 
 ```
-pfx render --recipe <x.pitofx> --camera <name> [--spp N] [--threshold T] [--min-samples N] [--draft] [--seed S] [--size WxH] [--equirect|--ortho] [--crop x,y,w,h] [--variant V] [--set key=value]... [--denoise off|on] [--format png|png16] [--dither on|off] [--master <file.png>] [--progress plain|json] [--checkpoint <every>] [--memory-limit GB] --out <file>
+pfx render --recipe <x.pitofx> --camera <name> [--spp N] [--threshold T] [--min-samples N] [--draft] [--seed S] [--size WxH] [--equirect|--ortho] [--crop x,y,w,h] [--variant V] [--set key=value]... [--denoise off|on] [--format png|png16] [--dither on|off] [--background sky|transparent] [--master <file.png>] [--progress plain|json] [--checkpoint <every>] [--memory-limit GB] --out <file>
 ```
 
 | Option | Default | Meaning |
@@ -24,6 +24,7 @@ pfx render --recipe <x.pitofx> --camera <name> [--spp N] [--threshold T] [--min-
 | `--out` | required | `.png`, `.exr` or `.hdr`, by its extension |
 | `--format` | `png` | with a `.png` `--out`: `png16` writes it at 16 bits a channel from the float frame, not dithered (Pictures) |
 | `--dither` | `on` | `off` writes the 8-bit `.png` rounded, without the dither |
+| `--background` | `sky` | `transparent`: the sky still lights the scene and shows in reflections and through glass, but a camera ray that misses the scene is transparent, so the `.png` and master are RGBA with straight alpha and the `.exr` keeps premultiplied alpha; a `.hdr`, which has no alpha, is refused (Transparent background) |
 | `--master` | | also writes a 16-bit `.png` master of the same finished picture |
 | `--progress` | `plain` | `json` gives progress on stderr as JSON lines (below) |
 | `--checkpoint` | none | saves the trace every so many minutes (`10`) or samples (`64spp`) beside `--out`, so a stopped render resumes there (below) |
@@ -50,7 +51,7 @@ Plain progress (the default) prints `progress <done>/<total>` about twenty times
 
 ## Checkpoints
 
-A long still survives a stop: `--checkpoint 10` saves the trace every ten minutes, `--checkpoint 64spp` every 64 samples, to `.<out name>.checkpoint` beside `--out`, written whole (a hidden partial file, synced, then renamed). Running the same line again prints `resuming from its checkpoint at 192 samples` and continues at the next sample: the checkpoint holds the tracer's per-pixel sums, its colour, albedo and normal layers, the sample index and, under adaptive sampling, the rounds reached and each pixel's noise estimate, so the picture ends on the bytes an unstopped render makes. A checkpoint from another line, another recipe (by its sha256) or another pfx version is removed and the render starts afresh; a finished render deletes its checkpoint. A 3840×2160 checkpoint is about 1.1 GB. Every picture `pfx render --recipe` writes (`.png`, `.exr`, `.hdr`, the master) goes through the same partial-then-rename, so a kill never leaves half a file.
+A long still survives a stop: `--checkpoint 10` saves the trace every ten minutes, `--checkpoint 64spp` every 64 samples, to `.<out name>.checkpoint` beside `--out`, written whole (a hidden partial file, synced, then renamed). Running the same line again prints `resuming from its checkpoint at 192 samples` and continues at the next sample: the checkpoint holds the tracer's per-pixel sums, its colour, albedo and normal layers, the sample index and, under adaptive sampling, the rounds reached and each pixel's noise estimate, so the picture ends on the bytes an unstopped render makes. A checkpoint from another line, another recipe (by its sha256), another HDRI kept beside the `.pitofx` (by its sha256) or another pfx version is removed and the render starts afresh; a finished render deletes its checkpoint. A 3840×2160 checkpoint is about 1.1 GB. Every picture `pfx render --recipe` writes (`.png`, `.exr`, `.hdr`, the master) goes through the same partial-then-rename, so a kill never leaves half a file.
 
 ## Crops
 
@@ -121,6 +122,20 @@ From the recipe camera through `Eye::from_camera`, the same eye `pfx shot --stil
 - **`.hdr`:** the traced colour, linear, as Radiance RGBE with run-length scanlines (flat below 8 or above 32767 pixels across), the encoding the engine's `Sky::parse` reads.
 
 The EXR and HDR carry the raw trace, neither denoised nor graded.
+
+### Transparent background
+
+`--background transparent` traces the camera's rays as the tracer's transparent film (`pfx_trace::Matte::transparent`, as the asset renderer's): the sky lights the scene, reflects in it and shows through glass, but a camera ray that leaves the scene without a hit counts as uncovered. A pixel's alpha is the share of its samples that hit something, so a silhouette is antialiased by the same samples as its colour. The trace keeps the colour premultiplied by that alpha. The denoiser filters the premultiplied colour and passes the alpha through unfiltered, as Cycles does. At a silhouette a pixel of low coverage can take colour from its covered neighbours, so once divided by its alpha its straight colour can come out brighter than the surface and clip; `--denoise off` keeps every edge pixel as traced.
+
+- **`.png` and `--master`:** the finish runs on straight colour: each pixel's colour is divided by its alpha first (a pixel under 1/65535 is clear), then the finish chain and the sRGB encode run on it, so the tone curve sees the surface's own colour at an edge, not one darkened by its coverage. The PNG holds **straight (unassociated) alpha**, as PNG defines it: colour as the finish leaves it, alpha the coverage, RGBA at 8 bits (dithered as above; the alpha is rounded, never dithered) or 16 with `--format png16` and the master. A pixel whose alpha rounds to 0 is written as 0, 0, 0, 0. Overlay text is painted over the finished picture premultiplied, so it adds its own coverage to the alpha.
+- **`.exr`:** the linear trace with **premultiplied alpha**, as OpenEXR defines it. Without `--background transparent` its alpha is 1 everywhere.
+- **What it does not cover:** a finish pass that spreads light past the geometry (bloom, a vignette over the clear) lands on pixels whose alpha stays 0, so the glow stops at the silhouette. Passes that read neighbouring pixels (bloom, sharpen) run on straight colour like the rest, so a faint edge pixel counts at its surface's full brightness and the clear pixels around it count as black. A shadow on the ground needs the ground in the picture: there is no shadow catcher here.
+
+```
+pfx render --recipe plaque.pitofx --camera front --size 1024x1024 --background transparent --out tmp/plaque.png
+```
+
+Without `--background`, every pixel is opaque and the files are as before, byte for byte.
 
 ### The output dither
 

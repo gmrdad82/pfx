@@ -1,9 +1,9 @@
 use crate::text::Overlay;
 use pfx_post::quantise::{self, Dither};
-use pfx_post::{BloomKind, Chain, Image, Pass, Vignette, VignetteKind, color};
+use pfx_post::{BloomKind, Chain, Image, Pass, Vignette, VignetteKind, color, view};
 use pfx_trace::denoise;
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const RLE_LEAST: usize = 8;
 const RLE_MOST: usize = 32767;
@@ -38,6 +38,7 @@ pub struct Film {
     pub normal: Vec<[f32; 4]>,
     pub denoised: Option<Vec<[f32; 4]>>,
     pub samples: u32,
+    pub transparent: bool,
 }
 
 pub fn cut(pixels: &[[f32; 4]], width: u32, origin: [u32; 2], size: [u32; 2]) -> Vec<[f32; 4]> {
@@ -65,6 +66,7 @@ impl Film {
             normal: take(&self.normal),
             denoised: self.denoised.as_deref().map(take),
             samples: self.samples,
+            transparent: self.transparent,
         }
     }
 
@@ -116,8 +118,12 @@ pub fn looked_with<'a>(
     Ok(finished(film, finish, denoised)?
         .into_iter()
         .flat_map(|pixel| {
-            let [r, g, b, _] = pixel.map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8);
-            [r, g, b, 255]
+            let [r, g, b, a] = pixel.map(|value| (value.clamp(0.0, 1.0) * 255.0).round() as u8);
+            match film.transparent {
+                true if a == 0 => [0; 4],
+                true => [r, g, b, a],
+                false => [r, g, b, 255],
+            }
         })
         .collect())
 }
@@ -156,7 +162,14 @@ pub fn finished_at<'a>(
 ) -> Result<Vec<[f32; 4]>, String> {
     let look = finish.into();
     let [width, height] = film.size;
-    let image = Image::from_pixels(width, height, developed(film, denoised)?.into_owned())
+    let pixels = match film.transparent {
+        true => developed(film, denoised)?
+            .iter()
+            .map(|&texel| view::straight(texel))
+            .collect(),
+        false => developed(film, denoised)?.into_owned(),
+    };
+    let image = Image::from_pixels(width, height, pixels)
         .map_err(|_| format!("the film is not {width}x{height}"))?;
     let whole = origin == [0, 0] && film.size == full;
     let finished = match look.overlay {
@@ -172,7 +185,17 @@ pub fn finished_at<'a>(
         Some(_) if !whole => return Err("overlay text is placed by the whole frame".into()),
         Some(overlay) => {
             let mut finished = look.chain.apply(&image, None, None);
+            if film.transparent {
+                for texel in &mut finished.pixels {
+                    *texel = premultiplied(*texel);
+                }
+            }
             overlay.paint(&mut finished.pixels, film.size)?;
+            if film.transparent {
+                for texel in &mut finished.pixels {
+                    *texel = view::straight(*texel);
+                }
+            }
             let encode = Chain {
                 passes: vec![Pass::Encode],
                 ..look.chain.clone()
@@ -322,31 +345,65 @@ pub fn dithered_at(
     dither: Option<Dither>,
     pixels: &[[f32; 4]],
 ) -> Vec<u8> {
+    delivered(size, origin, dither, pixels, false)
+}
+
+pub fn delivered(
+    size: [u32; 2],
+    origin: [u32; 2],
+    dither: Option<Dither>,
+    pixels: &[[f32; 4]],
+    alpha: bool,
+) -> Vec<u8> {
     let width = size[0].max(1);
     let height = pixels.len() as u32 / width;
     quantise::eight([width, height], origin, dither, 4, |at| {
-        let [r, g, b, _] = pixels[at];
-        [r, g, b, 1.0]
+        let [r, g, b, a] = pixels[at];
+        match alpha {
+            true if quantise::code(a) == 0 => [0.0; 4],
+            true => [r, g, b, a],
+            false => [r, g, b, 1.0],
+        }
     })
 }
 
 pub fn master(pixels: &[[f32; 4]]) -> Vec<u8> {
+    master_with(pixels, false)
+}
+
+pub fn master_with(pixels: &[[f32; 4]], alpha: bool) -> Vec<u8> {
     pixels
         .iter()
         .flat_map(|pixel| {
-            let [r, g, b] = [0, 1, 2].map(|k| (pixel[k].clamp(0.0, 1.0) * 65535.0).round() as u16);
-            [r, g, b, u16::MAX].into_iter().flat_map(u16::to_be_bytes)
+            let [r, g, b, a] = pixel.map(quantise::wide);
+            match alpha {
+                true if a == 0 => [0; 4],
+                true => [r, g, b, a],
+                false => [r, g, b, u16::MAX],
+            }
+            .into_iter()
+            .flat_map(u16::to_be_bytes)
         })
         .collect()
 }
 
-pub fn write_master(path: &Path, size: [u32; 2], pixels: &[[f32; 4]]) -> Result<(), String> {
+pub fn premultiplied(texel: [f32; 4]) -> [f32; 4] {
+    let alpha = texel[3].clamp(0.0, 1.0);
+    [texel[0] * alpha, texel[1] * alpha, texel[2] * alpha, alpha]
+}
+
+pub fn write_master(
+    path: &Path,
+    size: [u32; 2],
+    pixels: &[[f32; 4]],
+    alpha: bool,
+) -> Result<(), String> {
     fast_png(
         path,
         size,
         pixels.len(),
         png::BitDepth::Sixteen,
-        &master(pixels),
+        &master_with(pixels, alpha),
     )
 }
 
@@ -356,13 +413,14 @@ pub fn write_delivery(
     origin: [u32; 2],
     dither: Option<Dither>,
     pixels: &[[f32; 4]],
+    alpha: bool,
 ) -> Result<(), String> {
     fast_png(
         path,
         size,
         pixels.len(),
         png::BitDepth::Eight,
-        &dithered_at(size, origin, dither, pixels),
+        &delivered(size, origin, dither, pixels, alpha),
     )
 }
 
@@ -463,7 +521,12 @@ fn runs(data: &[u8], out: &mut Vec<u8>) {
     }
 }
 
-pub fn write_exr(path: &Path, size: [u32; 2], pixels: &[[f32; 4]]) -> Result<(), String> {
+pub fn write_exr(
+    path: &Path,
+    size: [u32; 2],
+    pixels: &[[f32; 4]],
+    alpha: bool,
+) -> Result<(), String> {
     use exr::prelude::*;
     let [width, height] = sides(size, pixels)?;
     let layer = Layer::new(
@@ -471,8 +534,8 @@ pub fn write_exr(path: &Path, size: [u32; 2], pixels: &[[f32; 4]]) -> Result<(),
         LayerAttributes::named("pfx render --recipe"),
         Encoding::FAST_LOSSLESS,
         SpecificChannels::rgba(|at: Vec2<usize>| {
-            let [r, g, b, _] = pixels[at.y() * width + at.x()].map(f16::from_f32);
-            (r, g, b, f16::ONE)
+            let [r, g, b, a] = pixels[at.y() * width + at.x()].map(f16::from_f32);
+            (r, g, b, if alpha { a } else { f16::ONE })
         }),
     );
     pfx_core::atomic::write_with(path, |temp| {
@@ -481,6 +544,47 @@ pub fn write_exr(path: &Path, size: [u32; 2], pixels: &[[f32; 4]]) -> Result<(),
             .non_parallel()
             .to_file(temp)
             .map_err(|e| format!("{}: {e}", path.display()))
+    })
+}
+
+pub const PASSES: [&str; 3] = ["color", "albedo", "normal"];
+
+pub fn pass_paths(dir: &Path, name: &str) -> [PathBuf; 3] {
+    PASSES.map(|pass| dir.join(format!("{name}.{pass}.exr")))
+}
+
+pub fn write_passes(dir: &Path, name: &str, film: &Film) -> Result<[PathBuf; 3], String> {
+    let layers = [&film.color, &film.albedo, &film.normal];
+    for (pass, pixels) in PASSES.iter().zip(layers) {
+        sides(film.size, pixels).map_err(|e| format!("the {pass} pass: {e}"))?;
+    }
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let paths = pass_paths(dir, name);
+    for ((path, pass), pixels) in paths.iter().zip(PASSES).zip(layers) {
+        write_pass(path, pass, film.size, pixels)
+            .map_err(|e| format!("{}: the {pass} pass: {e}", path.display()))?;
+    }
+    Ok(paths)
+}
+
+fn write_pass(path: &Path, pass: &str, size: [u32; 2], pixels: &[[f32; 4]]) -> Result<(), String> {
+    use exr::prelude::*;
+    let [width, height] = sides(size, pixels)?;
+    let layer = Layer::new(
+        (width, height),
+        LayerAttributes::named(pass),
+        Encoding::FAST_LOSSLESS,
+        SpecificChannels::rgba(|at: Vec2<usize>| {
+            let [r, g, b, a] = pixels[at.y() * width + at.x()];
+            (r, g, b, a)
+        }),
+    );
+    pfx_core::atomic::write_with(path, |temp| {
+        Image::from_layer(layer)
+            .write()
+            .non_parallel()
+            .to_file(temp)
+            .map_err(|e| e.to_string())
     })
 }
 
@@ -515,18 +619,33 @@ fn sides(size: [u32; 2], pixels: &[[f32; 4]]) -> Result<[usize; 2], String> {
     Ok([width, height])
 }
 
-pub fn write_linear(path: &Path, size: [u32; 2], pixels: &[[f32; 4]]) -> Result<Format, String> {
+pub fn write_linear(
+    path: &Path,
+    size: [u32; 2],
+    pixels: &[[f32; 4]],
+    alpha: bool,
+) -> Result<Format, String> {
     let format = Format::of(path)
         .filter(|format| *format != Format::Png)
         .ok_or_else(|| format!("{}: linear pixels go to .exr or .hdr", path.display()))?;
+    if alpha && format == Format::Hdr {
+        return Err(no_alpha(path));
+    }
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
     match format {
-        Format::Exr => write_exr(path, size, pixels)?,
+        Format::Exr => write_exr(path, size, pixels, alpha)?,
         _ => pfx_core::atomic::write(path, &hdr(size, pixels)?)?,
     }
     Ok(format)
+}
+
+fn no_alpha(path: &Path) -> String {
+    format!(
+        "{}: a transparent film needs an alpha channel; a .hdr has none, so write a .png or an .exr",
+        path.display()
+    )
 }
 
 pub fn write<'a>(path: &Path, film: &Film, finish: impl Into<Look<'a>>) -> Result<Format, String> {
@@ -545,6 +664,9 @@ pub fn write_with<'a>(
             path.display()
         )
     })?;
+    if film.transparent && format == Format::Hdr {
+        return Err(no_alpha(path));
+    }
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
@@ -553,7 +675,7 @@ pub fn write_with<'a>(
             let rgba = looked_with(film, finish, denoised)?;
             pfx_recipe_scene::write_png(path, film.size, &rgba).map_err(|e| e.0)?;
         }
-        Format::Exr => write_exr(path, film.size, &film.color)?,
+        Format::Exr => write_exr(path, film.size, &film.color, film.transparent)?,
         Format::Hdr => pfx_core::atomic::write(path, &hdr(film.size, &film.color)?)?,
     }
     Ok(format)
@@ -563,7 +685,6 @@ pub fn write_with<'a>(
 mod tests {
     use super::*;
     use pfx_load::Sky;
-    use std::path::PathBuf;
 
     fn scratch(name: &str) -> PathBuf {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp/render-tests");
@@ -604,13 +725,13 @@ mod tests {
         );
         let flat = vec![[level, level, level, 1.0]; 64];
         let path = scratch("master.png");
-        write_master(&path, [8, 8], &flat).unwrap();
+        write_master(&path, [8, 8], &flat, false).unwrap();
         let reader =
             png::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap()))
                 .read_info()
                 .unwrap();
         assert_eq!(reader.info().bit_depth, png::BitDepth::Sixteen);
-        assert!(write_master(&path, [9, 8], &flat).is_err());
+        assert!(write_master(&path, [9, 8], &flat, false).is_err());
     }
 
     #[test]
@@ -671,20 +792,302 @@ mod tests {
     fn an_exr_round_trips_known_pixels_as_half_floats() {
         let pixels = known(37, 5);
         let path = scratch("known.exr");
-        write_exr(&path, [37, 5], &pixels).unwrap();
+        write_exr(&path, [37, 5], &pixels, false).unwrap();
         let (size, back) = read_exr(&path).unwrap();
         assert_eq!(size, [37, 5]);
         assert_eq!(back, pixels);
         let odd = vec![[1.0 / 3.0, 1000.25, 0.1, 1.0]];
-        write_exr(&path, [1, 1], &odd).unwrap();
+        write_exr(&path, [1, 1], &odd, false).unwrap();
         let (_, back) = read_exr(&path).unwrap();
         for (got, want) in back[0].iter().zip(odd[0]) {
             assert!((got - want).abs() <= want.abs() / 1024.0, "{got} {want}");
         }
         let first = std::fs::read(&path).unwrap();
-        write_exr(&path, [1, 1], &odd).unwrap();
+        write_exr(&path, [1, 1], &odd, false).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), first);
-        assert!(write_exr(&path, [2, 2], &odd).is_err());
+        assert!(write_exr(&path, [2, 2], &odd, false).is_err());
+    }
+
+    fn decoded(path: &Path) -> (png::ColorType, png::BitDepth, Vec<u8>) {
+        let mut reader =
+            png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).unwrap()))
+                .read_info()
+                .unwrap();
+        let mut bytes = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut bytes).unwrap();
+        bytes.truncate(info.buffer_size());
+        (info.color_type, info.bit_depth, bytes)
+    }
+
+    #[test]
+    fn a_transparent_film_writes_straight_alpha_and_an_opaque_one_stays_opaque() {
+        let size = [4, 1];
+        let color = vec![
+            [0.0, 0.0, 0.0, 0.0],
+            [0.25, 0.125, 0.0625, 0.5],
+            [0.5, 0.5, 0.5, 1.0],
+            [1e-7, 1e-7, 1e-7, 1e-8],
+        ];
+        let film = Film {
+            size,
+            albedo: vec![[0.5, 0.5, 0.5, 1.0]; 4],
+            normal: vec![[0.0, 0.0, 1.0, 1.0]; 4],
+            color: color.clone(),
+            denoised: None,
+            samples: 1,
+            transparent: true,
+        };
+        let pixels = finished(&film, &Chain::new(), false).unwrap();
+        assert_eq!(pixels[0], [0.0; 4]);
+        assert_eq!(pixels[1][3], 0.5);
+        let half = view::srgb_encode(0.5);
+        assert!((pixels[1][0] - half).abs() < 1e-6, "{:?}", pixels[1]);
+        assert!((pixels[1][0] - pixels[2][0]).abs() < 1e-6, "{pixels:?}");
+        assert_eq!(pixels[2][3], 1.0);
+        let code = quantise::code(half);
+        let eight = [
+            0,
+            0,
+            0,
+            0,
+            code,
+            quantise::code(view::srgb_encode(0.25)),
+            quantise::code(view::srgb_encode(0.125)),
+            128,
+            code,
+            code,
+            code,
+            255,
+            0,
+            0,
+            0,
+            0,
+        ];
+        assert_eq!(delivered(size, [0, 0], None, &pixels, true), eight);
+        assert_eq!(looked_with(&film, &Chain::new(), false).unwrap(), eight);
+        let path = scratch("transparent.png");
+        write_delivery(&path, size, [0, 0], Some(Dither::seeded(3)), &pixels, true).unwrap();
+        let (kind, depth, bytes) = decoded(&path);
+        assert_eq!((kind, depth), (png::ColorType::Rgba, png::BitDepth::Eight));
+        assert_eq!(
+            bytes.iter().skip(3).step_by(4).copied().collect::<Vec<_>>(),
+            [0, 128, 255, 0]
+        );
+        assert_eq!(&bytes[..4], [0; 4]);
+        assert_eq!(&bytes[12..], [0; 4]);
+        let wide = master_with(&pixels, true);
+        assert_eq!(&wide[..8], [0; 8]);
+        assert_eq!(&wide[14..16], 32768u16.to_be_bytes());
+        assert_eq!(&wide[22..24], u16::MAX.to_be_bytes());
+        let path = scratch("transparent.master.png");
+        write_master(&path, size, &pixels, true).unwrap();
+        let (kind, depth, bytes) = decoded(&path);
+        assert_eq!(
+            (kind, depth),
+            (png::ColorType::Rgba, png::BitDepth::Sixteen)
+        );
+        assert_eq!(bytes, wide);
+        let opaque = Film {
+            color: color.iter().map(|&[r, g, b, _]| [r, g, b, 1.0]).collect(),
+            transparent: false,
+            ..film
+        };
+        let pixels = finished(&opaque, &Chain::new(), false).unwrap();
+        assert!(pixels.iter().all(|p| p[3] == 1.0), "{pixels:?}");
+        let bytes = delivered(size, [0, 0], None, &pixels, false);
+        assert!(bytes.iter().skip(3).step_by(4).all(|&a| a == 255));
+        assert_eq!(bytes, dithered_at(size, [0, 0], None, &pixels));
+        assert_eq!(master_with(&pixels, false), master(&pixels));
+    }
+
+    #[test]
+    fn a_transparent_exr_keeps_its_premultiplied_alpha_and_an_opaque_one_stays_opaque() {
+        let pixels = vec![
+            [0.0, 0.0, 0.0, 0.0],
+            [0.25, 0.125, 0.0625, 0.5],
+            [2.0, 1.0, 0.5, 1.0],
+            [0.03125, 0.03125, 0.03125, 0.25],
+        ];
+        let path = scratch("transparent.exr");
+        write_exr(&path, [2, 2], &pixels, true).unwrap();
+        assert_eq!(read_exr(&path).unwrap(), ([2, 2], pixels.clone()));
+        write_exr(&path, [2, 2], &pixels, false).unwrap();
+        let (_, back) = read_exr(&path).unwrap();
+        for (got, want) in back.iter().zip(&pixels) {
+            assert_eq!(got[..3], want[..3]);
+            assert_eq!(got[3], 1.0);
+        }
+        let film = Film {
+            size: [2, 2],
+            color: pixels.clone(),
+            albedo: vec![[0.5, 0.5, 0.5, 1.0]; 4],
+            normal: vec![[0.0, 0.0, 1.0, 1.0]; 4],
+            denoised: None,
+            samples: 1,
+            transparent: true,
+        };
+        let path = scratch("transparent-film.exr");
+        assert_eq!(
+            write_with(&path, &film, &Chain::new(), false).unwrap(),
+            Format::Exr
+        );
+        assert_eq!(read_exr(&path).unwrap().1, pixels);
+        let hdr_path = scratch("transparent-film.hdr");
+        let _ = std::fs::remove_file(&hdr_path);
+        let said = write_with(&hdr_path, &film, &Chain::new(), false).unwrap_err();
+        assert!(said.contains("alpha channel"), "{said}");
+        assert!(write_linear(&hdr_path, [2, 2], &pixels, true).is_err());
+        assert!(!hdr_path.exists());
+        assert_eq!(
+            write_linear(&hdr_path, [2, 2], &pixels, false).unwrap(),
+            Format::Hdr
+        );
+    }
+
+    fn silhouette(width: u32, edge: Option<[f32; 4]>) -> Film {
+        let covered = [0.4, 0.2, 0.1, 1.0];
+        let half = width / 2;
+        let at = |x: u32| match (x, edge) {
+            (x, _) if x < half => (covered, [0.5, 0.5, 0.5, 1.0], [0.0, 0.0, 1.0, 1.0]),
+            (x, Some(edge)) if x == half => (edge, [0.5, 0.5, 0.5, 1.0], [0.0, 0.0, 1.0, 1.0]),
+            _ => ([0.0; 4], [0.0; 4], [0.0; 4]),
+        };
+        let height = 4;
+        let pixels: Vec<_> = (0..width * height).map(|n| at(n % width)).collect();
+        Film {
+            size: [width, height],
+            color: pixels.iter().map(|p| p.0).collect(),
+            albedo: pixels.iter().map(|p| p.1).collect(),
+            normal: pixels.iter().map(|p| p.2).collect(),
+            denoised: None,
+            samples: 4,
+            transparent: true,
+        }
+    }
+
+    #[test]
+    fn the_denoiser_keeps_a_transparent_films_alpha_and_its_clear_pixels_clear() {
+        let film = silhouette(16, None);
+        let pixels = finished(&film, &Chain::new(), true).unwrap();
+        for (got, given) in pixels.iter().zip(&film.color) {
+            assert_eq!(got[3], given[3], "{got:?}");
+            if given[3] == 0.0 {
+                assert_eq!(*got, [0.0; 4]);
+            } else {
+                for (k, want) in [0.4, 0.2, 0.1].into_iter().enumerate() {
+                    assert!((got[k] - view::srgb_encode(want)).abs() < 1e-3, "{got:?}");
+                }
+            }
+        }
+        let bytes = delivered(film.size, [0, 0], None, &pixels, true);
+        for (pixel, given) in bytes.chunks_exact(4).zip(&film.color) {
+            match given[3] {
+                0.0 => assert_eq!(pixel, [0; 4]),
+                _ => assert_eq!(pixel[3], 255),
+            }
+        }
+        let edged = silhouette(8, Some([0.2, 0.1, 0.05, 0.5]));
+        let pixels = finished(&edged, &Chain::new(), true).unwrap();
+        for (got, given) in pixels.iter().zip(&edged.color) {
+            assert_eq!(got[3], given[3], "{got:?}");
+            assert!(
+                got.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)),
+                "{got:?}"
+            );
+            if given[3] == 0.0 {
+                assert_eq!(*got, [0.0; 4]);
+            }
+        }
+    }
+
+    #[test]
+    fn the_passes_are_three_full_float_rgba_exrs_named_after_the_frame() {
+        let size = [3, 2];
+        let film = Film {
+            size,
+            color: (0..6)
+                .map(|n| [1.0 / 3.0 + n as f32, 70000.5, -0.0, 0.25 * n as f32])
+                .collect(),
+            albedo: (0..6)
+                .map(|n| [0.1 * n as f32, 0.7, 1.0 / 7.0, 1.0 - 0.125 * n as f32])
+                .collect(),
+            normal: (0..6)
+                .map(|n| [-0.6, 0.8 - 0.1 * n as f32, 1.0 / 9.0, 0.0])
+                .collect(),
+            denoised: Some(vec![[9.0; 4]; 6]),
+            samples: 4,
+            transparent: false,
+        };
+        let dir = scratch("passes");
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = write_passes(&dir, "frame-0007", &film).unwrap();
+        assert_eq!(paths, pass_paths(&dir, "frame-0007"));
+        let names: Vec<&str> = paths
+            .iter()
+            .map(|path| path.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "frame-0007.color.exr",
+                "frame-0007.albedo.exr",
+                "frame-0007.normal.exr"
+            ]
+        );
+        let mut found: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        found.sort();
+        let mut wanted: Vec<String> = names.iter().map(|name| name.to_string()).collect();
+        wanted.sort();
+        assert_eq!(found, wanted);
+        for ((path, pass), pixels) in
+            paths
+                .iter()
+                .zip(PASSES)
+                .zip([&film.color, &film.albedo, &film.normal])
+        {
+            let meta = exr::meta::MetaData::read_from_file(path, false).unwrap();
+            assert_eq!(meta.headers.len(), 1);
+            let header = &meta.headers[0];
+            assert_eq!(header.layer_size.width(), 3);
+            assert_eq!(header.layer_size.height(), 2);
+            assert_eq!(
+                header
+                    .own_attributes
+                    .layer_name
+                    .as_ref()
+                    .map(|n| n.to_string()),
+                Some(pass.to_string())
+            );
+            let channels: Vec<(String, exr::meta::attribute::SampleType)> = header
+                .channels
+                .list
+                .iter()
+                .map(|channel| (channel.name.to_string(), channel.sample_type))
+                .collect();
+            let f32 = exr::meta::attribute::SampleType::F32;
+            assert_eq!(
+                channels,
+                ["A", "B", "G", "R"].map(|name| (name.to_string(), f32))
+            );
+            let (read, back) = read_exr(path).unwrap();
+            assert_eq!(read, size);
+            assert_eq!(&back, pixels, "{pass}");
+        }
+        let unguided = Film {
+            albedo: Vec::new(),
+            normal: Vec::new(),
+            ..film
+        };
+        let refused = write_passes(&dir, "frame-0008", &unguided).unwrap_err();
+        assert!(refused.contains("albedo"), "{refused}");
+        assert!(
+            pass_paths(&dir, "frame-0008")
+                .iter()
+                .all(|path| !path.exists())
+        );
     }
 
     #[test]
@@ -706,6 +1109,7 @@ mod tests {
             normal: vec![[0.0, 0.0, 1.0, 1.0]; 8],
             denoised: None,
             samples: 16,
+            transparent: false,
         };
         let plain = looked(&film, &Chain::new()).unwrap();
         assert_eq!(plain.len(), 32);
@@ -757,6 +1161,7 @@ mod tests {
             color,
             denoised: None,
             samples: 1,
+            transparent: false,
         };
         let finish = bloomed_finish();
         assert!(crop_refusal(&finish, full).is_none());
@@ -812,6 +1217,7 @@ mod tests {
             normal: vec![[0.0, 0.0, 1.0, 1.0]; 4],
             denoised: None,
             samples: 1,
+            transparent: false,
         };
         looked_with(&film, finish, false)
             .unwrap()
@@ -856,6 +1262,7 @@ mod tests {
             normal: vec![[0.0, 0.0, 1.0, 1.0]; 2],
             denoised: None,
             samples: 4,
+            transparent: false,
         };
         let raw = looked_with(&film, &Chain::new(), false).unwrap();
         assert_eq!(raw, [188, 188, 188, 255, 0, 0, 0, 255]);

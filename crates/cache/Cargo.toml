@@ -1,0 +1,17 @@
+[package]
+name = "pfx-cache"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's machine-wide cache: content-addressed entries per kind, shared by every run and checkout, written atomically, checked on read and capped by last use"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+pfx-core = { path = "../core" }
+sha2 = "0.11"
+hex = "0.4"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

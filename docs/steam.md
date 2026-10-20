@@ -168,10 +168,11 @@ let call = steam.join_lobby(lobbies[0])?;
 A friend joins a 1v1 through Steam itself:
 
 - `invite_dialog(lobby)` opens the overlay's invite dialog for a lobby the player is in (`ISteamFriends::ActivateGameOverlayInviteDialog`); outside the lobby it is `Error::Rejected`.
+- `web_page(url)` opens an `http://` or `https://` link in the overlay's web browser (`ISteamFriends::ActivateGameOverlayToWebPage`) and is `Ok(true)`; `Ok(false)` when the player turned the overlay off (`ISteamUtils::IsOverlayEnabled`), so the caller opens it elsewhere; any other scheme, a space or a control character, a quote or another character a URI forbids unencoded is `Error::Rejected` (`pfx_steam::web_link`). pfx-game's `SteamBrowser` uses it (`docs/game.md`, "Links").
 - When a friend accepts an invite, or picks "Join game" on the player's profile, while the game runs, Steam sends `GameLobbyJoinRequested`, and `run_callbacks` returns `Event::JoinRequested { lobby, friend: Some(friend) }`. The game calls `join_lobby(lobby)`.
 - When the invite starts the game, Steam launches it with `+connect_lobby <id>` on the command line. The game passes its arguments once after `init`: `steam.launched(&std::env::args().collect::<Vec<_>>())` returns the lobby and queues `Event::JoinRequested { lobby, friend: None }` for the next `run_callbacks`, so both paths reach the same handler. `connect_lobby(args)` is the parser alone.
 
-On `Fake`, `hub.invite(from, to, lobby)` plays the friend accepting, and `invite_dialogs()` lists the dialogs a client opened.
+On `Fake`, `hub.invite(from, to, lobby)` plays the friend accepting, and `invite_dialogs()` lists the dialogs a client opened; `web_pages()` lists the pages it opened and `set_overlay(false)` plays an overlay the player turned off.
 
 ## Messages
 

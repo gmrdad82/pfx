@@ -3234,6 +3234,7 @@ dependencies = [
  "pfx-bake",
  "pfx-bench",
  "pfx-build",
+ "pfx-cache",
  "pfx-core",
  "pfx-file",
  "pfx-film",
@@ -3298,6 +3299,7 @@ dependencies = [
  "hex",
  "ktx2",
  "naga",
+ "pfx-cache",
  "pfx-core",
  "pfx-geom",
  "pfx-gpu",
@@ -3356,6 +3358,27 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "toml 1.1.6+spec-1.1.0",
+]
+
+[[package]]
+name = "pfx-cache"
+version = "3.1.3"
+dependencies = [
+ "hex",
+ "libc",
+ "pfx-core",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "pfx-compose"
+version = "3.1.3"
+dependencies = [
+ "pfx-core",
+ "pfx-file",
+ "serde",
+ "toml 1.1.6+spec-1.1.0",
+ "toml_edit",
 ]
 
 [[package]]
@@ -3626,6 +3649,7 @@ dependencies = [
  "i_overlay",
  "naga",
  "pfx-bake",
+ "pfx-cache",
  "pfx-core",
  "pfx-geom",
  "pfx-gpu",

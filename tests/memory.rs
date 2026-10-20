@@ -40,6 +40,7 @@ fn a_file_claiming_more_memory_than_the_limit_is_refused_with_exit_1_not_a_signa
     let file = base.join("oversized.pitofx");
     std::fs::write(&file, oversized()).unwrap();
     let output = Command::new("prlimit")
+        .env("PFX_CACHE_DIR", "off")
         .arg("--core=1:1")
         .arg(format!("--as={LIMIT}:{LIMIT}"))
         .arg("--")

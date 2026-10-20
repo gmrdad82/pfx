@@ -249,6 +249,7 @@ fn live(path: &Path) -> Vec<[f32; 3]> {
     let output = Output {
         wide: true,
         dither: None,
+        transparent: false,
     };
     let bytes = shoot_posed_as(&gpu, (&recipe, &built), "main", SIZE, None, output).unwrap();
     bytes

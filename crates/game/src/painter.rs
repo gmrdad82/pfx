@@ -859,6 +859,10 @@ impl Warmer for PainterWarmer<'_> {
     fn renderer(&mut self) -> Option<&mut Renderer> {
         Some(&mut self.painter.renderer)
     }
+
+    fn format(&self) -> Option<wgpu::TextureFormat> {
+        Some(self.format)
+    }
 }
 
 pub fn resolution(quality: Option<pfx_settings::Quality>, game: Option<Budget>) -> Option<Budget> {

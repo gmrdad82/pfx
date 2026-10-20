@@ -456,7 +456,8 @@
         "scratch",
         "coat_wobble",
         "crack",
-        "track"
+        "track",
+        "film_ramp"
       ],
       "type": "string"
     },

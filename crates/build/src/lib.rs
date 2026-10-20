@@ -917,7 +917,12 @@ fn undefined_materials(
 ) -> Vec<recipe::Problem> {
     let mut out = Vec::new();
     for (i, object) in recipe.objects.iter().enumerate() {
-        if object.hidden || matches!(object.kind, Kind::Pocket { .. } | Kind::Text { .. }) {
+        if object.hidden
+            || matches!(
+                object.kind,
+                Kind::Pocket { .. } | Kind::Text { .. } | Kind::Empty
+            )
+        {
             continue;
         }
         for rule in &object.pieces {

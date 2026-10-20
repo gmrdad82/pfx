@@ -16,7 +16,7 @@ use pfx_trace::sky::Environment;
 use pfx_trace::sobol::Sampler;
 use pfx_trace::sprites::Spray;
 use pfx_trace::stage::Staged;
-use pfx_trace::{Adaptive, Round, Trace, TraceError};
+use pfx_trace::{Adaptive, Matte, Round, Trace, TraceError};
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt;
@@ -156,6 +156,7 @@ pub struct Request<'a> {
     pub crop: Option<Crop>,
     pub denoise: bool,
     pub time: Option<f64>,
+    pub transparent: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,10 +230,20 @@ impl Region {
         }
     }
 
-    fn open(&self, gpu: &Gpu, staged: &Staged<Environment>) -> Result<Trace, Fault> {
+    fn open(
+        &self,
+        gpu: &Gpu,
+        staged: &Staged<Environment>,
+        transparent: bool,
+    ) -> Result<Trace, Fault> {
         let mut trace = staged
             .trace(gpu, self.size[0], self.size[1])
             .map_err(refused)?;
+        if transparent {
+            trace
+                .set_matte(Matte::transparent())
+                .map_err(|e| Fault::Failed(format!("the tracer's matte: {e}")))?;
+        }
         if *self != Region::whole(self.full) {
             trace
                 .set_window(self.full, self.origin)
@@ -509,6 +520,7 @@ pub fn render_kept(
                 region,
                 seed,
                 denoiser: denoiser.as_mut(),
+                transparent: request.transparent,
             },
             adaptive,
             progress,
@@ -523,6 +535,7 @@ pub fn render_kept(
                     region,
                     seed,
                     denoiser: denoiser.as_mut(),
+                    transparent: request.transparent,
                 },
                 request.samples,
                 progress,
@@ -565,6 +578,8 @@ pub struct Reel {
     pub recipe: Recipe,
     pub seed: u32,
     pub motion_steps: u32,
+    pub denoise: bool,
+    pub guides: bool,
     base: Recipe,
     built: Built,
     staging: Staging,
@@ -627,6 +642,8 @@ impl Reel {
             recipe,
             seed,
             motion_steps: MOTION_STEPS,
+            denoise: true,
+            guides: false,
             built,
             staging,
             gpu,
@@ -880,11 +897,12 @@ impl Reel {
             _ => self.restage(lens, size, samples, &spray)?,
         };
         turn(Report::default());
-        if self.denoiser.is_none() {
+        if self.denoise && self.denoiser.is_none() {
             self.denoiser = Some(denoiser(&self.gpu)?);
         }
         let seed = take.seed.of(self.seed);
-        let shot = (size, seed, self.denoiser.as_mut());
+        let denoiser = self.denoiser.as_mut().filter(|_| self.denoise);
+        let shot = (size, seed, denoiser);
         let traced = match take.adaptive() {
             Some(adaptive) => adapted(
                 &self.gpu,
@@ -909,6 +927,7 @@ impl Reel {
         let built = kept.trace.builds();
         self.kept = Some(kept);
         let (film, mut paced, mean_samples, most_samples) = traced?;
+        let film = self.guided(film)?;
         paced.builds = Builds {
             bottom: built.bottom - since.bottom,
             top: built.top - since.top,
@@ -957,6 +976,24 @@ impl Reel {
             .collect()
     }
 
+    fn guided(&self, mut film: Film) -> Result<Film, Fault> {
+        let Some(kept) = self.kept.as_ref().filter(|_| self.guides) else {
+            return Ok(film);
+        };
+        if film.albedo.is_empty() {
+            let failed = |e: String| Fault::Failed(format!("the tracer's readback: {e}"));
+            let read = |target| {
+                self.gpu
+                    .readback_bytes(target)
+                    .and_then(|bytes| floats(&bytes))
+                    .map_err(failed)
+            };
+            film.albedo = read(&kept.trace.albedo)?;
+            film.normal = read(&kept.trace.normal)?;
+        }
+        Ok(film)
+    }
+
     fn restage(
         &self,
         lens: crate::staging::Eyepiece,
@@ -977,7 +1014,7 @@ impl Reel {
         staged.detail.sampler = Sampler::Sobol { samples };
         staged.detail.fit_textures = Some(size);
         Ok(Kept {
-            trace: Region::whole(size).open(&self.gpu, &staged)?,
+            trace: Region::whole(size).open(&self.gpu, &staged, false)?,
             size,
             samples,
         })
@@ -1013,6 +1050,7 @@ pub fn trace(
             region: Region::whole(size),
             seed,
             denoiser: None,
+            transparent: false,
         },
         samples,
         progress,
@@ -1025,6 +1063,7 @@ pub struct Shot<'a> {
     pub region: Region,
     pub seed: u32,
     pub denoiser: Option<&'a mut Denoiser>,
+    pub transparent: bool,
 }
 
 fn trace_in(
@@ -1040,8 +1079,9 @@ fn trace_in(
         region,
         seed,
         denoiser,
+        transparent,
     } = shot;
-    let mut trace = region.open(gpu, staged)?;
+    let mut trace = region.open(gpu, staged, transparent)?;
     traced(
         gpu,
         &mut trace,
@@ -1116,8 +1156,9 @@ pub fn converge(
         region,
         seed,
         denoiser,
+        transparent,
     } = shot;
-    let mut trace = region.open(gpu, staged)?;
+    let mut trace = region.open(gpu, staged, transparent)?;
     adapted(
         gpu,
         &mut trace,
@@ -1236,6 +1277,7 @@ fn developed(
         normal,
         denoised,
         samples,
+        transparent: trace.matte().transparent,
     })
 }
 
@@ -1562,6 +1604,7 @@ mod tests {
             crop: None,
             denoise: false,
             time: None,
+            transparent: false,
         };
         assert!(render(&request, &Registry::new(), &mut |s| steps.push(s)).is_err());
         assert!(steps.is_empty());

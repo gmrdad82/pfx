@@ -8,9 +8,10 @@ mod trace;
 pub use pfx_trace::checkpoint::{Keeper, Rounds, Saved};
 pub use pfx_trace::rt::{Path as TracePath, RayQueries};
 pub use picture::{
-    Film, Format, Look, Reach, crop_refusal, cut, developed, dithered, dithered_at, finished,
-    finished_at, hdr, looked, looked_with, master, reach, read_exr, rgbe, write, write_delivery,
-    write_exr, write_linear, write_master, write_with,
+    Film, Format, Look, PASSES, Reach, crop_refusal, cut, delivered, developed, dithered,
+    dithered_at, finished, finished_at, hdr, looked, looked_with, master, master_with, pass_paths,
+    premultiplied, reach, read_exr, rgbe, write, write_delivery, write_exr, write_linear,
+    write_master, write_passes, write_with,
 };
 pub use sprays::{node_world, puffs};
 pub use staging::{Eyepiece, IDENTITY, Shared, Staging, Steps, View, eyepiece};

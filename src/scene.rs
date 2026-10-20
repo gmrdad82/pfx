@@ -153,7 +153,7 @@ fn strip(doc: &mut pfx_build::Document, recipe: &Path) {
 }
 
 fn import_recipe(path: &Path, target: &Path, bare: bool) -> Result<Vec<String>, String> {
-    let mut doc = pfx_build::Document::pack(path, &pfx_build::Registry::new())?;
+    let mut doc = pfx_build::Document::pack_for(path, &pfx_build::Registry::new(), target)?;
     for note in &doc.notes {
         eprintln!("{}: {note}", path.display());
     }
@@ -172,6 +172,11 @@ fn import_recipe(path: &Path, target: &Path, bare: bool) -> Result<Vec<String>, 
         .iter()
         .map(|name| format!("packed {name} from outside {folder}"))
         .collect();
+    lines.extend(
+        doc.referenced.iter().map(|name| {
+            format!("kept {name} beside the .pitofx, which reads it from the disk there")
+        }),
+    );
     lines.extend(
         doc.unread
             .iter()

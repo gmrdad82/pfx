@@ -1,5 +1,5 @@
 use crate::mesh::Mesh;
-use pfx_materials::{AlphaMode, PackedMaterial, UvTransform};
+use pfx_materials::{AlphaMode, PackedMaterial, THIN_FILM_MIN, UvTransform};
 
 fn grey_png() -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -52,7 +52,7 @@ fn each_map_keeps_its_own_texture_transform_and_uv_set() {
     let packed = PackedMaterial::pack(&mesh.surfaces[0].material);
     assert_eq!(packed.normal_transform, [0.1, 0.2, 4.0, 4.0]);
     assert_eq!(packed.orm_transform, [0.0, 0.0, 2.0, 3.0]);
-    assert_eq!(packed.map_turns, [1.5, 0.25, 1.0, 0.0]);
+    assert_eq!(packed.map_turns, [1.5, 0.25, 1.0, THIN_FILM_MIN]);
     let back = packed.unpack().textures;
     assert_eq!(
         (back.main, back.normal_transform(), back.orm_transform()),
@@ -71,7 +71,7 @@ fn maps_without_their_own_transform_pack_the_rows_main_gives_them() {
     let packed = PackedMaterial::pack(&material);
     assert_eq!(packed.normal_transform, packed.texture_transform);
     assert_eq!(packed.orm_transform, packed.texture_transform);
-    assert_eq!(packed.map_turns, [0.75, 0.75, 0.0, 0.0]);
+    assert_eq!(packed.map_turns, [0.75, 0.75, 0.0, THIN_FILM_MIN]);
 }
 
 #[test]

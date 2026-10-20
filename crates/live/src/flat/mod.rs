@@ -1081,6 +1081,7 @@ pub(crate) fn pack_plain(draw: &Draw, fit: &Fit, icons: Option<&Icons>) -> Optio
                 (x1 - x0) * 0.5,
                 (y1 - y0) * 0.5,
             ];
+            shape = bounds;
             icon = entry.uv;
             gradient = [y0, y1];
         }

@@ -447,9 +447,11 @@ impl Features {
                     || m.lobes[0] != 0.0
                     || m.lobes[2] > 0.0
             }),
-            maps: materials
-                .iter()
-                .any(|m| m.textures.iter().any(|&slot| slot >= 0.0) || m.texture_extra[0] >= 0.0),
+            maps: materials.iter().any(|m| {
+                m.textures.iter().any(|&slot| slot >= 0.0)
+                    || m.texture_extra[0] >= 0.0
+                    || m.texture_extra[1] >= 0.0
+            }),
             wet: materials.iter().any(|m| m.wet[0] > 0.0 || m.wet[1] > 0.0),
             thin: materials.iter().any(crate::record::thin_on),
             alpha: materials.iter().any(crate::record::alpha_on),

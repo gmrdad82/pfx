@@ -4,15 +4,18 @@ use crate::parts::Piece;
 use pfx_build::{Look, Map, Mime};
 use pfx_load::scene::textures;
 use pfx_load::{ColorSpace, Image, Pixels};
-use pfx_materials::{Material, Textures, UvTransform};
+use pfx_materials::{Material, THIN_FILM_MIN, Textures, UvTransform};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
-const KINDS: [(&str, ColorSpace); 3] = [
+const KINDS: [(&str, ColorSpace); 4] = [
     ("base", ColorSpace::Srgb),
     ("normal", ColorSpace::Linear),
     ("roughness", ColorSpace::Linear),
+    ("thin film", ColorSpace::Linear),
 ];
+
+const LISTS: [usize; 4] = [0, 1, 2, 1];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Set {
@@ -21,7 +24,7 @@ pub struct Set {
     looks: Vec<Look>,
 }
 
-type Lists<'a> = [Vec<(&'a str, &'a Map)>; 3];
+type Lists<'a> = [Vec<(&'a str, usize, &'a Map)>; 3];
 
 fn drawn(map: &Option<Map>) -> Option<&Map> {
     map.as_ref().filter(|map| {
@@ -33,11 +36,12 @@ fn drawn(map: &Option<Map>) -> Option<&Map> {
     })
 }
 
-fn kinds(look: &Look) -> [Option<&Map>; 3] {
+fn kinds(look: &Look) -> [Option<&Map>; 4] {
     [
         drawn(&look.base),
         drawn(&look.normal),
         drawn(&look.metal_roughness),
+        drawn(&look.thin_film),
     ]
 }
 
@@ -92,6 +96,7 @@ impl Set {
                 })
                 .hash(&mut hasher);
             }
+            look.thin_film_min.map(f32::to_bits).hash(&mut hasher);
         }
         Some(Set {
             key: hasher.finish(),
@@ -100,20 +105,20 @@ impl Set {
         })
     }
 
-    fn plan(&self) -> (Vec<[i32; 3]>, Lists<'_>) {
+    fn plan(&self) -> (Vec<[i32; 4]>, Lists<'_>) {
         let mut lists: Lists<'_> = Default::default();
         let mut slots = Vec::with_capacity(self.looks.len());
         for (name, look) in self.names.iter().zip(&self.looks) {
-            let mut slot = [-1; 3];
+            let mut slot = [-1; 4];
             for (kind, map) in kinds(look).into_iter().enumerate() {
                 let Some(map) = map else {
                     continue;
                 };
-                let list = &mut lists[kind];
-                let at = match list.iter().position(|(_, seen)| seen.image == map.image) {
+                let list = &mut lists[LISTS[kind]];
+                let at = match list.iter().position(|(_, _, seen)| seen.image == map.image) {
                     Some(at) => at,
                     None => {
-                        list.push((name.as_str(), map));
+                        list.push((name.as_str(), kind, map));
                         list.len() - 1
                     }
                 };
@@ -131,11 +136,13 @@ impl Set {
                 continue;
             };
             let look = &self.looks[at];
-            let [base, normal, orm] = slots[at];
+            let [base, normal, orm, thin_film] = slots[at];
             material.textures = Textures {
                 base,
                 normal,
                 orm,
+                thin_film,
+                thin_film_min: look.thin_film_min.unwrap_or(THIN_FILM_MIN),
                 normal_scale: kinds(look)[1].map_or(1.0, |m| m.scale),
                 occlusion: 0.0,
                 main: main(look),
@@ -149,10 +156,11 @@ impl Set {
     pub fn images(&self) -> Result<textures::Textures, Error> {
         let (_, lists) = self.plan();
         let mut out: [Vec<Arc<Image>>; 3] = Default::default();
-        for ((list, found), (kind, space)) in lists.iter().zip(&mut out).zip(KINDS) {
-            for (name, map) in list {
+        for (list, found) in lists.iter().zip(&mut out) {
+            for (name, kind, map) in list {
+                let (label, space) = KINDS[*kind];
                 let image = decode(map, space)
-                    .map_err(|e| Error(format!("materials.{name}: the {kind} map: {e}")))?;
+                    .map_err(|e| Error(format!("materials.{name}: the {label} map: {e}")))?;
                 found.push(Arc::new(image));
             }
         }

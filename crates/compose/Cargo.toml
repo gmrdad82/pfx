@@ -1,0 +1,19 @@
+[package]
+name = "pfx-compose"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's composer: styles and scores kept in a .pitofx's [compose] table, the music theory tables, Markov harmony, the form fit and a seeded generator that writes notes per stem, the same notes for the same style, seed and length"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "pfx_compose"
+
+[dependencies]
+pfx-core = { path = "../core" }
+pfx-file = { path = "../file" }
+serde = { version = "1", features = ["derive"] }
+toml = "1.1"
+toml_edit = "0.25"

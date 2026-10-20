@@ -319,6 +319,7 @@ pub trait SteamApi {
     fn set_lobby_data(&mut self, lobby: Lobby, key: &str, value: &str) -> Result<(), Error>;
     fn lobby_data(&self, lobby: Lobby, key: &str) -> Result<Option<String>, Error>;
     fn invite_dialog(&mut self, lobby: Lobby) -> Result<(), Error>;
+    fn web_page(&mut self, url: &str) -> Result<bool, Error>;
     fn launched(&mut self, args: &[String]) -> Option<Lobby>;
 
     fn send_message(
@@ -447,6 +448,18 @@ pub(crate) fn message_len(len: usize) -> Result<(), Error> {
     } else {
         Ok(())
     }
+}
+
+pub fn web_link(url: &str) -> bool {
+    let starts = |scheme: &str| {
+        url.as_bytes()
+            .get(..scheme.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(scheme.as_bytes()))
+    };
+    (starts("http://") || starts("https://"))
+        && url
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && !b"\\\"<>`{}|^".contains(&byte))
 }
 
 #[cfg(test)]

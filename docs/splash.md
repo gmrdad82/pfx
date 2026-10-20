@@ -4,6 +4,8 @@ Every game built on pfx-game opens with pfx's splash: pfx's Powered by lockup (t
 
 The lockup follows the ground. On a dark ground the splash draws `assets/marks/powered-by.svg`, its words lime; on a light one `powered-by-light.svg`, its words violet, and PITOMD.COM turns violet too. A ground counts as light when its relative luminance (sRGB, linearised, weighted 0.2126, 0.7152 and 0.0722) is above 0.179, the point where black and white text contrast with it alike. The lockup is centred, 12 % of the window's shorter side tall and at most two thirds of its width wide, and the rule under it grows to 1.15 times its width.
 
+A game that credits pfx on its own screen, such as a credits page, draws this same lockup, glows included, on its flat board with `pfx_splash::Lockup` ([lockup.md](lockup.md)).
+
 ## What it shows and when
 
 The splash plays for 2 seconds: a 0.5 s fade in, the lockup holding while the whole group pushes in from 95% to 100% of its size, and a 0.5 s fade out. At 0.45 s the rule under the lockup grows from a point at the centre, both ends moving outward at the same eased speed, and reaches its full width at 0.85 s; then PITOMD.COM fades in under it over 0.25 s.

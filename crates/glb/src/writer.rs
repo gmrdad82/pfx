@@ -25,6 +25,9 @@ pub const MORPH_EPSILON: f32 = 1e-5;
 const MSFT_LOD: &str = "MSFT_lod";
 const SHEEN: &str = "KHR_materials_sheen";
 const ANISOTROPY: &str = "KHR_materials_anisotropy";
+const IRIDESCENCE: &str = "KHR_materials_iridescence";
+const THICKNESS_MIN: f32 = 100.0;
+const THICKNESS_MAX: f32 = 400.0;
 
 struct Builder<'a> {
     root: Root,
@@ -378,6 +381,21 @@ impl Builder<'_> {
                 serde_json::json!({
                     "anisotropyStrength": short(anisotropy.strength),
                     "anisotropyRotation": short(anisotropy.rotation),
+                }),
+            );
+        }
+        if let Some(map) = look.thin_film.as_ref() {
+            self.uses(IRIDESCENCE);
+            let index = self.texture(map).value();
+            let [amount, ior, most] = look.thin_film_factors.unwrap_or([1.0, 1.5, THICKNESS_MAX]);
+            others.insert(
+                IRIDESCENCE.to_string(),
+                serde_json::json!({
+                    "iridescenceFactor": short(amount),
+                    "iridescenceIor": short(ior),
+                    "iridescenceThicknessMinimum": short(look.thin_film_min.unwrap_or(THICKNESS_MIN)),
+                    "iridescenceThicknessMaximum": short(most),
+                    "iridescenceThicknessTexture": { "index": index, "texCoord": map.tex_coord },
                 }),
             );
         }

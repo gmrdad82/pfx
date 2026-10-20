@@ -65,6 +65,9 @@ fn traced_maps(s_in: Shaded, n_in: vec3f, m: MaterialMaps, hit: Hit, p: vec3f) -
         let b = normalize(hit.bitangent - n * dot(hit.bitangent, n) - t * dot(hit.bitangent, t));
         n = normalize(t * local.x + b * local.y + n * local.z);
     }
+    if (m.extra.y >= 0.0) {
+        s.thin_film = max(mix(m.turns.w, s.thin_film, traced_map(m.extra.y, uv).g), 0.0);
+    }
     if (m.extra.x >= 0.0) {
         let sample = traced_map(m.extra.x, uv);
         let along = sample.rg * 2.0 - vec2f(1.0);

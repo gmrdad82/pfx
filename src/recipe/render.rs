@@ -165,6 +165,15 @@ pub(super) struct Args {
     picture: super::Picture,
     #[arg(
         long,
+        value_name = "sky|transparent",
+        value_enum,
+        default_value = "sky",
+        hide_possible_values = true,
+        help = "sky: the recipe's sky behind the scene; transparent: the sky still lights the scene but the camera sees through it, to a .png with straight alpha or an .exr with premultiplied alpha"
+    )]
+    background: super::Background,
+    #[arg(
+        long,
         value_name = "file",
         value_parser = master,
         help = "Also write a 16-bit .png master through the recipe's finish"
@@ -230,6 +239,10 @@ impl Args {
         Format::of(&self.out) == Some(Format::Png)
     }
 
+    fn transparent(&self) -> bool {
+        self.background == super::Background::Transparent
+    }
+
     fn denoised(&self) -> bool {
         self.denoise != Some(false)
     }
@@ -282,6 +295,12 @@ fn precheck(args: &Args) -> Result<Trace, String> {
     if args.picture != super::Picture::default() && !args.png() {
         return Err(
             "--format and --dither shape a .png --out; an .exr or .hdr keeps the float frame"
+                .into(),
+        );
+    }
+    if args.transparent() && Format::of(&args.out) == Some(Format::Hdr) {
+        return Err(
+            "--background transparent needs an alpha channel; a .hdr has none, so write a .png or an .exr"
                 .into(),
         );
     }
@@ -545,6 +564,7 @@ fn traced(
         }),
         denoise: args.denoising(),
         time: args.time,
+        transparent: args.transparent(),
     };
     let key = super::checkpoint::key(
         &format!(
@@ -634,19 +654,26 @@ fn written(args: &Args, rendered: &Rendered) -> Result<(), Fault> {
     if args.finished() {
         let pixels = rendered.finished(args.denoised())?;
         if let Some(master) = &args.master {
-            pfx_still::write_master(master, size, &pixels)?;
+            pfx_still::write_master(master, size, &pixels, rendered.film.transparent)?;
         }
         if args.png() && args.picture.wide() {
-            pfx_still::write_master(&args.out, size, &pixels)?;
+            pfx_still::write_master(&args.out, size, &pixels, rendered.film.transparent)?;
         } else if args.png() {
             let dither = args.picture.dither(u64::from(rendered.seed));
-            pfx_still::write_delivery(&args.out, size, args.origin(), dither, &pixels)?;
+            pfx_still::write_delivery(
+                &args.out,
+                size,
+                args.origin(),
+                dither,
+                &pixels,
+                rendered.film.transparent,
+            )?;
         }
     }
     if !args.png() {
         let film = rendered.crop();
         let pixels = pfx_still::developed(&film, args.denoised_linear())?;
-        pfx_still::write_linear(&args.out, size, &pixels)?;
+        pfx_still::write_linear(&args.out, size, &pixels, rendered.film.transparent)?;
     }
     Ok(())
 }
@@ -763,7 +790,7 @@ mod tests {
     #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
-            "table.toml --camera main --spp 64 --threshold 0.02 --min-samples 16 --seed 9 --size 320x200 --ortho --crop 10,20,30,40 --variant bare --set sky.intensity=0.4 --set object.a.params.b=/x/y --time 1.5 --denoise off --out tmp/a.exr --master tmp/a.master.png --progress json --checkpoint 64spp --memory-limit 12.5",
+            "table.toml --camera main --spp 64 --threshold 0.02 --min-samples 16 --seed 9 --size 320x200 --ortho --crop 10,20,30,40 --variant bare --set sky.intensity=0.4 --set object.a.params.b=/x/y --time 1.5 --denoise off --out tmp/a.exr --master tmp/a.master.png --progress json --checkpoint 64spp --memory-limit 12.5 --background transparent",
         ))
         .unwrap();
         assert_eq!(
@@ -787,6 +814,7 @@ mod tests {
                 out: "tmp/a.exr".into(),
                 master: Some("tmp/a.master.png".into()),
                 picture: Default::default(),
+                background: super::super::Background::Transparent,
                 progress: Progress::Json,
                 checkpoint: Some(super::super::checkpoint::Every::Samples(64)),
                 pick: Default::default(),
@@ -863,6 +891,8 @@ mod tests {
             "a.toml --camera main --out a.png --crop 1,2,3",
             "a.toml --camera main --out a.png --crop 1,2,0,4",
             "a.toml --camera main --out a.png --crop a,b,c,d",
+            "a.toml --camera main --out a.png --background clear",
+            "a.toml --camera main --out a.png --background",
         ] {
             assert!(parse(&strings(text)).is_err(), "{text:?}");
         }
@@ -1182,6 +1212,23 @@ mod tests {
         ] {
             assert_eq!(format!("{:?}", run_line(line)), one, "{line}");
         }
+    }
+
+    #[test]
+    fn a_transparent_background_needs_a_format_with_alpha() {
+        let refused = |text: &str| precheck(&parse(&strings(text)).unwrap()).err();
+        let said = refused("nowhere/none.toml --camera main --out a.hdr --background transparent")
+            .unwrap_or_default();
+        assert!(said.contains("alpha channel"), "{said}");
+        for out in ["a.png", "a.exr"] {
+            let said = refused(&format!(
+                "nowhere/none.toml --camera main --out {out} --background transparent"
+            ))
+            .unwrap_or_default();
+            assert!(!said.contains("alpha channel"), "{said}");
+        }
+        let args = parse(&strings("a.toml --camera main --out a.png")).unwrap();
+        assert!(!args.transparent());
     }
 
     fn linear(byte: u8) -> f64 {

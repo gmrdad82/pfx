@@ -1,7 +1,10 @@
+use pfx_cache::{Key, Keyer, Store};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 pub const MAGIC: [u8; 8] = *b"PITOPLC1";
+pub const KIND: &str = "pipelines";
+pub const FORMAT: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CacheLoad {
@@ -11,16 +14,21 @@ pub enum CacheLoad {
     Unsupported,
 }
 
+enum Target {
+    File { path: PathBuf, key: String },
+    Store { store: Store, key: Key },
+}
+
 pub struct PipelineCache {
     cache: wgpu::PipelineCache,
-    path: PathBuf,
-    key: String,
+    target: Target,
+    loaded: Option<[u8; 32]>,
 }
 
 pub fn cache_key(info: &wgpu::AdapterInfo) -> Option<String> {
     wgpu::util::pipeline_cache_key(info).map(|backend| {
         format!(
-            "{backend}|{}|{}|{}|pito-engine {}",
+            "{backend}|{}|{}|{}|pfx {}",
             info.name,
             info.driver,
             info.driver_info,
@@ -43,7 +51,7 @@ pub fn wrap(key: &str, payload: &[u8]) -> Vec<u8> {
 pub fn unwrap<'a>(key: &str, bytes: &'a [u8]) -> Result<&'a [u8], String> {
     let rest = bytes
         .strip_prefix(&MAGIC)
-        .ok_or("not a pito-engine pipeline cache")?;
+        .ok_or("not a pfx pipeline cache")?;
     let (length, rest) = split(rest, 4)?;
     let length = u32::from_le_bytes(length.try_into().expect("four bytes")) as usize;
     let (stored, rest) = split(rest, length)?;
@@ -75,46 +83,71 @@ fn split(bytes: &[u8], at: usize) -> Result<(&[u8], &[u8]), String> {
     Ok(bytes.split_at(at))
 }
 
+pub fn store_key(key: &str) -> Key {
+    Keyer::new(KIND, FORMAT).part(key).finish()
+}
+
+fn digest(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
 impl PipelineCache {
     pub fn open(
         device: &wgpu::Device,
         info: &wgpu::AdapterInfo,
         path: &Path,
     ) -> (Option<Self>, CacheLoad) {
-        let Some(key) =
-            cache_key(info).filter(|_| device.features().contains(wgpu::Features::PIPELINE_CACHE))
-        else {
+        let Some(key) = supported(device, info) else {
             return (None, CacheLoad::Unsupported);
         };
-        let read = std::fs::read(path);
-        let (data, load) = match &read {
-            Ok(bytes) => match unwrap(&key, bytes) {
-                Ok(payload) => (
-                    Some(payload),
-                    CacheLoad::Loaded {
-                        bytes: payload.len(),
-                    },
-                ),
+        let (data, load) = match std::fs::read(path) {
+            Ok(bytes) => match unwrap(&key, &bytes) {
+                Ok(payload) => (Some(payload.to_vec()), loaded(payload)),
                 Err(reason) => (None, CacheLoad::Ignored(reason)),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => (None, CacheLoad::Fresh),
             Err(error) => (None, CacheLoad::Ignored(error.to_string())),
         };
+        let target = Target::File {
+            path: path.to_path_buf(),
+            key,
+        };
+        (Some(Self::made(device, data, None, target)), load)
+    }
+
+    pub fn open_in(
+        device: &wgpu::Device,
+        info: &wgpu::AdapterInfo,
+        store: Store,
+    ) -> (Option<Self>, CacheLoad) {
+        let Some(key) = supported(device, info) else {
+            return (None, CacheLoad::Unsupported);
+        };
+        let key = store_key(&key);
+        let (data, stamp) = store.get_stamped(KIND, &key).unzip();
+        let load = data.as_deref().map_or(CacheLoad::Fresh, loaded);
+        let target = Target::Store { store, key };
+        (Some(Self::made(device, data, stamp, target)), load)
+    }
+
+    fn made(
+        device: &wgpu::Device,
+        data: Option<Vec<u8>>,
+        loaded: Option<[u8; 32]>,
+        target: Target,
+    ) -> Self {
         let cache = unsafe {
             device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
                 label: Some("live pipeline cache"),
-                data,
+                data: data.as_deref(),
                 fallback: true,
             })
         };
-        (
-            Some(Self {
-                cache,
-                path: path.to_path_buf(),
-                key,
-            }),
-            load,
-        )
+        Self {
+            cache,
+            target,
+            loaded,
+        }
     }
 
     pub fn cache(&self) -> &wgpu::PipelineCache {
@@ -126,15 +159,41 @@ impl PipelineCache {
             .cache
             .get_data()
             .ok_or("the backend gave no pipeline cache data")?;
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        match &self.target {
+            Target::File { path, key } => {
+                pfx_core::atomic::write(path, &wrap(key, &payload))?;
+            }
+            Target::Store { store, key } => store.put(KIND, key, &payload)?,
         }
-        let mut partial = self.path.clone().into_os_string();
-        partial.push(".partial");
-        let partial = PathBuf::from(partial);
-        std::fs::write(&partial, wrap(&self.key, &payload)).map_err(|error| error.to_string())?;
-        std::fs::rename(&partial, &self.path).map_err(|error| error.to_string())?;
         Ok(payload.len())
+    }
+}
+
+impl Drop for PipelineCache {
+    fn drop(&mut self) {
+        let Target::Store { store, key } = &self.target else {
+            return;
+        };
+        if store.stamp(KIND, key) != self.loaded {
+            return;
+        }
+        let Some(payload) = self.cache.get_data() else {
+            return;
+        };
+        if Some(digest(&payload)) == self.loaded {
+            return;
+        }
+        let _ = store.put(KIND, key, &payload);
+    }
+}
+
+fn supported(device: &wgpu::Device, info: &wgpu::AdapterInfo) -> Option<String> {
+    cache_key(info).filter(|_| device.features().contains(wgpu::Features::PIPELINE_CACHE))
+}
+
+fn loaded(payload: &[u8]) -> CacheLoad {
+    CacheLoad::Loaded {
+        bytes: payload.len(),
     }
 }
 
@@ -143,7 +202,7 @@ mod tests {
     use super::*;
 
     const KEY: &str =
-        "wgpu_pipeline_cache_vulkan_4098_30016|AMD Radeon RX 9060 XT|radv|Mesa|pito-engine 0.18.18";
+        "wgpu_pipeline_cache_vulkan_4098_30016|AMD Radeon RX 9060 XT|radv|Mesa|pfx 0.18.18";
 
     #[test]
     fn a_wrapped_payload_unwraps_to_the_same_bytes() {

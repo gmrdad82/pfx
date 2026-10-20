@@ -80,6 +80,7 @@ fn zoom(dir: &Path) -> PathBuf {
         .collect();
     std::fs::write(dir.join("sky.hdr"), pfx_still::hdr(size, &sky).unwrap()).unwrap();
     let migrated = Command::new(env!("CARGO_BIN_EXE_pfx"))
+        .env("PFX_CACHE_DIR", "off")
         .args(["scene", "migrate"])
         .arg(&recipe)
         .output()
@@ -94,6 +95,7 @@ fn zoom(dir: &Path) -> PathBuf {
 
 fn clip(recipe: &Path, out: &Path, extra: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_pfx"));
+    command.env("PFX_CACHE_DIR", "off");
     command
         .arg("clip")
         .arg(recipe)

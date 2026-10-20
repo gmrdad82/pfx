@@ -22,11 +22,13 @@ use pfx_sound::{ChannelId, Clip, Level, Mixer, MusicTrack, PcmSender, Prepared, 
 
 use crate::PlayError;
 use crate::clipboard::Clipboard;
+use crate::configuring::Configuring;
 use crate::events::{Phase, TriggerEvent, WorldEvent};
 use crate::layers::Layers;
 use crate::math;
 use crate::rigs::Rigs;
 use crate::tunables::{FromTunable, TunableValue, Tunables};
+use crate::url::{Browser, Opening, Url, UrlError};
 
 mod anim;
 mod characters;
@@ -441,6 +443,8 @@ pub struct World {
     focus: Focus,
     scheme: Option<Scheme>,
     clipboard: Option<Box<dyn Clipboard>>,
+    browser: Option<Box<dyn Browser>>,
+    configuring: Configuring,
     redraw: Cell<bool>,
 }
 
@@ -667,6 +671,8 @@ impl World {
             focus: Focus::default(),
             scheme: None,
             clipboard: None,
+            browser: None,
+            configuring: Configuring::default(),
             warp: None,
             redraw: Cell::new(false),
             scene,
@@ -986,6 +992,20 @@ impl World {
 
     pub fn clipboard_text(&self) -> Option<String> {
         self.clipboard.as_ref()?.get_text()
+    }
+
+    pub fn attach_browser(&mut self, browser: Box<dyn Browser>) {
+        self.browser = Some(browser);
+    }
+
+    pub fn configuring(&self) -> Configuring {
+        self.configuring.clone()
+    }
+
+    pub fn open_url(&self, url: &str) -> Result<Opening, UrlError> {
+        let url = Url::parse(url)?;
+        let browser = self.browser.as_ref().ok_or(UrlError::NoBrowser)?;
+        Ok(browser.open(&url))
     }
 
     pub fn warp_pointer(&mut self, point: [f32; 2]) {

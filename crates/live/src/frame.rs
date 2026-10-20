@@ -2659,6 +2659,14 @@ impl Frame {
         load
     }
 
+    pub fn use_pipeline_cache_in(&mut self, store: pfx_cache::Store) -> CacheLoad {
+        let (cache, load) = PipelineCache::open_in(&self.gpu.device, &self.gpu.info, store);
+        if cache.is_some() {
+            self.pipelines.cache = cache;
+        }
+        load
+    }
+
     pub(crate) fn pipeline_cache(&self) -> Option<&wgpu::PipelineCache> {
         self.pipelines.cache.as_ref().map(PipelineCache::cache)
     }
