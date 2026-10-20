@@ -1,13 +1,9 @@
-mod dsp;
-mod reverb;
-
 use pfx_core::sim::pow;
-use pfx_sound::{Clip, Limiter};
+use pfx_sound::tone::{Biquad, Fm, Noise, Osc, Partial, Pass, bell, fm, pan, smooth};
+use pfx_sound::{Clip, Limiter, Room, reverb};
 
 use crate::compose::{RULE_FROM, RULE_TO, ease_out};
 use crate::timeline::LENGTH;
-use dsp::{Biquad, Noise, Osc, Pass, decay, pan, sine, smooth};
-use reverb::{Room, reverb};
 
 pub const RATE: u32 = 48_000;
 pub const CHANNELS: u16 = 2;
@@ -26,12 +22,6 @@ const ROOM: Room = Room {
     wet: 0.4,
     width: 1.0,
 };
-
-struct Partial {
-    ratio: f64,
-    amp: f32,
-    decay: f64,
-}
 
 const PURE: [Partial; 3] = [
     Partial {
@@ -64,14 +54,6 @@ const BODY: [Partial; 2] = [
     },
 ];
 
-struct Fm {
-    hz: f64,
-    ratio: f64,
-    index: f64,
-    index_decay: f64,
-    decay: f64,
-}
-
 const GLINT: Fm = Fm {
     hz: 2349.32,
     ratio: 3.5,
@@ -84,9 +66,17 @@ pub fn chime() -> Clip {
     let frames = (LENGTH * f64::from(RATE)).round() as usize;
     let mut dry = vec![[0.0f32; 2]; frames];
     sweep(&mut dry);
-    bell(&mut dry, RULE_TO, TONE, &PURE, 0.4, 0.002);
-    fm(&mut dry, RULE_TO, GLINT, 0.08);
-    bell(&mut dry, RULE_TO, SWEEP_FROM, &BODY, 0.28, 0.012);
+    bell(&mut dry, frame(RULE_TO), TONE, &PURE, 0.4, 0.002, RATE);
+    fm(&mut dry, frame(RULE_TO), GLINT, 0.08, RATE);
+    bell(
+        &mut dry,
+        frame(RULE_TO),
+        SWEEP_FROM,
+        &BODY,
+        0.28,
+        0.012,
+        RATE,
+    );
     let wet = reverb(&dry, RATE, ROOM);
     let mut samples = Vec::with_capacity(frames * usize::from(CHANNELS));
     for (n, (d, w)) in dry.iter().zip(&wet).enumerate() {
@@ -144,54 +134,8 @@ fn sweep(dry: &mut [[f32; 2]]) {
             mix[1] += r;
         }
         for c in 0..2 {
-            let air = band[c].process(noise[c].next()) * 0.4;
+            let air = band[c].process(noise[c].sample()) * 0.4;
             dry[n][c] += (low[c].process(mix[c]) + air) * amp;
-        }
-    }
-}
-
-fn bell(dry: &mut [[f32; 2]], start: f64, hz: f64, partials: &[Partial], gain: f32, attack: f64) {
-    let rate = f64::from(RATE);
-    let first = frame(start);
-    for partial in partials {
-        let mut osc = Osc::default();
-        let fall = decay(partial.decay, rate);
-        let mut level = partial.amp * gain;
-        let hz = hz * partial.ratio;
-        for (n, out) in dry.iter_mut().enumerate().skip(first) {
-            let rise = smooth(seconds(n - first) / attack) as f32;
-            let [l, r] = pan(osc.sine(hz, rate) * level * rise, 0.0);
-            out[0] += l;
-            out[1] += r;
-            level *= fall;
-            if level < 1e-6 {
-                break;
-            }
-        }
-    }
-}
-
-fn fm(dry: &mut [[f32; 2]], start: f64, fm: Fm, gain: f32) {
-    let rate = f64::from(RATE);
-    let first = frame(start);
-    let mut carrier = Osc::default();
-    let mut modulator = Osc::default();
-    let fall = decay(fm.decay, rate);
-    let index_fall = f64::from(decay(fm.index_decay, rate));
-    let mut level = gain;
-    let mut index = fm.index / std::f64::consts::TAU;
-    for (n, out) in dry.iter_mut().enumerate().skip(first) {
-        let rise = smooth(seconds(n - first) / 0.002) as f32;
-        let m = f64::from(modulator.sine(fm.hz * fm.ratio, rate));
-        let sample = sine(carrier.phase() + index * m);
-        carrier.sine(fm.hz, rate);
-        let [l, r] = pan(sample * level * rise, 0.0);
-        out[0] += l;
-        out[1] += r;
-        level *= fall;
-        index *= index_fall;
-        if level < 1e-6 {
-            break;
         }
     }
 }

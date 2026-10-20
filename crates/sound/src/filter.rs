@@ -20,6 +20,7 @@ pub(crate) struct Filter {
     coef: [f64; 5],
     state: Vec<[f64; 2]>,
     primed: bool,
+    tick: usize,
 }
 
 impl Filter {
@@ -34,6 +35,7 @@ impl Filter {
             coef: [1.0, 0.0, 0.0, 0.0, 0.0],
             state: Vec::new(),
             primed: false,
+            tick: 0,
         }
     }
 
@@ -89,6 +91,17 @@ impl Filter {
     }
 
     pub(crate) fn process(&mut self, buf: &mut [f32], frames: usize, channels: usize, rate: u32) {
+        self.process_every(buf, frames, channels, rate, 1);
+    }
+
+    pub(crate) fn process_every(
+        &mut self,
+        buf: &mut [f32],
+        frames: usize,
+        channels: usize,
+        rate: u32,
+        every: usize,
+    ) {
         if !self.on {
             return;
         }
@@ -98,9 +111,12 @@ impl Filter {
         }
         for frame in 0..frames {
             let cutoff = self.cutoff.next();
-            if cutoff != self.applied {
+            if cutoff != self.applied
+                && (self.tick.is_multiple_of(every.max(1)) || self.cutoff.is_settled())
+            {
                 self.recompute(cutoff, rate);
             }
+            self.tick = self.tick.wrapping_add(1);
             let [b0, b1, b2, a1, a2] = self.coef;
             let base = frame * channels;
             for channel in 0..channels {

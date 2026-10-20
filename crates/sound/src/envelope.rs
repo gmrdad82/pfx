@@ -150,6 +150,10 @@ impl EnvState {
         self.stage = Stage::Release;
     }
 
+    pub(crate) fn lengths(&self) -> (u64, u64, u64) {
+        (self.attack, self.decay, self.release)
+    }
+
     pub(crate) fn level(&self) -> f32 {
         self.level
     }

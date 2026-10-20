@@ -1,5 +1,7 @@
 use pfx_core::sim::{cos, exp, sin, splitmix64};
 
+use crate::synth::taylor_sine;
+
 const SINE_STEPS: usize = 4096;
 
 static SINE: [f32; SINE_STEPS + 1] = sine_table();
@@ -12,27 +14,6 @@ const fn sine_table() -> [f32; SINE_STEPS + 1] {
         i += 1;
     }
     table
-}
-
-const fn taylor_sine(x: f64) -> f64 {
-    let pi = std::f64::consts::PI;
-    let x = if x > 1.5 * pi {
-        x - 2.0 * pi
-    } else if x > 0.5 * pi {
-        pi - x
-    } else {
-        x
-    };
-    let square = x * x;
-    let mut term = x;
-    let mut sum = x;
-    let mut n = 1;
-    while n < 14 {
-        term = -term * square / ((2 * n) * (2 * n + 1)) as f64;
-        sum += term;
-        n += 1;
-    }
-    sum
 }
 
 pub fn sine(phase: f64) -> f32 {
@@ -100,7 +81,7 @@ impl Noise {
         Noise(seed)
     }
 
-    pub fn next(&mut self) -> f32 {
+    pub fn sample(&mut self) -> f32 {
         let unit = (splitmix64(&mut self.0) >> 40) as f32 / (1u64 << 24) as f32;
         unit * 2.0 - 1.0
     }
@@ -162,4 +143,72 @@ pub fn pan(sample: f32, at: f32) -> [f32; 2] {
     let at = at.clamp(-1.0, 1.0);
     let quarter = f64::from(at + 1.0) * 0.125;
     [sample * sine(quarter + 0.25), sample * sine(quarter)]
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Partial {
+    pub ratio: f64,
+    pub amp: f32,
+    pub decay: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fm {
+    pub hz: f64,
+    pub ratio: f64,
+    pub index: f64,
+    pub index_decay: f64,
+    pub decay: f64,
+}
+
+pub fn bell(
+    dry: &mut [[f32; 2]],
+    first: usize,
+    hz: f64,
+    partials: &[Partial],
+    gain: f32,
+    attack: f64,
+    rate: u32,
+) {
+    let rate = f64::from(rate);
+    for partial in partials {
+        let mut osc = Osc::default();
+        let fall = decay(partial.decay, rate);
+        let mut level = partial.amp * gain;
+        let hz = hz * partial.ratio;
+        for (n, out) in dry.iter_mut().enumerate().skip(first) {
+            let rise = smooth((n - first) as f64 / rate / attack) as f32;
+            let [l, r] = pan(osc.sine(hz, rate) * level * rise, 0.0);
+            out[0] += l;
+            out[1] += r;
+            level *= fall;
+            if level < 1e-6 {
+                break;
+            }
+        }
+    }
+}
+
+pub fn fm(dry: &mut [[f32; 2]], first: usize, fm: Fm, gain: f32, rate: u32) {
+    let rate = f64::from(rate);
+    let mut carrier = Osc::default();
+    let mut modulator = Osc::default();
+    let fall = decay(fm.decay, rate);
+    let index_fall = f64::from(decay(fm.index_decay, rate));
+    let mut level = gain;
+    let mut index = fm.index / std::f64::consts::TAU;
+    for (n, out) in dry.iter_mut().enumerate().skip(first) {
+        let rise = smooth((n - first) as f64 / rate / 0.002) as f32;
+        let m = f64::from(modulator.sine(fm.hz * fm.ratio, rate));
+        let sample = sine(carrier.phase() + index * m);
+        carrier.sine(fm.hz, rate);
+        let [l, r] = pan(sample * level * rise, 0.0);
+        out[0] += l;
+        out[1] += r;
+        level *= fall;
+        index *= index_fall;
+        if level < 1e-6 {
+            break;
+        }
+    }
 }
