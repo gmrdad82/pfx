@@ -189,7 +189,7 @@ mixer.stop(alarm, 0.05);
 ```
 
 - `Wave::Sine` reads a 2,049-entry table (one cycle, built at compile time from a Taylor series) with linear interpolation: within 1.2e-6 of a true sine (about -118 dB), the same bits on every platform, and cheaper than a libm call. Equal-power fades read the same table.
-- `Wave::Square` and `Saw`. Square and saw are band-limited with PolyBLEP, so their edges do not fold back at high notes.
+- `Wave::Square` and `Saw`. Square and saw are band-limited with PolyBLEP, so their edges do not fold back at high notes. `Wave::Triangle` and `Wave::Pulse(width)` are described under Music rendered offline.
 - `Wave::White` and `Wave::Pink` are noise (see Noise below).
 - The game drives the frequency (`set_tone_frequency`, `glide_tone_frequency`), the pitch ratio (`set_pitch`, which multiplies the frequency, as the channel's pitch does) and the volume (`set_gain`, `glide_gain`, a ramped gain on top of the level). All ramp.
 - The phase is a 64-bit accumulator: the measured frequency is within 0.1 % of what was asked, for every wave.
@@ -299,6 +299,54 @@ mixer.glide_pitch_at(mixer.clock() + 24_000, voice, 0.5, 2.0);
 - The block is cut at the frame, so the glide starts exactly there, not at the block's edge: the output is the same, bit for bit, as calling the plain glide when the clock reaches that frame. A frame already past is applied at the start of the next block. Events at the same frame apply in the order they were scheduled.
 - It applies the plain glide then, to whatever the target is by then: a voice that has ended is skipped, a channel or voice that did not exist is as in the plain call. `scheduled_glides()` counts the ones still waiting.
 - With nothing scheduled the block is rendered in one piece, as before.
+
+## Music rendered offline
+
+`NoteRender` writes notes straight into a stereo stem buffer, exactly as the live mixer would play them on one channel, without running the mixer:
+
+```rust
+let mut stem = NoteRender::new(48_000, frames);
+stem.note(&Note {
+    at: 0,
+    held: 24_000,
+    wave: Wave::Pulse(0.25),
+    hz: 110.0,
+    glide: Some(Glide { after: 12_000, frames: 4_800, to_hz: 82.4 }),
+    gain: 0.3,
+    pan: 0.0,
+    envelope,
+    fade: None,
+    seed: 7,
+});
+stem.lowpass_sweep(0, 2_000.0, 320.0, 9_600);
+let samples = stem.finish();
+```
+
+- A `Note` starts at frame `at`, holds for `held` frames, then plays its envelope's release. `glide` moves the frequency to `to_hz` over `frames`, starting `after` frames into the note. `fade` fades the note to silence over that many frames from its start. `seed` seeds noise waves.
+- Notes past the end of the buffer are skipped; a note that runs past it is cut there. Each envelope stage is tabulated once per envelope, up to the buffer's length, so a very long envelope costs no more than the stem.
+- `lowpass`, `highpass` and `drive` are the channel's filters and drive, applied at a frame, in the same order as a mixer channel (filters, then drive). Changes at the same frame apply in call order.
+  - `lowpass(at, Some(hz), frames)` glides from wherever the filter is: the first call ramps from open, and later calls start from the last cutoff. `frames` of 0 ramps over `FILTER_RAMP_SECONDS` (30 ms), never a jump.
+  - `lowpass_sweep(at, from, to, frames)` (and `highpass_sweep`) jumps to `from` and then glides to `to`, so every note it is called on sweeps from the same cutoff. Use it for a pluck or a filter envelope per note.
+- With no filter glide over 100 ms, the stem is the same as the live mixer's, bit for bit. On longer filter glides the filter retunes every 16 frames instead of every frame, and the stem stays within 1% of the mixer's peak.
+- `buffer_mut()` gives the interleaved stereo buffer, for writing a clip or a layer into it before `finish`.
+
+`Wave::Triangle` and `Wave::Pulse(width)` play in the mixer and in `NoteRender` alike. The triangle is band-limited with PolyBLAMP. The pulse's width is clamped to 0.01–0.99, a NaN width plays as 0.5, and its DC is removed, so any width is centred on zero.
+
+### Delay, room and loudness
+
+```rust
+Delay { frames: 14_400, feedback: 0.35, wet: 0.25 }.process(&mut samples, 2);
+let wet = reverb(&dry, 48_000, Room { size: 0.8, damp: 0.5, wet: 0.3, width: 1.0 });
+let measure = loudness(&samples, 2, 48_000);
+```
+
+- `Delay::process` is a feedback delay over a whole interleaved buffer. Its line starts empty on every call, so call it on a whole stem, not a block at a time. `feedback` is clamped to 0–0.95. A delay of 0 frames, or one as long as the buffer or longer, leaves the buffer untouched.
+- `reverb` is the Freeverb room (public domain, Jezar at Dreampoint), its comb and all-pass lengths scaled from 44.1 kHz to the rate. It returns the wet signal only, the length of the dry; mix it in yourself. `size`, `damp` and `width` are 0 to 1.
+- `Loudness` is a BS.1770 meter (ported from ebur128, MIT): `add` interleaved samples in any chunking and read `momentary()` (400 ms), `short_term()` (3 s) and `integrated()` (gated) in LUFS. The result is the same, bit for bit, however the input is split. `loudness(samples, channels, rate)` measures a whole buffer and returns a `Measure` with the maximum short-term and momentary readings, the integrated loudness and the true peak in dBTP.
+
+### Tone building blocks
+
+`pfx_sound::tone` holds the small pieces the splash chime is made of, for products that draw their own sounds offline: a table sine (`sine`, `Osc`), seeded noise (`Noise`), a biquad (`Biquad`), a decay factor (`decay`), a smoothstep (`smooth`), an equal-power pan (`pan`), an additive bell (`bell` with `Partial`s) and a two-operator FM voice (`fm` with `Fm`). They write into stereo frames at any rate.
 
 ## Vorbis (feature `vorbis`)
 

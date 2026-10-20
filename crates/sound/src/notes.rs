@@ -47,9 +47,13 @@ struct Curves {
 }
 
 impl Curves {
-    fn new(envelope: Envelope, rate: u32) -> Curves {
+    fn new(envelope: Envelope, rate: u32, frames: usize) -> Curves {
         let mut state = EnvState::new(envelope, rate, false);
+        let cap = |stage: u64, room: usize| usize::try_from(stage).unwrap_or(usize::MAX).min(room);
         let (attack, decay, release) = state.lengths();
+        let attack = cap(attack, frames);
+        let decay = cap(decay, frames - attack);
+        let release = cap(release, frames);
         let attack = (0..attack).map(|_| state.next()).collect();
         let decay = (0..decay).map(|_| state.next()).collect();
         let sustain = state.next();
@@ -176,7 +180,8 @@ impl NoteRender {
         if let Some(found) = self.curves.iter().position(|c| c.key == key) {
             return found;
         }
-        self.curves.push(Curves::new(envelope, self.rate));
+        self.curves
+            .push(Curves::new(envelope, self.rate, self.frames));
         self.curves.len() - 1
     }
 
@@ -515,5 +520,40 @@ mod tests {
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
         assert!(worst < 1e-4, "{worst}");
+    }
+
+    #[test]
+    fn an_endless_envelope_renders_only_the_stem() {
+        let mut render = NoteRender::new(RATE, 4_800);
+        for ms in [1e9, f32::INFINITY] {
+            for envelope in [
+                Envelope {
+                    attack_ms: ms,
+                    ..envelope(0.7, Shape::Linear)
+                },
+                Envelope {
+                    decay_ms: ms,
+                    release_ms: ms,
+                    ..envelope(0.7, Shape::Exponential)
+                },
+            ] {
+                render.note(&Note {
+                    at: 0,
+                    held: 2_400,
+                    wave: Wave::Sine,
+                    hz: 220.0,
+                    glide: None,
+                    gain: 0.2,
+                    pan: 0.0,
+                    envelope,
+                    fade: None,
+                    seed: 1,
+                });
+            }
+        }
+        let out = render.finish();
+        assert_eq!(out.len(), 9_600);
+        assert!(out.iter().all(|s| s.is_finite()));
+        assert!(out[4_800..].iter().any(|s| s.abs() > 0.01));
     }
 }
