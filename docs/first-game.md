@@ -2,7 +2,7 @@
 
 A game on pfx is its own repository and one binary. `pfx new` scaffolds it, `cargo run` plays it and `<game> edit` opens it in the editor. This page walks that path with the `pfx` tool installed ([Install and first use](../README.md#install-and-first-use)).
 
-![A terminal: pfx --version prints pfx 3.1.1; git init and pfx new demo scaffold a game of 18 files and set git to show its .pitofx diffs as TOML; ls shows AGENTS.md, CLAUDE.md, Cargo.toml, README.md, build.rs, content, project.toml, prompts, src and tests, and content holds first.pitofx, fonts and meshes; pfx bench plays demo/content/first.pitofx headless for 3 seconds and prints 180 frames, 0 dropped and GPU frame times under half a millisecond, held on screen.](images/new.gif)
+![A terminal: pfx --version prints pfx 3.1.2; git init and pfx new demo scaffold a game of 20 files and set git to show its .pitofx diffs as TOML; ls shows AGENTS.md, CLAUDE.md, Cargo.toml, README.md, build.rs, content, project.toml, prompts, src and tests, and content holds first.pitofx, fonts and meshes; pfx bench plays demo/content/first.pitofx headless for 3 seconds and prints 180 frames, 0 dropped and GPU frame times under half a millisecond, held on screen.](images/new.gif)
 
 ## Scaffold it
 
@@ -11,7 +11,7 @@ A game on pfx is its own repository and one binary. `pfx new` scaffolds it, `car
 ```
 $ git init my-game
 $ pfx new my-game
-my-game: scaffolded 15 files into my-game on pfx v3.1.1
+my-game: scaffolded 15 files into my-game on pfx v3.1.2
 git: diffs of .pitofx show their TOML (pfx scene print --all)
 next: cargo run --release (the game), cargo run --release -- edit (the editor)
 This game links pfx: publish its source under the AGPL-3.0, or use pfx's free licence (closed use under $200k a year, education, non-profits) or a commercial one: https://pitomd.com/pfx/license
@@ -23,9 +23,9 @@ The game pins the engine's crates at the tag the `pfx` tool was built from:
 
 ```toml
 [dependencies]
-pfx-game = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.1" }
-pfx-project = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.1" }
-pfx-workbench = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.1", optional = true }
+pfx-game = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.2" }
+pfx-project = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.2" }
+pfx-workbench = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.2", optional = true }
 ```
 
 The files it writes:

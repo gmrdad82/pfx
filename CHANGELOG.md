@@ -1,5 +1,53 @@
 # Changelog
 
+## v3.1.2 — 2026-10-20
+
+pfx is now licensed under the AGPL-3.0, with a commercial licence for closed products; versions up to 3.1.1 remain MIT.
+
+### Added
+
+- Every pfx game opens with a two-second "Powered by pfx" splash and its sound, composed while the game loads, never skippable; a pfx Pro key hides it for games built while the key is paid.
+- One settings panel in `pfx gui` and a game's editor: VRR, frame rate (60, 120, Auto or Uncapped), quality (Best appearance or Best performance), each costly live effect, frame stats and the licence; `pfx settings get`, `set` and `unlock` do the same from the command line, and a game's own menu offers VRR, frame rate and quality.
+- A frame stats overlay (F3) in the editor: fps, p50, p99 and max frame times, GPU time per pass, render scale, VRR and the present mode.
+- Best performance renders the 3D view at a lower scale and upscales it with AMD FSR 1, scaling to fit a 120 fps frame budget.
+- The live renderer culls by frustum in every pass, the camera's, each shadow cascade's and each light's, with the same pixels as before.
+- `[live] taa` and `[live] ssr` switch off temporal anti-aliasing and screen-space reflections.
+- `pfx git setup` makes `git diff` show a `.pitofx` as its TOML; `pfx scene print --all` prints a whole document.
+- An authored level can bake its colour, roughness and normals from the full mesh with every material blended (`bake_material`); morph targets are written sparse, about 60% smaller.
+- An imported wheel's pieces can hold still with `spin = false`, so a brake caliper steers but doesn't spin.
+- `pfx gui --clip` records at rational rates such as 24000/1001.
+- Traced renders, clips and jobs say which GPU, ray path and BVH they run on.
+- Apps reading the live depth buffer get its convention in code and WGSL helpers (`pfx_live::depth`).
+- `samples/courtyard.pitofx`, a moderate scene for frame-rate checks, and fourteen head-to-head charts against Godot and Bevy in docs/measured.md.
+- `pfx/cage` and a public Catmull-Clark subdivider.
+- Games and apps built with pfx may show the Powered by pfx lockup unmodified to credit it.
+
+### Changed
+
+- An idle game draws nothing until something changes: about 1% CPU and no GPU time at rest.
+- Games keep two frames in flight, so the CPU and GPU overlap: about twice the frame rate on flat games.
+- The editor and a game show their first frame in under 3 s on a fresh shader cache, down from about 25 s.
+- Traced clips are faster: a still frame about 25% and a moving one 6–7%, and a clip made one frame per run no longer renders each frame twice.
+- The path tracer stays fast on Apple GPUs instead of slowing to a crawl.
+- Live and traced lighting agree per patch, within a few percent.
+- When VRR is asked for but not in effect, a late frame shows late rather than a whole refresh late.
+- The editor's ground grid sits on the ground behind objects and fades with distance.
+- The docs describe only what the engine does today.
+- pito-codecs v1.16.3: RF64 and BW64 WAV files read like plain WAV.
+
+### Fixed
+
+- Live material and light edits draw exactly as the same edits saved to the files.
+- Resizing the editor while a scene loads no longer crashes it.
+- Loft silhouettes no longer fold a smooth surface into ridges.
+- `pfx set` takes a quoted ratio such as `timeline.fps = "24000/1001"`.
+- GLBs built on macOS have the same bytes as on Linux and Windows.
+- The docs bundle's links all resolve.
+
+### Removed
+
+- The old `.pfx` document name and its import, the `settings.pfx` fallback, recipes writing scene format 0 and the pre-3.0 generator alias; `.pitofx` is the one document name.
+
 ## v3.1.1 — 2026-10-19
 
 ### Added
