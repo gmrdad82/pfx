@@ -1,3 +1,4 @@
+mod aux;
 mod net;
 pub mod pfm;
 mod setup;
@@ -9,8 +10,11 @@ use bytemuck::{Pod, Zeroable};
 use pfx_gpu::Gpu;
 use wgpu::util::DeviceExt;
 
+use crate::aux::Filter;
 use crate::net::Net;
 use crate::tile::Plan;
+
+pub use crate::aux::Aux;
 
 pub const OIDN_VERSION: &str = "2.5.1";
 const MACS_PER_SUBMISSION: u64 = 24_000_000_000;
@@ -45,6 +49,8 @@ struct Images {
     albedo: wgpu::Buffer,
     normal: wgpu::Buffer,
     output: wgpu::Buffer,
+    clean_albedo: Option<wgpu::Buffer>,
+    clean_normal: Option<wgpu::Buffer>,
 }
 
 struct Setup {
@@ -58,13 +64,15 @@ struct Setup {
 }
 
 struct Model {
+    filter: Filter,
     net: Net,
     weights: Vec<wgpu::Buffer>,
     biases: Vec<wgpu::Buffer>,
 }
 
 pub struct Denoiser {
-    model: Model,
+    aux: Aux,
+    models: Vec<Model>,
     setup: Option<Setup>,
 }
 
@@ -75,33 +83,24 @@ fn norm_scales() -> (f32, f32) {
 
 impl Denoiser {
     pub fn new(gpu: &Gpu) -> Result<Self, String> {
-        let net = net::build(&tza::parse(WEIGHTS)?, 9)?;
-        let upload = |label: &str, data: &[f32]| {
-            gpu.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: bytemuck::cast_slice(data),
-                    usage: wgpu::BufferUsages::STORAGE,
-                })
-        };
-        let weights = net
-            .layers
+        Self::with_aux(gpu, Aux::Noisy)
+    }
+
+    pub fn with_aux(gpu: &Gpu, aux: Aux) -> Result<Self, String> {
+        let models = aux
+            .filters()
             .iter()
-            .map(|layer| upload(&layer.name, &layer.weights))
-            .collect();
-        let biases = net
-            .layers
-            .iter()
-            .map(|layer| upload(&layer.name, &layer.bias))
-            .collect();
+            .map(|&filter| model(gpu, filter, aux))
+            .collect::<Result<_, String>>()?;
         Ok(Self {
-            model: Model {
-                net,
-                weights,
-                biases,
-            },
+            aux,
+            models,
             setup: None,
         })
+    }
+
+    pub fn aux(&self) -> Aux {
+        self.aux
     }
 
     pub fn tiles(&self) -> Option<(u32, u32, usize)> {
@@ -315,9 +314,37 @@ impl Denoiser {
             return Ok(());
         }
         self.setup = None;
-        self.setup = Some(setup::build(gpu, &self.model, width, height)?);
+        self.setup = Some(setup::build(gpu, &self.models, width, height)?);
         Ok(())
     }
+}
+
+fn model(gpu: &Gpu, filter: Filter, aux: Aux) -> Result<Model, String> {
+    let net = net::build(&tza::parse(filter.weights(aux))?, filter.input_channels())?;
+    let upload = |label: &str, data: &[f32]| {
+        gpu.device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(data),
+                usage: wgpu::BufferUsages::STORAGE,
+            })
+    };
+    let weights = net
+        .layers
+        .iter()
+        .map(|layer| upload(&layer.name, &layer.weights))
+        .collect();
+    let biases = net
+        .layers
+        .iter()
+        .map(|layer| upload(&layer.name, &layer.bias))
+        .collect();
+    Ok(Model {
+        filter,
+        net,
+        weights,
+        biases,
+    })
 }
 
 fn check_texture(texture: &wgpu::Texture, width: u32, height: u32) -> Result<(), String> {

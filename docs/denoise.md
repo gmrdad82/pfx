@@ -1,6 +1,6 @@
 # The denoiser
 
-`pfx-denoise` is Intel Open Image Denoise's RT filter, ported from OIDN 2.5.1's source to Rust and WGSL compute on wgpu. It takes a path-traced HDR colour image with its albedo and normal, as `pfx-trace` writes them, and returns the denoised colour. It runs the trained weights OIDN ships for that filter (`rt_hdr_alb_nrm.tza`, OIDN's default quality), loaded as they are; it links no C++ and adds no dependency beyond wgpu and bytemuck. Its credits and licence are in [NOTICE.md](../NOTICE.md) and [INSPIRATION.md](../INSPIRATION.md); the package is licensed with pfx ([Licence](../README.md#licence)), and the parts ported from OIDN and its weights keep the Apache License 2.0 notice in [crates/denoise/LICENSE-APACHE](../crates/denoise/LICENSE-APACHE).
+`pfx-denoise` is Intel Open Image Denoise's RT filter, ported from OIDN 2.5.1's source to Rust and WGSL compute on wgpu. It takes a path-traced HDR colour image with its albedo and normal, as `pfx-trace` writes them, and returns the denoised colour. It runs the trained weights OIDN ships for that filter (`rt_hdr_alb_nrm.tza`, OIDN's default quality, and for clean features `rt_alb.tza`, `rt_nrm.tza` and `rt_hdr_calb_cnrm.tza`), loaded as they are; it links no C++ and adds no dependency beyond wgpu and bytemuck. Its credits and licence are in [NOTICE.md](../NOTICE.md) and [INSPIRATION.md](../INSPIRATION.md); the package is licensed with pfx ([Licence](../README.md#licence)), and the parts ported from OIDN and its weights keep the Apache License 2.0 notice in [crates/denoise/LICENSE-APACHE](../crates/denoise/LICENSE-APACHE).
 
 ## The API
 
@@ -13,7 +13,7 @@ let clean = denoiser.denoise_textures(&gpu, &trace.color.texture, &trace.albedo.
 denoiser.denoise_textures_into(&gpu, &trace.color.texture, &trace.albedo.texture, &trace.normal.texture, &target)?;
 ```
 
-- `Denoiser::new(&gpu)` parses the weights and uploads them. The first call at a new image size builds the pipelines for it (about 0.2 to 0.6 s); later calls at that size reuse them.
+- `Denoiser::new(&gpu)` parses the weights and uploads them. `Denoiser::with_aux(&gpu, aux)` picks how the albedo and normal are used ([Clean auxiliary features](#clean-auxiliary-features)); `new` is `Aux::Noisy`. The first call at a new image size builds the pipelines for it (about 0.2 to 0.6 s); later calls at that size reuse them.
 - `denoise` takes and returns row-major RGBA `f32` pixels. The alpha channel passes through from `color`; the network sees RGB only.
 - `denoise_textures` and `denoise_textures_into` read `Rgba32Float` textures with `COPY_SRC`, which is what `Trace::color`, `Trace::albedo` and `Trace::normal` are, so a trace feeds the denoiser with GPU copies and no readback. `denoise_textures` reads the result back; `denoise_textures_into` copies it into an `Rgba32Float` texture with `COPY_DST` and returns without waiting.
 - Normals may be in any space, in [-1, 1]; albedo in [0, 1]. Colour is linear HDR; its exposure is found the way OIDN finds it.
@@ -43,6 +43,58 @@ The convolution kernels are pfx's own: each workgroup of 64 threads computes a 3
 The tolerance is a gap of at most 1e-3 × (1 + |OIDN's value|) per channel. The GPU test `the_denoiser_matches_oidn_on_the_desk` (`crates/denoise/tests/oidn.rs`) holds it on a 32×24 crop of the desk against OIDN's stored output (`tests/fixtures/desk.oidn.pfm`); it measures 2.2e-6. The differences are float rounding: OIDN on the CPU sums in a different order.
 
 To repeat it, render the inputs with `cargo run --release -p pfx-denoise --example compare -- stage <dir> 640 16`, run `oidnDenoise -d cpu --hdr <name>.color.pfm --alb <name>.albedo.pfm --nrm <name>.normal.pfm -o <name>.oidn.pfm` for each name, then `compare denoise <dir> <name>`.
+
+## Clean auxiliary features
+
+A path tracer's albedo and normal are only as clean as its samples. Where motion blur, depth of field, hair or glass mix several surfaces into one pixel, the albedo and normal are noisy too, and the default weights (`rt_hdr_alb_nrm`, trained on noisy features) treat them as a weak hint: edges the features blur, the colour keeps blurred. OIDN's answer is to prefilter the features and use the weights trained on clean ones, and `pfx-denoise` ports it:
+
+```rust
+use pfx_denoise::{Aux, Denoiser};
+
+let mut denoiser = Denoiser::with_aux(&gpu, Aux::Prefiltered)?;
+let clean = denoiser.denoise_textures(&gpu, &trace.color.texture, &trace.albedo.texture, &trace.normal.texture)?;
+```
+
+| `Aux` | What runs | Weights |
+|---|---|---|
+| `Noisy` (`Denoiser::new`) | the colour network, the features as they are | `rt_hdr_alb_nrm.tza` |
+| `Prefiltered` | the albedo network, then the normal network, then the colour network on their outputs | `rt_alb.tza`, `rt_nrm.tza`, `rt_hdr_calb_cnrm.tza` |
+| `Clean` | the colour network, the features taken as noise-free (from a pass of their own, or already filtered) | `rt_hdr_calb_cnrm.tza` |
+
+`Prefiltered` is OIDN's documented prefiltering, the RT filter run on the albedo alone and on the normal alone before the colour, with `cleanAux` set. It follows OIDN's source as the colour pass does:
+
+- **The networks** are the same U-Net with three input channels instead of nine (`UNetFilter::getWeights` picks `rt_alb` and `rt_nrm` for a filter given only an albedo or only a normal; `rt_hdr_calb_cnrm` for colour with `cleanAux`).
+- **The albedo pass** (`RTFilter::newTransferFunc`, `gpu_input_process.h`, `gpu_output_process.h`): NaNs zeroed, clamped to [0, 1] and put through the sRGB transfer function on the way in; the inverse sRGB transfer and a clamp to 1 on the way out. No exposure.
+- **The normal pass**: clamped to [-1, 1] and mapped to [0, 1] in, a linear transfer, mapped back to [-1, 1] and clamped out (the `snorm` path).
+- **Order**: every tile of the albedo, then every tile of the normal, then the colour's tiles, so a colour tile reads prefiltered features its neighbours' tiles wrote. The three networks share one activation arena and the pipelines their identical layers generate, so prefiltering adds two image buffers and no tile memory.
+
+The weights are OIDN's base models (its `balanced` quality). At its default `high` quality OIDN picks larger models for clean features (`rt_alb_large`, `rt_nrm_large`, `rt_hdr_calb_cnrm_large`), about four times the size; pfx does not ship them.
+
+Prefiltering runs three networks instead of one, so it takes about three times the denoise times under [Speed](#speed), which are measured with `Aux::Noisy`.
+
+The GPU test `the_clean_aux_denoiser_matches_oidn_on_the_desk` (`crates/denoise/tests/oidn.rs`) holds the same tolerance as the noisy one on the same 32×24 desk crop, twice: `Prefiltered` from the noisy features against OIDN's three-step output, and `Clean` given OIDN's own prefiltered albedo and normal against the same image. OIDN 2.5.1's `oidnDenoise` (the official Linux release, CPU device, `-q balanced`) wrote the references: `--alb desk.albedo.pfm -o desk.albedo.oidn.pfm`, `--nrm desk.normal.pfm -o desk.normal.oidn.pfm`, then `--hdr desk.color.pfm --alb desk.albedo.oidn.pfm --nrm desk.normal.oidn.pfm --clean_aux -o desk.prefiltered.oidn.pfm`.
+
+## Samples for a film-quality frame
+
+How many samples a traced frame needs once denoised, measured on pfx's street template (`pfx new <out> --from street`: a low sun, analytic sky, height fog, f/5.6 depth of field) as a 2160×1200 crop of a 2160×3840 still, with `Aux::Noisy`. The reference is 1024 samples undenoised. "Display" error goes through ×1.5 exposure, a clamp and a 1/2.2 power; "against truth" removes the reference's own noise (its variance taken to fall as 1/spp); the last column compares each frame with the 256-sample adaptive (threshold 0.01) denoised frame.
+
+| frame | mean spp | GPU s | against the 1024 reference (display PSNR, relMSE) | against truth (display) | against the 256 adaptive frame (display PSNR) |
+|---|---:|---:|---|---:|---:|
+| raw 256 | 256 | 74.3 | 37.07 dB, 1.51e-3 | | |
+| 256, threshold 0.01, denoised | 244.2 | 84.9 | 42.00 dB, 1.26e-4 | 46.2 dB | — |
+| 256 fixed, denoised | 256 | 85.9 | 41.95 dB, 1.26e-4 | 46.2 dB | |
+| 128 fixed, denoised | 128 | 42.9 | 41.93 dB, 1.37e-4 | 46.1 dB | 55.7 dB |
+| **64 fixed, denoised** | 64 | 21.5 | 41.86 dB, 1.51e-4 | **45.9 dB** | **52.2 dB** |
+| 32 fixed, denoised | 32 | 10.7 | 41.63 dB, 1.81e-4 | 45.3 dB | 49.1 dB |
+| 16 fixed, denoised | 16 | 5.4 | 41.23 dB, 2.22e-4 | 44.4 dB | 46.6 dB |
+| 8 fixed, denoised | 8 | 3.1 | 40.52 dB, 2.75e-4 | 43.1 dB | 44.0 dB |
+| adaptive 0.02, cap 256 | 198.6 | 78.3 | 41.42 dB, 1.30e-4 | | |
+| adaptive 0.05, cap 256 | 98.0 | 52.4 | 40.20 dB, 1.48e-4 | | 43.1 dB |
+| adaptive 0.01, cap 64 | 63.8 | 21.8 | 41.86 dB, 1.51e-4 | | |
+
+Film quality here means within one 8-bit level RMS (48 dB in display terms) of the 256-sample adaptive frame. 32 samples pass (49.1 dB) and 64 pass with margin (52.2 dB, 0.3 dB under 256 against truth), so a film final takes 64 samples a pixel and a film draft 32. Adaptive sampling gains nothing on this scene: at 0.01 it runs nearly every pixel to the cap, and at 0.05 it is cheaper but scores below a fixed 64 in display terms, because its linear metric stops pixels the exposure later lifts.
+
+The still has no motion blur, so its features are cleaner than a clip's: where motion blur and defocus mix surfaces in a pixel, the features are noisy, and that is what `Aux::Prefiltered` is for.
 
 ## Speed
 
