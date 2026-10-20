@@ -112,7 +112,13 @@ struct Pass {
     layers: Vec<usize>,
 }
 
-pub(crate) fn build(gpu: &Gpu, models: &[Model], width: u32, height: u32) -> Result<Setup, String> {
+pub(crate) fn build(
+    gpu: &Gpu,
+    models: &[Model],
+    max_tile_pixels: u64,
+    width: u32,
+    height: u32,
+) -> Result<Setup, String> {
     let limits = gpu.device.limits();
     let binding = limits
         .max_storage_buffer_binding_size
@@ -122,11 +128,7 @@ pub(crate) fn build(gpu: &Gpu, models: &[Model], width: u32, height: u32) -> Res
         .map(|model| largest_tensor_per_pixel(&model.net))
         .max()
         .unwrap_or(BLOCK_BYTES);
-    let plan = tile::plan(
-        height,
-        width,
-        tile::DEFAULT_MAX_TILE_PIXELS.min(binding / per_pixel),
-    );
+    let plan = tile::plan(height, width, max_tile_pixels.min(binding / per_pixel));
     let arenas: Vec<(Vec<u64>, Vec<usize>)> = models
         .iter()
         .map(|model| arena(&model.net, &plan))
@@ -255,12 +257,10 @@ pub(crate) fn build(gpu: &Gpu, models: &[Model], width: u32, height: u32) -> Res
         list: Vec::new(),
         built: HashMap::new(),
     };
-    let exposure = has(Filter::Color).then(|| {
-        [
-            pipelines.get("denoise exposure bins", process.into(), "exposure_bins"),
-            pipelines.get("denoise exposure reduce", process.into(), "exposure_reduce"),
-        ]
-    });
+    let [bins_pipeline, reduce_pipeline] = [
+        pipelines.get("denoise exposure bins", process.into(), "exposure_bins"),
+        pipelines.get("denoise exposure reduce", process.into(), "exposure_reduce"),
+    ];
     let shapes: Vec<Vec<ConvShape>> = models
         .iter()
         .map(|model| {
@@ -311,34 +311,32 @@ pub(crate) fn build(gpu: &Gpu, models: &[Model], width: u32, height: u32) -> Res
         })
     };
     let mut steps = Vec::new();
-    if let Some([bins_pipeline, reduce_pipeline]) = exposure {
-        steps.push(Step {
-            bindings: bind(
-                bins_pipeline,
-                &[
-                    (0, job_slot(0)),
-                    (1, images.color.as_entire_binding()),
-                    (8, bins.as_entire_binding()),
-                ],
-            ),
-            pipeline: bins_pipeline,
-            groups: [width.div_ceil(16), height.div_ceil(16), 1],
-            macs: 0,
-        });
-        steps.push(Step {
-            bindings: bind(
-                reduce_pipeline,
-                &[
-                    (0, job_slot(0)),
-                    (8, bins.as_entire_binding()),
-                    (9, scale.as_entire_binding()),
-                ],
-            ),
-            pipeline: reduce_pipeline,
-            groups: [1, 1, 1],
-            macs: 0,
-        });
-    }
+    steps.push(Step {
+        bindings: bind(
+            bins_pipeline,
+            &[
+                (0, job_slot(0)),
+                (1, images.color.as_entire_binding()),
+                (8, bins.as_entire_binding()),
+            ],
+        ),
+        pipeline: bins_pipeline,
+        groups: [width.div_ceil(16), height.div_ceil(16), 1],
+        macs: 0,
+    });
+    steps.push(Step {
+        bindings: bind(
+            reduce_pipeline,
+            &[
+                (0, job_slot(0)),
+                (8, bins.as_entire_binding()),
+                (9, scale.as_entire_binding()),
+            ],
+        ),
+        pipeline: reduce_pipeline,
+        groups: [1, 1, 1],
+        macs: 0,
+    });
     let albedo = images.clean_albedo.as_ref().unwrap_or(&images.albedo);
     let normal = images.clean_normal.as_ref().unwrap_or(&images.normal);
     let tile_groups = [plan.tile_w.div_ceil(8), plan.tile_h.div_ceil(8), 1];

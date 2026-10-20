@@ -126,5 +126,6 @@ mod tests {
             assert!(covered(&split, h, w), "{h}x{w}");
             assert!(split.tiles.len() > 1);
         }
+        assert_eq!(plan(1200, 1200, 768 * 768).tiles.len(), 4);
     }
 }

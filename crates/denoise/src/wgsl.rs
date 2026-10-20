@@ -220,17 +220,26 @@ pub fn groups(layer: &Layer, shape: &ConvShape) -> [u32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::aux::Aux;
 
     #[test]
     fn every_generated_shader_validates() {
-        let net = crate::net::build(&crate::tza::parse(crate::WEIGHTS).unwrap(), 9).unwrap();
         let mut sources = vec![process().to_string()];
-        for layer in &net.layers {
-            let shape = ConvShape {
-                width: 1920 >> layer.level,
-                height: 1088 >> layer.level,
-            };
-            sources.push(conv(layer, &shape));
+        for aux in [Aux::Noisy, Aux::Prefiltered, Aux::Clean] {
+            for &filter in aux.filters() {
+                let tensors = crate::tza::parse(filter.weights(aux)).unwrap();
+                let net = crate::net::build(&tensors, filter.input_channels()).unwrap();
+                for layer in &net.layers {
+                    let shape = ConvShape {
+                        width: 1920 >> layer.level,
+                        height: 1088 >> layer.level,
+                    };
+                    let source = conv(layer, &shape);
+                    if !sources.contains(&source) {
+                        sources.push(source);
+                    }
+                }
+            }
         }
         for source in sources {
             let module = naga::front::wgsl::parse_str(&source).unwrap();

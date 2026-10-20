@@ -73,6 +73,7 @@ struct Model {
 pub struct Denoiser {
     aux: Aux,
     models: Vec<Model>,
+    max_tile_pixels: u64,
     setup: Option<Setup>,
 }
 
@@ -95,6 +96,7 @@ impl Denoiser {
         Ok(Self {
             aux,
             models,
+            max_tile_pixels: tile::DEFAULT_MAX_TILE_PIXELS,
             setup: None,
         })
     }
@@ -314,7 +316,13 @@ impl Denoiser {
             return Ok(());
         }
         self.setup = None;
-        self.setup = Some(setup::build(gpu, &self.models, width, height)?);
+        self.setup = Some(setup::build(
+            gpu,
+            &self.models,
+            self.max_tile_pixels,
+            width,
+            height,
+        )?);
         Ok(())
     }
 }
@@ -385,4 +393,93 @@ fn upload(gpu: &Gpu, buffer: &wgpu::Buffer, width: u32, stride: u32, pixels: &[[
     }
     gpu.queue
         .write_buffer(buffer, 0, bytemuck::cast_slice(&padded));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hash(x: u32, y: u32, salt: u32) -> f32 {
+        let mut h = x.wrapping_mul(0x8da6_b343)
+            ^ y.wrapping_mul(0xd816_3841)
+            ^ salt.wrapping_mul(0xcb1a_b31f);
+        h ^= h >> 15;
+        h = h.wrapping_mul(0x2c1b_3c6d);
+        h ^= h >> 12;
+        h = h.wrapping_mul(0x297a_2d39);
+        h ^= h >> 15;
+        h as f32 / u32::MAX as f32
+    }
+
+    fn scene(size: u32) -> [Vec<[f32; 4]>; 3] {
+        let mut color = Vec::new();
+        let mut albedo = Vec::new();
+        let mut normal = Vec::new();
+        for y in 0..size {
+            for x in 0..size {
+                let cell = (x / 37 + y / 53) % 4;
+                let a = [
+                    [0.8, 0.2, 0.1],
+                    [0.1, 0.6, 0.3],
+                    [0.2, 0.3, 0.9],
+                    [0.9, 0.9, 0.8],
+                ][cell as usize];
+                let n: [f32; 3] = match (x / 91 + 2 * (y / 71)) % 3 {
+                    0 => [0.0, 0.0, 1.0],
+                    1 => [0.6, 0.0, 0.8],
+                    _ => [0.0, -0.8, 0.6],
+                };
+                let light = if (x + y) % 300 < 150 { 4.0 } else { 0.5 };
+                let noise = |salt: u32| 2.0 * hash(x, y, salt);
+                color.push([
+                    a[0] * light * noise(0),
+                    a[1] * light * noise(1),
+                    a[2] * light * noise(2),
+                    1.0,
+                ]);
+                let jitter = 0.2 * (hash(x, y, 3) - 0.5);
+                albedo.push([
+                    (a[0] + jitter).clamp(0.0, 1.0),
+                    (a[1] + jitter).clamp(0.0, 1.0),
+                    (a[2] + jitter).clamp(0.0, 1.0),
+                    1.0,
+                ]);
+                normal.push([n[0] + jitter, n[1] - jitter, n[2], 0.0]);
+            }
+        }
+        [color, albedo, normal]
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn tiled_denoising_matches_one_tile_in_every_mode() {
+        let size = 1200;
+        let [color, albedo, normal] = scene(size);
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        for aux in [Aux::Noisy, Aux::Prefiltered, Aux::Clean] {
+            let mut whole = Denoiser::with_aux(&gpu, aux).unwrap();
+            let mut split = Denoiser::with_aux(&gpu, aux).unwrap();
+            split.max_tile_pixels = 768 * 768;
+            let one = whole
+                .denoise(&gpu, size, size, &color, &albedo, &normal)
+                .unwrap();
+            let tiled = split
+                .denoise(&gpu, size, size, &color, &albedo, &normal)
+                .unwrap();
+            let whole_tiles = whole.tiles().unwrap().2;
+            let split_tiles = split.tiles().unwrap().2;
+            let mut worst = 0.0f32;
+            for (a, b) in tiled.iter().zip(&one) {
+                for c in 0..4 {
+                    worst = worst.max((a[c] - b[c]).abs() / (1.0 + b[c].abs()));
+                }
+            }
+            println!(
+                "{aux:?} {size}x{size}: {split_tiles} tiles against {whole_tiles}, worst gap {worst:.2e}"
+            );
+            assert!(split_tiles >= 4, "{aux:?} {split_tiles}");
+            assert!(whole_tiles < split_tiles, "{aux:?} {whole_tiles}");
+            assert!(worst <= 1e-3, "{aux:?} {worst}");
+        }
+    }
 }
