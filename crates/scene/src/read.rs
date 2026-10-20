@@ -278,6 +278,7 @@ pub(crate) fn keys(kind: FileKind) -> &'static [&'static str] {
             "physics",
             "play",
             "music",
+            "compose",
             "authoring",
         ],
         FileKind::Prefab => &[

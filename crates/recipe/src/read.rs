@@ -4030,6 +4030,8 @@ fn read_root(
         None => BTreeMap::new(),
     };
     let effects = effects::read_effects(cx, &mut root, wet)?;
+    root.peek(cx, "compose");
+    root.peek(cx, "music");
     root.finish(cx)?;
     if timeline.is_none()
         && let Some(entry) = cx.keyed.keys().next()

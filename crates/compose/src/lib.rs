@@ -1,5 +1,6 @@
 pub mod doc;
 pub mod generate;
+pub mod render;
 pub mod score;
 pub mod style;
 pub mod theory;

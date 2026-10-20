@@ -23,7 +23,7 @@ authors.workspace = true
 default = ["harness", "editor", "bench", "shot-sound", "sound-clean"]
 editor = ["harness", "dep:pfx-workbench"]
 bench = ["harness", "dep:pfx-bench"]
-harness = ["dep:pfx-core", "dep:pfx-cache", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "pfx-run/encode", "dep:pfx-sound", "pfx-sound/media", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film", "dep:pfx-recipe", "dep:pfx-build", "dep:pfx-glb", "dep:pfx-mesh", "dep:pfx-motion", "dep:pfx-generators", "dep:pfx-recipe-scene", "dep:pfx-still", "dep:pfx-post", "dep:pfx-file", "dep:pfx-source", "dep:pfx-settings", "dep:pfx-splash", "dep:clap", "dep:gltf", "dep:glam", "dep:terminal_size"]
+harness = ["dep:pfx-core", "dep:pfx-cache", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "pfx-run/encode", "dep:pfx-sound", "pfx-sound/media", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film", "dep:pfx-recipe", "dep:pfx-build", "dep:pfx-glb", "dep:pfx-mesh", "dep:pfx-motion", "dep:pfx-generators", "dep:pfx-recipe-scene", "dep:pfx-still", "dep:pfx-post", "dep:pfx-file", "dep:pfx-source", "dep:pfx-settings", "dep:pfx-splash", "dep:pfx-compose", "dep:clap", "dep:gltf", "dep:glam", "dep:terminal_size"]
 shot-sound = ["bench", "pfx-sound/shot"]
 sound-clean = ["harness", "pfx-sound/clean"]
 
@@ -62,6 +62,7 @@ pfx-file = { path = "crates/file", optional = true }
 pfx-source = { path = "crates/source", optional = true }
 pfx-settings = { path = "crates/settings", optional = true }
 pfx-splash = { path = "crates/splash", optional = true }
+pfx-compose = { path = "crates/compose", optional = true }
 clap = { version = "4.6", features = ["derive"], optional = true }
 gltf = { version = "1.4", features = ["extras", "KHR_texture_transform"], optional = true }
 glam = { version = "0.33", features = ["libm"], optional = true }

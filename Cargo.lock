@@ -3235,6 +3235,7 @@ dependencies = [
  "pfx-bench",
  "pfx-build",
  "pfx-cache",
+ "pfx-compose",
  "pfx-core",
  "pfx-file",
  "pfx-film",
@@ -3376,6 +3377,7 @@ version = "3.1.3"
 dependencies = [
  "pfx-core",
  "pfx-file",
+ "pfx-sound",
  "serde",
  "toml 1.1.6+spec-1.1.0",
  "toml_edit",

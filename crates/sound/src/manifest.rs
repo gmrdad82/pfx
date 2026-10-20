@@ -17,9 +17,11 @@ const MUSIC_KEYS: &[&str] = &[
     "transition",
     "stem",
     "section",
+    "stinger",
 ];
 const STEM_KEYS: &[&str] = &["name", "file", "gain", "shape"];
 const SECTION_KEYS: &[&str] = &["name", "bars", "next", "avoid_repeat"];
+const STINGER_KEYS: &[&str] = &["name", "event", "file"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StemFile {
@@ -28,9 +30,30 @@ pub struct StemFile {
     pub gain: StemGain,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StingerFile {
+    pub name: String,
+    pub event: String,
+    pub file: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Stinger {
+    pub name: String,
+    pub event: String,
+    pub clip: Clip,
+}
+
+#[derive(Clone, Debug)]
+pub struct Music {
+    pub track: AdaptiveTrack,
+    pub stingers: Vec<Stinger>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Manifest {
     pub stems: Vec<StemFile>,
+    pub stingers: Vec<StingerFile>,
     pub track: AdaptiveTrack,
 }
 
@@ -73,12 +96,23 @@ impl Manifest {
         if stems.is_empty() {
             return Err("[music]: at least one [[music.stem]] is required".into());
         }
+        let mut stingers = Vec::new();
+        for (index, table) in tables(music, "stinger", at)?.into_iter().enumerate() {
+            stingers.push(stinger_file(
+                table,
+                &format!("[[music.stinger]] {}", index + 1),
+            )?);
+        }
         for (index, table) in tables(music, "section", at)?.into_iter().enumerate() {
             track
                 .sections
                 .push(section(table, &format!("[[music.section]] {}", index + 1))?);
         }
-        Ok(Manifest { stems, track })
+        Ok(Manifest {
+            stems,
+            stingers,
+            track,
+        })
     }
 
     pub fn track(
@@ -102,15 +136,25 @@ impl Manifest {
 }
 
 pub fn load(path: &Path) -> Result<AdaptiveTrack, String> {
+    load_music(path).map(|music| music.track)
+}
+
+pub fn load_music(path: &Path) -> Result<Music, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new(""));
-    load_bytes(&bytes, Some(dir)).map_err(|e| format!("{}: {e}", path.display()))
+    music_bytes(&bytes, Some(dir)).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 pub fn load_bytes(bytes: &[u8], beside: Option<&Path>) -> Result<AdaptiveTrack, String> {
+    music_bytes(bytes, beside).map(|music| music.track)
+}
+
+pub fn music_bytes(bytes: &[u8], beside: Option<&Path>) -> Result<Music, String> {
     let reader = pfx_file::Reader::from_bytes(bytes).map_err(|e| e.to_string())?;
     let mut manifest = None;
-    for (name, chunk) in reader.chunks(pfx_file::SCNE).map_err(|e| e.to_string())? {
+    let mut texts = reader.chunks(pfx_file::SCNE).map_err(|e| e.to_string())?;
+    texts.extend(reader.chunks(pfx_file::RCPE).map_err(|e| e.to_string())?);
+    for (name, chunk) in texts {
         let text = std::str::from_utf8(&chunk).map_err(|_| format!("`{name}` is not UTF-8"))?;
         if let Some(found) = Manifest::parse(text).map_err(|e| format!("`{name}`: {e}"))? {
             manifest = Some(found);
@@ -118,7 +162,7 @@ pub fn load_bytes(bytes: &[u8], beside: Option<&Path>) -> Result<AdaptiveTrack, 
         }
     }
     let manifest = manifest.ok_or("no scene in the file has a [music] table")?;
-    manifest.track(|file| {
+    let read = |file: &str| -> Result<Vec<u8>, String> {
         if let Some(chunk) = reader
             .named(pfx_file::FILE, file)
             .map_err(|e| e.to_string())?
@@ -137,7 +181,32 @@ pub fn load_bytes(bytes: &[u8], beside: Option<&Path>) -> Result<AdaptiveTrack, 
             return Err(format!("`{file}` must stay inside the file's folder"));
         }
         std::fs::read(dir.join(relative)).map_err(|e| format!("`{file}`: {e}"))
-    })
+    };
+    let track = manifest.track(&read)?;
+    let mut stingers = Vec::new();
+    for stinger in &manifest.stingers {
+        let bytes = read(&stinger.file).map_err(|e| format!("stinger `{}`: {e}", stinger.name))?;
+        let clip = Clip::from_wav(&bytes).ok_or_else(|| {
+            format!(
+                "stinger `{}`: `{}` is no WAV pfx reads",
+                stinger.name, stinger.file
+            )
+        })?;
+        stingers.push(Stinger {
+            name: stinger.name.clone(),
+            event: stinger.event.clone(),
+            clip,
+        });
+    }
+    Ok(Music { track, stingers })
+}
+
+fn stinger_file(table: &Table, at: &str) -> Result<StingerFile, String> {
+    known(table, STINGER_KEYS, at)?;
+    let name = text(table, "name", at)?.ok_or_else(|| format!("{at}: `name` is required"))?;
+    let file = text(table, "file", at)?.ok_or_else(|| format!("{at}: `file` is required"))?;
+    let event = text(table, "event", at)?.unwrap_or_else(|| name.clone());
+    Ok(StingerFile { name, event, file })
 }
 
 fn stem_file(table: &Table, at: &str) -> Result<StemFile, String> {

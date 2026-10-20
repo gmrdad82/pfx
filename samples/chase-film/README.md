@@ -49,7 +49,17 @@ pfx build samples/chase.pitofx
 pgpu run --class clip --as pfx -- pfx shot samples/chase.pitofx --seconds 10 --fps 60 --size 2160x3840 --camera chase --final --out "$FILM/chase" --audio "$FILM/chase.wav" --json
 ```
 
-## 4. Record the Claude Code part
+## 4. Score it
+
+`samples/chase.pitofx` carries its music style beside the recipe, `[compose.style.build_drop]`: a through-composed build and drop for a film cue, rounds that add a layer each, a lift of a tone with a riser and a roll, the drop on a hit and out on a second one, all on pfx's synthesised patches. `pfx compose` writes an original cue in that style into the same document: the notes as `[compose.score.title]`, each role's stem and the master as chunks, and, with `--music`, a `[music]` table a game plays as it is. `--hits` puts the drop and the end card on bar lines at 18 s and 26 s; the same seed gives the same bytes.
+
+```
+pfx compose samples/chase.pitofx --style build_drop --seed 11 --seconds 30 --hits 18,26 --name title --music --wav "$FILM/title.wav" --json
+```
+
+`pfx compose list samples/chase.pitofx` names its styles and scores, `pfx compose print samples/chase.pitofx --score title` prints the notes, and after a hand edit `pfx compose render samples/chase.pitofx --score title` renders them again.
+
+## 5. Record the Claude Code part
 
 prec records the terminal session that sends each beat's prompt and runs its CLI step, at the film's size and rate:
 
@@ -57,7 +67,7 @@ prec records the terminal session that sends each beat's prompt and runs its CLI
 prec clip <app> <shot> --app-dir . --size 2160x3840 --fps 60 --no-archive --out "$FILM/prec"
 ```
 
-## 5. Assemble and encode the film
+## 6. Assemble and encode the film
 
 `pfx film` lays the beats (prompt, CLI, window clip), the chase and the cards end to end into PNG frames and a WAV, with a manifest naming the pcod command that encodes them:
 
