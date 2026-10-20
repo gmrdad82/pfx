@@ -72,7 +72,7 @@ mixer.request_music_section("fight", Quantize::Bar);
 
 ### The `[music]` table (feature `music`)
 
-A game ships its music as a `[music]` table in a scene, its stems as files inside the same `.pitofx` (or beside it). `pfx_sound::manifest::load(path)` opens a `.pitofx`, finds the first scene in it with a `[music]` table and reads each stem's WAV from the file's own chunks by name, then from the folder beside it (never outside it); `load_bytes` does the same from memory. `Manifest::parse(text)` reads a scene document's TOML and `Manifest::from_table` the table the scene reader hands over (`Scene::music`, as written), and `Manifest::track(read)` loads the stems through the caller's reader.
+A game ships its music as a `[music]` table in a scene, its stems as files inside the same `.pitofx` (or beside it). `pfx_sound::manifest::load(path)` opens a `.pitofx`, finds the first scene in it with a `[music]` table and reads each stem's WAV from the file's own chunks by name, then from the folder beside it (never outside it); `load_bytes` does the same from memory. `Manifest::parse(text)` reads a scene document's TOML and `Manifest::from_table` the table the scene reader hands over (`Scene::music`, as written), and `Manifest::track(read)` loads the stems through the caller's reader. A table marked `score = "<name>"` is one `pfx compose --music` wrote: its stems are rendered from `[compose.score.<name>]` on load, so these loaders refuse it and name `pfx_compose::render::game::music`, which loads it ([compose.md](compose.md#in-a-game)).
 
 ```toml
 [music]

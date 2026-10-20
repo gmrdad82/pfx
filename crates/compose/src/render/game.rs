@@ -6,7 +6,7 @@ use pfx_sound::manifest::{Manifest, Music, Stinger};
 
 use super::master::Stem;
 use super::store::{self, Document};
-use super::{RATE, Rendered};
+use super::{RATE, Rendered, Target};
 use crate::{Compose, StyleRef};
 
 const CUE_PREFIX: &str = "cue/";
@@ -25,9 +25,13 @@ fn rendered(
 ) -> Result<Rendered, String> {
     let score = compose.score(name)?;
     let done = match &score.style {
-        StyleRef::Name(style) => {
-            super::render(compose.style(style)?, score, &|f| doc.file(f), &|| 0.0)
-        }
+        StyleRef::Name(style) => super::render(
+            compose.style(style)?,
+            score,
+            &|f| doc.file(f),
+            &|| 0.0,
+            Target::Game,
+        ),
         StyleRef::File { file, name: style } => {
             let folder = beside.ok_or_else(|| {
                 format!("its style is in `{file}`, and the document was read with no folder")
@@ -35,7 +39,13 @@ fn rendered(
             let other = Document::open(&store::beside(folder, file)?)?;
             let parsed = Compose::parse(&other.text)
                 .map_err(|e| format!("{}: {e}", other.path.display()))?;
-            super::render(parsed.style(style)?, score, &|f| other.file(f), &|| 0.0)
+            super::render(
+                parsed.style(style)?,
+                score,
+                &|f| other.file(f),
+                &|| 0.0,
+                Target::Game,
+            )
         }
     };
     done.map_err(|e| format!("[compose.score.{name}]: {e}"))
@@ -55,37 +65,29 @@ pub fn music(bytes: &[u8], beside: Option<&Path>) -> Result<Music, String> {
     let manifest =
         Manifest::parse(&doc.text)?.ok_or("the text holding [compose] has no [music] table")?;
     let compose = Compose::parse(&doc.text)?;
-    let files: Vec<&str> = manifest
-        .stems
-        .iter()
-        .map(|s| s.file.as_str())
-        .chain(manifest.stingers.iter().map(|s| s.file.as_str()))
-        .collect();
     let mut scores: BTreeMap<String, Rendered> = BTreeMap::new();
-    for file in &files {
-        let Some((score, _)) = part(file) else {
-            continue;
-        };
-        if scores.contains_key(score) || doc.file(file)?.is_some() {
-            continue;
-        }
-        scores.insert(score.to_string(), rendered(&doc, &compose, score, beside)?);
-    }
     let mut clip = |file: &str| -> Result<Clip, String> {
-        if let Some((score, part)) = part(file)
-            && let Some(done) = scores.get_mut(score)
-        {
-            let found = match part.strip_prefix(CUE_PREFIX) {
-                Some(cue) => take(&mut done.cues, cue),
-                None => take(&mut done.stems, part),
-            };
-            return found.ok_or_else(|| {
-                format!("`{file}`: [compose.score.{score}] renders no such part, or [music] names it twice")
-            });
-        }
         let bytes = match doc.file(file)? {
             Some(bytes) => bytes,
             None => {
+                if let Some((score, part)) = part(file)
+                    && compose.scores.contains_key(score)
+                {
+                    if !scores.contains_key(score) {
+                        let done = rendered(&doc, &compose, score, beside)?;
+                        scores.insert(score.to_string(), done);
+                    }
+                    let done = scores
+                        .get_mut(score)
+                        .ok_or("a rendered score went missing")?;
+                    let found = match part.strip_prefix(CUE_PREFIX) {
+                        Some(cue) => take(&mut done.cues, cue),
+                        None => take(&mut done.stems, part),
+                    };
+                    return found.ok_or_else(|| {
+                        format!("`{file}`: [compose.score.{score}] renders no such part, or [music] names it twice")
+                    });
+                }
                 let folder = beside.ok_or_else(|| format!("`{file}` is not in the document"))?;
                 let path = store::beside(folder, file)?;
                 std::fs::read(&path).map_err(|e| format!("`{file}`: {e}"))?

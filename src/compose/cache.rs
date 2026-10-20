@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 pub const KIND: &str = "compose";
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 const USED: &str = ".used";
 
 pub fn root() -> Result<PathBuf, String> {
@@ -22,21 +22,23 @@ pub fn key(recipe: &str) -> String {
     pfx_file::sha256::hex(&pfx_file::sha256::sha256(text.as_bytes()))
 }
 
-fn entry(key: &str) -> Result<PathBuf, String> {
-    Ok(root()?.join(KIND).join(key))
+fn entry(root: &Path, key: &str) -> PathBuf {
+    root.join(KIND).join(key)
 }
 
-pub fn get(key: &str, files: &[&str]) -> Option<PathBuf> {
-    let entry = entry(key).ok()?;
+pub fn get(root: &Path, key: &str, files: &[&str], touch: bool) -> Option<PathBuf> {
+    let entry = entry(root, key);
     if !files.iter().all(|file| entry.join(file).is_file()) {
         return None;
     }
-    let _ = std::fs::write(entry.join(USED), b"");
+    if touch {
+        let _ = std::fs::write(entry.join(USED), b"");
+    }
     Some(entry)
 }
 
-pub fn put(key: &str, files: &[(&str, &[u8])]) -> Result<PathBuf, String> {
-    let entry = entry(key)?;
+pub fn put(root: &Path, key: &str, files: &[(&str, &[u8])]) -> Result<PathBuf, String> {
+    let entry = entry(root, key);
     let folder = entry.parent().unwrap_or(Path::new(""));
     std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
     let part = folder.join(format!(".{key}.part-{}", std::process::id()));
@@ -51,10 +53,13 @@ pub fn put(key: &str, files: &[(&str, &[u8])]) -> Result<PathBuf, String> {
         return Err(format!("{}: {e}", part.display()));
     }
     if std::fs::rename(&part, &entry).is_err() {
-        let _ = std::fs::remove_dir_all(&part);
-        let names: Vec<&str> = files.iter().map(|(name, _)| *name).collect();
-        if get(key, &names).is_none() {
-            return Err(format!("{}: could not be written", entry.display()));
+        let _ = std::fs::remove_dir_all(&entry);
+        if let Err(e) = std::fs::rename(&part, &entry) {
+            let _ = std::fs::remove_dir_all(&part);
+            let names: Vec<&str> = files.iter().map(|(name, _)| *name).collect();
+            if get(root, key, &names, false).is_none() {
+                return Err(format!("{}: {e}", entry.display()));
+            }
         }
     }
     Ok(entry)

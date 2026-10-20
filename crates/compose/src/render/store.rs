@@ -66,30 +66,25 @@ impl Document {
             .map_err(|e| format!("{shown}: {e}"))
     }
 
-    pub fn holds_audio(&self, score: &str) -> Result<bool, String> {
+    pub fn holds_audio(&self, written: &[String]) -> Result<bool, String> {
         let shown = self.path.display();
         let reader = Reader::from_bytes(&self.bytes).map_err(|e| format!("{shown}: {e}"))?;
-        let folder = format!("{FOLDER}/{score}/");
         Ok(reader
             .entries()
             .iter()
-            .any(|e| e.tag == pfx_file::FILE && e.name.starts_with(folder.as_str())))
+            .any(|e| e.tag == pfx_file::FILE && written.contains(&e.name)))
     }
 
-    pub fn save(&self, text: &str, score: Option<&str>) -> Result<(), String> {
+    pub fn save(&self, text: &str, written: &[String]) -> Result<(), String> {
         let shown = self.path.display();
         let reader = Reader::from_bytes(&self.bytes).map_err(|e| format!("{shown}: {e}"))?;
-        let dropped = score.map(|score| format!("{FOLDER}/{score}/"));
         let mut writer = Writer::new();
         for (index, entry) in reader.entries().iter().enumerate() {
             if entry.tag == self.tag && entry.name == self.name {
                 writer = writer.named(self.tag, &self.name, text.as_bytes(), Codec::Auto);
                 continue;
             }
-            let stale = entry.tag == pfx_file::FILE
-                && dropped
-                    .as_ref()
-                    .is_some_and(|d| entry.name.starts_with(d.as_str()));
+            let stale = entry.tag == pfx_file::FILE && written.contains(&entry.name);
             if stale {
                 continue;
             }
@@ -111,7 +106,7 @@ pub fn beside(folder: &Path, file: &str) -> Result<PathBuf, String> {
             .any(|part| !matches!(part, std::path::Component::Normal(_)))
     {
         return Err(format!(
-            "`{file}` must name a file in the document's own folder"
+            "`{file}` must name a file in the document's folder or below it"
         ));
     }
     Ok(folder.join(relative))
@@ -147,7 +142,7 @@ mod tests {
     }
 
     #[test]
-    fn saving_a_score_keeps_every_other_chunk_and_drops_its_old_audio() {
+    fn saving_a_score_keeps_every_other_chunk_and_drops_only_the_audio_it_wrote() {
         let path = folder("store").join("doc.pitofx");
         Writer::new()
             .named(
@@ -161,6 +156,12 @@ mod tests {
                 pfx_file::FILE,
                 "compose/a/old.wav",
                 b"old".as_slice(),
+                Codec::Auto,
+            )
+            .named(
+                pfx_file::FILE,
+                "compose/a/mine.wav",
+                b"mine".as_slice(),
                 Codec::Auto,
             )
             .named(
@@ -180,11 +181,12 @@ mod tests {
         )
         .unwrap();
         assert!(text.starts_with("[sky]\nx = 1\n"), "{text}");
-        doc.save(&text, Some("a")).unwrap();
+        doc.save(&text, &["compose/a/old.wav".to_string()]).unwrap();
         let again = Document::open(&path).unwrap();
         assert!(again.text.contains("[music]\nbpm = 120"), "{}", again.text);
         assert_eq!(again.file("keep.bin").unwrap().unwrap(), b"keep");
         assert_eq!(again.file("compose/a/old.wav").unwrap(), None);
+        assert_eq!(again.file("compose/a/mine.wav").unwrap().unwrap(), b"mine");
         assert_eq!(
             again.file("compose/b/other.wav").unwrap().unwrap(),
             b"other"

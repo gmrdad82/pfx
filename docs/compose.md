@@ -195,26 +195,28 @@ role = "lead"
 notes = [[32.0, 81.0, 0.45, 0.543], [32.5, 81.0, 0.45, 0.543]]
 ```
 
-The score is the source of truth after composing: edit a note by hand, and `pfx compose render` plays the edit. `style = { file = "music.pitofx", name = "..." }` takes the style from another document in the same folder, never from outside it. Composing again under an existing name replaces that score, and the output says so (`replaced` in `--json`).
+The score is the source of truth after composing: edit a note by hand, and `pfx compose render` plays the edit. `style = { file = "music.pitofx", name = "..." }` takes the style from another document in the document's folder or below it, never from outside it. Composing again under an existing name replaces that score, and the output says so (`replaced` in `--json`).
 
 ## Stored as a recipe, rendered on demand
 
 A document holds the score and no audio: a 30 second, 19 stem score adds a few KB to the `.pitofx`. The audio is rendered from the score whenever it is needed, and the same score always renders the same bytes.
 
-The render runs each role's patch into its own stem on pfx-sound's offline note renderer, one thread per stem, then the master chain:
+Before anything is allocated, the render refuses a score or style it can't play safely, naming the key: a length over 600 seconds, a tempo of 0 or over 400 bpm, a section tempo outside 0.25 to 4, an envelope stage, `at_ms`, `glide_ms` or `sweep_ms` over 60 seconds, a value that isn't a finite number, a cue that would render over 600 seconds, a role named `room` (the room stem's name), and a sample chunk outside 8 to 192 kHz or over 600 seconds once resampled.
+
+The render runs each role's patch into its own stem on pfx-sound's offline note renderer, the stems shared over as many threads as the machine has cores, then the master chain:
 
 1. the sidechain ducks the bed stems under the key stems;
 2. the room (Freeverb) runs on the patches' sends and becomes its own `room` stem;
-3. the end fade, on every stem;
-4. the stems summed in role order, with the cues mixed in where they fire;
+3. the stems summed in role order, with the cues mixed in where they fire;
+4. the end fade;
 5. one gain to the style's maximum short-term loudness, from one loudness measurement;
-6. the true-peak limiter at the ceiling, its per-frame gain applied to every stem as well, so the stems sum to the limited master apart from the cues.
+6. the true-peak limiter at the ceiling, its 4x oversampled peak scan cut into time slices that run in parallel and read the same peaks as one pass.
 
-`pfx compose` and `pfx compose render` keep the master in pfx's cache, `${XDG_CACHE_HOME:-~/.cache}/pfx/compose/<key>/` (or `$PFX_CACHE_DIR/compose/<key>/`), as `mix.wav` and its measured levels, written to a temporary folder and renamed into place. The key is a SHA-256 of the recipe (the style, the score and any sample chunks the style reads), pfx's version and the cache's format version, so an edit renders again and an unchanged score is read back in milliseconds. `--wav` copies the cached master out.
+`pfx compose` and `pfx compose render` keep the master in pfx's cache, `${XDG_CACHE_HOME:-~/.cache}/pfx/compose/<key>/` (or `$PFX_CACHE_DIR/compose/<key>/`), as `mix.wav` and `master.json`, its measured levels with the WAV's length and SHA-256, written to a temporary folder and renamed into place. The key is a SHA-256 of the recipe (the style, the score and any sample chunks the style reads), the render's own pinned output hashes, pfx's version and the cache's format version. So an edit renders again, a build whose render sounds different never reads an older build's master, and an unchanged score is read back in milliseconds. A cached master whose WAV is missing, cut short or unreadable is rendered again and replaced. `--wav` copies the cached master out, and refuses a path that doesn't end in `.wav` or that names the document. Nothing prunes the cache yet: delete `compose/` under it to reclaim the space, about 11.5 MB per 30 seconds of master.
 
 ## Loudness and true peak
 
-The target is the maximum short-term loudness (ITU-R BS.1770, 3 second windows in 100 ms hops), the loudest moment, so a quiet build stays under its drop. A score lands within 0.5 LU of the style's `lufs`; when the limiter pulls it further, the gain is corrected and the limiter runs again, at most three times. Integrated loudness is measured and reported, not targeted. True peak is measured with BS.1770-4 Annex 2's 4x oversampling and stays at or under `true_peak`: the master, the sum of the stems, and each cue on its own.
+The target is the maximum short-term loudness (ITU-R BS.1770, 3 second windows in 100 ms hops), the loudest moment, so a quiet build stays under its drop. A score lands within 0.5 LU of the style's `lufs`; when the limiter pulls it further, the gain is corrected and the limiter runs again, at most three times. Integrated loudness is measured and reported, not targeted. True peak is measured with BS.1770-4 Annex 2's 4x oversampling and stays at or under `true_peak`: the master, the sum of a game's stems, and each of its stingers on its own.
 
 ## The command line
 
@@ -241,9 +243,11 @@ A command line pfx cannot parse is refused as clap refuses it: on stderr, exit 2
 
 ## In a game
 
-`--music` writes a `[music]` table pfx-sound's adaptive music reads ([sound.md](sound.md#adaptive-music)): one stem per role and the room, named `compose/<score>/<role>.wav`, with gain curves from each role's presence per section; the sections by name with their bars (a name used twice becomes variants); and each cue as a `[[music.stinger]]` with its event. Sections start on the bar nearest their start, so a style with `tempo` ratios loops close to its bars, not exactly on them.
+`--music` writes a `[music]` table for pfx-sound's adaptive music ([sound.md](sound.md#adaptive-music)), marked `score = "<score>"`: one stem per role and the room, named `compose/<score>/<role>.wav`, with gain curves from each role's presence per section; the sections by name with their bars (a name used twice becomes variants); and each cue as a `[[music.stinger]]` with its event. Sections start on the bar nearest their start, so a style with `tempo` ratios loops close to its bars, not exactly on them.
 
-The stems are not stored in the document. A game loads the table with `pfx_compose::render::game::music(bytes, folder)`, which renders the score's stems and stingers on load and returns pfx-sound's `Music`, the adaptive track and its stingers. Call it on a worker thread before the music first plays; the 30 second sample takes about a third of a second (below). A stem file that is a FILE chunk, or a file beside the document, is read as it is.
+The stems are not stored in the document, so pfx-sound's own loaders (`manifest::load`, `load_bytes`, `load_music`, `music_bytes`, `Manifest::track`) refuse a table marked `score` and name the loader to use. A game loads it with `pfx_compose::render::game::music(bytes, folder)`, which renders the score's stems and stingers on load and returns pfx-sound's `Music`, the adaptive track and its stingers. Call it on a worker thread before the music first plays; the 30 second sample takes about a third of a second (below), and a three-minute score proportionally longer. A file the table names that is a FILE chunk in the document, or a file beside it, is read as it is; only the parts missing from both are rendered.
+
+The game's stems are mastered on their own: the same gain and limiter as the master, measured on the stems without the cues and with no end fade, so a looped section neither fades nor dips where the film's cues fired, and the stems sum under the ceiling. Each stinger takes the same gain and its own limiter pass. A stinger played over a full stem mix can still pass the ceiling, so a game that plays `[music]` stingers turns on its mixer's limiter (`set_limiter`, [sound.md](sound.md)).
 
 ## Measured
 
@@ -253,7 +257,7 @@ The stems are not stored in the document. A game loads the table with `pfx_compo
 |---|---|
 | compose (the notes) | 0.09 ms |
 | render (the stems, one thread each) | 79 ms |
-| master (sidechain, room, loudness, limiter, true peak, stem gains) | 239 ms |
+| master (sidechain, room, loudness, limiter, true peak) | 239 ms |
 | the whole command, writing the document and the cached master | 357 ms |
 | the same command with the master cached | 12 ms |
 

@@ -18,7 +18,9 @@ const MUSIC_KEYS: &[&str] = &[
     "stem",
     "section",
     "stinger",
+    SCORE,
 ];
+pub const SCORE: &str = "score";
 const STEM_KEYS: &[&str] = &["name", "file", "gain", "shape"];
 const SECTION_KEYS: &[&str] = &["name", "bars", "next", "avoid_repeat"];
 const STINGER_KEYS: &[&str] = &["name", "event", "file"];
@@ -52,12 +54,22 @@ pub struct Music {
 
 #[derive(Clone, Debug)]
 pub struct Manifest {
+    pub score: Option<String>,
     pub stems: Vec<StemFile>,
     pub stingers: Vec<StingerFile>,
     pub track: AdaptiveTrack,
 }
 
 impl Manifest {
+    pub fn composed(&self) -> Result<(), String> {
+        match &self.score {
+            Some(score) => Err(format!(
+                "[music] plays [compose.score.{score}], whose stems are rendered on load; load it with pfx_compose::render::game::music"
+            )),
+            None => Ok(()),
+        }
+    }
+
     pub fn parse(text: &str) -> Result<Option<Manifest>, String> {
         let document: Table = toml::from_str(text).map_err(|e| e.to_string())?;
         match document.get("music") {
@@ -109,6 +121,7 @@ impl Manifest {
                 .push(section(table, &format!("[[music.section]] {}", index + 1))?);
         }
         Ok(Manifest {
+            score: text(music, SCORE, at)?,
             stems,
             stingers,
             track,
@@ -119,6 +132,7 @@ impl Manifest {
         &self,
         mut read: impl FnMut(&str) -> Result<Vec<u8>, String>,
     ) -> Result<AdaptiveTrack, String> {
+        self.composed()?;
         let mut track = self.track.clone();
         for stem in &self.stems {
             let bytes = read(&stem.file).map_err(|e| format!("stem `{}`: {e}", stem.name))?;
@@ -162,6 +176,7 @@ pub fn music_bytes(bytes: &[u8], beside: Option<&Path>) -> Result<Music, String>
         }
     }
     let manifest = manifest.ok_or("no scene in the file has a [music] table")?;
+    manifest.composed()?;
     let read = |file: &str| -> Result<Vec<u8>, String> {
         if let Some(chunk) = reader
             .named(pfx_file::FILE, file)

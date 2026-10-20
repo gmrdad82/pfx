@@ -1,3 +1,4 @@
+pub mod bounds;
 pub mod game;
 pub mod master;
 pub mod music;
@@ -11,8 +12,14 @@ use pfx_sound::Clip;
 use crate::{Score, ScoreCue, Style, Tempo};
 use master::{Chain, Mastered, Sidechain, Stem};
 
+pub use master::Target;
+
 pub const RATE: u32 = 48_000;
 pub const CUES: &str = "cue";
+pub const RENDER: [&str; 2] = [
+    "d8fff70dda5bc8fc23ab9d5457d31a50718382a4c4f18b43873a3f8fdbff8654",
+    "38c11307a4bea258b304c80e590108bf4e0dab091890728710d13d287c7185d4",
+];
 
 pub type Samples<'a> = dyn Fn(&str) -> Result<Option<Vec<u8>>, String> + 'a;
 
@@ -24,13 +31,20 @@ pub struct Rendered {
     pub master_ms: f64,
 }
 
-pub fn wav(samples: &[f32]) -> Vec<u8> {
+pub fn wav(samples: Vec<f32>) -> Vec<u8> {
     Clip {
         rate: RATE,
         channels: 2,
-        samples: samples.to_vec(),
+        samples,
     }
     .to_wav()
+}
+
+pub fn threads(jobs: usize) -> usize {
+    std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(jobs)
+        .max(1)
 }
 
 fn clips(style: &Style, samples: &Samples) -> Result<BTreeMap<String, Vec<f32>>, String> {
@@ -44,6 +58,7 @@ fn clips(style: &Style, samples: &Samples) -> Result<BTreeMap<String, Vec<f32>>,
                 samples(name)?.ok_or_else(|| format!("sample `{name}` is not in the document"))?;
             let clip = Clip::from_wav(&bytes)
                 .ok_or_else(|| format!("sample `{name}` is no WAV pfx reads"))?;
+            bounds::sample(name, &clip)?;
             clips.insert(name.to_string(), clip.at_rate(RATE, 2));
         }
     }
@@ -75,9 +90,9 @@ fn cue(
             .map(|n| frame(n.beat + n.beats))
             .max()
             .unwrap_or(0);
-        length = length.max(last + patch::tail(p));
+        length = length.max(last.saturating_add(patch::tail(p)));
     }
-    let frames = length as usize;
+    let frames = bounds::frames(&format!("cue `{}`", cue.name), length)?;
     let mut samples = vec![0.0f32; frames * 2];
     for (vi, voice) in cue.voices.iter().enumerate() {
         let p = patch(style, &voice.patch, &format!("cue `{}`", cue.name))?;
@@ -104,55 +119,85 @@ fn cue(
     })
 }
 
-pub fn render(
-    style: &Style,
+type Job<'a> = (
+    usize,
+    &'a crate::Role,
+    &'a crate::Patch,
+    Option<&'a crate::Track>,
+);
+
+fn stems(
+    jobs: &[Job],
     score: &Score,
-    samples: &Samples,
-    clock: &dyn Fn() -> f64,
-) -> Result<Rendered, String> {
-    let started = clock();
-    let frames = (score.seconds * f64::from(RATE)).round() as usize;
+    clips: &BTreeMap<String, Vec<f32>>,
+    frames: usize,
+) -> Vec<Result<Vec<f32>, String>> {
     let tempo = score.tempo();
-    let clips = clips(style, samples)?;
-    let mut jobs = Vec::new();
-    for (ri, role) in style.roles.iter().enumerate() {
-        let p = patch(style, &role.patch, &format!("role `{}`", role.name))?;
-        let track = score.track(&role.name);
-        jobs.push((ri, role, p, track));
-    }
-    let rendered: Vec<Result<Vec<f32>, String>> = std::thread::scope(|scope| {
+    let each = jobs.len().div_ceil(threads(jobs.len())).max(1);
+    std::thread::scope(|scope| {
         let handles: Vec<_> = jobs
-            .iter()
-            .map(|(ri, role, p, track)| {
+            .chunks(each)
+            .map(|group| {
                 let tempo = &tempo;
-                let clips = &clips;
-                let seed = score.seed.wrapping_add((*ri as u64 + 1).wrapping_mul(7919));
                 scope.spawn(move || {
                     let frame = patch::tempo_frames(tempo);
-                    patch::render(
-                        &patch::Stem {
-                            patch: p,
-                            notes: track.map_or(&[][..], |t| t.notes.as_slice()),
-                            lowpass: track.map_or(&[][..], |t| t.lowpass.as_slice()),
-                            gain: role.gain,
-                            seed,
-                        },
-                        &frame,
-                        frames,
-                        clips,
-                    )
-                    .map_err(|e| format!("role `{}`: {e}", role.name))
+                    group
+                        .iter()
+                        .map(|(ri, role, p, track)| {
+                            let seed = score.seed.wrapping_add((*ri as u64 + 1).wrapping_mul(7919));
+                            patch::render(
+                                &patch::Stem {
+                                    patch: p,
+                                    notes: track.map_or(&[][..], |t| t.notes.as_slice()),
+                                    lowpass: track.map_or(&[][..], |t| t.lowpass.as_slice()),
+                                    gain: role.gain,
+                                    seed,
+                                },
+                                &frame,
+                                frames,
+                                clips,
+                            )
+                            .map_err(|e| format!("role `{}`: {e}", role.name))
+                        })
+                        .collect::<Vec<_>>()
                 })
             })
             .collect();
         handles
             .into_iter()
-            .map(|h| {
-                h.join()
-                    .unwrap_or_else(|_| Err("a stem's render panicked".into()))
+            .zip(jobs.chunks(each))
+            .flat_map(|(h, group)| {
+                h.join().unwrap_or_else(|_| {
+                    group
+                        .iter()
+                        .map(|_| Err("a stem's render panicked".into()))
+                        .collect()
+                })
             })
             .collect()
-    });
+    })
+}
+
+pub fn render(
+    style: &Style,
+    score: &Score,
+    samples: &Samples,
+    clock: &dyn Fn() -> f64,
+    target: Target,
+) -> Result<Rendered, String> {
+    let started = clock();
+    bounds::check(style, score)?;
+    let frames = bounds::frames(
+        "the score",
+        (score.seconds * f64::from(RATE)).round() as u64,
+    )?;
+    let clips = clips(style, samples)?;
+    let mut jobs: Vec<Job> = Vec::new();
+    for (ri, role) in style.roles.iter().enumerate() {
+        let p = patch(style, &role.patch, &format!("role `{}`", role.name))?;
+        jobs.push((ri, role, p, score.track(&role.name)));
+    }
+    let rendered = stems(&jobs, score, &clips, frames);
     let mut stems = Vec::with_capacity(rendered.len());
     let mut sends = Vec::with_capacity(rendered.len());
     for ((_, role, p, _), samples) in jobs.iter().zip(rendered) {
@@ -194,9 +239,11 @@ pub fn render(
         }),
         fade: master.fade,
     };
-    let (mastered, gain) = master::chain(&mut stems, &sends, &fired, &chain, frames);
-    for c in &mut cues {
-        master::limit_cue(&mut c.samples, gain, master.true_peak);
+    let (mastered, gain) = master::chain(&mut stems, &sends, &fired, &chain, frames, target);
+    if target == Target::Game {
+        for c in &mut cues {
+            master::limit_cue(&mut c.samples, gain, master.true_peak);
+        }
     }
     let done = clock();
     Ok(Rendered {
@@ -209,7 +256,7 @@ pub fn render(
 }
 
 pub fn recipe(style: &Style, score: &Score, samples: &Samples) -> Result<String, String> {
-    let mut all = format!("{style:?}\n{score:?}\n").into_bytes();
+    let mut all = format!("{RENDER:?}\n{style:?}\n{score:?}\n").into_bytes();
     let names: std::collections::BTreeSet<&str> = style
         .patch
         .values()
@@ -226,6 +273,14 @@ pub fn recipe(style: &Style, score: &Score, samples: &Samples) -> Result<String,
 
 pub fn cue_file(score: &str, cue: &str) -> String {
     format!("{}/{score}/{CUES}/{cue}.wav", store::FOLDER)
+}
+
+pub fn written(style: &Style, score: &Score, name: &str) -> Vec<String> {
+    stem_names(style)
+        .iter()
+        .map(|stem| store::stem_file(name, stem))
+        .chain(score.cues.iter().map(|c| cue_file(name, &c.name)))
+        .collect()
 }
 
 pub fn stem_names(style: &Style) -> Vec<String> {
@@ -264,7 +319,7 @@ pub fn music_table(style: &Style, score: &Score, name: &str) -> toml::Table {
                     .iter()
                     .map(|s| {
                         let from = f64::from(s.from) * bpb;
-                        let end = f64::from(s.from + s.bars) * bpb;
+                        let end = f64::from(s.from.saturating_add(s.bars)) * bpb;
                         room || notes.iter().any(|n| n.beat >= from - 1e-9 && n.beat < end)
                     })
                     .collect(),
@@ -280,14 +335,19 @@ pub fn music_table(style: &Style, score: &Score, name: &str) -> toml::Table {
             file: cue_file(name, &c.name),
         })
         .collect();
-    music::table(
+    let mut table = music::table(
         f64::from(score.bpm),
         score.beats_per_bar,
         score.seconds,
         &parts,
         &lines,
         &stings,
-    )
+    );
+    table.insert(
+        pfx_sound::manifest::SCORE.into(),
+        toml::Value::String(name.to_string()),
+    );
+    table
 }
 
 #[cfg(test)]
@@ -388,28 +448,20 @@ fade = 0.5
 sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
 "#;
 
-    fn hash(rendered: &Rendered) -> String {
-        let mut all = wav(&rendered.master.mix);
-        for stem in rendered.stems.iter().chain(&rendered.cues) {
+    fn hash(film: &Rendered, game: Option<&Rendered>) -> String {
+        let mut all = wav(film.master.mix.clone());
+        for stem in game.iter().flat_map(|g| g.stems.iter().chain(&g.cues)) {
             all.extend(stem.name.as_bytes());
-            all.extend(wav(&stem.samples));
+            all.extend(wav(stem.samples.clone()));
         }
         pfx_file::sha256::hex(&pfx_file::sha256::sha256(&all))
     }
 
-    fn rendered(
-        text: &str,
-        style: &str,
-        seed: u64,
-        seconds: f64,
-        hits: &[f64],
-    ) -> (Score, Rendered) {
+    fn scored(text: &str, style: &str, seed: u64, seconds: f64, hits: &[f64]) -> Score {
         let doc = crate::Compose::parse(text).unwrap();
-        let name = style;
-        let style = doc.style(name).unwrap();
-        let score = crate::compose(
-            name,
+        crate::compose(
             style,
+            doc.style(style).unwrap(),
             &crate::Request {
                 seed,
                 seconds,
@@ -418,18 +470,21 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
                 key: None,
             },
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    fn rendered(text: &str, style: &str, score: &Score, target: Target) -> Rendered {
+        let doc = crate::Compose::parse(text).unwrap();
         let none = |_: &str| Ok(None);
-        let out = render(style, &score, &none, &|| 0.0).unwrap();
-        (score, out)
+        render(doc.style(style).unwrap(), score, &none, &|| 0.0, target).unwrap()
     }
 
     fn under_the_ceiling(out: &Rendered, ceiling: f32) {
         let sum = master::sum(&out.stems, out.master.mix.len() / 2);
-        let stems = pfx_sound::decibels(master::peak(&sum));
+        let stems = pfx_sound::decibels(pfx_sound::true_peak(&sum, 2));
         assert!(stems <= ceiling + 1e-3, "the stems sum to {stems} dBTP");
         for cue in &out.cues {
-            let peak = pfx_sound::decibels(master::peak(&cue.samples));
+            let peak = pfx_sound::decibels(pfx_sound::true_peak(&cue.samples, 2));
             assert!(
                 peak <= ceiling + 1e-3,
                 "cue `{}` peaks at {peak} dBTP",
@@ -440,20 +495,22 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
 
     #[test]
     fn the_test_style_renders_the_same_bytes_for_the_same_seed() {
-        let (score, out) = rendered(TEST_STYLE, "test", 3, 8.0, &[4.0]);
-        assert_eq!(out.master.mix.len(), 8 * RATE as usize * 2);
-        assert!(out.stems.iter().any(|s| s.name == master::ROOM_STEM));
+        let score = scored(TEST_STYLE, "test", 3, 8.0, &[4.0]);
+        let film = rendered(TEST_STYLE, "test", &score, Target::Film);
+        assert_eq!(film.master.mix.len(), 8 * RATE as usize * 2);
+        assert!(film.stems.iter().any(|s| s.name == master::ROOM_STEM));
         assert_eq!(score.fires.len(), 1);
-        assert_eq!(out.cues.len(), 1);
-        assert!(out.cues[0].samples.iter().any(|v| v.abs() > 1e-4));
-        assert!(out.stems.iter().all(|s| s.name != "sting"));
+        assert_eq!(film.cues.len(), 1);
+        assert!(film.cues[0].samples.iter().any(|v| v.abs() > 1e-4));
+        assert!(film.stems.iter().all(|s| s.name != "sting"));
         assert!(
-            (out.master.short_term_max + 16.0).abs() < 0.5,
+            (film.master.short_term_max + 16.0).abs() < 0.5,
             "{}",
-            out.master.short_term_max
+            film.master.short_term_max
         );
-        assert!(out.master.true_peak_db <= -1.0 + 1e-3);
-        under_the_ceiling(&out, -1.0);
+        assert!(film.master.true_peak_db <= -1.0 + 1e-3);
+        let game = rendered(TEST_STYLE, "test", &score, Target::Game);
+        under_the_ceiling(&game, -1.0);
         let style = crate::Compose::parse(TEST_STYLE).unwrap();
         let style = style.style("test").unwrap();
         let text = crate::write_score(TEST_STYLE, "kept", &score).unwrap();
@@ -467,9 +524,16 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
             )
             .to_vec()
             .unwrap();
+        let refused = pfx_sound::manifest::music_bytes(&bytes, None)
+            .err()
+            .unwrap();
+        assert!(
+            refused.contains("pfx_compose::render::game::music"),
+            "{refused}"
+        );
         let music = game::music(&bytes, None).unwrap();
-        assert_eq!(music.track.stems.len(), out.stems.len());
-        for stem in &out.stems {
+        assert_eq!(music.track.stems.len(), game.stems.len());
+        for stem in &game.stems {
             let loaded = music
                 .track
                 .stems
@@ -479,15 +543,13 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
             assert!(loaded.clip.samples == stem.samples, "stem `{}`", stem.name);
         }
         assert_eq!(music.stingers.len(), 1);
-        assert!(music.stingers[0].clip.samples == out.cues[0].samples);
+        assert!(music.stingers[0].clip.samples == game.cues[0].samples);
+        let other = scored(TEST_STYLE, "test", 4, 8.0, &[4.0]);
         assert_ne!(
-            hash(&out),
-            hash(&rendered(TEST_STYLE, "test", 4, 8.0, &[4.0]).1)
+            hash(&film, None),
+            hash(&rendered(TEST_STYLE, "test", &other, Target::Film), None)
         );
-        assert_eq!(
-            hash(&out),
-            "d8fff70dda5bc8fc23ab9d5457d31a50718382a4c4f18b43873a3f8fdbff8654"
-        );
+        assert_eq!(hash(&film, Some(&game)), RENDER[0]);
     }
 
     #[test]
@@ -495,55 +557,134 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/chase.pitofx");
         let doc = store::Document::open(&path).unwrap();
-        let (score, out) = rendered(&doc.text, "build_drop", 11, 30.0, &[18.0, 26.0]);
+        let score = scored(&doc.text, "build_drop", 11, 30.0, &[18.0, 26.0]);
         assert_eq!(score.bpm, 120);
+        let out = rendered(&doc.text, "build_drop", &score, Target::Film);
         assert!(
             (out.master.short_term_max + 16.0).abs() < 0.5,
             "{}",
             out.master.short_term_max
         );
         assert!(out.master.true_peak_db <= -1.0 + 1e-3);
-        under_the_ceiling(&out, -1.0);
-        assert_eq!(
-            hash(&out),
-            "38c11307a4bea258b304c80e590108bf4e0dab091890728710d13d287c7185d4"
-        );
+        assert_eq!(hash(&out, None), RENDER[1]);
     }
 
-    #[test]
-    fn a_sample_oscillator_plays_its_chunk_and_a_missing_chunk_is_refused() {
-        let text = TEST_STYLE.replace(
+    fn kick_style() -> String {
+        TEST_STYLE.replace(
             r#"osc = [{ wave = "sine", hz = 150, to_hz = 55, glide_ms = 40 }, { wave = "white", gain = 0.2, env = [1, 5, 0.0, 0] }]"#,
             r#"osc = [{ sample = "kick.wav" }]"#,
-        );
-        assert_ne!(text, TEST_STYLE);
-        let doc = crate::Compose::parse(&text).unwrap();
-        let style = doc.style("test").unwrap();
-        let request = crate::Request {
-            seed: 3,
-            seconds: 4.0,
-            hits: vec![2.0],
-            bpm: None,
-            key: None,
-        };
-        let score = crate::compose("test", style, &request).unwrap();
-        let kick = Clip {
-            rate: 24_000,
+        )
+    }
+
+    fn kick(rate: u32) -> Vec<u8> {
+        Clip {
+            rate,
             channels: 1,
             samples: (0..2_400)
                 .map(|i| pfx_core::sim::sinf(i as f32 * 0.03) * (1.0 - i as f32 / 2_400.0))
                 .collect(),
         }
-        .to_wav();
-        let samples = |name: &str| Ok((name == "kick.wav").then(|| kick.clone()));
-        let out = render(style, &score, &samples, &|| 0.0).unwrap();
+        .to_wav()
+    }
+
+    #[test]
+    fn a_sample_oscillator_plays_its_chunk_and_a_missing_or_odd_chunk_is_refused() {
+        let text = kick_style();
+        assert_ne!(text, TEST_STYLE);
+        let doc = crate::Compose::parse(&text).unwrap();
+        let style = doc.style("test").unwrap();
+        let score = scored(&text, "test", 3, 4.0, &[2.0]);
+        let wav = kick(24_000);
+        let samples = |name: &str| Ok((name == "kick.wav").then(|| wav.clone()));
+        let out = render(style, &score, &samples, &|| 0.0, Target::Film).unwrap();
         let stem = out.stems.iter().find(|s| s.name == "kick").unwrap();
         assert!(stem.samples.iter().any(|v| v.abs() > 1e-3));
         let none = |_: &str| Ok(None);
-        let refused = render(style, &score, &none, &|| 0.0).err().unwrap();
+        let refused = render(style, &score, &none, &|| 0.0, Target::Film)
+            .err()
+            .unwrap();
         assert!(
             refused.contains("`kick.wav` is not in the document"),
             "{refused}"
         );
+        let slow = kick(1);
+        let samples = |name: &str| Ok((name == "kick.wav").then(|| slow.clone()));
+        let refused = render(style, &score, &samples, &|| 0.0, Target::Film)
+            .err()
+            .unwrap();
+        assert!(
+            refused.contains("sample `kick.wav` is at 1 Hz"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn a_score_past_the_render_bounds_is_refused_before_it_allocates() {
+        let doc = crate::Compose::parse(TEST_STYLE).unwrap();
+        let style = doc.style("test").unwrap();
+        let score = scored(TEST_STYLE, "test", 3, 4.0, &[2.0]);
+        let none = |_: &str| Ok(None);
+        let refused = |score: &Score| {
+            render(style, score, &none, &|| 0.0, Target::Film)
+                .err()
+                .unwrap()
+        };
+        let mut long = score.clone();
+        long.seconds = f64::INFINITY;
+        assert!(refused(&long).contains("`seconds`"));
+        long.seconds = 1e7;
+        assert!(refused(&long).contains("`seconds`"));
+        let mut still = score.clone();
+        still.bpm = 0;
+        assert!(refused(&still).contains("`bpm`"));
+        let mut cue = score.clone();
+        cue.cues[0].beats = 1e12;
+        assert!(refused(&cue).contains("`beats`"));
+        let mut note = score.clone();
+        note.cues[0].voices[0].notes[0].beats = 1e12;
+        assert!(refused(&note).contains("would render"));
+        let mut nan = score.clone();
+        nan.sections[0].tempo = f64::NAN;
+        assert!(refused(&nan).contains("`tempo`"));
+        let roomy = TEST_STYLE.replace("name = \"lead\"", "name = \"room\"");
+        let roomy = crate::Compose::parse(&roomy).unwrap();
+        let err = render(
+            roomy.style("test").unwrap(),
+            &score,
+            &none,
+            &|| 0.0,
+            Target::Film,
+        )
+        .err()
+        .unwrap();
+        assert!(err.contains("room stem"), "{err}");
+    }
+
+    #[test]
+    fn the_recipe_key_follows_every_input_the_render_reads() {
+        let text = kick_style();
+        let doc = crate::Compose::parse(&text).unwrap();
+        let style = doc.style("test").unwrap();
+        let score = scored(&text, "test", 3, 4.0, &[2.0]);
+        let wav = kick(24_000);
+        let samples = |name: &str| Ok((name == "kick.wav").then(|| wav.clone()));
+        let key = recipe(style, &score, &samples).unwrap();
+        assert_eq!(key, recipe(style, &score, &samples).unwrap());
+        let mut louder = score.clone();
+        louder
+            .tracks
+            .iter_mut()
+            .find(|t| !t.notes.is_empty())
+            .unwrap()
+            .notes[0]
+            .vel += 0.01;
+        assert_ne!(key, recipe(style, &louder, &samples).unwrap());
+        let mut bent = wav.clone();
+        let last = bent.len() - 1;
+        bent[last] ^= 1;
+        let changed = |name: &str| Ok((name == "kick.wav").then(|| bent.clone()));
+        assert_ne!(key, recipe(style, &score, &changed).unwrap());
+        let none = |_: &str| Ok(None);
+        assert_ne!(key, recipe(style, &score, &none).unwrap());
     }
 }

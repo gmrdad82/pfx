@@ -97,16 +97,19 @@ fn sample(buffer: &mut [f32], source: &[f32], shot: &Shot) {
         fade,
     } = *shot;
     let length = source.len() / 2;
+    if !(step.is_finite() && step > 0.0) {
+        return;
+    }
     let left = (1.0 - pan).min(1.0) * gain;
     let right = (1.0 + pan).min(1.0) * gain;
     let fade = fade.map(|f| 1.0 / f.max(1) as f32);
     let mut level = 1.0f32;
     let frames = buffer.len() / 2;
     let mut read = 0.0f64;
-    let mut write = at as usize;
+    let mut write = usize::try_from(at).unwrap_or(usize::MAX);
     while write < frames {
         let i = read as usize;
-        if i + 1 >= length {
+        if i.saturating_add(1) >= length {
             break;
         }
         let t = (read - i as f64) as f32;
@@ -160,14 +163,18 @@ pub fn render(
             continue;
         }
         let note = &stem.notes[index];
-        let end = frame(note.beat + note.beats).max(at + 1);
+        let end = frame(note.beat + note.beats).max(at.saturating_add(1));
         if let Some([from, to]) = patch.sweep {
             let span = patch.sweep_ms.map_or(end - at, |m| ms(f64::from(m)));
             out.lowpass(at, Some(from), 1);
-            out.lowpass(at + 1, Some(to), span.saturating_sub(1).max(1));
+            out.lowpass(
+                at.saturating_add(1),
+                Some(to),
+                span.saturating_sub(1).max(1),
+            );
         }
         for (k, osc) in patch.osc.iter().enumerate() {
-            let start = at + ms(f64::from(osc.at_ms));
+            let start = at.saturating_add(ms(f64::from(osc.at_ms)));
             let gain = note.vel.max(0.0) as f32 * osc.gain * patch.gain * stem.gain;
             let pan = (patch.pan + osc.pan).clamp(-1.0, 1.0);
             let transpose = 12.0 * f64::from(osc.octave) + f64::from(osc.cents) / 100.0;
@@ -217,7 +224,7 @@ pub fn render(
             let held = if e[2] > 0.0 {
                 end - at
             } else {
-                ms(f64::from(e[0] + e[1])) + 96
+                ms(f64::from(e[0] + e[1])).saturating_add(96)
             };
             out.note(&pfx_sound::Note {
                 at: start,

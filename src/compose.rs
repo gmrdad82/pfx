@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -197,6 +198,22 @@ fn name_ok(value: &str, flag: &str) -> Result<String, Refusal> {
     }
 }
 
+fn wav_path(value: &str) -> Result<PathBuf, Refusal> {
+    let path = PathBuf::from(value);
+    let wav = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("wav"));
+    if wav {
+        Ok(path)
+    } else {
+        Err(Refusal::new(cli::invalid(
+            value,
+            "--wav",
+            "expected a path ending in .wav",
+        )))
+    }
+}
+
 pub fn plan(args: &[String]) -> Result<Command, Refusal> {
     match args.first().map(String::as_str) {
         Some("render") => plan_render(&args[1..]).map(Command::Render),
@@ -280,7 +297,7 @@ fn plan_compose(args: &[String]) -> Result<Compose, Refusal> {
         bpm,
         key: value("--key").map(str::to_string),
         music: found.switches.contains("--music"),
-        wav: value("--wav").map(PathBuf::from),
+        wav: value("--wav").map(wav_path).transpose()?,
         json: found.switches.contains("--json"),
     })
 }
@@ -292,7 +309,7 @@ fn plan_render(args: &[String]) -> Result<Render, Refusal> {
         doc: found.doc.clone().unwrap_or_default(),
         score: name_ok(&found.values["--score"], "--score")?,
         music: found.switches.contains("--music"),
-        wav: found.values.get("--wav").map(PathBuf::from),
+        wav: found.values.get("--wav").map(|v| wav_path(v)).transpose()?,
         json: found.switches.contains("--json"),
     })
 }
@@ -376,8 +393,19 @@ struct Done {
     style: String,
 }
 
-fn cached(key: &str) -> Option<(PathBuf, Levels)> {
-    let entry = cache::get(key, &[MIX, LEVELS])?;
+fn whole_wav(path: &Path, bytes: u64) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = [0u8; 12];
+    let read = std::io::Read::read_exact(&mut &file, &mut head).is_ok();
+    read && &head[..4] == b"RIFF"
+        && &head[8..] == b"WAVE"
+        && file.metadata().is_ok_and(|m| m.len() == bytes)
+}
+
+fn cached(root: &Path, key: &str, touch: bool) -> Option<(PathBuf, Levels)> {
+    let entry = cache::get(root, key, &[MIX, LEVELS], false)?;
     let text = std::fs::read_to_string(entry.join(LEVELS)).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;
     let number = |key: &str| value.get(key).and_then(Value::as_f64);
@@ -388,6 +416,13 @@ fn cached(key: &str) -> Option<(PathBuf, Levels)> {
         true_peak_db: number("true_peak_dbtp")?,
         passes: value.get("passes").and_then(Value::as_u64)? as usize,
     };
+    let bytes = value.get("mix_bytes").and_then(Value::as_u64)?;
+    if !whole_wav(&entry.join(MIX), bytes) {
+        return None;
+    }
+    if touch {
+        cache::get(root, key, &[MIX, LEVELS], true)?;
+    }
     Some((entry, levels))
 }
 
@@ -402,17 +437,19 @@ fn levels_of(rendered: &Rendered) -> Levels {
     }
 }
 
-fn stored(key: &str, rendered: &Rendered, levels: &Levels) -> Result<PathBuf, String> {
+fn stored(root: &Path, key: &str, mix: Vec<f32>, levels: &Levels) -> Result<PathBuf, String> {
+    let mix = render::wav(mix);
     let json = json!({
         "gain_db": levels.gain_db,
         "short_term_max_lufs": levels.short_term_max,
         "integrated_lufs": levels.integrated,
         "true_peak_dbtp": levels.true_peak_db,
         "passes": levels.passes,
+        "mix_bytes": mix.len(),
+        "mix_sha256": pfx_file::sha256::hex(&pfx_file::sha256::sha256(&mix)),
     })
     .to_string();
-    let mix = render::wav(&rendered.master.mix);
-    cache::put(key, &[(MIX, &mix), (LEVELS, json.as_bytes())])
+    cache::put(root, key, &[(MIX, &mix), (LEVELS, json.as_bytes())])
 }
 
 struct Job<'a> {
@@ -425,15 +462,22 @@ struct Job<'a> {
     replaced: bool,
 }
 
-fn produce(job: Job, now: &dyn Fn() -> f64) -> Result<Done, String> {
+fn produce(job: Job, root: &Path, now: &dyn Fn() -> f64) -> Result<Done, String> {
     let key = cache::key(&render::recipe(job.style, &job.score, job.samples)?);
-    let (entry, levels, cached, render_ms, master_ms) = match cached(&key) {
+    let (entry, levels, cached, render_ms, master_ms) = match cached(root, &key, true) {
         Some((entry, levels)) => (entry, levels, true, 0.0, 0.0),
         None => {
-            let rendered = render::render(job.style, &job.score, job.samples, now)?;
+            let rendered = render::render(
+                job.style,
+                &job.score,
+                job.samples,
+                now,
+                render::Target::Film,
+            )?;
             let levels = levels_of(&rendered);
-            let entry = stored(&key, &rendered, &levels)?;
-            (entry, levels, false, rendered.render_ms, rendered.master_ms)
+            let (render_ms, master_ms) = (rendered.render_ms, rendered.master_ms);
+            let entry = stored(root, &key, rendered.master.mix, &levels)?;
+            (entry, levels, false, render_ms, master_ms)
         }
     };
     Ok(Done {
@@ -451,6 +495,13 @@ fn produce(job: Job, now: &dyn Fn() -> f64) -> Result<Done, String> {
     })
 }
 
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
 fn finish(
     doc: &Document,
     style: &Style,
@@ -459,13 +510,22 @@ fn finish(
     music: bool,
     wav: Option<&Path>,
 ) -> Result<(), String> {
+    if let Some(path) = wav
+        && same_file(path, &doc.path)
+    {
+        return Err(format!(
+            "--wav {} names the document itself; give the mix its own .wav path",
+            path.display()
+        ));
+    }
     let mut text = text;
     if music {
         let table = render::music_table(style, &done.score, &done.name);
         text = store::set_table(&text, "music", table)?;
     }
-    if text != doc.text || doc.holds_audio(&done.name)? {
-        doc.save(&text, Some(&done.name))?;
+    let written = render::written(style, &done.score, &done.name);
+    if text != doc.text || doc.holds_audio(&written)? {
+        doc.save(&text, &written)?;
     }
     if let Some(path) = wav {
         std::fs::copy(done.entry.join(MIX), path)
@@ -572,6 +632,7 @@ fn run_compose(command: &Compose) -> Result<(), String> {
             compose_ms,
             replaced: parsed.scores.contains_key(&name),
         },
+        &cache::root()?,
         &now,
     )
     .map_err(|e| format!("{shown}: {e}"))?;
@@ -587,14 +648,14 @@ fn run_compose(command: &Compose) -> Result<(), String> {
     Ok(())
 }
 
-fn styled(doc: &Document, score: &Score) -> Result<Document, String> {
+fn styled<'a>(doc: &'a Document, score: &Score) -> Result<Cow<'a, Document>, String> {
     match &score.style {
-        StyleRef::Name(_) => Ok(doc.clone()),
+        StyleRef::Name(_) => Ok(Cow::Borrowed(doc)),
         StyleRef::File { file, .. } => {
             let folder = doc.path.parent().unwrap_or(Path::new(""));
             let path =
                 store::beside(folder, file).map_err(|e| format!("{}: {e}", doc.path.display()))?;
-            Document::open(&path)
+            Document::open(&path).map(Cow::Owned)
         }
     }
 }
@@ -624,6 +685,7 @@ fn run_render(command: &Render) -> Result<(), String> {
             compose_ms: 0.0,
             replaced: false,
         },
+        &cache::root()?,
         &now,
     )
     .map_err(|e| format!("{shown}: {e}"))?;
@@ -639,13 +701,20 @@ fn run_render(command: &Render) -> Result<(), String> {
     Ok(())
 }
 
-fn is_cached(doc: &Document, parsed: &Composed, name: &str) -> Result<bool, String> {
+fn is_cached(doc: &Document, parsed: &Composed, name: &str, root: &Path) -> Result<bool, String> {
     let score = parsed.score(name)?;
     let home = styled(doc, score)?;
-    let held = Composed::parse(&home.text)?;
+    let other;
+    let held = match &home {
+        Cow::Borrowed(_) => parsed,
+        Cow::Owned(other_doc) => {
+            other = Composed::parse(&other_doc.text)?;
+            &other
+        }
+    };
     let style = held.style(score.style.name())?;
     let recipe = render::recipe(style, score, &|file| home.file(file))?;
-    Ok(cached(&cache::key(&recipe)).is_some())
+    Ok(cached(root, &cache::key(&recipe), false).is_some())
 }
 
 fn run_list(command: &List) -> Result<(), String> {
@@ -653,16 +722,23 @@ fn run_list(command: &List) -> Result<(), String> {
     let doc = Document::open(&command.doc)?;
     let table = compose_table(&doc.text).map_err(|e| format!("{shown}: {e}"))?;
     let parsed = Composed::parse(&doc.text).map_err(|e| format!("{shown}: {e}"))?;
+    let root = cache::root();
     let styles = names(&table, "style");
     let mut scores = Vec::new();
     for score in names(&table, "score") {
-        let cached = is_cached(&doc, &parsed, &score).map_err(|e| format!("{shown}: {e}"))?;
-        scores.push((score, cached));
+        let state = root
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|root| is_cached(&doc, &parsed, &score, root));
+        scores.push((score, state));
     }
     if command.json {
         let scores: Vec<Value> = scores
             .iter()
-            .map(|(name, cached)| json!({ "name": name, "cached": cached }))
+            .map(|(name, state)| match state {
+                Ok(cached) => json!({ "name": name, "cached": cached }),
+                Err(e) => json!({ "name": name, "cached": false, "error": e }),
+            })
             .collect();
         println!("{}", json!({ "styles": styles, "scores": scores }));
         return Ok(());
@@ -670,8 +746,12 @@ fn run_list(command: &List) -> Result<(), String> {
     for style in &styles {
         println!("style[{style}]");
     }
-    for (score, cached) in &scores {
-        println!("score[{score}]{}", if *cached { "  cached" } else { "" });
+    for (score, state) in &scores {
+        match state {
+            Ok(true) => println!("score[{score}]  cached"),
+            Ok(false) => println!("score[{score}]"),
+            Err(e) => println!("score[{score}]  cannot render: {e}"),
+        }
     }
     Ok(())
 }
@@ -716,5 +796,112 @@ pub fn run(command: &Command) -> Result<(), String> {
         Command::Render(r) => run_render(r),
         Command::List(l) => run_list(l),
         Command::Print(p) => run_print(p),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const STYLE: &str = r#"
+[compose.style.small]
+bpm = [100, 110]
+tonics = [["C", 1]]
+modes = [["major", 1]]
+
+[compose.style.small.harmony]
+beats = 4
+start = ["I"]
+cadence = ["V", "I"]
+markov = { I = [["IV", 2]], IV = [["V", 2]], V = [["I", 2]] }
+
+[compose.style.small.melody]
+range = [62, 79]
+steps = [[1, 3], [-1, 3]]
+rhythm = [[0.5, 2], [1.0, 1]]
+rest = 0.1
+motif_bars = 1
+repeat = 0.5
+
+[[compose.style.small.role]]
+name = "kick"
+patch = "kick"
+plays = "hit"
+patterns = ["x...x...x...x..."]
+gain = 0.5
+
+[[compose.style.small.role]]
+name = "pad"
+patch = "pad"
+plays = "chord"
+octave = -1
+gain = 0.05
+
+[compose.style.small.patch.kick]
+osc = [{ wave = "sine", hz = 150, to_hz = 55, glide_ms = 40 }]
+env = [1, 300, 0.0, 0]
+
+[compose.style.small.patch.pad]
+osc = [{ wave = "saw", cents = -8, pan = -0.4 }, { wave = "triangle", cents = 8, pan = 0.4 }]
+env = [30, 0, 0.8, 200]
+lowpass = [900, 2400]
+send = 0.2
+
+[[compose.style.small.section]]
+name = "calm"
+bars = [2, 3]
+roles = ["kick", "pad"]
+intensity = [0.0, 0.4]
+
+[compose.style.small.master]
+lufs = -16
+true_peak = -1.0
+room = [0.6, 0.4, 0.15]
+fade = 0.5
+"#;
+
+    #[test]
+    fn a_cache_hit_hands_out_the_bytes_a_fresh_render_makes_and_a_broken_entry_heals() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/compose-tests/cache");
+        let _ = std::fs::remove_dir_all(&root);
+        let parsed = Composed::parse(STYLE).unwrap();
+        let style = parsed.style("small").unwrap();
+        let request = Request {
+            seed: 5,
+            seconds: 4.0,
+            hits: Vec::new(),
+            bpm: None,
+            key: None,
+        };
+        let score = pfx_compose::compose("small", style, &request).unwrap();
+        let none = |_: &str| Ok(None);
+        let job = || Job {
+            style,
+            style_name: "small".into(),
+            score: score.clone(),
+            name: "small".into(),
+            samples: &none,
+            compose_ms: 0.0,
+            replaced: false,
+        };
+        let clock = || 0.0;
+        let cold = produce(job(), &root, &clock).unwrap();
+        assert!(!cold.cached);
+        let hit = produce(job(), &root, &clock).unwrap();
+        assert!(hit.cached);
+        assert_eq!(hit.levels, cold.levels);
+        let fresh = render::render(style, &score, &none, &clock, render::Target::Film).unwrap();
+        let mix = hit.entry.join(MIX);
+        assert!(std::fs::read(&mix).unwrap() == render::wav(fresh.master.mix));
+        let whole = std::fs::read(&mix).unwrap();
+        std::fs::write(&mix, &whole[..whole.len() / 2]).unwrap();
+        let healed = produce(job(), &root, &clock).unwrap();
+        assert!(!healed.cached);
+        assert!(std::fs::read(&mix).unwrap() == whole);
+        let mut other = score.clone();
+        other.seed += 1;
+        let key = |score: &Score| cache::key(&render::recipe(style, score, &none).unwrap());
+        assert_ne!(key(&score), key(&other));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
