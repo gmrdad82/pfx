@@ -1,0 +1,91 @@
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn main() {
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+    licence();
+    let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap_or_default());
+    let epoch = match std::env::var("SOURCE_DATE_EPOCH") {
+        Ok(text) => text.trim().parse().ok(),
+        Err(_) => committed(&root),
+    };
+    if let Some(date) = epoch.and_then(date) {
+        println!("cargo:rustc-env=PFX_BUILD_DATE={date}");
+    }
+}
+
+fn licence() {
+    println!("cargo:rerun-if-env-changed=PFX_LICENCE_KEY");
+    let store = pfx_settings::Store::machine();
+    if let Some(path) = store.path() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+    let key = std::env::var("PFX_LICENCE_KEY")
+        .ok()
+        .filter(|key| !key.trim().is_empty())
+        .or_else(|| store.licence_key());
+    if let Some(key) = key {
+        let token: String = key.split_whitespace().collect();
+        println!("cargo:rustc-env=PFX_LICENCE_KEY={token}");
+    }
+}
+
+fn git(root: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn watch(root: &Path, name: &str) {
+    let Some(path) = git(root, &["rev-parse", "--git-path", name]).map(|path| root.join(path))
+    else {
+        return;
+    };
+    let path = match path.parent() {
+        Some(parent) if !path.exists() => parent.to_path_buf(),
+        _ => path,
+    };
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
+fn committed(root: &Path) -> Option<i64> {
+    if git(root, &["rev-parse", "--is-inside-work-tree"])? != "true" {
+        return None;
+    }
+    watch(root, "HEAD");
+    if let Some(branch) = git(root, &["symbolic-ref", "-q", "HEAD"]) {
+        watch(root, &branch);
+        if let Some(packed) = git(root, &["rev-parse", "--git-path", "packed-refs"])
+            .map(|path| root.join(path))
+            .filter(|path| path.exists())
+        {
+            println!("cargo:rerun-if-changed={}", packed.display());
+        }
+    }
+    git(root, &["log", "-1", "--format=%ct"])?.parse().ok()
+}
+
+pub fn date(epoch: i64) -> Option<String> {
+    let days = epoch.div_euclid(86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (0..=9999)
+        .contains(&year)
+        .then(|| format!("{year:04}-{month:02}-{day:02}"))
+}

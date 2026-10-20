@@ -25,7 +25,7 @@ A game's logic is the game's own code; every repo is a black box. The engine def
 pub trait Game {
     fn actions(&self) -> Vec<ActionSpec> { Vec::new() }
     fn start(&mut self, world: &mut World);
-    fn tick(&mut self, world: &mut World, tick: &Tick, input: &Input);
+    fn tick(&mut self, world: &mut World, tick: &Tick, input: &Input) {}
     fn events(&mut self, world: &mut World, events: &[WorldEvent]) {}
     fn animated(&mut self, world: &mut World, events: &[AnimationEvent]) {}
     fn frame(&mut self, world: &World, alpha: f32) {}
@@ -42,7 +42,7 @@ pub trait Game {
 - `animated` runs right after the animators and sprite players advance, with that tick's animation events, when there are any ([animation.md](animation.md)).
 - `frame` runs once per presented frame with the clock's `alpha` (how far game time is toward the next tick), for presentation the game keeps itself; it sees the world read only.
 - `stop` runs once on stop, before the world is dropped.
-- `ui` and `settings` are for `pfx-game`: the game's 2D UI each frame, and the settings value it keeps (display, pacing, audio volumes, binds). A session calls `ui` only through `PlaySession::ui`; [game.md](game.md) has both.
+- `ui` and `settings` are for `pfx-game`: the game's 2D UI each frame, and the settings value it keeps (display, pacing, audio volumes, binds). A session calls `ui` only through `PlaySession::ui`; [game.md](game.md) has both. The trait also has the fallible `try_tick`, `try_frame` and `try_ui`, and `warm`, `paint` and `modules`, all with defaults ([game.md](game.md), "The trait").
 
 The game keeps its run's state in the world (`world.set_state(state)`, `world.state::<T>()`, `world.state_mut::<T>()`), so stop drops it with everything else and the next play starts clean. Fields on the game struct survive a stop, since stop hands the game back.
 
@@ -238,7 +238,7 @@ stopped.restore(&mut staged, &mut renderer)?;
 
 `PlayHooks` has four calls, each with a default that does nothing: `on_play(&scene)` before `game.start`, `on_pause` and `on_resume` when the clock's state changes (a second `pause` calls nothing, and `step` calls nothing), and `on_stop` after `game.stop`. `Stopped::hooks` hands them back for the next play.
 
-The editor runs outside pgpu, never under `pgpu run` (its trace preview included), and keeps each submission short (2 to 6 ms). pgpu has no play mode since 0.29.0 (it uses the GPU all the time and shares it between two jobs), so the editor plays with `NoHooks` and tells pgpu nothing; the `PgpuPlay` hook that ran `pgpu play on` and `off` is gone. A caller that needs a hook still passes its own to `PlaySession::play_hooked`.
+The editor runs outside pgpu, never under `pgpu run` (its trace preview included), keeps each submission short (2 to 6 ms), and plays with `NoHooks`. A caller that needs a hook passes its own to `PlaySession::play_hooked`.
 
 ### What play never touches
 
@@ -275,11 +275,11 @@ Anything else is refused with the key and the reason (`material clay nonsense: u
 
 **On the next tick, deterministically.** An edit applies at once, between ticks, so it is in the world when the next tick runs. Each is stamped with the ticks done so far (`edits()`, a list of `Stamped { tick, edit }`). `Options { edits }` replays such a list: each edit applies just before the tick after its stamp, whatever the frame times, and live edits are refused for that session. The same scene, seed, input recording and edits at the same ticks give the same run, bit for bit.
 
-**The pending patch.** Every edit that applied is held in `pending()`, the latest value per key, in the form a file takes: a body's `mass` is held as the `density` that gives it, for the body's shape. Stop hands it back as `Stopped::pending` (and the stamped list as `Stopped::edits`), and the world goes with the session. The crate writes nothing; the editor discards the patch on stop, or writes it through `SceneEdit` when he presses Keep ([editor.md](editor.md), "Play mode"). A game's own changes to the world (`set_local`, `set_tunable`, a body's velocity in its tick) are runtime state, never pending.
+**The pending patch.** Every edit that applied is held in `pending()`, the latest value per key, in the form a file takes: a body's `mass` is held as the `density` that gives it, for the body's shape. Stop hands it back as `Stopped::pending` (and the stamped list as `Stopped::edits`), and the world goes with the session. The crate writes nothing; the editor discards the patch on stop, or writes it through `SceneEdit` on Keep ([editor.md](editor.md), "Play mode"). A game's own changes to the world (`set_local`, `set_tunable`, a body's velocity in its tick) are runtime state, never pending.
 
 ### Tunables
 
-A game declares its tunables as data in its project's `project.toml` (pfx-scene's format at `e856875`), and reads them while it plays:
+A game declares its tunables as data in its project's `project.toml` (pfx-scene's format, `crates/scene`), and reads them while it plays:
 
 ```toml
 [tunables.jump_height]
@@ -296,7 +296,7 @@ let lives: i64 = world.tunable("lives").unwrap_or(3);
 ```
 
 - `tunable::<T>` reads `f32` (a float, or an int as a float), `i64`, `i32`, `bool`, `[f32; 3]` or `TunableValue`; another type or an unknown name is `None`.
-- `pfx_play::Tunables` loads them: `Tunables::of_scene(scene file)` finds the project root (the nearest folder up with a `project.toml`) and reads its `[tunables.*]`, through pfx-scene's `ProjectFile` (pfx pins pfx-scene at `v0.1.0`, which checks `[tunables]`); `project.toml` is the only place they live. `Options::tunables` hands a session its own instead.
+- `pfx_play::Tunables` loads them: `Tunables::of_scene(scene file)` finds the project root (the nearest folder up with a `project.toml`) and reads its `[tunables.*]`, through pfx-scene's `ProjectFile`, which checks `[tunables]`; `project.toml` is the only place they live. `Options::tunables` hands a session its own instead.
 - Loading refuses, by name: an unknown type, a value of another type, a min or max on a bool, a min above its max, a default outside them, and any other key.
 - `set_tunable` and a live `Edit::tunable` are range-checked: a value of another type or outside its range is refused and the old value stays.
 - `Tunables::written(text, name, value)` rewrites one default with the file's text kept (comments and spacing), which Keep and the stopped inspector use.
@@ -328,7 +328,7 @@ Play, stop and play again give the same first frame, pixel for pixel: the world 
 ## Tests
 
 - `src/tests/queries.rs` (headless): each query on neutral shapes (a raycast's object, point, normal and distance; a shape cast; overlaps in scene order and by layer; triggers seen only when asked); layer filtering by name, by mask and by exclusion; trigger enter, stay and exit in tick order with the stays counted, filtered by the trigger's layers, following an object that moves and a body that carries it; contact events with their impulse; layers that do not collide passing through each other; triggers sensing triggers; layers from the scene in name order, past 32 and with a missing name refused, and a scene naming an unknown layer refused with its file and line; a layer that collides with nothing seen by queries and triggers; queries from `Game::start` and the first tick, and right after a live edit; the same events at the same ticks whatever the frame pacing, against fixed expected ticks (natively and under Wine).
-- `src/tests/live.rs` (headless): each kind of live edit reaches the world (materials, lights, the camera and exposure, objects and their bodies, bodies in Rapier with a bouncier ball bouncing higher, sounds on a playing voice) and bad ones are refused; tunables load, are range-checked and read, from `project.toml` or the stopgap file, with a default rewritten with the text kept; stop hands back the pending patch and the next play starts clean; edits recorded by tick replay to the same run.
+- `src/tests/live.rs` (headless): each kind of live edit reaches the world (materials, lights, the camera and exposure, objects and their bodies, bodies in Rapier with a bouncier ball bouncing higher, sounds on a playing voice) and bad ones are refused; tunables load, are range-checked and read from `project.toml` (a stray `tunables.toml` is ignored), with a default rewritten with the text kept; stop hands back the pending patch and the next play starts clean; edits recorded by tick replay to the same run.
 - `tests.rs` (headless): the hooks' order; a test game moving an object by its input; play, pause, step, resume and stop with the scene restored exactly; no file written during play (contents and modification times); inspector edits discarded; queued reloads and errors applied on stop; the default game's movers, bodies and sounds; determinism from a recording; play, stop, play again from the same world; the game's hooks.
 - `tests/restore.rs` (GPU, ignored): `play_pause_step_resume_and_stop_restore_the_rendered_pixels` renders the edited frame, plays, pauses, steps, resumes with an inspector look, stops, and checks the frame after stop and the first frame of a second play against the first, bit for bit.
 

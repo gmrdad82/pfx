@@ -8,7 +8,7 @@ use pfx_input::{
     ActionSpec, Backend, Binding, Button, Control, Family, GlyphStyle, Input, InputEvent, Key,
     LayoutSource, MotorCommand, Motors, PadId, PadInfo, Rumble, glyph_for,
 };
-use pfx_play::{Cap, Game, Prompt, Settings, Ui, UiFrame, World};
+use pfx_play::{Game, Prompt, Settings, Ui, UiFrame, World};
 
 use crate::tests::{WINDOW, capped, world};
 use crate::{Config, Event, Headless, Pads, Part};
@@ -105,7 +105,7 @@ fn rumbling(
     let sent: Sent = Rc::default();
     let next = Rc::new(RefCell::new(None));
     let game = Rumbler {
-        settings: capped(Cap::Fps60, Cap::Fps30),
+        settings: capped(),
         next: next.clone(),
     };
     let mut config = Config::new("rumbler", "0.0.0", world())

@@ -1,8 +1,10 @@
 # Notices
 
-pfx's code is MIT licensed ([LICENSE](LICENSE)); its name and logos are not ([TRADEMARKS.md](TRADEMARKS.md)). The media files in this repository are covered as follows. [tests/agnostic/fixtures.txt](tests/agnostic/fixtures.txt) lists every font, image, SVG and audio file with its sha256 and where it came from, and the agnostic test keeps that list complete.
+Copyright (c) 2026 Cătălin Ilinca.
 
-## The project's own files, under the MIT licence
+pfx's code is licensed under the GNU Affero General Public License, version 3 only ([LICENSE](LICENSE)), or under a commercial licence (https://pitomd.com/pfx/license); versions up to 3.1.1 were released under the MIT licence and stay under it as published. Its name and logos are not covered by either ([TRADEMARKS.md](TRADEMARKS.md)). The media files in this repository are covered as follows. [tests/agnostic/fixtures.txt](tests/agnostic/fixtures.txt) lists every font, image, SVG and audio file with its sha256 and where it came from, and the agnostic test keeps that list complete.
+
+## The project's own files, licensed with the code
 
 Made for pfx by hand, by its own scripts and tests, or by its own renderers, and licensed with the code:
 
@@ -13,26 +15,44 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 - `crates/editor-doc/tests/data/` and `crates/editor-viewport/tests/data/`: the editor crates' TOML samples and their neutral sample scene, a stand with a block and a ball.
 - `crates/game/examples/empty/world/empty.pitofx`: the empty example's world and its block.
 - `crates/live/examples/bench/`: the bench's room.
-- `crates/live/tests/flat/`: the flat pass's neutral reference scenes, made by `crates/live/tests/flat/scenes.py`.
+- `crates/live/tests/flat/`: the flat pass's neutral reference scenes, drawn as SVG by pfx's authors and screenshotted in headless Chromium.
 - `crates/load/tests/data/`, `crates/load/tests/level/` and `crates/load/tests/scenes/`: minimal neutral meshes, images, skies and a sine tone.
 - `crates/scene/tests/fixtures/` and `crates/scene/examples/demo/`: the scene format's neutral test meshes and image, and the demo project built from copies of them. The scene format, its checks, writer and tests began as pfx's own scene loader and were kept in the separate crate pfx-scene until v1.6.0 (commit `4b5e12d`), which moved back into this tree as `crates/scene` and `crates/file`.
 - `docs/schema/`: the scene format's JSON Schemas, generated from `pfx-scene`'s types by `cargo run -p pfx-scene --features schema --example scene-schema -- docs/schema`.
-- `library/`: the object library's models, `object.toml` files and thumbnails, original, baked by pfx's own generators from `library/sources.toml`, no third-party models or marks.
 - `samples/`: pfx's own made-up sample recipes, their LUT and the chase-film sample's tapes.
 - `tests/golden/` and `tests/fixtures/`: the recipe builder's golden scenes (cards, flatslab, table, toybox) with their GLBs and sidecars, built by `pfx build` from the recipes beside them, and the recipes' test sky `window.hdr`, made by pfx's tests (`tests/fixtures/sky/SOURCE`).
 - `crates/glb/tests/golden/`, `crates/recipe-scene/tests/fixtures/`, `crates/build/tests/` and `crates/runtime/tests/`: the recipe crates' test meshes, images and skies, written by their own code. The recipe crates, their tests and these files began in a separate scene tool and moved into this tree at its commit `598059d`.
 - `crates/play/tests/characters/`: blocks for the character tests.
 - `crates/sound/tests/fixtures/`: sine tones made with ffmpeg.
-- `crates/project/src/templates/grid.glb`: the floor grid of the scaffold's first scene.
+- `crates/splash/art/`: the start-up splash's word "PITOMD.COM", outlined from JetBrains Mono Bold (`assets/fonts/`, SIL Open Font License 1.1, [assets/fonts/OFL.txt](assets/fonts/OFL.txt)) by `crates/splash/examples/outline.rs`; the credit the splash shows is pfx's Powered by lockup from `assets/marks/`, covered by [TRADEMARKS.md](TRADEMARKS.md).
 - `docs/images/`: the README's and the docs' pictures, made from the engine's own neutral scenes; the mark they show is covered by [TRADEMARKS.md](TRADEMARKS.md):
   - `turntable.gif`: the sample shot `shapes`, traced by `pfx render --scene shapes --product sample --clip --recipes crates/assets/tests/recipes`, made a GIF with pcod's predecessor; `pcod <master> docs/images/<shot>.gif --size 1280 --fps 15` (pito-codecs) remakes it.
   - `desk.png` and `denoise.png`: the neutral desk (`crates/bake/tests/plates/desk.scene.toml`), traced by `crates/denoise/examples/rt_bench.rs` and denoised by `crates/denoise/examples/compare.rs`.
   - `live.gif`: the desk drawn by the live renderer, frames from `crates/live/examples/clip.rs`, made a GIF with pcod's predecessor; `pcod <master> docs/images/<shot>.gif --size 1280 --fps 15` (pito-codecs) remakes it.
   - `swarm.png`: the flat 2D pass under the swarm test's load, from `crates/live/examples/swarm.rs`.
-  - `new.gif`: the terminal shot `start` in `render/terminal.toml` (its tape `render/terminal/start.tape`), recorded with prec at v3.0.1 by `prec clip pfx start --size 1280x720 --fps 30` and made a GIF by `pcod <master> docs/images/new.gif --size 1280 --fps 15` (pito-codecs).
+  - `new.gif`, `edit.gif`, `git.gif`, `resume.gif` and `film.gif`: the terminal shots `start`, `edit`, `git`, `resume` and `film` in `render/terminal.toml` (their tapes in `render/terminal/`), recorded with prec 1.4.6 from a release build of this tree (it prints pfx 3.1.1) by `prec clip pfx <shot> --size 1280x720 --fps 30` and made GIFs by `pcod <master> docs/images/<name>.gif --size 1280 --fps 15` (pito-codecs); each holds its last output about 4 s. `start`, `resume` and `film` first run the same commands once in a hidden part of the tape, so the GPU driver's shader cache is warm and the clip shows the commands, not a cold compile; `resume` kills the job with SIGKILL while frame 2 is in flight, and its `cmp` lines compare the frames on disk.
+  - `cli-coverage.png`: the table of [docs/cli-coverage.md](docs/cli-coverage.md) drawn as a still with ImageMagick in JetBrains Mono (`assets/fonts/`, Fonts below), each command checked against its `--help`.
   - `editor.png`: `pfx gui` at v3.0.1 on the workshop sample, `samples/workshop.pitofx`, with the vase selected, drawn offscreen at 1600x1000 by `pfx gui samples/workshop.pitofx --clip <dir> --tape <tape> --poster last --size 1600x1000` from a tape of `select vase` and `wait 1` ([docs/editor-shots.md](docs/editor-shots.md)).
   - `editor-drag.gif` and `editor-example.png`: the editor and `crates/editor-viewport/examples/editor.rs`, captured by the offscreen shot harness.
   - `live-frames.png`, `trace-speed.png`, `systems.png`, `size-binary.png`, `size-deps.png` and `size-build.png`: charts drawn with pito-compare from the measurements the README's "The numbers" section lists.
+  - `download-size.png`, `disk-size.png`, `empty-game.png`, `editor-first-frame.png`, `editor-idle-cpu.png`, `editor-memory.png`, `cli-edit.png`, `same-bytes.png`, `gltf-import.png`, `game-memory.png`, `build-cold.png`, `build-rebuild.png`, `game-idle-cpu.png`, `game-idle-gpu.png` and `frame-time.png`: the head-to-head charts of [docs/measured.md](docs/measured.md#against-other-engines), each drawn by `bin/charts <name>` with pito-compare's `pcmp` 1.1.1 from its data file `docs/charts/<name>.toml`, whose sha256 the PNG carries in its `pfx-chart-data` text chunk.
+
+## The object library and the new-game templates, under the MIT licence
+
+These stay under the MIT licence, so a game that uses them or starts from them chooses its own licence for them:
+
+- `library/`: the object library's models, `object.toml` files and thumbnails, original, baked by pfx's own generators from `library/sources.toml`, no third-party models or marks. Each object's sidecar says so in its `licence` line.
+- `crates/project/src/templates/`: the files `pfx new` writes into a new game (its manifests, its starter code and module, its first scene and materials, its notes and `.gitignore`) and the floor grid of its first scene, `grid.glb`; IBM Plex Mono and its licence, which `pfx new` also writes, keep the SIL Open Font License (Fonts, below), and `badge.glb` and `wordmark.glb`, which it never writes, are pfx's mark ([TRADEMARKS.md](TRADEMARKS.md)).
+
+> MIT License
+>
+> Copyright (c) 2026 Cătălin Ilinca
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## Intel Open Image Denoise, under the Apache License 2.0
 
@@ -48,6 +68,8 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 `voronoi_edge2` in `crates/materials/src/pavement.rs` and `crates/materials/src/wgsl/noise.wgsl` (in the package `pfx-materials`) is a port, from the same tag, of Cycles' two-dimensional Voronoi distance to edge (`voronoi_distance_to_edge` for `float2` in `kernel/svm/voronoi.h`), SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0, whose text ships in [crates/materials/LICENSE-APACHE](crates/materials/LICENSE-APACHE). It is translated to Rust and WGSL and changed by pfx's authors: the feature points come from pfx's own `hash2` in place of Cycles' `hash_int2_to_float2`, and the search keeps Cycles' two passes over the 3 × 3 neighbourhood.
 
 `crates/materials/src/flakes.rs` and `crates/materials/src/wgsl/flakes.wgsl` (in the package `pfx-materials`) port Cycles' 3D Voronoi F1 (`src/kernel/svm/voronoi.h`, `voronoi_f1` with the Euclidean metric) and its PCG hash (`hash_pcg3d_i` and `hash_int3_to_float3` in `src/util/hash.h`, after Jarzynski and Olano, "Hash Functions for GPU Rendering", JCGT 2020) from the same tag and commit, SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0. Its text ships in [crates/materials/LICENSE-APACHE](crates/materials/LICENSE-APACHE). The port is a translation into Rust and WGSL, changed by pfx's authors: the cell search, the hash and its constants are kept; the flake layer built on the cells (which cells are flakes, their tilt and their lobe under the coat) is pfx's.
+
+`crates/build/src/level_material.rs` (in the package `pfx-build`) ports, from the same tag and commit, Cycles' bake jitter (`bake_jitter_barycentric` and the centre-first filter sample of `integrator_init_from_bake` in `src/kernel/integrator/init_from_bake.h`) and the hashes its retries use (`hash_uint3`, `uint_to_float_incl` and `hash_float2_to_float2` in `src/util/hash.h`), SPDX-FileCopyrightText: 2011-2022 Blender Foundation, licensed under the Apache License 2.0, whose text ships in [crates/trace/LICENSE-APACHE](crates/trace/LICENSE-APACHE). The port is a translation into Rust, changed by pfx's authors: the filter points come from pfx-trace's Sobol point set seeded per texel in place of Cycles' per-pixel sampler, and the jittered samples are averaged into one texel of a level's material maps.
 
 ## pbrt-v4, under the Apache License 2.0
 
@@ -121,7 +143,11 @@ Made for pfx by hand, by its own scripts and tests, or by its own renderers, and
 
 ## ebur128, under the MIT licence
 
-`local_peaks`, `true_peak` and `oversampled` in `crates/sound/src/peak.rs` (in the package `pfx-sound`) follow the true-peak scanner of the ebur128 crate (https://github.com/sdroege/ebur128, `src/true_peak.rs` and `src/interp.rs`, version 0.1.10, commit `ef08d2b84d6b042dbe6dd25f4e7074de4787a27e`), itself a port of libebur128: each channel's history run through every phase of a 48-tap, 4-phase polyphase interpolator per input frame, the rectified maximum kept, and 4x oversampling below 96 kHz. The filter's taps are not ebur128's windowed sinc but the 48 coefficients of ITU-R BS.1770-4, Annex 2. The crate is also a test-only dependency of pfx-sound, the reference its meter is checked against. Copyright (c) 2011 Jan Kokemüller, Copyright (c) 2020 Sebastian Dröge, licensed MIT; its licence text ships verbatim, with its author's address, as `crates/sound/LICENSE-ebur128.md` in the source and next to this file in every release.
+`local_peaks`, `true_peak` and `oversampled` in `crates/sound/src/peak.rs` (in the package `pfx-sound`) follow the true-peak scanner of the ebur128 crate (https://github.com/sdroege/ebur128, `src/true_peak.rs` and `src/interp.rs`, version 0.1.10, commit `ef08d2b84d6b042dbe6dd25f4e7074de4787a27e`), itself a port of libebur128: each channel's history run through every phase of a 48-tap, 4-phase polyphase interpolator per input frame, the rectified maximum kept, and 4x oversampling below 96 kHz. The filter's taps are not ebur128's windowed sinc but the 48 coefficients of ITU-R BS.1770-4, Annex 2. The crate is also a test-only dependency of pfx-sound, the reference its meter is checked against, and of pfx-splash, whose chime level it checks. Copyright (c) 2011 Jan Kokemüller, Copyright (c) 2020 Sebastian Dröge, licensed MIT; its licence text ships verbatim, with its author's address, as `crates/sound/LICENSE-ebur128.md` in the source and next to this file in every release.
+
+## Freeverb, in the public domain
+
+The splash chime's room in `crates/splash/src/chime/reverb.rs` (in the package `pfx-splash`) is ported from Freeverb by Jezar at Dreampoint (version 3, June 2000, `revmodel.cpp`, `revmodel.hpp`, `comb.hpp`, `allpass.hpp` and `tuning.h`), which its author released into the public domain. The port keeps its eight low-pass feedback combs and four allpasses per side, its comb and allpass tunings (1116, 1188, 1277, 1356, 1422, 1491, 1557 and 1617; 556, 441, 341 and 225 samples), the right side's spread of 23 samples, the fixed input gain of 0.015, the wet scale of 3, the damping scale of 0.4, the room scale of 0.28 with its offset of 0.7, the allpass feedback of 0.5 and the wet1 and wet2 width mix. The tunings are scaled from 44.1 kHz to the output rate.
 
 ## mda VST plug-ins, under the MIT licence
 
@@ -254,10 +280,22 @@ The live renderer's glossy screen-space reflections in `crates/live/src/reflect.
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-pfx's mark and wordmark are © Catalin Ilinca, all rights reserved, and not covered by the MIT licence ([TRADEMARKS.md](TRADEMARKS.md)):
+pfx's mark and wordmark are © Catalin Ilinca, all rights reserved, and not covered by pfx's licences ([TRADEMARKS.md](TRADEMARKS.md)):
 
-- `assets/marks/` and `.github/icon.png`, copied by `bin/marks` from the PITO MD brand masters at `1bd7ff234db9487b517ce5fed50c76a94d0dbd3f`; the README shows the lockup at its Licence section, `lockup.svg` on a dark theme and `lockup-light.svg` on a light one;
+- `assets/marks/` and `.github/icon.png`, copied by `bin/marks` from the PITO MD brand masters at `f5780929e8af805420c0640c7d801b42f655cda2`: the mark, the wordmark, the lockup (`lockup.svg` for dark grounds, `lockup-light.svg` for light ones), the icons, and the Powered by lockup that credits pfx, its words "Powered by" outlined from JetBrains Mono Regular (SIL Open Font License 1.1, [assets/fonts/OFL.txt](assets/fonts/OFL.txt)) beside the lockup: `powered-by.svg` (lime, for dark grounds), `powered-by-light.svg` (violet, for light ones), `powered-by-white.svg` and `powered-by-black.svg` (one colour), each also as a PNG 64 and 128 px tall (`powered-by-64.png`, `powered-by-light-128.png` and so on). The README shows the Powered by lockup at its Licence section, the start-up splash draws it, and `pfx new` and `pfx steam stage` copy its 128 px PNGs into a game;
 - `crates/project/src/templates/badge.glb` and `crates/project/src/templates/wordmark.glb`, the mark and wordmark in 3D that pfx's own start page shows; `pfx new` never writes them into a game.
+
+## FidelityFX Super Resolution 1, under the MIT licence
+
+The viewport upscaler in `crates/live/src/fsr.rs` (in the package `pfx-live`) ports AMD's FidelityFX Super Resolution 1 (https://github.com/GPUOpen-Effects/FidelityFX-FSR, tag `v1.0.2`, commit `a21ffb8f6c13233ba336352bdff293894c706575`): the 32-bit EASU edge-adaptive upscale (`FsrEasuCon`, `FsrEasuTapF`, `FsrEasuSetF`, `FsrEasuF` in `ffx-fsr/ffx_fsr1.h`), the 32-bit RCAS sharpener (`FsrRcasCon`, `FsrRcasF`, `FSR_RCAS_LIMIT`) and the approximations they use (`APrxLoRcpF1`, `APrxMedRcpF1`, `APrxLoRsqF1` in `ffx-fsr/ffx_a.h`). Copyright (c) 2021 Advanced Micro Devices, Inc., licensed MIT:
+
+> Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## Bevy, under the MIT licence
 
@@ -292,6 +330,20 @@ The screen-space ambient occlusion in `crates/live/src/screen_shadows.rs` (in th
 > MIT License
 >
 > Copyright (C) 2016-2021, Intel Corporation
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Niagara, under the MIT licence
+
+The occlusion culling in `crates/live/src/occlusion.rs` (in the package `pfx-live`) follows Arseny Kapoulkine's Niagara (https://github.com/zeux/niagara, commit `567ebe331247e122425eaf1a6319d8c64daf816d`, `src/shaders/drawcull.comp.glsl`, `src/shaders/depthreduce.comp.glsl` and `getOcclusionMip` in `src/shaders/math.h`): the two phases (an early pass draws what was visible last frame, a min depth pyramid is built from its depth, a late pass tests every draw against it, draws those newly visible and keeps the visibility for the next frame), the pyramid of 2x2 minimums and the choice of the pyramid level where a draw's rectangle covers at most 2x2 texels, translated to WGSL by pfx's authors, under the MIT licence:
+
+> MIT License
+>
+> Copyright (c) 2018 Arseny Kapoulkine
 >
 > Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 >
@@ -440,7 +492,7 @@ and tinyobjloader's `LICENSE` at that tag reads:
 
 ## Godot Engine, under the MIT licence
 
-The route spline's arc-length table in `crates/motion/src/route.rs` (in the package `pfx-motion`) ports the arc-length baking of Godot Engine's Curve3D (https://github.com/godotengine/godot, `scene/resources/curve.cpp`, tag `4.5-stable`, commit `876b290332ec6f2e6d173d08162a02aa7e6ca46d`): the even-length subdivision of each segment, the distance table searched by bisection, and the nearest distance by projection onto the baked polyline, altered, under the MIT licence, as its `LICENSE.txt` at that commit reads:
+The route spline's arc-length table in `crates/motion/src/route.rs` (in the package `pfx-motion`) ports the arc-length baking of Godot Engine's Curve3D (https://github.com/godotengine/godot, `scene/resources/curve.cpp`, tag `4.5-stable`, commit `876b290332ec6f2e6d173d08162a02aa7e6ca46d`): the even-length subdivision of each segment, the distance table searched by bisection, and the nearest distance by projection onto the baked polyline, altered; and the editor's ground grid in `crates/editor-viewport/src/grid.rs` (in the package `pfx-editor-viewport`) ports the 3D editor grid of the same commit (`editor/scene/3d/node_3d_editor_plugin.cpp`, `_init_grid` and its grid shader): the division level from the camera's height, the blend of the primary and secondary lines between levels, and the distance and angle fades with their smoothstep constants, altered to draw on the GPU per pixel against the scene's depth with ten steps per level; both under the MIT licence, as its `LICENSE.txt` at that commit reads:
 
 > Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md).
 > Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.
@@ -603,7 +655,7 @@ The same file ports SciPy's PCHIP interpolation (https://github.com/scipy/scipy,
 
 ## OpenSubdiv, under the Tomorrow Open Source Technology License 1.0
 
-The same file ports OpenSubdiv's Catmull-Clark subdivision with semi-sharp creases (https://github.com/PixarAnimationStudios/OpenSubdiv, tag `v3_7_0`, commit `9dab8a47bfbb1388ec8388fe61f5f916e6123f38`): the masks of `opensubdiv/sdc/catmarkScheme.h` and `scheme.h` and the sharpness rules of `opensubdiv/sdc/crease.cpp`, changed from C++ into Rust by pfx's authors. `crease.cpp` is Copyright 2014 DreamWorks Animation LLC. OpenSubdiv is under the Tomorrow Open Source Technology License 1.0, which is the Apache License 2.0 with Section 6 replaced. Its `LICENSE.txt` at that commit ships unchanged in [crates/build/LICENSE-APACHE](crates/build/LICENSE-APACHE); its Section 6 reads:
+The lofts and the `pfx/cage` generator share a port of OpenSubdiv's Catmull-Clark subdivision with semi-sharp creases in `crates/build/src/subdiv.rs` (https://github.com/PixarAnimationStudios/OpenSubdiv, tag `v3_7_0`, commit `9dab8a47bfbb1388ec8388fe61f5f916e6123f38`): the subdivision, limit position and limit tangent masks of `opensubdiv/sdc/catmarkScheme.h` and `scheme.h`, the uniform and Chaikin sharpness rules of `opensubdiv/sdc/crease.cpp`, the boundary and corner sharpening of `opensubdiv/far/topologyRefinerFactory.cpp`, and the face-varying value spans and interpolation of `opensubdiv/vtr/fvarLevel.cpp`, `opensubdiv/vtr/fvarRefinement.cpp` and `opensubdiv/far/primvarRefiner.h`, changed from C++ into Rust by pfx's authors. `crease.cpp` is Copyright 2014 DreamWorks Animation LLC. OpenSubdiv is under the Tomorrow Open Source Technology License 1.0, which is the Apache License 2.0 with Section 6 replaced. Its `LICENSE.txt` at that commit ships unchanged in [crates/build/LICENSE-APACHE](crates/build/LICENSE-APACHE); its Section 6 reads:
 
 > 6. Trademarks. This License does not grant permission to use the trade
 >    names, trademarks, service marks, or product names of the Licensor
@@ -927,3 +979,7 @@ resvg's box blur is based on fastblur (https://github.com/fschutt/fastblur, MIT)
 > To the extent possible under law, Christoph Peters has waived all copyright and related or neighboring rights to the files in this directory and its subdirectories. This work is published from: Germany.
 >
 > The work is made available under the terms of the Creative Commons CC0 Public Domain Dedication.
+
+## Harmony Agreements, under CC BY 3.0
+
+[CLA.md](CLA.md), pfx's Individual Contributor Licence Agreement, is adapted from the Harmony Individual Contributor License Agreement (HA-CLA-I), version 1.0 of July 4, 2011, by Harmony Agreements (https://www.harmonyagreements.org/), licensed under the Creative Commons Attribution 3.0 Unported License (https://creativecommons.org/licenses/by/3.0/). The changes are listed at its foot, and the adapted agreement is under the same licence.

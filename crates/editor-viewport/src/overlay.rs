@@ -10,8 +10,6 @@ use crate::lens::Lens;
 use crate::pick::EDGES;
 
 pub const SQUARE: f32 = 20.0;
-pub const GRID_LINES: i32 = 10;
-pub const GRID_STEP: f64 = 1.0;
 pub const DIM: f32 = 0.6;
 
 pub fn checker(painter: &Painter, image: Rect, theme: &Theme) {
@@ -66,28 +64,6 @@ pub fn passepartout(painter: &Painter, image: Rect, frame: Rect, theme: &Theme) 
         Stroke::new(theme.stroke, theme.line),
         StrokeKind::Outside,
     );
-}
-
-pub fn grid(painter: &Painter, lens: &Lens, theme: &Theme) {
-    let reach = f64::from(GRID_LINES) * GRID_STEP;
-    let [x, _, z] = colours(theme);
-    let faint = Stroke::new(1.0_f32, theme.grid);
-    for line in -GRID_LINES..=GRID_LINES {
-        let at = f64::from(line) * GRID_STEP;
-        for (a, b, axis) in [
-            (DVec3::new(-reach, 0.0, at), DVec3::new(reach, 0.0, at), x),
-            (DVec3::new(at, 0.0, -reach), DVec3::new(at, 0.0, reach), z),
-        ] {
-            let stroke = if line == 0 {
-                Stroke::new(1.0_f32, axis.gamma_multiply(0.45))
-            } else {
-                faint
-            };
-            if let Some(points) = lens.segment(a, b) {
-                painter.line_segment(points, stroke);
-            }
-        }
-    }
 }
 
 fn compass(image: Rect) -> (Pos2, f32) {

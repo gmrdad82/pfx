@@ -1,0 +1,17 @@
+[package]
+name = "pfx-docs-bundle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+license.workspace = true
+authors.workspace = true
+description = "Builds pfx's docs bundle for a release: Starlight pages from the README, docs/, src/main.rs's usage and the CHANGELOG"
+
+[[bin]]
+name = "docs-bundle"
+path = "src/main.rs"
+
+[dependencies]
+regex = "1"
+serde_json = "1"

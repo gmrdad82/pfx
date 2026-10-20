@@ -10,7 +10,7 @@ What the tool does differently on Windows:
 - A stop ends a render's child process (`Child::kill`) instead of sending it SIGTERM, and the processes below a queue wrapper are not looked up (that reads `/proc`).
 - The archive lock falls back to the temporary folder when `XDG_RUNTIME_DIR` is unset, and copies are plain copies (no reflink).
 - Windows ships two binaries, a `.com` and an `.exe` of one name. `pfx.com` is the console tool, which a terminal runs for `pfx` because `.COM` comes before `.EXE`. `pfx.exe` is a window-subsystem launcher built from `crates/launcher`, carrying `pfx.ico` as its icon: it starts `pfx.com gui <arguments>` with no console window and returns. `pfx.com` hands a bare call or a lone `.pitofx` to `pfx.exe`, detached ([install.md](install.md), "How pfx starts").
-- Tests that drive a `#!/bin/sh` or Python stand-in, symlinks or Unix signals are `cfg(unix)` or `cfg(target_os = "linux")`, so the Windows build skips them.
+- Tests that drive a `#!/bin/sh` stand-in, symlinks or Unix signals are `cfg(unix)` or `cfg(target_os = "linux")`, so the Windows build skips them.
 
 ## What builds
 

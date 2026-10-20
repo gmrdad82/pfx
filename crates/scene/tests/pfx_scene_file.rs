@@ -247,13 +247,13 @@ fn a_recipe_document_beside_a_scene_is_not_checked_as_one_of_its_scenes() {
             b"recipe = 1\nname = \"model\"\n".as_slice(),
             Codec::Lz4,
         )
-        .write(folder.root.join("model.pfx"))
+        .write(folder.root.join("model.pitofx"))
         .unwrap();
     let project = Project::open(&folder.root).unwrap();
     let named: Vec<_> = project
         .check()
         .into_iter()
-        .filter(|diagnostic| diagnostic.file.ends_with("model.pfx"))
+        .filter(|diagnostic| diagnostic.file.ends_with("model.pitofx"))
         .map(|diagnostic| diagnostic.message)
         .collect();
     assert!(named.is_empty(), "{named:?}");

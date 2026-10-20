@@ -14,8 +14,8 @@ use pfx_live::scene::Staged;
 use pfx_live::stats::FrameStats;
 use pfx_load::scene::Scene;
 
-const WIDTH: u32 = 480;
-const HEIGHT: u32 = 270;
+const WIDTH: u32 = 960;
+const HEIGHT: u32 = 540;
 const SEED: u32 = 7;
 
 fn shots() -> PathBuf {

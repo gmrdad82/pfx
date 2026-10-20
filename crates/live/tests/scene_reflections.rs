@@ -68,11 +68,18 @@ fn output(gpu: &Gpu) -> OffscreenTarget {
 }
 
 fn live(scene: &Scene) -> Vec<[f32; 3]> {
+    drawn(scene, false)
+}
+
+fn drawn(scene: &Scene, background: bool) -> Vec<[f32; 3]> {
     let gpu = pollster::block_on(Gpu::headless()).unwrap();
     let target = output(&gpu);
     let mut renderer = Renderer::new(gpu, WIDTH, HEIGHT).unwrap();
     renderer.set_exposure(Exposure::Fixed(1.0)).unwrap();
+    renderer.set_background_reflections(background);
     let mut staged = renderer.stage(scene).unwrap();
+    assert_eq!(renderer.wait_reflections().unwrap(), background);
+    assert!(!renderer.reflections_pending());
     renderer.set_finish(Chain::new());
     for _ in 0..8 {
         let finish = staged.finish();
@@ -205,4 +212,11 @@ fn a_glossy_sphere_between_dark_walls_reflects_the_walls_not_the_sky() {
         (a - b).abs() <= b * 0.35 + 0.002,
         "the sphere's flanks read {a} live, {b} traced"
     );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_scene_reflection_captured_in_the_background_draws_the_same_frames() {
+    let scene = Scene::open(folder("background")).unwrap();
+    assert!(drawn(&scene, true) == live(&scene));
 }

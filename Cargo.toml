@@ -1,12 +1,12 @@
 [workspace]
-members = ["crates/assets", "crates/bake", "crates/bench", "crates/build", "crates/core", "crates/denoise", "crates/editor", "crates/editor-doc", "crates/editor-shell", "crates/editor-style", "crates/editor-toml", "crates/editor-viewport", "crates/file", "crates/film", "crates/game", "crates/generators", "crates/geom", "crates/glb", "crates/gpu", "crates/input", "crates/launcher", "crates/live", "crates/load", "crates/materials", "crates/mesh", "crates/mod", "crates/motion", "crates/physics", "crates/play", "crates/post", "crates/project", "crates/recipe", "crates/recipe-scene", "crates/run", "crates/runtime", "crates/scene", "crates/source", "crates/sound", "crates/steam", "crates/still", "crates/text", "crates/theme", "crates/trace", "crates/workbench"]
+members = ["crates/assets", "crates/bake", "crates/bench", "crates/build", "crates/core", "crates/denoise", "crates/docs-bundle", "crates/editor", "crates/editor-doc", "crates/editor-shell", "crates/editor-style", "crates/editor-toml", "crates/editor-viewport", "crates/file", "crates/film", "crates/game", "crates/generators", "crates/geom", "crates/glb", "crates/gpu", "crates/input", "crates/launcher", "crates/live", "crates/load", "crates/materials", "crates/mesh", "crates/mod", "crates/motion", "crates/physics", "crates/play", "crates/post", "crates/project", "crates/recipe", "crates/recipe-scene", "crates/run", "crates/runtime", "crates/scene", "crates/settings", "crates/source", "crates/sound", "crates/splash", "crates/steam", "crates/still", "crates/text", "crates/theme", "crates/trace", "crates/workbench"]
 
 [workspace.package]
 version = "3.1.1"
 edition = "2024"
 rust-version = "1.97"
 publish = false
-license = "MIT"
+license = "AGPL-3.0-only"
 authors = ["Gamer Dad"]
 
 [package]
@@ -23,7 +23,7 @@ authors.workspace = true
 default = ["harness", "editor", "bench", "shot-sound", "sound-clean"]
 editor = ["harness", "dep:pfx-workbench"]
 bench = ["harness", "dep:pfx-bench"]
-harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "pfx-run/encode", "dep:pfx-sound", "pfx-sound/media", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film", "dep:pfx-recipe", "dep:pfx-build", "dep:pfx-glb", "dep:pfx-mesh", "dep:pfx-motion", "dep:pfx-generators", "dep:pfx-recipe-scene", "dep:pfx-still", "dep:pfx-post", "dep:pfx-file", "dep:pfx-source", "dep:clap", "dep:gltf", "dep:glam", "dep:terminal_size"]
+harness = ["dep:pfx-core", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "pfx-run/encode", "dep:pfx-sound", "pfx-sound/media", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film", "dep:pfx-recipe", "dep:pfx-build", "dep:pfx-glb", "dep:pfx-mesh", "dep:pfx-motion", "dep:pfx-generators", "dep:pfx-recipe-scene", "dep:pfx-still", "dep:pfx-post", "dep:pfx-file", "dep:pfx-source", "dep:pfx-settings", "dep:pfx-splash", "dep:clap", "dep:gltf", "dep:glam", "dep:terminal_size"]
 shot-sound = ["bench", "pfx-sound/shot"]
 sound-clean = ["harness", "pfx-sound/clean"]
 
@@ -59,6 +59,8 @@ pfx-still = { path = "crates/still", optional = true }
 pfx-post = { path = "crates/post", optional = true }
 pfx-file = { path = "crates/file", optional = true }
 pfx-source = { path = "crates/source", optional = true }
+pfx-settings = { path = "crates/settings", optional = true }
+pfx-splash = { path = "crates/splash", optional = true }
 clap = { version = "4.6", features = ["derive"], optional = true }
 gltf = { version = "1.4", features = ["extras", "KHR_texture_transform"], optional = true }
 glam = { version = "0.33", features = ["libm"], optional = true }
@@ -68,7 +70,9 @@ terminal_size = { version = "0.4", optional = true }
 libc = "0.2"
 
 [dev-dependencies]
-pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.16.2", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+base64 = "0.22"
+pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.16.3", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"] }
 
 [[bin]]
 name = "pfx"

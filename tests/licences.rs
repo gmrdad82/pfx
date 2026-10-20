@@ -1,5 +1,7 @@
 use std::process::Command;
 
+const OWN: &str = "AGPL-3.0-only";
+
 const ALLOWED: [&str; 14] = [
     "MIT",
     "Apache-2.0",
@@ -96,7 +98,7 @@ fn allowed(licence: &str) -> Result<bool, String> {
 }
 
 #[test]
-fn every_dependency_is_under_a_licence_the_mit_code_can_ship_with() {
+fn every_dependency_is_under_a_licence_the_dual_licensed_code_can_ship_with() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let output = Command::new(cargo)
         .args(["metadata", "--format-version", "1", "--locked"])
@@ -109,10 +111,28 @@ fn every_dependency_is_under_a_licence_the_mit_code_can_ship_with() {
         String::from_utf8_lossy(&output.stderr)
     );
     let metadata: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let members: Vec<&str> = metadata["workspace_members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|id| id.as_str())
+        .collect();
     let mut refused = Vec::new();
     for package in metadata["packages"].as_array().unwrap() {
         let name = package["name"].as_str().unwrap_or("?");
         let version = package["version"].as_str().unwrap_or("?");
+        if package["id"]
+            .as_str()
+            .is_some_and(|id| members.contains(&id))
+        {
+            if package["license"].as_str() != Some(OWN) {
+                refused.push(format!(
+                    "{name} {version}: {:?}, expected pfx's own {OWN}",
+                    package["license"].as_str()
+                ));
+            }
+            continue;
+        }
         match package["license"].as_str() {
             Some(licence) => match allowed(licence) {
                 Ok(true) => {}
@@ -137,6 +157,7 @@ fn the_expression_reader_weighs_and_over_or() {
     assert_eq!(allowed("Apache-2.0 WITH LLVM-exception"), Ok(true));
     assert_eq!(allowed("(MIT OR Apache-2.0) AND Unicode-3.0"), Ok(true));
     assert_eq!(allowed("GPL-3.0-only"), Ok(false));
+    assert_eq!(allowed("AGPL-3.0-only"), Ok(false));
     assert_eq!(allowed("(MIT OR Apache-2.0) AND GPL-3.0-only"), Ok(false));
     assert_eq!(allowed("MIT AND LGPL-2.1-or-later"), Ok(false));
 }

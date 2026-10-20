@@ -3,10 +3,10 @@ use std::path::Path;
 use pfx_core::clock::Tick;
 use pfx_gpu::Gpu;
 use pfx_gpu::screens::{Budget, Device};
-use pfx_gpu::window::{Attention, Size};
+use pfx_gpu::window::Size;
 use pfx_input::Input;
 use pfx_live::flat::{Draw, Srgba};
-use pfx_play::{Cap, Game, Label, Settings, Ui, UiFrame, World};
+use pfx_play::{Game, Label, Settings, Ui, UiFrame, World};
 
 use crate::tests::{capped, world};
 use crate::{Config, Count, Event, Headless};
@@ -37,8 +37,7 @@ impl Game for Board {
     }
 }
 
-fn run(cap: Cap, window: Size, config: impl FnOnce(Config) -> Config) -> Headless {
-    let settings = capped(cap, Cap::Fps30);
+fn run(settings: Settings, window: Size, config: impl FnOnce(Config) -> Config) -> Headless {
     let config = config(
         Config::new("board", "0.0.0", world())
             .device(Device::Desktop)
@@ -67,27 +66,26 @@ fn pixel(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
 
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
-fn the_loop_draws_the_world_and_its_ui_offscreen_at_each_cap() {
+fn the_loop_draws_the_world_and_its_ui_offscreen_capped_and_uncapped() {
     let window = Size {
         width: 640,
         height: 360,
     };
-    for (cap, frames) in [(Cap::Fps30, 15), (Cap::Fps60, 30), (Cap::Fps120, 60)] {
-        let mut run = run(cap, window, |config| config);
+    for (settings, cost, frames) in [
+        (capped(), 1_000_000, 30),
+        (Settings::default(), 10_000_000, 50),
+    ] {
+        let mut run = run(settings, window, |config| config);
+        run.frame_cost_ns = cost;
         run.run_for(0.5).unwrap();
         let counted = run.run_for(0.5).unwrap();
-        assert_eq!(counted, Count { frames, ticks: 30 }, "{cap:?}");
+        assert_eq!(counted, Count { frames, ticks: 30 }, "{frames}");
         let drawn = run.drawn.unwrap();
         assert_eq!(drawn.render, [640, 360]);
         assert_eq!(drawn.output, [640, 360]);
         assert_eq!(drawn.labels, 1);
-        if cap == Cap::Fps120 {
-            run.feed(Event::Attention(Attention::Focused(false)));
-            run.run_for(0.5).unwrap();
-            assert_eq!(run.run_for(0.5).unwrap().frames, 15);
-        }
     }
-    let mut run = run(Cap::Fps60, window, |config| config);
+    let mut run = run(capped(), window, |config| config);
     run.run_for(0.2).unwrap();
     let pixels = run.readback().unwrap();
     shot("board.ppm", 640, 360, &pixels);
@@ -115,7 +113,7 @@ fn a_wide_window_gets_bars_and_a_lower_render_scale_keeps_the_ui_native() {
         width: 960,
         height: 270,
     };
-    let mut run = run(Cap::Fps60, wide, |config| config.render_scale(0.5));
+    let mut run = run(capped(), wide, |config| config.render_scale(0.5));
     run.run_for(0.2).unwrap();
     let drawn = run.drawn.unwrap();
     assert_eq!(drawn.render, [240, 135]);
@@ -146,7 +144,7 @@ fn dynamic_resolution_drops_the_render_size_under_a_tight_budget() {
         width: 640,
         height: 360,
     };
-    let mut run = run(Cap::Fps60, window, |config| {
+    let mut run = run(capped(), window, |config| {
         config.budget(Budget::new(0.0005))
     });
     run.run_for(0.5).unwrap();
@@ -313,7 +311,7 @@ fn f3_toggles_the_dev_hud_over_the_game() {
         width: 640,
         height: 360,
     };
-    let mut run = run(Cap::Fps60, window, |config| {
+    let mut run = run(capped(), window, |config| {
         config.exposure(crate::Exposure::Fixed(1.0))
     });
     let f3 = |pressed| {
@@ -615,7 +613,7 @@ fn a_fixed_exposure_holds_the_frame_and_auto_is_the_default() {
         height: 180,
     };
     let frame = |exposure: Option<Exposure>| {
-        let mut run = run(Cap::Fps60, window, |config| match exposure {
+        let mut run = run(capped(), window, |config| match exposure {
             Some(exposure) => config.exposure(exposure),
             None => config,
         });
@@ -660,4 +658,103 @@ fn a_fixed_exposure_holds_the_frame_and_auto_is_the_default() {
     .err()
     .unwrap();
     assert!(error.contains("exposure"), "{error}");
+}
+
+#[derive(Default)]
+struct Asks {
+    pan: u32,
+    frames: u32,
+    text: &'static str,
+}
+
+struct Idle {
+    asks: std::rc::Rc<std::cell::RefCell<Asks>>,
+    settings: Settings,
+}
+
+impl Game for Idle {
+    fn start(&mut self, _world: &mut World) {}
+
+    fn tick(&mut self, world: &mut World, _tick: &Tick, _input: &Input) {
+        let mut asks = self.asks.borrow_mut();
+        if asks.pan > 0 {
+            asks.pan -= 1;
+            world.camera.at[0] += 0.01;
+        }
+        if asks.frames > 0 {
+            asks.frames -= 1;
+            world.request_frame();
+        }
+    }
+
+    fn ui(&mut self, _world: &World, _frame: &UiFrame) -> Ui {
+        let mut ui = Ui::new();
+        ui.label(Label::new(
+            self.asks.borrow().text,
+            "DM Sans",
+            48.0,
+            [100.0, 100.0],
+        ));
+        ui
+    }
+
+    fn settings(&self) -> Option<&Settings> {
+        Some(&self.settings)
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn an_idle_game_draws_nothing_until_something_changes() {
+    let window = Size {
+        width: 320,
+        height: 180,
+    };
+    let start = |redraw: crate::Redraw| {
+        let asks = std::rc::Rc::new(std::cell::RefCell::new(Asks {
+            text: "idle",
+            ..Asks::default()
+        }));
+        let config = Config::new("idle", "0.0.0", world())
+            .device(Device::Desktop)
+            .font(FONT)
+            .exposure(crate::Exposure::Fixed(1.0))
+            .redraw(redraw);
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let game = Idle {
+            asks: std::rc::Rc::clone(&asks),
+            settings: capped(),
+        };
+        let mut run = Headless::with_gpu(game, config, gpu, window).unwrap();
+        run.on_demand = true;
+        run.run_for(1.0).unwrap();
+        (run, asks)
+    };
+    let composed = |run: &mut Headless| {
+        let before = run.composed;
+        let count = run.run_for(1.0).unwrap();
+        (run.composed - before, count.frames)
+    };
+    let (mut run, asks) = start(crate::Redraw::OnDemand);
+    assert_eq!(composed(&mut run).0, 0, "a still scene and UI");
+    asks.borrow_mut().pan = 10;
+    let panned = composed(&mut run).0;
+    let settle = u64::from(pfx_live::demand::SETTLE);
+    assert!(
+        (10..=11 + settle).contains(&panned),
+        "a pan and its settle: {panned}"
+    );
+    assert_eq!(composed(&mut run).0, 0, "at rest after the pan");
+    asks.borrow_mut().frames = 5;
+    let asked = composed(&mut run).0;
+    assert!(
+        (1..=5).contains(&asked),
+        "frames the game asked for: {asked}"
+    );
+    asks.borrow_mut().text = "changed";
+    assert_eq!(composed(&mut run).0, 1, "one frame for a UI change");
+    assert_eq!(composed(&mut run).0, 0);
+    let (mut always, _) = start(crate::Redraw::Always);
+    let (drawn, frames) = composed(&mut always);
+    assert_eq!(drawn, frames, "redraw always draws every frame");
 }

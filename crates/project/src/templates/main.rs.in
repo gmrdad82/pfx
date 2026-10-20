@@ -12,9 +12,12 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    pfx_game::launch({{crate}}::{{type}}::new, config, |commands| {
-        tools(commands, project)
-    })
+    let settings = config.settings.clone();
+    pfx_game::launch(
+        move || {{crate}}::{{type}}::with(settings.clone()),
+        config,
+        |commands| tools(commands, project),
+    )
 }
 
 #[cfg(feature = "tools")]

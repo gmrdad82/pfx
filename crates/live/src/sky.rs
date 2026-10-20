@@ -574,7 +574,7 @@ fn sh_basis(d: [f32; 3]) -> [f32; 9] {
 
 fn prefilter(source: &SkySource, n: [f32; 3], roughness: f32) -> [f32; 3] {
     if roughness == 0.0 {
-        return source.radiance(n);
+        return source.diffuse(n);
     }
     let up = if n[1].abs() < 0.99 {
         [0.0, 1.0, 0.0]
@@ -601,7 +601,7 @@ fn prefilter(source: &SkySource, n: [f32; 3], roughness: f32) -> [f32; 3] {
         let l = unit(add(mul(h, 2.0 * dot(n, h)), mul(n, -1.0)));
         let ndotl = dot(n, l).max(0.0);
         if ndotl > 0.0 {
-            let value = source.radiance(l);
+            let value = source.diffuse(l);
             for (channel, incoming) in sum.iter_mut().zip(value) {
                 *channel += incoming * ndotl;
             }
@@ -1056,6 +1056,18 @@ mod tests {
                     "{normal:?} channel {c}: {sh:?} versus {reference:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn the_sky_cube_leaves_the_sun_disc_to_the_analytic_highlight() {
+        let noon = model(12.0);
+        let source = SkySource::Analytic(noon);
+        assert!(source.radiance(noon.sun)[0] > 1000.0);
+        for roughness in [0.0, 0.25, 1.0] {
+            let texel = prefilter(&source, noon.sun, roughness);
+            let open = source.diffuse(noon.sun);
+            assert!(texel[0] < open[0] * 2.0, "{roughness}: {texel:?}");
         }
     }
 

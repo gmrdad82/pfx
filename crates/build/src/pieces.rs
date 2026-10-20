@@ -14,6 +14,7 @@ pub(crate) struct Step {
 pub(crate) struct Choice<'a> {
     pub material: Option<&'a str>,
     pub hidden: bool,
+    pub still: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -154,6 +155,7 @@ impl<'a> Rules<'a> {
         let object = self.object;
         let mut material: Option<((usize, u8), &'a str)> = None;
         let mut hidden: Option<((usize, u8), bool)> = None;
+        let mut spin: Option<((usize, u8), bool)> = None;
         for (i, rule) in object.pieces.iter().enumerate() {
             let Some(parts) = &self.selects[i].node else {
                 continue;
@@ -172,6 +174,11 @@ impl<'a> Rules<'a> {
             {
                 hidden = Some((rank, value));
             }
+            if let Some(value) = rule.spin
+                && spin.is_none_or(|(best, _)| rank > best)
+            {
+                spin = Some((rank, value));
+            }
         }
         let fallback = Self::overrides(object)
             .then_some(object.material.as_deref())
@@ -179,6 +186,7 @@ impl<'a> Rules<'a> {
         Choice {
             material: material.map(|(_, name)| name).or(fallback),
             hidden: hidden.is_some_and(|(_, value)| value),
+            still: spin.is_some_and(|(_, value)| !value),
         }
     }
 

@@ -1,10 +1,14 @@
 use egui::epaint::ClippedPrimitive;
 use egui::{Color32, TexturesDelta};
 use egui_wgpu::{Renderer, RendererOptions, ScreenDescriptor};
-use pfx_gpu::{Gpu, wgpu};
+use pfx_gpu::{FrameTimings, Gpu, GpuProfiler, wgpu};
 
 pub struct Painter {
     renderer: Renderer,
+    profiler: Option<GpuProfiler>,
+    frames: u64,
+    timed: Option<FrameTimings>,
+    queued: Vec<wgpu::CommandBuffer>,
 }
 
 pub fn linear(v: u8) -> f64 {
@@ -29,7 +33,25 @@ impl Painter {
     pub fn new(gpu: &Gpu, format: wgpu::TextureFormat, options: RendererOptions) -> Painter {
         Painter {
             renderer: Renderer::new(&gpu.device, format, options),
+            profiler: None,
+            frames: 0,
+            timed: None,
+            queued: Vec::new(),
         }
+    }
+
+    pub fn queue(&mut self, commands: Vec<wgpu::CommandBuffer>) {
+        self.queued.extend(commands);
+    }
+
+    pub fn time(&mut self, gpu: &Gpu) {
+        if self.profiler.is_none() {
+            self.profiler = Some(GpuProfiler::new(&gpu.device, &gpu.queue));
+        }
+    }
+
+    pub fn timed(&self) -> Option<&FrameTimings> {
+        self.timed.as_ref()
     }
 
     pub fn renderer(&mut self) -> &mut Renderer {
@@ -56,9 +78,18 @@ impl Painter {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("editor ui"),
             });
-        let mut commands =
-            self.renderer
-                .update_buffers(&gpu.device, &gpu.queue, &mut encoder, primitives, screen);
+        let mut commands = std::mem::take(&mut self.queued);
+        commands.extend(self.renderer.update_buffers(
+            &gpu.device,
+            &gpu.queue,
+            &mut encoder,
+            primitives,
+            screen,
+        ));
+        let timing = self
+            .profiler
+            .as_mut()
+            .and_then(|profiler| profiler.pass("editor ui"));
         {
             let pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 multiview_mask: None,
@@ -73,14 +104,34 @@ impl Painter {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: self
+                    .profiler
+                    .as_ref()
+                    .and_then(|profiler| profiler.render_writes(timing)),
                 occlusion_query_set: None,
             });
             let mut pass = pass.forget_lifetime();
             self.renderer.render(&mut pass, primitives, screen);
         }
+        self.frames += 1;
+        let slot = self
+            .profiler
+            .as_mut()
+            .and_then(|profiler| profiler.finish_frame(&mut encoder, self.frames));
         commands.push(encoder.finish());
         gpu.queue.submit(commands);
+        if let Some(profiler) = self.profiler.as_mut() {
+            if let Some(slot) = slot {
+                profiler.submitted(slot);
+            }
+            if let Some(latest) = profiler
+                .collect_frames(&gpu.device)
+                .into_iter()
+                .max_by_key(|frame| frame.frame)
+            {
+                self.timed = Some(latest);
+            }
+        }
         for id in &textures.free {
             self.renderer.free_texture(id);
         }

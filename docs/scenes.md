@@ -55,7 +55,7 @@ The files are format 1 of the crate `pfx-scene`, which owns the format: every fi
 
 ### Keys over time
 
-`[[light]]`, `[camera]`, `[[particles]]`, `[finish]`, `[haze]`, `[sun]`, `[sky]` and each `[[sky.layer]]` take an inline `keys` table that animates some of their keys over the scene's time (pfx-scene's `docs/format.md`, "Keys over time"):
+`[[light]]`, `[camera]`, `[[particles]]`, `[finish]`, `[haze]`, `[sun]`, `[sky]` and each `[[sky.layer]]` take an inline `keys` table that animates some of their keys over the scene's time ([scene-format.md](scene-format.md#keys-over-time)):
 
 ```toml
 [[light]]

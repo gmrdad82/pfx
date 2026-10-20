@@ -171,27 +171,13 @@ pub(crate) fn text_named(
     base: &Path,
 ) -> Result<Written, Error> {
     let format = recipe.output.scene_format;
-    if format > 1 {
+    if format != 1 {
         return Err(Error::new(
             "output.scene_format",
-            format!("pfx writes scene format 0 or 1, not {format}"),
+            format!("pfx writes scene format 1, not {format}"),
         ));
     }
-    if format == 0
-        && let Some(key) = effects::format_1_key(recipe).or_else(|| {
-            built
-                .wet
-                .values()
-                .next()
-                .map(|(owner, _)| format!("object[{owner}].params"))
-        })
-    {
-        return Err(Error::new(
-            key,
-            "this key is scene format 1's, expected `[output] scene_format = 1` or the key removed",
-        ));
-    }
-    let paths = Paths::of(scene, format, recipe, base)?;
+    let paths = Paths::of(scene, recipe, base)?;
     let mut out = String::new();
     let library_path = library_file(scene);
     let (library, cards) = library(built, recipe, base)?;
@@ -220,7 +206,7 @@ pub(crate) fn text_named(
         Some(file) => Some((file, proxies::of(built, recipe)?)),
         None => None,
     };
-    let whole = effects::whole(recipe, built, format, glb);
+    let whole = effects::whole(recipe, built, glb);
     lights(&mut out, recipe, built, whole.as_deref())?;
     effects::particles(&mut out, recipe, built, whole.as_deref())?;
     let glb_name = match named {
@@ -228,35 +214,18 @@ pub(crate) fn text_named(
         None => paths.relative(glb, "output.glb")?,
     };
     match &whole {
-        Some(name) => animated(
-            &mut out,
-            built,
-            recipe,
-            &glb_name,
-            name,
-            paths.pick(),
-            &cards.glb,
-        )?,
-        None => objects(&mut out, built, recipe, &glb_name, &cards, paths.pick())?,
+        Some(name) => animated(&mut out, built, recipe, &glb_name, name, "pick", &cards.glb)?,
+        None => objects(&mut out, built, recipe, &glb_name, &cards, "pick")?,
     }
     contents(&mut out, &cards, (recipe, &paths, base))?;
     let mut fonts = texts(&mut out, built, recipe, scene, &paths, base)?;
     fonts.extend(lut);
-    let mut written = Written {
+    let written = Written {
         text: out,
         library,
         files: fonts,
     };
-    let mut done = match format {
-        0 => {
-            if let Some((file, stands)) = stands {
-                let text = proxies::text(&stands, &[], "", None)?;
-                written.files.push((file, Cow::Owned(text.into_bytes())));
-            }
-            written
-        }
-        _ => one(written, built, recipe, &paths, stands)?,
-    };
+    let mut done = one(written, built, recipe, &paths, stands)?;
     done.files.extend(paths.copied()?);
     Ok(done)
 }
@@ -1740,38 +1709,28 @@ struct Paths {
     folder: PathBuf,
     root: PathBuf,
     provenance: PathBuf,
-    format: u32,
     scene: PathBuf,
     sources: Vec<PathBuf>,
     copies: RefCell<BTreeMap<PathBuf, PathBuf>>,
 }
 
 impl Paths {
-    fn of(scene: &Path, format: u32, recipe: &Recipe, base: &Path) -> Result<Paths, Error> {
+    fn of(scene: &Path, recipe: &Recipe, base: &Path) -> Result<Paths, Error> {
         let scene = absolute(scene, "output.scene")?;
         let root = match recipe.project_folder(base) {
             Some(root) => declared(&scene, &root)?,
             None => Project::root_of(&scene),
         };
         let folder = folder(&scene)?;
-        let provenance = if format == 0 {
-            folder.clone()
-        } else {
-            root.clone()
-        };
+        let provenance = root.clone();
         Ok(Paths {
             folder,
             root,
             provenance,
-            format,
             scene,
             sources: recipe.asset_roots_at(base),
             copies: RefCell::new(BTreeMap::new()),
         })
-    }
-
-    fn pick(&self) -> &'static str {
-        if self.format == 0 { "id" } else { "pick" }
     }
 
     fn relative(&self, file: &Path, key: &str) -> Result<String, Error> {
@@ -1948,7 +1907,7 @@ pub fn object_ids(
         base,
         out,
     );
-    let paths = Paths::of(&scene, 1, recipe, base)?;
+    let paths = Paths::of(&scene, recipe, base)?;
     let source = source_of(recipe, &paths.provenance)?.unwrap_or_else(|| recipe.name.clone());
     let nodes = built.map(nodes_of).unwrap_or_default();
     let (_, bases) = bases(recipe, &nodes, &source, built.is_some());

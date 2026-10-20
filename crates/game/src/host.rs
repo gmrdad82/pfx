@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::time::Instant;
 
+use pfx_gpu::presents::{GUI_BUDGET_NS, Pacing};
 use pfx_gpu::screens::{Display, SystemSource, apply_display, detect};
 use pfx_gpu::window::{self, Attention, Pace, Size, SystemClock};
 use pfx_gpu::{Gpu, WindowTarget, wgpu};
@@ -18,15 +20,17 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 use crate::clipboard;
 use crate::config::{Config, Pads, report};
 use crate::cursor::{Pointer, nudge};
-use crate::driver::{Driver, Event, present_preference};
+use crate::driver::{Driver, Event};
 use crate::painter::{Painter, Warmup};
 use crate::scheme::{self, FROM_WINDOW, of_theme, system_scheme};
+#[cfg(feature = "splash")]
+use crate::splash::Splash;
 use crate::start;
 
 pub const AUDIO_SECONDS: f32 = 0.25;
 
 struct Sound {
-    _output: Output,
+    output: Output,
     sender: PcmSender,
 }
 
@@ -46,6 +50,13 @@ struct Live {
     schemes: Option<Receiver<Option<Scheme>>>,
     resize: Option<Size>,
     stale: bool,
+    #[cfg(feature = "splash")]
+    splash: Option<Splash>,
+    pacing: Pacing,
+    dirty: bool,
+    asked: bool,
+    rested: bool,
+    rest_ns: Option<u64>,
     _clipboard: Option<clipboard::Service>,
 }
 
@@ -133,10 +144,7 @@ fn sound(config: &Config) -> Option<Sound> {
         AUDIO_SECONDS,
         Level::default(),
     );
-    Some(Sound {
-        _output: output,
-        sender,
-    })
+    Some(Sound { output, sender })
 }
 
 fn size_of(window: &Window) -> Size {
@@ -226,14 +234,37 @@ fn open(
             .map_err(|error| format!("the window: {error}"))?,
     );
     apply_display(&window, &display).map_err(|error| format!("the display mode: {error}"))?;
-    let preference = present_preference(settings.pacing.vrr, window::host(&window));
-    let (gpu, target) = pollster::block_on(Gpu::window_present(window.clone(), preference))?;
+    #[cfg(feature = "splash")]
+    let splash = {
+        let size = size_of(&window);
+        Splash::start(
+            &config.splash,
+            config.build_date.as_deref(),
+            [size.width, size.height],
+            config.sound,
+        )
+    };
+    let preference = window::present_preference(&window, settings.pacing.present());
+    let (gpu, mut target) = pollster::block_on(Gpu::window_present(window.clone(), preference))?;
+    target.follow(&gpu, &window, settings.pacing.present());
+    if pfx_gpu::priority::asked() {
+        match pfx_gpu::priority::raise_current_thread() {
+            Ok(raised) => eprintln!("the window's thread: {raised}"),
+            Err(error) => eprintln!("the window's thread keeps its priority: {error}"),
+        }
+    }
     let ground = config.clear.unwrap_or(Srgba([0.0, 0.0, 0.0, 1.0]));
+    #[cfg(feature = "splash")]
+    let ground = if splash.is_some() {
+        config.splash.background.srgba()
+    } else {
+        ground
+    };
     present_ground(&gpu, &target, &window, ground);
     window.set_visible(true);
     let grounded = present_ground(&gpu, &target, &window, ground);
     let size = size_of(&window);
-    let painter = Painter::new(gpu, scene, &config, size)?;
+    let painter = Painter::live(gpu, scene, &config, size)?;
     let sound = sound(&config);
     let audio = sound.as_ref().map_or((48_000, 2), |sound| {
         (sound.sender.rate(), sound.sender.channels())
@@ -283,8 +314,17 @@ fn open(
         schemes,
         resize: None,
         stale: false,
+        #[cfg(feature = "splash")]
+        splash,
+        pacing: Pacing::from_env(GUI_BUDGET_NS),
+        dirty: false,
+        asked: false,
+        rested: false,
+        rest_ns: None,
         _clipboard: clipboard,
     };
+    live.pacing
+        .set(live.target.setting(&live.window, live.driver.present()));
     live.schemes();
     Ok(live)
 }
@@ -314,7 +354,8 @@ impl Live {
         Ok(())
     }
 
-    fn frame(&mut self, now_ns: u64) -> Result<(), String> {
+    fn frame(&mut self, now_ns: u64, exposed: bool) -> Result<bool, String> {
+        self.rested = false;
         if let Some(size) = self.resize.take() {
             let max = self
                 .painter
@@ -331,14 +372,17 @@ impl Live {
                 self.stale = true;
             }
         }
-        if std::mem::take(&mut self.stale) {
+        if std::mem::take(&mut self.stale) || !self.target.configured() {
             let gpu = self.painter.renderer().gpu();
-            self.target
-                .surface
-                .configure(&gpu.device, &self.target.config);
+            self.target.reconfigure(gpu);
+            self.dirty = true;
+        }
+        #[cfg(feature = "splash")]
+        if self.splash.is_some() {
+            return self.splash_frame(now_ns);
         }
         if self.warming.is_some() {
-            return self.warm(now_ns);
+            return self.warm(now_ns).map(|()| false);
         }
         self.driver.update(now_ns);
         self.cursor();
@@ -348,17 +392,121 @@ impl Live {
         for notice in self.driver.take_notices() {
             eprintln!("{notice}");
         }
+        let mut switched = false;
         if let Some(display) = self.driver.take_display() {
             apply_display(&self.window, display)
                 .map_err(|error| format!("the display mode: {error}"))?;
+            switched = true;
+        }
+        switched |= self.driver.take_present().is_some();
+        let settled = self.target.settled();
+        if settled {
+            switched = true;
         }
         let gpu = self.painter.renderer().gpu();
-        if let Some(vrr) = self.driver.take_present() {
-            let preference = present_preference(vrr, window::host(&self.window));
-            self.target.set_present(gpu, &preference);
+        if switched {
+            let present = self.driver.present();
+            self.target.follow(gpu, &self.window, present);
+            self.driver.set_vrr_in_effect(self.target.vrr_in_effect());
+            self.pacing.set(self.target.setting(&self.window, present));
+            self.dirty = true;
         }
         if self.driver.exit().is_some() {
-            return Ok(());
+            return Ok(false);
+        }
+        let forced = std::mem::take(&mut self.dirty) || exposed;
+        if !self.painter.prepare(&mut self.driver, forced)? {
+            self.audio();
+            self.rested = true;
+            return Ok(false);
+        }
+        self.dirty = true;
+        let gpu = self.painter.renderer().gpu();
+        let asking = Instant::now();
+        let acquired = self.target.surface.get_current_texture();
+        self.pacing
+            .acquired(u64::try_from(asking.elapsed().as_nanos()).unwrap_or(u64::MAX));
+        let texture = match acquired {
+            wgpu::CurrentSurfaceTexture::Success(texture) => texture,
+            wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+                self.stale = true;
+                texture
+            }
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                self.target.reconfigure(gpu);
+                return Ok(false);
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(false);
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                return Err("the window's surface: validation failed".to_string());
+            }
+        };
+        let view = texture.texture.create_view(&Default::default());
+        self.painter
+            .compose(&mut self.driver, &view, self.target.config.format)?;
+        self.window.pre_present_notify();
+        self.target.present(
+            &self.painter.renderer().gpu().queue,
+            texture,
+            self.pacing.tag(),
+        );
+        for shown in self.target.shown() {
+            self.pacing.shown(shown);
+        }
+        self.dirty = false;
+        self.audio();
+        Ok(true)
+    }
+
+    fn tick_ns(&self) -> u64 {
+        (self.driver.session().world().clock().tick_dt() * 1e9) as u64
+    }
+
+    fn audio(&mut self) {
+        let sound = &self.sound;
+        self.driver.drain_audio(|audio| {
+            if let Some(sound) = sound {
+                sound.sender.push(audio);
+            }
+        });
+    }
+
+    #[cfg(feature = "splash")]
+    fn splash_frame(&mut self, now_ns: u64) -> Result<bool, String> {
+        if self.warming.is_some() {
+            self.grounded = true;
+            self.warm(now_ns)?;
+        }
+        let loaded = self.warming.is_none();
+        let Some(splash) = &mut self.splash else {
+            return Ok(false);
+        };
+        let phase = splash.phase(now_ns, loaded);
+        if let (pfx_splash::Phase::Showing { at, .. }, Some(sound)) = (phase, &self.sound)
+            && let Some(clip) = splash.chime(at)
+        {
+            let audio = &self.driver.settings().audio;
+            if !audio.muted {
+                let level = Level {
+                    volume: audio.master,
+                    ..Level::default()
+                };
+                sound.output.play_on(ChannelId::EFFECTS, &clip, level);
+            }
+        }
+        if phase == pfx_splash::Phase::Done {
+            self.splash = None;
+            return Ok(false);
+        }
+        let gpu = self.painter.renderer().gpu();
+        let config = &self.target.config;
+        let size = [config.width, config.height];
+        if let Err(error) = splash.settle(gpu, size) {
+            eprintln!("the splash is left out: {error}");
+            self.splash = None;
+            return Ok(false);
         }
         let texture = match self.target.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
@@ -370,27 +518,23 @@ impl Live {
                 self.target
                     .surface
                     .configure(&gpu.device, &self.target.config);
-                return Ok(());
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(());
+                return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Validation => {
                 return Err("the window's surface: validation failed".to_string());
             }
         };
         let view = texture.texture.create_view(&Default::default());
-        self.painter
-            .draw(&mut self.driver, &view, self.target.config.format)?;
+        if let Err(error) = splash.draw(gpu, &view, self.target.config.format, size, phase) {
+            eprintln!("the splash is left out: {error}");
+            self.splash = None;
+        }
         self.window.pre_present_notify();
-        self.painter.renderer().gpu().queue.present(texture);
-        let sound = &self.sound;
-        self.driver.drain_audio(|audio| {
-            if let Some(sound) = sound {
-                sound.sender.push(audio);
-            }
-        });
-        Ok(())
+        gpu.queue.present(texture);
+        Ok(true)
     }
 
     fn resized(&mut self, size: Size) {
@@ -426,6 +570,7 @@ impl Live {
         let minimized = window::minimized(&self.window);
         if minimized != self.minimized {
             self.minimized = minimized;
+            self.dirty = true;
             self.driver
                 .feed(Event::Attention(Attention::Minimized(minimized)));
             self.pointer.minimize(minimized);
@@ -506,6 +651,9 @@ impl ApplicationHandler for App {
         let Some(live) = &mut self.live else {
             return;
         };
+        if !matches!(event, WindowEvent::RedrawRequested) {
+            live.rest_ns = None;
+        }
         if let Some(attention) = window::attention(&event) {
             live.driver.feed(Event::Attention(attention));
         }
@@ -528,6 +676,7 @@ impl ApplicationHandler for App {
                 height: size.height,
             }),
             WindowEvent::Moved(_) => live.moved(),
+            WindowEvent::Occluded(false) => live.dirty = true,
             WindowEvent::ThemeChanged(theme) if FROM_WINDOW => {
                 live.driver.feed(Event::Scheme(Some(of_theme(theme))));
             }
@@ -539,12 +688,26 @@ impl ApplicationHandler for App {
                 live.at = [position.x as f32, position.y as f32];
             }
             WindowEvent::RedrawRequested => {
+                let exposed = !std::mem::take(&mut live.asked);
                 let now = window::Clock::now_ns(&self.clock);
-                if let Err(error) = live.frame(now) {
-                    self.error = Some(error);
-                    event_loop.exit();
-                } else if live.driver.exit().is_some() {
-                    event_loop.exit();
+                match live.frame(now, exposed) {
+                    Err(error) => {
+                        self.error = Some(error);
+                        event_loop.exit();
+                    }
+                    Ok(presented) => {
+                        let at = window::Clock::now_ns(&self.clock);
+                        if presented {
+                            live.pacing.presented(at);
+                            live.rest_ns = None;
+                        } else if live.rested {
+                            live.pacing.idle();
+                            live.rest_ns = Some(at.saturating_add(live.tick_ns()));
+                        }
+                        if live.driver.exit().is_some() {
+                            event_loop.exit();
+                        }
+                    }
                 }
             }
             _ => {}
@@ -557,6 +720,7 @@ impl ApplicationHandler for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
         if let Some(live) = &mut self.live {
             live.schemes();
+            live.rest_ns = None;
         }
     }
 
@@ -568,6 +732,7 @@ impl ApplicationHandler for App {
             && live.locked
         {
             live.moved_locked(delta);
+            live.rest_ns = None;
         }
     }
 
@@ -575,20 +740,35 @@ impl ApplicationHandler for App {
         let Some(live) = &mut self.live else {
             return;
         };
-        if live.warming.is_some() {
+        #[cfg(feature = "splash")]
+        let starting = live.warming.is_some() || live.splash.is_some();
+        #[cfg(not(feature = "splash"))]
+        let starting = live.warming.is_some();
+        if starting {
             live.window.request_redraw();
+            live.asked = true;
             event_loop.set_control_flow(ControlFlow::Poll);
             return;
         }
         let flow = match live.driver.poll(&self.clock) {
             Pace::Start { next_ns } => {
-                live.window.request_redraw();
-                next_ns.map_or(ControlFlow::Poll, |ns| {
-                    ControlFlow::WaitUntil(self.clock.instant(ns))
-                })
+                let now = window::Clock::now_ns(&self.clock);
+                match live.rest_ns.filter(|&until| now < until) {
+                    Some(until) => ControlFlow::WaitUntil(self.clock.instant(until)),
+                    None => {
+                        live.window.request_redraw();
+                        live.asked = true;
+                        next_ns.map_or(ControlFlow::Wait, |ns| {
+                            ControlFlow::WaitUntil(self.clock.instant(ns))
+                        })
+                    }
+                }
             }
             Pace::Wait { until_ns } => ControlFlow::WaitUntil(self.clock.instant(until_ns)),
-            Pace::Paused => ControlFlow::Wait,
+            Pace::Paused => {
+                live.pacing.idle();
+                ControlFlow::Wait
+            }
         };
         event_loop.set_control_flow(flow);
     }

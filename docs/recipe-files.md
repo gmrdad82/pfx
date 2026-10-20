@@ -65,9 +65,10 @@ One JSON object a line on stderr, at most about one a second while tracing. Ever
 | `stage` | Other fields |
 | --- | --- |
 | `stage` | none: the recipe is read and staged |
+| `path` | `path`: what traces it, before the first sample: `adapter`, `backend`, `driver`, `ray_queries` (true when hardware ray queries run), `ray_queries_why` (`on`, `not offered by the adapter`, `off by PFX_TRACE_RT=0` or `not used for this scene`), `bvh` (`hardware TLAS over per-mesh BLASes`, `hardware TLAS over one BLAS`, `software two-level` or `software flat`), `two_level`, `instances`, and `line`, all of it in one sentence. Plain progress prints that sentence as `pfx render --recipe: tracing on …`, and the summary ends with it |
 | `trace` | adaptive: `cap`, `threshold`, `gpu_s`, `fraction` (0 to 1, only grows) and `eta_s` (null before the first round; an upper bound that falls as pixels stop). Every pixel to `--spp` (`--threshold 0`): `done`, `total`, `fraction`, `eta_s` |
 | `write` | none: the picture is being written |
-| `done` | `out`, `mean_samples`, `most_samples`, `gpu_s` |
+| `done` | `out`, `mean_samples`, `most_samples`, `path` (as above), `gpu_s` |
 
 ## `pfx diff --json`
 

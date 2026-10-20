@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF2'
+Usage: bin/charts <all|NAME...>
+
+Draws docs/charts/<NAME>.toml with pcmp (pito-compare) into docs/images/<NAME>.png:
+paired bars for two or more parties, single bars for one. Each PNG is set on one
+1080x720 canvas in the chart's background, top-aligned, and carries the sha256 of its
+data file in a tEXt chunk named pfx-chart-data, which tests/charts.rs checks. The PNG's
+line in tests/agnostic/fixtures.txt is rewritten. Needs pcmp and ImageMagick's magick.
+EOF2
+}
+
+refuse() {
+  printf "error: %s\n\nUsage: bin/charts <all|NAME...>\n\nFor more information, try '--help'.\n" "$1" >&2
+  exit 2
+}
+
+names=()
+for arg in "$@"; do
+  case $arg in
+    -h|--help) usage; exit 0 ;;
+    -*) refuse "unexpected argument '$arg' found" ;;
+    *) names+=("$arg") ;;
+  esac
+done
+[ ${#names[@]} -gt 0 ] || refuse "the following required arguments were not provided: <all|NAME...>"
+
+cd "$(dirname "$0")/.."
+width=1080
+height=720
+background='#101319'
+
+for tool in pcmp magick; do
+  command -v "$tool" >/dev/null 2>&1 || { echo "charts: $tool is not on PATH" >&2; exit 1; }
+done
+if command -v sha256sum >/dev/null 2>&1; then
+  sum=(sha256sum)
+else
+  sum=(shasum -a 256)
+fi
+
+if [ "${names[*]}" = all ]; then
+  names=()
+  while IFS= read -r file; do
+    names+=("$(basename "$file" .toml)")
+  done < <(find docs/charts -maxdepth 1 -name '*.toml' | LC_ALL=C sort)
+fi
+
+scratch=tmp/charts
+mkdir -p "$scratch"
+for name in "${names[@]}"; do
+  data=docs/charts/$name.toml
+  [ -f "$data" ] || { echo "charts: no $data" >&2; exit 1; }
+  parties=$(grep -o '{ *name *= *"' "$data" | wc -l)
+  kind=paired
+  [ "$parties" -eq 1 ] && kind=bars
+  drawn=$(pcmp "$data" --out "$scratch" --kind "$kind" | head -n 1)
+  size=$(magick identify -format '%w %h' "$drawn")
+  if [ "${size% *}" -ne "$width" ] || [ "${size#* }" -gt "$height" ]; then
+    echo "charts: $name is ${size/ /x}, which does not fit ${width}x$height" >&2
+    exit 1
+  fi
+  stamp=$("${sum[@]}" "$data" | cut -d' ' -f1)
+  out=docs/images/$name.png
+  magick "$drawn" -gravity north -background "$background" -extent "${width}x$height" \
+    -define png:exclude-chunk=date,time,zTXt,iTXt -set pfx-chart-data "$stamp" "$out"
+  png=$("${sum[@]}" "$out" | cut -d' ' -f1)
+  line="$png  $out  generated: chart drawn by bin/charts with $(pcmp --version) from $data"
+  grep -v "  $out  " tests/agnostic/fixtures.txt > "$scratch/fixtures.txt" || true
+  printf '%s\n' "$line" >> "$scratch/fixtures.txt"
+  mv "$scratch/fixtures.txt" tests/agnostic/fixtures.txt
+  echo "$out"
+done

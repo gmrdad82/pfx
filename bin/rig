@@ -185,7 +185,7 @@ up() {
   rm -rf "$RIG/scene"
   cp -r "$(dirname "$scene")" "$RIG/scene"
   rm -f "$RIG/app.pid" "$RIG/compositor.pid" "$RIG/launcher.pid" "$RIG/wayland"
-  printf '%s\n' 'pcm.!default { type null }' 'ctl.!default { type null }' > "$RIG/asound-null.conf"
+  : > "$RIG/asound-empty.conf"
   printf '%s\n' "${WAYLAND_DISPLAY:-}" > "$RIG/shell-wayland"
   printf '%s\n' "$compositor" > "$RIG/compositor"
   printf '%s\n' "$scene" > "$RIG/source"
@@ -194,7 +194,7 @@ up() {
 
   cat > "$RIG/app.sh" <<'EOS'
 #!/bin/sh
-exec env TMPDIR=/tmp PFX_EDIT_PGPU=off PIPEWIRE_RUNTIME_DIR=/nonexistent PULSE_SERVER=/nonexistent ALSA_CONFIG_PATH="$RIG/asound-null.conf" XDG_CONFIG_HOME="$RIG/config" XDG_CACHE_HOME="$RIG/cache" XDG_STATE_HOME="$RIG/state" XDG_DATA_HOME="$RIG/data" "$APP_BINARY" edit "$SCENE"
+exec env -u DISPLAY TMPDIR=/tmp PFX_EDIT_PGPU=off PIPEWIRE_RUNTIME_DIR=/nonexistent PULSE_SERVER=/nonexistent ALSA_CONFIG_PATH="$RIG/asound-empty.conf" XDG_CONFIG_HOME="$RIG/config" XDG_CACHE_HOME="$RIG/cache" XDG_STATE_HOME="$RIG/state" XDG_DATA_HOME="$RIG/data" "$APP_BINARY" gui "$SCENE"
 EOS
   chmod +x "$RIG/app.sh"
 

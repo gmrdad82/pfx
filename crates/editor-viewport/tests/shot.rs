@@ -263,3 +263,64 @@ fn a_selected_group_glows_and_outlines_through_its_descendants() {
     assert_eq!(lit, vec!["pair/left", "pair/right"]);
     gpu_turn(since);
 }
+
+fn gridded(name: &str, grid: bool, reversed: bool) -> Vec<u8> {
+    let path = common::fixture(name);
+    if !reversed {
+        let text = common::read(&path) + "\n[live]\nreversed_depth = false\n";
+        std::fs::write(&path, text).unwrap();
+    }
+    let mut editor = Editor::open(&path);
+    editor.viewport.set_grid(grid);
+    let png = shot(&mut editor, SIZE, &Script::default()).unwrap();
+    std::fs::write(scratch(&format!("{name}.png")), &png).unwrap();
+    assert_eq!(editor.viewport.failure(), None);
+    assert!(editor.viewport.timing().drawn);
+    png
+}
+
+fn change(with: &[u8], without: &[u8], at: Pos2) -> u8 {
+    let mut most = 0;
+    for dy in -2..=2 {
+        for dx in -2..=2 {
+            let spot = at + Vec2::new(dx as f32, dy as f32);
+            let (a, b) = (pixel(with, spot), pixel(without, spot));
+            for k in 0..3 {
+                most = most.max(a[k].abs_diff(b[k]));
+            }
+        }
+    }
+    most
+}
+
+#[test]
+#[ignore = "GPU: pgpu run --class interactive --as pfx -- cargo test -- --ignored"]
+fn the_ground_grid_hides_behind_a_box_and_shows_on_the_ground_beside_it() {
+    let since = std::time::Instant::now();
+    let path = common::fixture("grid-lens");
+    let lens = lens(&path);
+    let behind = spot(&lens, [0.7, 0.0, 0.0]);
+    let beside = spot(&lens, [1.4, 0.0, 0.0]);
+    let left = spot(&lens, [-1.2, 0.0, 0.0]);
+    let crate_face = spot(&lens, [0.7, 0.2, 0.3]);
+    for reversed in [true, false] {
+        let tag = if reversed { "reversed" } else { "classic" };
+        let with = gridded(&format!("grid-on-{tag}"), true, reversed);
+        let without = gridded(&format!("grid-off-{tag}"), false, reversed);
+        for inside in [behind, crate_face] {
+            let moved = change(&with, &without, inside);
+            assert!(
+                moved <= 2,
+                "{tag}: grid inside the box at {inside:?}: {moved}"
+            );
+        }
+        for ground in [beside, left] {
+            let moved = change(&with, &without, ground);
+            assert!(
+                moved >= 8,
+                "{tag}: no grid on the ground at {ground:?}: {moved}"
+            );
+        }
+    }
+    gpu_turn(since);
+}

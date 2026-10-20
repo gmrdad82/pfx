@@ -16,6 +16,10 @@ use crate::pick::{self, Lens, Words};
 use crate::timeline;
 use pfx_editor_shell::paint::clear;
 use pfx_editor_shell::worker::{Poll, Wake, Worker};
+use pfx_editor_viewport::grid::{self, Grid, XRAY};
+use pfx_live::fsr::{Fsr, SHARPNESS, Scaling};
+
+use crate::viewport::grid_lines;
 
 const SETTLE_FRAMES: u32 = 16;
 const CLOCK_RATE: f32 = 60.0;
@@ -117,6 +121,24 @@ impl Drawing {
     }
 }
 
+fn pending<'a>(
+    gpu: &Gpu,
+    pending: &'a mut Option<wgpu::CommandEncoder>,
+) -> &'a mut wgpu::CommandEncoder {
+    pending.get_or_insert_with(|| {
+        gpu.device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("pfx viewport overlays"),
+            })
+    })
+}
+
+fn flush(gpu: &Gpu, pending: &mut Option<wgpu::CommandEncoder>) {
+    if let Some(encoder) = pending.take() {
+        gpu.queue.submit([encoder.finish()]);
+    }
+}
+
 struct Target {
     draw: wgpu::TextureView,
     show: wgpu::TextureView,
@@ -161,6 +183,7 @@ fn target(gpu: &Gpu, size: [u32; 2], format: wgpu::TextureFormat) -> Target {
 #[allow(clippy::too_many_arguments)]
 fn outline(
     gpu: &Gpu,
+    grid: &mut Grid,
     wire: &mut crate::wire::Wire,
     clay: &mut crate::clay::Clay,
     backdrop: &mut crate::backdrop::Backdrop,
@@ -169,9 +192,14 @@ fn outline(
     recipe: Option<&Recipe>,
     shell: &Shell,
     scale: f32,
+    queued: &mut Option<wgpu::CommandEncoder>,
 ) -> Result<(), String> {
     let look = shell.wireframe();
     let shown = shell.backdrops();
+    let depth_size = match drawing {
+        Drawing::Stage(stage) => stage.render_size(),
+        Drawing::Fake(_) => target.size,
+    };
     let seen = match drawing {
         Drawing::Stage(stage) if !shown.is_empty() => {
             stage.looked().map(|camera| (camera, stage.depth()))
@@ -184,14 +212,37 @@ fn outline(
             format: target.format,
             depth,
             size: target.size,
+            depth_size,
             camera,
         };
         let drawn = backdrop.prepare(gpu, &under, shell.reference_epoch(), &shown, look.on())?;
         Some((under, drawn))
     });
+    let ruled = match (drawing, shell.is_clean() || shell.view_error().is_some()) {
+        (Drawing::Stage(stage), false) => stage.looked().map(|(view, projection)| {
+            let through = if look.on() && look.xray { XRAY } else { 0.0 };
+            (
+                grid::Target {
+                    output: &target.draw,
+                    format: target.format,
+                    depth: stage.depth(),
+                    size: target.size,
+                    depth_size,
+                    view,
+                    projection,
+                },
+                grid_lines(&shell.palette()).through(through),
+            )
+        }),
+        _ => None,
+    };
     if !look.on() && look.clay <= 0.0 {
         if let Some((under, drawn)) = &drawn {
+            flush(gpu, queued);
             crate::backdrop::Backdrop::draw(gpu, under, drawn);
+        }
+        if let Some((target, lines)) = &ruled {
+            grid.encode(gpu, pending(gpu, queued), target, lines);
         }
         return Ok(());
     }
@@ -226,6 +277,7 @@ fn outline(
         }
         Drawing::Fake(_) => return Ok(()),
     };
+    flush(gpu, queued);
     clay.draw(
         gpu,
         &crate::clay::Scene {
@@ -243,6 +295,15 @@ fn outline(
         },
         look,
     )?;
+    if !look.on() {
+        if let Some((target, lines)) = &ruled {
+            grid.encode(gpu, pending(gpu, queued), target, lines);
+        }
+        return Ok(());
+    }
+    let ruling = ruled
+        .as_ref()
+        .and_then(|(target, lines)| grid.prepare(gpu, target, lines));
     wire.draw(
         gpu,
         &crate::wire::Scene {
@@ -258,10 +319,12 @@ fn outline(
             format: target.format,
             depth,
             size: target.size,
+            depth_size,
             camera,
             scale,
             region: shell.region_shown(),
             under: drawn.as_ref().map(|(_, drawn)| drawn),
+            grid: ruling.as_ref(),
         },
         look,
     )
@@ -311,10 +374,14 @@ pub struct Viewer {
     parts: Option<Cast>,
     memory: Memory,
     steady: bool,
+    grid: Grid,
     wire: crate::wire::Wire,
     clay: crate::clay::Clay,
     backdrop: crate::backdrop::Backdrop,
     dither: bool,
+    low: Option<Target>,
+    fsr: Option<Fsr>,
+    pending: Option<wgpu::CommandEncoder>,
 }
 
 impl Viewer {
@@ -351,10 +418,14 @@ impl Viewer {
             parts: None,
             memory: Memory::default(),
             steady: false,
+            grid: Grid::default(),
             wire: crate::wire::Wire::default(),
             clay: crate::clay::Clay::default(),
             backdrop: crate::backdrop::Backdrop::default(),
             dither: true,
+            low: None,
+            fsr: None,
+            pending: None,
         }
     }
 
@@ -414,6 +485,27 @@ impl Viewer {
     pub fn frame_ms(&self) -> Option<f64> {
         match &self.drawing {
             Some(Drawing::Stage(stage)) => stage.frame_ms(),
+            _ => None,
+        }
+    }
+
+    pub fn take_commands(&mut self) -> Vec<wgpu::CommandBuffer> {
+        self.pending
+            .take()
+            .map(|encoder| vec![encoder.finish()])
+            .unwrap_or_default()
+    }
+
+    pub fn timings(&self) -> Option<&pfx_gpu::FrameTimings> {
+        match &self.drawing {
+            Some(Drawing::Stage(stage)) => stage.timings(),
+            _ => None,
+        }
+    }
+
+    pub fn render_scale(&self) -> Option<f32> {
+        match &self.drawing {
+            Some(Drawing::Stage(stage)) => stage.render_scale(),
             _ => None,
         }
     }
@@ -732,6 +824,7 @@ impl Viewer {
         shell: &mut Shell,
         pixels_per_point: f32,
     ) -> bool {
+        flush(gpu, &mut self.pending);
         let before = (
             self.texture.filter(|_| self.drawn),
             self.view_error(),
@@ -792,12 +885,56 @@ impl Viewer {
                     drawing.set_hour(hour, live)?;
                     self.hour = hour;
                 }
+                let mut scaled = None;
                 if let Drawing::Stage(stage) = drawing {
                     stage.look_through(shell.shown_camera().filter(|_| !shell.chasing()));
+                    stage
+                        .set_scaling(shell.view_scale().budget())
+                        .map_err(|error| error.0)?;
+                    let render = stage.scale_frame().map_err(|error| error.0)?;
+                    if render != size {
+                        scaled = Some((render, stage.render_capacity()));
+                    }
                 }
-                let view = &self.target.as_ref().ok_or("no viewport texture")?.draw;
-                drawing.render(gpu, (&eye, time), view, live)
+                let shown = self.target.as_ref().ok_or("no viewport texture")?;
+                let Some((render, capacity)) = scaled else {
+                    return drawing.render(gpu, (&eye, time), &shown.draw, live);
+                };
+                let format = drawing.format();
+                if self
+                    .low
+                    .as_ref()
+                    .is_none_or(|low| low.size != capacity || low.format != format)
+                {
+                    self.low = Some(target(gpu, capacity, format));
+                }
+                let low = self.low.as_ref().ok_or("no scaled viewport texture")?;
+                drawing.render(gpu, (&eye, time), &low.draw, live)?;
+                let fsr = self.fsr.get_or_insert_with(|| Fsr::new(&gpu.device));
+                fsr.encode(
+                    &gpu.device,
+                    &gpu.queue,
+                    pending(gpu, &mut self.pending),
+                    &Scaling {
+                        source: &low.show,
+                        source_size: render,
+                        output: &shown.show,
+                        output_format: shown.format.remove_srgb_suffix(),
+                        output_size: size,
+                        sharpness: SHARPNESS,
+                    },
+                    None,
+                )?;
+                Ok(())
             })();
+            if let Drawing::Stage(stage) = drawing {
+                let [render, full] = [stage.render_size()[0], size[0]];
+                shell.set_shown_scale(
+                    stage
+                        .render_scale()
+                        .map(|_| render as f32 / full.max(1) as f32),
+                );
+            }
             settle |= live && drawing.settling();
             let result = result.and_then(|()| self.outline(gpu, shell, pixels_per_point));
             match result {
@@ -826,14 +963,17 @@ impl Viewer {
             drawing,
             target,
             follow,
+            grid,
             wire,
             clay,
             backdrop,
+            pending,
             ..
         } = self;
         match (drawing.as_ref(), target.as_ref()) {
             (Some(drawing), Some(target)) => outline(
                 gpu,
+                grid,
                 wire,
                 clay,
                 backdrop,
@@ -842,6 +982,7 @@ impl Viewer {
                 follow.recipe(),
                 shell,
                 scale,
+                pending,
             ),
             _ => Ok(()),
         }
@@ -863,6 +1004,10 @@ impl Viewer {
         };
         moved |= shell.set_guides(guides);
         if let Some(Drawing::Stage(stage)) = self.drawing.as_mut() {
+            moved |= stage
+                .set_graphics(&shell.preferences().graphics)
+                .unwrap_or(false);
+            shell.prefs().set_shed(stage.shed());
             let posed = match (built, at) {
                 (Some(built), Some((span, time))) => timeline::poses(built, span.fps, time),
                 _ => Default::default(),
@@ -907,7 +1052,7 @@ impl Viewer {
                     }
                 }
                 if let Some(uv) = asked {
-                    let [x, y] = pick::pixel(uv, stage.size());
+                    let [x, y] = pick::pixel(uv, stage.render_size());
                     self.picking = stage.pick(x, y).is_ok();
                 }
                 if self.picking
@@ -1172,6 +1317,7 @@ mod tests {
         drive(ctx, [800, 500], &Script::default(), |ui| {
             shell.ui(ui);
             viewer.frame(gpu, painter.renderer(), shell, ui.ctx().pixels_per_point());
+            gpu.queue.submit(viewer.take_commands());
         });
     }
 
@@ -1746,6 +1892,7 @@ mod tests {
             let mut output = ctx.run_ui(input, |ui| {
                 shell.ui(ui);
                 viewer.frame(&gpu, painter.renderer(), shell, ui.ctx().pixels_per_point());
+                gpu.queue.submit(viewer.take_commands());
             });
             textures
                 .borrow_mut()

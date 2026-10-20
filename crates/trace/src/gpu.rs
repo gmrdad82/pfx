@@ -1,7 +1,7 @@
 use bytemuck::{Pod, Zeroable};
 use pfx_core::daylight::{Daylight, REFERENCE_HOUR};
 use pfx_core::memory;
-use pfx_gpu::pace::{Pacer, Slice, Stats, Turned, Turns, Work};
+use pfx_gpu::pace::{Pacer, Slice, Stamps, Stats, Turned, Turns, Work};
 use pfx_gpu::{Gpu, GpuRefusal, GpuShortfall, OffscreenTarget, trace_floor};
 use pfx_load::Sky;
 use pfx_load::scene::TraceSettings;
@@ -261,6 +261,9 @@ pub const SAMPLE_SPAN_MS: f64 = 12.0;
 pub const SAMPLE_TARGET_MS: f64 = 10.0;
 const LANES: u32 = 64;
 const PIECE_COLUMNS: u32 = 8;
+const SAMPLE_HARD_MS: f64 = 100.0;
+const SPLIT_COST: f64 = 2.0;
+const RUNAWAY_COST: f64 = 8.0;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TraceError {
@@ -1031,6 +1034,15 @@ fn pipeline_constants(
     let mut constants = bounce_limits(detail.bounces).to_vec();
     if moving {
         constants.push(("TRACE_MOTION", 1.0));
+        if !detail.instances.iter().any(|instance| {
+            instance.surface.sprite.is_some()
+                || instance
+                    .motion
+                    .as_ref()
+                    .is_some_and(|motion| !motion.shapes.is_empty())
+        }) {
+            constants.push(("RT_WALK", 0.0));
+        }
     }
     if detail.fog.is_some() {
         constants.push(("TRACE_FOG", 1.0));
@@ -1181,6 +1193,7 @@ struct Pass {
 struct Spread {
     longest: f64,
     single: f64,
+    total: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1200,6 +1213,14 @@ struct Lanes {
     pieces: u32,
     fewest: u32,
     last: Step,
+    dense: Option<Dense>,
+    settled: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Dense {
+    sample_ms: f64,
+    single: f64,
 }
 
 impl Lanes {
@@ -1212,6 +1233,8 @@ impl Lanes {
             pieces: 1,
             fewest: 1,
             last: Step::Held,
+            dense: None,
+            settled: false,
         }
     }
 
@@ -1287,7 +1310,11 @@ impl Lanes {
             } else if self.pieces < most {
                 self.pieces *= 2;
             } else {
-                *self = Self::lane_passes();
+                *self = Self {
+                    dense: self.dense,
+                    settled: self.settled,
+                    ..Self::lane_passes()
+                };
             }
             return;
         }
@@ -1304,9 +1331,21 @@ impl Lanes {
         }
     }
 
-    fn learn_dense(&mut self, spread: Spread, columns: u32) {
-        if spread.single.is_finite() && spread.single > SAMPLE_SPAN_MS {
+    fn learn_dense(&mut self, spread: Spread, columns: u32, samples: u32) {
+        if spread.total.is_finite() && spread.total > 0.0 && samples > 0 {
+            self.dense = Some(Dense {
+                sample_ms: spread.total / f64::from(samples),
+                single: spread.single,
+            });
+        }
+        let over = if self.settled {
+            SAMPLE_HARD_MS
+        } else {
+            SAMPLE_SPAN_MS
+        };
+        if spread.single.is_finite() && spread.single > over {
             let most = most_pieces(columns);
+            let kept = (self.dense, self.settled);
             *self = if most > 1 {
                 let fit = (spread.single / (SAMPLE_SPAN_MS * 0.5)).ceil() as u32;
                 Self {
@@ -1315,6 +1354,23 @@ impl Lanes {
                 }
             } else {
                 Self::lane_passes()
+            };
+            (self.dense, self.settled) = kept;
+        }
+    }
+
+    fn judge(&mut self, sample_ms: f64, limit: f64) {
+        let Some(dense) = self.dense else {
+            return;
+        };
+        if sample_ms.is_finite()
+            && dense.single <= SAMPLE_HARD_MS
+            && sample_ms > limit * dense.sample_ms
+        {
+            *self = Self {
+                dense: Some(dense),
+                settled: true,
+                ..Self::new()
             };
         }
     }
@@ -2087,6 +2143,10 @@ impl Trace {
                     binding: 18,
                     resource: rt.map.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 20,
+                    resource: rt.movers_tlas.as_binding(),
+                },
             ]);
         }
         let binding = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -2301,6 +2361,15 @@ impl Trace {
 
     pub fn hardware_rays(&self) -> bool {
         self.rt.is_some()
+    }
+
+    pub fn path(&self, gpu: &Gpu) -> crate::rt::Path {
+        crate::rt::Path::of(
+            gpu,
+            self.rt.is_some(),
+            self.placing.is_some(),
+            self.instance_count(),
+        )
     }
 
     pub fn moving(&self) -> bool {
@@ -2640,7 +2709,7 @@ impl Trace {
                 let spread =
                     self.pass(gpu, seed, samples, pass, pacer, &mut between, &mut stats)?;
                 if fixed.is_none() {
-                    self.lanes.learn_dense(spread, columns);
+                    self.lanes.learn_dense(spread, columns, samples);
                 }
                 self.samples += samples;
                 done += samples;
@@ -2648,6 +2717,7 @@ impl Trace {
             }
             if self.lanes.width >= LANES {
                 let mut at = 0;
+                let mut sample_ms = 0.0;
                 while at < columns {
                     let pieces = if self.lanes.width < LANES {
                         most_pieces(columns)
@@ -2666,16 +2736,25 @@ impl Trace {
                     let spread = self.pass(gpu, seed, 1, pass, pacer, &mut between, &mut stats);
                     pacer.set_fixed_units(fixed);
                     let spread = spread?;
+                    sample_ms += spread.total;
                     if end - at == span && self.lanes.width >= LANES {
                         self.lanes.learn_pieces(spread.longest, blocks, columns);
                     }
+                    if fixed.is_none() {
+                        let projected = sample_ms * f64::from(columns) / f64::from(end);
+                        self.lanes.judge(projected, RUNAWAY_COST);
+                    }
                     at = end;
+                }
+                if fixed.is_none() {
+                    self.lanes.judge(sample_ms, SPLIT_COST);
                 }
                 self.samples += 1;
                 done += 1;
                 continue;
             }
             let mut lane = 0;
+            let mut sample_ms = 0.0;
             while lane < LANES {
                 let configured = self.lanes.width;
                 let width = floor_power_of_two(configured.min(LANES - lane));
@@ -2689,10 +2768,18 @@ impl Trace {
                 let spread = self.pass(gpu, seed, 1, pass, pacer, &mut between, &mut stats);
                 pacer.set_fixed_units(fixed);
                 let spread = spread?;
+                sample_ms += spread.total;
                 if width == configured {
                     self.lanes.learn(spread.longest, blocks);
                 }
                 lane += width;
+                if fixed.is_none() {
+                    let projected = sample_ms * f64::from(LANES) / f64::from(lane);
+                    self.lanes.judge(projected, RUNAWAY_COST);
+                }
+            }
+            if fixed.is_none() {
+                self.lanes.judge(sample_ms, SPLIT_COST);
             }
             self.samples += 1;
             done += 1;
@@ -2718,16 +2805,16 @@ impl Trace {
             height: blocks * pass.per_block * samples,
         };
         let mut sizes = Vec::new();
-        let run = pacer.run(
+        let run = pacer.run_passes(
             SAMPLE_LABEL,
             &gpu.device,
             &gpu.queue,
             work,
-            |encoder, slice| {
+            |encoder, slice, stamps| {
                 if let Slice::Pixels { height, .. } = slice {
                     sizes.push(height);
                 }
-                self.encode(gpu, encoder, slice, accumulated, seed, pass)
+                self.encode(gpu, encoder, (slice, stamps), accumulated, seed, pass)
             },
             between,
         )?;
@@ -2738,6 +2825,7 @@ impl Trace {
                 .zip(&run.milliseconds)
                 .filter(|(units, _)| **units <= pass.per_block)
                 .fold(0.0, |longest, (_, ms)| ms.max(longest)),
+            total: run.milliseconds.iter().sum(),
         };
         stats.milliseconds.extend(run.milliseconds);
         stats.timings.extend(run.timings);
@@ -2749,7 +2837,7 @@ impl Trace {
         &self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
-        slice: Slice,
+        (slice, stamps): (Slice, &Stamps<'_>),
         accumulated: u32,
         seed: u32,
         pass: Pass,
@@ -2760,10 +2848,12 @@ impl Trace {
         let blocks = self.height.div_ceil(BAND_STEP);
         let (first, end) = pass.lanes;
         let share = (end - first) / pass.per_block;
-        for piece in pieces(blocks, pass.per_block, y, height) {
+        let pieces = pieces(blocks, pass.per_block, y, height);
+        let last = pieces.len().saturating_sub(1);
+        for (at, piece) in pieces.into_iter().enumerate() {
             self.dispatch(
                 gpu,
-                encoder,
+                (encoder, stamps.pass(at == 0, at == last)),
                 piece.order,
                 piece.blocks,
                 (first + piece.from * share, first + piece.to * share),
@@ -2779,7 +2869,10 @@ impl Trace {
     fn dispatch(
         &self,
         gpu: &Gpu,
-        encoder: &mut wgpu::CommandEncoder,
+        (encoder, timestamp_writes): (
+            &mut wgpu::CommandEncoder,
+            Option<wgpu::ComputePassTimestampWrites<'_>>,
+        ),
         order: u32,
         blocks: u32,
         lanes: (u32, u32),
@@ -2810,7 +2903,7 @@ impl Trace {
         );
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("trace"),
-            timestamp_writes: None,
+            timestamp_writes,
         });
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.binding, &[]);
@@ -4508,18 +4601,51 @@ mod tests {
             Spread {
                 longest: 40.7,
                 single: 0.0,
+                total: 0.0,
             },
             12,
+            1,
         );
         assert_eq!(dense.width, LANES);
         dense.learn_dense(
             Spread {
                 longest: 40.7,
                 single: 40.7,
+                total: 0.0,
             },
             12,
+            1,
         );
         assert_eq!((dense.width, dense.widest, dense.blocks), (1, LANES, 1));
+    }
+
+    #[test]
+    fn a_split_that_costs_more_than_twice_the_bands_goes_back_to_bands() {
+        let band = |single: f64| Spread {
+            longest: single,
+            single,
+            total: 8_000.0,
+        };
+        let mut lanes = Lanes::new();
+        lanes.learn_dense(band(21.0), 270, 1);
+        assert_eq!((lanes.width, lanes.pieces), (LANES, 4));
+        lanes.judge(9_000.0, SPLIT_COST);
+        assert_eq!((lanes.pieces, lanes.settled), (4, false));
+        lanes.judge(60_000.0, RUNAWAY_COST);
+        assert_eq!((lanes.pieces, lanes.settled), (4, false));
+        lanes.judge(108_000.0, RUNAWAY_COST);
+        assert_eq!((lanes.width, lanes.pieces, lanes.settled), (LANES, 1, true));
+        lanes.learn_dense(band(43.0), 270, 1);
+        assert_eq!((lanes.width, lanes.pieces), (LANES, 1));
+        lanes.learn_dense(band(150.0), 270, 1);
+        assert_eq!((lanes.pieces, lanes.settled), (32, true));
+        lanes.judge(108_000.0, RUNAWAY_COST);
+        assert_eq!(lanes.pieces, 32);
+        let mut glass = Lanes::new();
+        glass.learn_dense(band(40.0), 12, 1);
+        assert_eq!(glass.width, 1);
+        glass.judge(9_300.0, SPLIT_COST);
+        assert_eq!((glass.width, glass.settled), (1, false));
     }
 
     #[test]
@@ -4533,8 +4659,10 @@ mod tests {
             Spread {
                 longest: 14.0,
                 single: 14.0,
+                total: 0.0,
             },
             480,
+            1,
         );
         assert_eq!((wide.width, wide.pieces, wide.blocks), (LANES, 4, 1));
         for blocks in [2, 4, 8] {
@@ -4575,7 +4703,7 @@ mod tests {
                 let mut encoder = gpu.device.create_command_encoder(&Default::default());
                 whole.dispatch(
                     &gpu,
-                    &mut encoder,
+                    (&mut encoder, None),
                     0,
                     height.div_ceil(BAND_STEP),
                     (0, LANES),

@@ -90,7 +90,7 @@ All primitives are instances of one shared quad: four vertices, a triangle strip
 - A square corner (radius 0) next to round ones is the one shape a band needs to sit flush in a rounded edge.
 - Equal radii run the same arithmetic as the single radius before: the thirteen reference scenes and every byte-identity test hold (`equal_corners_are_the_single_radius_field`, `equal_corners_render_the_bytes_of_one_radius`).
 - A motion-blurred rect whose corners differ takes the marched blur, not the closed form, which needs one radius; `blur_matches_the_integral_of_moving_shapes` holds it to the brute-force integral with "corner rect", "corner outline" and "corner dashes".
-- Not done: clipping a draw to another draw's footprint. It does not fall out of this change, since it needs a second field per pixel in the shader.
+- A draw does not clip to another draw's footprint; that would need a second field per pixel in the shader.
 
 An SVG progress meter is an `Arc`. A circle with `stroke-dasharray="L C"`, `stroke-linecap="round"` and a −90° rotation is `Arc { start: 0, sweep: L / r }` under that rotation.
 
@@ -137,12 +137,12 @@ An SVG progress meter is an `Arc`. A circle with `stroke-dasharray="L C"`, `stro
     let face = Draw::circle(centre, 300.0).shadow(Shadow::None);
     let face = Draw { fill: Fill::Image(SpriteFill::new([0.0, 0.0, 600.0 / 1280.0, 600.0 / 640.0])), ..face };
     ```
-    - The format is `Rgba8Unorm`, the same as an uploaded atlas, because the flat pass works in sRGB-encoded colour and samples a sprite as stored: a texel shows its own bytes, filtered between encoded values as the twin's `SpriteImage::sample` filters them. An `Rgba8UnormSrgb` atlas would be decoded by the sampler and show darker; a second sRGB view of the same texture needs wgpu's `VIEW_FORMATS`, which the engine's floor does not require. So the live renderer gained an `Rgba8Unorm` output whose output blit encodes sRGB itself (the encode the hardware does for an sRGB target), and the flat pass is unchanged.
+    - The format is `Rgba8Unorm`, the same as an uploaded atlas, because the flat pass works in sRGB-encoded colour and samples a sprite as stored: a texel shows its own bytes, filtered between encoded values as the twin's `SpriteImage::sample` filters them. An `Rgba8UnormSrgb` atlas would be decoded by the sampler and show darker; a second sRGB view of the same texture needs wgpu's `VIEW_FORMATS`, which the engine's floor does not require. So the live renderer has an `Rgba8Unorm` output whose output blit encodes sRGB itself (the encode the hardware does for an sRGB target), and the flat pass is unchanged.
     - With `Renderer::set_alpha_from_coverage(true)` the atlas holds straight alpha: 0 where only the sky or the clear shows, 1 on geometry, and in between on silhouettes ([live-renderer.md](live-renderer.md), "Alpha from coverage"). Transparent texels next to a head carry its colour, so `Linear` sampling leaves no dark fringe, and the flat draw composes the head over its card and under whatever is drawn after it.
     - The renderer clears the whole atlas each frame and draws into its viewport's top-left corner; lay the heads out as a contact sheet there, one orthographic camera over all of them, and address each by its frame. A cell should hold its head with a few transparent texels around it.
     - The CPU twin has no pixels for a live atlas: its `image` is one transparent texel, so the twin draws live sprites blank.
     - `crates/live/examples/heads.rs` is the contact sheet: 11 heads (one at 600 px, two at 300 and eight at 120, each a sphere with a hat and two eyes, 44 instances) in a 1200×600 viewport of a 1280×640 atlas, shadows at 1024, a tone-only finish, no sharpening, lens, haze or sky visibility, fixed exposure, then a 3840×2160 flat frame with cards below and rings, badges and plates above. On the RX 9060 XT under RADV over 300 frames after 60 of warm-up: the live part 0.413 ms GPU at p50 and 0.452 ms at p99, the flat frame 1.118 ms and 1.217 ms. `cargo run --release -p pfx-live --example heads -- tmp/heads/flat.png [tmp/heads/atlas.png]` writes the flat frame and the atlas.
-    - `a_head_rendered_into_the_live_atlas_is_cut_out_in_its_flat_rect` (GPU, `tests/live_sprites.rs`) renders a sphere into a live atlas and draws it with `Draw::sprite`: the atlas is transparent black at its corner and opaque on the head with a thin band of partial alpha, the flat frame shows the clear colour inside the rect around the head and outside it, and the head's pixel is the atlas's texel.
+    - `a_head_rendered_into_the_live_atlas_is_cut_out_in_its_flat_rect` (GPU, `crates/live/tests/live_sprites.rs`) renders a sphere into a live atlas and draws it with `Draw::sprite`: the atlas is transparent black at its corner and opaque on the head with a thin band of partial alpha, the flat frame shows the clear colour inside the rect around the head and outside it, and the head's pixel is the atlas's texel.
 
 **Strokes.** `Stroke { colour, width, dash }` is centred on the outline, as SVG's is, and paints over the fill.
 - `Stroke::dashed(colour, width, on, off)` dashes a rounded rect's perimeter, or a circle's.
@@ -401,6 +401,14 @@ Every shape instance writes its `id` to the renderer's ids target (R32Uint) in a
 - `render_with_flat(scene, text, effects, style, &FlatScene, output)` and `submit_with_flat(...)` draw a 3D frame with a flat HUD over it.
 - `render` and `submit` are unchanged. The `FlatPass` is created on first use, so a renderer that never draws a flat scene builds no flat pipelines.
 
+### Frames in flight
+
+`render`, `render_with_flat`, `render_flat` and `render_flat_look` wait for their frame on the GPU by default, so the pixels are in the output when the call returns and the pass timings it returns are that frame's: what an offscreen shot, a readback or a test needs. A game's loop does not need either, and waiting every frame keeps the CPU and the GPU from ever working at the same time. `Renderer::set_frames_in_flight(n)` with `n` of 1 or more makes those four calls return as soon as their frame is submitted. Before encoding, a call waits only while `n` frames are still running on the GPU, for the oldest of them, so at most `n` frames are in flight; it returns the pass timings of the newest frame that finished by then (an earlier frame, or none). `0`, the default, restores the wait. The frames are encoded the same either way, so their bytes are identical; a readback after a pipelined frame still waits for it, as every readback waits for the work before it.
+
+- `submit`, `submit_flat` and their forms never wait and never bound; a caller that uses them bounds its frames itself with `frames_in_flight()` and `wait_frames(n)`.
+- `pfx_game::FRAMES_IN_FLIGHT` is 2: the game runtime's renderer runs at it, so a game that draws through the runtime's renderer in `Game::paint` is pipelined too. A game that keeps its own `Renderer` for its flat painting sets it on that renderer (`renderer.set_frames_in_flight(pfx_game::FRAMES_IN_FLIGHT)`), and hands it the runtime's frame stats (`own.set_frame_stats(renderer.frame_stats())`) so its lines carry the game's `sim_ms`; `crates/game/examples/flat` does both.
+- The CPU time the calls spent waiting is each frame's `wait_ms` in the frame stats (`docs/frame-stats.md`).
+
 A frame through `render` is byte-identical before and after this pass existed: ten frames of a test scene, Rgba16Float and sRGB, hash the same on the base commit and here. An empty HUD leaves a 3D frame's bytes unchanged.
 
 Pass order, as `last_pass_order` reports it:
@@ -422,7 +430,7 @@ Pass order, as `last_pass_order` reports it:
 
 `a_warmed_renderer_makes_no_flat_pipeline_on_its_first_frames` (`--ignored`, by name under pgpu) does exactly that on an Rgba16Float and an sRGB output: it warms five looks (a gradient backdrop with tokens, crisp-text and pixelated low resolution with a palette, a CRT, a vignette), draws a lit scene plain, through post, through every look, and through a wipe and a crossfade mid-transition, and requires the count unchanged after each. `warming_plans_a_pass_for_each_slot_a_look_draws_in` holds the slot plan on the CPU.
 
-**Headless and offscreen.** The renderer renders into any texture view, so a tool renders a board to the same pixels a game shows. `examples/flat_board.rs` renders the engine's neutral test board (`crates/live/tests/flat/board.svg`) through the scene API, with the dials as flags. It can put the reference render beside it, cut 2× crops, and lift and tip one card:
+**Headless and offscreen.** The renderer renders into any texture view, so a tool renders a board to the same pixels a game shows. `crates/live/examples/flat_board.rs` renders the engine's neutral test board (`crates/live/tests/flat/board.svg`) through the scene API, with the dials as flags. It can put the reference render beside it, cut 2× crops, and lift and tip one card:
 
 ```
 cargo build --release -p pfx-live --example flat_board
@@ -509,8 +517,6 @@ The Deck spike sets real text sizes at a 140% text scale in DM Sans, the engine'
 | dials at zero | 0.22 ms | 1.7 to 3.5 ms | fits | fits |
 | thickness 2, bevel 1, gloss 0.15, reflection 0.1, roughness 0.45, icons included | 0.29 ms | 2.4 to 4.7 ms | fits | fits |
 
-A real device check comes later.
-
 **Text size against a 9-pixel rule.** Valve's Deck check asks that the smallest character be at least 9 pixels tall at 1280×800. `text_roles_measure_against_the_deck_9_pixel_rule` renders DM Sans "H" and "x" at weight 400 through the flat pass at 1280×800 (layout scale 0.667) and counts the rows covered at least 30%:
 
 | Size at 1080 | text scale 1.0: cap / x-height | text scale 1.4: cap / x-height |
@@ -529,7 +535,7 @@ A game's own typeface moves these numbers; the test measures any font it is give
 
 ## Against a reference renderer
 
-`crates/live/tests/flat/scenes.py` draws the engine's own neutral test scenes as SVG and screenshots each in headless Chromium at 1× and 2×. The scenes are generic cards, pills, rings, arcs, dashed outlines, gradients, icons, patterns, groups and shadows at two elevations, in their own colours and layout, plus a full 1920×1080 board. `FLAT_CHROMIUM` can name the browser binary.
+`crates/live/tests/flat/` holds the engine's own neutral test scenes as SVG, each with its screenshot from headless Chromium at 1× and 2×, taken once and kept as the reference. The scenes are generic cards, pills, rings, arcs, dashed outlines, gradients, icons, patterns, groups and shadows at two elevations, in their own colours and layout, plus a full 1920×1080 board. A new or changed scene is screenshotted the same way by a one-off script in `tmp/`, which is then deleted.
 
 `flat::svg::read` reads that SVG subset into draws, so each test scene is built from the same numbers as its reference:
 - elements: `rect`, `circle`, `path` (M, L, H, V, C, S, Q, T, A and their relative forms; curves flattened to within 0.2% of their control box, at most 64 segments each), `use`, `g`, dashes;

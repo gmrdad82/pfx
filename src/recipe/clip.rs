@@ -25,7 +25,7 @@ fn turns(text: &str) -> Result<f64, String> {
     }
 }
 
-fn rate(text: &str) -> Result<Rate, String> {
+pub(super) fn rate(text: &str) -> Result<Rate, String> {
     Rate::parse_within(text, 1, MAX_FPS)
 }
 
@@ -442,6 +442,15 @@ impl Renderer {
         matches!(self, Renderer::Traced(..))
     }
 
+    fn build(&self) -> Option<String> {
+        let Renderer::Traced(reel, ..) = self else {
+            return None;
+        };
+        let exe = std::env::current_exe().ok()?;
+        let sha = super::ledger::sha256(&exe).ok()?;
+        Some(format!("{sha} on {}", reel.adapter()))
+    }
+
     fn settle(&mut self, camera: &Camera) -> Result<f64, String> {
         match self {
             Renderer::Live(reel, _) => {
@@ -459,7 +468,7 @@ impl Renderer {
         settled: Option<f64>,
         step: &mut dyn FnMut(Step),
         keeper: Option<&mut dyn pfx_still::Keeper>,
-    ) -> Result<String, String> {
+    ) -> Result<(String, Option<pfx_still::Paced>), String> {
         match self {
             Renderer::Live(reel, _) => {
                 let eye = reel.through(camera);
@@ -476,9 +485,9 @@ impl Renderer {
                 }
                 .map_err(|e| e.0)?;
                 let peak = pfx_core::memory::peak();
-                Ok(format!(
-                    "{gpu_ms:.0} ms on the GPU; {}",
-                    peak.line(reel.plan())
+                Ok((
+                    format!("{gpu_ms:.0} ms on the GPU; {}", peak.line(reel.plan())),
+                    None,
                 ))
             }
             Renderer::Traced(reel, samples, noise, picture) => {
@@ -519,18 +528,17 @@ impl Renderer {
                 }
                 .map_err(|e| e.0)?;
                 let paced = rendered.paced;
-                let builds = reel.builds().map_or(String::new(), |builds| {
+                Ok((
                     format!(
-                        ", the trace's {} bottom and {} top builds",
-                        builds.bottom, builds.top
-                    )
-                });
-                Ok(format!(
-                    "{} submissions, the longest {:.2} ms, {:.0} ms on the GPU{builds}; {}",
-                    paced.submissions,
-                    paced.longest_ms,
-                    paced.gpu_ms,
-                    super::render::memory_line(&paced)
+                        "{} submissions, the longest {:.2} ms, {:.0} ms on the GPU, {} bottom and {} top BVH builds this frame; {}",
+                        paced.submissions,
+                        paced.longest_ms,
+                        paced.gpu_ms,
+                        paced.builds.bottom,
+                        paced.builds.top,
+                        super::render::memory_line(&paced)
+                    ),
+                    Some(paced),
                 ))
             }
         }
@@ -604,6 +612,7 @@ struct Told {
     todo: u32,
     made: u32,
     last: Option<Instant>,
+    path: Option<pfx_still::TracePath>,
 }
 
 impl Told {
@@ -615,6 +624,7 @@ impl Told {
             todo,
             made: 0,
             last: None,
+            path: None,
         }
     }
 
@@ -636,6 +646,10 @@ impl Told {
     }
 
     fn step(&mut self, frame: u32, step: Step, pixels: u64) {
+        if let Step::Path(path) = step {
+            self.traced_on(frame, *path);
+            return;
+        }
         if !self.json {
             return;
         }
@@ -679,20 +693,53 @@ impl Told {
         );
     }
 
-    fn frame(&mut self, frame: u32, done: u32, to: &Path) {
+    fn traced_on(&mut self, frame: u32, path: pfx_still::TracePath) {
+        if self.path.as_ref() == Some(&path) {
+            return;
+        }
+        if self.json {
+            let mut fields = super::render::path_json(&path);
+            fields["line"] = path.line().into();
+            self.line("path", [("frame", frame.into()), ("path", fields)]);
+        } else {
+            eprintln!("pfx clip: tracing on {}", path.line());
+        }
+        self.path = Some(path);
+    }
+
+    fn frame(&mut self, frame: u32, done: u32, to: &Path, cost: Option<&pfx_still::Paced>) {
         self.made += 1;
         self.last = None;
-        if self.json {
-            self.line(
-                "frame",
-                [
-                    ("frame", frame.into()),
-                    ("of", self.of.into()),
-                    ("done", done.into()),
-                    ("out", to.display().to_string().into()),
-                    ("eta_s", self.eta(0.0)),
-                ],
-            );
+        if !self.json {
+            return;
+        }
+        let fields = [
+            ("frame", frame.into()),
+            ("of", self.of.into()),
+            ("done", done.into()),
+            ("out", to.display().to_string().into()),
+            ("eta_s", self.eta(0.0)),
+        ];
+        match cost {
+            None => self.line("frame", fields),
+            Some(paced) => {
+                let [a, b, c, d, e] = fields;
+                self.line(
+                    "frame",
+                    [
+                        a,
+                        b,
+                        c,
+                        d,
+                        e,
+                        ("submissions", paced.submissions.into()),
+                        ("longest_ms", super::render::rounded(paced.longest_ms, 2)),
+                        ("gpu_ms", super::render::rounded(paced.gpu_ms, 0)),
+                        ("bottom_builds", paced.builds.bottom.into()),
+                        ("top_builds", paced.builds.top.into()),
+                    ],
+                )
+            }
         }
     }
 }
@@ -891,6 +938,33 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
         return Ok(());
     }
     let (mut renderer, camera) = open(args, registry)?;
+    let build = renderer.build();
+    let proven = match (check, build.as_deref()) {
+        (Some(before), Some(build)) => Ledger::read(&args.out)?
+            .proven(build)
+            .map(|by| (before, by)),
+        _ => None,
+    };
+    if let Some((before, by)) = proven {
+        eprintln!(
+            "pfx clip: frame {before} is not rendered again: this pfx build on this GPU and driver already rendered frame {by} again to its stored bytes"
+        );
+        if told.json {
+            told.line(
+                "check",
+                [
+                    ("frame", before.into()),
+                    ("result", "proven".into()),
+                    ("by", by.into()),
+                ],
+            );
+        }
+        told.todo -= 1;
+    }
+    let jobs: Vec<(u32, bool)> = jobs
+        .into_iter()
+        .filter(|&(_, checking)| !checking || proven.is_none())
+        .collect();
     let spin = match &args.spin {
         Some(name) => Some(spun(renderer.recipe(), name)?),
         None => None,
@@ -984,7 +1058,7 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
         {
             eprintln!("pfx clip: frame {frame} resumes from its checkpoint at {samples} samples");
         }
-        let summary = renderer.frame(
+        let (summary, cost) = renderer.frame(
             &pose,
             (args.size, &to),
             settled,
@@ -997,7 +1071,7 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
             let same = again?
                 == std::fs::read(&stored).map_err(|e| format!("{}: {e}", stored.display()))?;
             Ledger::update(&args.out, |ledger| {
-                ledger.checked(frame, same);
+                ledger.checked(frame, same, build.clone());
                 Ok(())
             })?;
             if json {
@@ -1026,7 +1100,7 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
         written += 1;
         eprintln!("pfx clip: {}, {summary}", stored.display());
         println!("{}", stored.display());
-        told.frame(frame, done + written, &stored);
+        told.frame(frame, done + written, &stored, cost.as_ref());
         progress(done + written);
     }
     Ok(())

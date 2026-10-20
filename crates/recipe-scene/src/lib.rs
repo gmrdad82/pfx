@@ -7,6 +7,7 @@ use std::path::Path;
 
 mod cards;
 mod census;
+mod cube;
 mod eye;
 mod light;
 mod maps;

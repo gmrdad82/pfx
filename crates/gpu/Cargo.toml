@@ -18,9 +18,23 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "m
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vulkan", "wgsl"] }
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "netbsd"))'.dependencies]
+wayland-backend = { version = "0.3", features = ["client_system"], optional = true }
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", features = ["client", "staging"], optional = true }
 
 [features]
-window = ["dep:winit"]
+window = [
+    "dep:winit",
+    "dep:wayland-backend",
+    "dep:wayland-client",
+    "dep:wayland-protocols",
+]
 dev-hooks = []
 
 [dev-dependencies]

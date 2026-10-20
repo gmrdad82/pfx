@@ -8,7 +8,7 @@ use pfx_live::flat::Srgba;
 use pfx_play::{Game, GameError, Settings, Ui, UiFrame, Warm, Warming, World};
 
 use crate::tests::{WINDOW, capped, world};
-use crate::{Cap, Config, Count, Headless, WARM_BUDGET};
+use crate::{Config, Count, Headless, WARM_BUDGET};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Step {
@@ -29,7 +29,7 @@ impl Flat {
         let steps = Rc::new(RefCell::new(Vec::new()));
         (
             Self {
-                settings: capped(Cap::Fps60, Cap::Fps30),
+                settings: capped(),
                 passes,
                 steps: steps.clone(),
             },

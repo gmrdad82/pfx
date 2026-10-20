@@ -28,6 +28,15 @@ pub struct StandIn {
     pub calls: Vec<WindowCall>,
 }
 
+impl StandIn {
+    pub fn fullscreen(&self) -> bool {
+        self.calls.iter().rev().find_map(|call| match call {
+            WindowCall::Fullscreen(plan) => Some(*plan != FullscreenPlan::Windowed),
+            _ => None,
+        }) == Some(true)
+    }
+}
+
 impl WindowOps for StandIn {
     fn set_fullscreen(&mut self, fullscreen: &FullscreenPlan) {
         self.calls.push(WindowCall::Fullscreen(*fullscreen));
@@ -85,10 +94,12 @@ pub struct Headless {
     pub audio: Vec<f32>,
     pub frame_cost_ns: u64,
     pub drawn: Option<Drawn>,
+    pub on_demand: bool,
+    pub composed: u64,
     pub warm_passes: u32,
     pub warm_budget: f64,
     warmed: bool,
-    gpu: Option<Gpued>,
+    gpu: Option<Box<Gpued>>,
     name: String,
     crash: Option<Crash>,
 }
@@ -125,14 +136,14 @@ impl Headless {
         let scene = start::scene(&config)?;
         let device = config.device.unwrap_or(Device::Desktop);
         let gpu = gpu
-            .map(|gpu| -> Result<Gpued, String> {
+            .map(|gpu| -> Result<Box<Gpued>, String> {
                 let target = gpu.offscreen(window.width, window.height, TARGET_FORMAT)?;
                 let painter = Painter::new(gpu, scene.as_ref(), &config, window)?;
-                Ok(Gpued {
+                Ok(Box::new(Gpued {
                     painter,
                     target,
                     pace: Pace::new(),
-                })
+                }))
             })
             .transpose()?;
         let pads = backend(&mut config);
@@ -156,6 +167,8 @@ impl Headless {
             audio: Vec::new(),
             frame_cost_ns: 1_000_000,
             drawn: None,
+            on_demand: false,
+            composed: 0,
             warm_passes: 0,
             warm_budget: config.warm_budget,
             warmed: false,
@@ -242,10 +255,13 @@ impl Headless {
         if let Some(display) = self.driver.take_display().cloned() {
             apply(&display, &mut self.window, &self.monitors);
         }
-        if let Some(vrr) = self.driver.take_present() {
+        if let Some(present) = self.driver.take_present() {
+            let fullscreen = self.window.fullscreen();
             self.window
                 .calls
-                .push(WindowCall::Present(present_preference(vrr, self.host)));
+                .push(WindowCall::Present(present_preference(
+                    present, self.host, fullscreen,
+                )));
         }
         if self.exited() {
             self.audio.extend(self.driver.take_audio());
@@ -255,11 +271,23 @@ impl Headless {
             let driver = &mut self.driver;
             let painter = &mut gpu.painter;
             let view = &gpu.target.view;
+            let on_demand = self.on_demand;
             let mut result = Ok(None);
             gpu.pace.frame(|| {
-                result = painter.draw(driver, view, TARGET_FORMAT);
+                result = match on_demand {
+                    false => painter.draw(driver, view, TARGET_FORMAT),
+                    true => match painter.prepare(driver, false) {
+                        Ok(true) => painter.compose(driver, view, TARGET_FORMAT),
+                        Ok(false) => Ok(None),
+                        Err(error) => Err(error),
+                    },
+                };
             });
-            self.drawn = result?;
+            let drawn = result?;
+            self.composed += u64::from(drawn.is_some());
+            if !on_demand || drawn.is_some() {
+                self.drawn = drawn;
+            }
         }
         self.audio.extend(self.driver.take_audio());
         self.clock.now_ns = self.clock.now_ns.saturating_add(self.frame_cost_ns);

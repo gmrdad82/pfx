@@ -14,6 +14,7 @@ mod progress;
 mod project;
 mod recipe;
 mod scene;
+mod settings;
 #[cfg(feature = "bench")]
 mod shot;
 #[cfg(feature = "sound-clean")]
@@ -21,6 +22,8 @@ mod sound;
 mod steam;
 
 const ABOUT: &str = "pfx, a game and render engine: scaffold, edit, bench and bake games and scenes, stage Steam builds, and render apps' shots, logos, icons and scenes offline on its path tracer.";
+const SUPPORT: &str =
+    "pfx: got questions or doubts? Ping me on Discord: https://discord.gg/XsNcn3kYzn";
 
 const USAGE: &str = "usage:
   pfx render --app <app> --shot <shot> (--clip | --still) --fixtures <dir> (--rev <tag|rev> | --app-dir <dir> | --adapter <bin>) [flags]
@@ -43,7 +46,7 @@ const USAGE: &str = "usage:
   pfx new <game> [--path <dir>] [--with-module] [--mark <png>]
   pfx bench <scene.pitofx> --seconds N [--camera <object>] [--replay <recording.json>] [--size WxH] [--stats <path>] [--seed S]
   pfx shot <scene.pitofx> (--seconds S | --frames N) [--size WxH] [--fps N] [--from F] [--camera <object|node>] [--draft | --final] [--hour H] [--set dotted.key=value]... [--out <dir>] [--format png|png16|exr] [--dither on|off] [--audio <out.wav>] [--sound <script>] [--shutter S] [--exposure auto|fixed] [--seed S] [--memory-limit GB] [--json]
-  pfx scene migrate <file.toml|file.pfx|folder|scene.pitofx> [--dry-run]
+  pfx scene migrate <file.toml|folder|scene.pitofx> [--dry-run]
   pfx scene fix <scene.pitofx> [--dry-run]
   pfx film <script.film.toml> --out <dir> [--memory-limit GB] [--json] [--plan]
   pfx sound clean <in.wav> <out.wav> [--keep harmonic [--f0 LOW,HIGH]] [--remove transients] [--gate [--noise START,END] [--reduce DB]] [--mask <png>] [--json]
@@ -61,6 +64,8 @@ const USAGE: &str = "usage:
   pfx export <file.pitofx> --glb <out.glb> [flags]
   pfx scene list <file.pitofx> [table] [--json]
   pfx scene print <file.pitofx> [file] [--json]
+  pfx scene print <file.pitofx> --all
+  pfx git setup [folder] [--json]
   pfx scene write <file.pitofx> [file] < new.toml
   pfx scene save <file.pitofx> [--thumb] [--json]
   pfx scene fold <file.pitofx> [--apply | --keep] [--json]
@@ -75,6 +80,9 @@ const USAGE: &str = "usage:
   pfx job pause|log <name|pid> [--json]
   pfx job resume (<name|pid> | --all) [--json]
   pfx job stop <name|pid> [--now] [--json]
+  pfx settings get [<key>] [--json]
+  pfx settings set <key> <value> [--json]
+  pfx settings unlock <key-file|-> [--json]
   pfx --version
   pfx --help
 clip masters are H.264 (pito-codecs) at 60 fps; pcod (pito-codecs) makes video deliveries
@@ -86,13 +94,14 @@ an app renders only itself: run from its own git tree, whose render/engine.toml 
 steam stage writes Steam's build scripts and stages depots; it does not upload
 bench plays a scene headless for N seconds at 60 fps, from its own camera, an object's (--camera) or a recorded input stream (--replay), writes the engine's frame stats to --stats (default tmp/pfx/bench/<scene>-<time>.jsonl) and prints one JSON summary line (docs/frame-stats.md, Bench); it paces like pgpu's manners ask, so run it under pgpu
 shot renders a scene file offline on the live renderer at a fixed clock (frame n at t = n / fps), headless, into numbered PNG or EXR frames, a manifest.json and an optional WAV for pcod (docs/render-a-scene.md); --draft halves the shadow maps, --final keeps the scene's; the frames before --from render unwritten, so frame N matches a full run's
-.pitofx is pfx's one user file: recipes, scenes and the files they read live in it, compressed; the verbs read and write it in memory and never unpack it; scene print shows a TOML file it holds (--json as JSON) and scene write replaces one from stdin
-scene migrate imports a plain TOML recipe or scene, or a legacy .pfx with the PFXFILE magic (or every one in a folder), once into a .pitofx beside it, its format 0 files rewritten as format 1; given a scene's .pitofx it migrates the files inside; scene fix writes the ids a .pitofx scene's entries lack; both refuse to write when the check fails; every other verb refuses a .toml or a .pfx and names the migrate command, and a .pfx without the magic is not a pfx document
+.pitofx is pfx's one user file: recipes, scenes and the files they read live in it, compressed; the verbs read and write it in memory and never unpack it; scene print shows a TOML file it holds (--json as JSON, --all every entry in a stable order, its packed files by size and CRC-32) and scene write replaces one from stdin; git setup makes git diff show a .pitofx as that listing (docs/git.md)
+scene migrate imports a plain TOML recipe or scene (or every one in a folder), once into a .pitofx beside it, its format 0 files rewritten as format 1; given a scene's .pitofx it migrates the files inside; scene fix writes the ids a .pitofx scene's entries lack; both refuse to write when the check fails; every other verb refuses a .toml and names the migrate command
 film assembles a script of clips, rendered frame folders and cards into PNG frames, a WAV and a manifest.json naming the pcod command that encodes them, under the caller's tmp/ (docs/film.md, Footage films); --plan prints the scenes without rendering
 sound clean cleans a field recording offline and keeps its length: --keep harmonic tracks a moving fundamental (default 40..400 Hz) and keeps only its harmonic series, --remove transients finds short events that stand out of the background (barks, slams, voices, clicks) and inpaints them from the frames around them, --gate gates the noise under a print taken from --noise or the quietest second (fully, or by --reduce dB); it reports what it removed and --mask writes a time by frequency PNG, kept grey and removed red (docs/sound.md, Cleaning recordings)
 sound mix renders a *.sound.toml shot mix script to a 48 kHz stereo float WAV, N frames at --fps (default 60) long, with no scene and no GPU: the same mixer and the same bytes as pfx shot --audio for that script (docs/sound.md, Shot mix)
 a recipe is a TOML scene recipe (it starts `recipe = 1`), kept inside a .pitofx, that pfx builds into a GLB and a scene headless, draws live (shot --still) or path-traces (render --recipe); each recipe verb prints its own flags with --help (docs/recipes.md)
 new scaffolds a game into an existing, empty repo folder (default ./<game>): one binary that plays the game and opens it in the editor with `<game> edit` (docs/projects.md)
+settings reads and sets pfx's own settings, kept in settings.pitofx in pfx's state folder: vrr, frame_rate (60, 120, uncapped or auto), stats, quality (appearance or performance), effects.<effect> on or off, and the licence, which unlock sets from a key checked offline (docs/settings.md)
 job runs a pfx clip, film, render or bake detached under a name, its state in a job.json in pfx's state folder; pause and stop land once the frame in flight is written, resume carries on from the last finished frame, a frame that fails 3 times fails the job, and --frames A..B makes only part of a clip so parts made on several machines join in one folder (docs/jobs.md)";
 
 const SWITCHES: &[&str] = &[
@@ -388,7 +397,9 @@ const COMMANDS: &[&str] = &[
     "align",
     "asset",
     "credits",
+    "git",
     "job",
+    "settings",
     "help",
 ];
 
@@ -1138,7 +1149,7 @@ fn push_recipes(args: &mut Vec<String>, recipes: Vec<String>) {
 fn perform(plan: Plan) -> Result<(), String> {
     match plan {
         Plan::Help => {
-            println!("{ABOUT}\n\n{USAGE}");
+            println!("{ABOUT}\n\n{USAGE}\n\n{SUPPORT}");
             Ok(())
         }
         Plan::VerbHelp(text) => {
@@ -1284,7 +1295,7 @@ fn quiet_mesa() {
     }
 }
 
-const DOCUMENT_EXTENSIONS: &[&str] = &["pitofx", "pfx"];
+const DOCUMENT_EXTENSIONS: &[&str] = &["pitofx"];
 
 #[cfg(any(feature = "editor", test))]
 fn is_document(word: &str) -> bool {
@@ -1359,6 +1370,9 @@ fn main() -> std::process::ExitCode {
     let asked = help::asked(&std::env::args().skip(1).collect::<Vec<_>>());
     if job::claims(&asked) {
         return job::main(&asked);
+    }
+    if settings::claims(&asked) {
+        return settings::main(&asked);
     }
     if let Err(error) = pfx_run::ending::install() {
         eprintln!("pfx: {error}");
@@ -1441,6 +1455,8 @@ mod tests {
                     recipe::help_text(&args)
                 } else if job::claims(&args) {
                     job::help_text(&args)
+                } else if settings::claims(&args) {
+                    settings::help_text(&args)
                 } else {
                     match plan(&args) {
                         Ok(Plan::VerbHelp(text)) => Some(text),
@@ -1498,7 +1514,7 @@ mod tests {
         let routed = |line: &str| window_args(words(line));
         assert_eq!(routed(""), words("gui"));
         assert_eq!(routed("room.pitofx"), words("gui room.pitofx"));
-        assert_eq!(routed("room.PFX"), words("gui room.PFX"));
+        assert_eq!(routed("room.PITOFX"), words("gui room.PITOFX"));
         assert_eq!(routed("room.pitofx --x"), words("room.pitofx --x"));
         assert_eq!(
             routed("room.pitofx extra.pitofx"),
@@ -1852,7 +1868,7 @@ mod tests {
         for (line, message, usage) in [
             (
                 "",
-                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, gui, new, bench, shot, scene, film, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, align, asset, credits, job, help]",
+                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, gui, new, bench, shot, scene, film, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, align, asset, credits, git, job, settings, help]",
                 TOP,
             ),
             ("tui", "unrecognized subcommand 'tui'", TOP),

@@ -147,23 +147,6 @@ fn the_scene_and_its_proxies_load_through_scene_open() {
     stands(&scene);
 }
 
-#[test]
-fn format_0_still_writes_the_plates_and_the_engine_migrates_them() {
-    let recipe = desk(&[(
-        "scene = \"scene/desk.scene.toml\"",
-        "scene = \"scene/desk.scene.toml\"\nscene_format = 0",
-    )]);
-    let (base, _) = written(&recipe, "plates-format0").unwrap();
-    let text = read(&base.join("scene/desk.scene.toml"));
-    assert_eq!(
-        table(&text, "[plates]\n"),
-        "[plates]\ndir = \"../plates/desk\"\nproxies = \"desk.proxies.toml\"\ncasters = \"proxies\"\n"
-    );
-    let scene = Scene::open(base.join("scene/desk.scene.toml")).unwrap();
-    assert!(!scene.warnings.is_empty());
-    stands(&scene);
-}
-
 fn stands(scene: &Scene) {
     let plates = scene.plates.as_ref().unwrap();
     assert!(plates.dir.ends_with("plates/desk"), "{:?}", plates.dir);

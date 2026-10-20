@@ -6,7 +6,7 @@ pfx is generic: no app or game puts its names, colours, fonts or assets in it. E
 
 It reads `git ls-files` and skips `prompts/`, `CONVENTIONS.md`, `HANDOVER.md`, `ROADMAP.md`, `AGENTS.md` and `tests/agnostic/`. Over every other tracked file (its name and, for text files, every line) it counts the patterns of `tests/agnostic/deny.txt`: product names, a product's font family and a product's colours. The file's header says how each pattern matches, which are word-bounded and how a generic phrase is allowed.
 
-Today's hits are the baseline in `tests/agnostic/baseline.txt`, one line per file with its count per label. The baseline only shrinks, because the product recipes, desks and presets are still moving out. The check fails when:
+Today's hits are the baseline in `tests/agnostic/baseline.txt`, one line per file with its count per label. The baseline only shrinks. The check fails when:
 
 - a file outside the baseline has a hit;
 - a baselined file's count for a label rises, or the file gains a label it did not have;
@@ -28,7 +28,7 @@ It rewrites `baseline.txt` from the tracked files and refuses while anything has
 
 - `generated:` the engine script or tool that made it;
 - `OFL:` or `CC0:` the open source it was taken from, with its licence;
-- `product:` a copy of a product's file that goes out in wave D. No new one may be added.
+- `product:` a copy of a product's file. The check still takes the prefix, the list holds none, and no new one may be added.
 
 The failure for an unlisted file prints the line to add. A file that was dropped but is still listed is noted, and its line should go.
 

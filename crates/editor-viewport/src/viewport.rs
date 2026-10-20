@@ -14,7 +14,8 @@ use pfx_load::scene::{Camera, Matrix, Scene, SceneEdit, model, multiply};
 
 use crate::camera::{self, Eye, STEP_POINTS, narrow};
 use crate::edit::{self, ScenePatch};
-use crate::gizmo::{Finished, Gizmo, Mode, Pose, poses};
+use crate::gizmo::{Finished, Gizmo, Mode, Pose, colours, poses};
+use crate::grid::Lines;
 use crate::lens::{Lens, pixel};
 use crate::live::Live;
 use crate::overlay::{self, linear};
@@ -63,6 +64,18 @@ pub const HOVERED: f32 = 0.12;
 pub const PAUSED: &str = "paused while a game plays";
 pub const UNSAVED: &str = "holds edits that are not saved; save it before the gizmo writes it";
 const WHOLE: Rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+pub const MINOR: f32 = 0.55;
+pub const AXIS: f32 = 0.8;
+
+pub fn grid_lines(theme: &Theme) -> Lines {
+    let [x, _, z] = colours(theme);
+    Lines::new(
+        theme.grid.gamma_multiply(MINOR),
+        theme.grid,
+        x.gamma_multiply(AXIS),
+        z.gamma_multiply(AXIS),
+    )
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
@@ -118,6 +131,9 @@ pub struct Viewport {
     events: Vec<Event>,
     tints: Option<Tints>,
     grid: bool,
+    graphics: pfx_settings::Graphics,
+    background: bool,
+    lines: Option<Lines>,
     gpu_ms: Option<f64>,
     drops: u64,
 }
@@ -211,6 +227,9 @@ impl Viewport {
             events: Vec::new(),
             tints: None,
             grid: true,
+            graphics: pfx_settings::Graphics::default(),
+            background: false,
+            lines: None,
             gpu_ms: None,
             drops: 0,
         };
@@ -258,6 +277,7 @@ impl Viewport {
 
     pub fn set_wake(&mut self, wake: Wake) {
         self.watched.set_wake(wake);
+        self.background = true;
     }
 
     pub fn set_pgpu(&mut self, pgpu: Pgpu) {
@@ -274,6 +294,10 @@ impl Viewport {
             drops: self.drops,
             drawn: self.live.as_ref().is_some_and(|live| live.drawn() > 0),
         }
+    }
+
+    pub fn timings(&self) -> Option<&pfx_gpu::FrameTimings> {
+        self.live.as_ref().and_then(|live| live.timings())
     }
 
     pub fn texture(&self) -> Option<TextureId> {
@@ -519,6 +543,7 @@ impl Viewport {
             selected: accent.map(|v| v * SELECTED),
             hovered: accent.map(|v| v * HOVERED),
         });
+        self.lines = self.grid.then(|| grid_lines(&theme));
         let image = ui.available_rect_before_wrap();
         ui.allocate_rect(image, Sense::hover());
         let response = ui.interact(image, self.id, Sense::click_and_drag());
@@ -830,9 +855,6 @@ impl Viewport {
         }
         if let (Some(view), Some(picker)) = (self.view(), &self.picker) {
             let lens = Lens::new(&view, image);
-            if self.grid {
-                overlay::grid(painter, &lens, theme);
-            }
             if let Some(index) = self.hover
                 && self.selection.as_ref().is_none_or(|s| s.index != index)
             {
@@ -904,15 +926,26 @@ impl Viewport {
             ((image.height() * pixels_per_point).round() as u32).max(1),
         ];
         let wanted = self.wanted();
+        let lines = self.lines;
         let pick = self.pick.take();
+        let graphics = self.graphics;
         let Some(rest) = &self.rest else {
             return false;
         };
         let revision = self.revision;
+        let background = self.background;
         let live = &mut self.live;
         let outcome = (|| {
             if live.is_none() {
-                *live = Some(Live::new(gpu, egui, rest, revision, camera.clone(), size)?);
+                *live = Some(Live::new(
+                    gpu,
+                    egui,
+                    rest,
+                    revision,
+                    background,
+                    camera.clone(),
+                    size,
+                )?);
             }
             let Some(live) = live.as_mut() else {
                 return Err("the live renderer is gone".to_string());
@@ -922,8 +955,9 @@ impl Viewport {
                 live.show(rest, revision)?;
             }
             live.look(camera)?;
+            live.graphics(&graphics)?;
             live.overrides(&wanted);
-            live.draw(pick)
+            live.draw(pick, lines)
         })();
         match outcome {
             Ok(drawn) => {
@@ -942,6 +976,14 @@ impl Viewport {
                 false
             }
         }
+    }
+
+    pub fn set_graphics(&mut self, graphics: pfx_settings::Graphics) {
+        self.graphics = graphics;
+    }
+
+    pub fn shed(&self) -> &'static [pfx_settings::Effect] {
+        self.live.as_ref().map_or(&[], Live::shed)
     }
 
     pub fn forget(&mut self) {

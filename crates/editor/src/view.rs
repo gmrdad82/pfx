@@ -425,7 +425,7 @@ impl View {
         let scene = if stage.flat { &empty } else { &edited };
         let [width, height] = self.size();
         let window = Size { width, height };
-        let mut painter = Painter::new(
+        let mut painter = Painter::live(
             self.gpu.clone(),
             (!stage.flat).then_some(&edited),
             stage.config,

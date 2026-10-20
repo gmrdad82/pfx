@@ -3,7 +3,8 @@ use crate::{
     Sampler, Track, Trs,
 };
 use gltf_json as json;
-use json::accessor::{ComponentType, GenericComponentType, Type};
+use json::accessor::sparse::{Indices, Sparse, Values};
+use json::accessor::{ComponentType, GenericComponentType, IndexComponentType, Type};
 use json::buffer::Target;
 use json::mesh::MorphTarget;
 use json::mesh::{Mode, Primitive, Semantic};
@@ -20,6 +21,7 @@ const DEFAULT_MATERIAL: &str = "default";
 const TRANSFORM: &str = "KHR_texture_transform";
 const DETAIL_NORMAL: &str = "detailNormalTexture";
 pub const ENGINE_MATERIAL: &str = "pfxMaterial";
+pub const MORPH_EPSILON: f32 = 1e-5;
 const MSFT_LOD: &str = "MSFT_lod";
 const SHEEN: &str = "KHR_materials_sheen";
 const ANISOTROPY: &str = "KHR_materials_anisotropy";
@@ -45,8 +47,8 @@ fn bounds<const N: usize>(data: &[[f32; N]]) -> Option<([f32; N], [f32; N])> {
     let mut hi = *first;
     for item in data {
         for axis in 0..N {
-            lo[axis] = lo[axis].min(item[axis]);
-            hi[axis] = hi[axis].max(item[axis]);
+            lo[axis] = lo[axis].min(item[axis]) + 0.0;
+            hi[axis] = hi[axis].max(item[axis]) + 0.0;
         }
     }
     Some((lo, hi))
@@ -124,6 +126,76 @@ impl Builder<'_> {
             )
         });
         self.accessor(view, data.len(), ComponentType::F32, kind, range)
+    }
+
+    fn delta_accessor(&mut self, data: &[[f32; 3]]) -> Index<json::accessor::Accessor> {
+        let count = data.len();
+        let moved: Vec<u32> = data
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.iter().any(|c| c.abs() > MORPH_EPSILON))
+            .map(|(at, _)| at as u32)
+            .collect();
+        let (component, width) = match count {
+            0..=256 => (ComponentType::U8, 1),
+            257..=65536 => (ComponentType::U16, 2),
+            _ => (ComponentType::U32, 4),
+        };
+        let entries = moved.len().max(1);
+        if count == 0 || (entries * width).next_multiple_of(4) + entries * 12 >= count * 12 {
+            return self.vec_accessor(data, Type::Vec3);
+        }
+        let kept = if moved.is_empty() { vec![0] } else { moved };
+        let mut shown = vec![[0.0f32; 3]; count];
+        for &at in &kept {
+            shown[at as usize] = data[at as usize];
+        }
+        let mut index_bytes = Vec::with_capacity(kept.len() * width);
+        let mut value_bytes = Vec::with_capacity(kept.len() * 12);
+        for &at in &kept {
+            index_bytes.extend_from_slice(&at.to_le_bytes()[..width]);
+            for value in shown[at as usize] {
+                value_bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        let indices = self.view(&index_bytes, None);
+        let values = self.view(&value_bytes, None);
+        let (min, max) = bounds(&shown).map_or((None, None), |(lo, hi)| {
+            let list = |v: [f32; 3]| Some(Value::Array(v.iter().map(|c| short(*c)).collect()));
+            (list(lo), list(hi))
+        });
+        self.root.accessors.push(json::accessor::Accessor {
+            buffer_view: None,
+            byte_offset: None,
+            count: USize64::from(count),
+            component_type: Checked::Valid(GenericComponentType(ComponentType::F32)),
+            extensions: None,
+            extras: Default::default(),
+            type_: Checked::Valid(Type::Vec3),
+            min,
+            max,
+            name: None,
+            normalized: false,
+            sparse: Some(Sparse {
+                count: USize64::from(kept.len()),
+                indices: Indices {
+                    buffer_view: indices,
+                    byte_offset: USize64(0),
+                    component_type: Checked::Valid(IndexComponentType(component)),
+                    extensions: None,
+                    extras: Default::default(),
+                },
+                values: Values {
+                    buffer_view: values,
+                    byte_offset: USize64(0),
+                    extensions: None,
+                    extras: Default::default(),
+                },
+                extensions: None,
+                extras: Default::default(),
+            }),
+        });
+        Index::new(self.root.accessors.len() as u32 - 1)
     }
 
     fn index_accessor(&mut self, data: &[u32]) -> Index<json::accessor::Accessor> {
@@ -474,12 +546,12 @@ impl Builder<'_> {
         let mut out = Vec::with_capacity(morph.names.len());
         for t in 0..morph.names.len() {
             let deltas = morph.positions.get(t).map(pick).unwrap_or_default();
-            let positions = Some(self.vec_accessor(&deltas, Type::Vec3));
+            let positions = Some(self.delta_accessor(&deltas));
             let normals = morph
                 .normals
                 .get(t)
                 .map(pick)
-                .map(|n| self.vec_accessor(&n, Type::Vec3));
+                .map(|n| self.delta_accessor(&n));
             out.push(MorphTarget {
                 positions,
                 normals,

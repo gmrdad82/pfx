@@ -518,7 +518,7 @@ fn spray_sky(n: vec3f) -> vec3f {
     return max(value, vec3f(0.0));
 }
 fn spray_wrap(n: vec3f, l: vec3f) -> f32 {
-    return max(dot(n, l) + 0.5, 0.0) / 1.5;
+    return max(dot(n, l) + 0.5, 0.0) / 2.25;
 }
 fn spray_phase(cosine: f32) -> f32 {
     let g = spray.scatter.x;

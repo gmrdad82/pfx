@@ -437,6 +437,52 @@ pub(crate) fn record(book: &mut Book, summary: Summary, kind: Shown, limits: &Li
     book.kind = Some(kind);
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Watch {
+    pub settle: u32,
+    pub drawn: Option<Summary>,
+    pub left: u32,
+    pub exposure: Option<f32>,
+    pub exposure_moving: bool,
+}
+
+impl Watch {
+    pub fn new(settle: u32) -> Self {
+        Self {
+            settle,
+            ..Self::default()
+        }
+    }
+
+    pub fn redraw(&mut self, next: Summary) -> bool {
+        let changed = self.drawn.as_ref().is_none_or(|drawn| {
+            drawn.size != next.size
+                || !drawn.same_world(&next)
+                || !drawn.same_camera(&next)
+                || drawn.overlay != next.overlay
+                || drawn.moving != next.moving
+        });
+        let live = next.ticking || !next.layered.is_empty();
+        if changed {
+            self.left = self.settle;
+        } else if !live {
+            if self.left == 0 {
+                return false;
+            }
+            self.left -= 1;
+        }
+        self.drawn = Some(next);
+        true
+    }
+
+    pub fn exposed(&mut self, exposure: f32) {
+        self.exposure_moving = self
+            .exposure
+            .is_some_and(|previous| (previous - exposure).abs() > 1e-3 * exposure.abs());
+        self.exposure = Some(exposure);
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct Print(u64);
 
@@ -2387,5 +2433,36 @@ mod tests {
             "a pure turn has no parallax"
         );
         assert_eq!(same.bytes().len(), 24 * 4);
+    }
+
+    #[test]
+    fn a_watch_redraws_a_change_and_its_settle_then_rests() {
+        let mut watch = Watch::new(2);
+        let draws = |watch: &mut Watch, next: Summary, ticks: usize| {
+            (0..ticks)
+                .map(|_| watch.redraw(next.clone()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(draws(&mut watch, summary(), 4), [true, true, true, false]);
+        assert_eq!(
+            draws(&mut watch, turned(0.01), 4),
+            [true, true, true, false]
+        );
+        let ticking = Summary {
+            ticking: true,
+            ..turned(0.01)
+        };
+        assert_eq!(draws(&mut watch, ticking, 5), [true; 5]);
+        let world = Summary {
+            world: 8,
+            ..turned(0.01)
+        };
+        assert_eq!(draws(&mut watch, world, 4), [true, true, true, false]);
+        let resized = Summary {
+            size: [W, H + 1],
+            world: 8,
+            ..turned(0.01)
+        };
+        assert_eq!(draws(&mut watch, resized, 1), [true]);
     }
 }

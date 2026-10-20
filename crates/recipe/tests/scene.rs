@@ -82,30 +82,29 @@ fn an_unknown_output_key_still_names_the_scene_keys() {
 }
 
 #[test]
-fn the_scene_format_is_1_unless_the_output_asks_for_0() {
+fn the_scene_format_is_1() {
     assert_eq!(
         recipe("[output]\nscene = \"t.scene.toml\"\n")
             .output
             .scene_format,
         1
     );
-    let zero = recipe("[output]\nscene = \"t.scene.toml\"\nscene_format = 0\n");
-    assert_eq!(validate(&zero), Vec::new());
-    assert_eq!(zero.output.scene_format, 0);
-    assert_eq!(
-        problems("[output]\nscene = \"t.scene.toml\"\nscene_format = 2\n"),
-        [
-            "line 5: output.scene_format: pfx writes scene format 0 or 1, not 2, expected 1 (the default) or 0"
-        ]
-    );
-    for format in [0, 1] {
+    for format in [0, 2] {
         assert_eq!(
-            problems(&format!("[output]\nscene_format = {format}\n")),
-            [
-                "line 4: output.scene_format: says how to write the scene, but there is no `scene` to write, expected `output.scene`"
-            ]
+            problems(&format!(
+                "[output]\nscene = \"t.scene.toml\"\nscene_format = {format}\n"
+            )),
+            [format!(
+                "line 5: output.scene_format: pfx writes scene format 1, not {format}, expected 1 (the default)"
+            )]
         );
     }
+    assert_eq!(
+        problems("[output]\nscene_format = 1\n"),
+        [
+            "line 4: output.scene_format: says how to write the scene, but there is no `scene` to write, expected `output.scene`"
+        ]
+    );
     assert_eq!(validate(&recipe("[output]\nglb = \"t.glb\"\n")), Vec::new());
 }
 

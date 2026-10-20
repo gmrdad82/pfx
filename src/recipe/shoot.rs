@@ -3,7 +3,8 @@ use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
-use pfx_build::{Registry, build_with, write};
+use pfx_build::{Built, Registry, build_with, write};
+use pfx_recipe::Recipe;
 use pfx_recipe::toml_edit::DocumentMut;
 use serde_json::{Map, Value, json};
 
@@ -105,7 +106,7 @@ pub(super) enum Quality {
 
 pub(super) struct Plan<'a> {
     pub(super) scene: &'a Path,
-    pub(super) camera: &'a str,
+    pub(super) camera: Option<&'a str>,
     pub(super) fps: pfx_recipe::Rate,
     pub(super) size: [u32; 2],
     pub(super) quality: Quality,
@@ -131,8 +132,11 @@ pub(super) fn pfx_line(plan: &Plan, queue: bool) -> Vec<String> {
         plan.fps.to_string(),
         "--size".to_string(),
         format!("{}x{}", plan.size[0], plan.size[1]),
-        "--camera".to_string(),
-        plan.camera.to_string(),
+    ]);
+    if let Some(camera) = plan.camera {
+        line.extend(["--camera".to_string(), camera.to_string()]);
+    }
+    line.extend([
         match plan.quality {
             Quality::Draft => "--draft",
             Quality::Final => "--final",
@@ -208,6 +212,25 @@ fn packed(scene: &Path, dir: &Path) -> Result<PathBuf, String> {
     Ok(out)
 }
 
+fn shot_camera(recipe: &Recipe, built: &Built, name: &str) -> Result<Option<String>, String> {
+    let node = format!("camera.{name}");
+    if built.tracks.iter().any(|track| track.node == node) {
+        return Ok(Some(node));
+    }
+    let scene = recipe
+        .output
+        .scene_camera
+        .as_deref()
+        .or_else(|| recipe.cameras.first().map(|c| c.name.as_str()));
+    if scene == Some(name) {
+        Ok(None)
+    } else {
+        Err(format!(
+            "{node} holds still, and a still camera reaches the built scene only as its [camera]; set [output] scene_camera = \"{name}\" to shoot through it"
+        ))
+    }
+}
+
 fn has_sound(scene: &Path) -> bool {
     std::fs::read_to_string(scene)
         .ok()
@@ -252,7 +275,6 @@ impl Shoot<'_> {
             .or_else(|| recipe.cameras.first().map(|c| c.name.clone()))
             .ok_or_else(|| format!("{file} has no [[camera]] to shoot through"))?;
         pfx_recipe_scene::camera(&recipe, &name).map_err(|e| e.0)?;
-        let node = format!("camera.{name}");
         let range = args.range.clone().unwrap_or(0..=timeline.frames);
         if *range.end() > timeline.frames {
             return Err(format!(
@@ -277,6 +299,8 @@ impl Shoot<'_> {
         for note in &built.notes {
             eprintln!("{file}: {note}");
         }
+        let through = shot_camera(&recipe, &built, &name).map_err(|e| format!("{file}: {e}"))?;
+        let node = format!("camera.{name}");
         let written = write(&built, &recipe, base, None).map_err(|e| format!("{file}: {e}"))?;
         let glb = written
             .iter()
@@ -315,7 +339,7 @@ impl Shoot<'_> {
             let audio = (sound && whole && !wav.is_file()).then_some(wav.as_path());
             let plan = Plan {
                 scene: &shot,
-                camera: &node,
+                camera: through.as_deref(),
                 fps: timeline.fps,
                 size: timeline.size,
                 quality,
@@ -488,7 +512,7 @@ mod tests {
         let line = pfx_line(
             &Plan {
                 scene: &shot,
-                camera: "camera.chase",
+                camera: Some("camera.chase"),
                 fps: pfx_recipe::Rate::whole(60),
                 size: [108, 192],
                 quality: Quality::Draft,
@@ -531,6 +555,52 @@ mod tests {
         }
     }
 
+    fn timeline(cameras: &str) -> (Recipe, Built) {
+        let text = format!(
+            "recipe = 1\nname = \"timeline\"\n\n[timeline]\nfps = 24\nframes = 12\n\n[[object]]\nname = \"block\"\nkind = \"box\"\nsize = [1, 1, 1]\nkeys = {{ at = [[0.0, [0.0, 0.5, 0.0]], [0.5, [1.0, 0.5, 0.0]]] }}\n\n{cameras}"
+        );
+        let recipe = pfx_recipe::parse(&text).unwrap();
+        let built = build_with(&recipe, Path::new("."), &Registry::new()).unwrap();
+        (recipe, built)
+    }
+
+    #[test]
+    fn a_still_camera_is_shot_as_the_scene_camera_and_a_keyed_one_as_its_node() {
+        let still = "[[camera]]\nname = \"eye\"\nposition = [0, 1, 5]\ntarget = [0, 0, 0]\n";
+        let keyed = "[[camera]]\nname = \"chase\"\nposition = [0, 1, 5]\ntarget = [0, 0, 0]\nkeys = { position = [[0.0, [0.0, 1.0, 5.0]], [0.5, [2.0, 1.0, 5.0]]] }\n";
+        let (recipe, built) = timeline(still);
+        assert_eq!(shot_camera(&recipe, &built, "eye"), Ok(None));
+        let (recipe, built) = timeline(keyed);
+        assert_eq!(
+            shot_camera(&recipe, &built, "chase"),
+            Ok(Some("camera.chase".into()))
+        );
+        let (recipe, built) = timeline(&format!("{still}\n{keyed}"));
+        assert_eq!(shot_camera(&recipe, &built, "eye"), Ok(None));
+        assert_eq!(
+            shot_camera(&recipe, &built, "chase"),
+            Ok(Some("camera.chase".into()))
+        );
+        let (recipe, built) = timeline(&format!("{keyed}\n{still}"));
+        let refused = shot_camera(&recipe, &built, "eye").unwrap_err();
+        assert!(refused.contains("scene_camera = \"eye\""), "{refused}");
+        let line = pfx_line(
+            &Plan {
+                scene: Path::new("scene.pitofx"),
+                camera: None,
+                fps: pfx_recipe::Rate::whole(24),
+                size: [64, 64],
+                quality: Quality::Draft,
+                from: 0,
+                frames: 13,
+                stage: Path::new(".stage-00000"),
+                audio: None,
+            },
+            false,
+        );
+        assert!(!line.contains(&"--camera".to_string()), "{line:?}");
+    }
+
     #[test]
     fn missing_frames_group_into_runs_so_a_shoot_resumes() {
         let done = [0, 1, 2, 5, 9];
@@ -546,7 +616,7 @@ mod tests {
     fn pfx_shot_gets_the_scene_the_range_and_the_camera_node() {
         let plan = Plan {
             scene: Path::new("out/scene.pitofx"),
-            camera: "camera.chase",
+            camera: Some("camera.chase"),
             fps: pfx_recipe::Rate::whole(60),
             size: [1080, 1920],
             quality: Quality::Final,

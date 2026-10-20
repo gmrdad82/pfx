@@ -725,6 +725,11 @@ pub(crate) fn nodes(
             (None, _, Some(drive)) if node.name.starts_with(&wheel_prefix) => {
                 let (front, wheel) = wheels[wheel_at];
                 wheel_at += 1;
+                let spins = node
+                    .name
+                    .strip_prefix(&format!("{object}."))
+                    .and_then(|piece| facts?.get(piece)?.get("spin")?.as_bool())
+                    .unwrap_or(true);
                 let outer: Vec<DMat4> = (0..count)
                     .map(|n| {
                         let turn = if front { steer(n) } else { 0.0 };
@@ -737,7 +742,7 @@ pub(crate) fn nodes(
                 let angle: Vec<f64> = drive
                     .distance
                     .iter()
-                    .map(|d| spin(*d, wheel.radius))
+                    .map(|d| if spins { spin(*d, wheel.radius) } else { 0.0 })
                     .collect();
                 spun(
                     &outer,

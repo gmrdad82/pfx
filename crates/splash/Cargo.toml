@@ -1,0 +1,37 @@
+[package]
+name = "pfx-splash"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's start-up splash: the mark, the wordmark and the site on a dark ground for two seconds while the game loads, hidden only by a valid offline-verified pro key"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+pfx-core = { path = "../core" }
+pfx-sound = { path = "../sound" }
+pfx-live = { path = "../live" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+ebur128 = "=0.1.10"
+pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+swash = "=0.2.10"
+png = "0.18"
+pollster = "0.4"
+half = "2.7.1"
+toml = "0.9"
+
+[[example]]
+name = "outline"
+
+[[example]]
+name = "chime"
+
+[[example]]
+name = "options"

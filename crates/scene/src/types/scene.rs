@@ -850,6 +850,10 @@ pub struct LiveSettings {
     pub reversed_depth: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coat_reflections: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taa: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssr: Option<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

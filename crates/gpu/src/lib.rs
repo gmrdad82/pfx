@@ -1,5 +1,9 @@
 pub mod floor;
+#[cfg(feature = "window")]
+mod hint;
 pub mod pace;
+pub mod presents;
+pub mod priority;
 pub mod screens;
 pub mod stats;
 pub mod window;
@@ -62,6 +66,11 @@ pub struct WindowTarget {
     pub surface: wgpu::Surface<'static>,
     pub config: wgpu::SurfaceConfiguration,
     pub present: window::PresentChoice,
+    hint: hint::Hint,
+    probe: presents::VrrProbe,
+    vrr: bool,
+    settle: bool,
+    configured: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -530,7 +539,8 @@ impl Gpu {
     pub async fn window(
         window: Arc<winit::window::Window>,
     ) -> Result<(Self, WindowTarget), String> {
-        Ok(Self::open_window(window, None, None, &window::PresentPreference::fifo()).await?)
+        let preference = window::present_preference(&window, window::Present::default());
+        Ok(Self::open_window(window, None, None, &preference).await?)
     }
 
     #[cfg(feature = "window")]
@@ -538,26 +548,16 @@ impl Gpu {
         window: Arc<winit::window::Window>,
         limits: wgpu::Limits,
     ) -> Result<(Self, WindowTarget), String> {
-        Ok(Self::open_window(
-            window,
-            Some(&limits),
-            None,
-            &window::PresentPreference::fifo(),
-        )
-        .await?)
+        let preference = window::present_preference(&window, window::Present::default());
+        Ok(Self::open_window(window, Some(&limits), None, &preference).await?)
     }
 
     #[cfg(feature = "window")]
     pub async fn window_checked(
         window: Arc<winit::window::Window>,
     ) -> Result<(Self, WindowTarget), GpuRefusal> {
-        Self::open_window(
-            window,
-            None,
-            Some(&live_floor()),
-            &window::PresentPreference::fifo(),
-        )
-        .await
+        let preference = window::present_preference(&window, window::Present::default());
+        Self::open_window(window, None, Some(&live_floor()), &preference).await
     }
 
     #[cfg(feature = "window")]
@@ -609,7 +609,7 @@ impl Gpu {
             size.height,
             gpu.device.limits().max_texture_dimension_2d,
         );
-        let present = window::choose_present(preference, &caps.present_modes);
+        let present = window::overridden(window::choose_present(preference, &caps.present_modes));
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
@@ -621,13 +621,18 @@ impl Gpu {
             alpha_mode,
             view_formats: vec![],
         };
-        surface.configure(&gpu.device, &config);
+        let configured = configure(&surface, &gpu.device, &config);
         Ok((
             gpu,
             WindowTarget {
                 surface,
                 config,
                 present,
+                hint: hint::Hint::new(&window),
+                probe: presents::VrrProbe::default(),
+                vrr: false,
+                settle: false,
+                configured,
             },
         ))
     }
@@ -815,6 +820,25 @@ impl Gpu {
 }
 
 #[cfg(feature = "window")]
+fn configure(
+    surface: &wgpu::Surface<'static>,
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> bool {
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    surface.configure(device, config);
+    let mut popped = std::pin::pin!(scope.pop());
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match popped.as_mut().poll(&mut context) {
+        std::task::Poll::Ready(Some(error)) => {
+            eprintln!("pfx: the window surface was not configured, retrying next frame: {error}");
+            false
+        }
+        std::task::Poll::Ready(None) | std::task::Poll::Pending => true,
+    }
+}
+
+#[cfg(feature = "window")]
 impl WindowTarget {
     pub fn resize(&mut self, gpu: &Gpu, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -822,12 +846,28 @@ impl WindowTarget {
         }
         let (width, height) =
             surface_size(width, height, gpu.device.limits().max_texture_dimension_2d);
-        if (width, height) == (self.config.width, self.config.height) {
+        if self.configured && (width, height) == (self.config.width, self.config.height) {
             return;
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&gpu.device, &self.config);
+        self.configured = configure(&self.surface, &gpu.device, &self.config);
+    }
+
+    pub fn configured(&self) -> bool {
+        self.configured
+    }
+
+    pub fn reconfigure(&mut self, gpu: &Gpu) -> bool {
+        self.configured = configure(&self.surface, &gpu.device, &self.config);
+        self.configured
+    }
+
+    pub fn retry(&mut self, gpu: &Gpu) -> bool {
+        if !self.configured {
+            self.configured = configure(&self.surface, &gpu.device, &self.config);
+        }
+        self.configured
     }
 
     pub fn set_present(
@@ -836,12 +876,102 @@ impl WindowTarget {
         preference: &window::PresentPreference,
     ) -> window::PresentChoice {
         let caps = self.surface.get_capabilities(&gpu.adapter);
-        let choice = window::choose_present(preference, &caps.present_modes);
+        let choice = window::overridden(window::choose_present(preference, &caps.present_modes));
+        let same = choice.selected == self.config.present_mode
+            && choice.desired_maximum_frame_latency == self.config.desired_maximum_frame_latency;
         self.config.present_mode = choice.selected;
         self.config.desired_maximum_frame_latency = choice.desired_maximum_frame_latency;
         self.present = choice.clone();
-        self.surface.configure(&gpu.device, &self.config);
+        if !same || !self.configured {
+            self.configured = configure(&self.surface, &gpu.device, &self.config);
+        }
         choice
+    }
+
+    pub fn follow(
+        &mut self,
+        gpu: &Gpu,
+        window: &winit::window::Window,
+        present: window::Present,
+    ) -> bool {
+        self.hint.set(present.vrr);
+        self.probe.set_refresh(
+            window
+                .current_monitor()
+                .and_then(|monitor| window::refresh_millihertz(&monitor)),
+        );
+        if present.vrr != self.vrr {
+            self.vrr = present.vrr;
+            self.probe.reset();
+        }
+        let preference =
+            if present.vrr && self.vrr_in_effect() == Some(false) && !window::present_forced() {
+                window::PresentPreference::fixed_refresh()
+            } else {
+                window::present_preference(window, present)
+            };
+        if preference.modes == self.present.requested {
+            return false;
+        }
+        self.set_present(gpu, &preference);
+        true
+    }
+
+    pub fn setting(
+        &self,
+        window: &winit::window::Window,
+        present: window::Present,
+    ) -> presents::Setting {
+        window::setting(
+            window::host(window),
+            &self.present,
+            present,
+            self.vrr_in_effect(),
+        )
+    }
+
+    pub fn present(&self, queue: &wgpu::Queue, frame: wgpu::SurfaceTexture, tag: Option<u64>) {
+        match tag {
+            Some(tag) => self.hint.request(tag),
+            None if self.vrr => self.hint.request(u64::MAX),
+            None => {}
+        }
+        queue.present(frame);
+    }
+
+    pub fn shown(&mut self) -> Vec<presents::Shown> {
+        let shown = self.hint.shown();
+        if self.vrr {
+            for one in &shown {
+                self.settle |= self.probe.shown(*one);
+            }
+        }
+        shown
+    }
+
+    pub fn vrr_in_effect(&self) -> Option<bool> {
+        if self.vrr {
+            self.probe.verdict()
+        } else {
+            Some(false)
+        }
+    }
+
+    pub fn settled(&mut self) -> bool {
+        std::mem::take(&mut self.settle)
+    }
+
+    pub fn describe(&self) -> String {
+        let vrr = match (self.vrr, self.vrr_in_effect()) {
+            (false, _) => "VRR off",
+            (true, Some(true)) => "VRR in effect",
+            (true, Some(false)) => "VRR asked but not in effect: the refresh is fixed",
+            (true, None) => "VRR asked, not yet seen",
+        };
+        format!(
+            "presents {:?} at frame latency {}, {vrr}",
+            self.present.selected, self.present.desired_maximum_frame_latency
+        )
     }
 }
 

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+#[doc(no_inline)]
 pub use chrono::NaiveDateTime;
 use serde::{Deserialize, Serialize};
 
@@ -141,6 +142,8 @@ pub struct Job {
     pub updated: String,
     pub finished: Option<String>,
     pub report: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -171,6 +174,7 @@ pub enum Event {
         frame: u32,
         same: bool,
     },
+    Path(String),
 }
 
 impl Job {
@@ -207,6 +211,7 @@ impl Job {
             updated: stamp,
             finished: None,
             report: None,
+            path: None,
         }
     }
 
@@ -283,6 +288,11 @@ impl Job {
                     same: Some(same),
                 });
                 false
+            }
+            Event::Path(ref line) => {
+                let changed = self.path.as_deref() != Some(line.as_str());
+                self.path = Some(line.clone());
+                changed
             }
         }
     }

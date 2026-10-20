@@ -23,7 +23,7 @@ fn tick(&mut self, world: &mut World, _tick: &Tick, input: &Input) {
 
 ## The table
 
-The keys are pfx-scene's `[object.character]` (format 1, pinned at `d9a9f1a`; its `docs/format.md` owns them). pfx-load reads the table into `Scene::characters` with pfx-scene's defaults, and the radius and height from the object's mesh bounds times its scale:
+The keys are pfx-scene's `[object.character]` (format 1; [scene-format.md](scene-format.md) owns them). pfx-load reads the table into `Scene::characters` with pfx-scene's defaults, and the radius and height from the object's mesh bounds times its scale:
 
 ```toml
 [[object]]

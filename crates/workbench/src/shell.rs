@@ -68,12 +68,14 @@ const SEARCH: &str = "\u{f002}";
 const PLAY: &str = "\u{f04b}";
 const PAUSE: &str = "\u{f04c}";
 const STOP: &str = "\u{f04d}";
+const MEASURED_FRAMES: usize = 60;
 
 mod bare;
 mod clips;
 mod curves;
 mod direct;
 mod session;
+mod stats;
 mod transport;
 
 pub use session::{PLAY_DIR, recipe_scene};
@@ -234,6 +236,12 @@ pub struct Shell {
     scrubber: Option<Rect>,
     bare: bool,
     wire: crate::wire::Look,
+    preferences: pfx_settings::Preferences,
+    prefs: crate::prefs::Prefs,
+    measured: Vec<f32>,
+    stats: stats::Stats,
+    view_scale: crate::scale::ViewScale,
+    shown_scale: Option<f32>,
     also: Vec<String>,
     pieces: Vec<String>,
     strip: bool,
@@ -497,6 +505,12 @@ impl Shell {
         };
         Shell {
             wire: book.view(),
+            preferences: book.preferences(),
+            prefs: crate::prefs::Prefs::read(&book.store()),
+            measured: Vec::new(),
+            stats: stats::Stats::default(),
+            view_scale: book.view_scale(),
+            shown_scale: None,
             fixture: None,
             chosen: None,
             values: [0.25, 0.25, 0.25],
@@ -745,9 +759,6 @@ impl Shell {
                 Err(error) => self.fail(error),
             },
             Some(Kind::Scene) => self.open_scene(path),
-            None if pfx_file::is_legacy_path(path) => {
-                self.fail(pfx_file::legacy_refusal(path).unwrap_or_default());
-            }
             _ => {
                 self.open_recipe(path, path);
             }
@@ -1095,6 +1106,98 @@ impl Shell {
         let _ = self.book.keep_view(self.wire);
     }
 
+    pub fn present(&self) -> pfx_editor_shell::Present {
+        self.preferences.present()
+    }
+
+    pub fn preferences(&self) -> pfx_settings::Preferences {
+        self.preferences
+    }
+
+    pub fn set_preferences(&mut self, preferences: pfx_settings::Preferences) {
+        if !preferences.stats {
+            self.stats.clear();
+        }
+        if let Some(quality) = preferences.graphics.quality
+            && preferences.graphics.quality != self.preferences.graphics.quality
+        {
+            self.view_scale = crate::scale::of_quality(quality);
+            let _ = self.book.keep_view_scale(self.view_scale);
+        }
+        self.preferences = preferences;
+        let _ = self.book.keep_preferences(&preferences);
+    }
+
+    pub fn set_present(&mut self, present: pfx_editor_shell::Present) {
+        let mut preferences = self.preferences;
+        preferences.vrr = present.vrr;
+        if preferences.rate().frame_rate() != present.frame_rate {
+            preferences.frame_rate = Some(pfx_settings::Rate::of(present.frame_rate));
+        }
+        self.set_preferences(preferences);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_book(mut self, book: crate::open::Book) -> Shell {
+        self.preferences = book.preferences();
+        self.book = book;
+        self
+    }
+
+    pub fn prefs(&mut self) -> &mut crate::prefs::Prefs {
+        &mut self.prefs
+    }
+
+    fn toggle_vrr(&mut self) {
+        self.set_preferences(pfx_settings::Preferences {
+            vrr: !self.preferences.vrr,
+            ..self.preferences
+        });
+    }
+
+    pub fn view_scale(&self) -> crate::scale::ViewScale {
+        self.view_scale
+    }
+
+    pub fn set_shown_scale(&mut self, scale: Option<f32>) {
+        self.shown_scale = scale;
+    }
+
+    fn cycle_view_scale(&mut self) {
+        self.view_scale = self.view_scale.next();
+        let _ = self.book.keep_view_scale(self.view_scale);
+        self.preferences.graphics.quality = Some(crate::scale::quality_of(self.view_scale));
+        let _ = self.book.keep_preferences(&self.preferences);
+    }
+
+    fn cycle_frame_rate(&mut self) {
+        let rates = pfx_settings::Rate::ALL;
+        let at = rates
+            .iter()
+            .position(|rate| *rate == self.preferences.rate())
+            .unwrap_or(0);
+        self.set_preferences(pfx_settings::Preferences {
+            frame_rate: Some(rates[(at + 1) % rates.len()]),
+            ..self.preferences
+        });
+    }
+
+    fn prefs_layer(&mut self, ctx: &Context) {
+        self.prefs
+            .set_scale(self.view_scale.label(self.shown_scale));
+        if let Some(change) = self.prefs.draw(ctx, &self.preferences) {
+            match change {
+                crate::prefs::Change::Preferences(preferences) => self.set_preferences(preferences),
+                crate::prefs::Change::Licence(key) => {
+                    if let Err(error) = self.book.store().keep_licence_key(key.as_deref()) {
+                        self.file_note = Some((format!("the key wasn't saved: {error}"), true));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        }
+    }
+
     pub fn without_samples(mut self) -> Shell {
         self.picker.without_samples();
         self
@@ -1317,6 +1420,25 @@ impl Shell {
 
     pub fn set_pgpu(&mut self, pgpu: Pgpu) {
         self.pgpu = pgpu;
+    }
+
+    pub fn measure_frame(&mut self, gpu_ms: Option<f64>) {
+        if self.preferences.measured() {
+            return;
+        }
+        let Some(ms) = gpu_ms.filter(|ms| ms.is_finite() && *ms > 0.0) else {
+            return;
+        };
+        self.measured.push(ms as f32);
+        if self.measured.len() < MEASURED_FRAMES {
+            return;
+        }
+        self.measured.sort_by(f32::total_cmp);
+        let median = self.measured[self.measured.len() / 2];
+        self.measured.clear();
+        let mut preferences = self.preferences;
+        preferences.measure(median);
+        self.set_preferences(preferences);
     }
 
     pub fn set_frame_ms(&mut self, ms: Option<f32>) {
@@ -1594,6 +1716,7 @@ impl Shell {
             self.right(ui);
             self.centre(ui, &texture);
             self.open_layer(ctx);
+            self.prefs_layer(ctx);
             self.log_window(ctx);
         }
         self.reveal = false;
@@ -1868,6 +1991,22 @@ impl Shell {
         })
     }
 
+    fn settings_chord(ctx: &Context) -> bool {
+        ctx.input(|input| {
+            input.events.iter().any(|event| {
+                matches!(
+                    event,
+                    Event::Key {
+                        key: Key::Comma,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } if modifiers.ctrl || modifiers.command
+                )
+            })
+        })
+    }
+
     fn nav_key(ctx: &Context) -> bool {
         ctx.input(|input| {
             input.events.iter().any(|event| {
@@ -1885,6 +2024,14 @@ impl Shell {
     }
 
     fn keyboard(&mut self, ctx: &Context) {
+        if Self::settings_chord(ctx) {
+            self.prefs.open(crate::prefs::Page::Display);
+            return;
+        }
+        if self.prefs.shown() {
+            self.keys = Keys::default();
+            return;
+        }
         if Self::open_chord(ctx) {
             self.show_picker(ctx);
             return;
@@ -2005,6 +2152,10 @@ impl Shell {
                 Key::Escape => {}
                 _ => return self.panel_key(ctx, key),
             }
+            return;
+        }
+        if key == Key::F3 {
+            self.toggle_stats();
             return;
         }
         if self.edits_scene() && self.session_key(key) {
@@ -2759,6 +2910,22 @@ impl Shell {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let hint = format!("{SEARCH}  search  /");
                 text_field(ui, &mut self.search, &hint, 240.0, Some(search_id()));
+                let gear = ui
+                    .add(
+                        Button::new(code(ui, "settings", palette.text_secondary))
+                            .fill(palette.bg_chip)
+                            .stroke(Stroke::new(STROKE, palette.line_border))
+                            .corner_radius(CornerRadius::same(RADIUS)),
+                    )
+                    .on_hover_text("settings: ctrl ,");
+                if gear.clicked() {
+                    self.prefs.open(crate::prefs::Page::Display);
+                }
+                let badge = crate::prefs::badge(ui, self.prefs.licence(), true)
+                    .on_hover_text("your pfx licence; click for its page");
+                if badge.clicked() {
+                    self.prefs.open(crate::prefs::Page::Licence);
+                }
             });
         });
         self.panels.push((Panel::A, rect));
@@ -3075,6 +3242,7 @@ impl Shell {
                         );
                         shell.session_view(&mut view);
                         shell.viewport = Some(area);
+                        shell.stats_overlay(ui.ctx(), area);
                         shell.transport(ui);
                         return;
                     }
@@ -3124,6 +3292,7 @@ impl Shell {
                     shell.picture(ui, image);
                     shell.shading(ui, image);
                     shell.shot_overlay(ui, image);
+                    shell.stats_overlay(ui.ctx(), image);
                     if bar > 0.0 {
                         if shell.span().is_some() {
                             shell.curves_strip(ui);
@@ -3440,9 +3609,6 @@ impl Shell {
         }
         viewport::frame(painter, image);
         if let Some(eye) = self.view_eye() {
-            if self.view_error.is_none() {
-                viewport::grid(painter, &eye, image, &self.solids_shown());
-            }
             if let Some((frame, alpha)) = self.fade.frame() {
                 viewport::passepartout(painter, image, frame, alpha);
             }
@@ -4328,6 +4494,14 @@ impl Shell {
             )
             .on_hover_text(match text {
                 "x-ray" => "shift+z",
+                "vrr" => "adaptive sync: the display follows the frame rate; off is steady vsync",
+                "stats" => stats::HINT,
+                "uncapped" | "60 fps" | "120 fps" | "auto" => {
+                    "cycles 60 fps, 120 fps, uncapped and auto; auto aims at 120 and settles to a steady lower rate when the scene cannot hold it; ctrl , opens every setting"
+                }
+                scale if scale.starts_with("auto") || scale.ends_with('%') => {
+                    "the viewport's render scale cycles auto, 100%, 75% and 50%; auto renders fewer pixels when the frame runs over its budget and upscales them with FSR 1"
+                }
                 _ => "z cycles shaded, clay and wire",
             })
             .clicked()
@@ -4340,6 +4514,30 @@ impl Shell {
         }
         if toggle(ui, "clay", self.wire.clay > 0.0) {
             self.toggle_clay();
+        }
+        let frame_rate = match self.preferences.rate() {
+            pfx_settings::Rate::Cap60 => "60 fps",
+            pfx_settings::Rate::Cap120 => "120 fps",
+            pfx_settings::Rate::Uncapped => "uncapped",
+            pfx_settings::Rate::Auto => "auto",
+        };
+        if toggle(
+            ui,
+            frame_rate,
+            self.preferences.rate() != pfx_settings::Rate::Uncapped,
+        ) {
+            self.cycle_frame_rate();
+        }
+        if toggle(ui, "vrr", self.preferences.vrr) {
+            self.toggle_vrr();
+        }
+        let scale = self.view_scale.label(self.shown_scale);
+        let scaled = self.shown_scale.is_some_and(|shown| shown < 1.0);
+        if toggle(ui, &scale, scaled) {
+            self.cycle_view_scale();
+        }
+        if toggle(ui, "stats", self.stats()) {
+            self.toggle_stats();
         }
     }
 

@@ -196,10 +196,6 @@ impl Settings {
     }
 
     pub fn load(path: &Path) -> Result<Settings, String> {
-        let legacy = path.with_extension(pfx_file::LEGACY_EXTENSION);
-        if !path.exists() && pfx_file::is_file_path(path) && pfx_file::has_magic(&legacy) {
-            return Settings::load(&legacy);
-        }
         if !path.exists() {
             return Ok(Settings::default());
         }

@@ -13,6 +13,7 @@ pfx-recipe = { path = "../recipe" }
 pfx-build = { path = "../build" }
 pfx-live = { path = "../live" }
 pfx-load = { path = "../load" }
+pfx-settings = { path = "../settings", default-features = false }
 pfx-geom = { path = "../geom" }
 pfx-gpu = { path = "../gpu" }
 pfx-materials = { path = "../materials" }
@@ -22,6 +23,8 @@ pfx-core = { path = "../core" }
 png = "0.18"
 pfx-glb = { path = "../glb" }
 pfx-mesh = { path = "../mesh" }
+pfx-trace = { path = "../trace" }
+pfx-bake = { path = "../bake" }
 serde_json = "1"
 ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 

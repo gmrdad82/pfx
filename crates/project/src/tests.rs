@@ -2,6 +2,10 @@ use std::path::{Path, PathBuf};
 
 use crate::Project;
 
+#[allow(dead_code)]
+#[path = "templates/build.rs.in"]
+mod game_build;
+
 fn folder(name: &str) -> PathBuf {
     let root = std::path::absolute(
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -18,6 +22,22 @@ fn touch(root: &Path, relative: &str, text: &str) {
     let path = root.join(relative);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
+}
+
+#[test]
+fn a_games_build_date_comes_from_epoch_seconds_without_a_clock() {
+    assert_eq!(game_build::date(0).as_deref(), Some("1970-01-01"));
+    assert_eq!(
+        game_build::date(1_792_368_000).as_deref(),
+        Some("2026-10-19")
+    );
+    assert_eq!(
+        game_build::date(1_792_454_399).as_deref(),
+        Some("2026-10-19")
+    );
+    assert_eq!(game_build::date(951_782_400).as_deref(), Some("2000-02-29"));
+    assert_eq!(game_build::date(-86_400).as_deref(), Some("1969-12-31"));
+    assert_eq!(game_build::date(253_402_300_800), None);
 }
 
 #[test]
@@ -132,6 +152,27 @@ fn a_flat_project_says_so_in_its_authoring_table() {
 }
 
 #[test]
+fn a_game_draws_on_demand_unless_its_project_asks_to_redraw_always() {
+    let root = folder("redraw");
+    let open = |game: &str| {
+        touch(
+            &root,
+            "project.toml",
+            &format!("[project]\nname = \"x\"\n{game}"),
+        );
+        Project::open(&root).map(|project| project.redraws_always())
+    };
+    assert_eq!(open(""), Ok(false));
+    assert_eq!(open("[authoring.pfx]\nredraw = \"on-demand\"\n"), Ok(false));
+    assert_eq!(open("[authoring.pfx]\nredraw = \"always\"\n"), Ok(true));
+    assert!(
+        open("[authoring.pfx]\nredraw = true\n")
+            .unwrap_err()
+            .contains("redraw")
+    );
+}
+
+#[test]
 fn a_project_lists_its_gameplay_modules_by_their_built_files() {
     let root = folder("modules");
     touch(
@@ -168,6 +209,39 @@ fn a_project_lists_its_gameplay_modules_by_their_built_files() {
     }
     touch(&root, "project.toml", "[project]\nname = \"x\"\n");
     assert!(Project::open(&root).unwrap().modules().is_empty());
+}
+
+#[test]
+fn a_project_sets_its_games_quality_and_effects_and_refuses_unknown_ones() {
+    let root = folder("graphics");
+    touch(&root, "project.toml", "[project]\nname = \"x\"\n");
+    assert_eq!(Project::open(&root).unwrap().graphics(), None);
+    touch(
+        &root,
+        "project.toml",
+        "[project]\nname = \"x\"\n[authoring.pfx.graphics]\nquality = \"performance\"\n[authoring.pfx.graphics.effects]\nssr = false\nmotion_blur = false\n",
+    );
+    let graphics = Project::open(&root).unwrap().graphics().unwrap();
+    assert_eq!(graphics.quality, Some(pfx_settings::Quality::Performance));
+    assert_eq!(
+        graphics.effects,
+        pfx_settings::Effects::ALL_ON
+            .with(pfx_settings::Effect::Ssr, false)
+            .with(pfx_settings::Effect::MotionBlur, false)
+    );
+    for bad in [
+        "[authoring.pfx.graphics]\nquality = \"ultra\"\n",
+        "[authoring.pfx.graphics.effects]\nchrome = false\n",
+        "[authoring.pfx]\ngraphics = 1\n",
+    ] {
+        touch(
+            &root,
+            "project.toml",
+            &format!("[project]\nname = \"x\"\n{bad}"),
+        );
+        let error = Project::open(&root).unwrap_err();
+        assert!(error.contains("[authoring.pfx.graphics]"), "{error}");
+    }
 }
 
 #[test]
@@ -406,6 +480,7 @@ mod scaffold {
         let written = scaffold("my-game", &root, "9.8.7").unwrap();
         for relative in [
             "Cargo.toml",
+            "build.rs",
             "src/lib.rs",
             "src/main.rs",
             "tests/first.rs",
@@ -416,14 +491,44 @@ mod scaffold {
             "content/meshes/grid.glb",
             "content/fonts/IBMPlexMono-Regular.ttf",
             "content/fonts/IBMPlexMono-OFL.txt",
+            "content/credit/powered-by-128.png",
+            "content/credit/powered-by-light-128.png",
             "AGENTS.md",
             "CLAUDE.md",
             "prompts/RESUME.md",
             ".gitignore",
+            ".gitattributes",
+            "README.md",
         ] {
             assert!(written.contains(&root.join(relative)), "{relative}");
         }
         let read = |relative: &str| std::fs::read_to_string(root.join(relative)).unwrap();
+        assert_eq!(
+            read("README.md"),
+            "# my-game\n\nThis game links pfx: publish its source under the AGPL-3.0, or use pfx's free licence (closed use under $200k a year, education, non-profits) or a commercial one: https://pitomd.com/pfx/license\n\n<picture><source media=\"(prefers-color-scheme: dark)\" srcset=\"content/credit/powered-by-128.png\"><img src=\"content/credit/powered-by-light-128.png\" height=\"32\" alt=\"Powered by pfx\"></picture>\n"
+        );
+        for path in &written {
+            let name = path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_ascii_uppercase();
+            assert!(
+                !name.starts_with("LICENSE")
+                    && !name.starts_with("LICENCE")
+                    && !name.starts_with("COPYING"),
+                "{name}"
+            );
+            if path != &root.join("README.md")
+                && let Ok(text) = std::fs::read_to_string(path)
+            {
+                assert!(
+                    !text.contains("AGPL") && !text.contains("pitomd.com/pfx/license"),
+                    "{}",
+                    path.display()
+                );
+            }
+        }
         let cargo = read("Cargo.toml");
         assert!(cargo.contains("name = \"my-game\""));
         assert!(cargo.contains("default = [\"tools\"]"));
@@ -432,11 +537,49 @@ mod scaffold {
             "pfx-game = { git = \"https://github.com/gmrdad82/pfx.git\", tag = \"v9.8.7\" }"
         ));
         assert!(!cargo.contains("{{"));
+        let build = read("build.rs");
+        assert_eq!(build, include_str!("templates/build.rs.in"));
+        for line in [
+            "cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH",
+            "cargo:rustc-env=PFX_BUILD_DATE={date}",
+            "\"--is-inside-work-tree\"",
+            "\"--format=%ct\"",
+        ] {
+            assert!(build.contains(line), "{line}");
+        }
+        assert!(!cargo.contains("build = "));
+        assert!(read("src/lib.rs").contains(
+            "pfx_game::Config::new(NAME, env!(\"CARGO_PKG_VERSION\"), project.play())\n        .build_date(option_env!(\"PFX_BUILD_DATE\"))"
+        ));
         let main = read("src/main.rs");
         assert!(main.starts_with(
             "#![cfg_attr(not(feature = \"tools\"), windows_subsystem = \"windows\")]"
         ));
-        assert!(main.contains("pfx_game::launch(my_game::MyGame::new"));
+        assert!(main.contains(
+            "pfx_game::launch(\n        move || my_game::MyGame::with(settings.clone()),"
+        ));
+        let lib = read("src/lib.rs");
+        for line in [
+            "menu: pfx_game::SettingsMenu,",
+            "pfx_game::menu::actions()",
+            "self.menu.tick(input, &mut self.settings);",
+            ".ui(frame, &self.settings, &pfx_game::MenuLook::new(FONT))",
+            "fn settings(&self) -> Option<&pfx_game::Settings> {",
+            "if let Some(key) = option_env!(\"PFX_LICENCE_KEY\")",
+            "if let Some(graphics) = project.graphics()",
+        ] {
+            assert!(lib.contains(line), "{line}");
+        }
+        for line in [
+            "pfx_settings::Store::machine()",
+            "cargo:rerun-if-env-changed=PFX_LICENCE_KEY",
+            "cargo:rustc-env=PFX_LICENCE_KEY={token}",
+        ] {
+            assert!(build.contains(line), "{line}");
+        }
+        assert!(cargo.contains(
+            "[build-dependencies]\npfx-settings = { git = \"https://github.com/gmrdad82/pfx.git\", tag = \"v9.8.7\", default-features = false }"
+        ));
         assert!(main.contains(".usage(\"edit\", pfx_workbench::EDIT_USAGE)"));
         assert!(
             main.contains("pfx_workbench::edit_project(project.root(), factory, config, args)")
@@ -612,7 +755,10 @@ mod scaffold {
         let lib = read("src/lib.rs");
         assert!(lib.contains("pub struct MyGame {"));
         assert!(lib.contains("world: \"gameplay\""));
+        assert!(lib.contains(".build_date(option_env!(\"PFX_BUILD_DATE\"))"));
         assert!(lib.contains("fn modules(&mut self) -> Option<&mut dyn pfx_game::Reload>"));
+        assert!(lib.contains("menu: pfx_game::SettingsMenu,"));
+        assert!(lib.contains("self.menu.tick(input, &mut self.settings);"));
         let world = read("wit/gameplay.wit");
         for export in ["export tick:", "export save:", "export restore:"] {
             assert!(world.contains(export), "{export}");

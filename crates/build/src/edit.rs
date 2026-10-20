@@ -58,6 +58,7 @@ pub(crate) fn apply(
     skinned: &[bool],
     found: &Found,
     hidden: &mut BTreeSet<String>,
+    still: &mut BTreeSet<String>,
 ) -> Result<Edited, Error> {
     let names = |g: &Generated| g.pieces.iter().map(|p| p.name.clone()).collect();
     let selects: Vec<_> = object
@@ -219,6 +220,7 @@ pub(crate) fn apply(
         let depth = usize::from(one.island.is_some()) + usize::from(one.part.is_some());
         let mut paint: Option<((usize, u8), String)> = one.paint.clone().map(|p| ((depth, 0), p));
         let mut hide: Option<((usize, u8), bool)> = None;
+        let mut spin: Option<((usize, u8), bool)> = None;
         for (i, rule) in object.pieces.iter().enumerate() {
             let Some(cut) = selects[i].cut.as_ref() else {
                 continue;
@@ -243,8 +245,25 @@ pub(crate) fn apply(
             {
                 hide = Some((rank, value));
             }
+            if let Some(value) = rule.spin
+                && spin.is_none_or(|(best, _)| rank > best)
+            {
+                spin = Some((rank, value));
+            }
         }
         let name = one.piece.name.clone();
+        match spin.map(|(_, value)| value) {
+            Some(false) => {
+                still.insert(name.clone());
+            }
+            Some(true) => {
+                still.remove(&name);
+            }
+            None if name != one.from && still.contains(&one.from) => {
+                still.insert(name.clone());
+            }
+            None => {}
+        }
         match hide.map(|(_, value)| value) {
             Some(true) if !library => continue,
             Some(true) => {

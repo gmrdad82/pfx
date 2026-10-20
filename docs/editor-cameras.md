@@ -35,16 +35,16 @@ Orbit, pan or dolly the viewport, then save what you see.
 
 ## C3: render a still
 
-C3 holds the camera, the size, the samples and a Render button, which runs `pfx render --recipe`, the path tracer. `docs/render.md` has the details.
+C3 holds the camera, the size, the samples and a Render button, which runs `pfx render --recipe`, the path tracer. `docs/recipe-render.md` has the details.
 
 Render (or `⏎` in C3, or `t` from any panel, as a key or a script's `key t`) runs, on a thread, with the window's own executable:
 
 ```
-<pfx> render --recipe <recipe> --camera <name> --size WxH --spp N --out tmp/pfx/renders/<recipe>-<camera>-<W>x<H>.png
+<pfx> render --recipe <recipe> --camera <name> --size WxH --spp N --threshold 0 --out tmp/pfx/renders/<recipe>-<camera>-<W>x<H>.png
 ```
 
 - `<recipe>` is the recipe file's name without its extension; characters other than letters, digits, `-`, `_` and `.` in a name become `_`. The folder is made if it is missing, relative to where the window was started.
-- `pfx render --recipe` decides for itself whether to run under the optional GPU queue, `pgpu` (`docs/render.md`, the process line), so the window wraps nothing; it never waits on the subprocess and draws at once.
+- `pfx render --recipe` decides for itself whether to run under the optional GPU queue, `pgpu` (`docs/recipe-render.md`, "The process line"), so the window wraps nothing; it never waits on the subprocess and draws at once.
 - One render at a time. While one is live the button reads Cancel, and `esc` in C3 does the same: it sends TERM to the child's own pid, never SIGKILL.
 
 ### States
@@ -70,7 +70,7 @@ When a render is done, C3 shows its thumbnail (click it to enlarge) and its path
 
 ## Wiring
 
-`Shell::set_waker(f)` takes a function that the render thread calls whenever the job changes. The window passes one that sends its event loop a redraw (`Wake::Staged`), so C3 updates as the state changes; without one it updates on the next redraw, which the pgpu poll, when pgpu is there, causes within a second when its state changes.
+`Shell::set_waker(f)` takes a function that the render thread calls whenever the job changes. The window passes one that sends its event loop a redraw (the shell's `Wake`), so C3 updates as the state changes; without one it updates on the next redraw, which the pgpu poll, when pgpu is there, causes within a second when its state changes.
 
 ## Tests
 

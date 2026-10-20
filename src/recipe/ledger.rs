@@ -27,6 +27,8 @@ pub(super) struct Check {
     pub(super) frame: u32,
     pub(super) result: String,
     pub(super) pfx: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) build: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -132,12 +134,25 @@ impl Ledger {
         self.rerendered_from.push(from);
     }
 
-    pub(super) fn checked(&mut self, frame: u32, same: bool) {
+    pub(super) fn checked(&mut self, frame: u32, same: bool, build: Option<String>) {
         self.checks.push(Check {
             frame,
             result: if same { "same" } else { "differs" }.into(),
             pfx: env!("CARGO_PKG_VERSION").into(),
+            build,
         });
+    }
+
+    pub(super) fn proven(&self, build: &str) -> Option<u32> {
+        let ours = || {
+            self.checks
+                .iter()
+                .filter(move |check| check.build.as_deref() == Some(build))
+        };
+        if ours().any(|check| check.result != "same") {
+            return None;
+        }
+        ours().next().map(|check| check.frame)
     }
 
     pub(super) fn verify(
@@ -260,7 +275,7 @@ mod tests {
         }
         let order: Vec<u32> = ledger.frames.iter().map(|entry| entry.frame).collect();
         assert_eq!(order, [0, 2, 3]);
-        ledger.checked(2, false);
+        ledger.checked(2, false, None);
         assert!(ledger.holds(&path, 3, [1, 1]));
         assert!(!ledger.holds(&path, 3, [1, 2]) && !ledger.holds(&path, 1, [1, 1]));
         ledger.forget([2, 2]);
@@ -273,5 +288,20 @@ mod tests {
         assert_eq!(read.checks[0].result, "differs");
         assert_eq!(read.rerendered_from, [2, 2]);
         assert_eq!(Ledger::read(&dir.join("none")).unwrap(), Ledger::default());
+    }
+
+    #[test]
+    fn a_check_counts_only_for_its_own_build_and_never_after_a_difference() {
+        let mut ledger = Ledger::default();
+        ledger.checked(4, true, None);
+        assert_eq!(ledger.proven("a"), None);
+        ledger.checked(7, true, Some("a".into()));
+        ledger.checked(9, true, Some("b".into()));
+        assert_eq!((ledger.proven("a"), ledger.proven("b")), (Some(7), Some(9)));
+        ledger.checked(12, false, Some("a".into()));
+        assert_eq!((ledger.proven("a"), ledger.proven("b")), (None, Some(9)));
+        let text = serde_json::to_string(&ledger).unwrap();
+        let read: Ledger = serde_json::from_str(&text).unwrap();
+        assert_eq!(read, ledger);
     }
 }

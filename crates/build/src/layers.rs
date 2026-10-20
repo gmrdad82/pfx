@@ -8,11 +8,11 @@ use pfx_mesh::{Mesh, Slot};
 use pfx_recipe::Recipe;
 use std::collections::BTreeMap;
 
-const NOBODY: u32 = u32::MAX;
-const THREADS: usize = 16;
-const FLAT: [u8; 3] = [128, 128, 255];
-const BARE: [u8; 3] = [0, 0, 0];
-const SMOOTH: [u8; 3] = [255, 255, 255];
+pub(crate) const NOBODY: u32 = u32::MAX;
+pub(crate) const THREADS: usize = 16;
+pub(crate) const FLAT: [u8; 3] = [128, 128, 255];
+pub(crate) const BARE: [u8; 3] = [0, 0, 0];
+pub(crate) const SMOOTH: [u8; 3] = [255, 255, 255];
 
 #[derive(Clone, Debug)]
 pub(crate) struct Baked {
@@ -115,7 +115,7 @@ pub(crate) fn layered(material: &Material) -> bool {
     material.layers.iter().any(|layer| layer.active())
 }
 
-fn byte(value: f32) -> u8 {
+pub(crate) fn byte(value: f32) -> u8 {
     (value.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
@@ -256,10 +256,11 @@ pub(crate) struct Transfer<'a> {
     pub(crate) level: &'a Mesh,
     pub(crate) tangents: Option<&'a [[f32; 4]]>,
     pub(crate) distance: f32,
+    pub(crate) reach: f32,
     pub(crate) along_master: bool,
 }
 
-fn framed(target: V3, n: V3, t: V3, b: V3) -> V3 {
+pub(crate) fn framed(target: V3, n: V3, t: V3, b: V3) -> V3 {
     let det = dot(t, cross(b, n));
     let local = if det.abs() > 1e-12 {
         [
@@ -348,23 +349,23 @@ pub(crate) fn transferred(
                         let u = ids.map(|id| uvs[id]);
                         [0, 1].map(|c| u[0][c] * w[0] + u[1][c] * w[1] + u[2][c] * w[2])
                     };
-                    let (position, uv, surface_normal) = match caster.cast(p, n, transfer.distance)
-                    {
-                        Some(hit) => {
-                            let tri = &corners[hit.index * 3..hit.index * 3 + 3];
-                            let u = [0, 1, 2].map(|k| master_uvs[tri[k] as usize]);
-                            let hw = hit.weights;
-                            let uv =
-                                [0, 1].map(|c| u[0][c] * hw[0] + u[1][c] * hw[1] + u[2][c] * hw[2]);
-                            let towards = if transfer.along_master {
-                                caster.normal(hit.index, hit.point, n)
-                            } else {
-                                n
-                            };
-                            (hit.point, uv, towards)
-                        }
-                        None => (p, own(), n),
-                    };
+                    let (position, uv, surface_normal) =
+                        match caster.cast_within(p, n, transfer.distance, transfer.reach) {
+                            Some(hit) => {
+                                let tri = &corners[hit.index * 3..hit.index * 3 + 3];
+                                let u = [0, 1, 2].map(|k| master_uvs[tri[k] as usize]);
+                                let hw = hit.weights;
+                                let uv = [0, 1]
+                                    .map(|c| u[0][c] * hw[0] + u[1][c] * hw[1] + u[2][c] * hw[2]);
+                                let towards = if transfer.along_master {
+                                    caster.normal(hit.index, hit.point, n)
+                                } else {
+                                    n
+                                };
+                                (hit.point, uv, towards)
+                            }
+                            None => (p, own(), n),
+                        };
                     let resolved = resolve(
                         material,
                         0.0,
@@ -402,7 +403,7 @@ pub(crate) fn transferred(
     })
 }
 
-fn image(pixels: &[u8], size: u32) -> Result<Map, String> {
+pub(crate) fn image(pixels: &[u8], size: u32) -> Result<Map, String> {
     Ok(Map::new(maps::image(rgb_png(pixels, size)?)?))
 }
 
@@ -548,6 +549,9 @@ pub(crate) fn bake_levels(
         let Some(asked) = object.lod.get(k) else {
             continue;
         };
+        if asked.bake_material {
+            continue;
+        }
         let key = format!("lod[{k}].path");
         let base = part
             .node
@@ -593,6 +597,7 @@ pub(crate) fn bake_levels(
                 level: &low,
                 tangents: tangents.as_deref(),
                 distance,
+                reach: asked.bake_reach.map_or(distance, |r| r as f32),
                 along_master: asked.bake_normals,
             };
             let texels = transferred(&transfer, matrix, &material, wanted.size)
@@ -629,6 +634,26 @@ pub(crate) fn dress(node: &mut Node, baked: &[Baked], looks: &mut Looks) {
         let to = name(&item.material, &node.name);
         looks.insert(to.clone(), item.look.clone());
         retitle(node, &item.material, &to);
+    }
+}
+
+pub(crate) fn unify(node: &mut Node, baked: &Baked, looks: &mut Looks) {
+    looks.insert(baked.material.clone(), baked.look.clone());
+    let all = |mesh: &mut Mesh| {
+        if mesh.slots.is_empty() {
+            mesh.slots.push(Slot {
+                material: baked.material.clone(),
+                start: 0,
+                count: mesh.indices.len() as u32,
+            });
+        }
+        for slot in &mut mesh.slots {
+            slot.material = baked.material.clone();
+        }
+    };
+    all(&mut node.mesh);
+    if let Some(targets) = node.targets.as_mut() {
+        all(&mut targets.base);
     }
 }
 

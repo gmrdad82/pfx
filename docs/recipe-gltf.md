@@ -47,10 +47,10 @@ Both are packed into one standalone GLB first (`pfx_load::pack::model`), and tha
 ## Export
 
 ```
-pfx export <file.pitofx|recipe> --glb <out.glb> [--only <object>] [--json]
+pfx export <file.pitofx> --glb <out.glb> [--only <object>] [--json]
 ```
 
-An imported model's `.pitofx` exports its own glTF. A recipe, in a `.pitofx` or not, is built first: one object (the recipe's only one, or `--only`) exports as a node tree with real pivots, the library's form, and a scene of many keeps its objects' parents as the node hierarchy. Either way the GLB is standalone and carries no pfx extras: every `extras` is dropped but a mesh's `extras.targetNames`, the morph target names glTF tools read, and so is every extension not named `KHR_`, `EXT_` or `MSFT_`. `--json` prints `source`, `glb`, `bytes` and `nodes`.
+An imported model's `.pitofx` exports its own glTF. A recipe's `.pitofx` is built first (a plain `.toml` recipe is refused with one line naming `pfx scene migrate`): one object (the recipe's only one, or `--only`) exports as a node tree with real pivots, the library's form, and a scene of many keeps its objects' parents as the node hierarchy. Either way the GLB is standalone and carries no pfx extras: every `extras` is dropped but a mesh's `extras.targetNames`, the morph target names glTF tools read, and so is every extension not named `KHR_`, `EXT_` or `MSFT_`. `--json` prints `source`, `glb`, `bytes` and `nodes`.
 
 A recipe's materials are written as glTF metallic-roughness materials, every object's:
 

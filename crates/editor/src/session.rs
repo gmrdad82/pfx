@@ -731,6 +731,13 @@ impl App for Session {
         }
     }
 
+    fn gpu_timings(&self) -> Option<&pfx_gpu::FrameTimings> {
+        match self.view.as_deref().and_then(View::renderer) {
+            Some(renderer) => renderer.timings(),
+            None => self.editor.viewport.timings(),
+        }
+    }
+
     fn timing(&self) -> Timing {
         match self.view.as_deref().and_then(View::renderer) {
             Some(renderer) => {

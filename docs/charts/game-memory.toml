@@ -1,0 +1,11 @@
+title = "A RUNNING GAME, MEMORY"
+unit = "MEGABYTES RESIDENT"
+better = "lower"
+subtitle = "RYZEN 9 9950X, RADEON RX 9060 XT, LINUX"
+date = "2026-10-20"
+suffix = " MB"
+decimals = 1
+words = { better = "LESS", worse = "MORE", same = "SAME" }
+notes = ["EACH ENGINE'S EMPTY STARTER SCENE IN ITS RELEASE BUILD, 1280X720 IN A HEADLESS COMPOSITOR, 30 S AFTER THE FIRST FRAME. MEDIAN OF 5."]
+parties = [{ name = "PFX 3.1.0" }, { name = "GODOT 4.7.2" }, { name = "BEVY 0.20.0" }]
+rows = [{ label = "EMPTY GAME, LINUX X86_64", values = [156.3, 261.2, 255.1] }]

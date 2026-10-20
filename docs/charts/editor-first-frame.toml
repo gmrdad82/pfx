@@ -1,0 +1,10 @@
+title = "EDITOR, FIRST FRAME"
+unit = "SECONDS, WARM"
+better = "lower"
+subtitle = "RYZEN 9 9950X, RADEON RX 9060 XT, LINUX"
+date = "2026-10-20"
+suffix = " S"
+decimals = 2
+notes = ["FROM EXEC TO THE FIRST DRAWN FRAME ON AN EMPTY PROJECT, HEADLESS COMPOSITOR AT 1280X720, MEDIAN OF 5. COLD, WITH EMPTY SHADER CACHES, PFX TAKES 2.96 S AND GODOT 2.74 S."]
+parties = [{ name = "PFX AFTER 3.1.1" }, { name = "GODOT 4.7.2" }]
+rows = [{ label = "EMPTY PROJECT", values = [0.52, 2.18] }]

@@ -45,7 +45,7 @@ Everything steps at the fixed tick: `Rig::tick(dt, &Input, comfort, &probe)`, th
 
 ### The data
 
-Rigs are `[[rig]]` tables. Until pfx-scene's keys land in a scene, they are read from a `rigs.toml` at the project root (the folder with `project.toml`), or from the file `project.toml` names with `rigs = "cameras.toml"`; `Options::rigs` hands a session its own, and `Rigs::parse` reads the same tables from any TOML text. An unknown key, kind or a value out of range is refused with the rig's name and the key.
+Rigs are `[[rig]]` tables. pfx-play reads them from a `rigs.toml` at the project root (the folder with `project.toml`), or from the file `project.toml` names with `rigs = "cameras.toml"` (a key pfx-scene's checker refuses in a format 1 `project.toml`, `unknown-key`), never from a scene's own `[[rig]]` tables; `Options::rigs` hands a session its own, and `Rigs::parse` reads the same tables from any TOML text. An unknown key, kind or a value out of range is refused with the rig's name and the key.
 
 ```toml
 [[rig]]
@@ -106,7 +106,7 @@ Keys that belong to the other family are refused (`dead_zone` on a person rig, `
 
 Each tick, after the game's tick and the physics step, the active rig steps from its target's position (after the game and physics moved it), the action named by `look` (its `vector`), the mouse counts and the pointer's moves since the last tick, and a sphere cast through the world's physics that ignores the target's own body. At the end of every `advance` the camera is set from the rig's pose at the tick's `alpha`, and after a paused `step` from the newest tick. Presentation then draws it, shake included; stop leaves the scene's own camera untouched.
 
-The pointer's moves are the layout position's difference between ticks, so a game that captures the cursor should feed its raw deltas through `rig_look` instead; pfx-input has no raw motion event yet.
+The pointer's moves are the layout position's difference between ticks, so a game that captures the cursor should feed its raw deltas through `rig_look` instead; pfx-input has no raw motion event.
 
 ## Tests
 

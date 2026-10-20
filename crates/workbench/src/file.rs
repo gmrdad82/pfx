@@ -186,8 +186,6 @@ pub fn imported(path: &Path) -> Option<PathBuf> {
         &name[..name.len() - ".scene.toml".len()]
     } else if lower.ends_with(".toml") {
         &name[..name.len() - ".toml".len()]
-    } else if pfx_file::is_legacy_path(path) {
-        return Some(pfx_file::renamed(path));
     } else {
         return None;
     };
@@ -198,14 +196,8 @@ pub fn import_beside(path: &Path, registry: &Registry) -> Result<Option<PathBuf>
     let Some(target) = imported(path).filter(|_| path.is_file()) else {
         return Ok(None);
     };
-    if pfx_file::is_legacy_path(path) && !pfx_file::has_magic(path) {
-        return Err(pfx_file::legacy_refusal(path).unwrap_or_default());
-    }
     if target.is_file() {
         return Ok(Some(target));
-    }
-    if pfx_file::is_legacy_path(path) {
-        return pfx_file::import_legacy(path).map(Some);
     }
     match kind(path) {
         Some(Kind::Scene) => {

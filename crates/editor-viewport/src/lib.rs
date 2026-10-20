@@ -1,6 +1,7 @@
 pub mod camera;
 pub mod edit;
 pub mod gizmo;
+pub mod grid;
 pub mod lens;
 pub mod live;
 pub mod overlay;

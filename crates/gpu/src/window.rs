@@ -4,22 +4,29 @@ use serde::{Deserialize, Serialize};
 
 const NS_PER_SEC: u64 = 1_000_000_000;
 const FIFO_LATENCY: u32 = 2;
-const VRR_LATENCY: u32 = 1;
-const VRR_HEADROOM_MHZ: u32 = 3_000;
+const QUEUE_LATENCY: u32 = 1;
+const REFRESH_SLACK_MHZ: u64 = 600;
+const AUTO_TOP_FPS: u32 = 120;
+const AUTO_FLOOR_FPS: f64 = 29.5;
+const AUTO_LADDER: [u32; 10] = [120, 100, 90, 80, 72, 60, 50, 45, 40, 30];
+const AUTO_WINDOW: usize = 30;
+const AUTO_RISE_WINDOWS: u32 = 8;
+const AUTO_SETTLED_WINDOWS: u32 = 16;
+const AUTO_MAX_BACKOFF: u32 = 5;
+const AUTO_IDLE_NS: u64 = 250_000_000;
 
-const GAME_MODES: [wgpu::PresentMode; 3] = [
-    wgpu::PresentMode::Mailbox,
-    wgpu::PresentMode::FifoRelaxed,
-    wgpu::PresentMode::Fifo,
-];
-const MACOS_VRR: [wgpu::PresentMode; 2] = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo];
-const X11_VRR: [wgpu::PresentMode; 3] = [
-    wgpu::PresentMode::Mailbox,
-    wgpu::PresentMode::Fifo,
-    wgpu::PresentMode::FifoRelaxed,
-];
-const WAYLAND_VRR: [wgpu::PresentMode; 2] = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo];
+pub const PRESENT_VAR: &str = "PFX_PRESENT";
+pub const LATENCY_VAR: &str = "PFX_FRAME_LATENCY";
+
 const FIFO_ONLY: [wgpu::PresentMode; 1] = [wgpu::PresentMode::Fifo];
+const FIXED_REFRESH: [wgpu::PresentMode; 3] = [
+    wgpu::PresentMode::Mailbox,
+    wgpu::PresentMode::FifoRelaxed,
+    wgpu::PresentMode::Fifo,
+];
+const LINUX_VRR: [wgpu::PresentMode; 2] = [wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo];
+const WINDOWS_FULLSCREEN_VRR: [wgpu::PresentMode; 2] =
+    [wgpu::PresentMode::Immediate, wgpu::PresentMode::Fifo];
 
 pub const LAYOUT_UNITS: Size = Size {
     width: 1920,
@@ -122,13 +129,21 @@ impl Host {
         matches!(self, Host::Windows | Host::Macos | Host::X11)
     }
 
-    pub fn vrr_present_modes(self) -> &'static [wgpu::PresentMode] {
+    pub fn vrr_present_modes(self, fullscreen: bool) -> &'static [wgpu::PresentMode] {
         match self {
-            Host::Windows => &GAME_MODES,
-            Host::Macos => &MACOS_VRR,
-            Host::X11 => &X11_VRR,
-            Host::Wayland => &WAYLAND_VRR,
-            Host::Other => &FIFO_ONLY,
+            Host::Windows if fullscreen => &WINDOWS_FULLSCREEN_VRR,
+            Host::X11 | Host::Wayland => &LINUX_VRR,
+            Host::Windows | Host::Macos | Host::Other => &FIFO_ONLY,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Host::Windows => "windows",
+            Host::Macos => "macos",
+            Host::X11 => "x11",
+            Host::Wayland => "wayland",
+            Host::Other => "other",
         }
     }
 }
@@ -364,7 +379,6 @@ fn find_video_mode(monitor: &Monitor, choice: &VideoModeChoice) -> Option<VideoM
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PresentPreference {
     pub modes: Vec<wgpu::PresentMode>,
-    pub desired_maximum_frame_latency: u32,
 }
 
 impl Default for PresentPreference {
@@ -376,23 +390,51 @@ impl Default for PresentPreference {
 impl PresentPreference {
     pub fn fifo() -> Self {
         Self {
-            modes: vec![wgpu::PresentMode::Fifo],
-            desired_maximum_frame_latency: FIFO_LATENCY,
+            modes: FIFO_ONLY.to_vec(),
         }
     }
 
-    pub fn game() -> Self {
+    pub fn of(present: Present, host: Host, fullscreen: bool) -> Self {
+        if !present.vrr {
+            return Self::fifo();
+        }
         Self {
-            modes: GAME_MODES.to_vec(),
-            desired_maximum_frame_latency: FIFO_LATENCY,
+            modes: host.vrr_present_modes(fullscreen).to_vec(),
         }
     }
 
-    pub fn vrr(host: Host) -> Self {
+    pub fn forced(mode: wgpu::PresentMode) -> Self {
+        Self { modes: vec![mode] }
+    }
+
+    pub fn fixed_refresh() -> Self {
         Self {
-            modes: host.vrr_present_modes().to_vec(),
-            desired_maximum_frame_latency: VRR_LATENCY,
+            modes: FIXED_REFRESH.to_vec(),
         }
+    }
+}
+
+pub fn present_mode_named(name: &str) -> Option<wgpu::PresentMode> {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "fifo" => Some(wgpu::PresentMode::Fifo),
+        "fifo-relaxed" => Some(wgpu::PresentMode::FifoRelaxed),
+        "mailbox" => Some(wgpu::PresentMode::Mailbox),
+        "immediate" => Some(wgpu::PresentMode::Immediate),
+        _ => None,
+    }
+}
+
+pub fn latency_named(name: &str) -> Option<u32> {
+    name.trim()
+        .parse()
+        .ok()
+        .filter(|latency| (1..=3).contains(latency))
+}
+
+pub fn frame_latency(mode: wgpu::PresentMode) -> u32 {
+    match mode {
+        wgpu::PresentMode::Mailbox | wgpu::PresentMode::Immediate => QUEUE_LATENCY,
+        _ => FIFO_LATENCY,
     }
 }
 
@@ -409,7 +451,7 @@ pub fn choose_present(
     available: &[wgpu::PresentMode],
 ) -> PresentChoice {
     let requested = if preference.modes.is_empty() {
-        vec![wgpu::PresentMode::Fifo]
+        FIFO_ONLY.to_vec()
     } else {
         preference.modes.clone()
     };
@@ -425,7 +467,23 @@ pub fn choose_present(
         requested,
         selected,
         fell_back,
-        desired_maximum_frame_latency: preference.desired_maximum_frame_latency.max(1),
+        desired_maximum_frame_latency: frame_latency(selected),
+    }
+}
+
+pub fn setting(
+    host: Host,
+    choice: &PresentChoice,
+    present: Present,
+    vrr_in_effect: Option<bool>,
+) -> crate::presents::Setting {
+    crate::presents::Setting {
+        host: host.name(),
+        present_mode: format!("{:?}", choice.selected),
+        frame_latency: choice.desired_maximum_frame_latency,
+        vrr: present.vrr,
+        vrr_in_effect,
+        frame_rate: present.frame_rate.name(),
     }
 }
 
@@ -629,41 +687,58 @@ pub fn viewport_with(
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FrameCap {
-    Fps30,
-    Fps60,
-    Fps90,
-    Fps120,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FrameRate {
+    #[serde(rename = "cap60")]
+    Cap60,
+    #[serde(rename = "cap120")]
+    Cap120,
+    #[default]
+    #[serde(rename = "uncapped")]
     Uncapped,
+    #[serde(rename = "auto")]
+    Auto,
 }
 
-impl FrameCap {
+impl FrameRate {
+    pub fn name(self) -> &'static str {
+        match self {
+            FrameRate::Cap60 => "cap60",
+            FrameRate::Cap120 => "cap120",
+            FrameRate::Uncapped => "uncapped",
+            FrameRate::Auto => "auto",
+        }
+    }
+
     pub fn fps(self) -> Option<u32> {
         match self {
-            FrameCap::Fps30 => Some(30),
-            FrameCap::Fps60 => Some(60),
-            FrameCap::Fps90 => Some(90),
-            FrameCap::Fps120 => Some(120),
-            FrameCap::Uncapped => None,
+            FrameRate::Cap60 => Some(60),
+            FrameRate::Cap120 => Some(120),
+            FrameRate::Auto => Some(AUTO_TOP_FPS),
+            FrameRate::Uncapped => None,
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct FrameCaps {
-    pub focused: FrameCap,
-    pub background: FrameCap,
-    pub pause_when_minimized: bool,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Present {
+    pub vrr: bool,
+    pub frame_rate: FrameRate,
 }
 
-impl FrameCaps {
-    pub fn new(focused: FrameCap, background: FrameCap) -> Self {
+impl Default for Present {
+    fn default() -> Self {
         Self {
-            focused,
-            background,
-            pause_when_minimized: true,
+            vrr: true,
+            frame_rate: FrameRate::Uncapped,
         }
+    }
+}
+
+impl Present {
+    pub fn preference(self, host: Host, fullscreen: bool) -> PresentPreference {
+        PresentPreference::of(self, host, fullscreen)
     }
 }
 
@@ -724,144 +799,310 @@ pub enum Pace {
     Paused,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Period {
+    pub ns: u64,
+    pub per: u64,
+}
+
+impl Period {
+    pub fn fps(self) -> f64 {
+        self.per as f64 * NS_PER_SEC as f64 / self.ns as f64
+    }
+
+    pub fn ms(self) -> f64 {
+        self.ns as f64 / self.per as f64 / 1e6
+    }
+}
+
+pub fn refresh_vblanks(refresh_millihertz: u32, fps: u32) -> u64 {
+    (u64::from(refresh_millihertz) + REFRESH_SLACK_MHZ) / (u64::from(fps).max(1) * 1_000)
+}
+
+pub fn frame_period(present: Present, refresh_millihertz: Option<u32>) -> Option<Period> {
+    let fps = present.frame_rate.fps()?;
+    let locked = refresh_millihertz
+        .filter(|refresh| !present.vrr && *refresh > 0)
+        .map(|refresh| Period {
+            ns: refresh_vblanks(refresh, fps).max(1) * NS_PER_SEC * 1_000,
+            per: u64::from(refresh),
+        });
+    Some(locked.unwrap_or(Period {
+        ns: NS_PER_SEC,
+        per: u64::from(fps),
+    }))
+}
+
+pub fn auto_period(vrr: bool, refresh_millihertz: Option<u32>, rung: usize) -> Option<Period> {
+    match refresh_millihertz.filter(|refresh| !vrr && *refresh > 0) {
+        Some(refresh) => {
+            let vblanks = refresh_vblanks(refresh, AUTO_TOP_FPS).max(1)
+                + u64::try_from(rung).unwrap_or(u64::MAX);
+            let period = Period {
+                ns: vblanks.saturating_mul(NS_PER_SEC * 1_000),
+                per: u64::from(refresh),
+            };
+            (rung == 0 || period.fps() >= AUTO_FLOOR_FPS).then_some(period)
+        }
+        None => AUTO_LADDER.get(rung).map(|fps| Period {
+            ns: NS_PER_SEC,
+            per: u64::from(*fps),
+        }),
+    }
+}
+
+fn frame_ns(period: Period) -> u64 {
+    period.ns / period.per.max(1)
+}
+
+#[derive(Clone, Debug, Default)]
+struct Auto {
+    rung: usize,
+    samples: Vec<u64>,
+    started_ns: Option<u64>,
+    calm: u32,
+    held: u32,
+    rose: bool,
+    failures: u32,
+}
+
+impl Auto {
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    fn polled(&mut self, now_ns: u64, vrr: bool, refresh: Option<u32>) {
+        let Some(started) = self.started_ns.take() else {
+            return;
+        };
+        let busy = now_ns.saturating_sub(started);
+        if busy > AUTO_IDLE_NS {
+            return;
+        }
+        self.samples.push(busy);
+        if self.samples.len() >= AUTO_WINDOW {
+            self.judge(vrr, refresh);
+            self.samples.clear();
+        }
+    }
+
+    fn judge(&mut self, vrr: bool, refresh: Option<u32>) {
+        let mut sorted = self.samples.clone();
+        sorted.sort_unstable();
+        let p90 = sorted[(sorted.len() * 9).div_ceil(10) - 1];
+        let at = |rung: usize| auto_period(vrr, refresh, rung).map(frame_ns);
+        let Some(current) = at(self.rung) else {
+            self.reset();
+            return;
+        };
+        self.held = self.held.saturating_add(1);
+        if p90 > current {
+            let need = p90.saturating_mul(11) / 10;
+            let mut rung = self.rung;
+            while let Some(next) = at(rung + 1) {
+                rung += 1;
+                if next >= need {
+                    break;
+                }
+            }
+            if rung != self.rung {
+                if self.rose && self.held < AUTO_SETTLED_WINDOWS {
+                    self.failures = (self.failures + 1).min(AUTO_MAX_BACKOFF);
+                }
+                self.rung = rung;
+                self.held = 0;
+                self.rose = false;
+            }
+            self.calm = 0;
+            return;
+        }
+        if self.rose && self.held >= AUTO_SETTLED_WINDOWS {
+            self.failures = 0;
+            self.rose = false;
+        }
+        let above = self.rung.checked_sub(1).and_then(at);
+        match above {
+            Some(above) if p90.saturating_mul(13) / 10 <= above => {
+                self.calm += 1;
+                if self.calm >= AUTO_RISE_WINDOWS << self.failures {
+                    self.rung -= 1;
+                    self.calm = 0;
+                    self.held = 0;
+                    self.rose = true;
+                }
+            }
+            _ => self.calm = 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Schedule {
-    Fresh,
-    Hold,
     Open,
+    Hold,
     Grid {
         origin_ns: u64,
         index: u64,
-        fps: u32,
+        period: Period,
     },
 }
 
 #[derive(Clone, Debug)]
 pub struct FramePacer {
-    caps: FrameCaps,
-    focused: bool,
-    occluded: bool,
+    present: Present,
+    refresh_millihertz: Option<u32>,
+    pause_when_minimized: bool,
     minimized: bool,
-    vrr_millihertz: Option<u32>,
     schedule: Schedule,
+    auto: Auto,
+    vrr_in_effect: Option<bool>,
 }
 
 impl FramePacer {
-    pub fn new(caps: FrameCaps) -> Self {
+    pub fn new(present: Present) -> Self {
         Self {
-            caps,
-            focused: true,
-            occluded: false,
+            present,
+            refresh_millihertz: None,
+            pause_when_minimized: true,
             minimized: false,
-            vrr_millihertz: None,
-            schedule: Schedule::Fresh,
+            schedule: Schedule::Open,
+            auto: Auto::default(),
+            vrr_in_effect: None,
         }
     }
 
-    pub fn set_caps(&mut self, caps: FrameCaps) {
-        self.caps = caps;
+    pub fn present(&self) -> Present {
+        self.present
     }
 
-    pub fn set_vrr(&mut self, refresh_millihertz: Option<u32>) {
-        self.vrr_millihertz = refresh_millihertz;
+    pub fn set_present(&mut self, present: Present) {
+        if present != self.present {
+            self.auto.reset();
+        }
+        self.present = present;
+    }
+
+    pub fn set_refresh(&mut self, refresh_millihertz: Option<u32>) {
+        if refresh_millihertz != self.refresh_millihertz {
+            self.auto.reset();
+        }
+        self.refresh_millihertz = refresh_millihertz;
+    }
+
+    pub fn set_vrr_in_effect(&mut self, in_effect: Option<bool>) {
+        if in_effect != self.vrr_in_effect {
+            self.auto.reset();
+        }
+        self.vrr_in_effect = in_effect;
+    }
+
+    pub fn paced(&self) -> Present {
+        Present {
+            vrr: self.present.vrr && self.vrr_in_effect != Some(false),
+            ..self.present
+        }
+    }
+
+    pub fn set_pause_when_minimized(&mut self, pause: bool) {
+        self.pause_when_minimized = pause;
     }
 
     pub fn on(&mut self, event: Attention) {
-        match event {
-            Attention::Focused(focused) => self.focused = focused,
-            Attention::Occluded(occluded) => self.occluded = occluded,
-            Attention::Minimized(minimized) => self.minimized = minimized,
+        if let Attention::Minimized(minimized) = event {
+            self.minimized = minimized;
         }
     }
 
-    pub fn effective_fps(&self) -> Option<u32> {
-        let cap = if self.focused && !self.occluded {
-            self.caps.focused
-        } else {
-            self.caps.background
-        };
-        paced_fps(cap, self.vrr_millihertz)
+    pub fn period(&self) -> Option<Period> {
+        if self.present.frame_rate == FrameRate::Auto {
+            return auto_period(self.paced().vrr, self.refresh_millihertz, self.auto.rung);
+        }
+        frame_period(self.paced(), self.refresh_millihertz)
     }
 
     pub fn poll(&mut self, clock: &impl Clock) -> Pace {
-        let now = clock.now_ns();
-        if self.caps.pause_when_minimized && self.minimized {
+        if self.pause_when_minimized && self.minimized {
             self.schedule = Schedule::Hold;
+            self.auto.started_ns = None;
             return Pace::Paused;
         }
-        match self.effective_fps() {
+        match self.period() {
             None => {
                 self.schedule = Schedule::Open;
                 Pace::Start { next_ns: None }
             }
-            Some(0) => {
-                self.schedule = Schedule::Hold;
-                Pace::Paused
+            Some(_) => {
+                let now = clock.now_ns();
+                if self.present.frame_rate == FrameRate::Auto {
+                    self.auto
+                        .polled(now, self.paced().vrr, self.refresh_millihertz);
+                }
+                let Some(period) = self.period() else {
+                    return Pace::Start { next_ns: None };
+                };
+                let pace = self.poll_grid(now, period);
+                if matches!(pace, Pace::Start { .. }) {
+                    self.auto.started_ns = Some(now);
+                }
+                pace
             }
-            Some(fps) => self.poll_grid(now, fps),
         }
     }
 
-    fn poll_grid(&mut self, now: u64, fps: u32) -> Pace {
+    pub fn auto_rung(&self) -> usize {
+        self.auto.rung
+    }
+
+    fn poll_grid(&mut self, now: u64, period: Period) -> Pace {
         let (origin_ns, index) = match self.schedule {
             Schedule::Grid {
                 origin_ns,
                 index,
-                fps: scheduled,
-            } if scheduled == fps => (origin_ns, index),
+                period: scheduled,
+            } if scheduled == period => (origin_ns, index),
             _ => (now, 0),
         };
-        let due = slot(origin_ns, index, fps);
+        let due = slot(origin_ns, index, period);
         if now < due {
             return Pace::Wait { until_ns: due };
         }
-        let next = first_slot_after(origin_ns, now, fps).max(index.saturating_add(1));
+        let next = first_slot_after(origin_ns, now, period).max(index.saturating_add(1));
         self.schedule = Schedule::Grid {
             origin_ns,
             index: next,
-            fps,
+            period,
         };
         Pace::Start {
-            next_ns: Some(slot(origin_ns, next, fps)),
+            next_ns: Some(slot(origin_ns, next, period)),
         }
     }
 }
 
-pub fn vrr_limit_fps(refresh_millihertz: u32) -> Option<u32> {
-    let fps = refresh_millihertz.saturating_sub(VRR_HEADROOM_MHZ) / 1_000;
-    (fps > 0).then_some(fps)
-}
-
-pub fn paced_fps(cap: FrameCap, vrr_millihertz: Option<u32>) -> Option<u32> {
-    let Some(limit) = vrr_millihertz.and_then(vrr_limit_fps) else {
-        return cap.fps();
-    };
-    Some(cap.fps().map_or(limit, |fps| fps.min(limit)))
-}
-
-fn slot(origin_ns: u64, index: u64, fps: u32) -> u64 {
-    debug_assert!(fps > 0);
-    let step = u128::from(index) * u128::from(NS_PER_SEC) / u128::from(fps);
+fn slot(origin_ns: u64, index: u64, period: Period) -> u64 {
+    debug_assert!(period.per > 0);
+    let step = u128::from(index) * u128::from(period.ns) / u128::from(period.per);
     origin_ns.saturating_add(u64::try_from(step).unwrap_or(u64::MAX))
 }
 
-fn first_slot_after(origin_ns: u64, now_ns: u64, fps: u32) -> u64 {
-    debug_assert!(fps > 0);
+fn first_slot_after(origin_ns: u64, now_ns: u64, period: Period) -> u64 {
+    debug_assert!(period.ns > 0);
     if now_ns <= origin_ns {
         return 1;
     }
     let need = u128::from(now_ns - origin_ns) + 1;
-    let ns = u128::from(NS_PER_SEC);
-    let prod = need.saturating_mul(u128::from(fps));
-    let index = prod.div_ceil(ns);
+    let index = need
+        .saturating_mul(u128::from(period.per))
+        .div_ceil(u128::from(period.ns));
     u64::try_from(index).unwrap_or(u64::MAX).max(1)
 }
 
 #[cfg(any(feature = "window", test))]
 mod glue {
     use super::{
-        Attention, DisplayMode, Fallback, FullscreenPlan, Host, ModePlan, Monitor, Monitors,
-        PlanError, PlatformCaps, Point, Size, VideoMode, WindowOps, apply_plan, plan_display_mode,
+        Attention, DisplayMode, Fallback, FullscreenPlan, Host, LATENCY_VAR, ModePlan, Monitor,
+        Monitors, PRESENT_VAR, PlanError, PlatformCaps, Point, Present, PresentChoice,
+        PresentPreference, Size, VideoMode, WindowOps, apply_plan, latency_named,
+        plan_display_mode, present_mode_named,
     };
     use winit::dpi::{PhysicalPosition, PhysicalSize};
     use winit::monitor::MonitorHandle;
@@ -869,6 +1110,43 @@ mod glue {
 
     pub fn refresh_millihertz(monitor: &MonitorHandle) -> Option<u32> {
         monitor.refresh_rate_millihertz()
+    }
+
+    pub fn fullscreen(window: &Window) -> bool {
+        window.fullscreen().is_some()
+    }
+
+    pub fn present_forced() -> bool {
+        std::env::var(PRESENT_VAR)
+            .ok()
+            .as_deref()
+            .and_then(present_mode_named)
+            .is_some()
+    }
+
+    pub fn present_preference(window: &Window, present: Present) -> PresentPreference {
+        match std::env::var(PRESENT_VAR)
+            .ok()
+            .as_deref()
+            .and_then(present_mode_named)
+        {
+            Some(mode) => PresentPreference::forced(mode),
+            None => present.preference(host(window), fullscreen(window)),
+        }
+    }
+
+    pub fn latency_override() -> Option<u32> {
+        std::env::var(LATENCY_VAR)
+            .ok()
+            .as_deref()
+            .and_then(latency_named)
+    }
+
+    pub fn overridden(mut choice: PresentChoice) -> PresentChoice {
+        if let Some(latency) = latency_override() {
+            choice.desired_maximum_frame_latency = latency;
+        }
+        choice
     }
 
     pub fn minimized(window: &Window) -> bool {
@@ -1105,7 +1383,8 @@ mod glue {
 
 #[cfg(any(feature = "window", test))]
 pub use glue::{
-    apply_display_mode, attention, host, minimized, monitors, placement, refresh_millihertz,
+    apply_display_mode, attention, fullscreen, host, latency_override, minimized, monitors,
+    overridden, placement, present_forced, present_preference, refresh_millihertz,
 };
 
 #[cfg(test)]
@@ -1449,79 +1728,66 @@ mod tests {
     }
 
     #[test]
-    fn present_mode_follows_the_preference_and_falls_back_to_fifo() {
+    fn present_mode_follows_the_vrr_switch_and_falls_back_to_fifo() {
+        use wgpu::PresentMode::{Fifo, FifoRelaxed, Immediate, Mailbox};
         let fifo = PresentPreference::default();
-        assert_eq!(fifo.modes, vec![wgpu::PresentMode::Fifo]);
-        assert_eq!(fifo.desired_maximum_frame_latency, 2);
-        let game = PresentPreference::game();
-        assert_eq!(
-            game.modes,
-            vec![
-                wgpu::PresentMode::Mailbox,
-                wgpu::PresentMode::FifoRelaxed,
-                wgpu::PresentMode::Fifo,
-            ]
-        );
-        let available = [
-            wgpu::PresentMode::Fifo,
-            wgpu::PresentMode::Immediate,
-            wgpu::PresentMode::FifoRelaxed,
-        ];
-        let choice = choose_present(&game, &available);
-        assert_eq!(choice.selected, wgpu::PresentMode::FifoRelaxed);
-        assert!(!choice.fell_back);
-        assert_eq!(choice.desired_maximum_frame_latency, 2);
-
-        let mailbox_only = PresentPreference {
-            modes: vec![wgpu::PresentMode::Mailbox],
-            desired_maximum_frame_latency: 0,
+        assert_eq!(fifo.modes, vec![Fifo]);
+        let off = Present {
+            vrr: false,
+            ..Present::default()
         };
-        let fell = choose_present(&mailbox_only, &[wgpu::PresentMode::Fifo]);
-        assert_eq!(fell.selected, wgpu::PresentMode::Fifo);
-        assert!(fell.fell_back);
-        assert_eq!(fell.desired_maximum_frame_latency, 1);
+        for host in [Host::Windows, Host::Macos, Host::X11, Host::Wayland] {
+            for fullscreen in [false, true] {
+                assert_eq!(off.preference(host, fullscreen), fifo);
+            }
+        }
+        let on = Present::default();
+        assert!(on.vrr);
+        assert_eq!(on.frame_rate, FrameRate::Uncapped);
+        assert_eq!(
+            on.preference(Host::Wayland, false).modes,
+            vec![Mailbox, Fifo]
+        );
+        assert_eq!(on.preference(Host::X11, true).modes, vec![Mailbox, Fifo]);
+        assert_eq!(on.preference(Host::Windows, false).modes, vec![Fifo]);
+        assert_eq!(
+            on.preference(Host::Windows, true).modes,
+            vec![Immediate, Fifo]
+        );
+        assert_eq!(on.preference(Host::Macos, true).modes, vec![Fifo]);
+        assert_eq!(on.preference(Host::Other, false).modes, vec![Fifo]);
 
-        let empty = choose_present(&mailbox_only, &[]);
-        assert_eq!(empty.selected, wgpu::PresentMode::Fifo);
-        assert!(empty.fell_back);
+        let mailbox = choose_present(&on.preference(Host::Wayland, false), &[Fifo, Mailbox]);
+        assert_eq!(mailbox.selected, Mailbox);
+        assert_eq!(mailbox.desired_maximum_frame_latency, 1);
+        let fell = choose_present(&on.preference(Host::Wayland, false), &[Fifo, FifoRelaxed]);
+        assert_eq!(fell.selected, Fifo);
+        assert!(!fell.fell_back);
+        assert_eq!(fell.desired_maximum_frame_latency, 2);
+        let none = choose_present(&PresentPreference::forced(Immediate), &[]);
+        assert_eq!(none.selected, Fifo);
+        assert!(none.fell_back);
 
-        let asked = choose_present(
-            &PresentPreference::fifo(),
-            &[wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo],
-        );
-        assert_eq!(asked.selected, wgpu::PresentMode::Fifo);
-        assert!(!asked.fell_back);
-
-        assert_eq!(
-            Host::Windows.vrr_present_modes(),
-            PresentPreference::game().modes.as_slice()
-        );
-        assert_eq!(
-            Host::Wayland.vrr_present_modes(),
-            &[wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo]
-        );
-        assert_eq!(
-            Host::X11.vrr_present_modes(),
-            &[
-                wgpu::PresentMode::Mailbox,
-                wgpu::PresentMode::Fifo,
-                wgpu::PresentMode::FifoRelaxed,
-            ]
-        );
-        assert_eq!(
-            Host::Macos.vrr_present_modes(),
-            &[wgpu::PresentMode::Mailbox, wgpu::PresentMode::Fifo]
-        );
-        assert_eq!(Host::Other.vrr_present_modes(), &[wgpu::PresentMode::Fifo]);
+        assert_eq!(present_mode_named(" Mailbox "), Some(Mailbox));
+        assert_eq!(present_mode_named("fifo-relaxed"), Some(FifoRelaxed));
+        assert_eq!(present_mode_named("vsync"), None);
         assert!(Host::X11.supports_exclusive());
-        assert!(Host::Windows.supports_exclusive());
-        assert!(Host::Macos.supports_exclusive());
         assert!(!Host::Wayland.supports_exclusive());
-        assert!(!Host::Other.supports_exclusive());
+    }
+
+    #[test]
+    fn the_two_switches_read_and_write_as_settings() {
+        let parsed: Present = toml::from_str("vrr = false\nframe_rate = \"cap60\"\n").unwrap();
         assert_eq!(
-            PresentPreference::vrr(Host::Wayland).desired_maximum_frame_latency,
-            1
+            parsed,
+            Present {
+                vrr: false,
+                frame_rate: FrameRate::Cap60
+            }
         );
+        let empty: Present = toml::from_str("").unwrap();
+        assert_eq!(empty, Present::default());
+        assert!(toml::from_str::<Present>("frame_rate = \"30\"\n").is_err());
     }
 
     fn affine(sx: f32, sy: f32, tx: f32, ty: f32) -> [f32; 16] {
@@ -1676,59 +1942,208 @@ mod tests {
         panic!("no start");
     }
 
-    #[test]
-    fn the_absolute_grid_does_not_drift() {
-        assert_eq!(slot(0, 0, 60), 0);
-        assert_eq!(slot(0, 1, 60), NS_PER_SEC / 60);
-        assert_eq!(slot(0, 60, 60), NS_PER_SEC);
-        assert_eq!(first_slot_after(0, 0, 60), 1);
-        assert_eq!(first_slot_after(0, NS_PER_SEC / 60, 60), 2);
-        assert_eq!(first_slot_after(0, 10 * NS_PER_SEC / 60, 60), 11);
-        assert_eq!(first_slot_after(0, 10 * NS_PER_SEC / 60 + 10, 60), 11);
-        assert_eq!(first_slot_after(0, NS_PER_SEC, 30), 31);
+    fn cap60(vrr: bool) -> Present {
+        Present {
+            vrr,
+            frame_rate: FrameRate::Cap60,
+        }
+    }
+
+    fn cap120(vrr: bool) -> Present {
+        Present {
+            vrr,
+            frame_rate: FrameRate::Cap120,
+        }
+    }
+
+    const MS_NS: u64 = 1_000_000;
+    fn auto(vrr: bool) -> Present {
+        Present {
+            vrr,
+            frame_rate: FrameRate::Auto,
+        }
+    }
+
+    fn run(
+        pacer: &mut FramePacer,
+        clock: &mut FakeClock,
+        frames: usize,
+        cost: impl Fn(usize) -> u64,
+    ) -> Vec<usize> {
+        let mut rungs = Vec::with_capacity(frames);
+        for _ in 0..frames {
+            take(pacer, clock);
+            rungs.push(pacer.auto_rung());
+            clock.now_ns += cost(pacer.auto_rung());
+        }
+        rungs
     }
 
     #[test]
-    fn a_thousand_frames_at_each_cap_stay_within_one_tick() {
-        for cap in [
-            FrameCap::Fps30,
-            FrameCap::Fps60,
-            FrameCap::Fps90,
-            FrameCap::Fps120,
+    fn auto_steps_through_whole_refreshes_with_vrr_off_and_a_ladder_with_it_on() {
+        let fps = |vrr, refresh| {
+            (0..)
+                .map_while(|rung| auto_period(vrr, refresh, rung))
+                .map(|period| (period.fps() * 10.0).round() / 10.0)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            fps(false, Some(239_970)),
+            [120.0, 80.0, 60.0, 48.0, 40.0, 34.3, 30.0]
+        );
+        assert_eq!(fps(false, Some(60_000)), [60.0, 30.0]);
+        assert_eq!(
+            fps(true, Some(239_970)),
+            [120.0, 100.0, 90.0, 80.0, 72.0, 60.0, 50.0, 45.0, 40.0, 30.0]
+        );
+        assert_eq!(fps(false, None), fps(true, None));
+        assert_eq!(FrameRate::Auto.name(), "auto");
+        assert_eq!(
+            toml::from_str::<Present>("frame_rate = \"auto\"").unwrap(),
+            auto(true)
+        );
+    }
+
+    #[test]
+    fn auto_settles_to_a_steady_rate_and_rises_when_the_scene_lightens() {
+        let mut clock = FakeClock::default();
+        let mut pacer = FramePacer::new(auto(false));
+        pacer.set_refresh(Some(239_970));
+        let heavy = run(&mut pacer, &mut clock, 60, |_| 10 * MS_NS);
+        assert_eq!(heavy[59], 1);
+        assert!((pacer.period().unwrap().fps() - 79.99).abs() < 0.01);
+        let steady = run(&mut pacer, &mut clock, 900, |_| 11_500_000);
+        assert!(steady.iter().all(|rung| *rung == 1));
+        let light = run(&mut pacer, &mut clock, 30 * 10, |_| 3 * MS_NS);
+        assert_eq!(light.last(), Some(&0));
+        let mut vrr = FramePacer::new(auto(true));
+        vrr.set_refresh(Some(239_970));
+        run(&mut vrr, &mut clock, 60, |_| 9_500_000);
+        assert!((vrr.period().unwrap().fps() - 90.0).abs() < 1e-9);
+        vrr.set_present(auto(false));
+        assert_eq!(vrr.auto_rung(), 0);
+    }
+
+    #[test]
+    fn auto_backs_off_a_rate_it_failed_to_hold_instead_of_flapping() {
+        let mut clock = FakeClock::default();
+        let mut pacer = FramePacer::new(auto(false));
+        pacer.set_refresh(Some(239_970));
+        let rungs = run(&mut pacer, &mut clock, 6_000, |rung| {
+            if rung == 0 { 10 * MS_NS } else { 3 * MS_NS }
+        });
+        let rises = rungs.windows(2).filter(|pair| pair[1] < pair[0]).count();
+        assert!((2..=5).contains(&rises), "{rises} rises");
+        let top = rungs.iter().filter(|rung| **rung == 0).count();
+        assert!(top <= (rises + 1) * 31, "{top} frames at the top");
+    }
+
+    #[test]
+    fn cap60_locks_to_whole_refreshes_with_vrr_off_and_to_60_with_it_on() {
+        let sixty = Period {
+            ns: NS_PER_SEC,
+            per: 60,
+        };
+        assert_eq!(frame_period(cap60(true), Some(239_970)), Some(sixty));
+        assert_eq!(frame_period(cap60(false), None), Some(sixty));
+        assert_eq!(frame_period(Present::default(), Some(239_970)), None);
+        for (refresh, vblanks) in [
+            (239_970, 4),
+            (240_000, 4),
+            (144_000, 2),
+            (165_000, 2),
+            (119_880, 2),
+            (117_000, 1),
+            (60_000, 1),
+            (59_940, 1),
+            (50_000, 0),
         ] {
-            let fps = u64::from(cap.fps().unwrap());
-            let mut pacer = FramePacer::new(FrameCaps::new(cap, cap));
+            assert_eq!(refresh_vblanks(refresh, 60), vblanks, "{refresh}");
+        }
+        let locked = frame_period(cap60(false), Some(239_970)).unwrap();
+        assert!((locked.ms() - 4.0 * 1e3 / 239.97).abs() < 1e-9);
+        assert!((locked.fps() - 59.9925).abs() < 1e-9);
+        let slow = frame_period(cap60(false), Some(50_000)).unwrap();
+        assert!((slow.fps() - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn cap120_locks_to_whole_refreshes_with_vrr_off_and_to_120_with_it_on() {
+        let hundred_twenty = Period {
+            ns: NS_PER_SEC,
+            per: 120,
+        };
+        assert_eq!(
+            frame_period(cap120(true), Some(239_970)),
+            Some(hundred_twenty)
+        );
+        assert_eq!(frame_period(cap120(false), None), Some(hundred_twenty));
+        for (refresh, vblanks) in [
+            (239_970, 2),
+            (240_000, 2),
+            (360_000, 3),
+            (165_000, 1),
+            (144_000, 1),
+            (119_880, 1),
+            (60_000, 0),
+        ] {
+            assert_eq!(refresh_vblanks(refresh, 120), vblanks, "{refresh}");
+        }
+        let locked = frame_period(cap120(false), Some(239_970)).unwrap();
+        assert!((locked.ms() - 2.0 * 1e3 / 239.97).abs() < 1e-9);
+        assert!((locked.fps() - 119.985).abs() < 1e-9);
+        let one = frame_period(cap120(false), Some(144_000)).unwrap();
+        assert!((one.fps() - 144.0).abs() < 1e-9);
+        let below = frame_period(cap120(false), Some(60_000)).unwrap();
+        assert!((below.fps() - 60.0).abs() < 1e-9);
+        let parsed: Present = toml::from_str("frame_rate = \"cap120\"\n").unwrap();
+        assert_eq!(parsed, cap120(true));
+        assert_eq!(FrameRate::Cap120.name(), "cap120");
+    }
+
+    #[test]
+    fn the_absolute_grid_does_not_drift() {
+        let sixty = Period {
+            ns: NS_PER_SEC,
+            per: 60,
+        };
+        assert_eq!(slot(0, 0, sixty), 0);
+        assert_eq!(slot(0, 1, sixty), NS_PER_SEC / 60);
+        assert_eq!(slot(0, 60, sixty), NS_PER_SEC);
+        assert_eq!(first_slot_after(0, 0, sixty), 1);
+        assert_eq!(first_slot_after(0, NS_PER_SEC / 60, sixty), 2);
+        assert_eq!(first_slot_after(0, 10 * NS_PER_SEC / 60, sixty), 11);
+        assert_eq!(first_slot_after(0, 10 * NS_PER_SEC / 60 + 10, sixty), 11);
+        for present in [cap60(true), cap60(false), cap120(true), cap120(false)] {
+            let mut pacer = FramePacer::new(present);
+            pacer.set_refresh(Some(239_970));
+            let period = pacer.period().unwrap();
             let mut clock = FakeClock::default();
-            for frame in 0..1_000 {
+            for frame in 0..100_000u64 {
                 let start = take(&mut pacer, &mut clock);
-                let expected = frame * NS_PER_SEC / fps;
-                assert!(
-                    start.abs_diff(expected) <= 1,
-                    "{cap:?} frame {frame} at {start}, grid {expected}"
-                );
+                let expected = u128::from(frame) * u128::from(period.ns) / u128::from(period.per);
+                assert!(u128::from(start).abs_diff(expected) <= 1);
             }
         }
     }
 
     #[test]
-    fn uncapped_never_waits_and_a_late_frame_returns_to_the_grid() {
-        let mut pacer = FramePacer::new(FrameCaps::new(FrameCap::Uncapped, FrameCap::Fps30));
+    fn uncapped_never_waits_and_a_late_cap60_frame_returns_to_the_grid() {
+        let mut pacer = FramePacer::new(Present::default());
         let mut clock = FakeClock::default();
         for frame in 0..1_000 {
             clock.now_ns = frame * 123_456 + (frame % 7) * 89;
             assert!(matches!(pacer.poll(&clock), Pace::Start { next_ns: None }));
         }
 
-        let mut pacer = FramePacer::new(FrameCaps::new(FrameCap::Fps60, FrameCap::Fps60));
+        let mut pacer = FramePacer::new(cap60(true));
         let mut clock = FakeClock::default();
         assert!(matches!(pacer.poll(&clock), Pace::Start { .. }));
         clock.now_ns = 10 * NS_PER_SEC / 60 + 10;
         match pacer.poll(&clock) {
             Pace::Start {
                 next_ns: Some(next),
-            } => {
-                assert_eq!(next, 11 * NS_PER_SEC / 60);
-            }
+            } => assert_eq!(next, 11 * NS_PER_SEC / 60),
             other => panic!("late frame should start once, got {other:?}"),
         }
         assert!(matches!(
@@ -1736,104 +2151,55 @@ mod tests {
             Pace::Wait { until_ns } if until_ns == 11 * NS_PER_SEC / 60
         ));
         for frame in 11..40 {
-            let start = take(&mut pacer, &mut clock);
-            assert_eq!(start, frame * NS_PER_SEC / 60);
+            assert_eq!(take(&mut pacer, &mut clock), frame * NS_PER_SEC / 60);
         }
     }
 
     #[test]
-    fn focus_occlusion_and_minimize_swap_the_schedule() {
-        let mut pacer = FramePacer::new(FrameCaps::new(FrameCap::Fps60, FrameCap::Fps30));
+    fn focus_and_occlusion_never_slow_a_frame_and_minimize_pauses() {
+        let mut pacer = FramePacer::new(cap60(true));
         let mut clock = FakeClock::default();
         assert_eq!(take(&mut pacer, &mut clock), 0);
-        let second = take(&mut pacer, &mut clock);
-        assert_eq!(second, NS_PER_SEC / 60);
-
-        pacer.on(Attention::Occluded(true));
-        assert_eq!(pacer.effective_fps(), Some(30));
-        let origin = second;
-        assert_eq!(take(&mut pacer, &mut clock), origin);
-        let background = take(&mut pacer, &mut clock);
-        assert_eq!(background, origin + NS_PER_SEC / 30);
-        assert!(matches!(pacer.poll(&clock), Pace::Wait { .. }));
-
         pacer.on(Attention::Focused(false));
-        let held = take(&mut pacer, &mut clock);
-        assert_eq!(held, origin + 2 * NS_PER_SEC / 30);
-
-        pacer.on(Attention::Focused(true));
-        let still = take(&mut pacer, &mut clock);
-        assert_eq!(still, origin + 3 * NS_PER_SEC / 30);
-
-        pacer.on(Attention::Occluded(false));
-        assert_eq!(pacer.effective_fps(), Some(60));
-        assert_eq!(take(&mut pacer, &mut clock), still);
-        assert_eq!(take(&mut pacer, &mut clock), still + NS_PER_SEC / 60);
-
+        pacer.on(Attention::Occluded(true));
+        assert_eq!(take(&mut pacer, &mut clock), NS_PER_SEC / 60);
         pacer.on(Attention::Minimized(true));
         assert!(matches!(pacer.poll(&clock), Pace::Paused));
         clock.now_ns += 5 * NS_PER_SEC;
         assert!(matches!(pacer.poll(&clock), Pace::Paused));
         pacer.on(Attention::Minimized(false));
-        assert!(matches!(pacer.poll(&clock), Pace::Start { .. }));
-        assert!(matches!(pacer.poll(&clock), Pace::Wait { .. }));
+        let resumed = clock.now_ns;
+        assert_eq!(take(&mut pacer, &mut clock), resumed);
+        assert_eq!(take(&mut pacer, &mut clock), resumed + NS_PER_SEC / 60);
 
-        let mut caps = FrameCaps::new(FrameCap::Fps60, FrameCap::Fps30);
-        caps.pause_when_minimized = false;
-        let mut running = FramePacer::new(caps);
-        running.on(Attention::Minimized(true));
-        assert_eq!(running.effective_fps(), Some(60));
-        assert!(matches!(running.poll(&clock), Pace::Start { .. }));
+        pacer.set_pause_when_minimized(false);
+        pacer.on(Attention::Minimized(true));
+        assert!(!matches!(pacer.poll(&clock), Pace::Paused));
     }
 
     #[test]
-    fn vrr_caps_at_refresh_minus_three_and_the_pacer_uses_it() {
-        let cases = [
-            (60_000, FrameCap::Fps60, Some(57)),
-            (60_000, FrameCap::Fps30, Some(30)),
-            (120_000, FrameCap::Fps120, Some(117)),
-            (144_000, FrameCap::Fps120, Some(120)),
-            (144_000, FrameCap::Uncapped, Some(141)),
-            (165_000, FrameCap::Fps90, Some(90)),
-            (165_000, FrameCap::Fps120, Some(120)),
-            (165_000, FrameCap::Uncapped, Some(162)),
-        ];
-        for (refresh, cap, expected) in cases {
-            assert_eq!(paced_fps(cap, Some(refresh)), expected, "{refresh} {cap:?}");
-        }
-        assert_eq!(vrr_limit_fps(60_000), Some(57));
-        assert_eq!(vrr_limit_fps(120_000), Some(117));
-        assert_eq!(vrr_limit_fps(144_000), Some(141));
-        assert_eq!(vrr_limit_fps(165_000), Some(162));
-        assert_eq!(paced_fps(FrameCap::Fps60, None), Some(60));
-        assert_eq!(paced_fps(FrameCap::Uncapped, None), None);
-        assert_eq!(vrr_limit_fps(2_000), None);
-
-        let mut pacer = FramePacer::new(FrameCaps::new(FrameCap::Fps60, FrameCap::Fps30));
-        pacer.set_vrr(Some(60_000));
-        assert_eq!(pacer.effective_fps(), Some(57));
-        let mut clock = FakeClock::default();
-        for frame in 0..1_000 {
-            let start = take(&mut pacer, &mut clock);
-            assert!(start.abs_diff(frame * NS_PER_SEC / 57) <= 1);
-        }
-        pacer.set_vrr(None);
-        assert_eq!(pacer.effective_fps(), Some(60));
-        let switched = clock.now_ns;
-        assert_eq!(take(&mut pacer, &mut clock), switched);
-        assert_eq!(take(&mut pacer, &mut clock), switched + NS_PER_SEC / 60);
+    fn switching_at_run_time_starts_the_new_rate_at_that_poll() {
+        let mut pacer = FramePacer::new(Present::default());
+        pacer.set_refresh(Some(60_000));
+        let mut clock = FakeClock {
+            now_ns: 7 * NS_PER_SEC,
+        };
+        assert!(matches!(pacer.poll(&clock), Pace::Start { next_ns: None }));
+        pacer.set_present(cap60(false));
+        let start = take(&mut pacer, &mut clock);
+        assert_eq!(start, 7 * NS_PER_SEC);
+        assert_eq!(take(&mut pacer, &mut clock), start + NS_PER_SEC / 60);
+        pacer.set_present(Present::default());
+        assert!(matches!(pacer.poll(&clock), Pace::Start { next_ns: None }));
+        assert_eq!(pacer.present(), Present::default());
     }
 
     #[test]
-    fn winit_focus_and_occlusion_events_drive_the_pacer() {
-        let mut pacer = FramePacer::new(FrameCaps::new(FrameCap::Fps120, FrameCap::Fps30));
+    fn winit_focus_and_occlusion_events_map_to_attention() {
         let blurred = winit::event::WindowEvent::Focused(false);
-        pacer.on(attention(&blurred).unwrap());
-        assert_eq!(pacer.effective_fps(), Some(30));
-        pacer.on(Attention::Focused(true));
+        assert_eq!(attention(&blurred), Some(Attention::Focused(false)));
         let covered = winit::event::WindowEvent::Occluded(true);
-        pacer.on(attention(&covered).unwrap());
-        assert_eq!(pacer.effective_fps(), Some(30));
+        assert_eq!(attention(&covered), Some(Attention::Occluded(true)));
         assert!(attention(&winit::event::WindowEvent::RedrawRequested).is_none());
         assert!(attention(&winit::event::WindowEvent::CloseRequested).is_none());
     }

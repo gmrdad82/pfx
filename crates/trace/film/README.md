@@ -21,9 +21,7 @@ Each script wrote `<out>.csv`; the file here is that output, unedited. Blender i
 Who reads them:
 
 - `cycles.csv`: `tests/film.rs` (`include_str!`), the film reflectance checks.
-- `wavelength.csv`: `crates/materials/film/live_weights.py`, which fits the live renderer's film weights to it (plain Python, no Blender).
+- `wavelength.csv`: the source of the tracer's film weights (`CF_WEIGHTS` in `trace.wgsl`, `WEIGHTS` in `film.rs`) and, through them, the live renderer's (`FILM_WEIGHTS`), both computed once; `docs/trace-film.md` says how.
 - `cycles_sheet.csv`: the sheet figures in `docs/trace-film.md`, and the constants of `cycles_sheets()` in `tests/film.rs`.
-
-`film_weights.py` stays: it is plain Python (NumPy) that computes the film weights, and runs no Blender.
 
 The asset renderer's own references, one Blender render of each asset kind, are in `crates/assets/tests/reference/`.

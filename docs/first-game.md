@@ -2,7 +2,7 @@
 
 A game on pfx is its own repository and one binary. `pfx new` scaffolds it, `cargo run` plays it and `<game> edit` opens it in the editor. This page walks that path with the `pfx` tool installed ([Install and first use](../README.md#install-and-first-use)).
 
-![A terminal: pfx --version prints the version; git init and pfx new demo scaffold a game of 15 files; ls shows AGENTS.md, CLAUDE.md, Cargo.toml, content, project.toml, prompts, src and tests, and content holds first.pitofx, fonts and meshes; pfx bench plays content/first.pitofx headless for 3 seconds at 1920x1080 and prints 180 frames, 0 dropped and GPU frame times under a millisecond.](images/new.gif)
+![A terminal: pfx --version prints pfx 3.1.1; git init and pfx new demo scaffold a game of 18 files and set git to show its .pitofx diffs as TOML; ls shows AGENTS.md, CLAUDE.md, Cargo.toml, README.md, build.rs, content, project.toml, prompts, src and tests, and content holds first.pitofx, fonts and meshes; pfx bench plays demo/content/first.pitofx headless for 3 seconds and prints 180 frames, 0 dropped and GPU frame times under half a millisecond, held on screen.](images/new.gif)
 
 ## Scaffold it
 
@@ -11,8 +11,10 @@ A game on pfx is its own repository and one binary. `pfx new` scaffolds it, `car
 ```
 $ git init my-game
 $ pfx new my-game
-my-game: scaffolded 15 files into my-game on pfx v1.0.0
+my-game: scaffolded 15 files into my-game on pfx v3.1.1
+git: diffs of .pitofx show their TOML (pfx scene print --all)
 next: cargo run --release (the game), cargo run --release -- edit (the editor)
+This game links pfx: publish its source under the AGPL-3.0, or use pfx's free licence (closed use under $200k a year, education, non-profits) or a commercial one: https://pitomd.com/pfx/license
 ```
 
 The first scene shows the game's name in 3D on the floor grid, beside a plain plate. `pfx new my-game --mark art/mark.png` puts the game's own mark, a PNG, on that plate and in the editor's header ([pfx new](projects.md#--mark)).
@@ -23,13 +25,14 @@ The game pins the engine's crates at the tag the `pfx` tool was built from:
 [dependencies]
 pfx-game = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.1" }
 pfx-project = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.1" }
-pfx-editor = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.1", optional = true }
+pfx-workbench = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.1", optional = true }
 ```
 
 The files it writes:
 
 ```
 Cargo.toml                 the package, with the tools feature on by default
+build.rs                   the game's build date (projects.md, "The build date")
 project.toml               the project: its first scene and what the editor selects
 src/lib.rs                 the game: MyGame implements pfx_game::Game, doing nothing yet
 src/main.rs                hands the game to the launcher, with `edit` opening the editor
@@ -39,6 +42,9 @@ content/first.pitofx       the empty world: a grid, the game's name in 3D beside
                            and the title's materials
 content/meshes/            name.glb and mark.glb, made for the game, and grid.glb
 content/fonts/             IBM Plex Mono and its licence
+README.md                  the game's name and the one line on pfx's licence that a game linking pfx needs
+AGENTS.md, CLAUDE.md       notes for a coding agent working in the repo, and prompts/RESUME.md
+.gitignore, .gitattributes target/ and tmp/ ignored; .pitofx diffs read as TOML
 ```
 
 Every file is described in [Projects: one binary per game](projects.md#pfx-new).

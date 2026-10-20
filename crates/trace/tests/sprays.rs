@@ -150,7 +150,11 @@ fn live(scene: &Scene, size: [u32; 2], time: f32) -> Vec<[f32; 3]> {
         .readback_rgba16(&target)
         .unwrap()
         .chunks_exact(4)
-        .map(|p| std::array::from_fn(|c| half::f16::from_bits(p[c]).to_f32()))
+        .map(|p| {
+            std::array::from_fn(|c| {
+                pfx_materials::linear_channel(half::f16::from_bits(p[c]).to_f32())
+            })
+        })
         .collect()
 }
 
@@ -557,7 +561,7 @@ fn a_thin_puff_scatters_as_the_live_pass_formula_says() {
             / (4.0 * std::f32::consts::PI * (1.0 + g * g - 2.0 * g * cosine).powf(1.5));
         let n: Vec<f32> = v.iter().map(|c| -c / len).collect();
         let wrap = (dot(&n, [toward[0] / tl, toward[1] / tl, toward[2] / tl]) + 0.5).max(0.0)
-            / 1.5
+            / 2.25
             / std::f32::consts::PI;
         let centre = |img: &[[f32; 3]]| {
             let mut sum = 0.0;
@@ -569,15 +573,15 @@ fn a_thin_puff_scatters_as_the_live_pass_formula_says() {
             sum / 25.0
         };
         let formula = 0.6 * (0.8 * phase + 0.2 * wrap);
-        let normalised = 0.6 * (0.8 * phase + 0.2 * wrap / 1.5);
-        let traced = centre(&tr.colour);
+        let [traced, live] = [centre(&tr.colour), centre(&lv)];
         println!(
-            "toward {toward:?}: cos {cosine:.3}; the live formula gives {formula:.4}, normalised {normalised:.4}; traced {traced:.4}, live {:.4}",
-            centre(&lv)
+            "toward {toward:?}: cos {cosine:.3}; the formula gives {formula:.4}; traced {traced:.4}, live {live:.4}"
         );
-        assert!(
-            (traced - normalised).abs() < 0.12 * normalised + 0.002,
-            "toward {toward:?}: traced {traced} against {normalised}"
-        );
+        for (name, value) in [("traced", traced), ("live", live)] {
+            assert!(
+                (value - formula).abs() < 0.12 * formula + 0.002,
+                "toward {toward:?}: {name} {value} against {formula}"
+            );
+        }
     }
 }

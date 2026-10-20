@@ -39,8 +39,8 @@ Timestamp queries are never part of the floor. Without `TIMESTAMP_QUERY` the ren
 
 | Feature | Floor | Used by |
 |---|---|---|
-| `TIMESTAMP_QUERY` | optional | `GpuProfiler` pass timings across every pass; `pace` frame timing. Absent means profiling off. |
-| `TIMESTAMP_QUERY_INSIDE_ENCODERS` | optional | `GpuProfiler` marks between passes. |
+| `TIMESTAMP_QUERY` | optional | `GpuProfiler` pass timings across every pass; `pace` frame timing; `Pacer::run_passes` slice timing from the first pass's start to the last pass's end where encoder timestamps are missing (Apple GPUs). Absent means profiling off. |
+| `TIMESTAMP_QUERY_INSIDE_ENCODERS` | optional | `GpuProfiler` marks between passes; `Pacer` slice timing around the whole encoder. Absent, a `Pacer::run` slice is timed by its fence, which counts the submission's own CPU cost. |
 | `FLOAT32_FILTERABLE` | optional | Nothing in the live renderer: every R32Float and Rgba32Float binding is `filterable: false` and read with `textureLoad`. Glass declares its fluid and ripple inputs filterable; callers pass R16Float or Rgba16Float there, so an R32Float input would need this feature. The tracer requires it (below). |
 
 The floor requires no wgpu feature. No pass uses push constants, binding arrays, multisampling, indirect draws, occlusion queries, polygon modes, conservative raster, unclipped depth, subgroups or read-write storage textures.
@@ -76,7 +76,7 @@ The floor is `wgpu::Limits::default()` (the WebGPU guaranteed limits) with two r
 | `max_sampled_textures_per_shader_stage` | 16 | **18** | Tree cards ("live card depth", "live card shading") and lit text ("lit surface text", "lit deformed text"). Each binds, in the fragment stage, 3 shadow textures (sun cascades, transmission, light faces), the 14 of group 3 (`map_base`, `map_normal`, `map_roughness`, `map_metal`, `canopy_cookie`, `sky_cube`, `local_probes`, `ssr_history`, `content0` to `content3`, `contact_field`, `ssr_guide`) and 1 of its own (the card cookie or the glyph atlas). The main frame layout (prepass and opaque) sits at 17. |
 | `max_texture_dimension_2d` | 8192 | **16384** | Text and icon atlases grow by powers of two to 16384 rows before `pfx_text` refuses with `AtlasTooLarge`. Sky HDRs and contact fields are app-sized and not checked against the device either. The viewport itself is 3840×2160 at 4K. |
 
-The count passed 16 with the contact field (9f10b83) and reached 18 with the SSR guide at binding 26. wgpu 27 doesn't notice: it checks each bind group against the per-stage limits on its own, taking the largest group (14 here), while WebGPU and Vulkan count the sum over the pipeline layout. `Gpu`'s openers used to ask for 16, and RADV reports a driver limit of 8,388,606, so the tree test passes there. On a driver that reports 16 these pipelines would break the Vulkan limit without any wgpu error. The openers now ask for `min(adapter, 18)`, and the check refuses an adapter below 18.
+The count passed 16 with the contact field (9f10b83) and reached 18 with the SSR guide at binding 26. wgpu 27, which pfx built on then, didn't notice: it checked each bind group against the per-stage limits on its own, taking the largest group (14 here), while WebGPU and Vulkan count the sum over the pipeline layout. wgpu 30 sums them over the layout too. `Gpu`'s openers used to ask for 16, and RADV reports a driver limit of 8,388,606, so the tree test passes there. On a driver that reports 16 these pipelines would break the Vulkan limit without any wgpu error. The openers now ask for `min(adapter, 18)`, and the check refuses an adapter below 18.
 
 ### How the floor stays true
 
@@ -108,7 +108,7 @@ A new texture in group 3 therefore turns the gate red until the floor rises with
 | `max_bindings_per_bind_group` | 1000 | 26 entries, highest index 25 | Lighting group |
 | `max_color_attachments` | 8 | 2 | Prepass, opaque, effects volume, glass |
 | `max_color_attachment_bytes_per_sample` | 32 | 16 | Opaque (2 × Rgba16Float); shadow transmission (Rgba32Uint) |
-| `max_inter_stage_shader_components` | 60 | 32 + `front_facing` | Mesh vertex → opaque fragment (11 locations) |
+| `max_inter_stage_shader_variables` | 16 | 11 + `front_facing` | Mesh vertex → opaque fragment (11 locations) |
 | `max_vertex_buffers` | 8 | 2 | Sun shadow depth (positions + instances) |
 | `max_vertex_attributes` | 16 | 6 | Text instances |
 | `max_vertex_buffer_array_stride` | 2048 | 96 | Text instances |
@@ -159,7 +159,7 @@ Bgra8UnormSrgb is a render target only when the caller asks for it as the output
 
 ## Per pass
 
-Per-stage counts are summed over the pipeline layout's bind groups, the way WebGPU and Vulkan count them. wgpu 27 checks each group on its own.
+Per-stage counts are summed over the pipeline layout's bind groups, the way WebGPU, Vulkan and wgpu 30 count them.
 
 | Pass | Where | Groups | Per stage | Targets | Compute |
 |---|---|---|---|---|---|
@@ -189,7 +189,7 @@ Per-stage counts are summed over the pipeline layout's bind groups, the way WebG
 | Flat pass: colour, ids, lit colour and ids, layer clear and composite | flat/pass.rs | 1–2 | V: 1 uniform. F: 1 uniform, ≤ 4 textures (icon fields, environment, gradient stops, sprite atlas; the group layer in its own pass), 3 samplers | Rgba16Float premultiplied blend; R32Uint | — |
 | Flat text, flat finish | flat/pass.rs | 1 | V: 1 dynamic uniform. F: 1 texture, ≤ 1 sampler | Rgba16Float or the output format | — |
 
-The flat pass (`docs/flat.md`) needs less than this floor: every flat pipeline fits `wgpu::Limits::default()` with no optional feature and no downlevel flag beyond core WebGPU, so a phone GPU can draw a flat scene even where the 3D passes would be refused. It has no storage buffers or textures, and its instances are a vertex buffer: 15 attributes at a 240-byte stride, and 60 inter-stage components (the default limit is 60: the per-corner radii took the last four). `flat::tests::every_flat_layout_fits_webgpu_defaults` checks its layouts in the gate. `flat::tests::the_flat_pipelines_run_on_a_device_at_webgpu_defaults` opens a device at exactly `Limits::default()` and draws through every flat pipeline. Its two-group layer composite is listed in `binding_floor.rs` with the rest.
+The flat pass (`docs/flat.md`) needs less than this floor: every flat pipeline fits `wgpu::Limits::default()` with no optional feature and no downlevel flag beyond core WebGPU, so a phone GPU can draw a flat scene even where the 3D passes would be refused. It has no storage buffers or textures, and its instances are a vertex buffer: 15 attributes at a 240-byte stride, and 15 inter-stage variables (the default limit is 16). `flat::tests::every_flat_layout_fits_webgpu_defaults` checks its layouts in the gate. `flat::tests::the_flat_pipelines_run_on_a_device_at_webgpu_defaults` opens a device at exactly `Limits::default()` and draws through every flat pipeline. Its two-group layer composite is listed in `binding_floor.rs` with the rest.
 
 ### Outside the live renderer
 
@@ -219,7 +219,7 @@ The offline path tracer (`crates/trace`) binds more than the live floor allows, 
 | `max_storage_buffer_binding_size`, `max_buffer_size` | 128 MiB, 256 MiB | default | The accumulation buffer is 48 bytes a pixel (398,131,200 B at 3840×2160) and the scene buffers grow with the scene. Both are checked per build against the device, not set by the floor, so a small trace runs on a device at the defaults. `Gpu`'s openers ask for the adapter's own sizes. |
 | `max_storage_textures_per_shader_stage` | 4 | 3 in use | Colour, albedo and normal, Rgba32Float, write-only |
 | `max_uniform_buffers_per_shader_stage` | 12 | 3 in use | The frame, the environment and the sky CDF |
-| `max_sampled_textures_per_shader_stage`, `max_samplers_per_shader_stage` | 16 | 1 each | The environment and its linear sampler |
+| `max_sampled_textures_per_shader_stage`, `max_samplers_per_shader_stage` | 16 | 2 and 1 in use | The environment and the Sobol table (read with `textureLoad`), and the environment's linear sampler |
 | `max_bind_groups` | 4 | 2 | The scene, the environment |
 | `FLOAT32_FILTERABLE` | — | required | The environment is an Rgba32Float texture sampled with a linear sampler; wgpu derives the tracer's layout from the shader and marks a texture read through a sampler as filterable. |
 | `COMPUTE_SHADERS` | — | required | The whole tracer is one compute pass, 8×8 workgroups |
@@ -261,7 +261,7 @@ That is about 1.8 GiB before meshes, maps, the sky and probes. The renderer has 
 | Intel ANV | — | **Unverified**: never run |
 | NVIDIA (proprietary or NVK) | — | **Unverified**: never run |
 | Metal | — | **Unverified**: the openers allow it, nothing has run on it |
-| DX12 | — | **Unverified** on a device. Resource binding tiers 2 and 3 meet the numeric floors; see below. Tier 1 is not an adapter wgpu 27 exposes |
+| DX12 | — | **Unverified** on a device. Resource binding tiers 2 and 3 meet the numeric floors; see below. Tier 1 is not an adapter wgpu 30 exposes |
 
 Lavapipe proves correctness on a second driver, not speed.
 
@@ -296,17 +296,17 @@ No test failed on an image, a readback or a validation error.
 
 On Windows the openers take a Vulkan adapter first and use DX12 only when no Vulkan adapter is found. Elsewhere they request Vulkan and Metal and take the first discrete adapter, as before. A refusal names which of those the adapter is.
 
-wgpu 27.0.1 (wgpu-hal 27.0.4, `dx12/adapter.rs`) does not expose a resource binding tier 1 adapter: the backend returns none, because it needs bindless samplers. Tiers 2 and 3 are the adapters a floor can see. Every one of those reports `DownlevelFlags::all()` (shader model 5, so the live floor's capabilities pass, including `SHADER_F16_IN_F32`) and `FLOAT32_FILTERABLE`. Formats stay a check on the device. The numbers below are the limits that file reports.
+wgpu 30.0.1 (wgpu-hal 30.0.1, `dx12/adapter.rs`) does not expose a resource binding tier 1 adapter: the backend returns none, because it needs bindless samplers. Tiers 2 and 3 are the adapters a floor can see. Every one of those reports `DownlevelFlags::all()` (shader model 5, so the live floor's capabilities pass, including `SHADER_F16_IN_F32`) and `FLOAT32_FILTERABLE`. Formats stay a check on the device. The numbers below are the limits that file reports.
 
 | Limit | Flat pass (`Limits::default()`) | Live floor | Tracer | Tier 2 | Tier 3 | Tier 1, not exposed |
 |---|---|---|---|---|---|---|
-| Sampled textures per stage | 16 | **18** | 1 | 1,000,000, or half of that when the device supports ray tracing | 1,048,576, or half with ray tracing | 128, or 64 with ray tracing |
+| Sampled textures per stage | 16 | **18** | 2 | 999,976, or 499,988 when the device supports ray tracing | 786,424, or 393,212 with ray tracing | 118 at feature level 11_0 and 104 above it, or 59 and 52 with ray tracing |
 | Storage buffers per stage | 8 | 8 | **15** | 16 | 262,144 | 2 at feature level 11_0, 16 above it |
 | Storage textures per stage | 4 | 4 | 3 in use | 16 | 262,144 | same as storage buffers |
 | 2D texture side | 8192 | **16384** | the build's own check | 16384 | 16384 | 16384 |
 | Samplers per stage | 16 | 7 in use | 1 | 2048 | 2048 | 16 |
 
-Tier 2 passes the flat pass, the live floor and the tracer. The tracer's 15 storage buffers sit one under tier 2's 16, and the live floor's 18 sampled textures sit under tier 2's heap even with ray tracing (500,000). Tier 3 passes all three with the storage count at 262,144.
+Tier 2 passes the flat pass, the live floor and the tracer. The tracer's 15 storage buffers sit one under tier 2's 16, and the live floor's 18 sampled textures sit under tier 2's heap even with ray tracing (499,988). Tier 3 passes all three with the storage count at 262,144.
 
 Tier 1 passes nothing through wgpu, because the adapter is not exposed. The unreached numbers at feature level 11_0 miss `Limits::default()` (2 storage buffers against 8, 2 storage textures against 4), so they miss the flat pass, the live floor and the tracer. Above feature level 11_0 those unreached numbers would meet all three floors, and wgpu still returns no adapter.
 

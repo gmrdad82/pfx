@@ -4,9 +4,11 @@ use std::rc::Rc;
 use pfx_core::clock::Tick;
 use pfx_gpu::screens::{Device, ScreenPolicy, WindowMode};
 use pfx_gpu::wgpu;
-use pfx_gpu::window::{Host, Point, PresentPreference, Size, choose_present};
+use pfx_gpu::window::{Host, Point, Present, PresentPreference, Size, choose_present};
 use pfx_input::Input;
-use pfx_play::{Cap, Exit, FrameTime, Game, GameError, PcmStream, Settings, Ui, UiFrame, World};
+use pfx_play::{
+    Exit, FrameRate, FrameTime, Game, GameError, PcmStream, Settings, Ui, UiFrame, World,
+};
 use pfx_sound::{ChannelId, Level};
 
 use crate::tests::{WINDOW, capped, rms, world};
@@ -130,8 +132,7 @@ fn leaving(way: Option<Way>, settings: Settings) -> (Headless, Handles, Rc<RefCe
 
 #[test]
 fn a_quit_request_stops_the_game_cleanly_with_its_code() {
-    let (mut run, (_, trail), crashes) =
-        leaving(Some(Way::Quit(30, 3)), capped(Cap::Fps60, Cap::Fps30));
+    let (mut run, (_, trail), crashes) = leaving(Some(Way::Quit(30, 3)), capped());
     let count = run.run_for(2.0).unwrap();
     assert_eq!(count.ticks, 30, "no tick runs after the quit");
     assert!(run.exited());
@@ -145,7 +146,7 @@ fn a_quit_request_stops_the_game_cleanly_with_its_code() {
     assert!(trail.borrow().stopped, "Game::stop ran");
     assert!(crashes.borrow().is_empty());
 
-    let (mut run, (_, trail), _) = leaving(None, capped(Cap::Fps60, Cap::Fps30));
+    let (mut run, (_, trail), _) = leaving(None, capped());
     run.run_for(0.5).unwrap();
     assert_eq!(run.finish(), Ok(0));
     assert!(trail.borrow().stopped);
@@ -159,7 +160,7 @@ fn an_error_from_tick_frame_or_ui_stops_the_game_reports_it_and_exits_non_zero()
         (Way::FailUi(12), "the menu broke"),
         (Way::WorldFail(12), "the world gave up"),
     ] {
-        let (mut run, (_, trail), crashes) = leaving(Some(way), capped(Cap::Fps60, Cap::Fps30));
+        let (mut run, (_, trail), crashes) = leaving(Some(way), capped());
         run.run_for(1.0).unwrap();
         assert_eq!(
             run.driver.exit(),
@@ -180,13 +181,20 @@ fn an_error_from_tick_frame_or_ui_stops_the_game_reports_it_and_exits_non_zero()
 
 #[test]
 fn the_frame_and_the_ui_get_the_real_seconds_of_the_frame() {
-    for (cap, seconds) in [(Cap::Fps60, 1.0 / 60.0), (Cap::Fps30, 1.0 / 30.0)] {
-        let (mut run, (_, trail), _) = leaving(None, capped(cap, Cap::Fps30));
+    for (settings, cost, seconds) in [
+        (capped(), 1_000_000, 1.0 / 60.0),
+        (Settings::default(), 33_333_333, 1.0 / 30.0),
+    ] {
+        let (mut run, (_, trail), _) = leaving(None, settings);
+        run.frame_cost_ns = cost;
         run.run_for(0.5).unwrap();
         let trail = trail.borrow();
         let frame = *trail.frames.last().unwrap();
         let ui = *trail.uis.last().unwrap();
-        assert!((frame.seconds - seconds).abs() < 1e-4, "{cap:?} {frame:?}");
+        assert!(
+            (frame.seconds - seconds).abs() < 1e-4,
+            "{seconds} {frame:?}"
+        );
         assert_eq!(ui.seconds, frame.seconds);
         assert_eq!(ui.alpha, frame.alpha);
         assert_eq!(run.driver.seconds(), frame.seconds);
@@ -195,7 +203,7 @@ fn the_frame_and_the_ui_get_the_real_seconds_of_the_frame() {
             "the first frame has no last one"
         );
     }
-    let (mut run, (_, trail), _) = leaving(None, capped(Cap::Fps60, Cap::Fps30));
+    let (mut run, (_, trail), _) = leaving(None, capped());
     run.run_for(0.5).unwrap();
     run.feed(Event::Attention(pfx_gpu::window::Attention::Minimized(
         true,
@@ -223,7 +231,7 @@ fn the_window_title_is_its_own_or_the_name() {
 }
 
 fn windowed() -> Settings {
-    let mut settings = capped(Cap::Fps60, Cap::Fps30);
+    let mut settings = capped();
     settings.display.mode = WindowMode::Windowed;
     settings.display.size = Size {
         width: 1280,
@@ -323,61 +331,80 @@ fn presents(calls: &[WindowCall]) -> Vec<PresentPreference> {
 }
 
 #[test]
-fn vrr_toggles_live_by_asking_the_surface_for_its_present_mode_on_the_next_frame() {
-    let (game, (next, _)) = Leaver::new(None, capped(Cap::Fps120, Cap::Fps30));
+fn vrr_and_the_frame_rate_switch_live_and_only_vrr_asks_the_surface_again() {
+    let (game, (next, _)) = Leaver::new(None, Settings::default());
     let config = Config::new("leaver", "0.0.0", world()).device(Device::Desktop);
     let mut run = Headless::new(game, config, WINDOW).unwrap();
+    run.frame_cost_ns = 4_000_000;
     run.feed(Event::Refresh(Some(144_000)));
     run.run_for(0.2).unwrap();
     assert!(presents(&run.window.calls).is_empty());
+    assert_eq!(run.driver.present(), Present::default());
 
     let mut settings = run.driver.settings().clone();
-    settings.pacing.vrr = true;
+    settings.pacing.vrr = false;
     *next.borrow_mut() = Some(settings.clone());
     run.run_for(0.05).unwrap();
-    assert_eq!(
-        presents(&run.window.calls),
-        vec![PresentPreference::vrr(Host::Wayland)]
-    );
-    assert_eq!(run.driver.effective_fps(), Some(120));
+    assert_eq!(presents(&run.window.calls), vec![PresentPreference::fifo()]);
+    assert_eq!(run.driver.period(), None);
     run.run_for(0.2).unwrap();
     assert_eq!(presents(&run.window.calls).len(), 1, "asked once");
 
-    settings.pacing.focused = Cap::Fps60;
+    settings.pacing.frame_rate = FrameRate::Cap60;
     *next.borrow_mut() = Some(settings.clone());
     run.run_for(0.2).unwrap();
     assert_eq!(
         presents(&run.window.calls).len(),
         1,
-        "a cap change keeps the mode"
+        "a frame-rate change keeps the mode"
+    );
+    let locked = run.driver.period().unwrap();
+    assert!(
+        (locked.fps() - 72.0).abs() < 1e-9,
+        "two refreshes of 144 Hz"
     );
 
-    settings.pacing.vrr = false;
+    settings.pacing.frame_rate = FrameRate::Cap120;
+    *next.borrow_mut() = Some(settings.clone());
+    run.run_for(0.2).unwrap();
+    assert_eq!(presents(&run.window.calls).len(), 1);
+    assert!(
+        (run.driver.period().unwrap().fps() - 144.0).abs() < 1e-9,
+        "one refresh of 144 Hz"
+    );
+    settings.pacing.frame_rate = FrameRate::Cap60;
+
+    settings.pacing.vrr = true;
     *next.borrow_mut() = Some(settings);
     run.run_for(0.2).unwrap();
+    let on = Present {
+        vrr: true,
+        frame_rate: FrameRate::Cap60,
+    };
     assert_eq!(
         presents(&run.window.calls),
         vec![
-            PresentPreference::vrr(Host::Wayland),
-            PresentPreference::game()
+            PresentPreference::fifo(),
+            present_preference(on, Host::Wayland, true)
         ]
     );
+    assert!((run.driver.period().unwrap().fps() - 60.0).abs() < 1e-9);
+    run.run_for(0.5).unwrap();
+    assert_eq!(run.run_for(1.0).unwrap().frames, 60);
 
-    use wgpu::PresentMode::{Fifo, FifoRelaxed, Immediate, Mailbox};
-    let on = present_preference(true, Host::Wayland);
-    let mailbox = choose_present(&on, &[Fifo, Mailbox, Immediate]);
-    assert_eq!(mailbox.selected, Mailbox);
-    assert_eq!(mailbox.desired_maximum_frame_latency, 1);
-    let fifo = choose_present(&on, &[Fifo]);
-    assert_eq!((fifo.selected, fifo.fell_back), (Fifo, false));
-    let off = choose_present(
-        &present_preference(false, Host::Wayland),
-        &[Fifo, FifoRelaxed],
+    use wgpu::PresentMode::{Fifo, Mailbox};
+    let mailbox = choose_present(
+        &present_preference(on, Host::Wayland, false),
+        &[Fifo, Mailbox],
     );
-    assert_eq!(off.selected, FifoRelaxed);
-    assert_eq!(off.desired_maximum_frame_latency, 2);
+    assert_eq!(mailbox.selected, Mailbox);
+    let off = Present { vrr: false, ..on };
     assert_eq!(
-        choose_present(&present_preference(true, Host::X11), &[Fifo, FifoRelaxed]).selected,
+        choose_present(
+            &present_preference(off, Host::Wayland, false),
+            &[Fifo, Mailbox]
+        )
+        .selected,
         Fifo
     );
 }
@@ -397,7 +424,7 @@ fn a_width_anchored_layout_reaches_the_ui_frame() {
         ),
         (WINDOW, [1920.0, 1080.0]),
     ] {
-        let (game, (_, trail)) = Leaver::new(None, capped(Cap::Fps60, Cap::Fps30));
+        let (game, (_, trail)) = Leaver::new(None, capped());
         let config = Config::new("leaver", "0.0.0", world())
             .device(Device::Desktop)
             .screen(screen.clone());
@@ -452,7 +479,7 @@ fn sung(music: f32) -> (Vec<f32>, Vec<usize>) {
         phase: 0,
         pushed: pushed.clone(),
     };
-    let mut settings = capped(Cap::Fps60, Cap::Fps30);
+    let mut settings = capped();
     settings.audio.music = music;
     settings.audio.effects = 0.0;
     let config = Config::new("singer", "0.0.0", world())

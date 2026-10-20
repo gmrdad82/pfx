@@ -8,6 +8,7 @@ use egui::{
     ViewportInfo,
 };
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
+use pfx_core::rate::Rate;
 use pfx_editor_shell::paint::Painter;
 use pfx_editor_shell::{App, Error, MAX_SIDE, Mods, Script, Step, block_on, check, context};
 use pfx_gpu::pace::Turns;
@@ -609,7 +610,7 @@ fn even(t: f32) -> f32 {
 }
 
 struct Plan {
-    fps: f32,
+    rate: Rate,
     home: Pos2,
     frames: Vec<Frame>,
     pointer: Option<Pos2>,
@@ -708,7 +709,10 @@ impl Plan {
     }
 
     fn count(&self, seconds: f32) -> usize {
-        (seconds * self.fps).round() as usize
+        match self.rate.whole_fps() {
+            Some(fps) => (seconds * fps as f32).round() as usize,
+            None => self.rate.frames(f64::from(seconds)).round() as usize,
+        }
     }
 
     fn travel(&mut self, from: Pos2, to: Pos2, frames: usize, curve: fn(f32) -> f32) {
@@ -861,21 +865,18 @@ impl Plan {
     }
 }
 
-fn plan(tape: &Tape, fps: u32, points: [f32; 2]) -> Result<Vec<Frame>, Error> {
-    plan_from(tape, fps, points, crate::wire::Look::default())
+fn plan(tape: &Tape, rate: Rate, points: [f32; 2]) -> Result<Vec<Frame>, Error> {
+    plan_from(tape, rate, points, crate::wire::Look::default())
 }
 
 fn plan_from(
     tape: &Tape,
-    fps: u32,
+    rate: Rate,
     points: [f32; 2],
     start: crate::wire::Look,
 ) -> Result<Vec<Frame>, Error> {
-    if fps == 0 {
-        return Err(Error("a clip has at least one frame a second".into()));
-    }
     let mut plan = Plan {
-        fps: fps as f32,
+        rate,
         home: Pos2::new(points[0] / 2.0, points[1] / 2.0),
         frames: vec![Frame::default()],
         pointer: None,
@@ -955,15 +956,16 @@ fn plan_from(
         }
         if plan.full() {
             return Err(Error(format!(
-                "the tape runs past {MAX_FRAMES} frames at {fps} a second"
+                "the tape runs past {MAX_FRAMES} frames at {} a second",
+                rate.label()
             )));
         }
     }
     Ok(plan.frames)
 }
 
-pub fn steps(tape: &Tape, fps: u32, points: [f32; 2]) -> Result<Vec<Option<usize>>, Error> {
-    plan(tape, fps, points).map(|frames| frames.iter().map(|frame| frame.step).collect())
+pub fn steps(tape: &Tape, rate: Rate, points: [f32; 2]) -> Result<Vec<Option<usize>>, Error> {
+    plan(tape, rate, points).map(|frames| frames.iter().map(|frame| frame.step).collect())
 }
 
 fn pointer(ctx: &Context, at: Pos2, down: bool) {
@@ -1029,7 +1031,7 @@ struct Player<'p, 'a> {
     target: pfx_gpu::OffscreenTarget,
     theme: Theme,
     layout: Layout,
-    fps: u32,
+    rate: Rate,
     textures: TexturesDelta,
     watching: Watching,
     turns: Turns,
@@ -1046,7 +1048,7 @@ impl Player<'_, '_> {
             )),
             max_texture_side: Some(MAX_SIDE as usize),
             time: Some(time),
-            predicted_dt: 1.0 / self.fps as f32,
+            predicted_dt: 1.0 / self.rate.fps() as f32,
             focused: true,
             events: std::iter::once(Event::ModifiersChanged(frame.modifiers))
                 .chain(frame.events.iter().cloned())
@@ -1111,7 +1113,14 @@ impl Player<'_, '_> {
                 turns,
                 ..
             } = self;
-            turns.time(|| app.frame(gpu, painter.renderer(), output.pixels_per_point))
+            turns.time(|| {
+                let more = app.frame(gpu, painter.renderer(), output.pixels_per_point);
+                let commands = app.commands();
+                if !commands.is_empty() {
+                    gpu.queue.submit(commands);
+                }
+                more
+            })
         };
         self.watch();
         self.turns.poll();
@@ -1211,24 +1220,24 @@ pub fn play(
     app: &mut Workbench<'_>,
     tape: &Tape,
     layout: Layout,
-    fps: u32,
+    rate: Rate,
     mut sink: impl FnMut(usize, &[u8]) -> Result<(), String>,
 ) -> Result<usize, Error> {
-    play_seen(app, tape, layout, fps, |_, index, rgba| sink(index, rgba))
+    play_seen(app, tape, layout, rate, |_, index, rgba| sink(index, rgba))
 }
 
 pub fn play_seen(
     app: &mut Workbench<'_>,
     tape: &Tape,
     layout: Layout,
-    fps: u32,
+    rate: Rate,
     mut sink: impl FnMut(&Workbench<'_>, usize, &[u8]) -> Result<(), String>,
 ) -> Result<usize, Error> {
     let mut turns = Turns::default();
     turns.turn();
     check(layout.size)?;
     check(layout.drawn())?;
-    let frames = plan_from(tape, fps, layout.points(), app.wireframe())?;
+    let frames = plan_from(tape, rate, layout.points(), app.wireframe())?;
     let theme = app.theme();
     let gpu = block_on(Gpu::headless()).map_err(Error)?;
     turns.turn();
@@ -1251,7 +1260,7 @@ pub fn play_seen(
         target,
         theme,
         layout,
-        fps,
+        rate,
         textures: TexturesDelta::default(),
         watching,
         turns,
@@ -1259,7 +1268,7 @@ pub fn play_seen(
         refused: None,
     };
     for (index, frame) in frames.iter().enumerate() {
-        let time = index as f64 / f64::from(fps);
+        let time = rate.time(index as u64);
         if let Some(curve) = &frame.curve {
             let line = frame.step.and_then(|step| tape.line(step)).unwrap_or(0);
             player
@@ -1430,10 +1439,15 @@ mod tests {
     #[test]
     fn a_timed_drag_glides_its_whole_path_on_one_ease_curve_at_60_fps() {
         let points = [800.0, 400.0];
-        let lead = plan(&Tape::parse("move 100 100 0.5\n").unwrap(), 60, points).unwrap();
+        let lead = plan(
+            &Tape::parse("move 100 100 0.5\n").unwrap(),
+            Rate::whole(60),
+            points,
+        )
+        .unwrap();
         assert_eq!(lead.len(), 1 + 30);
         let tape = Tape::parse("move 100 100 0.5\ndrag 100 100 700 100 2.5\n").unwrap();
-        let frames = plan(&tape, 60, points).unwrap();
+        let frames = plan(&tape, Rate::whole(60), points).unwrap();
         assert_eq!(frames.len(), 1 + 30 + 1 + 150 + 1);
         assert!(frames[31].down && frames[181].down && !frames[182].down);
         let path: Vec<f32> = moved(&frames[32..182]).iter().map(|at| at.x).collect();
@@ -1463,7 +1477,7 @@ mod tests {
                 .all(|pair| pair[1] <= pair[0] + 1e-3)
         );
         let linear = Tape::parse("move 100 100 0.5\ndrag 100 100 700 100 1 linear\n").unwrap();
-        let frames = plan(&linear, 60, points).unwrap();
+        let frames = plan(&linear, Rate::whole(60), points).unwrap();
         assert_eq!(frames.len(), 1 + 30 + 1 + 60 + 1);
         let path: Vec<f32> = moved(&frames[32..92]).iter().map(|at| at.x).collect();
         for pair in path.windows(2) {
@@ -1475,28 +1489,31 @@ mod tests {
     fn a_timed_move_and_scroll_spread_over_their_frames_at_60_fps() {
         let points = [800.0, 400.0];
         let tape = Tape::parse("move 400 200 0.1\nmove 100 100 2\n").unwrap();
-        let frames = plan(&tape, 60, points).unwrap();
+        let frames = plan(&tape, Rate::whole(60), points).unwrap();
         assert_eq!(frames.len(), 1 + 6 + 120);
         assert_eq!(moved(&frames).last(), Some(&Pos2::new(100.0, 100.0)));
         let tape = Tape::parse("move 50 50 0.1\nscroll 50 50 6 1.5\n").unwrap();
-        let frames = plan(&tape, 60, points).unwrap();
+        let frames = plan(&tape, Rate::whole(60), points).unwrap();
         assert_eq!(frames.len(), 1 + 6 + 90);
         let lines = wheeled(&frames);
         assert_eq!(lines.len(), 90);
         assert!((lines.iter().sum::<f32>() - 6.0).abs() < 1e-4);
         assert!(lines[45] > lines[0] * 10.0);
         let even = Tape::parse("move 50 50 0.1\nscroll 50 50 -3 0.5 linear\n").unwrap();
-        let lines = wheeled(&plan(&even, 60, points).unwrap());
+        let lines = wheeled(&plan(&even, Rate::whole(60), points).unwrap());
         assert_eq!(lines.len(), 30);
         assert!(lines.iter().all(|line| (line + 0.1).abs() < 1e-5));
         let old = Tape::parse("move 50 50 0.1\nscroll 50 50 6\n").unwrap();
-        assert_eq!(wheeled(&plan(&old, 60, points).unwrap()), vec![6.0]);
+        assert_eq!(
+            wheeled(&plan(&old, Rate::whole(60), points).unwrap()),
+            vec![6.0]
+        );
     }
 
     #[test]
     fn the_plan_is_the_tape_in_frames_at_the_clips_rate() {
         let tape = Tape::parse("wait 1\nclick 100 100\nwait 0.5\ntext ab\nkey Enter\n").unwrap();
-        let frames = plan(&tape, 30, [200.0, 100.0]).unwrap();
+        let frames = plan(&tape, Rate::whole(30), [200.0, 100.0]).unwrap();
         let glide = (Pos2::new(100.0, 50.0).distance(Pos2::new(100.0, 100.0)) / GLIDE_SPEED)
             .clamp(GLIDE_SHORTEST, GLIDE_LONGEST);
         let glide = (glide * 30.0).round() as usize;
@@ -1506,7 +1523,12 @@ mod tests {
         assert!(frames[pressed].down);
         assert!(!frames[pressed + 1].down);
         let second = Tape::parse("wait 1\n").unwrap();
-        assert_eq!(plan(&second, 60, [200.0, 100.0]).unwrap().len(), 61);
+        assert_eq!(
+            plan(&second, Rate::whole(60), [200.0, 100.0])
+                .unwrap()
+                .len(),
+            61
+        );
     }
 
     #[test]
@@ -1520,7 +1542,7 @@ mod tests {
                 Beat::Seek("1.5".into())
             ]
         );
-        let frames = plan(&tape, 30, [200.0, 100.0]).unwrap();
+        let frames = plan(&tape, Rate::whole(30), [200.0, 100.0]).unwrap();
         let seeks: Vec<Option<&str>> = frames.iter().map(|f| f.seek.as_deref()).collect();
         assert_eq!(seeks, [None, Some("tip"), None, None, None, Some("1.5")]);
         for bad in ["seek\n", "seek a b\n"] {
@@ -1552,7 +1574,7 @@ mod tests {
                 },
             ]
         );
-        let frames = plan(&tape, 30, [200.0, 100.0]).unwrap();
+        let frames = plan(&tape, Rate::whole(30), [200.0, 100.0]).unwrap();
         let wires: Vec<Option<f32>> = frames.iter().map(|frame| frame.wire).collect();
         assert_eq!(
             wires,
@@ -1569,7 +1591,7 @@ mod tests {
         assert_eq!(frames[2].xray, Some(true));
         let faded = plan_from(
             &Tape::parse("wireframe 1 1\n").unwrap(),
-            60,
+            Rate::whole(60),
             [200.0, 100.0],
             crate::wire::Look {
                 amount: 0.5,
@@ -1636,7 +1658,12 @@ mod tests {
             assert_eq!(Tape::parse(line).unwrap_err().0, why);
         }
         assert!(Tape::parse("region 0.5 0 0.2 1").is_err());
-        let orbit = plan(&Tape::parse("orbit 90 0.1\n").unwrap(), 30, [200.0, 100.0]).unwrap();
+        let orbit = plan(
+            &Tape::parse("orbit 90 0.1\n").unwrap(),
+            Rate::whole(30),
+            [200.0, 100.0],
+        )
+        .unwrap();
         let turns: Vec<f64> = acts(&orbit)
             .into_iter()
             .map(|act| match act {
@@ -1651,11 +1678,16 @@ mod tests {
             assert!((turn - want).abs() < 1e-9, "{turns:?}");
         }
         assert!((turns.iter().sum::<f64>() - 90.0).abs() < 1e-9);
-        let dolly = plan(&Tape::parse("dolly -2 0\n").unwrap(), 30, [200.0, 100.0]).unwrap();
+        let dolly = plan(
+            &Tape::parse("dolly -2 0\n").unwrap(),
+            Rate::whole(30),
+            [200.0, 100.0],
+        )
+        .unwrap();
         assert_eq!(acts(&dolly), vec![Act::Dolly(-2.0)]);
         let reveal = plan(
             &Tape::parse("reveal road 1 0.1\n").unwrap(),
-            40,
+            Rate::whole(40),
             [200.0, 100.0],
         )
         .unwrap();
@@ -1692,7 +1724,7 @@ mod tests {
         };
         assert_eq!(tape.beats[1], Beat::Curve(moved.clone()));
         assert_eq!(tape.line(1), Some(2));
-        let frames = plan(&tape, 60, [200.0, 100.0]).unwrap();
+        let frames = plan(&tape, Rate::whole(60), [200.0, 100.0]).unwrap();
         let curved: Vec<usize> = (0..frames.len())
             .filter(|&index| frames[index].curve.is_some())
             .collect();
@@ -1736,7 +1768,7 @@ mod tests {
                 },
             ]
         );
-        let frames = plan(&tape, 30, [200.0, 100.0]).unwrap();
+        let frames = plan(&tape, Rate::whole(30), [200.0, 100.0]).unwrap();
         let shades: Vec<Option<(f32, f32)>> = frames
             .iter()
             .map(|frame| frame.clay.zip(frame.wire))
@@ -1755,7 +1787,7 @@ mod tests {
         );
         let faded = plan_from(
             &Tape::parse("shade clay 1\n").unwrap(),
-            60,
+            Rate::whole(60),
             [200.0, 100.0],
             crate::wire::Look::default(),
         )
@@ -1802,7 +1834,7 @@ mod tests {
                 }),
             ]
         );
-        let frames = plan(&tape, 30, [200.0, 100.0]).unwrap();
+        let frames = plan(&tape, Rate::whole(30), [200.0, 100.0]).unwrap();
         assert_eq!(frames.len(), 7);
         assert_eq!(frames[2].file, Some(FileStep::Save));
         assert_eq!(frames[6].file, None);
@@ -1816,7 +1848,7 @@ mod tests {
     #[test]
     fn a_drag_holds_the_button_and_its_modifiers_until_it_lets_go() {
         let tape = Tape::parse("drag 10 10 310 10 shift\nmove 10 10\n").unwrap();
-        let frames = plan(&tape, 30, [400.0, 200.0]).unwrap();
+        let frames = plan(&tape, Rate::whole(30), [400.0, 200.0]).unwrap();
         let held: Vec<&Frame> = frames.iter().filter(|frame| frame.down).collect();
         assert!(held.len() > 2);
         assert!(held.iter().all(|frame| frame.modifiers.shift));
@@ -1828,7 +1860,7 @@ mod tests {
     fn each_frame_knows_its_tape_step_and_a_framed_window_fits_the_frame() {
         let tape = Tape::parse("# wait\nwait 0.1\n\nframe\n").unwrap();
         assert_eq!(
-            steps(&tape, 30, [200.0, 100.0]).unwrap(),
+            steps(&tape, Rate::whole(30), [200.0, 100.0]).unwrap(),
             [None, Some(0), Some(0), Some(0), Some(1)]
         );
         assert_eq!(

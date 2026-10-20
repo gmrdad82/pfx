@@ -21,6 +21,7 @@ mod facts;
 pub mod gltf_io;
 mod holes;
 mod layers;
+mod level_material;
 pub mod library;
 mod lod;
 mod maps;
@@ -31,6 +32,7 @@ pub mod scatter;
 mod scene;
 mod shape;
 pub mod skin;
+pub mod subdiv;
 mod timeline;
 mod uv;
 
@@ -49,6 +51,7 @@ pub use pfx_recipe::NO_SIDECAR;
 pub use pfx_recipe::files;
 pub use pfx_recipe::{apply_only as only, apply_stage as staged};
 pub use scene::{Emitted, emitters, object_ids};
+pub use subdiv::subdivide;
 pub use timeline::{Animates, Bake, Baker, camera_track, lens, pose, pose_cameras, time_refusal};
 
 pub const GENERATOR: &str = "pfx";
@@ -287,6 +290,7 @@ pub struct Built {
     pub extras: Vec<Option<serde_json::Value>>,
     pub materials: BTreeMap<String, serde_json::Value>,
     pub catalogue: BTreeMap<String, serde_json::Value>,
+    overrides: BTreeMap<String, serde_json::Value>,
     pub notes: Vec<String>,
     pub timeline: Option<Timeline>,
     pub markers: Vec<(String, f64)>,
@@ -305,6 +309,7 @@ pub struct Built {
     art: BTreeMap<usize, art::Art>,
     layers: BTreeMap<usize, Vec<layers::Baked>>,
     level_layers: BTreeMap<usize, Vec<layers::Baked>>,
+    level_materials: BTreeMap<usize, layers::Baked>,
 }
 
 impl Built {
@@ -337,6 +342,11 @@ impl Built {
 
     fn recipe_without_catalogue(&self, recipe: &Recipe) -> Recipe {
         let mut merged = recipe.clone();
+        for (name, value) in &self.overrides {
+            if merged.materials.contains_key(name) {
+                merged.materials.insert(name.clone(), value.clone());
+            }
+        }
         for (name, value) in &self.materials {
             merged
                 .materials
@@ -480,7 +490,10 @@ impl Built {
             .filter_map(|(at, lod)| {
                 let of = placed.get(lod.of).copied().flatten()?;
                 let mut level = Lod { of, ..lod.clone() };
-                if let Some(own) = self.level_layers.get(&at) {
+                if let Some(own) = self.level_materials.get(&at) {
+                    let looks = dressed.get_or_insert_with(|| (*self.looks).clone());
+                    layers::unify(&mut level.node, own, looks);
+                } else if let Some(own) = self.level_layers.get(&at) {
                     let looks = dressed.get_or_insert_with(|| (*self.looks).clone());
                     layers::dress(&mut level.node, own, looks);
                 } else if let Some(baked) = self.layers.get(&lod.of) {
@@ -632,6 +645,7 @@ fn rigid_shape(mesh: &pfx_mesh::Mesh) -> pfx_mesh::rigid::Shape<'_> {
 type Lead = (usize, Option<Option<pfx_mesh::rigid::Anchors>>);
 
 const SNAP: f64 = 1e-6;
+const FILE_KEPT: [&str; 3] = ["alpha_mode", "alpha_cutoff", "alpha"];
 
 struct GlbNodes {
     visible: Vec<usize>,
@@ -1196,6 +1210,7 @@ struct Made {
     skins: Vec<(String, skin::Skin)>,
     player: Option<skin::Player>,
     hidden: std::collections::BTreeSet<String>,
+    still: std::collections::BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1276,6 +1291,7 @@ fn make(
     let mut offered = BTreeMap::new();
     let mut hidden = std::collections::BTreeSet::new();
     let mut found_pieces = pieces::Found::default();
+    let mut still = std::collections::BTreeSet::new();
     let generated = if matches!(object.kind, Kind::Generator { .. }) {
         generate(recipe, index, base, registry, routes)?
     } else if matches!(object.kind, Kind::Library { .. }) {
@@ -1287,14 +1303,29 @@ fn make(
         tree = Some(imported.tree);
         clips = imported.clips;
         hidden = imported.hidden;
+        still = imported.still;
         found_pieces = imported.pieces;
         imported.generated
     } else {
+        let mut parts = Vec::new();
         let mesh = match &object.kind {
             Kind::Mesh { path, node, .. } => {
                 let mut found = shape::imported(object, recipe, base, path, node.as_deref())?;
                 shape::weights(object, &mut found.morph)?;
                 morphs = vec![(!found.morph.is_empty()).then_some(found.morph)];
+                for (node, mesh, mut morph) in found.still {
+                    if let Kind::Mesh { morph: set, .. } = &object.kind {
+                        for (name, &w) in set {
+                            if let Some(at) = morph.names.iter().position(|n| n == name) {
+                                morph.weights[at] = w as f32;
+                            }
+                        }
+                    }
+                    let name = format!("{}.{node}", object.name);
+                    still.insert(name.clone());
+                    morphs.push((!morph.is_empty()).then_some(morph));
+                    parts.push(Piece { name, mesh });
+                }
                 looks = found.looks;
                 offered = found.materials;
                 found_pieces = found.pieces;
@@ -1307,10 +1338,12 @@ fn make(
             _ => shape::local(object, cuts, recipe, base)?,
         };
         Generated {
-            pieces: vec![Piece {
+            pieces: std::iter::once(Piece {
                 name: object.name.clone(),
                 mesh,
-            }],
+            })
+            .chain(parts)
+            .collect(),
             materials: offered,
             ..Generated::default()
         }
@@ -1328,6 +1361,7 @@ fn make(
         &skins.iter().map(Option::is_some).collect::<Vec<_>>(),
         &found_pieces,
         &mut hidden,
+        &mut still,
     )?;
     morphs = edited_morphs;
     skins = kept
@@ -1364,6 +1398,7 @@ fn make(
         skins: Vec::new(),
         player: None,
         hidden,
+        still,
     };
     taken(
         pieces.iter().map(|piece| piece.name.as_str()).collect(),
@@ -1585,6 +1620,7 @@ fn assemble(
     let mut provenance = serde_json::Map::new();
     let mut offered: BTreeMap<String, (&str, serde_json::Value)> = BTreeMap::new();
     let mut quiet = std::collections::BTreeSet::new();
+    let mut filed = std::collections::BTreeSet::new();
     let mut renamed = Vec::new();
     let mut textures = recipe.textures.clone();
     let mut lights = Vec::new();
@@ -1651,9 +1687,26 @@ fn assemble(
         if let Some(key) = key {
             used.insert(key);
         }
+        if !made.still.is_empty() {
+            let prefix = format!("{}.", object.name);
+            let entry = by_object
+                .entry(object.name.clone())
+                .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+            if let Some(map) = entry.as_object_mut() {
+                for piece in made.still.iter().filter_map(|n| n.strip_prefix(&prefix)) {
+                    let fact = map
+                        .entry(piece.to_string())
+                        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                    if let Some(fact) = fact.as_object_mut() {
+                        fact.insert("spin".to_string(), serde_json::Value::Bool(false));
+                    }
+                }
+            }
+        }
         if matches!(object.kind, Kind::Mesh { .. } | Kind::Library { .. }) {
             renamed.extend(share(recipe, object, &mut made, &offered, &imported));
             offer(&mut offered, object, made.materials.clone())?;
+            filed.extend(made.materials.keys().cloned());
             if matches!(object.kind, Kind::Mesh { .. }) {
                 quiet.extend(made.materials.keys().cloned());
             }
@@ -1727,9 +1780,16 @@ fn assemble(
     let facts = facts::facts(recipe, &generated);
     let sidecar = sidecar(recipe, registry, &facts)?;
     let mut materials = BTreeMap::new();
+    let mut overrides = BTreeMap::new();
     let mut wet = BTreeMap::new();
     let mut notes = renamed.into_iter().chain(notes).collect::<Vec<_>>();
     for (name, (owner, mut value)) in offered {
+        if filed.contains(&name)
+            && let Some(own) = recipe.materials.get(&name)
+            && let Some(kept) = over_file(own, &value)
+        {
+            overrides.insert(name.clone(), kept);
+        }
         match recipe.materials.get(&name) {
             Some(own) if *own != value && !quiet.contains(&name) => notes.push(format!(
                 "materials.{name}: the recipe's entry replaces the one the object `{owner}` returned"
@@ -1753,6 +1813,7 @@ fn assemble(
     }
     let catalogue = catalogue(&parts, registry, recipe, &mut notes);
     let mut merged = recipe.materials.clone();
+    merged.extend(overrides.iter().map(|(k, v)| (k.clone(), v.clone())));
     for (name, value) in &materials {
         merged.entry(name.clone()).or_insert_with(|| value.clone());
     }
@@ -1760,6 +1821,11 @@ fn assemble(
     let looks = Arc::new(maps::resolve(recipe, &textures, base, imported, &merged)?);
     for part in &mut parts {
         part.looks = looks.clone();
+        part.two_sided |= part.node.mesh.slots.iter().any(|slot| {
+            looks
+                .get(&slot.material)
+                .is_some_and(|look| look.double_sided == Some(true))
+        });
     }
     let art = art::read(recipe, base, &parts, &mut notes);
     let layers = layers::bake(
@@ -1770,11 +1836,13 @@ fn assemble(
         &mut notes,
     )?;
     let level_layers = layers::bake_levels(recipe, &parts, &lods, &layers, (&merged, &looks))?;
+    let level_materials = level_material::bake(recipe, &parts, &lods, (&merged, &looks))?;
     notes.extend(scene::left_out(recipe));
     notes.extend(scene::lights_left_out(recipe, &lights));
     Ok(Built {
         materials,
         catalogue,
+        overrides,
         notes,
         lights,
         looks,
@@ -1785,6 +1853,7 @@ fn assemble(
         art,
         layers,
         level_layers,
+        level_materials,
         timeline: recipe.timeline,
         markers: recipe
             .markers
@@ -1803,6 +1872,21 @@ fn assemble(
         sidecar,
         facts,
     })
+}
+
+fn over_file(own: &serde_json::Value, file: &serde_json::Value) -> Option<serde_json::Value> {
+    let (Some(own), Some(file)) = (own.as_object(), file.as_object()) else {
+        return None;
+    };
+    let mut kept = own.clone();
+    for key in FILE_KEPT {
+        if let Some(value) = file.get(key)
+            && !own.contains_key(key)
+        {
+            kept.insert(key.to_string(), value.clone());
+        }
+    }
+    (kept.len() != own.len()).then_some(serde_json::Value::Object(kept))
 }
 
 fn target(recipe_path: Option<&str>, fallback: String, base: &Path, out: Option<&Path>) -> PathBuf {

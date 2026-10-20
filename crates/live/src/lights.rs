@@ -827,6 +827,10 @@ impl Lights {
         self.extended
     }
 
+    pub fn will_extend(&self) -> bool {
+        self.extended || self.lights.iter().any(|light| light.lit())
+    }
+
     pub fn write_uniform(
         &mut self,
         device: &wgpu::Device,

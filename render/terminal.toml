@@ -5,9 +5,34 @@ frame = "bare"
 
 [env]
 HOME = "home"
+GPU_QUEUE = "1"
 
 [shots.start]
 kind = "clip"
 line = "pfx new scaffolds a game and pfx bench measures its first .pitofx scene headless"
 tape = "render/terminal/start.tape"
+settle = "1s"
+
+[shots.edit]
+kind = "clip"
+line = "an agent reads, sets and checks values in a .pitofx from the command line, then builds it"
+tape = "render/terminal/edit.tape"
+settle = "1s"
+
+[shots.git]
+kind = "clip"
+line = "pfx git setup makes git diff show a .pitofx edit as its one-line TOML change"
+tape = "render/terminal/git.tape"
+settle = "1s"
+
+[shots.film]
+kind = "clip"
+line = "pfx film assembles a short from a card, frames pfx shot rendered and a closing card"
+tape = "render/terminal/film.tape"
+settle = "1s"
+
+[shots.resume]
+kind = "clip"
+line = "a traced clip run as a job, killed partway into a frame, resumed, and every frame the same bytes as an uninterrupted run"
+tape = "render/terminal/resume.tape"
 settle = "1s"

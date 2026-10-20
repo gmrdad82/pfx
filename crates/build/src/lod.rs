@@ -161,31 +161,39 @@ pub(crate) fn levels(
         last = last.max(error);
         let mut tangent_list = None;
         let mut png = None;
-        if level.bake_normals {
+        if level.bake_normals || level.bake_material {
+            let key = if level.bake_material {
+                "bake_material"
+            } else {
+                "bake_normals"
+            };
             let Some(spaced) = tangents(&mesh) else {
                 return Err(fail(
                     object,
-                    &at("bake_normals"),
+                    &at(key),
                     "the level has no TEXCOORD_0 or no normals to bake a normal map on, expected uv other than \"none\" and smooth normals",
                 ));
             };
             if let Some(m) = morph.as_mut() {
                 m.remap(&spaced.sources);
             }
-            let distance = level
-                .bake_distance
-                .unwrap_or_else(|| default_distance(base, error as f32));
-            let map = normal_map::bake(
-                base,
-                &spaced.mesh,
-                &spaced.tangents,
-                level.normal_size,
-                distance as f32,
-            )
-            .map_err(|text| fail(object, &at("bake_normals"), text))?;
+            if !level.bake_material {
+                let distance = level
+                    .bake_distance
+                    .unwrap_or_else(|| default_distance(base, error as f32));
+                let reach = level.bake_reach.unwrap_or(distance);
+                let map = normal_map::bake(
+                    base,
+                    &spaced.mesh,
+                    &spaced.tangents,
+                    level.normal_size,
+                    (distance as f32, reach as f32),
+                )
+                .map_err(|text| fail(object, &at("bake_normals"), text))?;
+                png = Some(map);
+            }
             mesh = spaced.mesh;
             tangent_list = Some(spaced.tangents);
-            png = Some(map);
         }
         let mut extras = json!({
             "of": master.name,
@@ -196,6 +204,9 @@ pub(crate) fn levels(
         });
         if png.is_some() {
             extras["normal_size"] = json!(level.normal_size);
+        }
+        if level.bake_material {
+            extras["material_size"] = json!(level.material_size);
         }
         if let Some(file) = file {
             extras["path"] = json!(file);

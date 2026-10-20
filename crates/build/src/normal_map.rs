@@ -145,12 +145,18 @@ impl<'a> Master<'a> {
         }
     }
 
-    pub(crate) fn cast(&self, point: V3, normal: V3, distance: f32) -> Option<Found> {
+    pub(crate) fn cast_within(
+        &self,
+        point: V3,
+        normal: V3,
+        distance: f32,
+        reach: f32,
+    ) -> Option<Found> {
         let ray = Ray {
             origin: add(point, scale(normal, distance)),
             direction: scale(normal, -1.0),
         };
-        let hit = self.bvh.intersect(&self.triangles, ray, distance * 2.0)?;
+        let hit = self.bvh.intersect(&self.triangles, ray, distance + reach)?;
         let at = add(ray.origin, scale(ray.direction, hit.distance));
         Some(Found {
             index: hit.index as usize,
@@ -219,7 +225,7 @@ fn texel(
     tangents: &[[f32; 4]],
     triangle: usize,
     w: [f32; 3],
-    distance: f32,
+    (distance, reach): (f32, f32),
 ) -> [u8; 3] {
     let tri = &low.indices[triangle * 3..triangle * 3 + 3];
     let at = |k: usize| tri[k] as usize;
@@ -239,7 +245,7 @@ fn texel(
     };
     let n = normalize(vn);
     let vb = scale(cross(vn, vt), sign);
-    let Some(hit) = master.cast(p, n, distance) else {
+    let Some(hit) = master.cast_within(p, n, distance, reach) else {
         return FLAT;
     };
     let target = master.normal(hit.index, hit.point, n);
@@ -314,7 +320,7 @@ pub(crate) fn bake(
     low: &Mesh,
     tangents: &[[f32; 4]],
     size: u32,
-    distance: f32,
+    reach: (f32, f32),
 ) -> Result<Vec<u8>, String> {
     let n = low.positions.len();
     let uvs = low
@@ -356,7 +362,7 @@ pub(crate) fn bake(
                         tangents,
                         owner as usize,
                         raster.weights[at],
-                        distance,
+                        reach,
                     );
                     px[i * 3..i * 3 + 3].copy_from_slice(&rgb);
                     *done = true;
@@ -439,8 +445,8 @@ mod tests {
         let master = grid(24, 0.0);
         let low = grid(2, 0.0);
         let spaced = pfx_mesh::tangents(&low).unwrap();
-        let png = bake(&master, &spaced.mesh, &spaced.tangents, 32, 0.05).unwrap();
-        let again = bake(&master, &spaced.mesh, &spaced.tangents, 32, 0.05).unwrap();
+        let png = bake(&master, &spaced.mesh, &spaced.tangents, 32, (0.05, 0.05)).unwrap();
+        let again = bake(&master, &spaced.mesh, &spaced.tangents, 32, (0.05, 0.05)).unwrap();
         assert_eq!(png, again);
         let decoder = png::Decoder::new(std::io::Cursor::new(&png));
         let mut reader = decoder.read_info().unwrap();
@@ -457,7 +463,7 @@ mod tests {
         let mut low = grid(2, 0.0);
         low.append(&grid(2, 0.5));
         let spaced = pfx_mesh::tangents(&low).unwrap();
-        let e = bake(&low, &spaced.mesh, &spaced.tangents, 32, 0.05).unwrap_err();
+        let e = bake(&low, &spaced.mesh, &spaced.tangents, 32, (0.05, 0.05)).unwrap_err();
         assert!(e.contains("overlap"), "{e}");
     }
 }

@@ -29,7 +29,9 @@ select = "title"
 | `[authoring.pfx] play` | the scene the game plays; without it, `scene` | the game's `main` (`Project::play`) |
 | `[authoring.pfx] select` | the object the editor selects when it opens, if that scene has it | the editor |
 | `[authoring.pfx.screen]` | the game's `[screen]` policy (`docs/screens.md`): its aspects per device, the bars, the safe area and the UI scale | the game's `config()` (`Config::screen`) and the editor, which frames the scene camera with the policy's first aspect for the device |
+| `[authoring.pfx.graphics]` | the game's default quality (`quality = "appearance"` or `"performance"`) and effect switches (`[authoring.pfx.graphics.effects]`, [settings.md](settings.md#effects)); an unknown key is refused | the game's `config()` (`Project::graphics`, as `Config::settings`) |
 | `[authoring.pfx] flat` | `true` for a game with no 3D scene (`Config::flat`): the editor opens such a project without any scene on an empty world, and play draws no 3D pass; a value that is not a boolean is refused | the editor |
+| `[authoring.pfx] redraw` | `"on-demand"` (the default: the window draws a frame only when something changed) or `"always"` (every frame drawn, `Config::redraw(Redraw::Always)`); any other value is refused | the game's `config()` (`Project::redraws_always`), [game.md](game.md#frames-on-demand) |
 | `[authoring.pfx] modules` | the game's gameplay modules: the built `.wasm` of each, relative to the root; a module's id is its file's stem | the game (`Project::modules`, `pfx_mod::Modules`), and the editor's live reload |
 | `[project] ignore` | folders (or files) not to look in, relative to the root, besides `target/` and `tmp/` | pfx-scene's `Project::open`, and `Project::scenes` and `folders` here |
 | `[tunables.<name>]` | the game's tunables (`docs/play.md`, "Tunables") | pfx-play, through pfx-scene's `ProjectFile` |
@@ -42,6 +44,7 @@ select = "title"
 - `Project::find(path)` walks up from a file or folder to the nearest `project.toml`. `Project::locate(manifest_dir)` is what a game's `main` calls: the folder beside the running exe when it holds a `project.toml` (a shipped build packs `project.toml` and `content/` beside the exe), else the crate's own folder (`cargo run`).
 - `scenes()` lists every scene `.pitofx` (one holding a scene's `SMET` chunk) and every old `*.scene.toml` (imported once into a `.pitofx` when it is opened), and `folders()` every content folder (one that directly holds a scene, prefab, material library, proxies file, glTF, glb, buffer, PNG, HDR, WAV, Ogg, font, SVG, KTX2 or EXR), each with its files. Both are sorted by name and skip dot folders, folders with their own `project.toml`, the root's `target/` and `tmp/` (cargo's output and scratch) and the paths `[project] ignore` lists, as pfx-scene's own walk does. The scaffold's `project.toml` lists nothing in `ignore`: `target/` and `tmp/` are skipped by default.
 - `flat()` is `[authoring.pfx] flat`, false without it.
+- `redraws_always()` is `[authoring.pfx] redraw = "always"`, false without it or with `"on-demand"`.
 - `modules()` lists the gameplay modules as `Module { id, path }`, in the order `modules` names them; a `modules` that is not a list of `.wasm` paths is refused, naming the file.
 - `first()` is the scene the editor opens: `scene`, else `play`, else the first scene listed. `play()` is `play`, else `scene`, else the first scene listed.
 
@@ -62,7 +65,8 @@ It writes:
 | File | What it is |
 |---|---|
 | `Cargo.toml` | one package `<game>`; `pfx-game`, `pfx-project` and, optional, `pfx-workbench`, all from `https://github.com/gmrdad82/pfx.git` at the tag pfx was built from (`v` and its own version); `default = ["tools"]`, `tools = ["pfx-game/tools", "dep:pfx-workbench"]` |
-| `src/lib.rs` | the game: a unit struct named after the game (`my-game` gives `my_game::MyGame`) implementing `pfx_game::Game`, doing nothing yet; `project()` (`Project::locate`); and `config(&project)`, the game's `pfx_game::Config` on `project.play()` with the project's screen policy and `Exposure::Fixed(1.0)`, the exposure the editor's viewport draws with, instead of auto exposure (delete the line for auto) |
+| `src/lib.rs` | the game: a unit struct named after the game (`my-game` gives `my_game::MyGame`) implementing `pfx_game::Game`, doing nothing yet; `project()` (`Project::locate`); and `config(&project)`, the game's `pfx_game::Config` on `project.play()` with the project's screen policy, its build date (`.build_date(option_env!("PFX_BUILD_DATE"))`, below) and `Exposure::Fixed(1.0)`, the exposure the editor's viewport draws with, instead of auto exposure (delete the line for auto) |
+| `build.rs` | the game's build date, below; std only, no build dependencies |
 | `src/main.rs` | `#![cfg_attr(not(feature = "tools"), windows_subsystem = "windows")]`, then `pfx_game::launch(<Game>::new, config(&project), …)`; with `tools` it sets the launcher's edit hook to `pfx_workbench::edit_project(project.root(), factory, config(&project)?, args)`, the hook's factory, the game's own config and the arguments after `edit` |
 | `tests/first.rs` | a GPU test, ignored by default: the first scene runs headless (`pfx_game::Headless::with_gpu`) for half a second at 960 × 540, writes `tmp/first-frame.png` and checks the name's light and the X axis's red |
 | `project.toml` | the project, as above: `scene` and `play` name `content/first.pitofx`, `select` names `title`, and `[authoring.pfx.screen]` holds 16:9 on a desktop and 16:10 on a Deck |
@@ -70,8 +74,21 @@ It writes:
 | `content/meshes/name.glb`, `mark.glb`, `grid.glb` | the meshes, below; `name.glb` and `mark.glb` are made for the game when it scaffolds |
 | `content/marks/mark.png` | with `--mark` only: the game's mark as given |
 | `content/fonts/IBMPlexMono-Regular.ttf`, `IBMPlexMono-OFL.txt` | the name's and the version's face, IBM Plex Mono as IBM ships it, and its SIL Open Font License (Reserved Font Name "Plex", so it is never subset or renamed here) |
+| `content/credit/powered-by-128.png`, `powered-by-light-128.png` | pfx's Powered by lockup, 128 px tall, for a dark ground and a light one; the README shows it, and the game may show it in its own credits |
 | `AGENTS.md`, `CLAUDE.md`, `prompts/RESUME.md` | the repo's own session starts there |
+| `README.md` | the game's name as its title, one line, the one `pfx new` also prints last: "This game links pfx: publish its source under the AGPL-3.0, or use pfx's free licence (closed use under $200k a year, education, non-profits) or a commercial one: https://pitomd.com/pfx/license", and the Powered by lockup, a `<picture>` of the two PNGs above that shows the lime one on a dark theme and the violet one on a light one. The scaffold writes no licence file and no other legal text; the game chooses its own licence |
 | `.gitignore` | `/target` and `/tmp` |
+| `.gitattributes` | `*.pitofx diff=pitofx`, so `git diff` shows a `.pitofx` as its TOML; in a folder that is already a git repository, pfx new also sets the repository's git config ([.pitofx in git](git.md)) |
+
+### The build date
+
+A pfx Pro key hides the splash only for a build made while it was paid ([The splash](splash.md), "Hiding it"), so the game needs its own build date. The scaffold's `build.rs` sets `PFX_BUILD_DATE` (`YYYY-MM-DD`, UTC) at compile time from, in order:
+
+1. `SOURCE_DATE_EPOCH`, when the build sets it (a reproducible or release build);
+2. else the committer time of the game repo's `HEAD` (`git log -1 --format=%ct`), only when the game's folder is a git work tree. It reruns when `HEAD` or the branch it points to moves. A work tree with uncommitted changes still takes `HEAD`'s time, so commit before a build that needs today's date;
+3. else nothing: a build with no git and no `SOURCE_DATE_EPOCH` has no date, and a Pro key cannot hide its splash.
+
+It never falls back to the clock. `config(&project)` passes the value to `Config::build_date`; a game made before the scaffold had a `build.rs` copies the file and adds that line.
 
 ### --with-module
 
@@ -118,18 +135,7 @@ All of it is data. Delete the objects, the prefab, meshes and materials, or poin
 
 ### pfx's own start meshes
 
-`crates/project/src/templates/badge.glb` and `wordmark.glb` are pfx's mark and wordmark in 3D, held in `pfx_project::marks` for pfx's own start page and never written into a game. To rebuild them, from the repo's root:
-
-```sh
-mkdir -p tmp/marks3d
-manfred build brand/recipes/incoming-full.toml --out tmp/marks3d
-python3 crates/project/src/templates/recipes/make.py tmp/marks3d/recipes
-manfred build tmp/marks3d/recipes/wordmark.toml --out tmp/marks3d
-manfred build tmp/marks3d/recipes/grid.toml --out tmp/marks3d
-python3 crates/project/src/templates/recipes/merge.py tmp/marks3d/pfx-incoming-full.glb tmp/marks3d/pfx-wordmark.glb tmp/marks3d/merged
-```
-
-`merge.py` prints the children's places in the group (`badge_at`, `wordmark_at`) and its half height, which the prefab's and the scene's `at` hold; copy `merged/` and `pfx-grid.glb` over the templates. With manfred 0.16 the chain gives the checked-in files byte for byte.
+`crates/project/src/templates/badge.glb` and `wordmark.glb` are pfx's mark and wordmark in 3D, held in `pfx_project::marks` for pfx's own start page and never written into a game. They were built once and are kept as built: the wordmark from `recipes/wordmark.toml` (the wordmark's outlines extruded 7 cm with a 6 mm round edge), the mark from pfx's mark recipe with its materials averaged into five groups, both merged into one group with the wordmark 12 cm right of the mark's tile, its face flush with the tile's front. `grid.glb` is `recipes/grid.toml` built with `pfx build` ([Recipes](recipes.md)). A change to them is made by editing the recipe and rebuilding; a one-off step the build can't do is written in `tmp/` and deleted.
 
 **Stack.** pfx-scene resolves without recursion, in about 250 KB of stack at any depth, and refuses a chain deeper than `pfx_scene::MAX_DEPTH` (64) with `include-depth` or `prefab-depth`. pfx gui boxes the editor crates' viewport and the play view, so `Session::open_project` opens the scaffold in under 512 KB in a debug build; tests run it on an ordinary 2 MB test thread.
 
@@ -178,7 +184,7 @@ A folder without `project.toml`, like the engine's fixture folders, opens as a b
 
 ## Tests
 
-- `crates/project/src/tests.rs` (in the gate): reading `project.toml`, the fallbacks of `play` and `first`, refusals, the scene and folder listing and what it skips, bare folders, `find`; the name rule, the templates' fill, and a scaffold into an empty repo folder (every file, the pins and features, `main`'s first line, the ids written, the meshes, the same bytes twice) and its refusals.
+- `crates/project/src/tests.rs` (in the gate): reading `project.toml`, the fallbacks of `play` and `first`, refusals, the scene and folder listing and what it skips, bare folders, `find`; the name rule, the templates' fill, and a scaffold into an empty repo folder (every file, the pins and features, `main`'s first line, the ids written, the meshes, the same bytes twice) and its refusals; the scaffold's `build.rs` and `config` passing its build date, and the `build.rs` date conversion (the template itself, compiled into the tests).
 - `src/main.rs`: `pfx new`'s arguments.
 - `crates/editor/src/tests.rs` (in the gate): the scenes and content sections, the selection on open, Enter, the `open` button and a double-click asking to open a scene, and the switch keeping the project and the log; a folder without scenes refused and a bare fixture folder opened. A project whose prefab places itself, whose scenes include each other, or whose prefabs nest 70 deep is refused with pfx-scene's finding, never a crash: by pfx new's project check (`crates/project/src/tests.rs`), by `Session::open_project` and `Session::open` (`crates/editor/src/tests.rs`) and by a game's start (`crates/game/src/tests.rs`). pfx new's check runs pfx-scene's `check` before it fixes the ids, so its error names the finding.
 - `crates/project/tests/scaffold.rs`, run by hand (each `#[ignore]`):
@@ -195,7 +201,7 @@ A folder without `project.toml`, like the engine's fixture folders, opens as a b
   - `the_scaffolded_game_runs_headless_and_shows_its_world` runs the scaffold's `tests/first.rs` under pgpu and copies its frame to `tmp/scaffold/first-frame.png`;
   - `the_scaffold_with_a_module_builds_and_its_module_compiles` builds a `--with-module` scaffold with the defaults and checks its module crate;
   - `the_scaffolds_module_builds_to_wasm_and_the_host_swaps_it_keeping_its_state` (needs the `wasm32-unknown-unknown` target) builds the module to wasm, loads it through `Host::load_module`, ticks it twice and swaps it keeping its count.
-- `crates/project/src/tests.rs` reads `[authoring.pfx] flat` and refuses a value that is not a boolean, and the scaffold's `main.rs` hands the edit hook's factory and the game's config to `run_project`. `crates/game/src/tests.rs` (with `tools`) checks the edit hook gets a factory that builds no game until it is called and one fresh game each call. `crates/editor/src/tests.rs` opens a flat project with no scene on the empty world, and `crates/editor/tests/play.rs` (GPU) plays it: see `docs/editor.md`, "Tests".
+- `crates/project/src/tests.rs` reads `[authoring.pfx] flat` and refuses a value that is not a boolean, and the scaffold's `main.rs` hands the edit hook's factory, the game's config and the arguments to `edit_project`. `crates/game/src/tests.rs` (with `tools`) checks the edit hook gets a factory that builds no game until it is called and one fresh game each call. `crates/editor/src/tests.rs` opens a flat project with no scene on the empty world, and `crates/editor/tests/play.rs` (GPU) plays it: see `docs/editor.md`, "Tests".
 - `crates/editor/tests/project.rs` (GPU, ignored), `the_editor_swaps_a_rebuilt_gameplay_module_during_play_and_keeps_its_state`: a project whose game ticks one module, rebuilt during play at its tick 12 (the game writes the new build, as cargo would); the editor sees it, the module swaps at the next tick, its count carries on through `save` and `restore`, the rebuilt module's turn hides the title, and the log has each step. The shot is `tmp/editor-shots/project-module-reload.png`.
 - `crates/editor/tests/project.rs` (GPU, ignored): the editor's offscreen harness opens a scaffolded project, shows the group `title` selected with the move gizmo's centre within 5 % of the viewport's middle, the name and the X axis; the 3D view covers the same rect through the scene's camera and the editor's; F5 without a game plays the scene as it is; F5 with a game factory plays the game's own logic (it hides the name, the mark and the grid on its first tick; `start` once, ticks counted); F9 saves its input; F8 stops it (`stop` once) and the viewport comes back; no file changes. The shots go to `tmp/editor-shots/project-*.png`.
 

@@ -10,6 +10,17 @@ use serde::Serialize;
 
 const PLATFORMS: &[&str] = &["windows", "linux", "macos"];
 
+const CREDIT: &[(&str, &[u8])] = &[
+    (
+        "powered-by-128.png",
+        include_bytes!("../assets/marks/powered-by-128.png"),
+    ),
+    (
+        "powered-by-light-128.png",
+        include_bytes!("../assets/marks/powered-by-light-128.png"),
+    ),
+];
+
 pub const TOOLS_MARKER: &str =
     "pfx-game tools build: the launcher's commands and pfx's editor are linked in";
 
@@ -636,6 +647,12 @@ fn write_stage(out: &Path, spec: &Spec) -> Result<(), String> {
         let path = out.join(format!("depot_build_{}.vdf", depot.id));
         fs::write(&path, depot_script(depot)?).map_err(|error| io(&path, error))?;
     }
+    let credit = out.join("credit");
+    fs::create_dir_all(&credit).map_err(|error| io(&credit, error))?;
+    for (name, bytes) in CREDIT {
+        let path = credit.join(name);
+        fs::write(&path, bytes).map_err(|error| io(&path, error))?;
+    }
     let app_path = out.join(format!("app_build_{}.vdf", spec.app_id));
     fs::write(&app_path, app_script(spec)?).map_err(|error| io(&app_path, error))?;
     let manifest_path = out.join("steam-manifest.json");
@@ -749,6 +766,16 @@ fn manifest_json(spec: &Spec, out: &Path) -> Result<String, String> {
             files,
         });
     }
+    let credit = CREDIT
+        .iter()
+        .map(|(name, bytes)| {
+            Ok(FileRecord {
+                path: format!("credit/{name}"),
+                bytes: bytes.len() as u64,
+                sha256: tools::hash_file(&out.join("credit").join(name))?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let body = SteamManifest {
         v: 1,
         app_id: spec.app_id,
@@ -758,6 +785,7 @@ fn manifest_json(spec: &Spec, out: &Path) -> Result<String, String> {
         app_build: format!("app_build_{}.vdf", spec.app_id),
         steamcmd,
         depots,
+        credit,
     };
     let mut text = serde_json::to_string_pretty(&body).map_err(|error| error.to_string())?;
     text.push('\n');
@@ -868,6 +896,7 @@ struct SteamManifest {
     app_build: String,
     steamcmd: String,
     depots: Vec<DepotRecord>,
+    credit: Vec<FileRecord>,
 }
 
 #[derive(Serialize)]
@@ -1090,6 +1119,18 @@ mod tests {
         let linux_files = record["depots"][1]["files"].as_array().unwrap();
         assert_eq!(linux_files[0]["path"], "example-game");
         assert_eq!(linux_files[0]["sha256"], sha(b"LIN\n"));
+        for (at, name) in ["powered-by-128.png", "powered-by-light-128.png"]
+            .iter()
+            .enumerate()
+        {
+            let staged = fs::read(out.join("credit").join(name)).unwrap();
+            assert_eq!(
+                staged,
+                fs::read(Path::new("assets/marks").join(name)).unwrap()
+            );
+            assert_eq!(record["credit"][at]["path"], format!("credit/{name}"));
+            assert_eq!(record["credit"][at]["sha256"], sha(&staged));
+        }
         let _ = fs::remove_dir_all(&root);
     }
 

@@ -15,7 +15,7 @@ pub const CREASE_DEGREES: f32 = 1.0;
 const PRECISION: f32 = 1e4;
 const EDGE_BYTES: u64 = 32;
 const PLACED_BYTES: usize = 96;
-const VIEW_BYTES: u64 = 192;
+const VIEW_BYTES: u64 = 208;
 const LINE_WIDTH: f32 = 1.0;
 const SELECTED_WIDTH: f32 = 1.6;
 const ROUTE_WIDTH: f32 = 2.0;
@@ -227,10 +227,12 @@ pub struct Target<'a> {
     pub format: wgpu::TextureFormat,
     pub depth: &'a wgpu::TextureView,
     pub size: [u32; 2],
+    pub depth_size: [u32; 2],
     pub camera: (Matrix, Matrix),
     pub scale: f32,
     pub region: Option<[f32; 4]>,
     pub under: Option<&'a crate::backdrop::Drawn>,
+    pub grid: Option<&'a pfx_editor_viewport::grid::Drawn>,
 }
 
 struct Pipes {
@@ -366,6 +368,15 @@ impl Wire {
         );
         push_floats(&mut uniform, depth_terms(&projection));
         push_floats(&mut uniform, region_pixels(target.region, target.size));
+        push_floats(
+            &mut uniform,
+            [
+                target.depth_size[0] as f32,
+                target.depth_size[1] as f32,
+                0.0,
+                0.0,
+            ],
+        );
         gpu.queue.write_buffer(&pipes.view, 0, &uniform);
         let (Some(edges), Some(placed)) = (&self.edges, &self.placed) else {
             return Err("the wireframe has no buffers".into());
@@ -413,6 +424,10 @@ impl Wire {
         pass.draw(0..3, 0..1);
         if let Some(under) = target.under {
             under.record(&mut pass);
+            pass.set_bind_group(0, &group, &[]);
+        }
+        if let Some(grid) = target.grid {
+            grid.record(&mut pass);
             pass.set_bind_group(0, &group, &[]);
         }
         if self.count > 0 {
@@ -619,6 +634,7 @@ struct View {
     hidden: f32,
     depth: vec4f,
     region: vec4f,
+    depth_size: vec4f,
 }
 
 fn kept(pixel: vec2f) -> bool {
@@ -720,8 +736,9 @@ fn line(@builtin(vertex_index) index: u32) -> Line {
 }
 
 fn distance_at(pixel: vec2i) -> f32 {
-    let limit = vec2i(view.size) - vec2i(1, 1);
-    let z = textureLoad(depth, clamp(pixel, vec2i(0, 0), limit), 0);
+    let limit = vec2i(view.depth_size.xy) - vec2i(1, 1);
+    let at = vec2i((vec2f(pixel) + vec2f(0.5)) * view.depth_size.xy / view.size);
+    let z = 1.0 - textureLoad(depth, clamp(at, vec2i(0, 0), limit), 0);
     if z >= 1.0 {
         return 1e30;
     }
@@ -856,7 +873,7 @@ mod tests {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &depth,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
+                    load: wgpu::LoadOp::Clear(0.0),
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,
@@ -879,10 +896,12 @@ mod tests {
             format,
             depth: &depth,
             size,
+            depth_size: size,
             camera: (eye.view(), eye.projection(size, 0.05, 1000.0)),
             scale: 1.0,
             region: None,
             under: None,
+            grid: None,
         };
         assert!(
             gpu.device

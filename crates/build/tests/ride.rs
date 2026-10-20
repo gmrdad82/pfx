@@ -136,3 +136,101 @@ fn a_wheels_children_do_not_move_the_wheelbase() {
         turns(&with, "car.wheel_fl.tyre")
     );
 }
+
+fn two_node_wheel() -> Vec<u8> {
+    let quad = |half: f32| -> Vec<u8> {
+        [
+            0.0, -half, -half, 0.0, -half, half, 0.0, half, half, 0.0, half, -half,
+        ]
+        .iter()
+        .flat_map(|v: &f32| v.to_le_bytes())
+        .collect()
+    };
+    let indices: Vec<u8> = [0u16, 1, 2, 0, 2, 3]
+        .iter()
+        .flat_map(|i| i.to_le_bytes())
+        .collect();
+    let mut bin = quad(0.3);
+    bin.extend(quad(0.05));
+    bin.extend(&indices);
+    let accessor = |view: usize, half: f32| {
+        json!({ "bufferView": view, "componentType": 5126, "count": 4, "type": "VEC3",
+                "min": [0.0, -half, -half], "max": [0.0, half, half] })
+    };
+    let document = json!({
+        "asset": { "version": "2.0" },
+        "scene": 0,
+        "scenes": [{ "nodes": [0, 1] }],
+        "nodes": [
+            { "name": "Tyre", "mesh": 0 },
+            { "name": "Caliper", "mesh": 1, "translation": [0.0, 0.2, 0.1] },
+        ],
+        "meshes": [
+            { "primitives": [{ "attributes": { "POSITION": 0 }, "indices": 2 }] },
+            { "primitives": [{ "attributes": { "POSITION": 1 }, "indices": 2 }] },
+        ],
+        "accessors": [
+            accessor(0, 0.3),
+            accessor(1, 0.05),
+            { "bufferView": 2, "componentType": 5123, "count": 6, "type": "SCALAR" },
+        ],
+        "bufferViews": [
+            { "buffer": 0, "byteOffset": 0, "byteLength": 48 },
+            { "buffer": 0, "byteOffset": 48, "byteLength": 48 },
+            { "buffer": 0, "byteOffset": 96, "byteLength": 12 },
+        ],
+        "buffers": [{ "byteLength": 108 }],
+    });
+    pfx_build::library::join_glb(&document, &bin)
+}
+
+fn mesh_wheel(pieces: &str) -> Result<Built, pfx_build::Error> {
+    let dir = common::scratch("ride-still-nodes");
+    std::fs::write(dir.join("wheel.glb"), two_node_wheel()).unwrap();
+    let text = format!(
+        "recipe = 1\nname = \"t\"\nseed = 3\n\n[timeline]\nfps = 30\nframes = 30\n\n[[route]]\nname = \"main\"\npoints = {CURVED}\n\n[[object]]\nname = \"car\"\nkind = \"box\"\nsize = [1.8, 0.6, 4.0]\nat = [0.0, 0.5, 0.0]\n\n[[object]]\nname = \"car.wheel_fl\"\nkind = \"mesh\"\npath = \"wheel.glb\"\nparent = \"car\"\nat = [0.8, -0.16, 1.3]\npieces = {{ {pieces} }}\n\n[[follow]]\nobject = \"car\"\nroute = \"main\"\nspeed = [[0.0, 10.0]]\n"
+    );
+    let recipe = parse(&text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+    build_with(&recipe, &dir, &registry())
+}
+
+#[test]
+fn listed_nodes_of_an_imported_wheel_follow_and_steer_but_do_not_spin() {
+    let b = mesh_wheel("Caliper = { spin = false }").unwrap();
+    let car = turns(&b, "car");
+    let tyre = turns(&b, "car.wheel_fl");
+    let caliper = turns(&b, "car.wheel_fl.Caliper");
+    let tyre_at = spots(&b, "car.wheel_fl");
+    let caliper_at = spots(&b, "car.wheel_fl.Caliper");
+    for n in [10, 25] {
+        let travelled = 10.0 * n as f64 / 30.0;
+        let spun = caliper[n].inverse() * tyre[n];
+        let want = DQuat::from_axis_angle(DVec3::X, travelled / 0.3);
+        assert!(spun.angle_between(want) < 1e-4, "tyre spins, frame {n}");
+        let (axis, angle) = (car[n].inverse() * caliper[n]).to_axis_angle();
+        assert!(
+            angle < 1e-6 || axis.y.abs() > 0.999,
+            "caliper only steers, frame {n}"
+        );
+        assert!((tyre_at[n] - caliper_at[n]).length() < 1e-6, "frame {n}");
+    }
+    assert!((caliper_at[25] - caliper_at[10]).length() > 1.0);
+    let plain = mesh_wheel("Tyre = { hidden = false }").unwrap();
+    assert!(
+        !plain
+            .tracks
+            .iter()
+            .any(|t| t.node == "car.wheel_fl.Caliper")
+    );
+}
+
+#[test]
+fn a_still_node_the_wheel_lacks_is_refused_with_its_nodes() {
+    let Err(e) = mesh_wheel("Brake = { spin = false }") else {
+        panic!("built");
+    };
+    assert_eq!(
+        e.to_string(),
+        "object[car.wheel_fl].pieces.Brake: wheel.glb has no node `Brake`, expected a node name, a parent/child path or #<index> of: Tyre, Caliper"
+    );
+}

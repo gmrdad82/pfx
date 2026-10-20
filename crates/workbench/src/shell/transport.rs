@@ -9,6 +9,7 @@ const NEXT: &str = "\u{f051}";
 const LOOP: &str = "\u{f01e}";
 const MODULE: &str = "\u{f12e}";
 const GAME: f32 = 330.0;
+const STATS: f32 = 76.0;
 
 fn toggle(ui: &mut Ui, text: &str, on: bool) -> Response {
     let palette = Palette::of(ui.ctx());
@@ -116,7 +117,11 @@ impl Shell {
                 .layout(Layout::left_to_right(Align::Center)),
         );
         bar.spacing_mut().item_spacing.x = 4.0;
-        let game_width = if game { GAME } else { 0.0 };
+        let game_width = match (game, self.shows_session()) {
+            (true, true) => GAME + STATS,
+            (true, false) => GAME,
+            (false, _) => 0.0,
+        };
         match &span {
             Some(span) => self.timeline_controls(&mut bar, span, game_width),
             None => bar.add_space((bar.available_width() - game_width).max(0.0)),
@@ -153,6 +158,13 @@ impl Shell {
         };
         if response.clicked() {
             self.pick_module();
+        }
+        if self.shows_session()
+            && toggle(bar, "stats  F3", self.stats())
+                .on_hover_text(super::stats::HINT)
+                .clicked()
+        {
+            self.toggle_stats();
         }
     }
 

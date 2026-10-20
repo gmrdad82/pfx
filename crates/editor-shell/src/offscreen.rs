@@ -267,6 +267,10 @@ pub fn pixels(app: &mut impl App, size: [u32; 2], script: &Script) -> Result<Vec
         |ui, painter| {
             app.ui(ui);
             app.frame(&gpu, painter.renderer(), ui.ctx().pixels_per_point());
+            let commands = app.commands();
+            if !commands.is_empty() {
+                gpu.queue.submit(commands);
+            }
             settling.set(app.settling());
         },
         || settling.get(),

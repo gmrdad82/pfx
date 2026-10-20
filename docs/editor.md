@@ -74,7 +74,9 @@ The top bar's **Edit** menu, beside File, holds what changes the open document, 
 - **Duplicate** (Ctrl+D) and **Delete** (Del with B1 focused, or in the viewport of a scene) work in both: a recipe duplicate is a copy pasted at once; a scene's is pfx-editor's duplicate (Shift+D too), offset by the level tools' duplicate offset, and its delete removes the picked objects. Each is one undo step.
 - **Values:** a field of the properties panel or the inspector takes a pasted value as typed text (click it, Ctrl+V, Enter).
 
-Copy, cut and paste of scene objects between scene documents is not in this window yet; in a scene, Ctrl+D and Del work, and Ctrl+C, Ctrl+X and Ctrl+V say so in D1.
+Copy, cut and paste work on recipe objects only; in a scene, Ctrl+D and Del work, and Ctrl+C, Ctrl+X and Ctrl+V say so in D1.
+
+**Frame stats.** F3 or the `stats` chip under the viewport shows fps, the frame intervals' p50, p99 and max, the GPU time per pass, the render scale, VRR and the frame-rate target over the viewport ([frame-stats.md](frame-stats.md#stats-in-the-editor)).
 
 ## Play while editing
 
@@ -102,6 +104,17 @@ The editor runs on five crates of pfx's own, `crates/editor-*`, which the window
 pfx keeps only what is its own: the outliner, the inspector, the log, the toolbar, play, the trace preview, the pgpu status line and the theme. Nothing of the old viewport, camera or gizmo is left in pfx.
 
 **One engine in the build.** The editor crates are workspace members and take `pfx-gpu`, `pfx-live` and `pfx-load` by path, so every build holds one copy of each engine crate and the viewport draws on this tree's `Gpu`; `cargo tree -d --workspace` names no pfx crate and one wgpu. The editor takes `pfx-scene` by path too, for its `check`.
+
+## The ground grid
+
+Both viewports, a game's editor and `pfx gui`, draw the ground grid the same way, as Godot's and Blender's 3D editors do: on the plane `y = 0`, depth-tested against the scene, fading with distance and at grazing angles. `pfx_editor_viewport::grid` is one full-screen pass after the live frame: each pixel's view ray meets `y = 0`, the lines are ruled there with a one-pixel, anti-aliased width, and the hit's distance along the view is compared with the scene's depth at that pixel, so a box standing on the ground hides the lines behind it and the floor shows them up to its edges. The pass reads the depth and never writes it, so nothing drawn after it is hidden by the grid. The depth buffer is reversed whether the scene's `[live] reversed_depth` is on or off (only its precision changes), and the pass reads it so in both.
+
+- **The steps follow the height.** The step is a power of ten picked from the camera's height above the plane (half the view's height for an orthographic camera), as Godot picks its division level: from 1 cm to 100 m, every tenth line a major line, and the minor lines fading out as the camera rises towards the next step.
+- **The fade.** The grid fades out with distance from the point under the camera, gone at 90 × 10^(level − 1) metres (about 8 m for a camera 1.5 m up, 57 m for one 10 m up), and where the view meets the plane at under about ten degrees, so the far grid doesn't shimmer into a solid band at the horizon.
+- **The axes lie on the ground.** The X axis is drawn along `z = 0` and the Z axis along `x = 0`, both on the plane; the up axis is only in the corner gizmo.
+- **A floor not at 0.** The grid stays at `y = 0`. A floor above it hides the grid as any surface does; a floor below it leaves the grid floating over it at `y = 0`, as in Blender and Godot. Moving the scene so its floor sits at `y = 0` lines them up.
+- **The modes.** Shaded and clay test the grid against the scene's depth; the wireframe draws it over its dark ground before its lines, still hidden behind surfaces; x-ray shows the hidden part at a third of its strength, as it shows hidden edges. `h` and `--clean` leave it out.
+- **Reprojected frames.** On a small camera move the live renderer may warp its last frame instead of drawing a new one; until the next full frame, a few frames later, the grid is tested against that frame's depth.
 
 ## The look: pfx's theme
 
@@ -265,7 +278,7 @@ The level strip, top left of the viewport, shows the snapping and the brush when
 | normal | off | turns the placement so its +Y is the surface's normal (`snap::upright`) |
 | vertex (V) | off | moves the placement onto the nearest mesh vertex within 12 points of the pointer, as Blender's vertex snap |
 
-**The gizmo.** The viewport's gizmo snaps a move by a step while Ctrl is held, and its step is the viewport's own (0.01 m). With grid snapping on, pfx sets the gizmo's step to the grid step, so a Ctrl-drag moves by whole grid steps. Snapping a gizmo move to a surface or a vertex, and snapping without Ctrl, need the editor crates' drag to take a snap from its host; pfx has the math (`Surfaces::cast`, `Surfaces::vertex`, `snap::grid`) ready for that hook, which pfx asks of the kit.
+**The gizmo.** The viewport's gizmo snaps a move by a step while Ctrl is held, and its step is the viewport's own (0.01 m). With grid snapping on, pfx sets the gizmo's step to the grid step, so a Ctrl-drag moves by whole grid steps. The gizmo does not snap a move to a surface or a vertex, nor without Ctrl: the editor crates' drag takes only a step from its host. Surface, vertex and grid snapping (`Surfaces::cast`, `Surfaces::vertex`, `snap::grid`) apply to placing.
 
 **The id buffer.** The viewport reads its GPU id buffer only for a click's pick, and does not expose it; the surface cast runs on the CPU over the same triangles, so it finds the same object the id buffer would.
 
@@ -317,7 +330,7 @@ Play runs the game exactly as its runtime does: the editor's play is pfx-game's 
 - **A flat game** (`Config::flat()`, or a project with `[authoring.pfx] flat = true`) plays on an empty world (`Scene::empty()`, no tunables or rigs read), with no 3D pass and nothing staged, whatever scene the editor shows, as its window would.
 - **The game ends play.** When the game fails (`world.fail`, or an `Err` from a `try_` hook, `warm` or `paint`), the error goes to the log as `play: the game failed: <error>; play stopped` (or `play: <error>; play stopped` for `warm` and `paint`) and play stops as F8 would: `Game::stop` runs, the edits are discarded and the viewport comes back. `world.quit(code)` stops play the same way with `play: the game quit with code N`. Nothing goes to stderr and the editor stays open.
 - **Record** (F9, while playing or paused) saves the session's input recording, a `pfx_input::Recording` as JSON, to `tmp/pfx/recordings/<scene>-<UTC yyyymmdd-hhmmss>.json` under the project's root (a second save in the same second gets `-2`, and so on), and logs the path. Every play session records its input from its first tick (`Options::record`), and F9 copies what it holds so far without stopping it. `pfx bench <scene> --seconds N --replay <that file>` feeds it back one step per tick (docs/frame-stats.md).
-- **Pause** (F5 or F7) and **step** (F6, one tick) keep pgpu's play on.
+- **Pause** (F5 or F7) holds the game, and **step** (F6) advances it one tick.
 - **Stop** (F8, or closing the window, which drops the session) stops the game (`Game::stop`) and drops play's driver and painter. The viewport was never touched during play, so its pixels, camera and selection come back exactly, and the reloads that arrived during play are taken then.
 - **Sound** (`audio.rs`): the first play opens the default output device once (`pfx_sound::Output`) and keeps it for the session. Each play starts the session with `audio_rate` and `audio_channels` set to the device's (the sender does no resampling), opens one PCM stream (`Output::pcm_stream`, 100 ms of room) and pushes every frame's `take_audio()` into it.
   - **Pause** pushes nothing and is silent; **step** pushes that tick's audio; **resume** carries on; **stop** pushes what is left and finishes the stream, so the tail plays out without a click. Play again opens a fresh stream on the same device.
@@ -331,7 +344,7 @@ Play runs the game exactly as its runtime does: the editor's play is pfx-game's 
 - **Pending until Keep.** Every live edit is held as the session's pending patch. Its rows show the played value and are marked: the label in the hot accent with a `•`. The toolbar shows `F10 keep N` while any are held.
   - **Stop** (F8) discards the patch, as before: the files stay as they were and the rows show them again.
   - **Keep** (F10, or the button) stops and writes the whole patch as one `ScenePatch` on the shared `History`: the scene keys through `SceneEdit::dry_run` (to their defining files, the author's text kept), and the tunables as their new `default`s in the file that holds them. One Ctrl+Z takes it all back. The log says `keep N play edits`.
-- `PFX_EDIT_PGPU=off` skips pgpu's play mode, its status line and the wait for another game; `bin/rig` sets it, so a captured editor never holds anyone's jobs. Without a `pgpu` on `PATH` they are skipped the same way.
+- `PFX_EDIT_PGPU=off` skips pgpu's status line and the wait for another game; `bin/rig` sets it. Without a `pgpu` on `PATH` they are skipped the same way.
 
 ## Tests
 

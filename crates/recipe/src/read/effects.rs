@@ -43,28 +43,6 @@ pub struct Effects {
     pub sound: Option<String>,
 }
 
-impl Effects {
-    pub fn first_key(&self) -> Option<String> {
-        if let Some(p) = self.particles.first() {
-            return Some(format!("particles[{}]", p.name));
-        }
-        for (key, set) in [
-            ("flare", self.flare.is_some()),
-            ("motion_blur", self.motion_blur.is_some()),
-            ("haze", self.haze.is_some()),
-            ("sound", self.sound.is_some()),
-        ] {
-            if set {
-                return Some(key.to_string());
-            }
-        }
-        self.wet
-            .keys()
-            .next()
-            .map(|name| format!("materials.{name}.wet"))
-    }
-}
-
 #[derive(Clone, Copy)]
 enum Rule {
     Any,

@@ -1,6 +1,6 @@
 # Steam
 
-A product that ships on Steam depends on `pfx-steam` and links the Steamworks SDK: achievements, stats, Cloud, leaderboards, lobbies, peer-to-peer lockstep and the Workshop. A product that does not leaves the crate out, and never links the SDK. Nothing else in the workspace depends on it.
+A product that ships on Steam depends on `pfx-steam` and links the Steamworks SDK: achievements, stats, Cloud, leaderboards, lobbies, peer-to-peer lockstep and the Workshop. A product that does not leaves the crate out, and never links the SDK. Nothing else in the workspace depends on it, apart from pfx-game's optional `steam` feature (off by default; "Steam Input" in `docs/game.md`).
 
 The crate is built on `steamworks` (steamworks-rs) pinned at `=0.13.1`. That release carries Steamworks SDK 1.64. `STEAMWORKS_VERSION` is `"0.13.1"` and `SDK_VERSION` is `"1.64"`.
 
@@ -367,7 +367,7 @@ Every behaviour above, including `sync`, is tested on `Fake`. Those tests do not
 
 `Fake::new()` is one player. For two or more, a `Hub` is the fake Steam they share: `hub.client(User(…))` makes a `Fake` for that player, and they see each other's boards, lobbies and messages. The hub also sets what Steam would: `set_server_time`, `befriend`, `set_loss(seed, per_mille)` (unreliable messages dropped from a seeded draw, so a test repeats exactly), and `fail_session(a, b, reason)`. An answer to a call arrives on the next `run_callbacks`. On `Fake`, `AroundUser` stops at the ends of the board; ties rank the earlier score first. For the Workshop, `Fake::subscribe(item)`, `download(item, done, total)`, `install(item, folder)`, `outdate(item)` and `unsubscribe(item)` set an item's state as Steam would, `create_item` numbers new items from `FAKE_ITEM`, `submit_item` succeeds only for an item this `Fake` created, and `submitted()` lists what was sent. One test, `spacewar_client`, is ignored. It inits the public Spacewar app id 480 when a client is running, and it is never part of the gate. It does not change achievements or stats.
 
-## Later
+## Not wrapped
 
 Rich-presence joins with a connect string (`GameRichPresenceJoinRequested`) are not wrapped. The depot build and its upload are a separate step from this runtime. macOS (`libsteam_api.dylib`) is not covered here.
 
@@ -431,11 +431,15 @@ depot = "example-game"
 <out>/depot_build_<depotid>.vdf
 <out>/content/<depotid>/...
 <out>/output/
+<out>/credit/powered-by-128.png
+<out>/credit/powered-by-light-128.png
 <out>/steam-manifest.json
 ```
 
 The scripts are Valve's ContentBuilder shape: an `appbuild` script whose `depots` block names one `depot_build_<depotid>.vdf` per depot, and a `DepotBuildConfig` per depot with `ContentRoot` `content/<depotid>` and one `FileMapping` per manifest entry. `buildoutput` is `output`, next to the scripts, for steamcmd's logs. `contentroot` is `content`. `local` is empty.
 
 The staged files are copies of the mapped sources. `<out>/steam-manifest.json` lists every staged file with its path inside the depot, its size in bytes, and its sha256, so the release step can check the tree it is about to upload. The same steamcmd line is recorded there as `steamcmd`.
+
+`<out>/credit/` holds pfx's Powered by lockup as PNGs 128 px tall, `powered-by-128.png` for a dark ground and `powered-by-light-128.png` for a light one, for the game's store page or credits. They sit outside every depot, so nothing uploads them, and `steam-manifest.json` lists them under `credit` with their sizes and sha256.
 
 The runtime crate, with everything above, is separate from this command. The upload itself stays with the release process.

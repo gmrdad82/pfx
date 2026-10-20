@@ -364,6 +364,7 @@ pub(crate) struct Imported {
     pub materials: std::collections::BTreeMap<String, serde_json::Value>,
     pub skin: Option<(Skin, pfx_load::SkinRig)>,
     pub pieces: pieces::Found,
+    pub still: Vec<(String, Mesh, Morph)>,
 }
 
 pub(crate) fn imported(
@@ -404,6 +405,7 @@ pub(crate) fn imported(
     let mut visited = vec![false; document.nodes().len()];
     let mut rules = Rules::new(object);
     let mut steps = Vec::new();
+    let mut still = Vec::new();
     let mut taken = std::collections::BTreeSet::new();
     while let Some((n, parent, inside, up)) = stack.pop() {
         if visited
@@ -441,6 +443,16 @@ pub(crate) fn imported(
                 let before = out.positions.len();
                 match n.skin() {
                     Some(skin) => {
+                        if choice.still {
+                            return Err(fail(
+                                object,
+                                "pieces",
+                                format!(
+                                    "{path}: the node `{}` is skinned, so its skin poses it and `spin = false` cannot hold it still",
+                                    steps[at].unique
+                                ),
+                            ));
+                        }
                         let placed = (DMat4::IDENTITY, choice.material);
                         read_mesh(&source, &m, placed, &mut out, &mut morph, &mut looks)?;
                         let index = skin.index();
@@ -470,6 +482,13 @@ pub(crate) fn imported(
                             }
                         }
                     }
+                    None if choice.still => {
+                        let mut part = Mesh::default();
+                        let mut own = Morph::default();
+                        let placed = (matrix, choice.material);
+                        read_mesh(&source, &m, placed, &mut part, &mut own, &mut looks)?;
+                        still.push((steps[at].unique.clone(), part, own));
+                    }
                     None => {
                         let placed = (matrix, choice.material);
                         read_mesh(&source, &m, placed, &mut out, &mut morph, &mut looks)?;
@@ -490,7 +509,9 @@ pub(crate) fn imported(
         )),
         _ => {
             crate::library::keep_looks(&mut looks, &bytes, |name| {
-                out.slots.iter().any(|slot| slot.material == name)
+                std::iter::once(&out)
+                    .chain(still.iter().map(|(_, part, _)| part))
+                    .any(|mesh| mesh.slots.iter().any(|slot| slot.material == name))
             });
             let skin = rig.and_then(|(_, found, skin)| {
                 let mut skin = skin?;
@@ -498,7 +519,11 @@ pub(crate) fn imported(
                 Some((skin, found))
             });
             let mut materials = crate::library::file_materials(&bytes);
-            materials.retain(|name, _| out.slots.iter().any(|slot| slot.material == *name));
+            materials.retain(|name, _| {
+                std::iter::once(&out)
+                    .chain(still.iter().map(|(_, part, _)| part))
+                    .any(|mesh| mesh.slots.iter().any(|slot| slot.material == *name))
+            });
             Ok(Imported {
                 mesh: out,
                 morph,
@@ -506,6 +531,7 @@ pub(crate) fn imported(
                 materials,
                 skin,
                 pieces: found_pieces,
+                still,
             })
         }
     }

@@ -61,4 +61,4 @@ std::fs::write("scene.schema.json", json_schema(FileKind::Scene)).unwrap();
 cargo run -p pfx-scene --features schema --example scene-schema -- schemas
 ```
 
-The feature adds `schemars` and `serde_json`; without it the crate depends on neither.
+The feature adds `schemars`; without it the crate does not depend on it.

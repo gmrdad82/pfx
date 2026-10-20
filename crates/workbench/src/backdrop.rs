@@ -7,7 +7,7 @@ use wgpu::util::DeviceExt;
 
 use crate::wire::Matrix;
 
-const QUAD_BYTES: u64 = 208;
+const QUAD_BYTES: u64 = 224;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shown {
@@ -54,6 +54,7 @@ pub struct Target<'a> {
     pub format: wgpu::TextureFormat,
     pub depth: &'a wgpu::TextureView,
     pub size: [u32; 2],
+    pub depth_size: [u32; 2],
     pub camera: (Matrix, Matrix),
 }
 
@@ -140,6 +141,15 @@ impl Backdrop {
                         target.size[1] as f32,
                         item.reference.opacity.clamp(0.0, 1.0) as f32,
                         if through { 1.0 } else { 0.0 },
+                    ],
+                );
+                push_floats(
+                    &mut bytes,
+                    [
+                        target.depth_size[0] as f32,
+                        target.depth_size[1] as f32,
+                        0.0,
+                        0.0,
                     ],
                 );
                 let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -304,6 +314,7 @@ struct Quad {
     size: vec2f,
     opacity: f32,
     through: f32,
+    depth_size: vec4f,
 }
 
 @group(0) @binding(0) var<uniform> quad: Quad;
@@ -331,9 +342,10 @@ fn corner(@builtin(vertex_index) index: u32) -> Corner {
 @fragment
 fn paint(at: Corner) -> @location(0) vec4f {
     let colour = textureSampleLevel(image, soft, at.uv, 0.0);
-    let limit = vec2i(quad.size) - vec2i(1, 1);
-    let z = textureLoad(depth, clamp(vec2i(at.clip.xy), vec2i(0, 0), limit), 0);
-    if z < 1.0 && quad.through < 0.5 {
+    let limit = vec2i(quad.depth_size.xy) - vec2i(1, 1);
+    let pixel = vec2i((floor(at.clip.xy) + vec2f(0.5)) * quad.depth_size.xy / quad.size);
+    let z = textureLoad(depth, clamp(pixel, vec2i(0, 0), limit), 0);
+    if z > 0.0 && quad.through < 0.5 {
         discard;
     }
     return vec4f(colour.rgb, colour.a * quad.opacity);

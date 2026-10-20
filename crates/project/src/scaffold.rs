@@ -7,6 +7,7 @@ pub const SCENE: &str = "content/first.scene.toml";
 pub const DOCUMENT: &str = "content/first.pitofx";
 pub const MARK: &str = "content/marks/mark.png";
 pub const PREFAB: &str = "content/prefabs/title.prefab.toml";
+pub const LICENCE: &str = "This game links pfx: publish its source under the AGPL-3.0, or use pfx's free licence (closed use under $200k a year, education, non-profits) or a commercial one: https://pitomd.com/pfx/license";
 const FONT: &[u8] = include_bytes!("templates/IBMPlexMono-Regular.ttf");
 const TITLE: &str = include_str!("templates/title.prefab.toml.in");
 const FACE: &str = "
@@ -41,8 +42,10 @@ const RESERVED: [&str; 12] = [
     "examples",
 ];
 
-const TEMPLATES: [(&str, &str); 11] = [
+const TEMPLATES: [(&str, &str); 14] = [
+    ("README.md", include_str!("templates/README.md.in")),
     ("Cargo.toml", include_str!("templates/Cargo.toml.in")),
+    ("build.rs", include_str!("templates/build.rs.in")),
     ("src/lib.rs", include_str!("templates/lib.rs.in")),
     ("src/main.rs", include_str!("templates/main.rs.in")),
     ("tests/first.rs", include_str!("templates/first.rs.in")),
@@ -56,6 +59,7 @@ const TEMPLATES: [(&str, &str); 11] = [
     ("CLAUDE.md", "@AGENTS.md\n"),
     ("prompts/RESUME.md", include_str!("templates/RESUME.md.in")),
     (".gitignore", include_str!("templates/gitignore.in")),
+    (".gitattributes", "*.pitofx diff=pitofx\n"),
 ];
 
 const MODULE: [(&str, &str); 3] = [
@@ -76,7 +80,15 @@ const MODULE: [(&str, &str); 3] = [
 const MODULE_LIB: &str = include_str!("templates/lib.module.rs.in");
 const MODULE_AGENTS: &str = include_str!("templates/AGENTS.module.md.in");
 
-const FILES: [(&str, &[u8]); 3] = [
+const FILES: [(&str, &[u8]); 5] = [
+    (
+        "content/credit/powered-by-128.png",
+        include_bytes!("../../../assets/marks/powered-by-128.png"),
+    ),
+    (
+        "content/credit/powered-by-light-128.png",
+        include_bytes!("../../../assets/marks/powered-by-light-128.png"),
+    ),
     (
         "content/meshes/grid.glb",
         include_bytes!("templates/grid.glb"),
@@ -125,6 +137,7 @@ pub fn fill(template: &str, name: &str, version: &str) -> String {
         .replace("{{type}}", &type_name(name))
         .replace("{{tag}}", &format!("v{version}"))
         .replace("{{source}}", SOURCE)
+        .replace("{{licence}}", LICENCE)
 }
 
 fn empty(folder: &Path) -> Result<(), String> {
@@ -298,8 +311,8 @@ fn point(at: [f32; 3]) -> String {
 fn with_mark(relative: &str, text: String) -> String {
     match relative {
         "src/lib.rs" => text.replacen(
-            ".exposure(pfx_game::Exposure::Fixed(1.0));",
-            &format!(".exposure(pfx_game::Exposure::Fixed(1.0))\n        .mark(project.root().join(\"{MARK}\"));"),
+            ".font(include_bytes!(\"../content/fonts/IBMPlexMono-Regular.ttf\").as_slice());",
+            &format!(".font(include_bytes!(\"../content/fonts/IBMPlexMono-Regular.ttf\").as_slice())\n        .mark(project.root().join(\"{MARK}\"));"),
             1,
         ),
         _ => text,

@@ -7,7 +7,7 @@ use pfx_gpu::screens::{Bars, Device, WindowMode};
 use pfx_gpu::window::{Attention, FullscreenPlan, Size};
 use pfx_input::{ActionSpec, Binding, BindingMap, Input, InputEvent, Key};
 use pfx_live::flat::{Draw, Srgba};
-use pfx_play::{Cap, Game, Label, Settings, Ui, UiFrame, World};
+use pfx_play::{FrameRate, Game, Label, Settings, Ui, UiFrame, World};
 use pfx_sound::Clip;
 
 use crate::{Config, Count, Event, Headless, WindowCall};
@@ -94,10 +94,9 @@ impl Game for Probe {
     }
 }
 
-pub(crate) fn capped(focused: Cap, background: Cap) -> Settings {
+pub(crate) fn capped() -> Settings {
     let mut settings = Settings::default();
-    settings.pacing.focused = focused;
-    settings.pacing.background = background;
+    settings.pacing.frame_rate = FrameRate::Cap60;
     settings
 }
 
@@ -108,27 +107,47 @@ fn headless(settings: Settings) -> (Headless, Next, Shared) {
 }
 
 #[test]
-fn each_cap_paces_the_frames_while_the_tick_stays_at_its_rate() {
-    for (cap, fps) in [
-        (Cap::Fps30, 30),
-        (Cap::Fps60, 60),
-        (Cap::Fps90, 90),
-        (Cap::Fps120, 120),
-    ] {
-        let (mut run, _, _) = headless(capped(cap, Cap::Fps30));
-        run.run_for(1.0).unwrap();
-        let second = run.run_for(1.0).unwrap();
-        assert_eq!(second.frames, fps, "{cap:?}");
-        assert_eq!(second.ticks, 60, "{cap:?}");
-        assert_eq!(run.driver.effective_fps(), Some(fps as u32));
-    }
-    let (mut run, _, _) = headless(capped(Cap::Uncapped, Cap::Fps30));
-    run.frame_cost_ns = 2_000_000;
+fn cap60_paces_the_frames_and_uncapped_draws_as_fast_as_frames_are_ready() {
+    let (mut run, _, _) = headless(capped());
     run.run_for(1.0).unwrap();
     let second = run.run_for(1.0).unwrap();
-    assert_eq!(second.frames, 500);
-    assert_eq!(second.ticks, 60);
-    assert_eq!(run.driver.effective_fps(), None);
+    assert_eq!(
+        second,
+        Count {
+            frames: 60,
+            ticks: 60
+        }
+    );
+    assert!((run.driver.period().unwrap().fps() - 60.0).abs() < 1e-9);
+    for cost_ns in [2_000_000, 4_167_000, 25_000_000] {
+        let (mut run, _, _) = headless(Settings::default());
+        run.frame_cost_ns = cost_ns;
+        run.run_for(1.0).unwrap();
+        let second = run.run_for(1.0).unwrap();
+        assert!(
+            second.frames.abs_diff(1_000_000_000 / cost_ns) <= 1,
+            "{cost_ns}"
+        );
+        assert_eq!(second.ticks, 60);
+        assert_eq!(run.driver.period(), None);
+    }
+}
+
+#[test]
+fn cap120_paces_120_frames_a_second_on_the_60_hz_tick() {
+    let mut settings = Settings::default();
+    settings.pacing.frame_rate = FrameRate::Cap120;
+    let (mut run, _, _) = headless(settings);
+    run.run_for(1.0).unwrap();
+    let second = run.run_for(1.0).unwrap();
+    assert_eq!(
+        second,
+        Count {
+            frames: 120,
+            ticks: 60
+        }
+    );
+    assert!((run.driver.period().unwrap().fps() - 120.0).abs() < 1e-9);
 }
 
 #[test]
@@ -146,26 +165,22 @@ fn a_headless_run_is_focused_until_its_script_says_otherwise() {
 }
 
 #[test]
-fn focus_loss_applies_the_background_cap_and_minimizing_pauses_without_a_burst() {
-    let (mut run, _, _) = headless(capped(Cap::Fps120, Cap::Fps30));
+fn focus_loss_and_occlusion_keep_the_rate_and_minimizing_pauses_without_a_burst() {
+    let (mut run, _, _) = headless(capped());
     run.run_for(1.0).unwrap();
-    assert_eq!(run.run_for(1.0).unwrap().frames, 120);
+    assert_eq!(run.run_for(1.0).unwrap().frames, 60);
     run.feed(Event::Attention(Attention::Focused(false)));
-    assert_eq!(run.run_for(1.0).unwrap().frames, 30);
-    let away = run.run_for(1.0).unwrap();
     assert_eq!(
-        away,
+        run.run_for(1.0).unwrap(),
         Count {
-            frames: 30,
+            frames: 60,
             ticks: 60
         }
     );
     run.feed(Event::Attention(Attention::Occluded(true)));
-    run.feed(Event::Attention(Attention::Focused(true)));
-    assert_eq!(run.run_for(1.0).unwrap().frames, 30);
+    assert_eq!(run.run_for(1.0).unwrap().frames, 60);
     run.feed(Event::Attention(Attention::Occluded(false)));
-    run.run_for(0.1).unwrap();
-    assert_eq!(run.run_for(1.0).unwrap().frames, 120);
+    run.feed(Event::Attention(Attention::Focused(true)));
     run.feed(Event::Attention(Attention::Minimized(true)));
     assert_eq!(run.frame().unwrap(), None);
     let ticks = run.driver.ticks();
@@ -176,11 +191,10 @@ fn focus_loss_applies_the_background_cap_and_minimizing_pauses_without_a_burst()
     let back = run.frame().unwrap().unwrap();
     assert_eq!(back.ticks, 0, "the first frame back runs no catch-up ticks");
     run.run_for(1.0).unwrap();
-    let resumed = run.run_for(1.0).unwrap();
     assert_eq!(
-        resumed,
+        run.run_for(1.0).unwrap(),
         Count {
-            frames: 120,
+            frames: 60,
             ticks: 60
         }
     );
@@ -188,23 +202,20 @@ fn focus_loss_applies_the_background_cap_and_minimizing_pauses_without_a_burst()
 
 #[test]
 fn the_interpolation_alpha_reaches_the_game_and_its_ui() {
-    for (cap, step) in [
-        (Cap::Fps120, 0.5),
-        (Cap::Fps90, 60.0 / 90.0),
-        (Cap::Fps30, 2.0),
-    ] {
-        let (mut run, _, log) = headless(capped(cap, Cap::Fps30));
+    for (fps, step) in [(120, 0.5), (90, 60.0 / 90.0), (30, 2.0)] {
+        let (mut run, _, log) = headless(Settings::default());
+        run.frame_cost_ns = 1_000_000_000 / fps;
         run.run_for(1.0).unwrap();
         let mut last: Option<f64> = None;
         for _ in 0..24 {
             let tick = run.frame().unwrap().unwrap();
-            assert!((0.0..1.0).contains(&tick.alpha), "{cap:?} {}", tick.alpha);
+            assert!((0.0..1.0).contains(&tick.alpha), "{fps} {}", tick.alpha);
             let log = log.borrow();
             assert_eq!(*log.alphas.last().unwrap(), tick.alpha);
             assert_eq!(log.frames.last().unwrap().alpha, tick.alpha);
             let at = run.driver.ticks() as f64 + f64::from(tick.alpha);
             if let Some(last) = last {
-                assert!((at - last - step).abs() < 1e-3, "{cap:?}: {last} then {at}");
+                assert!((at - last - step).abs() < 1e-3, "{fps}: {last} then {at}");
             }
             last = Some(at);
         }
@@ -261,7 +272,7 @@ fn a_volume_change_in_the_settings_changes_the_mix_live() {
         "volume",
         "\n[sound.hum]\nfile = \"tone.wav\"\nloop = true\n",
     );
-    let (game, next, _) = Probe::new(capped(Cap::Fps60, Cap::Fps30));
+    let (game, next, _) = Probe::new(capped());
     let config = Config::new("probe", "0.0.0", folder.scene()).device(Device::Desktop);
     let mut run = Headless::new(game, config, WINDOW).unwrap();
     run.run_for(0.5).unwrap();
@@ -302,7 +313,7 @@ fn key(key: Key, pressed: bool) -> Event {
 
 #[test]
 fn a_bind_change_in_the_settings_remaps_the_action_live() {
-    let (mut run, next, log) = headless(capped(Cap::Fps60, Cap::Fps30));
+    let (mut run, next, log) = headless(capped());
     run.run_for(0.1).unwrap();
     run.feed(key(Key::Space, true));
     run.run_for(0.1).unwrap();
@@ -348,7 +359,7 @@ fn a_bind_change_in_the_settings_remaps_the_action_live() {
 
 #[test]
 fn display_and_pacing_changes_in_the_settings_apply_live() {
-    let (mut run, next, _) = headless(capped(Cap::Fps60, Cap::Fps30));
+    let (mut run, next, _) = headless(capped());
     assert!(
         run.window.calls.iter().any(|call| matches!(
             call,
@@ -364,7 +375,7 @@ fn display_and_pacing_changes_in_the_settings_apply_live() {
         width: 1280,
         height: 720,
     };
-    settings.pacing.focused = Cap::Fps90;
+    settings.pacing.frame_rate = FrameRate::Uncapped;
     *next.borrow_mut() = Some(settings);
     run.run_for(0.1).unwrap();
     let calls = &run.window.calls;
@@ -380,14 +391,15 @@ fn display_and_pacing_changes_in_the_settings_apply_live() {
         })),
         "{calls:?}"
     );
-    assert_eq!(run.driver.effective_fps(), Some(90));
+    assert_eq!(run.driver.period(), None);
+    run.frame_cost_ns = 4_000_000;
     run.run_for(0.5).unwrap();
-    assert_eq!(run.run_for(1.0).unwrap().frames, 90);
+    assert_eq!(run.run_for(1.0).unwrap().frames, 250);
 }
 
 #[test]
 fn the_deck_keeps_its_mode_whatever_the_settings_say() {
-    let mut settings = capped(Cap::Fps60, Cap::Fps30);
+    let mut settings = capped();
     settings.display.mode = WindowMode::Windowed;
     let (game, next, _) = Probe::new(settings.clone());
     let config = Config::new("probe", "0.0.0", world()).device(Device::SteamDeck {
@@ -413,7 +425,7 @@ fn the_deck_keeps_its_mode_whatever_the_settings_say() {
 
 #[test]
 fn the_ui_frame_follows_the_aspect_fit_and_the_safe_area() {
-    let (mut run, _, log) = headless(capped(Cap::Fps60, Cap::Fps30));
+    let (mut run, _, log) = headless(capped());
     run.feed(Event::Resized(Size {
         width: 2560,
         height: 1080,
@@ -436,7 +448,7 @@ fn the_ui_frame_follows_the_aspect_fit_and_the_safe_area() {
     assert_eq!(ui.draws.len(), 1);
     assert_eq!(ui.labels[0].text, "probe");
 
-    let (game, _, log) = Probe::new(capped(Cap::Fps60, Cap::Fps30));
+    let (game, _, log) = Probe::new(capped());
     let config = Config::new("probe", "0.0.0", world()).device(Device::SteamDeck {
         model: pfx_gpu::screens::DeckModel::Lcd,
     });
@@ -460,7 +472,7 @@ fn the_ui_frame_follows_the_aspect_fit_and_the_safe_area() {
     assert_eq!(frame.ui_scale, 1.4);
     assert!(frame.deck);
 
-    let (game, _, log) = Probe::new(capped(Cap::Fps60, Cap::Fps30));
+    let (game, _, log) = Probe::new(capped());
     let screen =
         pfx_gpu::screens::ScreenPolicy::from_toml("[screen]\nbars = \"backdrop\"").unwrap();
     let config = Config::new("probe", "0.0.0", world())
@@ -486,7 +498,7 @@ fn the_ui_frame_follows_the_aspect_fit_and_the_safe_area() {
 
 #[test]
 fn the_pointer_lands_in_layout_units_through_the_bars() {
-    let (mut run, _, _) = headless(capped(Cap::Fps60, Cap::Fps30));
+    let (mut run, _, _) = headless(capped());
     run.feed(Event::Resized(Size {
         width: 2560,
         height: 1080,
@@ -502,13 +514,13 @@ fn the_pointer_lands_in_layout_units_through_the_bars() {
 
 #[test]
 fn settings_round_trip_through_toml_and_fill_what_is_missing() {
-    let mut settings = capped(Cap::Fps120, Cap::Uncapped);
+    let mut settings = capped();
     settings.audio.music = 0.5;
     settings.audio.custom.insert(2, 0.75);
-    settings.pacing.vrr = true;
+    settings.pacing.vrr = false;
     let text = toml::to_string(&settings).unwrap();
-    assert!(text.contains("focused = \"120\""), "{text}");
-    assert!(text.contains("background = \"uncapped\""), "{text}");
+    assert!(text.contains("frame_rate = \"cap60\""), "{text}");
+    assert!(text.contains("vrr = false"), "{text}");
     let back: Settings = toml::from_str(&text).unwrap();
     assert_eq!(back, settings);
     let partial: Settings = toml::from_str("[audio]\nmusic = 0.5\n").unwrap();
@@ -1080,7 +1092,7 @@ fn steam_input_drives_the_actions_and_hands_its_events_back() {
     steam.push_overlay(true);
     let input = SteamInput::new(steam, SteamPads::new("play", &["jump"], &[]));
     let events = input.events();
-    let (game, _, log) = Probe::new(capped(Cap::Fps60, Cap::Fps30));
+    let (game, _, log) = Probe::new(capped());
     let config = Config::new("probe", "0.0.0", world())
         .device(Device::Desktop)
         .pads(Pads::Backend(Box::new(input)));

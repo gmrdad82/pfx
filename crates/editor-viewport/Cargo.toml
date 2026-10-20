@@ -16,6 +16,7 @@ pfx-gpu = { path = "../gpu" }
 pfx-live = { path = "../live" }
 pfx-post = { path = "../post" }
 pfx-load = { path = "../load" }
+pfx-settings = { path = "../settings", default-features = false }
 pfx-editor-doc = { path = "../editor-doc" }
 pfx-editor-shell = { path = "../editor-shell" }
 pfx-editor-style = { path = "../editor-style" }

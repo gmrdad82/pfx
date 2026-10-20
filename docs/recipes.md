@@ -56,6 +56,7 @@ pfx align <file.pitofx> <object>... --snap <object> --axis x|y|z [--edge min|cen
                                                           sets each object against the other's bounds: `max` (the default) puts its min side on the other's max side, as a cup on a table with `--axis y`, `min` its max on the other's min, `center` centre on centre
 pfx scene list <file.pitofx> [<table>] [--json]               the recipe's entries and their names (an object's kind and parent)
 pfx scene print <file.pitofx> [<file>] [--json]            prints a TOML file the .pitofx holds (its recipe by default, an include by its name inside) to stdout, or its table as JSON
+pfx scene print <file.pitofx> --all                          prints every entry in a stable order, TOML whole and packed files by size and CRC-32: what git diff shows (docs/git.md)
 pfx scene write <file.pitofx> [<file>] < new.toml          replaces that file with TOML from stdin; kept only when the recipe still checks, written in place
 pfx scene save <file.pitofx> [--thumb] [--json]             rebuilds the .pitofx from its recipe when it is stale and writes it, with a thumbnail drawn into it if asked
 pfx scene migrate <file.toml|folder> [--dry-run] [--bare]
@@ -73,6 +74,7 @@ pfx asset get <source:id> [--out <dir>] [--res <r>] [--format <f>] [--from <file
 pfx asset list|sources [--in <dir>] [--json]             the fetched assets with their licences, or the sources
 pfx asset settings [--stdin] [--json]                    pfx's settings.pitofx as TOML, or TOML on stdin written to it
 pfx credits <scene.pitofx> [--json]                         one credit line per asset a scene uses, ready for a credits card; unlicensed assets are refused by name
+pfx git setup [<folder>] [--json]                           makes git diff show a .pitofx as its TOML: writes .gitattributes and the repo's own git config, once
 pfx gui [<recipe|scene|file.pitofx|project folder|folder>] [--play <module.wasm>] [--camera <name>] [--stage N|name] [--only <glob>,...] [--clay] [--wireframe [--blend <0..1>] [--xray]]
                                                           the window on a recipe, a scene, a .pitofx, a game's project or the start screen; Play runs the scene with a game's module (docs/editor.md)
 pfx gui [<file>] --shot <png> [--size WxH] [--input <script>] [--fake] [--fixture <name>] [--start] [--bare [--strip]] [--clean]
@@ -85,7 +87,7 @@ pfx gui [<file>] --clip <dir> --tape <file> [--fps 30|60|120] [--poster first|la
 
 A recipe lives in a `.pitofx` document, pfx's one user file: the recipe, every file it includes or reads, its build and its scene in one compressed container (docs/pfx-file.md). Every command reads the recipe and its files from the document in memory, never unpacking them to disk, and `set`, `route` and every other command that edits the recipe write the edit alone back into the `.pitofx` in place, in milliseconds whatever its size (docs/pfx-file.md, Editing in place), leaving its build for the next `pfx build` or save; a command that fails leaves the `.pitofx` as it was. To read what is inside, `pfx scene print` shows the recipe or any TOML file the document holds, and the editor opens it in its TOML panel with syntax highlighting.
 
-A plain `.toml` recipe or scene from an older pfx is imported once: `pfx scene migrate old.toml` writes `old.pitofx` beside it (an old `manfred = 1` header becomes `recipe = 1`, a format 0 scene is migrated to format 1 inside the document), and the `.toml` is never written again. Every other command given a `.toml` refuses with one line naming that command: `pfx build: street.toml is a plain TOML file; import it once with `pfx scene migrate street.toml`, which writes street.pitofx beside it`.
+A recipe or scene written as TOML is imported once: `pfx scene migrate street.toml` writes `street.pitofx` beside it (a format 0 scene is migrated to format 1 inside the document), and the `.toml` is never written again. Every other command given a `.toml` refuses with one line naming that command: `pfx build: street.toml is a plain TOML file; import it once with `pfx scene migrate street.toml`, which writes street.pitofx beside it`.
 
 `pfx <command> --help` prints a command's whole help. A line pfx cannot parse gets clap's short error on stderr and exits 2; a recipe, camera or file it refuses after that is one line on stderr, `pfx <command>: …`, and exits 1. A file whose header claims more memory than the machine (or a `ulimit -v` / `prlimit --as` limit) can give is refused the same way before pfx fills it, never by an abort: `pfx scene print: big.pitofx: chunk RCPE needs 3221225472 bytes: memory allocation failed because the memory allocator returned an error`. The buffers a file or a recipe sizes are reserved that way: `.pitofx` chunks, PNG and JPEG textures, `.hdr` skies (which must also hold at least the shortest scanlines their size needs) and the traced and denoised frames read back from the GPU.
 

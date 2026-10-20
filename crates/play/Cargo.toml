@@ -17,6 +17,7 @@ pfx-physics = { path = "../physics", features = ["enhanced-determinism"] }
 pfx-input = { path = "../input", default-features = false }
 pfx-sound = { path = "../sound", features = ["vorbis"] }
 pfx-gpu = { path = "../gpu" }
+pfx-settings = { path = "../settings" }
 pfx-post = { path = "../post" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"

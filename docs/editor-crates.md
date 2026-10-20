@@ -23,7 +23,7 @@ pfx-editor-toml = { git = "https://github.com/gmrdad82/pfx.git", tag = "<tag>" }
 pfx-editor-viewport = { git = "https://github.com/gmrdad82/pfx.git", tag = "<tag>" }
 ```
 
-They build on egui 0.33.3 and wgpu 27; an app adds `egui = "=0.33.3"` for its own panels.
+They build on egui 0.36.2 and wgpu 30; an app adds `egui = "=0.36.2"` for its own panels.
 
 ## Use
 
@@ -44,8 +44,8 @@ struct Settings {
 }
 
 impl App for Settings {
-    fn ui(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+    fn ui(&mut self, ui: &mut egui::Ui) {
+        egui::CentralPanel::default().show(ui, |ui| {
             let changed = self.source.show(ui, &mut self.files, &mut self.history, &NoCheck, &mut |_, _| {});
             for file in changed.iter().flat_map(|changed| &changed.files) {
                 let _ = self.files.save(file);
@@ -70,6 +70,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 `my_theme()` is yours: a `Theme` holds the app's colours, metrics and the bytes of its font files, which the app keeps, with their licences, in its own tree. The crates' test theme, `crates/editor-style/src/fixture.rs`, is a complete one.
+
+The host paces the window with pfx's two switches (`docs/window.md`, "Pacing"). An app that offers them returns them from `App::present` (`Present { vrr, frame_rate }`, re-exported by the shell; the default is VRR on and uncapped); the host reads it every frame and switches the surface and the pacer in place when it changes. The host is event-driven: it draws on input, on a file change, on the app's waker and on egui's own repaint requests, a delayed one included, and keeps drawing while the app's `frame` returns true or egui asks for an immediate repaint.
 
 ## The editor example
 

@@ -1,0 +1,13 @@
+title = "THE SAME BYTES ON EVERY OS"
+unit = "PERCENT OF MESH BYTES SAME AS LINUX"
+better = "higher"
+subtitle = "PFX 3.1.0: NEW STREET.PITOFX --FROM STREET --SEED 7, THEN BUILD"
+date = "2026-10-19"
+suffix = " %"
+notes = ["MACOS WRITES TWO ACCESSOR BOUNDS IN THE GLTF'S JSON AS -0.0 WHERE LINUX AND WINDOWS WRITE 0.0; EVERY MESH BYTE IS THE SAME."]
+parties = [{ name = "PFX 3.1.0" }]
+rows = [
+  { label = "LINUX X86_64, TWO RUNS", values = [100], texts = ["100 %, SAME SHA256"] },
+  { label = "WINDOWS X86_64 (WINE 11.20)", values = [100], texts = ["100 %, SAME SHA256"] },
+  { label = "MACOS ARM64 (M1 MAX)", values = [100], texts = ["100 %, 2 BOUNDS -0.0"] },
+]

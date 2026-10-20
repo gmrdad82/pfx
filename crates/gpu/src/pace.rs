@@ -817,15 +817,45 @@ impl Pacer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         work: Work,
-        encode: impl FnMut(&mut wgpu::CommandEncoder, Slice),
+        mut encode: impl FnMut(&mut wgpu::CommandEncoder, Slice),
         between: impl FnMut(f64) -> T,
     ) -> Result<Stats, String> {
-        let timestamps = device
-            .features()
-            .contains(
-                wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS,
-            )
-            .then(|| Timestamp::new(device, queue));
+        self.run_stamped(
+            label,
+            device,
+            queue,
+            work,
+            false,
+            |encoder, slice, _| encode(encoder, slice),
+            between,
+        )
+    }
+
+    pub fn run_passes<T: Turned>(
+        &mut self,
+        label: &str,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        work: Work,
+        encode: impl FnMut(&mut wgpu::CommandEncoder, Slice, &Stamps<'_>),
+        between: impl FnMut(f64) -> T,
+    ) -> Result<Stats, String> {
+        self.run_stamped(label, device, queue, work, true, encode, between)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_stamped<T: Turned>(
+        &mut self,
+        label: &str,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        work: Work,
+        passes: bool,
+        encode: impl FnMut(&mut wgpu::CommandEncoder, Slice, &Stamps<'_>),
+        between: impl FnMut(f64) -> T,
+    ) -> Result<Stats, String> {
+        let stamping = Stamping::of(device.features(), passes);
+        let timestamps = (stamping != Stamping::None).then(|| Timestamp::new(device, queue));
         let mut lane = GpuLane {
             label,
             device,
@@ -837,6 +867,8 @@ impl Pacer {
                 Frozen::from_env()
             },
             timestamps,
+            stamping,
+            stamped: [false; 2],
             last_done: None,
         };
         self.drive(label, &mut lane, work, between)
@@ -1001,11 +1033,59 @@ struct Pending<T> {
     units: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stamping {
+    None,
+    Encoder,
+    Passes,
+}
+
+impl Stamping {
+    fn of(features: wgpu::Features, passes: bool) -> Self {
+        if features.contains(
+            wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS,
+        ) {
+            Self::Encoder
+        } else if passes && features.contains(wgpu::Features::TIMESTAMP_QUERY) {
+            Self::Passes
+        } else {
+            Self::None
+        }
+    }
+}
+
+pub struct Stamps<'a> {
+    queries: Option<&'a wgpu::QuerySet>,
+    written: std::cell::Cell<u8>,
+}
+
+impl<'a> Stamps<'a> {
+    pub fn pass(&self, first: bool, last: bool) -> Option<wgpu::ComputePassTimestampWrites<'a>> {
+        let queries = self.queries?;
+        if !first && !last {
+            return None;
+        }
+        self.written
+            .set(self.written.get() | u8::from(first) | (u8::from(last) << 1));
+        Some(wgpu::ComputePassTimestampWrites {
+            query_set: queries,
+            beginning_of_pass_write_index: first.then_some(0),
+            end_of_pass_write_index: last.then_some(1),
+        })
+    }
+
+    fn whole(&self) -> bool {
+        self.written.get() == 3
+    }
+}
+
 struct GpuLane<'a, F> {
     label: &'a str,
     device: &'a wgpu::Device,
     queue: &'a wgpu::Queue,
     timestamps: Option<Timestamp>,
+    stamping: Stamping,
+    stamped: [bool; 2],
     encode: F,
     frozen: Frozen,
     last_done: Option<Moment>,
@@ -1016,7 +1096,7 @@ fn fence_ms(submitted: Moment, last_done: Option<Moment>, done: Moment) -> f64 {
     done.ms_since(began)
 }
 
-impl<F: FnMut(&mut wgpu::CommandEncoder, Slice)> Lane for GpuLane<'_, F> {
+impl<F: FnMut(&mut wgpu::CommandEncoder, Slice, &Stamps<'_>)> Lane for GpuLane<'_, F> {
     type Ticket = (wgpu::SubmissionIndex, Moment);
 
     fn submit(&mut self, slot: usize, slice: Slice) -> Self::Ticket {
@@ -1025,13 +1105,26 @@ impl<F: FnMut(&mut wgpu::CommandEncoder, Slice)> Lane for GpuLane<'_, F> {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some(self.label),
             });
-        if let Some(timestamp) = &self.timestamps {
-            encoder.write_timestamp(&timestamp.slots[slot].queries, 0);
+        let timing = self
+            .timestamps
+            .as_ref()
+            .map(|timestamp| &timestamp.slots[slot]);
+        if let (Some(timing), Stamping::Encoder) = (timing, self.stamping) {
+            encoder.write_timestamp(&timing.queries, 0);
         }
-        (self.encode)(&mut encoder, slice);
-        if let Some(timestamp) = &self.timestamps {
-            let timing = &timestamp.slots[slot];
+        let stamps = Stamps {
+            queries: timing
+                .filter(|_| self.stamping == Stamping::Passes)
+                .map(|timing| &timing.queries),
+            written: std::cell::Cell::new(0),
+        };
+        (self.encode)(&mut encoder, slice, &stamps);
+        if let (Some(timing), Stamping::Encoder) = (timing, self.stamping) {
             encoder.write_timestamp(&timing.queries, 1);
+        }
+        self.stamped[slot] =
+            timing.is_some() && (self.stamping == Stamping::Encoder || stamps.whole());
+        if let Some(timing) = timing.filter(|_| self.stamped[slot]) {
             encoder.resolve_query_set(&timing.queries, 0..2, &timing.resolve, 0);
             encoder.copy_buffer_to_buffer(&timing.resolve, 0, &timing.read, 0, 16);
         }
@@ -1054,6 +1147,7 @@ impl<F: FnMut(&mut wgpu::CommandEncoder, Slice)> Lane for GpuLane<'_, F> {
         let gpu_ms = self
             .timestamps
             .as_ref()
+            .filter(|_| self.stamped[slot])
             .and_then(|timestamp| timestamp.read_ms(self.device, slot, index.clone()));
         Ok(match gpu_ms {
             Some(milliseconds) => Measured {

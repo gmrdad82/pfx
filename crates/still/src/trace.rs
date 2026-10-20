@@ -96,9 +96,10 @@ impl Take {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Step {
     Stage,
+    Path(Box<pfx_trace::rt::Path>),
     Trace {
         done: u32,
         total: u32,
@@ -310,6 +311,7 @@ pub struct Paced {
     pub trace_bytes: u64,
     pub gpu_resident: Option<u64>,
     pub planned: [u64; 2],
+    pub builds: Builds,
 }
 
 impl Paced {
@@ -639,6 +641,14 @@ impl Reel {
         &self.plan
     }
 
+    pub fn adapter(&self) -> String {
+        let info = &self.gpu.info;
+        format!(
+            "{}, {:?}, {} {}",
+            info.name, info.backend, info.driver, info.driver_info
+        )
+    }
+
     pub fn builds(&self) -> Option<Builds> {
         self.kept.as_ref().map(|kept| kept.trace.builds())
     }
@@ -789,6 +799,7 @@ impl Reel {
             steps.cameras = traced_cameras;
         }
         let moves = self.staging.steps.as_ref().is_some_and(Steps::moves);
+        let mut since = Builds::default();
         let mut kept = match self.kept.take() {
             Some(mut kept)
                 if kept.size == size
@@ -803,6 +814,7 @@ impl Reel {
                             size,
                         ) =>
             {
+                since = kept.trace.builds();
                 let placements = self.staging.placements(&lens.eye);
                 let models: Vec<Matrix> =
                     placements.iter().map(|placement| placement.model).collect();
@@ -832,7 +844,10 @@ impl Reel {
                             .collect();
                         match kept.trace.set_motion(&self.gpu, &motion, &steps.cameras) {
                             Ok(()) => kept,
-                            Err(_) => self.restage(lens, size, samples)?,
+                            Err(_) => {
+                                since = Builds::default();
+                                self.restage(lens, size, samples)?
+                            }
                         }
                     }
                     None => kept,
@@ -867,8 +882,13 @@ impl Reel {
             )
             .map(|(film, paced)| (film, paced, f64::from(samples), samples)),
         };
+        let built = kept.trace.builds();
         self.kept = Some(kept);
         let (film, mut paced, mean_samples, most_samples) = traced?;
+        paced.builds = Builds {
+            bottom: built.bottom - since.bottom,
+            top: built.top - since.top,
+        };
         paced.planned = [self.plan.cpu(), self.plan.gpu()];
         Ok(Rendered {
             film,
@@ -1018,6 +1038,7 @@ fn traced(
 ) -> Result<(Film, Paced), Fault> {
     let mut turns = Turns::new(turn);
     pfx_core::memory::look_gpu();
+    progress(Step::Path(Box::new(trace.path(gpu))));
     let failed = |e: String| Fault::Failed(format!("the tracer's checkpoint: {e}"));
     let resumed = keeper.as_deref_mut().and_then(Keeper::resume);
     if let Some(saved) = resumed {
@@ -1092,6 +1113,7 @@ fn adapted(
     keeper: Option<&mut dyn Keeper>,
 ) -> Result<(Film, Paced, f64, u32), Fault> {
     pfx_core::memory::look_gpu();
+    progress(Step::Path(Box::new(trace.path(gpu))));
     let mut turns = Turns::new(turn);
     let mut pacer = Pacer::default();
     let cap = adaptive.max_samples;

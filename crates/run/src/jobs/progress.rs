@@ -47,6 +47,11 @@ fn json_line(line: &str) -> Option<Event> {
                 check: number(&value, &["check"]),
             });
         }
+        Some("path") => {
+            return Some(Event::Path(
+                value.get("path")?.get("line")?.as_str()?.to_owned(),
+            ));
+        }
         Some("check") => {
             return Some(Event::Checked {
                 frame: number(&value, &["frame"])?,
@@ -142,6 +147,14 @@ mod tests {
                 frame: 3,
                 same: false
             })
+        );
+        assert_eq!(
+            err_line(
+                r#"{"stage":"path","frame":0,"path":{"ray_queries":true,"line":"A GPU (metal), ray queries on, BVH hardware TLAS over one BLAS"}}"#
+            ),
+            Some(Event::Path(
+                "A GPU (metal), ray queries on, BVH hardware TLAS over one BLAS".into()
+            ))
         );
         assert_eq!(
             err_line(

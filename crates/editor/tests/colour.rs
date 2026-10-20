@@ -170,6 +170,7 @@ fn a_games_frame_and_the_editors_view_agree_in_colour() {
         },
     )
     .unwrap();
+    session.editor.viewport.set_grid(false);
     let shot = pixels(&mut session, SHOT, &Script::parse(&frames(4)).unwrap()).unwrap();
     let live = session.pixels().unwrap();
     let live_size = session.editor.viewport.live().unwrap().size();

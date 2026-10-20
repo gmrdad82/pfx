@@ -1,0 +1,9 @@
+title = "IMPORT A GLTF FROM THE COMMAND LINE"
+unit = "MILLISECONDS"
+better = "lower"
+subtitle = "RYZEN 9 9950X, RADEON RX 9060 XT, LINUX"
+date = "2026-10-20"
+suffix = " MS"
+notes = ["A 6.8 MB GLB, 46 NODES. PFX IMPORT TO A .PITOFX; GODOT --HEADLESS --IMPORT IN A FRESH PROJECT, MOST OF IT STARTING ITS EDITOR. MEDIAN OF 5."]
+parties = [{ name = "PFX 3.1.1" }, { name = "GODOT 4.7.2" }]
+rows = [{ label = "STREET.GLB TO A SCENE", values = [46, 2479] }]

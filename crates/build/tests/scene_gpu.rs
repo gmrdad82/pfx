@@ -375,16 +375,17 @@ fn leaf_png() -> Vec<u8> {
     out
 }
 
-fn leaf_tree() -> Vec<u8> {
+fn leaf_tree(turned: bool) -> Vec<u8> {
     let mut positions = Vec::new();
     let mut uvs = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
+    let mut normals = Vec::new();
     let mut state = 7u32;
     let mut next = || {
         state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
         f64::from(state >> 8) / f64::from(1u32 << 24)
     };
-    for _ in 0..14 {
+    for card in 0..14 {
         let centre = [next() - 0.5, 0.6 + 0.8 * next(), next() * 0.4 - 0.2];
         let tilt = (next() - 0.5) * 0.8;
         let half = 0.18;
@@ -397,9 +398,16 @@ fn leaf_tree() -> Vec<u8> {
             ]);
             uvs.push([(a as f32 + 1.0) / 2.0, (1.0 - b as f32) / 2.0]);
         }
-        indices.extend([0, 1, 2, 0, 2, 3].map(|k| first + k));
+        let away = turned && card % 2 == 1;
+        let order = if away {
+            [0, 2, 1, 0, 3, 2]
+        } else {
+            [0, 1, 2, 0, 2, 3]
+        };
+        indices.extend(order.map(|k| first + k));
+        let facing = if away { -1.0f32 } else { 1.0 };
+        normals.extend([[0.0, 0.0, facing]; 4]);
     }
-    let normals = vec![[0.0f32, 0.0, 1.0]; positions.len()];
     let mut bin: Vec<u8> = positions
         .iter()
         .flatten()
@@ -481,44 +489,81 @@ fn leaf_coverage(rgba: &[u8]) -> [u32; 4] {
     out
 }
 
-fn covers_alike(way: &str, pfx: &[u8], engine: &[u8]) {
-    let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tmp/scene-gpu/mask-cards");
-    write_png(&out.join(format!("{way}-pfx.png")), SIZE, pfx).unwrap();
-    write_png(&out.join(format!("{way}-scene.png")), SIZE, engine).unwrap();
-    let want = leaf_coverage(pfx);
-    let got = leaf_coverage(engine);
-    println!("mask cards {way}: leaf pixels at 2, 10, 30, 80 m: recipe {want:?}, scene {got:?}");
+fn leaf_mass(rgba: &[u8]) -> [f64; 4] {
+    let edges = [0, 256, 368, 496, SIZE[0]];
+    let mut out = [0.0; 4];
+    for (column, mass) in out.iter_mut().enumerate() {
+        for y in 0..SIZE[1] {
+            for x in edges[column]..edges[column + 1] {
+                let at = ((y * SIZE[0] + x) * 4) as usize;
+                let [r, g, b] = [rgba[at], rgba[at + 1], rgba[at + 2]].map(f64::from);
+                *mass += (g - r.max(b)).max(0.0);
+            }
+        }
+    }
+    out
+}
+
+fn live_covers_as_traced(set: &str, (way, live): (&str, &[u8]), traced: &[u8]) {
+    let near = [leaf_coverage(live)[0], leaf_coverage(traced)[0]].map(f64::from);
+    assert!(
+        (near[0] / near[1] - 1.0).abs() <= 0.1,
+        "{set}: {way} covers {} pixels of the near copy, traced {}",
+        near[0],
+        near[1]
+    );
+    let [lit, mass] = [leaf_mass(live), leaf_mass(traced)];
+    let scale = lit[0] / mass[0];
+    let ratios: Vec<f64> = (0..4).map(|k| lit[k] / (scale * mass[k])).collect();
+    println!("{set}: {way} leaf mass over traced at 2, 10, 30, 80 m: {ratios:.3?}");
+    for (k, (name, distance, _)) in DISTANCES.iter().enumerate() {
+        assert!(
+            (0.8..=1.25).contains(&ratios[k]),
+            "{set}: {way} draws {:.3} of the traced leaves on the {name} copy at {distance} m",
+            ratios[k]
+        );
+    }
+}
+
+fn covers_alike(set: &str, (way, want): (&str, &[u8]), (other, got): (&str, &[u8])) {
+    let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tmp/scene-gpu")
+        .join(set);
+    write_png(&out.join(format!("{way}.png")), SIZE, want).unwrap();
+    write_png(&out.join(format!("{other}.png")), SIZE, got).unwrap();
+    let want = leaf_coverage(want);
+    let got = leaf_coverage(got);
+    println!("{set}: leaf pixels at 2, 10, 30, 80 m: {way} {want:?}, {other} {got:?}");
     for (k, (name, distance, _)) in DISTANCES.iter().enumerate() {
         assert!(
             want[k] >= 4,
-            "{way}: the recipe draws {} leaf pixels for the {name} copy at {distance} m",
+            "{set}: {way} draws {} leaf pixels for the {name} copy at {distance} m",
             want[k]
         );
         let slack = 0.15 * f64::from(want[k]) + 4.0;
         assert!(
             (f64::from(got[k]) - f64::from(want[k])).abs() <= slack,
-            "{way}: the scene draws {} leaf pixels for the {name} copy at {distance} m, the recipe {}",
+            "{set}: {other} draws {} leaf pixels for the {name} copy at {distance} m, {way} {}",
             got[k],
             want[k]
         );
     }
 }
 
-#[test]
-#[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
-fn repeated_mask_leaf_cards_cover_in_the_written_scene_as_in_the_recipe_at_every_distance() {
-    let out = scratch("scene-gpu-mask-cards");
-    std::fs::write(out.join("tree.glb"), leaf_tree()).unwrap();
+fn mask_card_frames(set: &str, materials: &str, turned: bool) -> [(&'static str, Vec<u8>); 4] {
+    let out = scratch(&format!("scene-gpu-{set}"));
+    std::fs::write(out.join("tree.glb"), leaf_tree(turned)).unwrap();
     let mut text = String::from(
         "recipe = 1\nname = \"trees\"\n\n[output]\nglb = \"trees.glb\"\nscene = \"trees.scene.toml\"\nscene_camera = \"main\"\nscene_format = 1\n",
     );
     for (name, distance, x) in DISTANCES {
         text.push_str(&format!(
-            "\n[[object]]\nname = \"{name}\"\nkind = \"mesh\"\npath = \"tree.glb\"\nat = [{x:?}, 0.0, {:?}]\n",
+            "\n[[object]]\nname = \"{name}\"\nkind = \"mesh\"\npath = \"tree.glb\"\nshadow = \"none\"\nat = [{x:?}, 0.0, {:?}]\n",
             -distance
         ));
     }
     text.push_str("\n[[camera]]\nname = \"main\"\nposition = [0.0, 1.0, 0.0]\ntarget = [0.0, 1.0, -1.0]\nfov_y_deg = 40.0\n\n[sun]\nmodel = \"authored\"\ntoward = [0.3, 0.8, 0.5]\nradius_deg = 0.6\nirradiance = 3.0\n\n[sky]\nkind = \"analytic\"\nintensity = 0.8\n\n[look]\nexposure = 1.0\n");
+    text.push_str(materials);
     let recipe = out.join("trees.toml");
     std::fs::write(&recipe, text).unwrap();
     let (r, built) = pfx_recipe_scene::load(&recipe, None, &[], &Registry::new()).unwrap();
@@ -532,14 +577,61 @@ fn repeated_mask_leaf_cards_cover_in_the_written_scene_as_in_the_recipe_at_every
         traced: 0.0,
     };
     let gpu = headless().unwrap();
-    let pfx = pfx_live(&gpu, &case, &recipe);
+    let live = pfx_live(&gpu, &case, &recipe);
     turn_reporting(Default::default());
-    let engine = engine_live(&gpu, &scene);
+    let live_scene = engine_live(&gpu, &scene);
     turn_reporting(Default::default());
-    covers_alike("live", &pfx, &engine);
-    let pfx = pfx_traced(&case, &recipe);
+    let traced = pfx_traced(&case, &recipe);
     turn_reporting(Default::default());
-    let engine = engine_traced(&gpu, &scene);
+    let traced_scene = engine_traced(&gpu, &scene);
     turn_reporting(Default::default());
-    covers_alike("traced", &pfx, &engine);
+    [
+        ("live", live),
+        ("live-scene", live_scene),
+        ("traced", traced),
+        ("traced-scene", traced_scene),
+    ]
+}
+
+fn pair<'a>(frames: &'a [(&'static str, Vec<u8>); 4], k: usize) -> (&'a str, &'a [u8]) {
+    (frames[k].0, &frames[k].1)
+}
+
+#[test]
+#[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+fn repeated_mask_leaf_cards_cover_in_the_written_scene_as_in_the_recipe_at_every_distance() {
+    let frames = mask_card_frames("mask-cards", "", true);
+    let facing = mask_card_frames("mask-cards-facing", "", false);
+    for k in [0, 1] {
+        let [turned, all] = [&frames[k].1, &facing[k].1].map(|f| f64::from(leaf_coverage(f)[0]));
+        assert!(
+            turned >= 0.9 * all,
+            "{}: cards turned from the camera cover {turned} pixels of the near copy, facing it {all}",
+            frames[k].0
+        );
+    }
+    covers_alike("mask-cards", pair(&frames, 0), pair(&frames, 1));
+    covers_alike("mask-cards", pair(&frames, 2), pair(&frames, 3));
+    live_covers_as_traced("mask-cards", pair(&frames, 0), &frames[2].1);
+    live_covers_as_traced("mask-cards", pair(&frames, 1), &frames[3].1);
+}
+
+#[test]
+#[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+fn a_recipe_material_over_mask_leaf_cards_keeps_their_cutout_live_traced_and_in_the_scene() {
+    let own = mask_card_frames("mask-cards-own", "", true);
+    let over = mask_card_frames(
+        "mask-cards-over",
+        "\n[materials.leaves]\nbase = [1.0, 1.0, 1.0]\nroughness = 1.0\nmetalness = 0.0\n",
+        true,
+    );
+    for k in 0..4 {
+        covers_alike(
+            "mask-cards-over",
+            (&format!("own-{}", own[k].0), &own[k].1),
+            (&format!("over-{}", over[k].0), &over[k].1),
+        );
+    }
+    live_covers_as_traced("mask-cards-over", pair(&over, 0), &over[2].1);
+    live_covers_as_traced("mask-cards-over", pair(&over, 1), &over[3].1);
 }

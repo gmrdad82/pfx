@@ -1,0 +1,5 @@
+# {{name}}
+
+{{licence}}
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="content/credit/powered-by-128.png"><img src="content/credit/powered-by-light-128.png" height="32" alt="Powered by pfx"></picture>

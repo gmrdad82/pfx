@@ -15,7 +15,7 @@ How `pfx_trace` finds light: the sun, the sky, emissive surfaces and local light
 | `shadow` | `false` lights everything in range through geometry, as live does without a shadow map |
 | `shape` | `Point`; `Spot { direction, inner_deg, outer_deg }` with glTF's cone falloff (`t = clamp(cos·scale + offset)`, squared); `Rect { half_u, half_v, two_sided }` with orthogonal half-edges, facing `half_u × half_v` |
 
-A rect's `intensity` keeps the point light's unit along its normal: its radiance is `colour·intensity / area`, so a rect replacing a point of the same intensity looks as bright head-on. Live has only points today; `LocalLight::point(...)` with the live light's fields is the conversion (`shape: Point`), and the tracer crate does not depend on `pfx-live`.
+A rect's `intensity` keeps the point light's unit along its normal: its radiance is `colour·intensity / area`, so a rect replacing a point of the same intensity looks as bright head-on. Live has points and spots and no rects; `LocalLight::point(...)` with the live light's fields is the conversion (`shape: Point`, or `shape: Spot` for a light with a spot cone), and the tracer crate does not depend on `pfx-live`.
 
 Lights reach the tracer as `Detail::lights`. Emissive surfaces need nothing: every triangle or analytic shape whose material emits is found when the scene is built.
 

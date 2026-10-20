@@ -1,0 +1,11 @@
+title = "AN EMPTY GAME, SHIPPED"
+unit = "MEGABYTES"
+better = "lower"
+subtitle = "RYZEN 9 9950X, RADEON RX 9060 XT, LINUX"
+date = "2026-10-19"
+suffix = " MB"
+decimals = 1
+words = { better = "SMALLER", worse = "LARGER", same = "SAME SIZE" }
+notes = ["PFX NEW'S GAME WITHOUT ITS EDITOR, STRIPPED, WITH ITS CONTENT. GODOT'S RELEASE TEMPLATE WITH ITS .PCK. BEVY 0.20.0 WITH DEFAULTPLUGINS, STRIPPED, MEASURED 2026-10-14."]
+parties = [{ name = "PFX 3.1.0" }, { name = "GODOT 4.7.2" }, { name = "BEVY 0.20.0" }]
+rows = [{ label = "LINUX X86_64", values = [33.7, 73.5, 106.6] }]

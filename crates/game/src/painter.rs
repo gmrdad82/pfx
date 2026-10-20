@@ -1,8 +1,11 @@
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
+use pfx_gpu::screens::{Budget, ScreenReport};
 use pfx_gpu::window::Size;
 use pfx_gpu::{Gpu, wgpu};
 use pfx_input::{GlyphAtlas, KeyLabels};
+use pfx_live::demand::{Next, SETTLE};
 use pfx_live::flat::look::Look;
 use pfx_live::flat::{
     Draw, Environment, FlatIcons, FlatScene, FlatSprites, FlatText, Glyphs, IDENTITY, Matrix,
@@ -16,7 +19,7 @@ use pfx_load::scene::Scene;
 use pfx_play::{Anchor, PaintFrame, Ui, Warmer, Warming};
 use pfx_text::{Face, Fallback, Placement, Prefill, Representation, Span, TextEngine};
 
-use crate::config::Config;
+use crate::config::{Config, Redraw};
 use crate::driver::Driver;
 use crate::prompt::{self, Part, PromptQuads, Sources, Style};
 
@@ -39,7 +42,20 @@ pub struct Painter {
     draws: Vec<Draw>,
     span: Span,
     uploads: usize,
-    waits: bool,
+    redraw: Redraw,
+    source: Option<(wgpu::TextureView, [u32; 2])>,
+    shown: Option<Shown>,
+    budget: Option<Budget>,
+    graphics: Option<pfx_settings::Graphics>,
+}
+
+struct Shown {
+    ui: Rc<Ui>,
+    parts: Vec<Vec<Part>>,
+    labels: Option<KeyLabels>,
+    report: ScreenReport,
+    window: Size,
+    hud: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +68,7 @@ pub struct Drawn {
 }
 
 const BLACK: Srgba = Srgba([0.0, 0.0, 0.0, 1.0]);
+pub const FRAMES_IN_FLIGHT: u64 = 2;
 
 enum Sheet {
     Page(u32),
@@ -96,11 +113,38 @@ impl Painter {
         config: &Config,
         window: Size,
     ) -> Result<Self, String> {
+        Self::open(gpu, scene, config, window, false)
+    }
+
+    pub fn live(
+        gpu: Gpu,
+        scene: Option<&Scene>,
+        config: &Config,
+        window: Size,
+    ) -> Result<Self, String> {
+        Self::open(gpu, scene, config, window, true)
+    }
+
+    fn open(
+        gpu: Gpu,
+        scene: Option<&Scene>,
+        config: &Config,
+        window: Size,
+        background: bool,
+    ) -> Result<Self, String> {
         let width = window.width.max(1);
         let height = window.height.max(1);
         let mut renderer = Renderer::new(gpu, width, height).map_err(|error| error.to_string())?;
+        renderer.set_background_reflections(background);
         renderer.set_exposure(config.exposure)?;
-        let staged = scene.map(|scene| renderer.stage(scene)).transpose()?;
+        if config.redraw == Redraw::OnDemand {
+            renderer.watch_redraws(Some(SETTLE));
+        }
+        let mut staged = scene.map(|scene| renderer.stage(scene)).transpose()?;
+        if background && let Some(staged) = &mut staged {
+            let frame = staged.frame(width as f32 / height as f32, 0.0, config.seed as u32);
+            renderer.warm_frame(&frame.scene, &frame.effects)?;
+        }
         if let (Some(budget), Some(_)) = (config.budget, &staged) {
             renderer.set_dynamic_resolution(Some(budget))?;
         }
@@ -141,6 +185,7 @@ impl Painter {
                 )
             })
             .transpose()?;
+        renderer.set_frames_in_flight(FRAMES_IN_FLIGHT);
         Ok(Self {
             renderer,
             staged,
@@ -171,12 +216,42 @@ impl Painter {
                 color: [1.0; 4],
             },
             uploads: 0,
-            waits: false,
+            redraw: config.redraw,
+            source: None,
+            shown: None,
+            budget: config.budget,
+            graphics: None,
         })
     }
 
+    pub fn follow_graphics(&mut self, graphics: &pfx_settings::Graphics) -> Result<(), String> {
+        if self.graphics.as_ref() == Some(graphics) {
+            return Ok(());
+        }
+        let budget = resolution(graphics.quality, self.budget);
+        if self.staged.is_some()
+            && budget.map(|budget| budget.gpu_ms)
+                != self
+                    .renderer
+                    .dynamic_resolution()
+                    .map(|resolution| resolution.budget().gpu_ms)
+        {
+            self.renderer.set_dynamic_resolution(budget)?;
+        }
+        self.renderer
+            .set_shedding(graphics.quality == Some(pfx_settings::Quality::Performance))?;
+        self.renderer.set_effects(graphics.effects)?;
+        self.graphics = Some(*graphics);
+        Ok(())
+    }
+
+    pub fn graphics(&self) -> Option<&pfx_settings::Graphics> {
+        self.graphics.as_ref()
+    }
+
     pub fn wait_for_frames(&mut self, waits: bool) {
-        self.waits = waits;
+        self.renderer
+            .set_frames_in_flight(if waits { 0 } else { FRAMES_IN_FLIGHT });
     }
 
     pub fn renderer(&self) -> &Renderer {
@@ -426,10 +501,14 @@ impl Painter {
     fn scene_source(
         &mut self,
         driver: &mut Driver,
-        content: [u32; 2],
-        scale: Option<Size>,
-    ) -> Result<(wgpu::TextureView, [u32; 2]), String> {
-        let size = self.render_size(content, scale)?;
+        report: &ScreenReport,
+        always: bool,
+    ) -> Result<bool, String> {
+        let content = [
+            (report.content.width.round() as u32).max(1),
+            (report.content.height.round() as u32).max(1),
+        ];
+        let size = self.render_size(content, report.render_size(self.render_scale))?;
         let (capacity_width, capacity_height) = self.renderer.capacity();
         let source = self.upscale.source_target(
             &self.renderer.gpu().device,
@@ -445,17 +524,63 @@ impl Painter {
             .session_mut()
             .present(staged, &mut self.renderer, aspect, self.seed)
             .map_err(|error| error.to_string())?;
-        if self.waits {
+        let next = Next::new(&frame.scene, &frame.text, &frame.effects, finish);
+        self.renderer.poll_reflections()?;
+        let changed = self.renderer.needs_redraw(&next);
+        let drew = changed || always || self.source.as_ref().is_none_or(|(_, at)| *at != size);
+        if drew {
             self.renderer
                 .render(&frame.scene, &frame.text, &frame.effects, finish, &source)?;
-        } else {
-            self.renderer
-                .submit(&frame.scene, &frame.text, &frame.effects, finish, &source)?;
         }
-        Ok((source, size))
+        self.source = Some((source, size));
+        Ok(drew)
+    }
+
+    pub fn redraw(&self) -> Redraw {
+        self.redraw
+    }
+
+    pub fn prepare(&mut self, driver: &mut Driver, forced: bool) -> Result<bool, String> {
+        self.follow_graphics(&driver.settings().graphics)?;
+        let Some(report) = driver.report().copied() else {
+            return Ok(false);
+        };
+        let always = self.redraw == Redraw::Always;
+        let scene = self.staged.is_some() && self.scene_source(driver, &report, always)?;
+        let requested = driver.session().world().take_frame_request();
+        let hud = driver.session().hud_shown();
+        Ok(always || forced || scene || requested || hud || self.changed(driver, &report, hud))
+    }
+
+    fn changed(&self, driver: &Driver, report: &ScreenReport, hud: bool) -> bool {
+        let Some(shown) = &self.shown else {
+            return true;
+        };
+        let ui = driver.ui();
+        shown.report != *report
+            || shown.window != driver.window()
+            || shown.hud != hud
+            || *shown.ui != *ui
+            || shown.parts != driver.prompt_parts()
+            || (!ui.prompts.is_empty() && shown.labels.as_ref() != Some(driver.labels()))
     }
 
     pub fn draw(
+        &mut self,
+        driver: &mut Driver,
+        output: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+    ) -> Result<Option<Drawn>, String> {
+        let Some(report) = driver.report().copied() else {
+            return Ok(None);
+        };
+        if self.staged.is_some() {
+            self.scene_source(driver, &report, true)?;
+        }
+        self.compose(driver, output, format)
+    }
+
+    pub fn compose(
         &mut self,
         driver: &mut Driver,
         output: &wgpu::TextureView,
@@ -465,15 +590,11 @@ impl Painter {
         let Some(report) = driver.report().copied() else {
             return Ok(None);
         };
-        let content = [
-            (report.content.width.round() as u32).max(1),
-            (report.content.height.round() as u32).max(1),
-        ];
         let ui = driver.shared_ui();
-        let (source, size) = if self.staged.is_some() {
-            self.scene_source(driver, content, report.render_size(self.render_scale))?
-        } else {
-            self.clear_source(ui.clear.unwrap_or(BLACK))?
+        let (source, size) = match (&self.staged, &self.source) {
+            (Some(_), Some(source)) => source.clone(),
+            (Some(_), None) => return Err("the 3D frame has not been drawn yet".into()),
+            (None, _) => self.clear_source(ui.clear.unwrap_or(BLACK))?,
         };
         let gpu = self.renderer.gpu();
         let curve = ui.curve.as_ref().unwrap_or(&self.none);
@@ -630,6 +751,14 @@ impl Painter {
         driver
             .session_mut()
             .draw_hud_on(&mut self.renderer, output, format, output_size);
+        self.shown = Some(Shown {
+            labels: (!ui.prompts.is_empty()).then(|| driver.labels().clone()),
+            ui: Rc::clone(&ui),
+            parts: driver.prompt_parts().to_vec(),
+            report,
+            window,
+            hud: driver.session().hud_shown(),
+        });
         Ok(Some(Drawn {
             render: if self.staged.is_some() { size } else { [0, 0] },
             output: output_size,
@@ -729,5 +858,15 @@ impl Warmer for PainterWarmer<'_> {
 
     fn renderer(&mut self) -> Option<&mut Renderer> {
         Some(&mut self.painter.renderer)
+    }
+}
+
+pub fn resolution(quality: Option<pfx_settings::Quality>, game: Option<Budget>) -> Option<Budget> {
+    match quality {
+        Some(pfx_settings::Quality::Appearance) => None,
+        Some(pfx_settings::Quality::Performance) => {
+            Some(game.unwrap_or_else(|| Budget::new(f64::from(pfx_settings::BUDGET_MS))))
+        }
+        None => game,
     }
 }

@@ -179,16 +179,38 @@ impl App for Workbench<'_> {
         self.viewer.get().is_some() || self.shell.session().is_some()
     }
 
+    fn present(&self) -> pfx_editor_shell::Present {
+        self.shell.present()
+    }
+
+    fn stats(&self) -> bool {
+        self.shell.stats()
+    }
+
+    fn frames(&mut self, frames: &pfx_editor_shell::Frames) {
+        self.shell.set_frames(frames);
+    }
+
     fn frame(&mut self, gpu: &Gpu, renderer: &mut Renderer, pixels_per_point: f32) -> bool {
         let mut more = false;
+        let graphics = self.shell.preferences().graphics;
         if let Some(session) = self.shell.session_mut() {
+            session.editor.viewport.set_graphics(graphics);
             more |= session.frame(gpu, renderer, pixels_per_point);
+            let shed = session.editor.viewport.shed();
+            let gpu_ms = session.editor.viewport.timing().gpu_ms;
+            self.shell.prefs().set_shed(shed);
+            self.shell.measure_frame(gpu_ms);
         }
         if self.shell.edits_scene() {
             return more;
         }
         match self.viewer.get_mut() {
-            Some(viewer) => viewer.frame(gpu, renderer, self.shell, pixels_per_point) || more,
+            Some(viewer) => {
+                let drew = viewer.frame(gpu, renderer, self.shell, pixels_per_point);
+                self.shell.measure_frame(viewer.frame_ms());
+                drew || more
+            }
             None => more,
         }
     }
@@ -306,6 +328,24 @@ impl App for Workbench<'_> {
             },
             None => Timing::default(),
         }
+    }
+
+    fn commands(&mut self) -> Vec<pfx_gpu::wgpu::CommandBuffer> {
+        self.viewer
+            .get_mut()
+            .map(Viewer::take_commands)
+            .unwrap_or_default()
+    }
+
+    fn gpu_timings(&self) -> Option<&pfx_gpu::FrameTimings> {
+        if let Some(session) = self.shell.session() {
+            return session.gpu_timings();
+        }
+        self.viewer.get().and_then(Viewer::timings)
+    }
+
+    fn render_scale(&self) -> Option<f32> {
+        self.viewer.get().and_then(Viewer::render_scale)
     }
 }
 
@@ -695,7 +735,7 @@ roughness = 0.4
             &mut Workbench::lent(&mut shell, &mut viewer),
             &crate::Tape::parse("frame\n").unwrap(),
             layout,
-            fps,
+            pfx_core::rate::Rate::whole(fps),
             |_, _, _| Ok(()),
         )
         .unwrap();
@@ -716,7 +756,7 @@ roughness = 0.4
             &mut Workbench::lent(&mut shell, &mut viewer),
             &crate::Tape::parse(&tape).unwrap(),
             layout,
-            fps,
+            pfx_core::rate::Rate::whole(fps),
             |app, _, rgba| {
                 let eye = app.shell.view_eye().unwrap();
                 framed = app.shell.camera_frame().or(framed);

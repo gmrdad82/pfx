@@ -9,16 +9,18 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["clipboard"]
+default = ["clipboard", "splash"]
 clipboard = ["dep:arboard", "dep:smithay-clipboard"]
 tools = []
 dev-hud = ["pfx-play/dev-hud", "pfx-live/dev-hud"]
 steam = ["dep:pfx-steam"]
 modules = ["dep:pfx-mod", "dep:wit-parser", "dep:wit-component"]
+splash = ["dep:pfx-splash"]
 
 [dependencies]
 pfx-core = { path = "../core" }
 pfx-gpu = { path = "../gpu", features = ["window"] }
+pfx-settings = { path = "../settings" }
 pfx-input = { path = "../input" }
 pfx-live = { path = "../live" }
 pfx-load = { path = "../load" }
@@ -26,6 +28,7 @@ pfx-play = { path = "../play" }
 pfx-sound = { path = "../sound" }
 pfx-text = { path = "../text" }
 pfx-mod = { path = "../mod", optional = true }
+pfx-splash = { path = "../splash", optional = true }
 wit-parser = { version = "=0.258.3", optional = true }
 wit-component = { version = "=0.258.3", default-features = false, optional = true }
 pfx-steam = { path = "../steam", default-features = false, features = ["input"], optional = true }
@@ -51,6 +54,10 @@ wat = "=1.258.3"
 [[example]]
 name = "empty"
 path = "examples/empty/main.rs"
+
+[[example]]
+name = "flat"
+path = "examples/flat/main.rs"
 
 [[example]]
 name = "marker"

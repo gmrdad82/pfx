@@ -1,0 +1,19 @@
+[package]
+name = "pfx-settings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "pfx's user settings: VRR, the frame rate, the quality mode, each costly live effect and the licence key, kept in settings.pitofx, read and set by key for the editor's panel, a game's menu and pfx settings"
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[features]
+default = ["present"]
+present = ["dep:pfx-gpu"]
+
+[dependencies]
+pfx-file = { path = "../file" }
+pfx-gpu = { path = "../gpu", optional = true }
+serde = { version = "1", features = ["derive"] }
+toml_edit = { version = "0.25", features = ["serde"] }

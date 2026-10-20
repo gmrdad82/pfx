@@ -2052,7 +2052,7 @@ mod tests {
         let pgpu = tools.join("pgpu");
         std::fs::write(
             &pgpu,
-            "#!/usr/bin/python3\nimport os, signal, time\ndef stop(signum, frame):\n    open(os.environ['GOT'], 'w').write('term')\n    raise SystemExit\nsignal.signal(signal.SIGTERM, stop)\nopen(os.environ['STARTED'], 'w').write(str(os.getpid()))\nwhile True:\n    time.sleep(30)\n",
+            "#!/bin/sh\ntrap 'printf term > \"$GOT\"; kill $! 2>/dev/null; exit 0' TERM\nprintf '%s' $$ > \"$STARTED\"\nwhile :; do /bin/sleep 30 & wait $!; done\n",
         )
         .unwrap();
         std::fs::set_permissions(&pgpu, std::fs::Permissions::from_mode(0o755)).unwrap();

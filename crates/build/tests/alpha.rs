@@ -1,6 +1,8 @@
 mod common;
 
 use pfx_build::{build, library, write};
+use pfx_glb::Coverage;
+use pfx_materials::{AlphaMode, Material};
 use pfx_recipe::parse;
 use serde_json::{Value, json};
 use std::path::Path;
@@ -210,5 +212,66 @@ fn a_written_scene_draws_an_imported_mask_card_with_its_own_texture() {
             "{materials:?}: the card draws {leaf}, not the file's textured material"
         );
         assert!(!draws.textures.is_empty(), "{materials:?}");
+    }
+}
+
+#[test]
+fn a_recipe_material_over_a_mask_leaf_material_keeps_its_cutout_unless_it_states_one() {
+    let dir = common::scratch("alpha-override");
+    std::fs::write(dir.join("card.glb"), leaf_card(true)).unwrap();
+    let plain = "\n[materials.leaf]\nbase = [1.0, 1.0, 1.0]\nroughness = 1.0\nmetalness = 0.0\n";
+    for (extra, mode, cutoff) in [
+        ("", AlphaMode::Mask, 0.5),
+        ("alpha_cutoff = 0.3\n", AlphaMode::Mask, 0.3),
+        ("alpha_mode = \"opaque\"\n", AlphaMode::Opaque, 0.5),
+    ] {
+        let r = recipe(&format!("{plain}{extra}"));
+        let b = build(&r, &dir).unwrap();
+        let merged = b.recipe(&r).materials;
+        let material: Material = serde_json::from_value(merged["leaf"].clone()).unwrap();
+        assert_eq!(material.alpha_mode, mode, "{extra:?}: {}", merged["leaf"]);
+        assert!((material.alpha_cutoff - cutoff).abs() < 1e-6, "{extra:?}");
+        assert_eq!(material.base, [1.0; 3], "{extra:?}");
+        assert_eq!(material.roughness, 1.0, "{extra:?}");
+        let look = &b.looks["leaf"];
+        assert!(look.base.is_some(), "{extra:?}: the card lost its texture");
+        let want = (mode == AlphaMode::Mask).then_some(Coverage::Mask(cutoff));
+        assert_eq!(look.coverage, want, "{extra:?}");
+    }
+}
+
+#[test]
+fn a_double_sided_material_from_a_file_draws_both_sides_unless_pfx_wrote_the_file() {
+    let (card, bin) = library::split_glb(&leaf_card(true)).unwrap();
+    let sided = |mask: bool, generator: &str| {
+        let mut json = card.clone();
+        json["materials"][0]["doubleSided"] = json!(true);
+        if !mask {
+            json["materials"][0]["alphaMode"] = json!("OPAQUE");
+        }
+        json["asset"]["generator"] = json!(generator);
+        library::join_glb(&json, &bin)
+    };
+    for (case, (two, glb)) in [
+        (false, leaf_card(true)),
+        (true, sided(true, "a modeller")),
+        (true, sided(false, "a modeller")),
+        (false, sided(false, "pfx")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let dir = common::scratch(&format!("alpha-sides-{case}"));
+        std::fs::write(dir.join("card.glb"), glb).unwrap();
+        let r = recipe("");
+        let b = build(&r, &dir).unwrap();
+        assert_eq!(b.parts[0].two_sided, two, "case {case}");
+        let written = write(&b, &r, &dir, None).unwrap();
+        let text = scene_text(&dir, &written);
+        assert_eq!(
+            text.contains("two_sided = true"),
+            two,
+            "case {case}: {text}"
+        );
     }
 }

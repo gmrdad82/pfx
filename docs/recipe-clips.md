@@ -60,7 +60,7 @@ A long clip survives a stop, a crash, a reboot or the GPU queue taking the card 
 
 - **Whole files only.** Every frame, the `--video`, `clip.txt` and `frames.json` go to a hidden `.<name>.partial.<ext>` beside the file, are synced to disk and then renamed into place. A run sweeps any leftover `.partial` file before it starts.
 - **`frames.json`** lists each finished frame with its number, size and sha256, rewritten whole after every frame. On resume each frame on disk is read against it: a frame that is missing, cut short or doesn't match its hash is made again. A frame the ledger doesn't know yet (a folder from an older pfx, or a stop between the rename and the ledger) is decoded whole first and only then recorded. Several `--range` runs into one folder share the ledger under `frames.lock`: each verifies, sweeps and redoes only its own frames, and a range checks the frame before its first missing one only when that frame is finished and recorded there.
-- **The previous frame is made again first.** Before continuing at frame K, frame K−1 is rendered once more and compared byte for byte with the one on disk. When they match the run carries on; when they don't (another pfx build, another GPU driver, or state carried between frames), it stops with one line naming the frame, records the result under `checks` in `frames.json`, and renders nothing more, so old and new frames never mix. `--rerender-from <frame>` removes that frame and every later one, from the folder and from the ledger, and makes them again without the check.
+- **The previous frame is made again first.** Before continuing at frame K, frame K−1 is rendered once more and compared byte for byte with the one on disk. When they match the run carries on; when they don't (another pfx build, another GPU driver, or state carried between frames), it stops with one line naming the frame, records the result under `checks` in `frames.json`, and renders nothing more, so old and new frames never mix. A traced check is paid once per build and GPU: `frames.json` keeps with each check the sha256 of the pfx binary that made it and the adapter, backend and driver it ran on, and once a check made by that same binary on that same GPU and driver has matched (and none by it has differed), a later run or `--range` into the folder skips rendering its frame K−1 again and says which frame proved it. A clip made one frame a run otherwise renders every frame twice. `--rerender-from <frame>` removes that frame and every later one, from the folder and from the ledger, and makes them again without the check.
 - **Checkpoints inside a frame.** `--checkpoint <every>` (with `--trace`) saves the frame's accumulated samples to `.frame-NNNN.checkpoint` every so many minutes (`--checkpoint 10`) or samples (`--checkpoint 64spp`). The file holds the tracer's sums, its three output layers, the sample index and, for adaptive sampling, the rounds reached and the per-pixel noise estimates, so a resumed frame continues at the next sample and ends on the same bytes as an uninterrupted one. A checkpoint is kept only for the render that made it (the line, the recipe's sha256 and the pfx version); any other is removed. It is deleted once its frame is written. At 3840×2160 a checkpoint is about 1.1 GB.
 - **What it says.** A resumed run prints `resuming: 37 of 120 frames done, starting at frame 37` (with `, from its checkpoint at 96 samples` when one is used), a line with the frames verified and redone, and the K−1 check's result.
 
@@ -69,10 +69,11 @@ A long clip survives a stop, a crash, a reboot or the GPU queue taking the card 
 | `stage` | fields |
 |---|---|
 | `resume` | `done`, `of`, `from`, `checkpoint_samples`, `verified`, `adopted`, `redone` (`frame`, `why`), `check`, `rerender_from` |
-| `check` | `frame`, `result` (`same` or `differs`) |
+| `check` | `frame`, `result` (`same`, `differs`, or `proven` with `by`, the frame whose check proved this build) |
+| `path` | `frame`, `path`: the adapter, ray queries and BVH the frame traces on, the fields of `pfx render --recipe --progress json`'s `path` line ([recipe-files.md](recipe-files.md#pfx-render---recipe---progress-json)); printed before the first traced frame and again only when it changes. Plain output prints its `line` as `pfx clip: tracing on …` |
 | `trace` | `frame`, `of`, `samples` (the mean so far under adaptive sampling), `spp`, `fraction` of the frame, `eta_s` for the run |
 | `checkpoint` | `checkpoint` (its path), `frame`, `at_samples` |
-| `frame` | `frame`, `of`, `done`, `out`, `eta_s` |
+| `frame` | `frame`, `of`, `done`, `out`, `eta_s`; with `--trace` also the frame's cost: `submissions` (GPU submissions), `longest_ms` (the longest one), `gpu_ms` (their GPU time), `bottom_builds` and `top_builds` (the BVH builds this frame made: a restaged trace builds every mesh and its top level, a kept one refits only the top level) |
 
 `trace` lines come at most once a second, plus the first of every frame.
 
@@ -125,6 +126,6 @@ pfx clip samples/workshop.pitofx --camera orbit --frames 120 --fps 30 --size 128
 
 With [pcod](https://github.com/gmrdad82/pito-codecs) on the `PATH`, `--video` encodes the frames into an `.mp4` (H.264) or a `.webm` (VP9). Opaque frames are written as RGB PNGs, which both take; a frame with transparent pixels keeps its alpha, which only `.webm` carries. Without pcod, `--video` says it needs pcod, the frames stay in the folder and the command exits 1.
 
-The list holds each frame for exactly its share of a second, so the video has every frame once.
+pcod reads the frames folder at the clip's rate (`pcod <frames> <video> --fps <rate> --profile best`), so the video has every frame once.
 
 `--memory-limit <GB>` (or `PFX_MEMORY_LIMIT`) plans the clip's memory before its scene is staged, live or `--trace`, and refuses one past the limit in one line; each frame's line ends with the peaks so far beside the plan ([memory.md](memory.md)). A traced clip keeps its built scene for the whole clip, so it plans more than a traced still of the same recipe.

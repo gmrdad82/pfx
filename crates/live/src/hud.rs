@@ -1,9 +1,11 @@
 use egui::{
-    Align, Area, Color32, Context, Frame, FullOutput, Id, Layout, Margin, Order, Pos2, RawInput,
-    Rect, Sense, Stroke, TexturesDelta, ViewportId, ViewportInfo, epaint::ClippedPrimitive, vec2,
+    Align, Align2, Area, Color32, Context, Frame, FullOutput, Id, Layout, Margin, Order, Pos2,
+    RawInput, Rect, Sense, Stroke, TexturesDelta, ViewportId, ViewportInfo,
+    epaint::ClippedPrimitive, vec2,
 };
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
 use pfx_gpu::Gpu;
+use pfx_gpu::stats::percentiles;
 use pfx_input::device::Key;
 use pfx_input::event::InputEvent;
 use pfx_theme::style::Theme;
@@ -19,9 +21,56 @@ pub const KEPT: usize = 512;
 pub const WIDTH: f32 = 216.0;
 pub const MARGIN: f32 = 12.0;
 pub const GRAPH_HEIGHT: f32 = 48.0;
+pub const PASSES: usize = 6;
+const PASS_NAME: usize = 14;
 const CEILING_MS: f64 = 2.0 * BUDGET_MS;
 const CANVAS: f32 = 512.0;
 const CANVAS_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Pace {
+    pub fps: f64,
+    pub p50_ms: f64,
+    pub p99_ms: f64,
+    pub max_ms: f64,
+}
+
+impl Pace {
+    pub fn of(intervals: impl Iterator<Item = f64>) -> Option<Pace> {
+        let intervals: Vec<f64> = intervals
+            .filter(|interval| interval.is_finite() && *interval > 0.0)
+            .collect();
+        let total: f64 = intervals.iter().sum();
+        if intervals.is_empty() || total <= 0.0 {
+            return None;
+        }
+        let spread = percentiles(intervals.iter().copied());
+        Some(Pace {
+            fps: intervals.len() as f64 * 1000.0 / total,
+            p50_ms: spread.p50,
+            p99_ms: spread.p99,
+            max_ms: spread.max,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Shown {
+    pub mode: String,
+    pub vrr: bool,
+    pub vrr_in_effect: Option<bool>,
+    pub frame_rate: String,
+}
+
+impl Shown {
+    pub fn vrr_word(&self) -> &'static str {
+        match (self.vrr, self.vrr_in_effect) {
+            (false, _) => "off",
+            (true, Some(false)) => "on, not in effect",
+            (true, _) => "on",
+        }
+    }
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Readout {
@@ -32,6 +81,13 @@ pub struct Readout {
     pub hud_ms: Option<f64>,
     pub frames: Vec<(f64, f64)>,
     pub over: usize,
+    pub pace: Option<Pace>,
+    pub shown_pace: Option<Pace>,
+    pub cpu_ms: Option<f64>,
+    pub passes: Vec<(String, f64)>,
+    pub scale: Option<f32>,
+    pub present: Option<Shown>,
+    pub drawn: Option<[u64; 2]>,
 }
 
 impl Readout {
@@ -62,7 +118,9 @@ impl Readout {
                 .iter()
                 .filter(|(_, interval)| *interval > BUDGET_MS)
                 .count(),
+            pace: Pace::of(frames.iter().map(|(_, interval)| *interval)),
             frames,
+            ..Self::default()
         }
     }
 }
@@ -123,50 +181,134 @@ fn graph(ui: &mut egui::Ui, theme: &Theme, readout: &Readout) {
     painter.hline(rect.x_range(), budget, Stroke::new(theme.stroke, theme.hot));
 }
 
+fn pace_rows(ui: &mut egui::Ui, theme: &Theme, prefix: &str, pace: &Pace) {
+    if prefix.is_empty() {
+        row(ui, theme, "fps", format!("{:.0}", pace.fps), theme.text);
+    }
+    for (name, ms) in [
+        ("p50", pace.p50_ms),
+        ("p99", pace.p99_ms),
+        ("max", pace.max_ms),
+    ] {
+        row(
+            ui,
+            theme,
+            &format!("{prefix}{name}"),
+            millis(Some(ms)),
+            theme.text,
+        );
+    }
+}
+
+fn game_rows(ui: &mut egui::Ui, theme: &Theme, readout: &Readout, kind: Option<FrameKind>) {
+    row(ui, theme, "sim", millis(readout.sim_ms), theme.text);
+    row(ui, theme, "submit", millis(readout.submit_ms), theme.text);
+    row(
+        ui,
+        theme,
+        "gpu",
+        millis(readout.gpu.map(|(_, ms)| ms)),
+        theme.text,
+    );
+    let (kind, colour) = match kind {
+        Some(kind) => (kind.name().to_uppercase(), kind_colour(theme, kind)),
+        None => ("-".into(), theme.muted),
+    };
+    row(ui, theme, "kind", kind, colour);
+}
+
+fn view_rows(ui: &mut egui::Ui, theme: &Theme, readout: &Readout) {
+    row(ui, theme, "cpu", millis(readout.cpu_ms), theme.text);
+    row(
+        ui,
+        theme,
+        "gpu",
+        millis(readout.gpu.map(|(_, ms)| ms)),
+        theme.text,
+    );
+    for (name, ms) in readout.passes.iter().take(PASSES) {
+        let name: String = name.chars().take(PASS_NAME).collect();
+        row(
+            ui,
+            theme,
+            &format!(" {name}"),
+            millis(Some(*ms)),
+            theme.text2,
+        );
+    }
+    if let Some(scale) = readout.scale {
+        row(
+            ui,
+            theme,
+            "scale",
+            format!("{:.0} %", f64::from(scale) * 100.0),
+            theme.text,
+        );
+    }
+    if let Some(present) = &readout.present {
+        row(ui, theme, "target", present.frame_rate.clone(), theme.text);
+        row(ui, theme, "vrr", present.vrr_word().into(), theme.text);
+        row(ui, theme, "present", present.mode.clone(), theme.text2);
+    }
+    if let Some([drawn, culled]) = readout.drawn {
+        row(ui, theme, "draws", drawn.to_string(), theme.text);
+        row(ui, theme, "culled", culled.to_string(), theme.text2);
+    }
+}
+
+fn panel(ui: &mut egui::Ui, theme: &Theme, readout: &Readout) {
+    Frame::new()
+        .fill(theme.bg)
+        .stroke(Stroke::new(theme.stroke, theme.line))
+        .inner_margin(Margin::same(theme.panel_padding))
+        .corner_radius(theme.radius)
+        .show(ui, |ui| {
+            ui.set_width(WIDTH);
+            ui.label(pfx_theme::title(
+                theme,
+                "frame",
+                theme.size_body,
+                theme.text,
+            ));
+            if let Some(pace) = &readout.pace {
+                pace_rows(ui, theme, "", pace);
+            }
+            if let Some(pace) = &readout.shown_pace {
+                pace_rows(ui, theme, "shown ", pace);
+            }
+            match readout.kind {
+                Some(kind) => game_rows(ui, theme, readout, Some(kind)),
+                None if readout.cpu_ms.is_none() && readout.present.is_none() => {
+                    game_rows(ui, theme, readout, None)
+                }
+                None => view_rows(ui, theme, readout),
+            }
+            row(ui, theme, "hud", millis(readout.hud_ms), theme.text2);
+            if !readout.frames.is_empty() || readout.kind.is_some() {
+                graph(ui, theme, readout);
+                let over = if readout.over > 0 {
+                    theme.warning
+                } else {
+                    theme.muted
+                };
+                row(ui, theme, "over 16.67", readout.over.to_string(), over);
+            }
+        });
+}
+
 pub fn ui(ctx: &Context, readout: &Readout) -> Rect {
+    ui_at(ctx, readout, Pos2::ZERO, Align2::LEFT_TOP)
+}
+
+pub fn ui_at(ctx: &Context, readout: &Readout, at: Pos2, pivot: Align2) -> Rect {
     let theme = Theme::of(ctx);
     let theme = theme.as_ref();
     Area::new(Id::new("pfx dev hud"))
-        .fixed_pos(Pos2::ZERO)
+        .fixed_pos(at)
+        .pivot(pivot)
         .order(Order::Foreground)
-        .show(ctx, |ui| {
-            Frame::new()
-                .fill(theme.bg)
-                .stroke(Stroke::new(theme.stroke, theme.line))
-                .inner_margin(Margin::same(theme.panel_padding))
-                .corner_radius(theme.radius)
-                .show(ui, |ui| {
-                    ui.set_width(WIDTH);
-                    ui.label(pfx_theme::title(
-                        theme,
-                        "frame",
-                        theme.size_body,
-                        theme.text,
-                    ));
-                    row(ui, theme, "sim", millis(readout.sim_ms), theme.text);
-                    row(ui, theme, "submit", millis(readout.submit_ms), theme.text);
-                    row(
-                        ui,
-                        theme,
-                        "gpu",
-                        millis(readout.gpu.map(|(_, ms)| ms)),
-                        theme.text,
-                    );
-                    let (kind, colour) = match readout.kind {
-                        Some(kind) => (kind.name().to_uppercase(), kind_colour(theme, kind)),
-                        None => ("-".into(), theme.muted),
-                    };
-                    row(ui, theme, "kind", kind, colour);
-                    row(ui, theme, "hud", millis(readout.hud_ms), theme.text2);
-                    graph(ui, theme, readout);
-                    let over = if readout.over > 0 {
-                        theme.warning
-                    } else {
-                        theme.muted
-                    };
-                    row(ui, theme, "over 16.67", readout.over.to_string(), over);
-                });
-        })
+        .interactable(false)
+        .show(ctx, |ui| panel(ui, theme, readout))
         .response
         .rect
 }
@@ -641,6 +783,11 @@ mod tests {
             t_ms,
             sim_ms: Some(0.5),
             submit_ms: 2.0,
+            prepare_ms: None,
+            encode_ms: 2.0,
+            poll_ms: 0.0,
+            queue_ms: 0.0,
+            wait_ms: None,
             gpu_ms: None,
             interval_ms,
             kind: FrameKind::Full,
@@ -706,6 +853,10 @@ mod tests {
                 .all(|(end, _)| (0.0..=WINDOW_MS).contains(end))
         );
         assert_eq!(readout.over, 2);
+        let pace = readout.pace.unwrap();
+        assert!((pace.fps - 251_000.0 / 4064.0).abs() < 1e-9);
+        assert_eq!((pace.p50_ms, pace.p99_ms, pace.max_ms), (16.0, 16.0, 40.0));
+        assert_eq!(Pace::of([0.0, f64::NAN].into_iter()), None);
     }
 
     #[test]
@@ -731,7 +882,8 @@ mod tests {
         assert_eq!(rects[0].min, Pos2::ZERO);
         assert!(rects[0].width() > WIDTH && rects[0].width() < WIDTH + 40.0);
         for want in [
-            "FRAME", "SIM", "SUBMIT", "GPU", "KIND", "HUD", "FULL", "2.00 ms", "0.50 ms",
+            "FRAME", "FPS", "P99", "SIM", "SUBMIT", "GPU", "KIND", "HUD", "FULL", "2.00 ms",
+            "0.50 ms",
         ] {
             assert!(texts.iter().any(|text| text == want), "{want} in {texts:?}");
         }
@@ -754,5 +906,52 @@ mod tests {
         assert!(encodes(wgpu::TextureFormat::Rgba8Unorm));
         assert!(!encodes(wgpu::TextureFormat::Rgba8UnormSrgb));
         assert!(!encodes(wgpu::TextureFormat::Rgba16Float));
+    }
+
+    #[test]
+    fn a_view_readout_shows_pacing_passes_and_the_present_but_no_game_rows() {
+        let readout = Readout {
+            pace: Some(Pace {
+                fps: 120.0,
+                p50_ms: 8.33,
+                p99_ms: 8.4,
+                max_ms: 9.1,
+            }),
+            cpu_ms: Some(0.7),
+            gpu: Some((0, 3.5)),
+            passes: vec![("opaque".into(), 2.25), ("shadow".into(), 0.5)],
+            scale: Some(1.0),
+            present: Some(Shown {
+                mode: "Mailbox".into(),
+                vrr: true,
+                vrr_in_effect: None,
+                frame_rate: "uncapped".into(),
+            }),
+            drawn: Some([40, 12]),
+            ..Readout::default()
+        };
+        let ctx = context();
+        let (_, mut full) = layout(&ctx, 1.0, &readout, 2);
+        full.textures_delta.clear();
+        let texts: Vec<String> = full
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_string()),
+                _ => None,
+            })
+            .collect();
+        for want in [
+            "FPS", "120", "P99", "8.40 ms", "CPU", " OPAQUE", "2.25 ms", "SCALE", "100 %",
+            "TARGET", "uncapped", "VRR", "on", "Mailbox", "DRAWS", "40", "CULLED", "12",
+        ] {
+            assert!(texts.iter().any(|text| text == want), "{want} in {texts:?}");
+        }
+        for gone in ["SIM", "SUBMIT", "KIND", "OVER 16.67"] {
+            assert!(
+                !texts.iter().any(|text| text == gone),
+                "{gone} in {texts:?}"
+            );
+        }
     }
 }

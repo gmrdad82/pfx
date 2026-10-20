@@ -18,6 +18,7 @@ pfx-post = { path = "../post" }
 pfx-geom = { path = "../geom" }
 pfx-bake = { path = "../bake" }
 pfx-load = { path = "../load" }
+pfx-settings = { path = "../settings", default-features = false }
 pfx-trace = { path = "../trace" }
 half = "2.7.1"
 i_overlay = { version = "=9.0.0", default-features = false }
@@ -51,4 +52,8 @@ pfx-trace = { path = "../trace" }
 
 [[test]]
 name = "dev_hud"
+required-features = ["dev-hud"]
+
+[[example]]
+name = "hud_cost"
 required-features = ["dev-hud"]

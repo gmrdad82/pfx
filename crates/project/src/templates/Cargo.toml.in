@@ -15,6 +15,9 @@ pfx-game = { git = "{{source}}", tag = "{{tag}}" }
 pfx-project = { git = "{{source}}", tag = "{{tag}}" }
 pfx-workbench = { git = "{{source}}", tag = "{{tag}}", optional = true }
 
+[build-dependencies]
+pfx-settings = { git = "{{source}}", tag = "{{tag}}", default-features = false }
+
 [dev-dependencies]
 pfx-gpu = { git = "{{source}}", tag = "{{tag}}" }
 png = "0.18"

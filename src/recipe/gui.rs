@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use pfx_build::Registry;
+use pfx_core::rate::Rate;
 use pfx_workbench::{Fixture, Follow, Mode, Shell, Viewer, Workbench};
 
 use super::size;
@@ -10,11 +11,6 @@ use super::size;
 fn fixtures() -> impl TypedValueParser<Value = Fixture> {
     PossibleValuesParser::new(Fixture::ALL.map(Fixture::name))
         .map(|name| Fixture::from_name(&name).unwrap_or(Fixture::ALL[0]))
-}
-
-fn rates() -> impl TypedValueParser<Value = u32> {
-    PossibleValuesParser::new(["30", "60", "120"])
-        .map(|fps| fps.parse().unwrap_or(super::gui_tape::FPS[0]))
 }
 
 #[derive(clap::Args, Debug, Default, PartialEq)]
@@ -64,10 +60,10 @@ pub(super) struct Args {
         long,
         value_name = "F",
         requires = "clip",
-        value_parser = rates(),
-        help = "A clip's frames per second [default: 30]"
+        value_parser = super::clip::rate,
+        help = "Frames per second, from 1 to 240: a whole number, num/den such as 24000/1001, or 23.976 (23.98), 29.97, 47.952 (47.95), 59.94, 119.88 [default: 30]"
     )]
-    pub(super) fps: Option<u32>,
+    pub(super) fps: Option<Rate>,
     #[arg(
         long,
         value_name = "when",
@@ -257,11 +253,7 @@ pub fn run(args: &Args, rest: &[String], registry: &Registry) -> ExitCode {
         }
     }
     if let Target::Recipe(path) | Target::Scene(path) = &choice {
-        if pfx_file::is_legacy_path(Path::new(path)) {
-            Shell::remember_recent(&pfx_file::renamed(Path::new(path)).display().to_string());
-        } else {
-            Shell::remember_recent(path);
-        }
+        Shell::remember_recent(path);
     }
     let opened = match &choice {
         Target::Recipe(path) | Target::Scene(path) => {

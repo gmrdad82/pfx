@@ -1,28 +1,9 @@
 use super::{Paths, shown};
 use crate::bake::{Section, list, number, string};
 use crate::{Built, Error};
-use pfx_recipe::{Colour, LightKind, Recipe, Setting, Settings};
+use pfx_recipe::{Colour, Recipe, Setting, Settings};
 use pfx_scene::types::Wet;
 use std::path::Path;
-
-pub(super) fn format_1_key(recipe: &Recipe) -> Option<String> {
-    if let Some(key) = recipe.effects.first_key() {
-        return Some(key);
-    }
-    if recipe.look.as_ref().is_some_and(|look| look.lut.is_some()) {
-        return Some("look.lut".to_string());
-    }
-    recipe
-        .lights
-        .iter()
-        .find(|light| {
-            light.kind == LightKind::Spot
-                || light.parent.is_some()
-                || light.direction.is_some()
-                || light.cone.is_some()
-        })
-        .map(|light| format!("light[{}]", light.name))
-}
 
 pub(super) fn file(
     paths: &Paths,
@@ -56,8 +37,8 @@ pub(super) fn riding(whole: &str, node: String) -> Parent {
     }
 }
 
-pub(super) fn whole(recipe: &Recipe, built: &Built, format: u32, glb: &Path) -> Option<String> {
-    if format != 1 || recipe.timeline.is_none() || built.tracks.is_empty() {
+pub(super) fn whole(recipe: &Recipe, built: &Built, glb: &Path) -> Option<String> {
+    if recipe.timeline.is_none() || built.tracks.is_empty() {
         return None;
     }
     let stem = glb.file_stem().and_then(|stem| stem.to_str()).unwrap_or("");

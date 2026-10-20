@@ -771,8 +771,12 @@ fn read_delta(
             accessor.count()
         ));
     }
-    let deltas: Vec<[f32; 3]> = if accessor.view().is_none() && accessor.sparse().is_none() {
-        vec![[0.0; 3]; vertices]
+    let deltas: Vec<[f32; 3]> = if accessor.view().is_none() {
+        let mut deltas = vec![[0.0; 3]; vertices];
+        if let Some(sparse) = accessor.sparse() {
+            scatter(&sparse, buffers, &mut deltas)?;
+        }
+        deltas
     } else {
         gltf::accessor::Iter::<[f32; 3]>::new(accessor, |buffer: gltf::Buffer<'_>| {
             buffers.get(buffer.index()).map(Vec::as_slice)
@@ -790,6 +794,65 @@ fn read_delta(
         return Err("hold a delta that is not finite".into());
     }
     Ok(Some(deltas))
+}
+
+fn view_bytes<'a>(
+    view: gltf::buffer::View<'_>,
+    offset: usize,
+    length: usize,
+    buffers: &'a [Vec<u8>],
+) -> Option<&'a [u8]> {
+    if offset.checked_add(length)? > view.length() {
+        return None;
+    }
+    let start = view.offset().checked_add(offset)?;
+    buffers
+        .get(view.buffer().index())?
+        .get(start..start.checked_add(length)?)
+}
+
+fn scatter(
+    sparse: &gltf::accessor::sparse::Sparse<'_>,
+    buffers: &[Vec<u8>],
+    deltas: &mut [[f32; 3]],
+) -> Result<(), String> {
+    let count = sparse.count();
+    let indices = sparse.indices();
+    let width = match indices.index_type() {
+        gltf::accessor::sparse::IndexType::U8 => 1,
+        gltf::accessor::sparse::IndexType::U16 => 2,
+        gltf::accessor::sparse::IndexType::U32 => 4,
+    };
+    let unreadable = || "cannot be read from their buffer".to_string();
+    let index_bytes = count
+        .checked_mul(width)
+        .and_then(|length| view_bytes(indices.view(), indices.offset(), length, buffers))
+        .ok_or_else(unreadable)?;
+    let values = sparse.values();
+    let value_bytes = count
+        .checked_mul(12)
+        .and_then(|length| view_bytes(values.view(), values.offset(), length, buffers))
+        .ok_or_else(unreadable)?;
+    let mut last = None;
+    for (index, value) in index_bytes
+        .chunks_exact(width)
+        .zip(value_bytes.chunks_exact(12))
+    {
+        let mut raw = [0u8; 4];
+        raw[..width].copy_from_slice(index);
+        let at = u32::from_le_bytes(raw) as usize;
+        if last.is_some_and(|last| at <= last) {
+            return Err("have sparse indices that do not increase".into());
+        }
+        last = Some(at);
+        let slot = deltas
+            .get_mut(at)
+            .ok_or("have a sparse index past the last vertex")?;
+        for (c, bytes) in value.chunks_exact(4).enumerate() {
+            slot[c] = f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        }
+    }
+    Ok(())
 }
 
 fn fit<T>(values: Vec<T>, len: usize, what: &str) -> Result<Vec<T>, String> {

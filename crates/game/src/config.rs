@@ -17,6 +17,13 @@ pub enum Pads {
 
 pub type Crash = Box<dyn Fn(&str)>;
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Redraw {
+    #[default]
+    OnDemand,
+    Always,
+}
+
 pub struct Config {
     pub name: String,
     pub title: Option<String>,
@@ -24,6 +31,7 @@ pub struct Config {
     pub wordmark: Option<PathBuf>,
     pub crash: Option<Crash>,
     pub version: String,
+    pub build_date: Option<String>,
     pub scene: Option<PathBuf>,
     pub packed: Option<&'static [u8]>,
     pub settings: Settings,
@@ -43,6 +51,9 @@ pub struct Config {
     pub environment: Option<EnvironmentTexels>,
     pub warm_budget: f64,
     pub clear: Option<Srgba>,
+    pub redraw: Redraw,
+    #[cfg(feature = "splash")]
+    pub splash: pfx_splash::Settings,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -84,6 +95,7 @@ impl Config {
             wordmark: None,
             crash: None,
             version: version.into(),
+            build_date: None,
             scene: None,
             packed: None,
             settings: Settings::default(),
@@ -103,7 +115,21 @@ impl Config {
             environment: None,
             warm_budget: WARM_BUDGET,
             clear: None,
+            redraw: Redraw::OnDemand,
+            #[cfg(feature = "splash")]
+            splash: pfx_splash::Settings::default(),
         }
+    }
+
+    #[cfg(feature = "splash")]
+    pub fn splash(mut self, splash: pfx_splash::Settings) -> Self {
+        self.splash = splash;
+        self
+    }
+
+    pub fn build_date(mut self, date: Option<&str>) -> Self {
+        self.build_date = date.map(str::to_string);
+        self
     }
 
     pub fn clear(mut self, colour: Srgba) -> Self {
@@ -114,6 +140,11 @@ impl Config {
     pub fn bind_text(&self) {
         pfx_load::scene::bind("name", &self.name);
         pfx_load::scene::bind("version", &self.version);
+    }
+
+    pub fn redraw(mut self, redraw: Redraw) -> Self {
+        self.redraw = redraw;
+        self
     }
 
     pub fn warm_budget(mut self, seconds: f64) -> Self {

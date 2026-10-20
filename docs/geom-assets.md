@@ -1,6 +1,6 @@
 # Asset geometry
 
-Status: 2026-10-06. `crates/geom` builds the solids the asset renders need, on the CPU, without Blender: an SVG mark becomes extruded, bevelled solids, and an icon's parts fuse into one smooth shape through a distance field. Every parameter and default follows `crates/assets/blender/render.py`, so `crates/assets` can map its preset keys one to one and stage the meshes into `pfx_trace`.
+Status: 2026-10-06. `crates/geom` builds the solids the asset renders need, on the CPU, without Blender: an SVG mark becomes extruded, bevelled solids, and an icon's parts fuse into one smooth shape through a distance field. Every parameter and default follows render.py, the Blender asset script these modules replaced (it is no longer in the tree), so `crates/assets` maps its preset keys one to one and stage the meshes into `pfx_trace`.
 
 Three modules:
 - `svg`: reads a master (`Drawing::parse`) into elements in document order, with flattened paths, paints, stroke widths, fill rules, mask holes and the ground rect.

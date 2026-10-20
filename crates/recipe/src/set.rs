@@ -277,7 +277,8 @@ fn value_like(old: &Value, text: &str) -> Result<Value, String> {
         (
             Value::Integer(_) | Value::Float(_),
             Value::Integer(_) | Value::Float(_)
-        ) | (Value::Boolean(_), Value::Boolean(_))
+        ) | (Value::Integer(_) | Value::Float(_), Value::String(_))
+            | (Value::Boolean(_), Value::Boolean(_))
             | (Value::Array(_), Value::Array(_))
             | (Value::InlineTable(_), Value::InlineTable(_))
     ) || (reference && matches!(new, Value::Integer(_) | Value::Float(_)));
@@ -352,6 +353,17 @@ two_sided = false
         assert_eq!(params["height"], 48);
         assert!(set.source.contains("intensity = 1.4\n"));
         assert_eq!(apply_set(&recipe, &[]).unwrap(), recipe);
+    }
+
+    #[test]
+    fn a_number_takes_a_quoted_string_the_reader_accepts_and_no_other() {
+        let recipe = parse(&format!("{RECIPE}\n[timeline]\nfps = 60\nseconds = 2\n")).unwrap();
+        let set = apply_set(&recipe, &sets(&["timeline.fps=\"24000/1001\""])).unwrap();
+        let fps = set.timeline.as_ref().unwrap().fps;
+        assert_eq!((fps.num(), fps.den()), (24000, 1001));
+        assert!(set.source.contains("fps = \"24000/1001\"\n"));
+        assert!(apply_set(&recipe, &sets(&["sky.intensity=\"dark\""])).is_err());
+        assert!(apply_set(&recipe, &sets(&["sky.intensity=dark"])).is_err());
     }
 
     #[test]

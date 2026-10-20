@@ -562,7 +562,7 @@ fn trace_pass(@builtin(global_invocation_id) id: vec3u) {
     var hit = vec3f(0.0);
     let fade = 1.0 - smoothstep(0.6, 0.75, roughness);
     if (fade > 0.0) {
-        let jitter = select(0.0, ssr_random(pixel + vec2u(17u, 59u), params.frame_index + 2654435769u).x, stochastic_trace());
+        let jitter = select(0.0, ssr_random(vec2u(17u, 59u), params.frame_index + 2654435769u).x, stochastic_trace());
         hit = march(origin + surface * depth * 0.002, direction, march_steps(roughness), jitter);
     }
     if (hit.z < 0.0) {

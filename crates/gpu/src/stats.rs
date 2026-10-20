@@ -167,7 +167,7 @@ fn valid(value: f64) -> Option<f64> {
     (value.is_finite() && value >= 0.0).then_some(value)
 }
 
-fn percentiles(values: impl Iterator<Item = f64>) -> Percentiles {
+pub fn percentiles(values: impl Iterator<Item = f64>) -> Percentiles {
     let mut values: Vec<_> = values.collect();
     if values.is_empty() {
         return Percentiles::default();

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use pfx_core::cli;
+use pfx_core::rate::Rate;
 use pfx_editor::session::{Factory, Session};
 use pfx_game::{CommandError, Config};
 
@@ -234,10 +235,11 @@ fn film(root: &Path, factory: Factory, config: Config, options: &Offscreen) -> R
         window: None,
     };
     let mut app = Workbench::new(&mut shell, None);
+    let rate = Rate::whole(options.fps);
     match &options.out {
         Out::Clip(dir) => {
             std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
-            let frames = play(&mut app, &tape, layout, options.fps, |index, rgba| {
+            let frames = play(&mut app, &tape, layout, rate, |index, rgba| {
                 let png = frame_png(options.size, rgba).map_err(|error| error.0)?;
                 let path = dir.join(format!("frame-{index:05}.png"));
                 std::fs::write(&path, png).map_err(|error| format!("{}: {error}", path.display()))
@@ -247,7 +249,7 @@ fn film(root: &Path, factory: Factory, config: Config, options: &Offscreen) -> R
         }
         Out::Shot(png) => {
             let mut last = None;
-            play(&mut app, &tape, layout, options.fps, |_, rgba| {
+            play(&mut app, &tape, layout, rate, |_, rgba| {
                 last = Some(rgba.to_vec());
                 Ok(())
             })

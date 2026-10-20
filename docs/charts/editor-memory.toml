@@ -1,0 +1,10 @@
+title = "EDITOR, MEMORY"
+unit = "MEGABYTES RESIDENT"
+better = "lower"
+subtitle = "RYZEN 9 9950X, RADEON RX 9060 XT, LINUX"
+date = "2026-10-19"
+suffix = " MB"
+words = { better = "LESS", worse = "MORE", same = "SAME" }
+notes = ["THE PROCESS'S RESIDENT SET AFTER 30 S OPEN ON AN EMPTY PROJECT, MEDIAN OF 5."]
+parties = [{ name = "PFX 3.1.0" }, { name = "GODOT 4.7.2" }]
+rows = [{ label = "EMPTY PROJECT", values = [180, 1064] }]

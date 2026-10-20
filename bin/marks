@@ -2,9 +2,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 assets="${PITO_ASSETS:?PITO_ASSETS names the checkout of the PITO MD brand masters}"
-rev=1bd7ff234db9487b517ce5fed50c76a94d0dbd3f
+rev=f5780929e8af805420c0640c7d801b42f655cda2
 mkdir -p assets/marks .github
-for file in pfx.svg wordmark.svg lockup.svg lockup-light.svg pfx-icon.png pfx.ico pfx.icns; do
+for file in pfx.svg wordmark.svg lockup.svg lockup-light.svg pfx-icon.png pfx.ico pfx.icns \
+  powered-by.svg powered-by-64.png powered-by-128.png \
+  powered-by-light.svg powered-by-light-64.png powered-by-light-128.png \
+  powered-by-white.svg powered-by-white-64.png powered-by-white-128.png \
+  powered-by-black.svg powered-by-black-64.png powered-by-black-128.png; do
   git -C "$assets" show "$rev:exports/pfx/assets/marks/$file" > "assets/marks/$file"
 done
 git -C "$assets" show "$rev:exports/pfx/.github/icon.png" > .github/icon.png

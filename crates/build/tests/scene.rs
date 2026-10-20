@@ -42,53 +42,6 @@ fn opened(set: &str, camera: Option<&str>, name: &str) -> Scene {
     scene
 }
 
-fn format_0_matches_golden(set: &str, camera: Option<&str>) -> Scene {
-    let (mut r, folder) = recipe(set, camera);
-    r.output.scene_format = 0;
-    assert_eq!(validate(&r), []);
-    let (out, written) = emitted(&r, &folder, &format!("scene-{set}-format0")).unwrap();
-    let here = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/scene");
-    for name in [format!("{set}.scene.toml"), format!("{set}.materials.toml")] {
-        assert!(written.contains(&out.join(&name)), "{name}: {written:?}");
-        let made = std::fs::read_to_string(out.join(&name)).unwrap();
-        if std::env::var_os("UPDATE_GOLDEN").is_some() {
-            std::fs::write(here.join(&name), &made).unwrap();
-        }
-        let want = std::fs::read_to_string(here.join(&name)).unwrap();
-        assert!(
-            made == want,
-            "{name} differs from its format 0 golden; UPDATE_GOLDEN=1 regenerates it\n{made}"
-        );
-    }
-    Scene::open(out.join(format!("{set}.scene.toml"))).unwrap()
-}
-
-#[test]
-fn format_0_still_writes_its_goldens_and_the_engine_migrates_them_to_the_format_1_scene() {
-    for (set, camera) in [("table", None), ("toybox", Some("high"))] {
-        let old = format_0_matches_golden(set, camera);
-        assert!(!old.warnings.is_empty(), "{set}");
-        let new = opened(set, camera, &format!("scene-{set}-format1"));
-        assert_eq!(old.objects, new.objects, "{set}");
-        assert_eq!(
-            old.meshes.keys().collect::<Vec<_>>(),
-            new.meshes.keys().collect::<Vec<_>>(),
-            "{set}"
-        );
-        assert_eq!(old.library, new.library, "{set}");
-        assert_eq!(old.sun, new.sun, "{set}");
-        assert_eq!(old.sky, new.sky, "{set}");
-        assert_eq!(old.camera, new.camera, "{set}");
-        assert_eq!(
-            format!("{:?}", old.finish.map(|f| f.chain)),
-            format!("{:?}", new.finish.map(|f| f.chain)),
-            "{set}"
-        );
-        assert_eq!(old.lights, new.lights, "{set}");
-        assert_eq!(old.trace, new.trace, "{set}");
-    }
-}
-
 #[test]
 fn the_table_writes_a_format_1_scene_and_the_engine_opens_it() {
     let scene = opened("table", None, "scene-table");
@@ -818,24 +771,20 @@ fn the_firefly_settings_are_written_in_the_scenes_trace_and_off_writes_none() {
     assert!(!text.contains("[trace]"), "{text}");
     let off = opened_scene(&r, &folder, "scene-fireflies-off-open").trace;
     assert_eq!((off.clamp_indirect, off.filter_glossy), (0.0, 0.0));
-    for format in [1, 0] {
-        let mut r = parse(&format!(
-            "{}\n[trace]\nclamp_indirect = 4\nfilter_glossy = 0.25\n",
-            r.source
-        ))
-        .unwrap();
-        r.output.scene = Some("table.scene.toml".into());
-        r.output.scene_format = format;
-        r.base = Some(folder.clone());
-        let name = format!("scene-fireflies-{format}");
-        let text = written_text(&r, &folder, &name);
-        assert!(
-            text.contains("\n[trace]\nclamp_indirect = 4.0\nfilter_glossy = 0.25\n"),
-            "{text}"
-        );
-        let trace = opened_scene(&r, &folder, &format!("{name}-open")).trace;
-        assert_eq!((trace.clamp_indirect, trace.filter_glossy), (4.0, 0.25));
-    }
+    let mut r = parse(&format!(
+        "{}\n[trace]\nclamp_indirect = 4\nfilter_glossy = 0.25\n",
+        r.source
+    ))
+    .unwrap();
+    r.output.scene = Some("table.scene.toml".into());
+    r.base = Some(folder.clone());
+    let text = written_text(&r, &folder, "scene-fireflies-1");
+    assert!(
+        text.contains("\n[trace]\nclamp_indirect = 4.0\nfilter_glossy = 0.25\n"),
+        "{text}"
+    );
+    let trace = opened_scene(&r, &folder, "scene-fireflies-1-open").trace;
+    assert_eq!((trace.clamp_indirect, trace.filter_glossy), (4.0, 0.25));
     let error = refused(|r| r.trace.filter_glossy = 2.0, "scene-fireflies-far");
     assert_eq!(error.path, "trace.filter_glossy");
     let error = refused(

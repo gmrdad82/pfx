@@ -14,11 +14,13 @@ use pfx_live::flat::{
 use pfx_live::renderer::Renderer;
 use pfx_live::upscale::{Overlay, Upscale};
 use pfx_play::{
-    Anchor, Game, GameError, Label, PaintFrame, Prompt, Ui, UiFrame, UiLook, Warm, Warming, World,
+    Anchor, Game, GameError, Label, PaintFrame, Prompt, Settings, Ui, UiFrame, UiLook, Warm,
+    Warming, World,
 };
 use pfx_text::{Face, Fallback, Placement, Representation, Span, TextEngine};
 
 use crate::prompt::{self, Sources, Style};
+use crate::tests::capped;
 use crate::{Config, Count, Headless};
 
 const FONT: &[u8] = pfx_text::fixture::DM_SANS;
@@ -54,10 +56,15 @@ fn near(found: [u8; 3], colour: Srgba, what: &str) {
 struct Painter {
     overlay: Option<Upscale>,
     frames: Rc<RefCell<Vec<PaintFrame>>>,
+    settings: Settings,
 }
 
 impl Game for Painter {
     fn start(&mut self, _world: &mut World) {}
+
+    fn settings(&self) -> Option<&Settings> {
+        Some(&self.settings)
+    }
 
     fn tick(&mut self, _world: &mut World, _tick: &Tick, _input: &Input) {}
 
@@ -133,6 +140,7 @@ fn a_flat_game_with_no_scene_paints_its_frame_then_draws_its_ui_over_it() {
     let game = Painter {
         overlay: None,
         frames: frames.clone(),
+        settings: capped(),
     };
     let window = Size {
         width: 640,
@@ -171,6 +179,7 @@ fn a_flat_game_with_no_scene_paints_its_frame_then_draws_its_ui_over_it() {
     let game = Painter {
         overlay: None,
         frames: frames.clone(),
+        settings: capped(),
     };
     let wide = Size {
         width: 960,

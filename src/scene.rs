@@ -94,8 +94,6 @@ pub fn imported(path: &Path) -> Option<PathBuf> {
         &name[..name.len() - ".scene.toml".len()]
     } else if lower.ends_with(".toml") {
         &name[..name.len() - ".toml".len()]
-    } else if pfx_file::is_legacy_path(path) {
-        return Some(pfx_file::renamed(path));
     } else {
         return None;
     };
@@ -103,9 +101,6 @@ pub fn imported(path: &Path) -> Option<PathBuf> {
 }
 
 pub fn legacy(path: &Path) -> Option<String> {
-    if let Some(refusal) = pfx_file::legacy_refusal(path) {
-        return Some(refusal);
-    }
     if !is_toml(path) {
         return None;
     }
@@ -131,36 +126,13 @@ fn kind(path: &Path) -> Option<Legacy> {
         .parse::<toml::Table>()
         .ok()?;
     let header = |key: &str| table.get(key).is_some_and(toml::Value::is_integer);
-    if header("recipe") || header("manfred") {
+    if header("recipe") {
         Some(Legacy::Recipe)
     } else if table.contains_key("format") && !lower.ends_with("materials.toml") {
         Some(Legacy::Scene)
     } else {
         None
     }
-}
-
-fn current_header(text: &str) -> Option<String> {
-    let mut changed = false;
-    let lines: Vec<&str> = text
-        .split_inclusive('\n')
-        .map(|line| {
-            let bare: String = line.chars().filter(|c| !c.is_whitespace()).collect();
-            if !changed && bare == "manfred=1" {
-                changed = true;
-                if line.ends_with("\r\n") {
-                    "recipe = 1\r\n"
-                } else if line.ends_with('\n') {
-                    "recipe = 1\n"
-                } else {
-                    "recipe = 1"
-                }
-            } else {
-                line
-            }
-        })
-        .collect();
-    changed.then(|| lines.concat())
 }
 
 fn strip(doc: &mut pfx_build::Document, recipe: &Path) {
@@ -181,12 +153,6 @@ fn strip(doc: &mut pfx_build::Document, recipe: &Path) {
 }
 
 fn import_recipe(path: &Path, target: &Path, bare: bool) -> Result<Vec<String>, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let _mount = current_header(&text).map(|fixed| {
-        pfx_recipe::files::mount(
-            std::iter::once((path.to_path_buf(), fixed.into_bytes())).collect(),
-        )
-    });
     let mut doc = pfx_build::Document::pack(path, &pfx_build::Registry::new())?;
     for note in &doc.notes {
         eprintln!("{}: {note}", path.display());
@@ -224,33 +190,10 @@ fn import_scene(path: &Path, target: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn import_legacy(path: &Path, dry_run: bool) -> Result<String, String> {
-    let shown = path.display();
-    let target = pfx_file::renamed(path);
-    if dry_run {
-        if !pfx_file::has_magic(path) {
-            return Err(pfx_file::legacy_refusal(path).unwrap_or_default());
-        }
-        if target.exists() {
-            return Err(format!(
-                "{} already exists; {shown} was imported before, and edits go to the .pitofx",
-                target.display()
-            ));
-        }
-        return Ok(format!("would import {shown} into {}", target.display()));
-    }
-    let target = pfx_file::import_legacy(path)?;
-    Ok(format!("imported {shown} into {}", target.display()))
-}
-
 fn import(path: &Path, dry_run: bool, bare: bool) -> Result<String, String> {
-    if pfx_file::is_legacy_path(path) {
-        return import_legacy(path, dry_run);
-    }
     let shown = path.display();
-    let found = kind(path).ok_or_else(|| {
-        format!("{shown}: not a recipe (`recipe = 1`), an old recipe (`manfred = 1`) or a scene")
-    })?;
+    let found =
+        kind(path).ok_or_else(|| format!("{shown}: not a recipe (`recipe = 1`) or a scene"))?;
     let target = imported(path).ok_or_else(|| format!("{shown}: not a .toml file"))?;
     if target.exists() {
         return Err(format!(
@@ -290,7 +233,6 @@ fn gather(folder: &Path, top: bool, out: &mut Vec<PathBuf>) {
             gather(&path, false, out);
         } else if name.to_lowercase().ends_with(".scene.toml")
             || kind(&path) == Some(Legacy::Recipe)
-            || (pfx_file::is_legacy_path(&path) && pfx_file::has_magic(&path))
         {
             out.push(path);
         }
@@ -314,7 +256,7 @@ fn import_folder(folder: &Path, dry_run: bool, bare: bool) -> Result<String, Str
     }
     if lines.is_empty() && failed.is_empty() {
         return Ok(format!(
-            "{}: holds no recipe or scene TOML or legacy .pfx to import",
+            "{}: holds no recipe or scene TOML to import",
             folder.display()
         ));
     }
@@ -423,19 +365,6 @@ mod tests {
                 .contains("street.pitofx")
         );
         assert_eq!(legacy(Path::new("a/room.pitofx")), None);
-        assert_eq!(
-            legacy(Path::new("a/room.pfx")).unwrap(),
-            "a/room.pfx is a legacy .pfx; import it once with `pfx scene migrate a/room.pfx`, which writes a/room.pitofx beside it"
-        );
         assert_eq!(legacy(Path::new("a/model.glb")), None);
-    }
-
-    #[test]
-    fn the_old_header_is_rewritten_once_and_alone() {
-        assert_eq!(
-            current_header("# a scene\nmanfred = 1\nname = \"manfred = 1\"\n").unwrap(),
-            "# a scene\nrecipe = 1\nname = \"manfred = 1\"\n"
-        );
-        assert_eq!(current_header("recipe = 1\n"), None);
     }
 }

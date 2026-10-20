@@ -1,0 +1,10 @@
+title = "BUILD A NEW GAME FROM SOURCE"
+unit = "SECONDS"
+better = "lower"
+subtitle = "RYZEN 9 9950X, RUST 1.97.1, LINUX"
+date = "2026-10-20"
+suffix = " S"
+decimals = 1
+notes = ["AN EMPTY 3D GAME: PFX NEW'S WITHOUT ITS EDITOR, BEVY'S DEFAULTPLUGINS WITH A BOX AND A SUN. CARGO BUILD --RELEASE FROM AN EMPTY TARGET FOLDER, 4 JOBS. MEDIAN OF 5."]
+parties = [{ name = "PFX 3.1.1" }, { name = "BEVY 0.20.0" }]
+rows = [{ label = "CLEAN RELEASE BUILD", values = [87.4, 180.4] }]

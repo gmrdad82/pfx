@@ -22,6 +22,7 @@ pub struct RtInstance {
     pub transform: [f32; 12],
     pub moving: bool,
     pub sprite: bool,
+    pub walked: bool,
 }
 
 pub const MAX_INSTANCES: usize = (1 << 24) - 2;
@@ -78,6 +79,7 @@ impl RtGeometry {
                     .map_or([0.0; 12], |pose| pose.rows()),
                 moving: placed.moving(),
                 sprite: placed.word & crate::gpu::SPRITE != 0,
+                walked: placed.word & crate::gpu::SPRITE != 0 || placed.deform > 1,
             });
         }
     }
@@ -104,18 +106,133 @@ pub fn wanted(gpu: &Gpu) -> bool {
     offered(gpu) && std::env::var("PFX_TRACE_RT").map_or(true, |value| value != "0")
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RayQueries {
+    On,
+    NotOffered,
+    TurnedOff,
+    NotUsed,
+}
+
+impl RayQueries {
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::NotOffered => "not offered by the adapter",
+            Self::TurnedOff => "off by PFX_TRACE_RT=0",
+            Self::NotUsed => "not used for this scene",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Path {
+    pub adapter: String,
+    pub backend: String,
+    pub driver: String,
+    pub ray_queries: RayQueries,
+    pub levels: bool,
+    pub instances: usize,
+}
+
+impl Path {
+    pub fn of(gpu: &Gpu, hardware: bool, levels: bool, instances: usize) -> Self {
+        let ray_queries = if hardware {
+            RayQueries::On
+        } else if !offered(gpu) {
+            RayQueries::NotOffered
+        } else if !wanted(gpu) {
+            RayQueries::TurnedOff
+        } else {
+            RayQueries::NotUsed
+        };
+        let driver = [gpu.info.driver.as_str(), gpu.info.driver_info.as_str()]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self {
+            adapter: gpu.info.name.clone(),
+            backend: gpu.info.backend.to_str().to_owned(),
+            driver,
+            ray_queries,
+            levels,
+            instances,
+        }
+    }
+
+    pub fn hardware(&self) -> bool {
+        self.ray_queries == RayQueries::On
+    }
+
+    pub fn bvh(&self) -> &'static str {
+        match (self.hardware(), self.levels) {
+            (true, true) => "hardware TLAS over per-mesh BLASes",
+            (true, false) => "hardware TLAS over one BLAS",
+            (false, true) => "software two-level",
+            (false, false) => "software flat",
+        }
+    }
+
+    pub fn line(&self) -> String {
+        let driver = if self.driver.is_empty() {
+            String::new()
+        } else {
+            format!(", {}", self.driver)
+        };
+        let instances = if self.levels {
+            format!(", {} instances", self.instances)
+        } else {
+            String::new()
+        };
+        format!(
+            "{} ({}{driver}), ray queries {}, BVH {}{instances}",
+            self.adapter,
+            self.backend,
+            self.ray_queries.word(),
+            self.bvh(),
+        )
+    }
+}
+
 pub struct Rt {
     pub tlas: wgpu::Tlas,
+    pub movers_tlas: wgpu::Tlas,
     pub map: wgpu::Buffer,
     pub bytes: u64,
     first_instance: usize,
     sprites: Vec<bool>,
-    movers: Option<(wgpu::Blas, wgpu::Buffer)>,
+    walked: Vec<bool>,
+    movers: [Option<(wgpu::Blas, wgpu::Buffer)>; 2],
     _blases: Vec<wgpu::Blas>,
+    meshes: Vec<wgpu::Blas>,
+    instance_mesh: Vec<usize>,
     _inputs: Vec<wgpu::Buffer>,
 }
 
 pub const SPRITE_MASK: u8 = 1;
+const BOX_MASK: u8 = 1;
+const MESH_MASK: u8 = 2;
+const INACTIVE: [f32; 6] = [f32::NAN, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+fn split_movers(boxes: &[[f32; 6]], moving: &[bool], walked: &[bool]) -> [Vec<[f32; 6]>; 2] {
+    let kinds: Vec<bool> = moving
+        .iter()
+        .zip(walked)
+        .filter(|(moves, _)| **moves)
+        .map(|(_, walked)| *walked)
+        .collect();
+    [true, false].map(|wanted| {
+        if !kinds.contains(&wanted) {
+            return Vec::new();
+        }
+        boxes
+            .iter()
+            .zip(kinds.iter().chain(std::iter::repeat(&false)))
+            .map(|(bounds, kind)| if *kind == wanted { *bounds } else { INACTIVE })
+            .collect()
+    })
+}
 
 fn mask(moving: bool, sprite: bool) -> u8 {
     match (moving, sprite) {
@@ -293,8 +410,11 @@ impl Rt {
                 mask(instance.moving, instance.sprite),
             ));
         }
-        let movers = movers_blas(gpu, &geometry.movers);
-        if let Some((blas, _, _)) = &movers {
+        let moving: Vec<bool> = geometry.instances.iter().map(|i| i.moving).collect();
+        let walked: Vec<bool> = geometry.instances.iter().map(|i| i.walked).collect();
+        let [walked_boxes, hardware_boxes] = split_movers(&geometry.movers, &moving, &walked);
+        let world_movers = movers_blas(gpu, &walked_boxes);
+        if let Some((blas, _, _)) = &world_movers {
             *tlas
                 .get_mut_single(leading + geometry.instances.len())
                 .unwrap() = Some(wgpu::TlasInstance::new(
@@ -303,6 +423,36 @@ impl Rt {
                 crate::moving::MOVERS,
                 0xff,
             ));
+        }
+        let movers = movers_blas(gpu, &hardware_boxes);
+        let mut movers_tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
+            label: Some("trace rt movers"),
+            max_instances: (geometry.instances.len() + 1) as u32,
+            flags,
+            update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+        });
+        *movers_tlas.get_mut_single(0).unwrap() = movers.as_ref().map(|(blas, _, _)| {
+            wgpu::TlasInstance::new(blas, IDENTITY, crate::moving::MOVERS, BOX_MASK)
+        });
+        let instance_mesh: Vec<usize> = geometry
+            .instances
+            .iter()
+            .map(|instance| {
+                variants
+                    .iter()
+                    .position(|(key, _, _)| *key == (instance.mesh, instance.opaque))
+                    .expect("every instance has its variant")
+            })
+            .collect();
+        for (k, instance) in geometry.instances.iter().enumerate() {
+            if instance.moving && !instance.walked {
+                *movers_tlas.get_mut_single(k + 1).unwrap() = Some(wgpu::TlasInstance::new(
+                    &variants[instance_mesh[k]].1,
+                    instance.transform,
+                    k as u32 + 1,
+                    MESH_MASK,
+                ));
+            }
         }
         let mut entries = Vec::new();
         if let Some(blas) = &tri_blas {
@@ -337,7 +487,7 @@ impl Rt {
                 }]),
             });
         }
-        if let Some((blas, buffer, size)) = &movers {
+        for (blas, buffer, size) in world_movers.iter().chain(&movers) {
             entries.push(wgpu::BlasBuildEntry {
                 blas,
                 geometry: wgpu::BlasGeometries::AabbGeometries(vec![wgpu::BlasAabbGeometry {
@@ -371,7 +521,7 @@ impl Rt {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("trace rt build"),
         });
-        encoder.build_acceleration_structures(entries.iter(), [&tlas]);
+        encoder.build_acceleration_structures(entries.iter(), [&tlas, &movers_tlas]);
         gpu.queue.submit([encoder.finish()]);
         let mut words = geometry.map.clone();
         words.extend_from_slice(&geometry.tail);
@@ -383,35 +533,72 @@ impl Rt {
         let mut inputs = vertex_buffers;
         inputs.extend(box_buffer);
         inputs.extend(mesh_buffers.into_iter().flatten());
-        let mut blases: Vec<wgpu::Blas> = [tri_blas, box_blas].into_iter().flatten().collect();
-        blases.extend(variants.into_iter().map(|(_, blas, _)| blas));
+        let blases: Vec<wgpu::Blas> = [tri_blas, box_blas].into_iter().flatten().collect();
+        let meshes: Vec<wgpu::Blas> = variants.into_iter().map(|(_, blas, _)| blas).collect();
         let bytes = inputs.iter().map(wgpu::Buffer::size).sum::<u64>()
             + map.size()
             + 3 * inputs.iter().map(wgpu::Buffer::size).sum::<u64>() / 2
-            + 64 * (leading + geometry.instances.len()) as u64;
+            + 64 * (leading + 2 * geometry.instances.len() + 1) as u64;
         Self {
             tlas,
+            movers_tlas,
             map,
             bytes,
             first_instance: leading,
             sprites: geometry.instances.iter().map(|i| i.sprite).collect(),
-            movers: movers.map(|(blas, buffer, _)| (blas, buffer)),
+            walked,
+            movers: [world_movers, movers]
+                .map(|built| built.map(|(blas, buffer, _)| (blas, buffer))),
             _blases: blases,
+            meshes,
+            instance_mesh,
             _inputs: inputs,
         }
     }
 
+    fn place_movers(&mut self, moving: &[bool]) {
+        for (k, &moves) in moving.iter().enumerate() {
+            let walked = self.walked.get(k).copied().unwrap_or(true);
+            let transform = self
+                .tlas
+                .get_mut_single(self.first_instance + k)
+                .and_then(|instance| instance.as_ref().map(|instance| instance.transform));
+            let placed = match (moves && !walked, transform, self.instance_mesh.get(k)) {
+                (true, Some(transform), Some(&mesh)) => Some(wgpu::TlasInstance::new(
+                    &self.meshes[mesh],
+                    transform,
+                    k as u32 + 1,
+                    MESH_MASK,
+                )),
+                _ => None,
+            };
+            if let Some(slot) = self.movers_tlas.get_mut_single(k + 1) {
+                *slot = placed;
+            }
+        }
+    }
+
     pub(crate) fn set_movers(&mut self, gpu: &Gpu, moving: &[bool], boxes: &[[f32; 6]]) {
-        let slot = self.first_instance + moving.len();
         for (k, &moves) in moving.iter().enumerate() {
             if let Some(Some(instance)) = self.tlas.get_mut_single(self.first_instance + k) {
                 instance.mask = mask(moves, self.sprites.get(k).copied().unwrap_or(false));
             }
         }
-        let built = movers_blas(gpu, boxes);
-        *self.tlas.get_mut_single(slot).unwrap() = built.as_ref().map(|(blas, _, _)| {
+        let [walked_boxes, hardware_boxes] = split_movers(boxes, moving, &self.walked);
+        let built = [
+            movers_blas(gpu, &walked_boxes),
+            movers_blas(gpu, &hardware_boxes),
+        ];
+        *self
+            .tlas
+            .get_mut_single(self.first_instance + self.walked.len())
+            .unwrap() = built[0].as_ref().map(|(blas, _, _)| {
             wgpu::TlasInstance::new(blas, IDENTITY, crate::moving::MOVERS, 0xff)
         });
+        *self.movers_tlas.get_mut_single(0).unwrap() = built[1].as_ref().map(|(blas, _, _)| {
+            wgpu::TlasInstance::new(blas, IDENTITY, crate::moving::MOVERS, BOX_MASK)
+        });
+        self.place_movers(moving);
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -419,6 +606,7 @@ impl Rt {
             });
         let entries: Vec<wgpu::BlasBuildEntry<'_>> = built
             .iter()
+            .flatten()
             .map(|(blas, buffer, size)| wgpu::BlasBuildEntry {
                 blas,
                 geometry: wgpu::BlasGeometries::AabbGeometries(vec![wgpu::BlasAabbGeometry {
@@ -429,14 +617,17 @@ impl Rt {
                 }]),
             })
             .collect();
-        encoder.build_acceleration_structures(entries.iter(), [&self.tlas]);
+        encoder.build_acceleration_structures(entries.iter(), [&self.tlas, &self.movers_tlas]);
         gpu.queue.submit([encoder.finish()]);
-        self.movers = built.map(|(blas, buffer, _)| (blas, buffer));
+        self.movers = built.map(|built| built.map(|(blas, buffer, _)| (blas, buffer)));
     }
 
     pub(crate) fn set_transforms(&mut self, gpu: &Gpu, transforms: &[[f32; 12]]) {
         for (k, transform) in transforms.iter().enumerate() {
             if let Some(Some(instance)) = self.tlas.get_mut_single(self.first_instance + k) {
+                instance.transform = *transform;
+            }
+            if let Some(Some(instance)) = self.movers_tlas.get_mut_single(k + 1) {
                 instance.transform = *transform;
             }
         }
@@ -445,7 +636,7 @@ impl Rt {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("trace rt top"),
             });
-        encoder.build_acceleration_structures(std::iter::empty(), [&self.tlas]);
+        encoder.build_acceleration_structures(std::iter::empty(), [&self.tlas, &self.movers_tlas]);
         gpu.queue.submit([encoder.finish()]);
     }
 }

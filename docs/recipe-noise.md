@@ -1,12 +1,11 @@
 # Gradient noise for generators
 
-`pfx_generators::noise` (`pfx_generators::noise` on the facade) is pfx's own gradient noise, for an app's generators that once shaped their meshes with Blender's `mathutils.noise.noise()`; pfx does not port Blender's code. It builds the function from the algorithm as the literature describes it.
+`pfx_generators::noise` is pfx's own gradient noise, for an app's generators that once shaped their meshes with Blender's `mathutils.noise.noise()`; pfx does not port Blender's code. It builds the function from the algorithm as the literature describes it.
 
 ## Calls
 
 - `perlin([x, y, z]) -> f64`: one lattice cell per unit, mean 0, standard deviation 0.278, range about −0.96 to 0.95.
 - `fractal(p, octaves)`: the fractal sum a typical Blender generator script computes over `noise.noise()`: amplitude 0.5 halving each octave, frequency growing by 2.03 each octave, summed over `perlin`.
-- `fractal_with(p, octaves, gain, lacunarity)`: the same with the two factors given. `FRACTAL_GAIN` is 0.5 and `FRACTAL_LACUNARITY` is 2.03.
 
 ## Construction
 

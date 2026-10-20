@@ -6,7 +6,10 @@ use pfx_gpu::Gpu;
 use pfx_load::scene::{Draws, Scene};
 use pfx_trace::bvh::{Bvh, Ray, Triangle};
 use pfx_trace::detail::Lens;
+use pfx_trace::sky::Environment;
+use pfx_trace::stage::Staged;
 use pfx_trace::{Camera, Projection};
+use std::sync::mpsc::{Receiver, TryRecvError, sync_channel};
 
 use crate::sky::SkySource;
 
@@ -123,6 +126,43 @@ fn face_texels(
         .collect()
 }
 
+pub struct Prepared {
+    staged: Staged<Environment>,
+    triangles: Vec<Triangle>,
+    eye: [f32; 3],
+}
+
+pub fn prepare(scene: &Scene) -> Result<Option<Prepared>, String> {
+    let triangles = world_triangles(&scene.draws())?;
+    if bounds(&triangles).is_none() {
+        return Ok(None);
+    }
+    Ok(Some(Prepared {
+        staged: pfx_trace::stage::scene_at(scene, 1.0, 0.0)?,
+        triangles,
+        eye: scene.camera_or_default().at,
+    }))
+}
+
+impl Prepared {
+    pub fn capture(
+        self,
+        gpu: &Gpu,
+        sky: &SkySource,
+        settings: &SceneReflections,
+        hour: f32,
+    ) -> Result<Option<ReflectionArtifact>, String> {
+        capture_staged(
+            gpu,
+            self.staged,
+            &self.triangles,
+            self.eye,
+            (sky, settings),
+            hour,
+        )
+    }
+}
+
 pub fn capture(
     gpu: &Gpu,
     scene: &Scene,
@@ -130,22 +170,75 @@ pub fn capture(
     settings: &SceneReflections,
     hour: f32,
 ) -> Result<Option<ReflectionArtifact>, String> {
+    match prepare(scene)? {
+        Some(prepared) => prepared.capture(gpu, sky, settings, hour),
+        None => Ok(None),
+    }
+}
+
+pub type Captured = Result<Option<ReflectionArtifact>, String>;
+
+pub struct Pending {
+    arrival: Receiver<Captured>,
+    pub hour: f32,
+}
+
+impl Pending {
+    pub fn spawn(
+        gpu: Gpu,
+        prepared: Prepared,
+        sky: SkySource,
+        settings: SceneReflections,
+        hour: f32,
+    ) -> Result<Self, String> {
+        let (sender, arrival) = sync_channel(1);
+        std::thread::Builder::new()
+            .name("pfx scene reflections".into())
+            .spawn(move || {
+                let _ = sender.send(prepared.capture(&gpu, &sky, &settings, hour));
+            })
+            .map_err(|error| format!("the scene reflections' thread: {error}"))?;
+        Ok(Self { arrival, hour })
+    }
+
+    pub fn try_take(&self) -> Option<Captured> {
+        match self.arrival.try_recv() {
+            Ok(captured) => Some(captured),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => {
+                Some(Err("the scene reflections' capture stopped".into()))
+            }
+        }
+    }
+
+    pub fn take(&self) -> Captured {
+        self.arrival
+            .recv()
+            .unwrap_or_else(|_| Err("the scene reflections' capture stopped".into()))
+    }
+}
+
+pub fn capture_staged(
+    gpu: &Gpu,
+    staged: Staged<Environment>,
+    triangles: &[Triangle],
+    eye: [f32; 3],
+    (sky, settings): (&SkySource, &SceneReflections),
+    hour: f32,
+) -> Result<Option<ReflectionArtifact>, String> {
     if !settings.valid() {
         return Err("scene reflections need a power-of-two resolution from 4 to 1024, samples and a finite fade and margin".into());
     }
-    let triangles = world_triangles(&scene.draws())?;
-    let Some([lo, hi]) = bounds(&triangles) else {
+    let Some([lo, hi]) = bounds(triangles) else {
         return Ok(None);
     };
-    let eye = scene.camera_or_default().at;
     let min = std::array::from_fn(|k| lo[k].min(eye[k]) - settings.margin);
     let max = std::array::from_fn(|k| hi[k].max(eye[k]) + settings.margin);
     let size = settings.resolution;
-    let staged = pfx_trace::stage::scene_at(scene, 1.0, 0.0)?;
     let mut trace = staged.trace(gpu, size, size).map_err(|e| e.to_string())?;
     trace.set_projection(Projection::Perspective)?;
     trace.set_lens(Lens::default())?;
-    let bvh = Bvh::try_build(&triangles).map_err(|e| format!("the scene reflections: {e}"))?;
+    let bvh = Bvh::try_build(triangles).map_err(|e| format!("the scene reflections: {e}"))?;
     let mut colours = Vec::with_capacity(6);
     for (face, &(forward, right, up)) in FACES.iter().enumerate() {
         trace.set_camera(Camera {
@@ -168,7 +261,7 @@ pub fn capture(
         }
         colours.push(trace.readback_color(gpu)?);
     }
-    let (bvh, triangles) = (&bvh, &triangles);
+    let bvh = &bvh;
     let faces: Vec<Vec<[f32; 4]>> = std::thread::scope(|scope| {
         let workers: Vec<_> = colours
             .iter()

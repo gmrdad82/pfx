@@ -28,18 +28,23 @@ A frame is one submission that puts an image on the output:
 ## The line
 
 ```json
-{"schema_version":1,"tick":2,"t_ms":350.239,"sim_ms":0.009,"submit_ms":2.523,"gpu_ms":0.089,"gpu_tick":2,"present_interval_ms":17.253,"kind":"full","size":[160,96],"device":"desktop","hud_ms":null}
+{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
 ```
 
 Every key is always present, in this order. Times are milliseconds as JSON numbers with three decimals, never negative.
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema_version` | integer | `1` |
+| `schema_version` | integer | `2` (version 1 had no `prepare_ms`, `encode_ms`, `poll_ms`, `queue_ms` or `wait_ms`; every other key means the same) |
 | `tick` | integer | the frame's index, from 0, counting the frames of this file (not the renderer's submission count, which also counts `wake`) |
 | `t_ms` | number | monotonic time from the start of the first frame to the start of this one; the first line is `0.000` |
 | `sim_ms` | number or null | the time the game's simulation took since the previous frame's submit: the sum of the `sim_begin`/`sim_end` spans completed in that interval, which `pfx-play`'s `PlaySession::advance` and `step` report when given the stats (`set_frame_stats`). `null` when no span was reported |
 | `submit_ms` | number | CPU time of the frame from the renderer's first work on it to the end of `queue.submit`: encoding and submitting, not waiting for the GPU |
+| `prepare_ms` | number or null | the part of `submit_ms` spent preparing the scene before any command is encoded: a flat frame's draw, text and buffer uploads (`FlatPass::prepare`). `null` for frames whose path has no separate prepare step (the 3D frame, a flat look, frames on demand), where that work is in `encode_ms` |
+| `encode_ms` | number | the rest of `submit_ms`: recording the frame's passes and finishing the command buffer (`submit_ms` minus `prepare_ms`, `poll_ms` and `queue_ms`) |
+| `poll_ms` | number | the part of `submit_ms` in the non-blocking `device.poll` before the submit and in reading the GPU times it resolved. A large value is the driver or the OS holding that call |
+| `queue_ms` | number | the part of `submit_ms` in the `queue.submit` call itself: validation, residency and the driver's submit. A large value with small `prepare_ms` and `encode_ms` is a stall in the driver or the OS, not the frame's own work |
+| `wait_ms` | number or null | time the CPU blocked waiting for the GPU after this frame's submit and before the next frame began: a blocking `render`, `render_flat` and their forms, or `wait_frames` that had to wait. `null` when nothing waited, which is the usual case with frames in flight (`Renderer::set_frames_in_flight`) |
 | `gpu_ms` | number or null | GPU time, see below |
 | `gpu_tick` | integer or null | the `tick` that `gpu_ms` measured; `null` exactly when `gpu_ms` is |
 | `present_interval_ms` | number or null | time from the previous frame's submit to this one's. The renderer does not own the swapchain, so this is submit to submit, which a product that presents once per frame holds to its present to present. `null` on the first line |
@@ -68,24 +73,29 @@ The renderer hands each line to a writer thread through a bounded channel of 256
 On a clean exit (the renderer, and every handle to its stats, dropped, or `FrameStats::finish` called) the last line is written:
 
 ```json
-{"schema_version":1,"end":true,"frames":6,"dropped":0}
+{"schema_version":2,"end":true,"frames":6,"dropped":0}
 ```
 
 `frames` is the number of frames the run presented, dropped ones included; `dropped` is how many of them have no line. So the file holds `frames - dropped` frame lines before the end line. A file without an end line came from a process that did not exit cleanly (a kill, a crash, `process::exit`): its lines are valid up to the last complete one.
 
 ## An example
 
-The first four frames of a measured run at 160×96 (neutral room, one `submit` per frame), with the end line a four-frame run writes:
+The first three frames of a measured run of `crates/game/examples/flat` at 2560×1440 (one `render_flat` per frame, the renderer waiting for each frame: `FLAT_IN_FLIGHT=0`):
 
 ```json
-{"schema_version":1,"tick":0,"t_ms":0.000,"sim_ms":0.018,"submit_ms":333.435,"gpu_ms":null,"gpu_tick":null,"present_interval_ms":null,"kind":"full","size":[160,96],"device":"desktop","hud_ms":null}
-{"schema_version":1,"tick":1,"t_ms":333.521,"sim_ms":0.013,"submit_ms":1.989,"gpu_ms":0.128,"gpu_tick":1,"present_interval_ms":2.075,"kind":"full","size":[160,96],"device":"desktop","hud_ms":null}
-{"schema_version":1,"tick":2,"t_ms":350.239,"sim_ms":0.009,"submit_ms":2.523,"gpu_ms":0.089,"gpu_tick":2,"present_interval_ms":17.253,"kind":"full","size":[160,96],"device":"desktop","hud_ms":null}
-{"schema_version":1,"tick":3,"t_ms":366.911,"sim_ms":0.013,"submit_ms":2.493,"gpu_ms":0.129,"gpu_tick":3,"present_interval_ms":16.641,"kind":"full","size":[160,96],"device":"desktop","hud_ms":null}
-{"schema_version":1,"end":true,"frames":4,"dropped":0}
+{"schema_version":2,"tick":0,"t_ms":0.000,"sim_ms":0.001,"submit_ms":201.512,"prepare_ms":198.993,"encode_ms":2.312,"poll_ms":0.035,"queue_ms":0.172,"wait_ms":5.379,"gpu_ms":4.880,"gpu_tick":0,"present_interval_ms":null,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
+{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
+{"schema_version":2,"tick":2,"t_ms":214.727,"sim_ms":0.001,"submit_ms":1.629,"prepare_ms":0.412,"encode_ms":1.128,"poll_ms":0.012,"queue_ms":0.079,"wait_ms":5.015,"gpu_ms":4.855,"gpu_tick":2,"present_interval_ms":7.445,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
 ```
 
-(The first frame's 333 ms is pipeline creation; a target report skips frames until the interval settles.)
+(The first frame's 199 ms of `prepare_ms` is pipeline creation; a target report skips frames until the interval settles.) Every frame of that run blocks about 5 ms in `wait_ms`. The same game with two frames in flight (`FLAT_IN_FLIGHT=2`, the default) waits for nothing, and its GPU time arrives a frame later, joined by `gpu_tick`:
+
+```json
+{"schema_version":2,"tick":999,"t_ms":3656.506,"sim_ms":0.000,"submit_ms":1.355,"prepare_ms":0.419,"encode_ms":0.883,"poll_ms":0.001,"queue_ms":0.051,"wait_ms":null,"gpu_ms":2.846,"gpu_tick":998,"present_interval_ms":3.640,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
+{"schema_version":2,"tick":1000,"t_ms":3659.224,"sim_ms":0.001,"submit_ms":1.327,"prepare_ms":0.391,"encode_ms":0.900,"poll_ms":0.001,"queue_ms":0.036,"wait_ms":null,"gpu_ms":2.847,"gpu_tick":999,"present_interval_ms":2.691,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
+```
+
+A clean exit then closes the file with its end line, as above.
 
 ## For a game with its own loop
 
@@ -107,7 +117,7 @@ loop {
 
 The same numbers on screen, for a developer playing a dev build. It is an egui panel in pfx's theme (`pfx-theme`, the colours and fonts `pfx gui` uses), drawn over the presented frame, top right, hidden at start and toggled by F3.
 
-It shows the newest frame's `sim_ms`, `submit_ms` and `kind`, the newest resolved `gpu_ms`, its own draw cost (`hud_ms` of the last frame it drew over), a frame-time graph of the last four seconds against the 16.67 ms line, and how many frames in the graph went over it. The graph's bars are `present_interval_ms`, each as wide as its frame lasted: violet within the budget, orange over it, red over twice it.
+It shows the frame rate and the p50, p99 and largest `present_interval_ms` over the graph's four seconds (`Pace`), the newest frame's `sim_ms`, `submit_ms` and `kind`, the newest resolved `gpu_ms`, its own draw cost (`hud_ms` of the last frame it drew over), a frame-time graph of the last four seconds against the 16.67 ms line, and how many frames in the graph went over it. The graph's bars are `present_interval_ms`, each as wide as its frame lasted: violet within the budget, orange over it, red over twice it.
 
 It reads the stats, never a clock of its own: the renderer keeps the last 512 frames' values in memory for it (`FrameStats::keep_recent`, `recent`), exactly the values the file's lines get, with each GPU time joined to its tick when it resolves. When `PFX_FRAME_STATS` is unset, the HUD gives the renderer a measuring handle (`FrameStats::measure()`) that keeps those values and writes no file, so a dev build pays the clock reads the stats file would.
 
@@ -132,6 +142,33 @@ loop {
 `input` takes F3's press (once per press, however long it is held) and release and returns `true` for them; every other event returns `false`. `draw` attaches to the renderer's stats every frame, so the history is there the first time F3 shows it; while hidden it draws nothing. It lays out on the CPU, renders egui into a small sRGB canvas the size of the panel, and composites it over the output in one submission: linear into a float or sRGB output (the renderer's `Rgba16Float` included), encoded into a plain 8-bit one. The panel's scale follows the output's height (one point per pixel up to 1080 lines, two at 2160). `Hud::rect` is where it drew, in output pixels. `draw` takes the output's format and size from the renderer; `draw_on(renderer, output, format, size)` draws into any other output, such as a window's surface at the window's size after an upscale (`PlaySession::draw_hud_on`, which `pfx-game` uses).
 
 **With `pfx-play`,** `PlaySession::feed` hands F3 to the session's HUD instead of the game, and `PlaySession::draw_hud_on(&mut renderer, &output, format, size)` after the frame draws it and points the session's `sim_ms` at the stats the HUD reads. Without the feature `draw_hud_on` is an empty call, so a loop needs no `cfg`. pfx-game's `Painter::draw` calls it after each frame, in a game's window and in `pfx gui`'s play view alike, so F3 in a playing scene shows the HUD. `pfx bench` is headless and never shows it, so it leaves the HUD unwired.
+
+## Stats in the editor
+
+`pfx gui` and a game's `<game> edit` draw the same panel over their viewport, top right: F3 (outside a text field), the `stats` chip under the viewport (`stats  F3` beside Play in `<game> edit`), or `[display] stats = true` in the user's `settings.pitofx` turns it on, and the switch is kept there. It shows:
+
+| Row | What |
+|---|---|
+| `fps`, `p50`, `p99`, `max` | the window's presents over its last 240 frames: present-call to present-call intervals, counted only between frames drawn back to back, so an idle editor's gaps never count |
+| `shown p50`, `p99`, `max` | the same for the times the compositor showed the frames, where it reports them (`wp_presentation` on Wayland, [window.md](window.md#vrr-in-effect)) |
+| `cpu` | the p50 of the window thread's time per frame, the panel itself included |
+| `gpu` and the passes under it | the p50 of the frame's GPU time (the viewport's passes and the UI's paint), then the six slowest passes by their mean, from the renderer's timestamp queries; none on a device without them |
+| `scale` | the viewport's render scale, 100 % at full size ([window.md](window.md)) |
+| `target`, `vrr`, `present` | the frame-rate setting (60 fps, 120 fps, auto or uncapped), VRR on, off, or on but not in effect, and the present mode the surface runs |
+| `hud` | the panel's own layout time on the CPU |
+
+The window host (`pfx-editor-shell`) records each present into `pfx_gpu::stats::FrameStats` only while the app asks for stats (`App::stats`), and hands the app a snapshot at most four times a second (`App::frames`), so the numbers are steady enough to read and cost nothing while the panel is off. The panel never asks for a frame of its own: an idle window stays idle, and the numbers hold until the next frame.
+
+Its cost, from `crates/live/examples/hud_cost.rs` (600 frames after 60 warm ones, at 3840x2160 and two pixels a point, release build under `pgpu run --class bench`, on an AMD Radeon RX 9060 XT with RADV, the machine at a load average of 21 to 25), two runs:
+
+| | p50 | p99 |
+|---|---|---|
+| CPU, an egui frame with the panel, its numbers changing four times a second as the editor shows them | 0.12 to 0.15 ms | 0.27 to 0.41 ms |
+| CPU, the panel's share over an empty egui frame | 0.12 to 0.14 ms | 0.24 to 0.38 ms |
+| CPU, every number changing every frame | 0.14 to 0.20 ms | 0.27 to 0.53 ms |
+| GPU, the panel's paint into the 4K frame (524 triangles) | 0.019 to 0.026 ms | 0.027 ms |
+
+The p50 is under 0.2 ms on the CPU and the GPU; the CPU's p99 on this loaded machine is over it, almost all of it egui laying out the panel's twenty rows of text.
 
 ## Bench
 

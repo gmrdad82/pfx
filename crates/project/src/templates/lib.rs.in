@@ -1,23 +1,53 @@
 pub const NAME: &str = "{{name}}";
+pub const FONT: &str = "IBM Plex Mono";
 
-#[derive(Default)]
-pub struct {{type}};
+pub struct {{type}} {
+    settings: pfx_game::Settings,
+    menu: pfx_game::SettingsMenu,
+}
+
+impl Default for {{type}} {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl {{type}} {
     pub fn new() -> Self {
-        Self
+        Self::with(pfx_game::Settings::default())
+    }
+
+    pub fn with(settings: pfx_game::Settings) -> Self {
+        Self {
+            settings,
+            menu: pfx_game::SettingsMenu::new(),
+        }
     }
 }
 
 impl pfx_game::Game for {{type}} {
+    fn actions(&self) -> Vec<pfx_game::ActionSpec> {
+        pfx_game::menu::actions()
+    }
+
     fn start(&mut self, _world: &mut pfx_game::World) {}
 
     fn tick(
         &mut self,
         _world: &mut pfx_game::World,
         _tick: &pfx_game::Tick,
-        _input: &pfx_game::Input,
+        input: &pfx_game::Input,
     ) {
+        self.menu.tick(input, &mut self.settings);
+    }
+
+    fn ui(&mut self, _world: &pfx_game::World, frame: &pfx_game::UiFrame) -> pfx_game::Ui {
+        self.menu
+            .ui(frame, &self.settings, &pfx_game::MenuLook::new(FONT))
+    }
+
+    fn settings(&self) -> Option<&pfx_game::Settings> {
+        Some(&self.settings)
     }
 }
 
@@ -27,7 +57,25 @@ pub fn project() -> Result<pfx_project::Project, String> {
 
 pub fn config(project: &pfx_project::Project) -> Result<pfx_game::Config, String> {
     let mut config = pfx_game::Config::new(NAME, env!("CARGO_PKG_VERSION"), project.play())
-        .exposure(pfx_game::Exposure::Fixed(1.0));
+        .build_date(option_env!("PFX_BUILD_DATE"))
+        .exposure(pfx_game::Exposure::Fixed(1.0))
+        .font(include_bytes!("../content/fonts/IBMPlexMono-Regular.ttf").as_slice());
+    if let Some(key) = option_env!("PFX_LICENCE_KEY") {
+        config = config.splash(pfx_game::SplashSettings {
+            hide: true,
+            key: Some(key.to_string()),
+            ..Default::default()
+        });
+    }
+    if let Some(graphics) = project.graphics() {
+        config = config.settings(pfx_game::Settings {
+            graphics,
+            ..Default::default()
+        });
+    }
+    if project.redraws_always() {
+        config = config.redraw(pfx_game::Redraw::Always);
+    }
     if let Some(screen) = project.screen() {
         let policy = pfx_game::ScreenPolicy::from_table(screen)
             .map_err(|error| format!("project.toml: [authoring.pfx.screen]: {error}"))?;

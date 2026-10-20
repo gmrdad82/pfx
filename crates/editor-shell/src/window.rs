@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,15 +11,23 @@ use egui_winit::winit::dpi::LogicalSize;
 use egui_winit::winit::event::WindowEvent;
 use egui_winit::winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use egui_winit::winit::window::{Window, WindowId};
+use pfx_gpu::presents::{GUI_BUDGET_NS, Pacing, Setting};
+use pfx_gpu::stats::{FrameStats, percentiles};
+use pfx_gpu::window::{self as pace, Clock, FramePacer, Pace, SystemClock};
 use pfx_gpu::{Gpu, WindowTarget, wgpu};
 
 use crate::paint::Painter;
 use crate::pgpu::{self, Pgpu};
-use crate::{App, Error, Theme, Watch, block_on, context};
+use crate::profile::{Phase, Profile};
+use crate::{App, Error, Frames, Present, Theme, Watch, block_on, context};
+use pfx_gpu::presents::Shown;
+use pfx_gpu::{FrameTimings, PassTiming};
 
 const SLOW: Duration = Duration::from_millis(250);
 const TALLY: u32 = 240;
 const SIZE: [f64; 2] = [1586.0, 992.0];
+const SAMPLE_NS: u64 = 250_000_000;
+const SHOWN_KEPT: usize = 240;
 
 pub trait Pulse {
     fn frame(&self, work: Duration);
@@ -39,6 +48,8 @@ struct Live {
     target: WindowTarget,
     state: egui_winit::State,
     painter: Painter,
+    wanted: bool,
+    wake_at: Option<Instant>,
 }
 
 #[derive(Default)]
@@ -190,6 +201,123 @@ impl Watcher {
     }
 }
 
+#[derive(Default)]
+struct Meter {
+    on: bool,
+    stats: FrameStats,
+    last_ns: Option<u64>,
+    timed: Option<FrameTimings>,
+    painted: Option<FrameTimings>,
+    shown: VecDeque<f64>,
+    last_shown: Option<(u64, u64)>,
+    sampled_ns: Option<u64>,
+    mode: String,
+    vrr_in_effect: Option<bool>,
+}
+
+fn fresh(seen: &mut Option<FrameTimings>, timings: Option<&FrameTimings>) -> Vec<PassTiming> {
+    match timings.filter(|timings| seen.as_ref() != Some(*timings)) {
+        Some(timings) => {
+            *seen = Some(timings.clone());
+            timings.passes.clone()
+        }
+        None => Vec::new(),
+    }
+}
+
+impl Meter {
+    fn follow(&mut self, on: bool) {
+        if on && !self.on {
+            self.stats = FrameStats::default();
+            self.timed = None;
+            self.painted = None;
+            self.shown.clear();
+            self.last_shown = None;
+            self.sampled_ns = None;
+        }
+        self.on = on;
+    }
+
+    fn set(&mut self, setting: &Setting) {
+        self.mode.clone_from(&setting.present_mode);
+        self.vrr_in_effect = setting.vrr_in_effect;
+    }
+
+    fn tag(&self) -> Option<u64> {
+        self.on.then_some(0)
+    }
+
+    fn presented(
+        &mut self,
+        now_ns: u64,
+        work: Duration,
+        viewport: Option<&FrameTimings>,
+        paint: Option<&FrameTimings>,
+    ) {
+        let interval = self
+            .last_ns
+            .replace(now_ns)
+            .map_or(f64::NAN, |last| now_ns.saturating_sub(last) as f64 / 1e6);
+        if !self.on {
+            return;
+        }
+        let mut passes = fresh(&mut self.timed, viewport);
+        passes.extend(fresh(&mut self.painted, paint));
+        let gpu_ms =
+            (!passes.is_empty()).then(|| passes.iter().map(|pass| pass.milliseconds).sum::<f64>());
+        self.stats
+            .record_frame(work.as_secs_f64() * 1000.0, interval, gpu_ms, &passes);
+    }
+
+    fn shown(&mut self, shown: &Shown) {
+        let Some(at) = shown.at_ns.filter(|_| self.on) else {
+            return;
+        };
+        if let Some((tag, last)) = self.last_shown
+            && tag == shown.tag
+            && at > last
+        {
+            if self.shown.len() == SHOWN_KEPT {
+                self.shown.pop_front();
+            }
+            self.shown.push_back((at - last) as f64 / 1e6);
+        }
+        self.last_shown = Some((shown.tag, at));
+    }
+
+    fn idle(&mut self) {
+        self.last_ns = None;
+        self.last_shown = None;
+    }
+
+    fn due(&mut self, now_ns: u64, present: Present, render_scale: Option<f32>) -> Option<Frames> {
+        if !self.on
+            || self
+                .sampled_ns
+                .is_some_and(|at| now_ns.saturating_sub(at) < SAMPLE_NS)
+        {
+            return None;
+        }
+        self.sampled_ns = Some(now_ns);
+        let total: f64 = self.shown.iter().sum();
+        let shown = (total > 0.0).then(|| {
+            (
+                self.shown.len() as f64 * 1000.0 / total,
+                percentiles(self.shown.iter().copied()),
+            )
+        });
+        Some(Frames {
+            snapshot: self.stats.snapshot(),
+            shown,
+            render_scale,
+            present_mode: self.mode.clone(),
+            vrr: present.vrr,
+            vrr_in_effect: self.vrr_in_effect,
+            frame_rate: present.frame_rate.name(),
+        })
+    }
+}
+
 struct Host<A: App> {
     app: A,
     ctx: Context,
@@ -205,6 +333,12 @@ struct Host<A: App> {
     ui_shown: bool,
     view_shown: bool,
     tally: Tally,
+    clock: SystemClock,
+    pacer: FramePacer,
+    present: Present,
+    pacing: Pacing,
+    profile: Profile,
+    meter: Meter,
 }
 
 impl<A: App> Host<A> {
@@ -223,7 +357,27 @@ impl<A: App> Host<A> {
                 .map_err(|error| error.to_string())?,
         );
         retitle(&window, self.pulse.as_deref(), &self.app);
-        let (gpu, target) = block_on(Gpu::window(window.clone()))?;
+        let (gpu, mut target) = block_on(Gpu::window(window.clone()))?;
+        self.present = self.app.present();
+        target.follow(&gpu, &window, self.present);
+        self.pacer.set_present(self.present);
+        self.pacer.set_refresh(
+            window
+                .current_monitor()
+                .and_then(|monitor| pace::refresh_millihertz(&monitor)),
+        );
+        let setting = target.setting(&window, self.present);
+        self.meter.set(&setting);
+        self.pacing.set(setting);
+        if self.app.raised_priority() || pfx_gpu::priority::asked() {
+            match pfx_gpu::priority::raise_current_thread() {
+                Ok(raised) => eprintln!("{}: the window's thread: {raised}", self.app.name()),
+                Err(error) => eprintln!(
+                    "{}: the window's thread keeps its priority: {error}",
+                    self.app.name()
+                ),
+            }
+        }
         let side = gpu.device.limits().max_texture_dimension_2d as usize;
         let state = egui_winit::State::new(
             self.ctx.clone(),
@@ -233,8 +387,10 @@ impl<A: App> Host<A> {
             window.theme(),
             Some(side),
         );
-        let painter = Painter::new(&gpu, target.config.format, RendererOptions::default());
-        window.request_redraw();
+        let mut painter = Painter::new(&gpu, target.config.format, RendererOptions::default());
+        if self.profile.on() {
+            painter.time(&gpu);
+        }
         if !self.watching {
             self.watching = true;
             let proxy = self.proxy.clone();
@@ -251,6 +407,8 @@ impl<A: App> Host<A> {
             target,
             state,
             painter,
+            wanted: true,
+            wake_at: None,
         })
     }
 
@@ -267,38 +425,75 @@ impl<A: App> Host<A> {
             ui_shown,
             view_shown,
             tally,
+            clock,
+            pacer,
+            present,
+            pacing,
+            profile,
+            meter,
             ..
         } = self;
         let Some(live) = live.as_mut() else {
             return Ok(());
         };
         let started = Instant::now();
+        profile.start();
         let native = live.window.scale_factor() as f32;
         ctx.set_zoom_factor(native.round().max(1.0) / native);
+        meter.follow(app.stats());
+        if let Some(frames) = meter.due(clock.now_ns(), *present, app.render_scale()) {
+            app.frames(&frames);
+        }
         let input = live.state.take_egui_input(&live.window);
         let mut output = ctx.run_ui(input, |root| app.ui(root));
+        profile.span(Phase::Ui);
         if app.opened() {
             watcher.follow(app.watched(), proxy);
             retitle(&live.window, pulse.as_deref(), app);
         }
+        let asked = app.present();
+        let settled = live.target.settled();
+        if asked != *present || settled {
+            *present = asked;
+            pacer.set_present(asked);
+            live.target.follow(&live.gpu, &live.window, asked);
+            pacer.set_vrr_in_effect(live.target.vrr_in_effect());
+            let setting = live.target.setting(&live.window, asked);
+            meter.set(&setting);
+            pacing.set(setting);
+            if settled {
+                eprintln!("{}: {}", app.name(), live.target.describe());
+            }
+        }
         let mut more = false;
         if app.viewport() {
+            let framing = clock.now_ns();
             more = app.frame(&live.gpu, live.painter.renderer(), output.pixels_per_point);
+            pacing.viewport(clock.now_ns().saturating_sub(framing));
         }
+        live.painter.queue(app.commands());
+        profile.span(Phase::Viewport);
         live.state
             .handle_platform_output(&live.window, output.platform_output);
         let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
-        let frame = match live.target.surface.get_current_texture() {
+        profile.span(Phase::Tessellate);
+        if !live.target.retry(&live.gpu) {
+            live.wanted = true;
+        }
+        let asking = clock.now_ns();
+        let acquired = live.target.surface.get_current_texture();
+        pacing.acquired(clock.now_ns().saturating_sub(asking));
+        let frame = match acquired {
             wgpu::CurrentSurfaceTexture::Success(frame)
             | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 let size = live.window.inner_size();
                 live.target.resize(&live.gpu, size.width, size.height);
-                live.window.request_redraw();
+                live.wanted = true;
                 return Ok(());
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                live.window.request_redraw();
+                live.wanted = true;
                 return Ok(());
             }
             wgpu::CurrentSurfaceTexture::Validation => {
@@ -308,10 +503,12 @@ impl<A: App> Host<A> {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        profile.span(Phase::Acquire);
         let screen = ScreenDescriptor {
             size_in_pixels: [live.target.config.width, live.target.config.height],
             pixels_per_point: output.pixels_per_point,
         };
+        let painting = clock.now_ns();
         live.painter.paint(
             &live.gpu,
             &view,
@@ -320,10 +517,38 @@ impl<A: App> Host<A> {
             &primitives,
             Theme::of(ctx).bg,
         );
+        pacing.paint(clock.now_ns().saturating_sub(painting));
         output.textures_delta.clear();
+        profile.span(Phase::Paint);
         live.window.pre_present_notify();
-        live.gpu.queue.present(frame);
+        let presenting = clock.now_ns();
+        live.target
+            .present(&live.gpu.queue, frame, pacing.tag().or(meter.tag()));
+        pacing.present_call(clock.now_ns().saturating_sub(presenting));
+        let now = clock.now_ns();
+        pacing.presented(now);
+        for shown in live.target.shown() {
+            meter.shown(&shown);
+            pacing.shown(shown);
+        }
+        profile.span(Phase::Present);
+        if profile.on() {
+            let setting = live.target.setting(&live.window, *present);
+            let label = format!(
+                "{} {} {}",
+                setting.present_mode,
+                if setting.vrr { "vrr" } else { "fixed" },
+                setting.frame_rate
+            );
+            profile.frame(
+                &label,
+                app.render_scale(),
+                app.gpu_timings(),
+                live.painter.timed(),
+            );
+        }
         let work = started.elapsed();
+        meter.presented(now, work, app.gpu_timings(), live.painter.timed());
         let name = app.name().to_string();
         if work >= SLOW {
             eprintln!("{name}: a frame took {} ms", work.as_millis());
@@ -350,13 +575,19 @@ impl<A: App> Host<A> {
                 opened.elapsed().as_millis()
             );
         }
-        let again = output
+        let delay = output
             .viewport_output
             .get(&ViewportId::ROOT)
-            .is_some_and(|viewport| viewport.repaint_delay.is_zero());
-        if again || more {
-            live.window.request_redraw();
+            .map(|viewport| viewport.repaint_delay);
+        if delay.is_some_and(|delay| delay.is_zero()) || more {
+            live.wanted = true;
+        } else {
+            pacing.idle();
+            meter.idle();
         }
+        live.wake_at = delay
+            .filter(|delay| !delay.is_zero())
+            .and_then(|delay| Instant::now().checked_add(delay));
         Ok(())
     }
 }
@@ -387,8 +618,8 @@ impl<A: App> ApplicationHandler<Signal> for Host<A> {
                 self.drew = false;
             }
         }
-        if redraw && let Some(live) = self.live.as_ref() {
-            live.window.request_redraw();
+        if redraw && let Some(live) = self.live.as_mut() {
+            live.wanted = true;
         }
     }
 
@@ -421,16 +652,54 @@ impl<A: App> ApplicationHandler<Signal> for Host<A> {
                 live.target.resize(&live.gpu, size.width, size.height);
                 live.window.request_redraw();
             }
+            WindowEvent::Moved(_) | WindowEvent::ScaleFactorChanged { .. } => {
+                self.pacer.set_refresh(
+                    live.window
+                        .current_monitor()
+                        .and_then(|monitor| pace::refresh_millihertz(&monitor)),
+                );
+            }
             _ => {}
         }
         let response = live.state.on_window_event(&live.window, &event);
         if response.repaint {
-            live.window.request_redraw();
+            live.wanted = true;
         }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(live) = self.live.as_mut() else {
+            return;
+        };
+        let now = Instant::now();
+        if live.wake_at.is_some_and(|at| at <= now) {
+            live.wake_at = None;
+            live.wanted = true;
+        }
+        let waiting = live.wake_at;
+        let until = |at: Instant| waiting.map_or(at, |wake| wake.min(at));
+        let flow = if !live.wanted {
+            waiting.map_or(ControlFlow::Wait, ControlFlow::WaitUntil)
+        } else {
+            match self.pacer.poll(&self.clock) {
+                Pace::Start { .. } => {
+                    live.wanted = false;
+                    live.window.request_redraw();
+                    waiting.map_or(ControlFlow::Wait, ControlFlow::WaitUntil)
+                }
+                Pace::Wait { until_ns } => {
+                    ControlFlow::WaitUntil(until(self.clock.instant(until_ns)))
+                }
+                Pace::Paused => waiting.map_or(ControlFlow::Wait, ControlFlow::WaitUntil),
+            }
+        };
+        event_loop.set_control_flow(flow);
     }
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
         self.watcher.stop();
+        self.pacing.finish();
+        self.profile.finish();
         self.live = None;
     }
 }
@@ -444,6 +713,7 @@ pub fn window(mut app: impl App, pulse: Option<Box<dyn Pulse>>) -> Result<(), Er
     let ctx = context(&app.theme());
     let proxy = event_loop.create_proxy();
     let started = Instant::now();
+    let present = app.present();
     let wake = proxy.clone();
     app.waker(Arc::new(move || {
         let _ = wake.send_event(Signal::App);
@@ -467,6 +737,12 @@ pub fn window(mut app: impl App, pulse: Option<Box<dyn Pulse>>) -> Result<(), Er
         ui_shown: false,
         view_shown: false,
         tally: Tally::default(),
+        clock: SystemClock::new(),
+        pacer: FramePacer::new(present),
+        present,
+        pacing: Pacing::from_env(GUI_BUDGET_NS),
+        profile: Profile::from_env(),
+        meter: Meter::default(),
     };
     event_loop
         .run_app(&mut host)
@@ -526,6 +802,79 @@ mod tests {
                 "editor: 240 frames, the UI thread 1.00 ms a frame (longest 1.00 ms), the viewport on the GPU 5.00 ms",
             ]
         );
+    }
+
+    #[test]
+    fn the_meter_skips_idle_gaps_counts_a_timing_once_and_samples_four_times_a_second() {
+        let mut meter = Meter::default();
+        let ms = 1_000_000;
+        let timings = FrameTimings {
+            frame: 3,
+            passes: vec![pfx_gpu::PassTiming {
+                label: "opaque".into(),
+                milliseconds: 2.0,
+            }],
+        };
+        let paint = FrameTimings {
+            frame: 9,
+            passes: vec![pfx_gpu::PassTiming {
+                label: "ui".into(),
+                milliseconds: 0.5,
+            }],
+        };
+        let at = |ms: f64| Shown {
+            tag: 0,
+            at_ns: Some((ms * 1e6) as u64),
+            refresh_ns: None,
+        };
+        meter.presented(0, Duration::from_millis(1), None, None);
+        meter.shown(&at(1.0));
+        assert_eq!(meter.tag(), None);
+        meter.follow(true);
+        assert_eq!(meter.tag(), Some(0));
+        meter.presented(
+            8 * ms,
+            Duration::from_millis(1),
+            Some(&timings),
+            Some(&paint),
+        );
+        meter.presented(
+            16 * ms,
+            Duration::from_millis(1),
+            Some(&timings),
+            Some(&paint),
+        );
+        for shown in [at(10.0), at(18.0), at(26.5)] {
+            meter.shown(&shown);
+        }
+        meter.shown(&Shown {
+            at_ns: None,
+            ..at(30.0)
+        });
+        meter.idle();
+        meter.shown(&at(5_000.0));
+        meter.presented(5_000 * ms, Duration::from_millis(1), None, None);
+        meter.presented(5_010 * ms, Duration::from_millis(3), None, None);
+        let present = Present::default();
+        let frames = meter.due(5_010 * ms, present, Some(0.75)).unwrap();
+        let (shown_fps, shown) = frames.shown.unwrap();
+        assert!((shown_fps - 2000.0 / 16.5).abs() < 1e-9);
+        assert_eq!((shown.p50, shown.max), (8.0, 8.5));
+        assert_eq!(frames.render_scale, Some(0.75));
+        let snapshot = &frames.snapshot;
+        assert_eq!(snapshot.interval_ms.max, 10.0);
+        assert_eq!(snapshot.interval_ms.p50, 8.0);
+        assert!((snapshot.fps - 3000.0 / 26.0).abs() < 1e-9);
+        assert_eq!(snapshot.gpu_ms.unwrap().max, 2.5);
+        assert_eq!(
+            snapshot.gpu_pass_ms,
+            vec![("opaque".to_string(), 2.0), ("ui".to_string(), 0.5)]
+        );
+        assert_eq!(frames.frame_rate, present.frame_rate.name());
+        assert!(meter.due(5_100 * ms, present, None).is_none());
+        assert!(meter.due(5_260 * ms, present, None).is_some());
+        meter.follow(false);
+        assert!(meter.due(9_000 * ms, present, None).is_none());
     }
 
     #[test]

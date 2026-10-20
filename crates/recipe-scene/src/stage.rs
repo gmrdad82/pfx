@@ -8,6 +8,7 @@ use crate::text::{self, Drawn, Laid};
 use crate::{Error, Eye, IDENTITY};
 use pfx_build::{Built, Part};
 use pfx_gpu::pace::{Pacer, Stats};
+use pfx_gpu::screens::{Budget, DynamicResolution};
 use pfx_gpu::{Gpu, wgpu};
 use pfx_live::frame::{
     Camera, Frame, Instance, Matrix, MeshData, MeshHandle, MeshStats, Scene, SceneWind, Sun,
@@ -112,6 +113,7 @@ pub struct Prepared {
     atlas: Option<Atlas>,
     maps: Option<maps::Set>,
     shadows: Shadows,
+    eye: Option<[f32; 3]>,
 }
 
 fn shadows_of(recipe: &Recipe) -> Shadows {
@@ -191,6 +193,7 @@ impl Prepared {
             atlas: dressed.atlas,
             maps,
             shadows: shadows_of(recipe),
+            eye: crate::cube::scene_eye(recipe),
         })
     }
 
@@ -254,6 +257,8 @@ pub struct Stage {
     generation: u64,
     looked: Option<(Matrix, Matrix)>,
     swept: BTreeSet<u32>,
+    eye: Option<[f32; 3]>,
+    cubed: bool,
 }
 
 pub struct Outline<'a> {
@@ -351,6 +356,8 @@ impl Stage {
             generation: 0,
             looked: None,
             swept: BTreeSet::new(),
+            eye: None,
+            cubed: false,
         };
         stage.apply(prepared)?;
         Ok(stage)
@@ -385,6 +392,7 @@ impl Stage {
             atlas,
             maps,
             shadows,
+            eye,
         } = prepared;
         let opaque = opaque_at(&glass);
         let opaque_marks: Vec<Mark> = opaque.iter().map(|&at| marks[at].clone()).collect();
@@ -459,6 +467,12 @@ impl Stage {
         self.dress = dress;
         self.faced.clear();
         self.uploaded = uploaded;
+        let recapture = !self.cubed
+            || change.added + change.replaced + change.released > 0
+            || change.sky
+            || self.eye != eye
+            || self.lighting.lights != lighting.lights
+            || self.materials != materials;
         self.materials = if materials.is_empty() {
             vec![Material::default()]
         } else {
@@ -489,6 +503,11 @@ impl Stage {
         self.text = Drawn::new(self.renderer.gpu(), text)?;
         self.glazed = shown_glass(&glass).collect();
         self.opaque = opaque;
+        if recapture {
+            self.eye = eye;
+            self.cubed = true;
+            self.scene_reflections(&pieces, &slots)?;
+        }
         self.pieces = pieces;
         self.generation += 1;
         if change.sky {
@@ -500,6 +519,33 @@ impl Stage {
             self.shade(self.shown);
         }
         Ok(change)
+    }
+
+    fn scene_reflections(&mut self, pieces: &[Piece], slots: &[u32]) -> Result<(), Error> {
+        let Some(settings) = self.renderer.scene_reflections() else {
+            return Ok(());
+        };
+        let captured = match self.eye {
+            Some(eye) => crate::cube::capture(
+                self.renderer.gpu(),
+                &crate::cube::Scene {
+                    pieces,
+                    slots,
+                    materials: &self.materials,
+                    lighting: &self.lighting,
+                    hour: self.hour,
+                    eye,
+                },
+                &settings,
+            )
+            .map_err(|e| Error(format!("the scene reflections: {e}")))?,
+            None => None,
+        };
+        let hour = captured.as_ref().map_or(0.0, |(_, hour)| *hour);
+        self.renderer
+            .frame()
+            .set_local_reflections(captured.map(|(artifact, _)| vec![artifact]), hour)
+            .map_err(Error)
     }
 
     pub fn gpu(&self) -> &Gpu {
@@ -819,12 +865,82 @@ impl Stage {
         if size == self.size {
             return Ok(());
         }
-        self.renderer
-            .resize(size[0], size[1])
-            .map_err(|e| Error(format!("the live renderer: {e}")))?;
+        if self.renderer.dynamic_resolution().is_some() {
+            self.renderer
+                .apply_dynamic_resolution(size)
+                .map_err(|e| Error(format!("the live renderer: {e}")))?;
+        } else {
+            self.renderer
+                .resize(size[0], size[1])
+                .map_err(|e| Error(format!("the live renderer: {e}")))?;
+        }
         self.size = size;
         self.previous = None;
         Ok(())
+    }
+
+    pub fn set_graphics(&mut self, graphics: &pfx_settings::Graphics) -> Result<bool, Error> {
+        let before = (self.renderer.chosen_effects(), self.renderer.shed().len());
+        self.renderer
+            .set_shedding(graphics.quality == Some(pfx_settings::Quality::Performance))
+            .map_err(Error)?;
+        self.renderer.set_effects(graphics.effects).map_err(Error)?;
+        Ok(before != (self.renderer.chosen_effects(), self.renderer.shed().len()))
+    }
+
+    pub fn shed(&self) -> &'static [pfx_settings::Effect] {
+        self.renderer.shed()
+    }
+
+    pub fn set_scaling(&mut self, budget: Option<Budget>) -> Result<(), Error> {
+        let wrap = |e: String| Error(format!("the live renderer: {e}"));
+        if self
+            .renderer
+            .dynamic_resolution()
+            .map(DynamicResolution::budget)
+            == budget
+        {
+            return Ok(());
+        }
+        self.renderer.set_dynamic_resolution(budget).map_err(wrap)?;
+        if budget.is_some() {
+            self.renderer
+                .apply_dynamic_resolution(self.size)
+                .map_err(wrap)?;
+        } else if self.renderer.capacity() != (self.size[0], self.size[1]) {
+            self.renderer
+                .resize(self.size[0], self.size[1])
+                .map_err(wrap)?;
+        } else {
+            self.renderer
+                .set_viewport(self.size[0], self.size[1])
+                .map_err(wrap)?;
+        }
+        Ok(())
+    }
+
+    pub fn scale_frame(&mut self) -> Result<[u32; 2], Error> {
+        let (width, height) = self
+            .renderer
+            .apply_dynamic_resolution(self.size)
+            .map_err(|e| Error(format!("the live renderer: {e}")))?;
+        Ok([width, height])
+    }
+
+    pub fn render_size(&self) -> [u32; 2] {
+        let (width, height) = self.renderer.size();
+        [width, height]
+    }
+
+    pub fn render_capacity(&self) -> [u32; 2] {
+        let (width, height) = self.renderer.capacity();
+        [width, height]
+    }
+
+    pub fn render_scale(&self) -> Option<f32> {
+        self.renderer
+            .dynamic_resolution()
+            .map(DynamicResolution::scale)
     }
 
     pub fn set_hour(&mut self, hour: Option<f64>) -> Result<(), Error> {
@@ -960,10 +1076,11 @@ impl Stage {
             &self.faced
         };
         let scene = scene(camera, time, (self.seed, self.sun), drawn, &self.materials);
+        let (width, height) = self.renderer.size();
         let done = pass(
             &mut self.renderer,
             &scene,
-            &self.text.text(current, self.size),
+            &self.text.text(current, [width, height]),
             &Effects {
                 glass: &self.glass,
                 ..Effects::default()
@@ -1850,6 +1967,56 @@ mod tests {
         }
         assert!(!stage.settling());
         stage.gpu().readback_rgba8(&target).unwrap()
+    }
+
+    fn scaled_evening(stage: &mut Stage, eye: &Eye, budget: Option<Budget>) -> Vec<u8> {
+        let size = stage.size();
+        let target = stage
+            .gpu()
+            .offscreen(size[0], size[1], stage.output_format())
+            .unwrap();
+        stage.set_hour(Some(19.0)).unwrap();
+        stage.set_scaling(budget).unwrap();
+        let mut turns = crate::pace::TurnState::default();
+        for frame in 0..crate::SETTLE_FRAMES {
+            stage.scale_frame().unwrap();
+            let measured = stage
+                .render_measured(eye, frame as f32 / crate::FRAME_RATE, &target.view)
+                .unwrap();
+            crate::pace::turn_soon(&mut turns, measured.unwrap_or(crate::UNMEASURED_MS));
+        }
+        stage.gpu().readback_rgba8(&target).unwrap()
+    }
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+    fn a_budget_at_full_scale_draws_the_native_bytes_and_a_fixed_half_draws_half() {
+        let (recipe, built) = table();
+        let size = [480, 300];
+        let eye = Eye::from_camera(crate::camera(&recipe, "main").unwrap(), 1.6);
+        let gpu = crate::headless().unwrap();
+        let mut native = Stage::new(gpu.clone(), &recipe, &built, size).unwrap();
+        let plain = scaled_evening(&mut native, &eye, None);
+        let mut budgeted = Stage::new(gpu.clone(), &recipe, &built, size).unwrap();
+        let roomy = Budget {
+            min_scale: 0.5,
+            ..Budget::new(1000.0)
+        };
+        let full = scaled_evening(&mut budgeted, &eye, Some(roomy));
+        assert_eq!(budgeted.render_size(), size);
+        assert!(plain == full, "a full-scale budget changed the image");
+        let mut half = Stage::new(gpu, &recipe, &built, size).unwrap();
+        let fixed = Budget {
+            min_scale: 0.5,
+            max_scale: 0.5,
+            ..Budget::new(1000.0)
+        };
+        scaled_evening(&mut half, &eye, Some(fixed));
+        assert_eq!(half.render_size(), [240, 150]);
+        assert_eq!(half.render_scale(), Some(0.5));
+        half.set_scaling(None).unwrap();
+        assert_eq!(half.render_size(), size);
+        crate::pace::turn();
     }
 
     #[test]

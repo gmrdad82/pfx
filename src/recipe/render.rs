@@ -8,7 +8,7 @@ use pfx_build::Registry;
 use pfx_recipe::Trace;
 use pfx_still::{
     Crop, DRAFT, EQUIRECT_SIZE, Fault, Format, NOISE, Noise, Paced, Rendered, Request, SAMPLES,
-    SIZE, Step, View,
+    SIZE, Step, TracePath, View,
 };
 
 use super::{pair, refuse, seconds, size};
@@ -311,6 +311,7 @@ struct Watch {
     threshold: f32,
     began: Instant,
     last: Option<Duration>,
+    path: Option<TracePath>,
 }
 
 impl Watch {
@@ -320,6 +321,7 @@ impl Watch {
             threshold,
             began: Instant::now(),
             last: None,
+            path: None,
         }
     }
 
@@ -334,6 +336,18 @@ impl Watch {
     fn line(&mut self, step: Step, at: Duration) -> Option<String> {
         let elapsed = at.as_secs_f64();
         match (self.progress, step) {
+            (progress, Step::Path(path)) => {
+                let line = match progress {
+                    Progress::Plain => format!("pfx render --recipe: tracing on {}", path.line()),
+                    Progress::Json => {
+                        let mut fields = path_json(&path);
+                        fields["line"] = path.line().into();
+                        json_line("path", elapsed, [("path", fields)])
+                    }
+                };
+                self.path = Some(*path);
+                Some(line)
+            }
             (Progress::Plain, Step::Trace { done, total }) => progress_line(done, total),
             (
                 Progress::Plain,
@@ -412,6 +426,12 @@ impl Watch {
                     ("out", out.display().to_string().into()),
                     ("mean_samples", rounded(rendered.mean_samples, 1)),
                     ("most_samples", rendered.most_samples.into()),
+                    (
+                        "path",
+                        self.path
+                            .as_ref()
+                            .map_or(serde_json::Value::Null, path_json),
+                    ),
                     ("gpu_s", rounded(rendered.paced.gpu_ms / 1000.0, 1)),
                     (
                         "cpu_peak_gb",
@@ -446,6 +466,19 @@ impl Watch {
             )
         })
     }
+}
+
+pub(super) fn path_json(path: &TracePath) -> serde_json::Value {
+    serde_json::json!({
+        "adapter": path.adapter,
+        "backend": path.backend,
+        "driver": path.driver,
+        "ray_queries": path.hardware(),
+        "ray_queries_why": path.ray_queries.word(),
+        "bvh": path.bvh(),
+        "two_level": path.levels,
+        "instances": path.instances,
+    })
 }
 
 pub(super) fn rounded(value: f64, places: i32) -> serde_json::Value {
@@ -636,7 +669,12 @@ pub fn run(parsed: &Args, args: &[String], registry: &Registry) -> ExitCode {
             if let Some(line) = watch.done(&parsed.out, &rendered, watch.began.elapsed()) {
                 eprintln!("{line}");
             }
-            eprintln!("pfx render --recipe: {summary}");
+            match &watch.path {
+                Some(path) => {
+                    eprintln!("pfx render --recipe: {summary}; traced on {}", path.line())
+                }
+                None => eprintln!("pfx render --recipe: {summary}"),
+            }
             println!("{}", parsed.out.display());
             if let Some(master) = &parsed.master {
                 println!("{}", master.display());
@@ -720,32 +758,6 @@ mod tests {
         ))
         .unwrap();
         assert!(precheck(&wrong).is_err());
-    }
-
-    #[test]
-    fn a_recipe_naming_an_old_manfred_generator_plans_through_the_built_in_registry() {
-        let dir = Path::new("tmp/render-tests");
-        std::fs::create_dir_all(dir).unwrap();
-        let file = dir.join("old-road.toml");
-        std::fs::write(
-            &file,
-            "recipe = 1\nname = \"street\"\n\n[[route]]\nname = \"main\"\npoints = [[0.0, 0.0, 0.0], [0.0, 0.0, 40.0]]\n\n[[object]]\nname = \"road\"\nkind = \"generator\"\ngenerator = \"manfred/road\"\nparams = { route = \"main\" }\n\n[[camera]]\nname = \"main\"\nposition = [0.0, 3.0, -6.0]\ntarget = [0.0, 0.0, 10.0]\nfov_y_deg = 40.0\n",
-        )
-        .unwrap();
-        let args = parse(&strings(&format!(
-            "{} --camera main --size 64x40 --out tmp/render-tests/old-road.png",
-            file.display()
-        )))
-        .unwrap();
-        precheck(&args).unwrap();
-        let (recipe, built) =
-            pfx_recipe_scene::load_at(&file, None, &[], &args.pick.pick(), &Registry::new(), None)
-                .unwrap_or_else(|e| panic!("{e}"));
-        let pfx_recipe::Kind::Generator { generator, .. } = &recipe.objects[0].kind else {
-            panic!("the road is a generator");
-        };
-        assert_eq!(generator, "pfx/road");
-        assert!(!built.parts.is_empty());
     }
 
     #[test]
@@ -1268,7 +1280,8 @@ mod tests {
         let (rendered, summary) = traced(&args, &Registry::new(), &mut |s| steps.push(s)).unwrap();
         println!("pfx render --recipe of the table: {summary}");
         assert_eq!(steps.first(), Some(&Step::Stage));
-        assert_eq!(steps[1], Step::Trace { done: 0, total: 64 });
+        assert!(matches!(&steps[1], Step::Path(path) if !path.adapter.is_empty()));
+        assert_eq!(steps[2], Step::Trace { done: 0, total: 64 });
         assert_eq!(
             steps[steps.len() - 2],
             Step::Trace {
@@ -1332,6 +1345,7 @@ mod tests {
         let mut steps = Vec::new();
         let (rendered, summary) = traced(&args, &Registry::new(), &mut |s| steps.push(s)).unwrap();
         println!("pfx render --recipe of the table, adaptive: {summary}");
+        steps.retain(|step| !matches!(step, Step::Path(_)));
         assert_eq!(
             steps[1],
             Step::Converge {

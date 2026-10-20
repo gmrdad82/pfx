@@ -65,16 +65,6 @@ fn target(args: &Args) -> Result<(PathBuf, String), String> {
             .file_stem()
             .map_or_else(|| "model".to_string(), |s| s.to_string_lossy().to_string())
     };
-    if let Some(out) = args
-        .out
-        .as_deref()
-        .filter(|out| pfx_file::is_legacy_path(out))
-    {
-        return Err(format!(
-            "{}: .pfx is the legacy extension; write a .pitofx",
-            out.display()
-        ));
-    }
     match (&args.as_name, &args.out) {
         (Some(name), out) => {
             let (kind, base) = name

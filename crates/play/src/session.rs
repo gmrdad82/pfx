@@ -7,7 +7,7 @@ use pfx_input::{Actions, BindingMap, Input, InputEvent, MotorCommand, Recording}
 use pfx_live::renderer::Renderer;
 use pfx_live::scene::{Applied, Override, Staged};
 use pfx_live::stats::FrameStats;
-use pfx_load::scene::{Reload, Scene, SceneDiff, SceneError};
+use pfx_load::scene::{Reload, Scene, SceneDiff, SceneError, Target};
 
 use crate::PlayError;
 use crate::events::WorldEvent;
@@ -67,6 +67,7 @@ pub struct PlaySession {
     errors: Vec<SceneError>,
     max_ticks: u32,
     presenter: Presenter,
+    reflect: bool,
     motors: Vec<MotorCommand>,
     stats: FrameStats,
     world_events: Vec<WorldEvent>,
@@ -159,6 +160,7 @@ impl PlaySession {
             max_ticks: options.max_ticks.max(1),
             stats: FrameStats::off(),
             presenter: Presenter::default(),
+            reflect: false,
             motors: Vec::new(),
             world_events: Vec::new(),
             animation_events: Vec::new(),
@@ -314,6 +316,13 @@ impl PlaySession {
 
     fn apply(&mut self, edit: Edit) -> Result<(), String> {
         let kept = self.world.apply(&edit)?;
+        if let Edit::Scene {
+            target: Target::Material(_) | Target::Light(_),
+            ..
+        } = &edit
+        {
+            self.reflect = true;
+        }
         self.edits.push(Stamped {
             tick: self.world.ticks(),
             edit,
@@ -486,6 +495,20 @@ impl PlaySession {
     ) -> Result<present::PlayFrame<'a>, PlayError> {
         let time = self.time();
         self.world.set_view_aspect(aspect);
+        if std::mem::take(&mut self.reflect) {
+            let mut scene = (*self.snapshot).clone();
+            for (name, material) in self.world.edited_materials() {
+                scene
+                    .library
+                    .insert(name, *material)
+                    .map_err(PlayError::Render)?;
+            }
+            scene.lights = self.world.lights().clone();
+            renderer
+                .capture_reflections(&scene, staged.sun().hour)
+                .map_err(PlayError::Render)?;
+            self.presenter.reflected();
+        }
         self.presenter
             .present(&self.world, staged, renderer, aspect, time, seed)
     }
@@ -498,6 +521,16 @@ impl PlaySession {
     #[cfg(feature = "dev-hud")]
     pub fn hud_mut(&mut self) -> &mut pfx_live::hud::Hud {
         &mut self.hud
+    }
+
+    #[cfg(feature = "dev-hud")]
+    pub fn hud_shown(&self) -> bool {
+        self.hud.visible()
+    }
+
+    #[cfg(not(feature = "dev-hud"))]
+    pub fn hud_shown(&self) -> bool {
+        false
     }
 
     #[cfg(feature = "dev-hud")]
@@ -575,8 +608,14 @@ impl Stopped {
                 .map_err(PlayError::Render)?;
         }
         present::cut(renderer)?;
-        staged
+        let applied = staged
             .apply(renderer, &self.scene, &self.diff)
-            .map_err(PlayError::Render)
+            .map_err(PlayError::Render)?;
+        if self.touched.reflections {
+            renderer
+                .capture_reflections(&self.scene, staged.sun().hour)
+                .map_err(PlayError::Render)?;
+        }
+        Ok(applied)
     }
 }

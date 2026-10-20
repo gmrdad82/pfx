@@ -21,7 +21,7 @@ use crate::probes::{Ambient, ContactDesc, ProbeLighting};
 use crate::reflect;
 use crate::shadow::{Quality, Shadows, View};
 use crate::sky::SkySource;
-use crate::stats::{FrameKind, FrameStats};
+use crate::stats::{FrameKind, FrameStats, Span};
 use crate::taa::{self, GpuInputs};
 use crate::text::{
     BatchGlyphs, BatchItem, GpuAtlas, LitBindings, PackedGlyph, RichQuad, TextBatch, TextPass,
@@ -680,6 +680,13 @@ pub struct Renderer {
     haze: Option<RoomHaze>,
     height_fog: Option<(HeightFog, HeightFogPass)>,
     scene_reflections: Option<crate::capture::SceneReflections>,
+    passes: pfx_settings::Effects,
+    chosen_passes: pfx_settings::Effects,
+    shedder: Option<pfx_settings::Shedder>,
+    finish_source: Chain,
+    screen_shadows_source: crate::screen_shadows::ScreenShadows,
+    background_reflections: bool,
+    reflection_capture: Option<crate::capture::Pending>,
     exposure: ExposureMeter,
     exposure_mode: Exposure,
     custom_finish: bool,
@@ -709,6 +716,7 @@ pub struct Renderer {
     frames_submitted: u64,
     frames_done: Arc<AtomicU64>,
     submissions: VecDeque<(u64, wgpu::SubmissionIndex)>,
+    in_flight: u64,
     arrivals: Vec<FrameTimings>,
     latest_timings: Option<FrameTimings>,
     late_timings: u64,
@@ -721,6 +729,9 @@ pub struct Renderer {
     history: History,
     still: (Option<f32>, u32),
     settle: bool,
+    taa_on: bool,
+    ssr_on: bool,
+    ssr_stale: bool,
     history_valid: bool,
     hour: f32,
     probe_emission: f32,
@@ -734,6 +745,7 @@ pub struct Renderer {
     plate_casters: Vec<Instance>,
     plate_mask: bool,
     demand: Option<demand::Cache>,
+    watch: Option<demand::Watch>,
     revision: AtomicU64,
     custom_local: Option<bool>,
 }
@@ -972,6 +984,10 @@ fn linear_depths(
     })
 }
 
+pub(crate) fn linear_depth_wgsl() -> String {
+    [crate::depth::DEPTH_WGSL, "@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let raw = textureLoad(source, id.xy, 0); let z = select(raw, pfx_standard_depth(raw), limits.w > 1.5); let distance = pfx_projection_distance(z, limits.x, limits.y, limits.w == 1.0 || limits.w == 3.0); textureStore(destination, id.xy, vec4f(select(limits.z, distance, !pfx_is_sky(raw) && distance > 0.0), 0.0, 0.0, 0.0)); }"].concat()
+}
+
 fn depth_pipeline(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::ComputePipeline) {
     let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("live linear depth"),
@@ -1013,7 +1029,10 @@ fn depth_pipeline(device: &wgpu::Device) -> (wgpu::BindGroupLayout, wgpu::Comput
         bind_group_layouts: &[Some(&layout)],
         immediate_size: 0,
     });
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("live linear depth"), source: wgpu::ShaderSource::Wgsl("@group(0) @binding(0) var source: texture_depth_2d; @group(0) @binding(1) var destination: texture_storage_2d<r32float, write>; @group(0) @binding(2) var<uniform> limits: vec4f; @compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) { let size = textureDimensions(source); if (id.x >= size.x || id.y >= size.y) { return; } let raw = textureLoad(source, id.xy, 0); let z = select(raw, 1.0 - raw, limits.w > 1.5); let distance = select(limits.y / (z + limits.x), (limits.y - z) / limits.x, limits.w == 1.0 || limits.w == 3.0); textureStore(destination, id.xy, vec4f(select(limits.z, distance, raw > 0.0 && distance > 0.0), 0.0, 0.0, 0.0)); }".into()) });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("live linear depth"),
+        source: wgpu::ShaderSource::Wgsl(linear_depth_wgsl().into()),
+    });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("live linear depth"),
         layout: Some(&pipeline_layout),
@@ -1302,6 +1321,13 @@ impl Renderer {
         ) {
             return Err(String::from("unsupported output format").into());
         }
+        let frame = {
+            let gpu = gpu.clone();
+            std::thread::Builder::new()
+                .name("pfx live frame".into())
+                .spawn(move || Frame::new(gpu, width, height))
+                .map_err(|error| format!("the live frame's thread: {error}"))?
+        };
         let device = &gpu.device;
         let shadows = Shadows::new(device, Quality::default());
         let mut taa = taa::Pass::new(device);
@@ -1309,12 +1335,8 @@ impl Renderer {
         let text = TextPass::new(device);
         let effects = effects::Effects::new(device, width, height, 4)?;
         let style = Finish::Standard;
-        let mut post = GpuChain::new(
-            chain(style, output_format == wgpu::TextureFormat::Rgba16Float),
-            device,
-            width,
-            height,
-        );
+        let finish_source = chain(style, output_format == wgpu::TextureFormat::Rgba16Float);
+        let mut post = GpuChain::new(finish_source.clone(), device, width, height);
         post.set_reversed_depth(true);
         let display = (output_format != wgpu::TextureFormat::Rgba16Float).then(|| {
             image(
@@ -1369,6 +1391,13 @@ impl Renderer {
             haze: None,
             height_fog: None,
             scene_reflections: Some(crate::capture::SceneReflections::default()),
+            passes: pfx_settings::Effects::ALL_ON,
+            chosen_passes: pfx_settings::Effects::ALL_ON,
+            shedder: None,
+            finish_source,
+            screen_shadows_source: crate::screen_shadows::ScreenShadows::OFF,
+            background_reflections: false,
+            reflection_capture: None,
             exposure: ExposureMeter::new(device),
             exposure_mode: Exposure::Auto { bias: 0.0 },
             custom_finish: false,
@@ -1408,6 +1437,7 @@ impl Renderer {
             frames_submitted: 0,
             frames_done: Arc::new(AtomicU64::new(0)),
             submissions: VecDeque::new(),
+            in_flight: 0,
             arrivals: Vec::new(),
             latest_timings: None,
             late_timings: 0,
@@ -1420,6 +1450,9 @@ impl Renderer {
             history: History::default(),
             still: (None, 0),
             settle: true,
+            taa_on: true,
+            ssr_on: true,
+            ssr_stale: false,
             history_valid: false,
             hour: 12.0,
             probe_emission: 0.0,
@@ -1433,9 +1466,12 @@ impl Renderer {
             plate_casters: Vec::new(),
             plate_mask: false,
             demand: None,
+            watch: None,
             revision: AtomicU64::new(0),
             custom_local: None,
-            frame: Frame::new(gpu, width, height)?,
+            frame: frame
+                .join()
+                .map_err(|_| String::from("the live frame's thread stopped"))??,
         };
         renderer.frame.set_reflections_planned(true);
         Ok(renderer)
@@ -1527,7 +1563,17 @@ impl Renderer {
         textures
     }
 
-    fn post_chain(&self, finish: Chain) -> Result<GpuChain, String> {
+    fn rebuild_post(&mut self, finish: Chain) -> Result<GpuChain, String> {
+        self.finish_source = finish.clone();
+        self.post_chain(finish)
+    }
+
+    fn post_chain(&self, mut finish: Chain) -> Result<GpuChain, String> {
+        finish.passes.retain(|pass| match pass {
+            PostPass::Bloom(_) => self.passes.bloom,
+            PostPass::Flare(_) => self.passes.flare,
+            _ => true,
+        });
         let (capacity_width, capacity_height) = self.capacity();
         let (width, height) = self.size();
         let mut post = GpuChain::new(
@@ -1573,8 +1619,25 @@ impl Renderer {
         self.history_valid
     }
 
+    pub(crate) fn restart_history(&mut self) {
+        self.still = (None, 0);
+        self.history.invalidate();
+    }
+
     pub fn frame(&self) -> &Frame {
         &self.frame
+    }
+
+    pub fn set_culling(&mut self, on: bool) {
+        self.frame.set_culling(on);
+    }
+
+    pub fn set_occlusion(&mut self, on: bool) {
+        self.frame.set_occlusion(on);
+    }
+
+    pub fn cull_stats(&self) -> &crate::cull::CullStats {
+        self.frame.cull_stats()
     }
 
     pub fn last_jitter(&self) -> [f32; 2] {
@@ -1614,6 +1677,19 @@ impl Renderer {
         Ok(self.frame.warm(&first, &later))
     }
 
+    pub fn warm_frame(
+        &mut self,
+        scene: &Scene<'_>,
+        effects: &Effects<'_>,
+    ) -> Result<Warming, String> {
+        if let Some(lights) = effects.lights
+            && self.frame.lights().lights() != lights
+        {
+            self.set_lights(lights)?;
+        }
+        self.warm(std::slice::from_ref(scene))
+    }
+
     pub fn set_warm_workers(&mut self, workers: usize) {
         self.frame.set_warm_workers(workers);
     }
@@ -1637,7 +1713,7 @@ impl Renderer {
             finish.passes.push(PostPass::Encode);
         }
         self.custom_local = Some(demand::local_post(&finish));
-        if let Ok(post) = self.post_chain(finish) {
+        if let Ok(post) = self.rebuild_post(finish) {
             self.post = post;
         }
         self.custom_finish = true;
@@ -1658,7 +1734,7 @@ impl Renderer {
         self.touch();
         self.custom_finish = false;
         self.custom_local = None;
-        if let Ok(post) = self.post_chain(chain(self.style, self.display.is_none())) {
+        if let Ok(post) = self.rebuild_post(chain(self.style, self.display.is_none())) {
             self.post = post;
         }
     }
@@ -1719,6 +1795,154 @@ impl Renderer {
 
     pub fn scene_reflections(&self) -> Option<crate::capture::SceneReflections> {
         self.scene_reflections
+            .filter(|_| self.passes.scene_reflections)
+    }
+
+    pub fn effects(&self) -> pfx_settings::Effects {
+        self.passes
+    }
+
+    pub fn chosen_effects(&self) -> pfx_settings::Effects {
+        self.chosen_passes
+    }
+
+    pub fn set_effects(&mut self, effects: pfx_settings::Effects) -> Result<(), String> {
+        self.chosen_passes = effects;
+        self.show_effects()
+    }
+
+    pub fn set_shedding(&mut self, on: bool) -> Result<(), String> {
+        if on == self.shedder.is_some() {
+            return Ok(());
+        }
+        self.shedder = on.then(pfx_settings::Shedder::new);
+        self.show_effects()
+    }
+
+    pub fn shed(&self) -> &'static [pfx_settings::Effect] {
+        self.shedder
+            .as_ref()
+            .map_or(&[], pfx_settings::Shedder::shed)
+    }
+
+    fn show_effects(&mut self) -> Result<(), String> {
+        let effects = self.shedder.as_ref().map_or(self.chosen_passes, |shedder| {
+            shedder.effects(self.chosen_passes)
+        });
+        let before = self.passes;
+        if before == effects {
+            return Ok(());
+        }
+        self.passes = effects;
+        self.touch();
+        if before.bloom != effects.bloom || before.flare != effects.flare {
+            self.post = self.post_chain(self.finish_source.clone())?;
+        }
+        if before.ambient_occlusion != effects.ambient_occlusion {
+            self.frame.set_screen_shadows(self.shown_screen_shadows())?;
+        }
+        if before.scene_reflections && !effects.scene_reflections {
+            self.unreflect(self.hour)?;
+        }
+        if before.ssr != effects.ssr {
+            self.frame.set_reflections_planned(self.ssr_runs());
+            self.ssr_stale = self.ssr_runs();
+        }
+        if before.taa != effects.taa || before.ssr != effects.ssr {
+            self.taa.invalidate();
+        }
+        self.history.invalidate();
+        Ok(())
+    }
+
+    fn shown_screen_shadows(&self) -> crate::screen_shadows::ScreenShadows {
+        if self.passes.ambient_occlusion {
+            self.screen_shadows_source
+        } else {
+            crate::screen_shadows::ScreenShadows::OFF
+        }
+    }
+
+    pub fn set_background_reflections(&mut self, on: bool) {
+        self.background_reflections = on;
+    }
+
+    pub fn background_reflections(&self) -> bool {
+        self.background_reflections
+    }
+
+    pub fn reflections_pending(&self) -> bool {
+        self.reflection_capture.is_some()
+    }
+
+    pub(crate) fn reflect(
+        &mut self,
+        scene: &pfx_load::scene::Scene,
+        sky: &crate::sky::SkySource,
+        settings: crate::capture::SceneReflections,
+        hour: f32,
+    ) -> Result<bool, String> {
+        self.reflection_capture = None;
+        self.frame.set_local_reflections_planned(false);
+        if !self.background_reflections {
+            let artifact = crate::capture::capture(self.gpu(), scene, sky, &settings, hour)?;
+            let reflected = artifact.is_some();
+            self.frame
+                .set_local_reflections(artifact.map(|artifact| vec![artifact]), hour)?;
+            return Ok(reflected);
+        }
+        let Some(prepared) = crate::capture::prepare(scene)? else {
+            self.frame.set_local_reflections(None, hour)?;
+            return Ok(false);
+        };
+        self.reflection_capture = Some(crate::capture::Pending::spawn(
+            self.gpu().clone(),
+            prepared,
+            sky.clone(),
+            settings,
+            hour,
+        )?);
+        self.frame.set_local_reflections_planned(true);
+        Ok(true)
+    }
+
+    pub(crate) fn unreflect(&mut self, hour: f32) -> Result<(), String> {
+        self.reflection_capture = None;
+        self.frame.set_local_reflections_planned(false);
+        self.frame.set_local_reflections(None, hour)
+    }
+
+    pub fn poll_reflections(&mut self) -> Result<bool, String> {
+        let Some(captured) = self
+            .reflection_capture
+            .as_ref()
+            .and_then(crate::capture::Pending::try_take)
+        else {
+            return Ok(false);
+        };
+        self.arrive_reflections(captured)
+    }
+
+    pub fn wait_reflections(&mut self) -> Result<bool, String> {
+        let Some(pending) = &self.reflection_capture else {
+            return Ok(false);
+        };
+        let captured = pending.take();
+        self.arrive_reflections(captured)
+    }
+
+    fn arrive_reflections(&mut self, captured: crate::capture::Captured) -> Result<bool, String> {
+        let hour = self
+            .reflection_capture
+            .take()
+            .map_or(self.hour, |pending| pending.hour);
+        self.frame.set_local_reflections_planned(false);
+        let artifact = captured?;
+        self.frame
+            .set_local_reflections(artifact.map(|artifact| vec![artifact]), hour)?;
+        self.touch();
+        self.history.invalidate();
+        Ok(true)
     }
 
     pub fn set_motion_blur(&mut self, blur: Option<MotionBlur>) {
@@ -2102,6 +2326,9 @@ impl Renderer {
         if let Some(&(_, hour)) = self.sky_hours.iter().find(|(request, _)| *request == shown) {
             self.frame.set_probe_hour(hour)?;
             self.hour = hour;
+            if let Some(pending) = &mut self.reflection_capture {
+                pending.hour = hour;
+            }
         }
         self.sky_hours.retain(|(request, _)| *request > shown);
         self.history.invalidate();
@@ -2133,6 +2360,8 @@ impl Renderer {
         &mut self,
         settings: crate::screen_shadows::ScreenShadows,
     ) -> Result<(), String> {
+        self.screen_shadows_source = settings;
+        let settings = self.shown_screen_shadows();
         if self.frame.screen_shadows() == settings {
             return Ok(());
         }
@@ -2143,7 +2372,7 @@ impl Renderer {
     }
 
     pub fn screen_shadows(&self) -> crate::screen_shadows::ScreenShadows {
-        self.frame.screen_shadows()
+        self.screen_shadows_source
     }
 
     pub fn write_contact(&self, values: &[f32]) -> Result<(), String> {
@@ -2166,11 +2395,29 @@ impl Renderer {
         self.settle
     }
 
-    pub fn reversed_depth(&self) -> bool {
+    pub fn depth_convention(&self) -> crate::depth::DepthConvention {
+        crate::depth::DepthConvention::REVERSED
+    }
+
+    pub fn reversed_projection(&self) -> bool {
         !self.frame.classic_depth()
     }
 
+    #[deprecated(
+        note = "the depth buffer is reversed in both modes (see depth_convention); use reversed_projection"
+    )]
+    pub fn reversed_depth(&self) -> bool {
+        self.reversed_projection()
+    }
+
+    #[deprecated(
+        note = "the depth buffer is reversed in both modes (see depth_convention); use set_reversed_projection"
+    )]
     pub fn set_reversed_depth(&mut self, on: bool) {
+        self.set_reversed_projection(on);
+    }
+
+    pub fn set_reversed_projection(&mut self, on: bool) {
         if on == self.frame.classic_depth() {
             self.touch();
             self.history_valid = false;
@@ -2203,6 +2450,39 @@ impl Renderer {
     pub fn set_settle(&mut self, on: bool) {
         self.settle = on;
         self.reflections.set_settle(on);
+    }
+
+    pub fn taa(&self) -> bool {
+        self.taa_on
+    }
+
+    pub fn set_taa(&mut self, on: bool) {
+        if on != self.taa_on {
+            self.touch();
+            self.taa.invalidate();
+            self.taa_on = on;
+        }
+    }
+
+    pub fn ssr(&self) -> bool {
+        self.ssr_on
+    }
+
+    pub fn set_ssr(&mut self, on: bool) {
+        if on != self.ssr_on {
+            self.touch();
+            self.ssr_on = on;
+            self.frame.set_reflections_planned(self.ssr_runs());
+            self.ssr_stale = self.ssr_runs();
+        }
+    }
+
+    fn taa_runs(&self) -> bool {
+        self.taa_on && self.passes.taa
+    }
+
+    fn ssr_runs(&self) -> bool {
+        self.ssr_on && self.passes.ssr
     }
 
     pub fn set_reflection_occlusion(&mut self, threshold: f32) -> Result<(), String> {
@@ -2473,8 +2753,9 @@ impl Renderer {
         style: Finish,
         output: &wgpu::TextureView,
     ) -> Result<Vec<PassTiming>, String> {
+        self.make_room()?;
         let frame = self.encode_frame(scene, text, effects, style, None, output, false)?;
-        self.wait_for(frame)
+        self.finish_render(frame)
     }
 
     pub fn render_with_flat(
@@ -2486,8 +2767,9 @@ impl Renderer {
         flat: &FlatScene<'_>,
         output: &wgpu::TextureView,
     ) -> Result<Vec<PassTiming>, String> {
+        self.make_room()?;
         let frame = self.encode_frame(scene, text, effects, style, Some(flat), output, false)?;
-        self.wait_for(frame)
+        self.finish_render(frame)
     }
 
     pub fn render_flat(
@@ -2495,8 +2777,9 @@ impl Renderer {
         flat: &FlatScene<'_>,
         output: &wgpu::TextureView,
     ) -> Result<Vec<PassTiming>, String> {
+        self.make_room()?;
         let frame = self.encode_flat_frame(flat, None, output)?;
-        self.wait_for(frame)
+        self.finish_render(frame)
     }
 
     pub fn render_flat_look(
@@ -2505,16 +2788,50 @@ impl Renderer {
         look: &LookFrame<'_>,
         output: &wgpu::TextureView,
     ) -> Result<Vec<PassTiming>, String> {
+        self.make_room()?;
         let frame = self.encode_flat_frame(flat, Some(look), output)?;
-        self.wait_for(frame)
+        self.finish_render(frame)
+    }
+
+    pub fn set_frames_in_flight(&mut self, frames: u64) {
+        self.in_flight = frames;
+    }
+
+    pub fn frames_in_flight_limit(&self) -> u64 {
+        self.in_flight
+    }
+
+    fn make_room(&mut self) -> Result<(), String> {
+        if self.in_flight == 0 {
+            return Ok(());
+        }
+        let mut arrived = self.wait_frames(self.in_flight - 1)?;
+        arrived.append(&mut self.arrivals);
+        self.arrivals = arrived;
+        Ok(())
+    }
+
+    fn finish_render(&mut self, frame: u64) -> Result<Vec<PassTiming>, String> {
+        if self.in_flight == 0 {
+            return self.wait_for(frame);
+        }
+        Ok(self
+            .submitted_frame(frame)
+            .arrived
+            .into_iter()
+            .max_by_key(|timings| timings.frame)
+            .map(|timings| timings.passes)
+            .unwrap_or_default())
     }
 
     fn wait_for(&mut self, frame: u64) -> Result<Vec<PassTiming>, String> {
+        let waited = self.stats.now();
         self.frame
             .gpu
             .device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|error| format!("{error:?}"))?;
+        self.stats.span(Span::Wait, waited);
         self.gather_timings(self.frames_submitted.saturating_sub(1));
         Ok(std::mem::take(&mut self.arrivals)
             .into_iter()
@@ -2661,6 +2978,7 @@ impl Renderer {
                 self.flat = Some(flat);
                 return Err(error);
             }
+            self.stats.prepared();
         }
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("live flat"),
@@ -2838,6 +3156,7 @@ impl Renderer {
             let index = self.submissions[(waiting - in_flight - 1) as usize]
                 .1
                 .clone();
+            let waited = self.stats.now();
             self.frame
                 .gpu
                 .device
@@ -2846,6 +3165,7 @@ impl Renderer {
                     timeout: None,
                 })
                 .map_err(|error| format!("{error:?}"))?;
+            self.stats.span(Span::Wait, waited);
         } else {
             let _ = self.frame.gpu.device.poll(wgpu::PollType::Poll);
         }
@@ -2854,12 +3174,21 @@ impl Renderer {
     }
 
     fn gather_timings(&mut self, current: u64) {
+        let mut shed = false;
         for timings in self.profiler.gather() {
-            if self.stats.enabled() || self.resolution.is_some() {
+            if self.stats.enabled() || self.resolution.is_some() || self.shedder.is_some() {
                 let total = timings.passes.iter().map(|pass| pass.milliseconds).sum();
                 self.stats.gpu(timings.frame, total);
                 if let Some(resolution) = self.resolution.as_mut() {
                     resolution.observe(timings.frame, total);
+                }
+                let floored = self.resolution.as_ref().is_none_or(|resolution| {
+                    resolution.scale() <= resolution.budget().min_scale + 1e-3
+                });
+                if let Some(shedder) = self.shedder.as_mut()
+                    && shedder.frame(total as f32, floored)
+                {
+                    shed = true;
                 }
             }
             if current.saturating_sub(timings.frame) > TIMING_LAG {
@@ -2879,6 +3208,9 @@ impl Renderer {
             }
             self.arrivals.push(timings);
         }
+        if shed {
+            let _ = self.show_effects();
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2892,6 +3224,7 @@ impl Renderer {
         output: &wgpu::TextureView,
         cached: bool,
     ) -> Result<u64, String> {
+        self.poll_reflections()?;
         if !cached {
             self.begin_frame(FrameKind::Full);
         }
@@ -2917,7 +3250,9 @@ impl Renderer {
             self.sky_shown(shown)?;
         }
         let still = match self.still {
-            (Some(last), count) if self.settle && last == scene.time => count.wrapping_add(1),
+            (Some(last), count) if self.settle && !self.history.reset && last == scene.time => {
+                count.wrapping_add(1)
+            }
             _ => 0,
         };
         self.still = (Some(scene.time), still);
@@ -2948,7 +3283,7 @@ impl Renderer {
         let queue = self.frame.gpu.queue.clone();
         if style != self.style {
             if !self.custom_finish {
-                self.post = self.post_chain(chain(style, self.display.is_none()))?;
+                self.post = self.rebuild_post(chain(style, self.display.is_none()))?;
             }
             self.style = style;
         }
@@ -2992,7 +3327,11 @@ impl Renderer {
             deformers: scene.deformers,
             wind: scene.wind,
         };
-        let jitter = taa::jitter_clip(frame_number, width, height);
+        let jitter = if self.taa_runs() {
+            taa::jitter_clip(frame_number, width, height)
+        } else {
+            [0.0; 2]
+        };
         self.frame.set_jitter(jitter);
         let projection = frame::multiply(frame::jitter_matrix(jitter), scene.camera.projection);
         let jittered = frame::multiply(projection, scene.camera.view);
@@ -3020,8 +3359,12 @@ impl Renderer {
             right.map(|value| value * lens[0]),
             view.up.map(|value| value * lens[1]),
         );
-        self.frame
-            .set_reflections(self.reflections.result().filter(|_| valid));
+        let ssr_valid = valid && !std::mem::take(&mut self.ssr_stale);
+        self.frame.set_reflections(
+            self.reflections
+                .result()
+                .filter(|_| ssr_valid && self.ssr_runs()),
+        );
         let fit = self.shadows.fit(&view, scene.sun.direction);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("live renderer"),
@@ -3346,84 +3689,88 @@ impl Renderer {
             self.frame.sky().draw(&mut pass);
         }
         self.pass_log.push("sky");
-        self.mips.copy_scene(
-            &mut encoder,
-            &self.frame.targets.hdr.texture,
-            [width, height],
-        );
-        let timing = self.profiler.pass("scene colour mips");
-        let fresh = self.mips.written != Some([width, height]);
-        self.mips.written = Some([width, height]);
-        for level in 1..self.mips.levels.len() {
-            let rect = [width, height].map(|size| crate::viewport::mip(size, level as u32));
-            if fresh {
-                queue.write_buffer(
-                    &self.mips.extents[level],
-                    0,
-                    bytemuck::cast_slice(&[rect[0], rect[1], 0, 0]),
-                );
+        if self.ssr_runs() || glass::drawn(effects.glass) {
+            self.mips.copy_scene(
+                &mut encoder,
+                &self.frame.targets.hdr.texture,
+                [width, height],
+            );
+            let timing = self.profiler.pass("scene colour mips");
+            let fresh = self.mips.written != Some([width, height]);
+            self.mips.written = Some([width, height]);
+            for level in 1..self.mips.levels.len() {
+                let rect = [width, height].map(|size| crate::viewport::mip(size, level as u32));
+                if fresh {
+                    queue.write_buffer(
+                        &self.mips.extents[level],
+                        0,
+                        bytemuck::cast_slice(&[rect[0], rect[1], 0, 0]),
+                    );
+                }
+                let last = level + 1 == self.mips.levels.len();
+                let writes = if level == 1 && last {
+                    self.profiler.render_writes(timing)
+                } else if level == 1 {
+                    self.profiler.render_writes(timing).map(|writes| {
+                        wgpu::RenderPassTimestampWrites {
+                            end_of_pass_write_index: None,
+                            ..writes
+                        }
+                    })
+                } else if last {
+                    self.profiler.render_writes(timing).map(|writes| {
+                        wgpu::RenderPassTimestampWrites {
+                            beginning_of_pass_write_index: None,
+                            ..writes
+                        }
+                    })
+                } else {
+                    None
+                };
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    multiview_mask: None,
+                    label: Some("scene colour mip"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.mips.levels[level],
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: writes,
+                    occlusion_query_set: None,
+                });
+                crate::viewport::apply(&mut pass, self.mips.bordered(rect, level as u32));
+                pass.set_pipeline(&self.mips.pipeline);
+                pass.set_bind_group(0, &self.mips.binds[level - 1], &[]);
+                pass.draw(0..3, 0..1);
             }
-            let last = level + 1 == self.mips.levels.len();
-            let writes = if level == 1 && last {
-                self.profiler.render_writes(timing)
-            } else if level == 1 {
-                self.profiler
-                    .render_writes(timing)
-                    .map(|writes| wgpu::RenderPassTimestampWrites {
-                        end_of_pass_write_index: None,
-                        ..writes
-                    })
-            } else if last {
-                self.profiler
-                    .render_writes(timing)
-                    .map(|writes| wgpu::RenderPassTimestampWrites {
-                        beginning_of_pass_write_index: None,
-                        ..writes
-                    })
-            } else {
-                None
-            };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                multiview_mask: None,
-                label: Some("scene colour mip"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.mips.levels[level],
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: writes,
-                occlusion_query_set: None,
-            });
-            crate::viewport::apply(&mut pass, self.mips.bordered(rect, level as u32));
-            pass.set_pipeline(&self.mips.pipeline);
-            pass.set_bind_group(0, &self.mips.binds[level - 1], &[]);
-            pass.draw(0..3, 0..1);
+            self.pass_log.push("scene colour");
         }
-        self.pass_log.push("scene colour");
-        let inverse_projection = invert(projection).ok_or("camera projection is singular")?;
-        self.reflections.encode(
-            device,
-            &mut encoder,
-            &reflect::Inputs {
-                depth: current_depth,
-                normal_roughness: &self.frame.targets.normal_roughness_view,
-                colour: &self.mips.view,
-                motion: &self.frame.targets.velocity_view,
-                projection,
-                inverse_projection,
-                frame_index: frame_number,
-                thickness: reflect::THICKNESS,
-                far: view.far,
-                history_valid: valid,
-            },
-            Some(&mut self.profiler),
-        );
-        self.pass_log.push("reflections");
+        if self.ssr_runs() {
+            let inverse_projection = invert(projection).ok_or("camera projection is singular")?;
+            self.reflections.encode(
+                device,
+                &mut encoder,
+                &reflect::Inputs {
+                    depth: current_depth,
+                    normal_roughness: &self.frame.targets.normal_roughness_view,
+                    colour: &self.mips.view,
+                    motion: &self.frame.targets.velocity_view,
+                    projection,
+                    inverse_projection,
+                    frame_index: frame_number,
+                    thickness: reflect::THICKNESS,
+                    far: view.far,
+                    history_valid: ssr_valid,
+                },
+                Some(&mut self.profiler),
+            );
+            self.pass_log.push("reflections");
+        }
         let mut reactive = &self.reactive_view;
         if glass::drawn(effects.glass) {
             let cube = self.frame.sky().cube_view();
@@ -3499,7 +3846,7 @@ impl Renderer {
             depth: current_depth,
             shadow: Some((self.shadows.atlas_view(), shadow_data)),
         };
-        if let Some(haze) = self.haze {
+        if let Some(haze) = self.haze.filter(|_| self.passes.fog) {
             let mut room_frame = effect_frame;
             room_frame.set_room_haze(haze);
             self.effects.prepare_room(
@@ -3525,7 +3872,7 @@ impl Renderer {
             );
             self.pass_log.extend(["haze march", "haze upsample"]);
         }
-        if let Some((fog, pass)) = self.height_fog.as_mut() {
+        if let Some((fog, pass)) = self.height_fog.as_mut().filter(|_| self.passes.fog) {
             let lights = fog_lights(
                 self.frame.lights().lights(),
                 scene.camera.position,
@@ -3687,28 +4034,31 @@ impl Renderer {
             )?;
             self.pass_log.push("surface text");
         }
-        self.taa.resolve_timed(
-            device,
-            &queue,
-            &mut encoder,
-            &GpuInputs {
-                colour: &self.frame.targets.hdr.view,
-                depth: current_depth,
-                motion: &self.frame.targets.velocity_view,
-                reactive,
-                id: Some(&self.frame.targets.ids_view),
-                normal: Some(&self.frame.targets.normal_roughness_view),
-                exposure,
-            },
-            &taa::Settings::default(),
-            Some(&mut self.profiler),
-        )?;
-        self.pass_log.push("TAA");
-        let resolved = self
-            .taa
-            .history_view()
-            .ok_or("TAA output is empty")?
-            .clone();
+        let resolved = if self.taa_runs() {
+            self.taa.resolve_timed(
+                device,
+                &queue,
+                &mut encoder,
+                &GpuInputs {
+                    colour: &self.frame.targets.hdr.view,
+                    depth: current_depth,
+                    motion: &self.frame.targets.velocity_view,
+                    reactive,
+                    id: Some(&self.frame.targets.ids_view),
+                    normal: Some(&self.frame.targets.normal_roughness_view),
+                    exposure,
+                },
+                &taa::Settings::default(),
+                Some(&mut self.profiler),
+            )?;
+            self.pass_log.push("TAA");
+            self.taa
+                .history_view()
+                .ok_or("TAA output is empty")?
+                .clone()
+        } else {
+            self.frame.targets.hdr.view.clone()
+        };
         let late_text = surface_text && self.text_after_taa;
         let resolved = if self.sharpen > 0.0 || late_text {
             let display = self.crisp.encode(
@@ -3790,7 +4140,11 @@ impl Renderer {
         } else {
             resolved
         };
-        let blurred = match (self.motion_blur.filter(|_| !cached), self.blur.as_mut()) {
+        let blurred = match (
+            self.motion_blur
+                .filter(|_| !cached && self.passes.motion_blur),
+            self.blur.as_mut(),
+        ) {
             (Some(settings), Some(blur)) => {
                 let timing = self.profiler.pass("motion blur");
                 self.pass_log.push("motion blur");
@@ -3811,7 +4165,7 @@ impl Renderer {
             _ => None,
         };
         let resolved = blurred.unwrap_or(resolved);
-        let resolved = if let Some(lens) = self.lens {
+        let resolved = if let Some(lens) = self.lens.filter(|_| self.passes.depth_of_field) {
             let timing = self.profiler.pass("depth of field");
             self.pass_log.push("depth of field");
             self.dof.render(
@@ -3851,6 +4205,9 @@ impl Renderer {
             Some(&mut self.profiler),
         );
         self.pass_log.push("post");
+        if let Some(watch) = &mut self.watch {
+            watch.exposed(exposure);
+        }
         if let Some(cache) = self.demand.as_mut().filter(|_| cached) {
             cache.probe_depth(&mut encoder, &self.depths[self.depth_index].0);
             cache.encode_tiles(
@@ -4128,10 +4485,15 @@ impl Renderer {
             None
         };
         let number = self.frames_submitted;
+        let polled = self.stats.now();
         let _ = device.poll(wgpu::PollType::Poll);
         self.gather_timings(number);
+        self.stats.span(Span::Poll, polled);
         let slot = self.profiler.finish_frame(&mut encoder, number);
-        let index = queue.submit(Some(encoder.finish()));
+        let commands = encoder.finish();
+        let queued = self.stats.now();
+        let index = queue.submit(Some(commands));
+        self.stats.span(Span::Queue, queued);
         self.text.recycle();
         let (width, height) = self.size();
         self.stats.submitted(number, [width, height]);
@@ -4226,6 +4588,24 @@ impl Renderer {
 
     pub fn demand_stats(&self) -> Option<DemandStats> {
         self.demand.as_ref().map(demand::Cache::stats)
+    }
+
+    pub fn watch_redraws(&mut self, settle: Option<u32>) {
+        self.watch = settle.map(demand::Watch::new);
+    }
+
+    pub fn redraws_watched(&self) -> Option<u32> {
+        self.watch.as_ref().map(|watch| watch.settle)
+    }
+
+    pub fn needs_redraw(&mut self, next: &Next<'_>) -> bool {
+        if self.watch.is_none() {
+            return true;
+        }
+        let summary = self.summarize(next);
+        self.watch
+            .as_mut()
+            .is_none_or(|watch| watch.redraw(summary))
     }
 
     pub fn frame_needed(&self, next: &Next<'_>) -> Need {
@@ -4464,10 +4844,14 @@ impl Renderer {
             || self.tape.is_some_and(|tape| !tape.is_off())
             || self.sky_settling()
             || (auto
-                && self
+                && (self
                     .demand
                     .as_ref()
-                    .is_some_and(|cache| cache.exposure_moving));
+                    .is_some_and(|cache| cache.exposure_moving)
+                    || self
+                        .watch
+                        .as_ref()
+                        .is_some_and(|watch| watch.exposure_moving)));
         let reach = self.layer_reach(next.style);
         let whole = Region::whole(width, height);
         let mut layered = Vec::new();
@@ -7809,5 +8193,61 @@ mod tests {
             taped != finished,
             "the tape glitch did not reach the flat frame"
         );
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn each_effect_switched_off_skips_its_pass_and_comes_back_on() {
+        let (mut renderer, target, instances, materials) = sphere_still(96);
+        renderer.set_motion_blur(Some(pfx_post::MotionBlur::default()));
+        renderer.set_lens(Some(pfx_post::dof::Lens {
+            focal_m: 0.05,
+            sensor_m: 0.036,
+            fstop: 2.8,
+            aperture: 0.05 / 2.8,
+            focus_m: 1.2,
+            near_m: 0.0,
+            near_blur: 0.0,
+            far_m: 0.0,
+            far_blur: 0.0,
+            ground_m: None,
+        }));
+        let draw = |renderer: &mut Renderer, number: u32| {
+            renderer
+                .render(
+                    &still_scene(&instances, &materials, number),
+                    &Text::default(),
+                    &Effects::default(),
+                    Finish::Standard,
+                    &target.view,
+                )
+                .unwrap();
+            renderer.last_pass_order().to_vec()
+        };
+        let passes = [
+            (pfx_settings::Effect::Taa, "TAA"),
+            (pfx_settings::Effect::Ssr, "reflections"),
+            (pfx_settings::Effect::MotionBlur, "motion blur"),
+            (pfx_settings::Effect::DepthOfField, "depth of field"),
+        ];
+        let all = draw(&mut renderer, 0);
+        for (_, pass) in passes {
+            assert!(all.contains(&pass), "{pass} is not in {all:?}");
+        }
+        for (number, (effect, pass)) in passes.into_iter().enumerate() {
+            let off = pfx_settings::Effects::ALL_ON.with(effect, false);
+            renderer.set_effects(off).unwrap();
+            assert_eq!(renderer.effects(), off);
+            let shown = draw(&mut renderer, number as u32 + 1);
+            assert!(!shown.contains(&pass), "{effect:?} off still ran {pass}");
+            for (_, other) in passes.iter().filter(|(other, _)| *other != effect) {
+                assert!(shown.contains(other), "{effect:?} off dropped {other}");
+            }
+        }
+        renderer.set_effects(pfx_settings::Effects::ALL_ON).unwrap();
+        assert_eq!(draw(&mut renderer, 9), all);
+        renderer.set_shedding(true).unwrap();
+        assert!(renderer.shed().is_empty());
+        assert_eq!(renderer.effects(), pfx_settings::Effects::ALL_ON);
     }
 }

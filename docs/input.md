@@ -1,6 +1,6 @@
 # Input
 
-`pfx-input` (`crates/input`) is the engine's input crate. A game uses it for the keyboard, the mouse and controllers, all behind one action map. It also provides controller-family glyphs, rumble, and input recording. No other engine crate depends on it. It opens no window and reads no clock. Everything time-based counts fixed game steps, which the game drives.
+`pfx-input` (`crates/input`) is the engine's input crate. A game uses it for the keyboard, the mouse and controllers, all behind one action map. It also provides controller-family glyphs, rumble, and input recording. The game runtime, play mode, the Steam crate and the editor build on it. It opens no window and reads no clock. Everything time-based counts fixed game steps, which the game drives.
 
 ## The step
 
@@ -202,10 +202,10 @@ Labels come from a `LayoutSource`, which has two methods: `layout()`, an id of t
 | Platform | Source |
 |---|---|
 | Windows, and the Windows build under Proton | `WindowsLayout`: the id is `GetKeyboardLayout(0)`; a key's set-1 scancode (`layout::scancode`) goes through `MapVirtualKeyExW` to a virtual key, then to its unshifted character, with a dead key's flag cleared. A key with no character falls back to `GetKeyNameTextW`. windows-sys 0.61.2, pinned, behind `cfg(windows)` |
-| Linux dev builds | learned from key events: `winit::learn(&mut labels, &event)` reads `key_without_modifiers` from winit's modifier supplement on each press, a dead key included |
+| Linux and macOS | learned from key events: `winit::learn(&mut labels, &event)` reads `key_without_modifiers` from winit's modifier supplement on each press, a dead key included |
 | anything else | US (`Us`, or nothing at all) |
 
-winit 0.30 doesn't surface `WM_INPUTLANGCHANGE`, and the message is sent to the window procedure rather than posted, so winit's message hook never sees it. Comparing the layout id each frame catches the same change. On Linux there is no layout event, so learning refreshes itself: when a learned key reports a different label, the layout has changed, so every learned label is dropped and the new one kept. Until the player presses a key under the new layout, that key keeps its old label.
+winit 0.30 doesn't surface `WM_INPUTLANGCHANGE`, and the message is sent to the window procedure rather than posted, so winit's message hook never sees it. Comparing the layout id each frame catches the same change. On Linux and macOS no layout event reaches the game, so learning refreshes itself: when a learned key reports a different label, the layout has changed, so every learned label is dropped and the new one kept. Until the player presses a key under the new layout, that key keeps its old label.
 
 `KeycapLabel` draws a label through the text crate's own MSDF path, with the game's font and `TextEngine`:
 
@@ -242,14 +242,6 @@ To replay, build a fresh `Input` with the same actions and bindings, call `begin
 
 **What a recording is for.** It is the engine's own log: shots, the editor's play, a bug replayed tick for tick. It is not a format to ship. Its events are serde enums with `f32` pointers, so 25 minutes at 60 steps a second with the pointer moving every step is about 5.7 MB of JSON (0.9 MB deflated), it replays only through the same actions and the same bindings (a player's rebinds included), and `RECORDING_VERSION` changes whenever an event does. A game that ships replays (a leaderboard check, a 1v1) logs its own per-tick sim input instead: what its `tick` actually reads, quantized to the integers its sim runs on (the pointer in sim units, a bit per action), delta and varint coded, a few bytes a tick, with its seed and its own sim version, and re-runs its sim from that log headless with no `Input` at all.
 
-## Real-hardware check (pending)
+## Real hardware
 
-The tests use fake layouts and fake pads; nothing here has been checked on hardware yet. It needs a pad, a window and Steam. To check, with a pad and Proton available:
-
-1. Build the game's Windows build with Steam Input on (the Steam crate's backend calling `steam_input(true)`), and run it from Steam, on a Steam Deck or under Proton on the desk.
-2. Connect a DualSense by USB, then by Bluetooth. The prompts must show cross, circle, square and triangle, never A B X Y or the four dots. Press each face button once: each action fires once, not twice.
-3. In Steam's controller configurator, swap two buttons for the game. Without restarting, the prompts must show the swapped buttons.
-4. Trigger a rumble: it plays on the DualSense through Steam Input.
-5. Turn Steam Input off for the game: the pad still works through gilrs, as Generic or by its ids.
-6. Switch Windows (or the Deck's desktop) to French AZERTY, then German QWERTZ, while the game runs. Within a frame, the keycap prompts show A where QWERTY shows Q, Z where it shows Y, and Ö, Ü and ß on their keys, with the bindings themselves unchanged.
-
+The tests use fake layouts and fake pads; nothing here has been checked on hardware. Steam Input's precedence over gilrs, the DualSense's glyphs and rumble through Steam Input, a rebind in Steam's configurator reaching the prompts, the gilrs fallback with Steam Input off, and keycap labels following a live switch to AZERTY or QWERTZ on Windows or the Deck are built but untested on a real pad, window and Steam.

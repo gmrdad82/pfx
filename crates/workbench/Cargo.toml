@@ -19,7 +19,7 @@ pfx-editor-style = { path = "../editor-style" }
 pfx-editor-viewport = { path = "../editor-viewport" }
 pfx-core = { path = "../core" }
 pfx-gpu = { path = "../gpu" }
-pfx-live = { path = "../live" }
+pfx-live = { path = "../live", features = ["dev-hud"] }
 pfx-load = { path = "../load" }
 pfx-materials = { path = "../materials" }
 pfx-project = { path = "../project" }
@@ -29,11 +29,15 @@ pfx-build = { path = "../build" }
 pfx-recipe-scene = { path = "../recipe-scene" }
 pfx-motion = { path = "../motion" }
 pfx-file = { path = "../file" }
+pfx-settings = { path = "../settings" }
+pfx-splash = { path = "../splash" }
 glam = { version = "0.33", features = ["libm"] }
 toml_edit = { version = "0.25", features = ["serde"] }
 serde_json = "1"
 
 [dev-dependencies]
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+base64 = "0.22"
 pfx-project = { path = "../project", features = ["scaffold"] }
 pfx-scene = { path = "../scene" }
 pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }

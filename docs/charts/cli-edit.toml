@@ -1,0 +1,9 @@
+title = "CHANGE ONE VALUE, GET A FILE TO SHIP"
+unit = "MILLISECONDS"
+better = "lower"
+subtitle = "RYZEN 9 9950X, RADEON RX 9060 XT, LINUX"
+date = "2026-10-19"
+suffix = " MS"
+notes = ["PFX: PFX SET A LIGHT'S INTENSITY, THEN PFX BUILD. GODOT: CHANGE A MATERIAL'S COLOUR IN THE SCENE, THEN A HEADLESS EXPORT OF THE PACK. MEDIAN OF 6."]
+parties = [{ name = "PFX 3.1.0" }, { name = "GODOT 4.7.2" }]
+rows = [{ label = "FROM THE COMMAND LINE", values = [63, 2340] }]

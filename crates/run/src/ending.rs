@@ -271,18 +271,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let got = dir.join("got");
         let ready = dir.join("ready");
-        let mut child = std::process::Command::new("/usr/bin/python3")
+        let mut child = std::process::Command::new("/bin/sh")
             .arg("-c")
             .arg(concat!(
-                "import signal,sys,time\n",
-                "got,ready=sys.argv[1],sys.argv[2]\n",
-                "def stop(signum,frame):\n",
-                "    open(got,'w').write('term')\n",
-                "    sys.exit(0)\n",
-                "signal.signal(signal.SIGTERM, stop)\n",
-                "open(ready,'w').write('ready')\n",
-                "while True:\n",
-                "    time.sleep(30)\n",
+                "trap 'printf term > \"$0\"; kill $! 2>/dev/null; exit 0' TERM\n",
+                "printf ready > \"$1\"\n",
+                "while :; do /bin/sleep 30 & wait $!; done\n",
             ))
             .arg(&got)
             .arg(&ready)

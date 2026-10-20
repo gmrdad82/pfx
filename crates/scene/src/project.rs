@@ -338,7 +338,7 @@ impl Project {
             )),
             None if self.in_memory() => Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
-                format!("{} is not in the .pfx", file.display()),
+                format!("{} is not in the .pitofx", file.display()),
             )),
             _ => std::fs::read_to_string(self.root.join(file)),
         }

@@ -65,6 +65,7 @@ pub(crate) struct Touched {
     pub posed: bool,
     pub morphed: bool,
     pub sprites: bool,
+    pub reflections: bool,
 }
 
 pub(crate) fn cut(renderer: &mut Renderer) -> Result<(), PlayError> {
@@ -125,6 +126,10 @@ fn looked(world: &World, base: Material, look: &Look) -> Material {
 impl Presenter {
     pub(crate) fn touched(&self) -> Touched {
         self.touched
+    }
+
+    pub(crate) fn reflected(&mut self) {
+        self.touched.reflections = true;
     }
 
     fn sync(&mut self, world: &World, renderer: &mut Renderer) -> Result<(), PlayError> {

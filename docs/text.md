@@ -125,8 +125,6 @@ There are two choices, and the default is `Ligatures::Kept`:
 - `Ligatures::Kept` draws the ligatures, so a label looks exactly as it does everywhere else in the game. The labels that hold a ligating pair are shaped once and then stay in the shaping cache (below), so they cost one shaping, not one a frame.
 - `Ligatures::Off` shapes the set and its fallback labels with `liga` and `clig` off, so every label stays fast. It changes what is drawn ("fit" shows f, i and t), so the set's owner chooses it. A face can still form required ligatures (`rlig`) or contextual ones through other features; those pairs are recorded and fall back as above.
 
-Before this change, one ligating pair anywhere in the set turned the fast path off for the whole set.
-
 **Figures.**
 
 - `Figures::Tabular` (the default) shapes the set with `tnum`. In a face with `tnum`, that also gives every other glyph the feature covers its tabular form; some faces give round brackets tabular widths.
@@ -145,11 +143,11 @@ The tests compare the fast path with full shaping for every combination, in DM S
 
 ## Keeping shaped text warm
 
-`end_frame` used to drop every shaped block and number face the frame had not used, so a menu that came back a frame later was shaped again. Now they stay under a byte budget, `set_shaping_budget(bytes)`, which defaults to `DEFAULT_SHAPING_BUDGET`, 8 MiB.
+`end_frame` keeps the shaped blocks and number faces the frame did not use under a byte budget, so a menu that comes back a frame later is not shaped again. The budget is `set_shaping_budget(bytes)`, which defaults to `DEFAULT_SHAPING_BUDGET`, 8 MiB.
 
 - At `end_frame`, if the cache holds more than the budget, it drops the least recently used blocks and number faces until it fits. Blocks and number faces share one budget and one order, the order of their last use.
 - What the frame used always stays, even over the budget, so a frame never shapes the same text twice.
-- A budget of 0 gives the old behaviour: everything the frame did not use is dropped.
+- A budget of 0 drops everything the frame did not use.
 - `shaping_stats()` returns the blocks, number faces, estimated bytes, budget and evictions.
 
 A block's bytes are estimated from its glyph, line and span counts, the sizes of cosmic-text's glyph records and the text, times 7/4. The factor covers vector slack and the allocator, and was calibrated against the growth of resident memory (`cargo run --release -p pfx-text --example shaping_memory`, DM Sans at 24 px, scale 2, glibc):
@@ -193,7 +191,7 @@ Prefill shapes on the caller's thread and lists the cells the atlas does not hav
 | prefill on 1 thread | 730 ms |
 | prefill on 24 threads | 65 ms |
 
-**A faster field generator.** The field generator now gives the same bytes four to five times faster:
+**A faster field generator.** The field generator gives the same bytes as the previous one four to five times faster:
 
 - It counts winding once a row: it finds the row's crossings through an index of edges by row, then sweeps them, instead of testing every edge at every pixel.
 - It finds each channel's nearest edges in any order, pruned by the bounding boxes of groups of edges, starting from the previous pixel's nearest group. It then replays the original sequential choice, with its tie-break on the dot product, over only the edges that can change it. An edge farther than the chain of near-ties above the nearest distance plus 0.001 px can never be chosen, and cannot stop a nearer edge from being chosen, so dropping it changes nothing. A pixel whose chain of ties runs past 0.05 px falls back to the full loop.
@@ -246,9 +244,9 @@ With the `subset` feature, the text crate cuts a font down to the characters a g
 
 - `subset::subset(font, &chars, options)` subsets a font. It uses skera 0.8.0, googlefonts' Rust port of HarfBuzz's subsetter from fontations, pinned exactly.
   - It keeps `cmap`, `GSUB`/`GPOS` (with closure over substitutions, so contextual and localized forms survive), `glyf`/`gvar`/`HVAR` (a variable font stays variable), metrics, `OS/2` and the name records 0–6, 13 and 14 (the licence).
-  - The typst `subsetter` crate the task suggested drops `cmap` and layout tables by design (PDF embedding only), so it cannot serve a game.
+  - The typst `subsetter` crate drops `cmap` and layout tables by design (PDF embedding only), so it cannot serve a game.
 - `subset::gb2312_level1()` returns GB 2312's level 1, 3,755 ideographs from 啊 to 座, decoded with encoding_rs.
-- `subset::command(args)` is the command-line form. Today it runs as `cargo run --release -p pfx-text --features subset --example font_subset -- --font <ttf> --chars <file> --out <ttf> [--base gb2312-1] [--no-closure]`. `pfx font subset` takes the same arguments once the root package wires it in.
+- `subset::command(args)` is the command-line form, `pfx font subset --font <ttf> --chars <file> --out <ttf> [--base gb2312-1|none] [--no-closure]`, and `cargo run --release -p pfx-text --features subset --example font_subset --` takes the same arguments.
 
 Only TrueType outlines subset. The CFF and CFF2 OTFs are refused with a clear message, so use the variable TTF.
 

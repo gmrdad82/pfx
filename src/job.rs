@@ -434,6 +434,9 @@ fn detail(dir: &Path, job: &Job) -> String {
     if let Some(median) = job.median_frame_seconds {
         more("median frame", state::duration(median));
     }
+    if let Some(path) = &job.path {
+        more("traced on", path.clone());
+    }
     if let Some(resume) = &job.resume {
         more("resumed", resume.line());
     }

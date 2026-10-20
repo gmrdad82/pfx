@@ -7,6 +7,8 @@ use pfx_live::renderer::{Exposure, Renderer};
 use pfx_live::scene::{Override, Staged};
 use pfx_load::scene::{Camera, Scene, SceneDiff};
 
+use crate::grid::{self, Grid, Lines};
+
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 pub const SHOWN: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub const IN_FLIGHT: u64 = 1;
@@ -66,6 +68,8 @@ pub struct Live {
     size: [u32; 2],
     awaiting: bool,
     drawn: u64,
+    grid: Grid,
+    gridded: Option<Lines>,
 }
 
 fn aspect(size: [u32; 2]) -> f32 {
@@ -78,6 +82,7 @@ impl Live {
         egui: &mut egui_wgpu::Renderer,
         scene: &Scene,
         revision: u64,
+        background: bool,
         camera: Camera,
         size: [u32; 2],
     ) -> Result<Live, String> {
@@ -86,9 +91,12 @@ impl Live {
         renderer.set_exposure(Exposure::Fixed(1.0))?;
         renderer.set_frames_on_demand(Some(Limits::default()))?;
         renderer.set_output_dither(Some(pfx_post::quantise::Dither::default()))?;
+        renderer.set_background_reflections(background);
         let mut shown = scene.clone();
         shown.camera = Some(camera.clone());
-        let staged = renderer.stage(&shown)?;
+        let mut staged = renderer.stage(&shown)?;
+        let frame = staged.frame(aspect(size), 0.0, 0);
+        renderer.warm_frame(&frame.scene, &frame.effects)?;
         renderer.wait_sky()?;
         renderer.set_lens(staged.lens(aspect(size)));
         let surface = surface(gpu, size);
@@ -106,6 +114,8 @@ impl Live {
             size,
             awaiting: false,
             drawn: 0,
+            grid: Grid::default(),
+            gridded: None,
         })
     }
 
@@ -164,6 +174,29 @@ impl Live {
         Ok(())
     }
 
+    pub fn graphics(&mut self, graphics: &pfx_settings::Graphics) -> Result<(), String> {
+        let was = self.renderer.chosen_effects();
+        self.renderer
+            .set_shedding(graphics.quality == Some(pfx_settings::Quality::Performance))?;
+        self.renderer.set_effects(graphics.effects)?;
+        if !was.scene_reflections && graphics.effects.scene_reflections {
+            let diff = SceneDiff {
+                camera: true,
+                ..SceneDiff::default()
+            };
+            self.staged.apply(&mut self.renderer, &self.scene, &diff)?;
+        }
+        Ok(())
+    }
+
+    pub fn shed(&self) -> &'static [pfx_settings::Effect] {
+        self.renderer.shed()
+    }
+
+    pub fn effects(&self) -> pfx_settings::Effects {
+        self.renderer.effects()
+    }
+
     pub fn look(&mut self, camera: Camera) -> Result<(), String> {
         if self.camera == camera {
             return Ok(());
@@ -197,6 +230,10 @@ impl Live {
         }
     }
 
+    pub fn timings(&self) -> Option<&pfx_gpu::FrameTimings> {
+        self.renderer.timings()
+    }
+
     pub fn gpu_ms(&self) -> Option<f64> {
         self.renderer
             .timings()
@@ -209,7 +246,7 @@ impl Live {
         drops.ring + drops.late
     }
 
-    pub fn draw(&mut self, pick: Option<[u32; 2]>) -> Result<Drawn, String> {
+    pub fn draw(&mut self, pick: Option<[u32; 2]>, lines: Option<Lines>) -> Result<Drawn, String> {
         let mut drawn = Drawn::default();
         if self.awaiting
             && let Some(picked) = self.renderer.picked()
@@ -217,10 +254,13 @@ impl Live {
             self.awaiting = false;
             drawn.picked = Some(picked.id);
         }
+        self.renderer.poll_reflections()?;
         let size = self.size;
         let finish = self.staged.finish();
         let frame = self.staged.frame(aspect(size), 0.0, 0);
+        let camera = (frame.scene.camera.view, frame.scene.camera.projection);
         let next = Next::new(&frame.scene, &frame.text, &frame.effects, finish);
+        let regrid = lines != self.gridded;
         if let Some([x, y]) = pick {
             self.renderer.pick(x.min(size[0] - 1), y.min(size[1] - 1))?;
             self.renderer
@@ -232,7 +272,14 @@ impl Live {
             drawn.drew = true;
         } else {
             let need = self.renderer.frame_needed(&next);
-            if need.draws() {
+            if regrid {
+                if self.renderer.frames_in_flight() >= IN_FLIGHT {
+                    self.renderer.wait_frames(IN_FLIGHT - 1)?;
+                }
+                self.renderer
+                    .submit_needed(&next, &Need::Full, &self.surface.view)?;
+                drawn.drew = true;
+            } else if need.draws() {
                 if self.renderer.frames_in_flight() >= IN_FLIGHT {
                     self.renderer.wait_frames(IN_FLIGHT - 1)?;
                 }
@@ -243,8 +290,25 @@ impl Live {
         }
         if drawn.drew {
             self.drawn += 1;
+            self.gridded = lines;
+            if let Some(lines) = &lines {
+                let [width, height] = self.renderer.frame().viewport();
+                self.grid.draw(
+                    &self.gpu,
+                    &grid::Target {
+                        output: &self.surface.view,
+                        format: FORMAT,
+                        depth: self.renderer.depth_view(),
+                        size,
+                        depth_size: [width, height],
+                        view: camera.0,
+                        projection: camera.1,
+                    },
+                    lines,
+                );
+            }
         }
-        drawn.awaiting = self.awaiting;
+        drawn.awaiting = self.awaiting || self.renderer.reflections_pending();
         Ok(drawn)
     }
 }

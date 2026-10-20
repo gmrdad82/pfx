@@ -10,6 +10,7 @@ mod diff;
 mod document;
 mod entries;
 mod export;
+pub(crate) mod git;
 #[cfg(feature = "editor")]
 mod gui;
 #[cfg(feature = "editor")]
@@ -66,6 +67,7 @@ pub const MOVED: &[&str] = &[
     "align",
     "asset",
     "credits",
+    "git",
     #[cfg(feature = "editor")]
     "gui",
 ];
@@ -171,6 +173,12 @@ enum Verb {
         about = "The credits of every asset a .pitofx scene uses, refusing unlicensed ones by name"
     )]
     Credits(credits::Args),
+    #[command(
+        about = "Git for .pitofx documents: setup makes git diff show their TOML",
+        subcommand_required = true,
+        arg_required_else_help = false
+    )]
+    Git(git::Args),
 }
 
 #[derive(clap::Args)]
@@ -482,6 +490,7 @@ fn run_verb(verb: Verb, rest: &[String], registry: &Registry) -> ExitCode {
         Verb::Align(parsed) => align::run(&parsed, registry),
         Verb::Asset(parsed) => asset::run(&parsed),
         Verb::Credits(parsed) => credits::run(&parsed),
+        Verb::Git(parsed) => git::run(&parsed),
         #[cfg(feature = "editor")]
         Verb::Gui(parsed) => gui::run(&parsed, rest, registry),
         Verb::Scene(SceneArgs { verb }) => match verb {

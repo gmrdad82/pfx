@@ -1,4 +1,5 @@
 use crate::carve::{Carve, Carved, Frame};
+use crate::subdiv::{self, INFINITE, Level as Cage, Topology, key};
 use crate::{Call, Generated, Piece};
 use glam::{DVec2, DVec3};
 use pfx_mesh::math::Real;
@@ -26,9 +27,11 @@ const PARAMS: [&str; 12] = [
 const STATION: [&str; 5] = ["at", "curve", "half", "crease", "sharpness"];
 const VIEWS: [&str; 4] = ["side", "top", "front", "rear"];
 const MATERIAL: &str = "loft";
-const INFINITE: f64 = 10.0;
 const FRONT_BINS: usize = 48;
 const HULL: f64 = 0.02;
+const FRONT_FLOOR: f64 = 0.2;
+const FRONT_PASSES: usize = 4;
+const AXIS_SMOOTH: f64 = 1.0 / 64.0;
 
 pub struct Station {
     pub at: f64,
@@ -416,15 +419,20 @@ impl Loft {
 
     pub fn lofted(&self) -> Result<Lofted, String> {
         let ruler = self.ruler();
-        let (mut cage, notes) = self.cage(&ruler);
-        fit(&mut cage.points, &ruler, self.along, &self.silhouettes);
+        let (cage, rings, notes) = self.fitted(&ruler)?;
+        let mesh = finish(&cage, &ruler, rings)?;
+        Ok(Lofted { mesh, notes })
+    }
+
+    fn fitted(&self, ruler: &Ruler) -> Result<(Cage, usize, Vec<String>), String> {
+        let (mut cage, notes) = self.cage(ruler);
+        fit(&mut cage.points, ruler, self.along, &self.silhouettes);
         for _ in 0..self.subdivide {
             cage = subdivide(&cage)?;
         }
         let rings = (self.along - 1) * (1 << self.subdivide) + 1;
-        fit(&mut cage.points, &ruler, rings, &self.silhouettes);
-        let mesh = finish(&cage, &ruler, rings)?;
-        Ok(Lofted { mesh, notes })
+        fit(&mut cage.points, ruler, rings, &self.silhouettes);
+        Ok((cage, rings, notes))
     }
 
     fn ruler(&self) -> Ruler {
@@ -526,12 +534,7 @@ impl Loft {
                 }
             }
         }
-        let mut cage = Cage {
-            points,
-            starts,
-            verts,
-            sharp,
-        };
+        let mut cage = Cage::new(points, starts, verts, sharp);
         if cage.volume() < 0.0 {
             cage.flip();
         }
@@ -985,27 +988,7 @@ impl Lu {
     }
 }
 
-fn key(a: u32, b: u32) -> (u32, u32) {
-    if a < b { (a, b) } else { (b, a) }
-}
-
-struct Cage {
-    points: Vec<DVec3>,
-    starts: Vec<usize>,
-    verts: Vec<u32>,
-    sharp: HashMap<(u32, u32), f64>,
-}
-
 impl Cage {
-    fn faces(&self) -> usize {
-        self.starts.len()
-    }
-
-    fn face(&self, f: usize) -> &[u32] {
-        let end = self.starts.get(f + 1).copied().unwrap_or(self.verts.len());
-        &self.verts[self.starts[f]..end]
-    }
-
     fn volume(&self) -> f64 {
         (0..self.faces())
             .map(|f| {
@@ -1032,204 +1015,29 @@ impl Cage {
     }
 }
 
-struct Topology {
-    edges: Vec<[u32; 2]>,
-    halves: Vec<[(u32, u32); 2]>,
-    sharp: Vec<f64>,
-    face_edges: Vec<u32>,
-    vertex_edges: Vec<Vec<u32>>,
-    vertex_faces: Vec<Vec<u32>>,
-}
-
 fn topology(cage: &Cage) -> Result<Topology, String> {
-    let mut index: HashMap<(u32, u32), u32> = HashMap::with_capacity(cage.verts.len());
-    let mut edges = Vec::with_capacity(cage.verts.len() / 2);
-    let mut halves: Vec<[(u32, u32); 2]> = Vec::with_capacity(cage.verts.len() / 2);
-    let mut face_edges = vec![0u32; cage.verts.len()];
-    let mut vertex_faces = vec![Vec::new(); cage.points.len()];
-    for f in 0..cage.faces() {
-        let face = cage.face(f);
-        let n = face.len();
-        for k in 0..n {
-            let (a, b) = (face[k], face[(k + 1) % n]);
-            vertex_faces[a as usize].push(f as u32);
-            let id = *index.entry(key(a, b)).or_insert_with(|| {
-                edges.push([a, b]);
-                halves.push([(f as u32, k as u32), (u32::MAX, u32::MAX)]);
-                (edges.len() - 1) as u32
-            });
-            if halves[id as usize][0] != (f as u32, k as u32) {
-                if halves[id as usize][1].0 != u32::MAX {
-                    return Err("the loft is not manifold: an edge has more than two faces; check the station curves cross nothing".into());
-                }
-                halves[id as usize][1] = (f as u32, k as u32);
-            }
-            face_edges[cage.starts[f] + k] = id;
-        }
-    }
-    if halves.iter().any(|h| h[1].0 == u32::MAX) {
+    let topo = subdiv::topology(cage).map_err(|_| {
+        "the loft is not manifold: an edge has more than two faces; check the station curves cross nothing".to_string()
+    })?;
+    if (0..topo.edges.len()).any(|id| topo.open(id)) {
         return Err("the loft is not closed".into());
     }
-    let mut vertex_edges = vec![Vec::new(); cage.points.len()];
-    for (i, e) in edges.iter().enumerate() {
-        vertex_edges[e[0] as usize].push(i as u32);
-        vertex_edges[e[1] as usize].push(i as u32);
-    }
-    let sharp = edges
-        .iter()
-        .map(|e| cage.sharp.get(&key(e[0], e[1])).copied().unwrap_or(0.0))
-        .collect();
-    Ok(Topology {
-        edges,
-        halves,
-        sharp,
-        face_edges,
-        vertex_edges,
-        vertex_faces,
-    })
-}
-
-fn decrement(s: f64) -> f64 {
-    if s <= 0.0 {
-        0.0
-    } else if s >= INFINITE {
-        INFINITE
-    } else if s > 1.0 {
-        s - 1.0
-    } else {
-        0.0
-    }
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Rule {
-    Smooth,
-    Crease,
-    Corner,
-}
-
-fn rule(count: usize) -> Rule {
-    match count {
-        0 | 1 => Rule::Smooth,
-        2 => Rule::Crease,
-        _ => Rule::Corner,
-    }
+    Ok(topo)
 }
 
 fn subdivide(cage: &Cage) -> Result<Cage, String> {
     let topo = topology(cage)?;
-    let v = cage.points.len();
-    let e = topo.edges.len();
-    let faces: Vec<DVec3> = (0..cage.faces())
-        .map(|f| {
-            let face = cage.face(f);
-            face.iter().map(|&i| cage.points[i as usize]).sum::<DVec3>() / face.len() as f64
-        })
-        .collect();
-    let mut points = Vec::with_capacity(v + e + faces.len());
-    for i in 0..v {
-        let p = cage.points[i];
-        let around = &topo.vertex_edges[i];
-        let other = |id: u32| {
-            let edge = topo.edges[id as usize];
-            cage.points[if edge[0] as usize == i {
-                edge[1]
-            } else {
-                edge[0]
-            } as usize]
-        };
-        let parent: Vec<u32> = around
-            .iter()
-            .copied()
-            .filter(|&id| topo.sharp[id as usize] > 0.0)
-            .collect();
-        let child: Vec<u32> = parent
-            .iter()
-            .copied()
-            .filter(|&id| decrement(topo.sharp[id as usize]) > 0.0)
-            .collect();
-        let mask = |r: Rule, sharp: &[u32]| match r {
-            Rule::Corner => p,
-            Rule::Crease => (p * 6.0 + other(sharp[0]) + other(sharp[1])) / 8.0,
-            Rule::Smooth => {
-                let n = around.len() as f64;
-                let edges: DVec3 = around.iter().map(|&id| other(id)).sum();
-                let fs: DVec3 = topo.vertex_faces[i]
-                    .iter()
-                    .map(|&f| faces[f as usize])
-                    .sum();
-                p * ((n - 2.0) / n) + (edges + fs) / (n * n)
-            }
-        };
-        let (pr, cr) = (rule(parent.len()), rule(child.len()));
-        let point = if pr == cr {
-            mask(pr, &parent)
-        } else {
-            let fractional: Vec<f64> = parent
-                .iter()
-                .map(|&id| topo.sharp[id as usize])
-                .filter(|&s| s <= 1.0)
-                .collect();
-            let w = if fractional.is_empty() {
-                0.0
-            } else {
-                (fractional.iter().sum::<f64>() / fractional.len() as f64).min(1.0)
-            };
-            mask(pr, &parent) * w + mask(cr, &child) * (1.0 - w)
-        };
-        points.push(point);
-    }
-    for (id, edge) in topo.edges.iter().enumerate() {
-        let a = cage.points[edge[0] as usize];
-        let b = cage.points[edge[1] as usize];
-        let s = topo.sharp[id];
-        let crease = (a + b) * 0.5;
-        let [h0, h1] = topo.halves[id];
-        let smooth = (a + b + faces[h0.0 as usize] + faces[h1.0 as usize]) * 0.25;
-        points.push(if s <= 0.0 {
-            smooth
-        } else if decrement(s) > 0.0 {
-            crease
-        } else {
-            crease * s + smooth * (1.0 - s)
-        });
-    }
-    points.extend(&faces);
-    let mut starts = Vec::with_capacity(cage.verts.len());
-    let mut verts = Vec::with_capacity(cage.verts.len() * 4);
-    for f in 0..cage.faces() {
-        let face = cage.face(f);
-        let n = face.len();
-        let s = cage.starts[f];
-        let centre = (v + e + f) as u32;
-        for (k, &corner) in face.iter().enumerate() {
-            starts.push(verts.len());
-            verts.extend([
-                corner,
-                v as u32 + topo.face_edges[s + k],
-                centre,
-                v as u32 + topo.face_edges[s + (k + n - 1) % n],
-            ]);
-        }
-    }
-    let mut sharp = HashMap::new();
-    for (id, edge) in topo.edges.iter().enumerate() {
-        let d = decrement(topo.sharp[id]);
-        if d > 0.0 {
-            let mid = (v + id) as u32;
-            sharp.insert(key(edge[0], mid), d);
-            sharp.insert(key(mid, edge[1]), d);
-        }
-    }
-    Ok(Cage {
-        points,
-        starts,
-        verts,
-        sharp,
-    })
+    Ok(subdiv::refine(
+        cage,
+        &topo,
+        &subdiv::Options {
+            creasing: subdiv::Creasing::Uniform,
+            ..subdiv::Options::default()
+        },
+    ))
 }
 
-struct Branches(Vec<Vec<DVec2>>);
+struct Branches(Vec<Pchip>);
 
 impl Branches {
     fn new(curve: &[DVec2]) -> Branches {
@@ -1247,14 +1055,29 @@ impl Branches {
         } else {
             None
         };
-        let sorted = |part: &[DVec2]| {
+        let smooth = |part: &[DVec2]| {
             let mut part = part.to_vec();
             part.sort_by(|a, b| a.x.total_cmp(&b.x));
-            part
+            let mut xs: Vec<f64> = Vec::with_capacity(part.len());
+            let mut ys: Vec<f64> = Vec::with_capacity(part.len());
+            for p in part {
+                match xs.last() {
+                    Some(&x) if p.x - x <= 1e-9 => *ys.last_mut().unwrap() = p.y,
+                    _ => {
+                        xs.push(p.x);
+                        ys.push(p.y);
+                    }
+                }
+            }
+            if xs.len() == 1 {
+                xs.push(xs[0] + 1.0);
+                ys.push(ys[0]);
+            }
+            Pchip::new(xs, ys)
         };
         Branches(match split {
-            Some(i) => vec![sorted(&curve[..=i]), sorted(&curve[i..])],
-            None => vec![sorted(curve)],
+            Some(i) => vec![smooth(&curve[..=i]), smooth(&curve[i..])],
+            None => vec![smooth(curve)],
         })
     }
 
@@ -1263,28 +1086,50 @@ impl Branches {
     }
 
     fn at(&self, a: f64) -> (f64, f64) {
-        let values: Vec<f64> = self.0.iter().map(|b| linear(b, a)).collect();
+        let values: Vec<f64> = self
+            .0
+            .iter()
+            .map(|b| b.at(a.clamp(b.x[0], b.x[b.x.len() - 1])))
+            .collect();
         let lo = values.iter().copied().fold(f64::INFINITY, f64::min);
         let hi = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         (lo, hi)
     }
 }
 
-fn linear(points: &[DVec2], a: f64) -> f64 {
-    let n = points.len();
-    if a <= points[0].x {
-        return points[0].y;
+fn outline(curve: &[DVec2]) -> impl Fn(f64) -> Option<f64> + '_ {
+    let rising = curve.windows(2).all(|w| w[1].y > w[0].y);
+    let falling = curve.windows(2).all(|w| w[1].y < w[0].y);
+    let smooth = (rising || falling).then(|| {
+        let mut sorted: Vec<DVec2> = curve.to_vec();
+        if falling {
+            sorted.reverse();
+        }
+        Pchip::new(
+            sorted.iter().map(|p| p.y).collect(),
+            sorted.iter().map(|p| p.x.abs()).collect(),
+        )
+    });
+    move |y: f64| match &smooth {
+        Some(pchip) => {
+            let (lo, hi) = (pchip.x[0], pchip.x[pchip.x.len() - 1]);
+            (lo..=hi).contains(&y).then(|| pchip.at(y).max(0.0))
+        }
+        None => half_width(curve, y),
     }
-    if a >= points[n - 1].x {
-        return points[n - 1].y;
+}
+
+fn smoothed(mut table: Vec<f64>, passes: usize) -> Vec<f64> {
+    let n = table.len();
+    for _ in 0..passes {
+        let last = table.clone();
+        for i in 0..n {
+            let a = last[i.saturating_sub(1)];
+            let b = last[(i + 1).min(n - 1)];
+            table[i] = 0.25 * a + 0.5 * last[i] + 0.25 * b;
+        }
     }
-    let i = points.windows(2).position(|w| a <= w[1].x).unwrap_or(n - 2);
-    let (p, q) = (points[i], points[i + 1]);
-    let d = q.x - p.x;
-    if d <= 1e-12 {
-        return q.y;
-    }
-    p.y + (q.y - p.y) * (a - p.x) / d
+    table
 }
 
 fn half_width(curve: &[DVec2], y: f64) -> Option<f64> {
@@ -1374,8 +1219,8 @@ fn range_map(lo: f64, hi: f64, target: (f64, f64)) -> [f64; 3] {
     [lo, target.0, k]
 }
 
-fn mix3(a: [f64; 3], b: [f64; 3], t: f64) -> [f64; 3] {
-    [0, 1, 2].map(|i| a[i] + (b[i] - a[i]) * t)
+fn mix2(a: [f64; 2], b: [f64; 2], t: f64) -> [f64; 2] {
+    [0, 1].map(|i| a[i] + (b[i] - a[i]) * t)
 }
 
 fn fit(points: &mut [DVec3], ruler: &Ruler, count: usize, s: &Silhouettes) {
@@ -1387,52 +1232,94 @@ fn fit(points: &mut [DVec3], ruler: &Ruler, count: usize, s: &Silhouettes) {
     if let Some(side) = &s.side {
         let side = Branches::new(side);
         let ex = bins.extremes(points);
-        let table: Vec<[f64; 3]> = (0..count)
-            .map(|b| {
-                let (lo, hi) = side.at(ruler.z(bins.centre(b)));
-                let target = if side.looped() {
-                    (lo, hi)
-                } else {
-                    (ex[b][2], hi)
-                };
-                range_map(ex[b][2], ex[b][3], target)
-            })
-            .collect();
+        let table = field(
+            (0..count)
+                .map(|b| {
+                    let (lo, hi) = side.at(ruler.z(bins.centre(b)));
+                    let target = if side.looped() {
+                        (lo, hi)
+                    } else {
+                        (ex[b][2], hi)
+                    };
+                    range_map(ex[b][2], ex[b][3], target)
+                })
+                .collect(),
+        );
         for p in points.iter_mut() {
-            let [lo, to, k] = bins.warp(p.z, &table, mix3);
-            p.y = to + (p.y - lo) * k;
+            let [to, k] = bins.warp(p.z, &table, mix2);
+            p.y = to + p.y * k;
         }
     }
     if s.front.is_some() || s.rear.is_some() {
-        front_rear(points, ruler, s);
+        front_rear(points, ruler, &bins, s);
     }
     if let Some(top) = &s.top {
         let top = Branches::new(top);
         let ex = bins.extremes(points);
-        let table: Vec<[f64; 3]> = (0..count)
-            .map(|b| {
-                let (lo, hi) = top.at(ruler.z(bins.centre(b)));
-                if top.looped() {
-                    range_map(ex[b][0], ex[b][1], (lo, hi))
-                } else {
-                    let half = ex[b][0].abs().max(ex[b][1].abs());
-                    let k = if half > 1e-9 {
-                        (hi.abs() / half).clamp(0.05, 20.0)
+        let table = field(
+            (0..count)
+                .map(|b| {
+                    let (lo, hi) = top.at(ruler.z(bins.centre(b)));
+                    if top.looped() {
+                        range_map(ex[b][0], ex[b][1], (lo, hi))
                     } else {
-                        1.0
-                    };
-                    [0.0, 0.0, k]
-                }
-            })
-            .collect();
+                        let half = ex[b][0].abs().max(ex[b][1].abs());
+                        let k = if half > 1e-9 {
+                            (hi.abs() / half).clamp(0.05, 20.0)
+                        } else {
+                            1.0
+                        };
+                        [0.0, 0.0, k]
+                    }
+                })
+                .collect(),
+        );
         for p in points.iter_mut() {
-            let [lo, to, k] = bins.warp(p.z, &table, mix3);
-            p.x = to + (p.x - lo) * k;
+            let [to, k] = bins.warp(p.z, &table, mix2);
+            p.x = to + p.x * k;
         }
     }
 }
 
-fn front_rear(points: &mut [DVec3], ruler: &Ruler, s: &Silhouettes) {
+fn field(table: Vec<[f64; 3]>) -> Vec<[f64; 2]> {
+    let sigma = AXIS_SMOOTH * (table.len() - 1) as f64;
+    let passes = (2.0 * sigma * sigma).ceil() as usize;
+    let to = smoothed(
+        table.iter().map(|[lo, to, k]| to - lo * k).collect(),
+        passes,
+    );
+    let k = smoothed(table.iter().map(|t| t[2]).collect(), passes);
+    to.into_iter().zip(k).map(|(to, k)| [to, k]).collect()
+}
+
+fn loops(points: &[DVec3], bins: &Bins) -> Vec<(f64, Vec<DVec2>)> {
+    let mut by_bin: Vec<Vec<DVec2>> = vec![Vec::new(); bins.count];
+    for p in points {
+        by_bin[bins.of(p.z)].push(p.truncate());
+    }
+    by_bin
+        .into_iter()
+        .enumerate()
+        .filter(|(_, ring)| ring.len() > 2)
+        .map(|(b, ring)| {
+            let (lo, hi) = ring.iter().fold(
+                (DVec2::splat(f64::INFINITY), DVec2::splat(f64::NEG_INFINITY)),
+                |(lo, hi), p| (lo.min(*p), hi.max(*p)),
+            );
+            let centre = (lo + hi) * 0.5;
+            let mut ring: Vec<(f64, DVec2)> = ring
+                .into_iter()
+                .map(|p| ((p.x - centre.x).atan2_of(centre.y - p.y), p))
+                .collect();
+            ring.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut curve: Vec<DVec2> = ring.into_iter().map(|(_, p)| p).collect();
+            curve.push(curve[0]);
+            (bins.centre(b), curve)
+        })
+        .collect()
+}
+
+fn front_rear(points: &mut [DVec3], ruler: &Ruler, bins: &Bins, s: &Silhouettes) {
     let (ylo, yhi) = points
         .iter()
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), p| {
@@ -1441,23 +1328,26 @@ fn front_rear(points: &mut [DVec3], ruler: &Ruler, s: &Silhouettes) {
     if yhi - ylo <= 1e-9 {
         return;
     }
-    let bin = |y: f64| {
-        (((y - ylo) / (yhi - ylo)) * (FRONT_BINS - 1) as f64).clamp(0.0, (FRONT_BINS - 1) as f64)
-    };
+    let level = |b: usize| ylo + (yhi - ylo) * b as f64 / (FRONT_BINS - 1) as f64;
     let weight = |z: f64| smoothstep(ruler.z0, ruler.z1, ruler.z(z));
     let mut envelope = [[0.0f64; FRONT_BINS]; 2];
-    for p in points.iter() {
-        let side = usize::from(weight(p.z) >= 0.5);
-        let b = bin(p.y).round() as usize;
-        envelope[side][b] = envelope[side][b].max(p.x.abs());
+    for (z, curve) in loops(points, bins) {
+        let side = usize::from(weight(z) >= 0.5);
+        for (b, e) in envelope[side].iter_mut().enumerate() {
+            if let Some(x) = half_width(&curve, level(b)) {
+                *e = e.max(x);
+            }
+        }
     }
-    let ratios = |curve: &[DVec2], side: usize| -> Vec<f64> {
+    let ratios = |curve: &[DVec2], side: usize| -> Pchip {
+        let envelope = &envelope[side];
+        let widest = envelope.iter().copied().fold(0.0, f64::max);
+        let target = outline(curve);
         let mut out: Vec<Option<f64>> = (0..FRONT_BINS)
             .map(|b| {
-                let y = ylo + (yhi - ylo) * b as f64 / (FRONT_BINS - 1) as f64;
-                let e = envelope[side][b];
-                half_width(curve, y)
-                    .filter(|_| e > 1e-9)
+                let e = envelope[b];
+                target(level(b))
+                    .filter(|_| e > FRONT_FLOOR * widest)
                     .map(|t| (t / e).clamp(0.05, 20.0))
             })
             .collect();
@@ -1471,7 +1361,11 @@ fn front_rear(points: &mut [DVec3], ruler: &Ruler, s: &Silhouettes) {
                     .and_then(|k| out[k]);
             }
         }
-        out.into_iter().map(|r| r.unwrap_or(1.0)).collect()
+        let table = out.into_iter().map(|r| r.unwrap_or(1.0)).collect();
+        Pchip::new(
+            (0..FRONT_BINS).map(level).collect(),
+            smoothed(table, FRONT_PASSES),
+        )
     };
     let front = s
         .front
@@ -1486,15 +1380,10 @@ fn front_rear(points: &mut [DVec3], ruler: &Ruler, s: &Silhouettes) {
     let (Some(front), Some(rear)) = (front, rear) else {
         return;
     };
-    let sample = |table: &[f64], y: f64| {
-        let place = bin(y);
-        let lo = place.floor() as usize;
-        let hi = (lo + 1).min(FRONT_BINS - 1);
-        table[lo] + (table[hi] - table[lo]) * (place - lo as f64)
-    };
     for p in points.iter_mut() {
         let w = weight(p.z);
-        let k = sample(&rear, p.y) * (1.0 - w) + sample(&front, p.y) * w;
+        let y = p.y.clamp(ylo, yhi);
+        let k = rear.at(y) * (1.0 - w) + front.at(y) * w;
         p.x *= k;
     }
 }
@@ -1799,7 +1688,32 @@ mod tests {
     #[test]
     fn the_default_interpolation_builds_the_bytes_it_always_has() {
         let m = surface(shape(json!([2])));
-        assert_eq!(digest(&m), 0xfbc0_f248_4460_76fb, "{:#018x}", digest(&m));
+        assert_eq!(digest(&m), 0xe3df_6d4c_62e1_7003, "{:#018x}", digest(&m));
+    }
+
+    #[test]
+    fn fractional_creases_build_the_bytes_they_always_have() {
+        let digests: Vec<u64> = [0.5, 1.0, 1.5, 3.25]
+            .into_iter()
+            .map(|sharpness| {
+                let mut params = shape(json!([1, 3]));
+                for station in params["stations"].as_array_mut().unwrap() {
+                    station["sharpness"] = json!(sharpness);
+                }
+                params["subdivide"] = json!(3);
+                digest(&surface(params))
+            })
+            .collect();
+        assert_eq!(
+            digests,
+            [
+                0x8770_0b49_8bee_13eb,
+                0x86d4_ee81_06bd_85e5,
+                0x7ca3_49a2_562d_2fa0,
+                0x6161_c7fd_c1d5_ec65
+            ],
+            "{digests:#018x?}"
+        );
     }
 
     #[test]
@@ -1974,5 +1888,118 @@ mod tests {
         let [lo, hi] = bounds(&dense);
         assert!(lo[2].abs() < 1e-6 && (hi[2] - 2.1).abs() < 1e-5);
         assert!(welded_edges(&dense).values().all(|&c| c == 2));
+    }
+
+    fn rounded(width: f64, top: f64, bottom: f64) -> Vec<DVec2> {
+        let mid = 0.3 * (top + bottom);
+        (0..13)
+            .map(|i| {
+                let (s, c) = (PI * i as f64 / 12.0).sin_cos();
+                let reach = if c >= 0.0 { top - mid } else { mid - bottom };
+                DVec2::new(
+                    width * s.abs().powf(0.77),
+                    mid + reach * c.abs().powf(0.77) * c.signum(),
+                )
+            })
+            .collect()
+    }
+
+    fn traced(views: &[&str]) -> Value {
+        let sections: Vec<(f64, Vec<DVec2>)> = (0..14)
+            .map(|i| {
+                let t = (i as f64 / 13.0).powf(1.1);
+                let width = 1.5 + 3.8 * (PI * t.powf(0.6)).sin();
+                let top = 1.0 + 4.5 * (PI * t.sqrt()).sin() - 1.5 * t;
+                let bottom = -1.0 - 4.0 * (PI * t.powf(0.8)).sin();
+                (-5.0 + 14.5 * t, rounded(width, top, bottom))
+            })
+            .collect();
+        let stations: Vec<Value> = sections
+            .iter()
+            .map(|(at, c)| {
+                let curve: Vec<[f64; 2]> = c.iter().map(|p| [p.x, p.y]).collect();
+                json!({ "at": at, "half": true, "curve": curve })
+            })
+            .collect();
+        let mut side: Vec<[f64; 2]> = sections.iter().map(|(at, c)| [*at, c[0].y]).collect();
+        side.extend(sections.iter().rev().map(|(at, c)| [*at, c[12].y]));
+        let top: Vec<[f64; 2]> = sections.iter().map(|(at, c)| [*at, c[6].x]).collect();
+        let high = sections
+            .iter()
+            .map(|(_, c)| c[0].y)
+            .fold(f64::MIN, f64::max);
+        let low = sections
+            .iter()
+            .map(|(_, c)| c[12].y)
+            .fold(f64::MAX, f64::min);
+        let front: Vec<[f64; 2]> = (0..=12)
+            .map(|i| {
+                let y = high - (high - low) * i as f64 / 12.0;
+                let x = sections
+                    .iter()
+                    .filter_map(|(_, c)| half_width(c, y))
+                    .fold(0.0, f64::max);
+                [x, y]
+            })
+            .collect();
+        let all = json!({ "side": side, "top": top, "front": front });
+        let picked: serde_json::Map<String, Value> = views
+            .iter()
+            .map(|v| (v.to_string(), all[v].clone()))
+            .collect();
+        json!({
+            "stations": stations,
+            "interpolate": "pchip",
+            "subdivide": 2,
+            "samples": { "around": 32, "along": 40 },
+            "silhouettes": picked,
+        })
+    }
+
+    fn bend(params: Value) -> [f64; 2] {
+        let Value::Object(map) = params else {
+            unreachable!()
+        };
+        let loft = parse(&map.into_iter().collect()).unwrap();
+        let ruler = loft.ruler();
+        let (cage, _, _) = loft.fitted(&ruler).unwrap();
+        let topo = topology(&cage).unwrap();
+        let margin = 0.04 * (ruler.z1 - ruler.z0);
+        let mut worst = [0.0f64; 2];
+        for (v, edges) in topo.vertex_edges.iter().enumerate() {
+            let p = cage.points[v];
+            if edges.len() != 4 || p.z - ruler.z0 < margin || ruler.z1 - p.z < margin {
+                continue;
+            }
+            let mut pairs = [Vec::new(), Vec::new()];
+            for &e in edges {
+                let [a, b] = topo.edges[e as usize];
+                let q = cage.points[if a as usize == v { b } else { a } as usize];
+                pairs[usize::from((q.z - p.z).abs() > 1e-9)].push(q);
+            }
+            for (w, pair) in worst.iter_mut().zip(&pairs) {
+                if let [a, b] = pair[..] {
+                    let spread = 0.5 * (a.distance_squared(p) + b.distance_squared(p));
+                    *w = w.max((a + b - 2.0 * p).length() / spread);
+                }
+            }
+        }
+        worst
+    }
+
+    #[test]
+    fn silhouettes_traced_from_the_stations_bend_the_surface_no_more_than_the_stations_do() {
+        let [around, along] = bend(traced(&[]));
+        for views in [
+            &["side"][..],
+            &["top"],
+            &["front"],
+            &["side", "top"],
+            &["side", "top", "front"],
+        ] {
+            let [a, b] = bend(traced(views));
+            assert!(a < 1.2 * around, "{views:?} around {a} against {around}");
+            assert!(b < 1.6 * along, "{views:?} along {b} against {along}");
+        }
     }
 }

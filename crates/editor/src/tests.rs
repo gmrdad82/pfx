@@ -766,13 +766,14 @@ fn a_project_lists_its_scenes_and_content_folders_in_the_outliner() {
         labels(editor, "content"),
         [
             "content",
+            "content/credit",
             "content/fonts",
             "content/materials",
             "content/meshes",
             "content/prefabs"
         ]
     );
-    let meshes = &editor.outline.section("content").unwrap().nodes[3];
+    let meshes = &editor.outline.section("content").unwrap().nodes[4];
     assert_eq!(
         meshes
             .children

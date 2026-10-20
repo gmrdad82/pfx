@@ -1,0 +1,10 @@
+title = "SIZE ON DISK"
+unit = "MEGABYTES, UNPACKED"
+better = "lower"
+subtitle = "RYZEN 9 9950X, RADEON RX 9060 XT, LINUX"
+date = "2026-10-19"
+suffix = " MB"
+words = { better = "SMALLER", worse = "LARGER", same = "SAME SIZE" }
+notes = ["PFX IS THE WHOLE ENGINE IN ONE BINARY: EDITOR, LIVE RENDERER, PATH TRACER AND COMMAND LINE. GODOT'S EDITOR AND BLENDER, LINUX X86_64."]
+parties = [{ name = "PFX 3.1.0" }, { name = "GODOT 4.7.2" }, { name = "BLENDER 5.2.2" }]
+rows = [{ label = "LINUX X86_64", values = [84.4, 146.4, 1236] }]

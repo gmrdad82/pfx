@@ -76,7 +76,7 @@ Found by diffing the public items of pfx-scene 1.6.0 (with manf 0.1.0) and pfx 2
 |---|---|
 | `manf::*` | `pfx_file::*` (`Reader`, `Writer`, `Entry`, `Named`, `Codec`, `Tag`, the tag constants, `scene_hash`, `check_name`, `tag_text`, `lz4`, `sha256`) |
 | `manf::MAGIC`, `b"MANFRED\0"` | `pfx_file::MAGIC`, `b"PFXFILE\0"`: a file with the old magic does not open; pack it again from its sources |
-| `manf::Error::NotManf` ("not a .manf file") | `pfx_file::Error::NotPfx` ("not a .pfx file") |
+| `manf::Error::NotManf` ("not a .manf file") | `pfx_file::Error::NotPfx` ("not a .pitofx file") |
 | `manf::crc32` (private) | `pfx_file::crc32` (public) |
 | `Project::open_manf(file)` | `Project::open_pfx(file)` |
 | `Project::manf_file()` | `Project::pfx_path()` |
@@ -123,20 +123,20 @@ fn main() -> std::process::ExitCode {
 
 ## Opening the window
 
-A game's tools build opens its project in pfx's window through `pfx_workbench::run_project`. The scaffold's `main.rs` (from `pfx new`) does it as the game's `edit` command:
+A game's tools build opens its project in pfx's window through `pfx_workbench::run_project`, or `pfx_workbench::edit_project`, which does the same with no arguments and draws the window offscreen with `--shot` or `--clip` ([game.md](game.md), "The edit hook"). The scaffold's `main.rs` (from `pfx new`) does it as the game's `edit` command:
 
 ```rust
 #[cfg(feature = "tools")]
 fn tools(commands: &mut pfx_game::Commands, project: pfx_project::Project) {
     commands
         .edit(
-            "opens the game in pfx's editor; F5 plays it",
-            move |factory, _args| {
+            "opens the game in pfx's editor; F5 plays it; --shot and --clip draw it offscreen",
+            move |factory, args| {
                 let config = world::config(&project)?;
-                pfx_workbench::run_project(project.root(), factory, config)
+                pfx_workbench::edit_project(project.root(), factory, config, args)
             },
         )
-        .usage("edit", "");
+        .usage("edit", pfx_workbench::EDIT_USAGE);
 }
 ```
 

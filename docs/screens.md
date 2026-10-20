@@ -2,7 +2,7 @@
 
 `pfx_gpu::screens` is what a game needs to look right on a Steam Deck, a 16:9 desktop and an ultrawide: the window mode, which device it runs on, which aspects it supports, where the safe area is, how big its UI should be, and how far to drop the render scale to hold a GPU budget. Everything in it is a pure function or a small value. It opens no window, reads no clock and writes no file. `pfx_live::upscale` is the GPU half: it draws a frame rendered at a lower size into the window, crisply, with the bars and a flat HUD at native resolution.
 
-The window layer underneath (`docs/window.md`) is unchanged in what it does. This module chooses its inputs.
+The window layer underneath (`docs/window.md`) plays the mode; this module chooses its inputs.
 
 ## Window modes
 

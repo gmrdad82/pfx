@@ -137,4 +137,4 @@ The path written goes to stdout and the summary to stderr. [Path-trace a still](
 pfx gui desk.pitofx
 ```
 
-Click the ball, drag the gizmo's arrow, and the recipe inside `desk.pitofx` changes under you; its TOML panel shows the text with syntax highlighting. [Arrange a scene in the window](editor.md) says how.
+Click the ball, drag the gizmo's arrow, and the recipe changes under you, ● after its name until Ctrl+S writes it into `desk.pitofx`; its TOML panel shows the text with syntax highlighting. [Arrange a scene in the window](editor-window.md) says how.

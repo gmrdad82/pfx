@@ -1,3 +1,5 @@
+format = 1
+
 materials = ["materials.toml"]
 fallback = "felt"
 

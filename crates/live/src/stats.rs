@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use pfx_gpu::screens::{Device, SystemSource, detect};
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 pub const ENV: &str = "PFX_FRAME_STATS";
 pub const CHANNEL: usize = 256;
 const KEPT_FRAMES: usize = 16;
@@ -42,6 +42,11 @@ pub struct Sample {
     pub t_ms: f64,
     pub sim_ms: Option<f64>,
     pub submit_ms: f64,
+    pub prepare_ms: Option<f64>,
+    pub encode_ms: f64,
+    pub poll_ms: f64,
+    pub queue_ms: f64,
+    pub wait_ms: Option<f64>,
     pub gpu_ms: Option<f64>,
     pub interval_ms: Option<f64>,
     pub kind: FrameKind,
@@ -82,6 +87,16 @@ impl Line {
         optional(&mut out, sample.sim_ms);
         out.push_str(",\"submit_ms\":");
         number(&mut out, sample.submit_ms);
+        out.push_str(",\"prepare_ms\":");
+        optional(&mut out, sample.prepare_ms);
+        out.push_str(",\"encode_ms\":");
+        number(&mut out, sample.encode_ms);
+        out.push_str(",\"poll_ms\":");
+        number(&mut out, sample.poll_ms);
+        out.push_str(",\"queue_ms\":");
+        number(&mut out, sample.queue_ms);
+        out.push_str(",\"wait_ms\":");
+        optional(&mut out, sample.wait_ms);
         out.push_str(",\"gpu_ms\":");
         optional(&mut out, self.gpu.map(|(_, ms)| ms));
         out.push_str(",\"gpu_tick\":");
@@ -159,6 +174,16 @@ fn write_lines(receiver: Receiver<Message>, mut out: Box<dyn Write + Send>) {
 struct Open {
     begin: Instant,
     kind: FrameKind,
+    prepared: Option<Instant>,
+    poll_ms: f64,
+    queue_ms: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Span {
+    Poll,
+    Queue,
+    Wait,
 }
 
 struct State {
@@ -445,7 +470,68 @@ impl FrameStats {
         if let Some(shared) = &self.shared {
             let mut state = shared.lock();
             state.epoch.get_or_insert(now);
-            state.open = Some(Open { begin: now, kind });
+            state.open = Some(Open {
+                begin: now,
+                kind,
+                prepared: None,
+                poll_ms: 0.0,
+                queue_ms: 0.0,
+            });
+        }
+    }
+
+    pub fn now(&self) -> Option<Instant> {
+        self.shared.as_ref().map(|_| Instant::now())
+    }
+
+    pub fn prepared(&self) {
+        if self.shared.is_some() {
+            self.prepared_at(Instant::now());
+        }
+    }
+
+    pub fn prepared_at(&self, now: Instant) {
+        if let Some(shared) = &self.shared
+            && let Some(open) = shared.lock().open.as_mut()
+        {
+            open.prepared = Some(now);
+        }
+    }
+
+    pub fn span(&self, span: Span, from: Option<Instant>) {
+        if let Some(from) = from {
+            self.span_at(span, from, Instant::now());
+        }
+    }
+
+    pub fn span_at(&self, span: Span, from: Instant, to: Instant) {
+        let Some(shared) = &self.shared else {
+            return;
+        };
+        let ms = millis(from, to);
+        let mut state = shared.lock();
+        match span {
+            Span::Poll => {
+                if let Some(open) = state.open.as_mut() {
+                    open.poll_ms += ms;
+                }
+            }
+            Span::Queue => {
+                if let Some(open) = state.open.as_mut() {
+                    open.queue_ms += ms;
+                }
+            }
+            Span::Wait => {
+                let Some(line) = state.pending.as_mut() else {
+                    return;
+                };
+                let total = line.sample.wait_ms.unwrap_or(0.0) + ms;
+                line.sample.wait_ms = Some(total);
+                let tick = line.sample.tick;
+                if let Some(sample) = state.recent.back_mut().filter(|sample| sample.tick == tick) {
+                    sample.wait_ms = Some(total);
+                }
+            }
         }
     }
 
@@ -482,11 +568,19 @@ impl FrameStats {
         while state.ticks.len() > KEPT_FRAMES {
             state.ticks.pop_front();
         }
+        let submit_ms = millis(open.begin, now);
+        let prepare_ms = open.prepared.map(|prepared| millis(open.begin, prepared));
         let sample = Sample {
             tick,
             t_ms: millis(epoch, open.begin),
             sim_ms,
-            submit_ms: millis(open.begin, now),
+            submit_ms,
+            prepare_ms,
+            encode_ms: (submit_ms - prepare_ms.unwrap_or(0.0) - open.poll_ms - open.queue_ms)
+                .max(0.0),
+            poll_ms: open.poll_ms,
+            queue_ms: open.queue_ms,
+            wait_ms: None,
             gpu_ms: None,
             interval_ms,
             kind: open.kind,
@@ -610,7 +704,7 @@ mod tests {
         let lines = sink.lines();
         assert_eq!(lines.len(), 5);
         for (index, line) in lines[..4].iter().enumerate() {
-            assert_eq!(line["schema_version"], 1);
+            assert_eq!(line["schema_version"], 2);
             assert_eq!(line["tick"], index as u64);
             assert_eq!(line["size"], serde_json::json!([1280, 800]));
             assert!(line["device"].is_null());
@@ -632,7 +726,40 @@ mod tests {
         assert_eq!(lines[3]["present_interval_ms"], 17.0);
         assert_eq!(
             lines[4],
-            serde_json::json!({"schema_version": 1, "end": true, "frames": 4, "dropped": 0})
+            serde_json::json!({"schema_version": 2, "end": true, "frames": 4, "dropped": 0})
+        );
+    }
+
+    #[test]
+    fn submit_time_splits_into_prepare_encode_poll_and_queue_and_waits_land_on_the_frame() {
+        let sink = Sink::default();
+        let stats = FrameStats::to_writer(Box::new(sink.clone()), 16);
+        let base = Instant::now();
+        stats.begin_at(FrameKind::Full, ms(base, 0));
+        stats.prepared_at(ms(base, 1));
+        stats.span_at(Span::Poll, ms(base, 2), ms(base, 3));
+        stats.span_at(Span::Queue, ms(base, 4), ms(base, 6));
+        stats.submitted_at(0, [1280, 800], ms(base, 7));
+        stats.span_at(Span::Wait, ms(base, 8), ms(base, 12));
+        stats.begin_at(FrameKind::Full, ms(base, 17));
+        stats.submitted_at(1, [1280, 800], ms(base, 19));
+        stats.finish();
+        let lines = sink.lines();
+        assert_eq!(lines[0]["submit_ms"], 7.0);
+        assert_eq!(lines[0]["prepare_ms"], 1.0);
+        assert_eq!(lines[0]["encode_ms"], 3.0);
+        assert_eq!(lines[0]["poll_ms"], 1.0);
+        assert_eq!(lines[0]["queue_ms"], 2.0);
+        assert_eq!(lines[0]["wait_ms"], 4.0);
+        assert!(lines[1]["prepare_ms"].is_null());
+        assert_eq!(lines[1]["encode_ms"], 2.0);
+        assert_eq!(lines[1]["poll_ms"], 0.0);
+        assert!(lines[1]["wait_ms"].is_null());
+        let text = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+        let first = text.lines().next().unwrap();
+        assert!(
+            first.contains(",\"submit_ms\":7.000,\"prepare_ms\":1.000,\"encode_ms\":3.000,\"poll_ms\":1.000,\"queue_ms\":2.000,\"wait_ms\":4.000,\"gpu_ms\":"),
+            "{first}"
         );
     }
 

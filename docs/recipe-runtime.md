@@ -1,6 +1,6 @@
 # The recipe runtime loader
 
-`pfx-runtime` (`pfx_runtime` on the facade) is what an app or game links to read and draw pfx's output. Its load half turns a GLB and its sidecar into a `Scene` of plain data. pfx reads its own `facts` dialect ; an app passes a reader for the keys its writer stored. It reads the GLB through `pfx_load::Mesh` and never touches wgpu. Its raster half (below) turns that `Scene` into the engine's live instances, lights and content, with every look-specific value a parameter of the caller's. It stays a library: no job record, no crash reporter, no window, no clock.
+`pfx-runtime` (`pfx_runtime`) is what an app or game links to read and draw pfx's output. Its load half turns a GLB and its sidecar into a `Scene` of plain data. pfx reads its own `facts` dialect ; an app passes a reader for the keys its writer stored. It reads the GLB through `pfx_load::Mesh` and never touches wgpu. Its raster half (below) turns that `Scene` into the engine's live instances, lights and content, with every look-specific value a parameter of the caller's. It stays a library: no job record, no crash reporter, no window, no clock.
 
 ## Calls
 
@@ -77,4 +77,4 @@ raster.draw(time, &view)?;
 
 The app keeps its material lookup with its fallback, its lighting constants (tree, bird, steam, motes), its content painter, its look and post chain, the names that keep their reflection, its near and far planes, its baked files and their layout. `tests/raster.rs` is such a caller as test code (`tests/caller/mod.rs`): a small hand-built scene plans its instances, surfaces, sky and light; a scene without movers, content or detail parts gives plain instances; the caller's painter dresses its slots; a pick reads the object plus one and falls back to the caller's picker.
 
-Parity against an app's own renderer is the app's to prove now, with its own scenes and its own call site.
+Parity against an app's own renderer is the app's to prove, with its own scenes and its own call site.

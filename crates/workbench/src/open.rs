@@ -42,7 +42,7 @@ impl Purpose {
         match self {
             Purpose::Open => "OPEN",
             Purpose::Import => "IMPORT GLTF",
-            Purpose::SaveAs => "SAVE AS .PFX",
+            Purpose::SaveAs => "SAVE AS .PITOFX",
             Purpose::Export => "EXPORT GLTF",
         }
     }
@@ -69,7 +69,7 @@ impl Purpose {
         path.is_file()
             && visible_name(path).is_some()
             && match self {
-                Purpose::Open => kind.is_some() || pfx_file::is_legacy_path(path),
+                Purpose::Open => kind.is_some(),
                 Purpose::Import | Purpose::Export => kind == Some(crate::file::Kind::Glb),
                 Purpose::SaveAs => kind == Some(crate::file::Kind::Pfx),
             }
@@ -105,49 +105,10 @@ impl Thumbs {
     }
 }
 
-pub fn state_dir() -> PathBuf {
-    own_dir("XDG_STATE_HOME", state_dir_from)
-}
-
-fn own_dir(xdg: &str, linux: fn(Option<&OsStr>, Option<&OsStr>) -> PathBuf) -> PathBuf {
-    let home = home();
-    if cfg!(windows) {
-        if let Some(local) = std::env::var_os("LOCALAPPDATA").filter(|dir| !dir.is_empty()) {
-            return PathBuf::from(local).join("pfx");
-        }
-    } else if cfg!(target_os = "macos")
-        && let Some(home) = &home
-    {
-        return PathBuf::from(home).join("Library/Application Support/pfx");
-    }
-    linux(std::env::var_os(xdg).as_deref(), home.as_deref())
-}
-
-fn home() -> Option<std::ffi::OsString> {
-    std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .or_else(|| std::env::var_os("USERPROFILE").filter(|home| !home.is_empty()))
-}
-
-pub fn state_dir_from(xdg: Option<&OsStr>, home: Option<&OsStr>) -> PathBuf {
-    match xdg {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("pfx"),
-        _ => home
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".local/state/pfx"),
-    }
-}
-
-pub fn data_dir_from(xdg: Option<&OsStr>, home: Option<&OsStr>) -> PathBuf {
-    match xdg {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("pfx"),
-        _ => home
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".local/share/pfx"),
-    }
-}
+#[cfg(test)]
+use pfx_settings::dirs::state_dir_from;
+pub use pfx_settings::dirs::{data_dir_from, state_dir};
+use pfx_settings::dirs::{home, own_dir};
 
 pub fn installed_samples() -> PathBuf {
     own_dir("XDG_DATA_HOME", data_dir_from).join("samples")
@@ -436,11 +397,7 @@ impl Book {
     fn settings(&self) -> toml_edit::DocumentMut {
         self.path
             .as_ref()
-            .and_then(|path| {
-                pfx_file::Reader::open(path).ok().or_else(|| {
-                    pfx_file::Reader::open(path.with_extension(pfx_file::LEGACY_EXTENSION)).ok()
-                })
-            })
+            .and_then(|path| pfx_file::Reader::open(path).ok())
             .and_then(|reader| {
                 reader
                     .named(pfx_file::FILE, SETTINGS_TOML)
@@ -533,6 +490,49 @@ impl Book {
         settings["view"] = toml_edit::Item::Table(view);
         self.keep(&settings)
     }
+
+    pub fn store(&self) -> pfx_settings::Store {
+        self.path
+            .clone()
+            .map_or_else(pfx_settings::Store::none, pfx_settings::Store::at)
+    }
+
+    pub fn preferences(&self) -> pfx_settings::Preferences {
+        self.store().preferences()
+    }
+
+    pub fn keep_preferences(&self, preferences: &pfx_settings::Preferences) -> std::io::Result<()> {
+        self.store().keep_preferences(preferences)
+    }
+
+    pub fn view_scale(&self) -> crate::scale::ViewScale {
+        self.settings()
+            .get("display")
+            .and_then(toml_edit::Item::as_table_like)
+            .and_then(|display| display.get("render_scale"))
+            .and_then(toml_edit::Item::as_str)
+            .and_then(crate::scale::ViewScale::parse)
+            .unwrap_or_default()
+    }
+
+    pub fn keep_view_scale(&self, scale: crate::scale::ViewScale) -> std::io::Result<()> {
+        if self.path.is_none() {
+            return Ok(());
+        }
+        let mut settings = self.settings();
+        let mut display = display_table(&settings);
+        display["render_scale"] = toml_edit::value(scale.name());
+        settings["display"] = toml_edit::Item::Table(display);
+        self.keep(&settings)
+    }
+}
+
+fn display_table(settings: &toml_edit::DocumentMut) -> toml_edit::Table {
+    settings
+        .get("display")
+        .and_then(toml_edit::Item::as_table)
+        .cloned()
+        .unwrap_or_default()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1221,6 +1221,54 @@ mod tests {
             ..crate::wire::Look::default()
         })
         .unwrap();
+        assert!(book.view().xray);
+        assert_eq!(book.preferences(), pfx_settings::Preferences::default());
+        let chosen = pfx_settings::Preferences {
+            vrr: false,
+            frame_rate: Some(pfx_settings::Rate::Cap60),
+            ..pfx_settings::Preferences::default()
+        };
+        assert!(!book.preferences().stats);
+        let shown = pfx_settings::Preferences {
+            stats: true,
+            ..chosen
+        };
+        book.keep_preferences(&shown).unwrap();
+        assert_eq!(book.preferences(), shown);
+        assert_eq!(
+            book.preferences().present(),
+            pfx_editor_shell::Present {
+                vrr: false,
+                frame_rate: pfx_editor_shell::FrameRate::Cap60,
+            }
+        );
+        let fast = pfx_settings::Preferences {
+            vrr: true,
+            frame_rate: Some(pfx_settings::Rate::Cap120),
+            ..book.preferences()
+        };
+        book.keep_preferences(&fast).unwrap();
+        assert!(book.preferences().stats);
+        book.keep_view_scale(crate::scale::ViewScale::Percent(75))
+            .unwrap();
+        assert!(book.preferences().stats);
+        let hidden = pfx_settings::Preferences {
+            stats: false,
+            ..book.preferences()
+        };
+        book.keep_preferences(&hidden).unwrap();
+        assert!(!book.preferences().stats);
+        assert_eq!(book.preferences().rate(), pfx_settings::Rate::Cap120);
+        assert_eq!(book.view_scale(), crate::scale::ViewScale::Percent(75));
+        let auto = pfx_settings::Preferences {
+            frame_rate: Some(pfx_settings::Rate::Auto),
+            ..book.preferences()
+        };
+        book.keep_preferences(&auto).unwrap();
+        assert_eq!(
+            book.preferences().present().frame_rate,
+            pfx_editor_shell::FrameRate::Auto
+        );
         assert!(book.view().xray);
         assert_eq!(book.list().len(), LIMIT);
     }

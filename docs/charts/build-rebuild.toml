@@ -1,0 +1,10 @@
+title = "REBUILD AFTER AN EDIT"
+unit = "SECONDS"
+better = "lower"
+subtitle = "RYZEN 9 9950X, RUST 1.97.1, LINUX"
+date = "2026-10-20"
+suffix = " S"
+decimals = 2
+notes = ["THE SAME TWO GAMES, CARGO BUILD --RELEASE AFTER MAIN.RS IS TOUCHED, SO ONLY THE GAME'S OWN CRATE COMPILES AND LINKS AGAIN. MEDIAN OF 5."]
+parties = [{ name = "PFX 3.1.1" }, { name = "BEVY 0.20.0" }]
+rows = [{ label = "RELEASE REBUILD", values = [0.96, 1.63] }]

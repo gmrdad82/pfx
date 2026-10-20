@@ -9,9 +9,11 @@ pub use sidecars::{
     FACTS, SidecarWriter, facts, grade_json, merge, mover_json, room_json, sidecar_text,
 };
 pub use writer::{
-    Content, ENGINE_MATERIAL, write, write_animated, write_looks, write_tree, write_with_extras,
+    Content, ENGINE_MATERIAL, MORPH_EPSILON, write, write_animated, write_looks, write_tree,
+    write_with_extras,
 };
 
+#[doc(no_inline)]
 pub use glam::DMat4;
 use pfx_mesh::{Mesh, Morph};
 pub use pfx_motion::{Rate, Trs};

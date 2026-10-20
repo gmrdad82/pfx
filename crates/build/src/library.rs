@@ -932,9 +932,14 @@ pub(crate) fn file_materials(bytes: &[u8]) -> BTreeMap<String, Value> {
 }
 
 pub(crate) fn keep_looks(looks: &mut Looks, bytes: &[u8], used: impl Fn(&str) -> bool) {
+    let ours = file_json(bytes)
+        .as_ref()
+        .and_then(|json| json.pointer("/asset/generator"))
+        .and_then(Value::as_str)
+        .is_some_and(|generator| generator.starts_with(crate::GENERATOR));
     let sides = each_material(bytes, |m| m.get("doubleSided").and_then(Value::as_bool));
     for (name, two) in sides {
-        if used(&name) {
+        if used(&name) && !(ours && two) {
             looks.entry(name).or_default().double_sided = Some(two);
         }
     }
@@ -1227,6 +1232,7 @@ pub(crate) struct Imported {
     pub tree: Tree,
     pub clips: Vec<(String, Vec<DMat4>)>,
     pub hidden: BTreeSet<String>,
+    pub still: BTreeSet<String>,
     pub pieces: crate::pieces::Found,
 }
 
@@ -1565,6 +1571,7 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
     let mut rules = Rules::new(object);
     let mut steps = Vec::new();
     let mut hidden = BTreeSet::new();
+    let mut still = BTreeSet::new();
     while let Some((n, parent)) = stack.pop() {
         if visited
             .get_mut(n.index())
@@ -1637,6 +1644,18 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
             if choice.hidden {
                 hidden.insert(full.clone());
             }
+            if choice.still && skinned {
+                return Err(fail(
+                    object,
+                    "pieces",
+                    format!(
+                        "{reference}: the node `{node}` is skinned, so its skin poses it and `spin = false` cannot hold it still"
+                    ),
+                ));
+            }
+            if choice.still {
+                still.insert(full.clone());
+            }
             rules.source(&steps, steps.len() - 1, &full);
             piece = Some(full.clone());
             pieces.push(Piece { name: full, mesh });
@@ -1690,6 +1709,7 @@ pub(crate) fn import(recipe: &Recipe, object: &Object, base: &Path) -> Result<Im
         tree,
         clips,
         hidden,
+        still,
         pieces: found_pieces,
     })
 }

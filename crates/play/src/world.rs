@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -440,6 +441,7 @@ pub struct World {
     focus: Focus,
     scheme: Option<Scheme>,
     clipboard: Option<Box<dyn Clipboard>>,
+    redraw: Cell<bool>,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -666,6 +668,7 @@ impl World {
             scheme: None,
             clipboard: None,
             warp: None,
+            redraw: Cell::new(false),
             scene,
         };
         world.physics.refresh_queries();
@@ -993,6 +996,14 @@ impl World {
 
     pub fn take_warp(&mut self) -> Option<[f32; 2]> {
         self.warp.take()
+    }
+
+    pub fn request_frame(&self) {
+        self.redraw.set(true);
+    }
+
+    pub fn take_frame_request(&self) -> bool {
+        self.redraw.replace(false)
     }
 
     pub fn rumble(&mut self, rumble: Rumble) {

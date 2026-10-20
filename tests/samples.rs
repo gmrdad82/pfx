@@ -48,7 +48,12 @@ fn name(path: &Path) -> String {
 #[test]
 fn the_sample_folder_holds_the_scenes() {
     let names: Vec<String> = recipes().iter().map(|path| name(path)).collect();
-    for scene in ["figurine.pitofx", "gallery.pitofx", "workshop.pitofx"] {
+    for scene in [
+        "courtyard.pitofx",
+        "figurine.pitofx",
+        "gallery.pitofx",
+        "workshop.pitofx",
+    ] {
         assert!(
             names.iter().any(|found| found == scene),
             "{scene}: {names:?}"
@@ -88,6 +93,7 @@ fn every_sample_scene_has_its_cameras() {
     let wanted = [
         ("workshop.pitofx", &["hero", "top", "detail", "orbit"][..]),
         ("gallery.pitofx", &["flat", "angle"][..]),
+        ("courtyard.pitofx", &["chase", "hero"][..]),
     ];
     for (file, cameras) in wanted {
         let loaded = load(&root().join("samples").join(file)).unwrap();

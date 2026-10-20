@@ -143,8 +143,8 @@ mod tests {
             "cannot read \"m.glb\" (n.glb)."
         );
         assert_eq!(
-            text("kept as ~/m/a.pfx; 1/2 W/m² a / b"),
-            "kept as a.pfx; 1/2 W/m² a / b"
+            text("kept as ~/m/a.pitofx; 1/2 W/m² a / b"),
+            "kept as a.pitofx; 1/2 W/m² a / b"
         );
     }
 }

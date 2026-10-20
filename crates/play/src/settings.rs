@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use pfx_gpu::screens::DisplaySettings;
-use pfx_gpu::window::{FrameCap, FrameCaps};
+use pfx_gpu::window::{FrameRate, Present};
 use pfx_input::BindingMap;
 use pfx_sound::{ChannelId, Mixer};
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,7 @@ pub struct Settings {
     pub display: DisplaySettings,
     pub pacing: Pacing,
     pub audio: Audio,
+    pub graphics: pfx_settings::Graphics,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binds: Option<BindingMap>,
 }
@@ -24,45 +25,8 @@ impl Default for Settings {
             display: DisplaySettings::default(),
             pacing: Pacing::default(),
             audio: Audio::default(),
+            graphics: pfx_settings::Graphics::default(),
             binds: None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Cap {
-    #[serde(rename = "30")]
-    Fps30,
-    #[serde(rename = "60")]
-    Fps60,
-    #[serde(rename = "90")]
-    Fps90,
-    #[serde(rename = "120")]
-    Fps120,
-    #[serde(rename = "uncapped")]
-    Uncapped,
-}
-
-impl Cap {
-    pub fn frame_cap(self) -> FrameCap {
-        match self {
-            Cap::Fps30 => FrameCap::Fps30,
-            Cap::Fps60 => FrameCap::Fps60,
-            Cap::Fps90 => FrameCap::Fps90,
-            Cap::Fps120 => FrameCap::Fps120,
-            Cap::Uncapped => FrameCap::Uncapped,
-        }
-    }
-}
-
-impl From<FrameCap> for Cap {
-    fn from(cap: FrameCap) -> Self {
-        match cap {
-            FrameCap::Fps30 => Cap::Fps30,
-            FrameCap::Fps60 => Cap::Fps60,
-            FrameCap::Fps90 => Cap::Fps90,
-            FrameCap::Fps120 => Cap::Fps120,
-            FrameCap::Uncapped => Cap::Uncapped,
         }
     }
 }
@@ -70,28 +34,27 @@ impl From<FrameCap> for Cap {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Pacing {
-    pub focused: Cap,
-    pub background: Cap,
     pub vrr: bool,
+    pub frame_rate: FrameRate,
     pub pause_when_minimized: bool,
 }
 
 impl Default for Pacing {
     fn default() -> Self {
+        let present = Present::default();
         Self {
-            focused: Cap::Fps60,
-            background: Cap::Fps30,
-            vrr: false,
+            vrr: present.vrr,
+            frame_rate: present.frame_rate,
             pause_when_minimized: true,
         }
     }
 }
 
 impl Pacing {
-    pub fn caps(&self) -> FrameCaps {
-        FrameCaps {
-            pause_when_minimized: self.pause_when_minimized,
-            ..FrameCaps::new(self.focused.frame_cap(), self.background.frame_cap())
+    pub fn present(&self) -> Present {
+        Present {
+            vrr: self.vrr,
+            frame_rate: self.frame_rate,
         }
     }
 }
@@ -142,5 +105,48 @@ impl Audio {
         for (channel, volume) in self.channels() {
             mixer.set_channel_volume(channel, volume);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pacing_is_two_switches_and_older_cap_keys_still_load() {
+        let fresh = Settings::default().pacing;
+        assert!(fresh.vrr);
+        assert_eq!(fresh.frame_rate, FrameRate::Uncapped);
+        let older: Settings = toml::from_str(
+            "[pacing]\nfocused = \"60\"\nbackground = \"30\"\nvrr = false\npause_when_minimized = false\n",
+        )
+        .unwrap();
+        assert_eq!(
+            older.pacing,
+            Pacing {
+                vrr: false,
+                frame_rate: FrameRate::Uncapped,
+                pause_when_minimized: false,
+            }
+        );
+        let capped: Settings = toml::from_str("[pacing]\nframe_rate = \"cap60\"\n").unwrap();
+        assert_eq!(
+            capped.pacing.present(),
+            Present {
+                vrr: true,
+                frame_rate: FrameRate::Cap60,
+            }
+        );
+        let fast: Settings =
+            toml::from_str("[pacing]\nvrr = false\nframe_rate = \"cap120\"\n").unwrap();
+        assert_eq!(
+            fast.pacing.present(),
+            Present {
+                vrr: false,
+                frame_rate: FrameRate::Cap120,
+            }
+        );
+        let auto: Settings = toml::from_str("[pacing]\nframe_rate = \"auto\"\n").unwrap();
+        assert_eq!(auto.pacing.present().frame_rate, FrameRate::Auto);
     }
 }

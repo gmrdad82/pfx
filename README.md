@@ -4,6 +4,8 @@
 
 [![Version](https://img.shields.io/github/v/tag/gmrdad82/pfx)](https://github.com/gmrdad82/pfx/tags)
 
+pfx: got questions or doubts? [Ping me on Discord](https://discord.gg/XsNcn3kYzn)
+
 pfx is a game and render engine in Rust, part of [PITO MD](https://pitomd.com). It draws scenes live at 4K, path-traces stills and clips with its own denoiser, builds scenes from recipes, edits them in its own editor, plays them with a game's WebAssembly module, and runs the physics, sound, input and Steam a game needs. It is one tool, `pfx`, and a set of library crates a game links. It is built to be fast, light and simple, and every number below was measured on this repository's code.
 
 | | Measured | Source |
@@ -15,9 +17,21 @@ pfx is a game and render engine in Rust, part of [PITO MD](https://pitomd.com). 
 | Live ambient occlusion and contact shadows, 4K, `high` | **2.72 ms** GPU a frame | [live-renderer.md](docs/live-renderer.md#ambient-occlusion-and-contact-shadows) |
 | Denoiser, 4K, texture to texture | **274 ms** on the GPU | [denoise.md](docs/denoise.md#speed) |
 | `.pitofx` file, car-sized model (159,200 triangles) | **3.4 ms** warm, 7.9 ms cold, at half the GLB's size | [pfx-file.md](docs/pfx-file.md#load-time) |
-| Empty game, stripped release binary (v0.32.0) | **34.7 MB** against Bevy's 106.6 MB | [measured.md](docs/measured.md#size) |
+| Empty game, stripped, no editor (v3.1.0) | **29.1 MB** against Godot 4.7.2's 73.5 MB and Bevy's 106.6 MB | [measured.md](docs/measured.md#size-of-an-empty-game) |
+| Editor, first frame with warm shader caches | **0.52 s** against Godot's 2.18 s, idling at 0.05 % CPU | [measured.md](docs/measured.md#start-up-idle-and-memory) |
+| Empty game at rest, drawing frames on demand | **1.05 %** CPU and no GPU time against Godot 4.7.2's 4.10 % and 0.94 % | [measured.md](docs/measured.md#start-up-idle-and-memory) |
+| Clean release build of an empty game | **87.4 s** against Bevy 0.20.0's 180.4 s | [measured.md](docs/measured.md#build-a-game-from-source-with-bevy) |
+| Change a value from the command line | **63 ms** against Godot's 2.34 s | [measured.md](docs/measured.md#edit-from-the-command-line) |
+| Import a 6.8 MB glTF from the command line | **46 ms** against Godot's 2.48 s | [measured.md](docs/measured.md#import-a-gltf) |
+| Live frame of a 6.8 MB glTF street at 1280×720, effects matched to Godot's defaults | **0.301 ms** GPU at p50 against Godot 4.7.2's 0.477 ms; 0.632 ms at pfx's own defaults | [measured.md](docs/measured.md#frame-time-on-a-matched-scene) |
 
-How and when each was measured is on its page.
+<p align="center">
+<img src="docs/images/editor-idle-cpu.png" width="32%" alt="Bar chart, the editor's idle CPU on an empty project in percent of one thread, lower is better: pfx 0.05, Godot 4.7.2 3.20, 64 times less.">
+<img src="docs/images/gltf-import.png" width="32%" alt="Bar chart, importing a 6.8 MB glTF from the command line in milliseconds, lower is better: pfx 46, Godot 4.7.2 2,479.">
+<img src="docs/images/editor-memory.png" width="32%" alt="Bar chart, the editor's resident memory on an empty project in megabytes, lower is better: pfx 180, Godot 4.7.2 1,064.">
+</p>
+
+How and when each was measured is on its page, with every head-to-head against Godot, Bevy and Blender, the losses included, under [Against other engines](docs/measured.md#against-other-engines).
 
 ## Install and first use
 
@@ -39,7 +53,7 @@ cargo run --release
 cargo run --release -- edit
 ```
 
-<p align="center"><img src="docs/images/new.gif" width="800" alt="A terminal: pfx --version prints pfx 3.0.1; git init and pfx new demo scaffold a game of 15 files; ls shows AGENTS.md, CLAUDE.md, Cargo.toml, content, project.toml, prompts, src and tests, and content holds first.pitofx, fonts and meshes; pfx bench plays content/first.pitofx headless for 3 seconds at 1920x1080 and prints 180 frames, 0 dropped and GPU frame times under a millisecond."></p>
+<p align="center"><img src="docs/images/new.gif" width="800" alt="A terminal: pfx --version prints pfx 3.1.1; git init and pfx new demo scaffold a game of 18 files and set git to show its .pitofx diffs as TOML; ls shows AGENTS.md, CLAUDE.md, Cargo.toml, README.md, build.rs, content, project.toml, prompts, src and tests, and content holds first.pitofx, fonts and meshes; pfx bench plays demo/content/first.pitofx headless for 3 seconds and prints 180 frames, 0 dropped and GPU frame times under half a millisecond, held on screen."></p>
 
 A game links the crates it uses by the same tag, on Linux, Windows and macOS:
 
@@ -55,7 +69,11 @@ A `.pitofx` is pfx's own file for scenes, recipes and models: TOML inside, in pf
 
 People edit a `.pitofx` in the editor's inspector or its built-in TOML editor, with syntax highlighting; scripts and agents edit it through the CLI verbs (`set` and `get` by dotted key, `key`, `add`, `remove` and the rest), which write the edit and a fresh build back into the `.pitofx` in one atomic replace. Other tools exchange glTF with pfx (`pfx import`, `pfx export`), never `.pitofx`.
 
-`pfx scene print <file.pitofx>` shows a document's TOML, and `pfx scene write` replaces it from stdin. A plain `.toml` recipe or scene, or a `.pfx` from an older release (magic `PFXFILE`), is imported once into a `.pitofx` beside it with `pfx scene migrate`, or by opening it in the window; every other command refuses it and names that command.
+`pfx scene print <file.pitofx>` shows a document's TOML, and `pfx scene write` replaces it from stdin. A recipe or scene written as plain `.toml` is imported once into a `.pitofx` beside it with `pfx scene migrate`, or by opening it in the window; every other command refuses it and names that command.
+
+<p align="center"><img src="docs/images/git.gif" width="800" alt="A terminal: git init a repository, pfx new street.pitofx --from street writes a starter recipe and git add stages it; pfx set street.pitofx sun.hour=7.5 changes one value; git diff prints only Binary files differ; pfx git setup writes the .gitattributes line and the repository's textconv driver; git diff again prints the change as TOML, the recipe's hash in the metadata and the one line hour = 19.13 becoming hour = 7.5."></p>
+
+**In git.** git sees a `.pitofx` as binary and prints `Binary files differ`. `pfx git setup`, run once in a repository, adds `*.pitofx diff=pitofx` to its `.gitattributes` and sets the repository's own git config to read a `.pitofx` through `pfx scene print --all`, so `git diff`, `git log -p` and `git show` print a document's change as TOML lines. `pfx new` does the same in the game it scaffolds ([docs/git.md](docs/git.md)).
 
 ## The renderers
 
@@ -71,7 +89,7 @@ People edit a `.pitofx` in the editor's inspector or its built-in TOML editor, w
 
 <p align="center"><img src="docs/images/editor.png" width="800" alt="pfx gui on the workshop sample, samples/workshop.pitofx, with the vase selected: the outliner on the left lists its 19 objects with their materials, over the cameras and the lights and sky with an hour slider; the viewport in the middle shows a teal case with the pfx mark, a peach vase under the move gizmo, a glass jar, a chrome ball, a brass ring, a pill and a cable on a tiled bench, with the axes and a scale bar in the corner; the properties panel on the right shows the vase's name, location, rotation, scale, material and smoothing, and the render panel its camera, size and samples; Play, Stop and the module chip sit under the viewport, the key hints and the status line along the bottom."></p>
 
-`pfx gui` opens a `.pitofx` document, a scene or a project folder in pfx's editor: an outliner, the live viewport with gizmos and picking, the cameras, the lights and sky, a properties inspector, a render panel, a TOML panel with highlighting and checks at line and column, a log and a traced preview, on one undo history ([docs/editor.md](docs/editor.md)). Its theme is black with thin, wide-tracked uppercase titles, a lime accent for what is live, violet for hover and highlights, inset cards and numbered panel markers.
+`pfx gui` opens a `.pitofx` document, a scene or a project folder in pfx's editor: an outliner, the live viewport with gizmos and picking, the cameras, the lights and sky, a properties inspector, a render panel, a TOML panel with highlighting and checks at line and column, a log and a traced preview, on one undo history ([docs/editor.md](docs/editor.md)). F3 shows the frame stats over the viewport: fps, the frame intervals' p50, p99 and max, the GPU time per pass, the render scale, VRR and the frame-rate target ([docs/frame-stats.md](docs/frame-stats.md#stats-in-the-editor)). Its theme is black with thin, wide-tracked uppercase titles, a lime accent for what is live, violet for hover and highlights, inset cards and numbered panel markers.
 
 **Play** (F5) runs the open scene as a game in the viewport, and Stop (F8) puts the editor back exactly where it was. With a game's WebAssembly module (`--play <module.wasm>`, the scene's `[play] module`, or a `.wasm` dropped on the window) the game's logic runs in pfx-mod's sandbox, metered and deterministic; the logic stays in the game's own repository ([docs/play-modules.md](docs/play-modules.md)).
 
@@ -83,7 +101,7 @@ People edit a `.pitofx` in the editor's inspector or its built-in TOML editor, w
 | `pfx`, `pfx <file.pitofx>`, `pfx gui [<path>]` | the editor, with `--play <module.wasm>` |
 | `pfx build`, `check`, `timeline` | build a recipe headless into a GLB and a scene, the same bytes on every OS ([docs/recipes.md](docs/recipes.md)) |
 | `pfx set`, `get`, `key`, `unkey`, `curve`, `route`, `add`, `remove`, `duplicate` | edit a recipe or a `.pitofx`: values by dotted key, keys, curves, routes and objects |
-| `pfx scene list`, `print`, `write`, `save`, `fold`, `migrate`, `fix` | read and write a document's TOML, import `.toml` and legacy `.pfx` files |
+| `pfx scene list`, `print`, `write`, `save`, `fold`, `migrate`, `fix` | read and write a document's TOML, import `.toml` recipes and scenes |
 | `pfx asset search`, `get`, `list`; `pfx credits <scene>` | find and fetch CC0 and account assets with their licences checked, and list a scene's credits ([docs/asset-sources.md](docs/asset-sources.md)) |
 | `pfx import`, `export`, `diff`, `library`, `align` | glTF in and out, GLB diffs, the object library, aligning objects |
 | `pfx render --recipe <recipe>`, `pfx shot <recipe> --still` | a path-traced still; a live still |
@@ -92,9 +110,20 @@ People edit a `.pitofx` in the editor's inspector or its built-in TOML editor, w
 | `pfx sound clean <in.wav> <out.wav>`, `pfx sound mix <script>` | clean a field recording; render a shot's mix script to a WAV ([docs/sound.md](docs/sound.md)) |
 | `pfx bench <scene.pitofx> --seconds N` | a repeatable headless load with frame stats ([docs/benchmark-a-scene.md](docs/benchmark-a-scene.md)) |
 | `pfx bake --scene <dir>` | path-traced probes, lightmaps and plates |
+| `pfx job start`, `status`, `pause`, `stop`, `resume` | run a long clip, film, render or bake detached, and carry it on from its last finished frame ([docs/jobs.md](docs/jobs.md)) |
+| `pfx git setup` | make `git diff` show a `.pitofx` as its TOML ([docs/git.md](docs/git.md)) |
 | `pfx steam stage --manifest <steam.toml>` | Steam build scripts and depots ([docs/steam.md](docs/steam.md)) |
 
 `pfx --help` lists every command, and `pfx <command> --help` prints its flags.
+
+### For agents and scripts
+
+<p align="center"><img src="docs/images/edit.gif" width="800" alt="A terminal: pfx new writes street.pitofx and a copy is kept as before.pitofx; pfx set street.pitofx sun.hour=7.5 timeline.seconds=6 prints each change with its old value and check: ok; pfx set sun.hour=31 is refused in one line, the file left as it was; diff of pfx scene print before and after shows the two changed TOML lines; pfx build street.pitofx writes out/street.glb, 6.2 MB."></p>
+
+- **Edits are commands.** What the editor writes into a recipe, a script or an agent writes with `pfx set`, `add`, `remove`, `duplicate`, `key`, `route` and `curve`; each checks the document and refuses in one line, leaving the file as it was. [docs/cli-coverage.md](docs/cli-coverage.md) lists every editor action with its command, and the ones that are not a command today.
+- **Readable output.** Most commands print one JSON object with `--json`; a refusal is one line on stderr with exit 1.
+- **Reviewable in git.** `pfx git setup` makes `git diff` show a `.pitofx` edit as its TOML lines ([docs/git.md](docs/git.md)).
+- **Long renders survive a kill.** `pfx job` runs a traced clip detached and carries on from its last finished frame after a stop, a crash or a reboot, with the same bytes as an uninterrupted run ([docs/jobs.md](docs/jobs.md)).
 
 ## The rest of a game
 
@@ -154,8 +183,16 @@ bin/gate
 
 ## Contributing
 
-Issues and pull requests are welcome at [github.com/gmrdad82/pfx](https://github.com/gmrdad82/pfx). Keep `bin/gate` green, keep game-specific names, values and assets out of the engine ([docs/agnostic.md](docs/agnostic.md)), and follow the [code of conduct](CODE_OF_CONDUCT.md). Report a vulnerability privately, as [SECURITY.md](SECURITY.md) says.
+Issues and pull requests are welcome at [github.com/gmrdad82/pfx](https://github.com/gmrdad82/pfx). A pull request is merged only once its author has signed the [Contributor Licence Agreement](CLA.md); [CONTRIBUTING.md](CONTRIBUTING.md) says how, and what a change needs. Follow the [code of conduct](CODE_OF_CONDUCT.md). Report a vulnerability privately, as [SECURITY.md](SECURITY.md) says.
 
 ## Licence
 
-The code is MIT licensed, © Catalin Ilinca ([LICENSE](LICENSE)); ported code and fonts keep their own notices ([NOTICE.md](NOTICE.md)). The PITO MD name, every app and game name and their logos are not covered by it: all rights reserved ([TRADEMARKS.md](TRADEMARKS.md)).
+Copyright (c) 2026 Catalin Ilinca.
+
+pfx is free software under the GNU Affero General Public License, version 3 only ([LICENSE](LICENSE)): use it, study it, change it and share it for open-source projects, learning and hobby work, as that licence allows. A closed product or service built on pfx, one that does not publish its own source under the AGPL-3.0, needs a commercial licence: [pitomd.com/pfx/license](https://pitomd.com/pfx/license). Versions up to 3.1.1 were released under the MIT licence and stay under it as published.
+
+The AGPL-3.0 and the commercial licence cover the code only: the pfx and PITO MD names, every app and game name and their logos are © Catalin Ilinca, all rights reserved ([TRADEMARKS.md](TRADEMARKS.md)). Ported code and fonts keep their own notices ([NOTICE.md](NOTICE.md)).
+
+To credit pfx, a game or app built on it shows the Powered by lockup: `assets/marks/powered-by.svg` on a dark ground, `powered-by-light.svg` on a light one, and PNGs of each 64 and 128 px tall beside them. pfx's start-up splash draws it, `pfx new` puts its PNGs and this credit in a new game's README, and `pfx steam stage` writes its PNGs beside the depots.
+
+<picture><source media="(prefers-color-scheme: dark)" srcset="assets/marks/powered-by-128.png"><img src="assets/marks/powered-by-light-128.png" height="64" alt="Powered by pfx"></picture>

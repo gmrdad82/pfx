@@ -220,6 +220,7 @@ pub struct PieceRule {
     pub select: String,
     pub material: Option<String>,
     pub hidden: Option<bool>,
+    pub spin: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -235,10 +236,14 @@ pub struct Lod {
     pub bake_normals: bool,
     pub normal_size: u32,
     pub bake_distance: Option<f64>,
+    pub bake_reach: Option<f64>,
+    pub bake_material: bool,
+    pub material_size: u32,
     pub lock_borders: bool,
 }
 
 pub const NORMAL_SIZE: u32 = 1024;
+pub const MATERIAL_SIZE: u32 = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BakeLayers {

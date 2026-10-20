@@ -355,8 +355,14 @@ fn seen(shell: &Shell, ctx: &Context, path: &Path) -> String {
             shell.full,
             shell.picker.shown()
         ),
+        format!("{} {}", shell.prefs.shown(), shell.prefs.unlocking()),
         format!("{:?} {:?} {:?}", shell.confirm, shell.note, shell.pick),
-        format!("{:?} {:?}", shell.gizmo.mode, shell.gizmo.space),
+        format!(
+            "{:?} {:?} {}",
+            shell.gizmo.mode,
+            shell.gizmo.space,
+            shell.stats()
+        ),
         format!("{:?}", shell.eye),
         format!("{:?}", shell.editor.as_ref().map(Editor::steps)),
         format!("{:?}", shell.shots.job()),

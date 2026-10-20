@@ -1,7 +1,5 @@
-use std::sync::Arc;
-
 use egui::{
-    Align2, Color32, ColorImage, CornerRadius, Id, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2,
+    Align2, Color32, ColorImage, CornerRadius, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2,
 };
 use glam::{DMat4, DVec3};
 use pfx_build::Built;
@@ -13,6 +11,7 @@ use crate::pick::Lens;
 use crate::theme::*;
 use pfx_editor_style::tokens::SCALE_WIDTH;
 use pfx_editor_style::widgets::ScaleBar;
+use pfx_editor_viewport::grid::Lines;
 
 pub const ASPECT: f32 = 16.0 / 10.0;
 pub const CHECKER: [usize; 2] = [320, 200];
@@ -21,12 +20,8 @@ const PASSEPARTOUT: f32 = 0.6;
 pub const FADE_SECONDS: f64 = 0.2;
 const FADE_SNAP: f32 = 1e-4;
 const SQUARE: usize = 20;
-const GRID_REACH: f64 = 3.0;
-const GRID_CELLS: i64 = 24;
-const GRID_NEAR: f64 = 0.02;
+const MINOR: f32 = 0.55;
 const AXIS_ALPHA: f32 = 0.75;
-const GRID_SLICES: usize = 16;
-const GRID_SLACK: f64 = 1e-4;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Fade {
@@ -75,21 +70,6 @@ impl Fade {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Rule {
-    Cell,
-    X,
-    Z,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Line {
-    pub from: Pos2,
-    pub to: Pos2,
-    pub rule: Rule,
-    pub fade: f32,
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Solid {
     pub min: DVec3,
@@ -117,23 +97,6 @@ impl Solid {
             objects: self.objects.clone(),
             name: self.name.clone(),
         }
-    }
-
-    fn enters(&self, origin: DVec3, direction: DVec3) -> Option<f64> {
-        let (mut near, mut far) = (f64::NEG_INFINITY, f64::INFINITY);
-        for k in 0..3 {
-            if direction[k].abs() < 1e-15 {
-                if origin[k] < self.min[k] || origin[k] > self.max[k] {
-                    return None;
-                }
-                continue;
-            }
-            let a = (self.min[k] - origin[k]) / direction[k];
-            let b = (self.max[k] - origin[k]) / direction[k];
-            near = near.max(a.min(b));
-            far = far.min(a.max(b));
-        }
-        (near <= far && far > 0.0).then_some(near.max(0.0))
     }
 }
 
@@ -177,14 +140,13 @@ pub fn solids(recipe: &Recipe, built: &Built) -> Vec<Solid> {
         .collect()
 }
 
-impl Line {
-    pub fn colour(&self, palette: &Palette) -> Color32 {
-        match self.rule {
-            Rule::Cell => palette.grid.gamma_multiply(self.fade),
-            Rule::X => palette.danger.gamma_multiply(AXIS_ALPHA * self.fade),
-            Rule::Z => palette.info.gamma_multiply(AXIS_ALPHA * self.fade),
-        }
-    }
+pub fn grid_lines(palette: &Palette) -> Lines {
+    Lines::new(
+        palette.grid.gamma_multiply(MINOR),
+        palette.grid,
+        palette.danger.gamma_multiply(AXIS_ALPHA),
+        palette.info.gamma_multiply(AXIS_ALPHA),
+    )
 }
 
 pub fn checker(palette: &Palette) -> ColorImage {
@@ -404,210 +366,6 @@ pub fn axes(painter: &Painter, image: Rect, basis: &Basis) {
     painter.circle_filled(centre, 2.0, palette.accent);
 }
 
-fn span(eye: &Eye) -> f64 {
-    eye.ortho_height
-        .unwrap_or_else(|| {
-            (DVec3::from_array(eye.position) - DVec3::from_array(eye.target)).length()
-        })
-        .max(1e-6)
-}
-
-pub fn spacing(eye: &Eye) -> f64 {
-    10f64.powf((span(eye) / 2.0).log10().floor())
-}
-
-fn clip(lens: &Lens, a: DVec3, b: DVec3, near: f64) -> Option<(DVec3, DVec3)> {
-    let (da, db) = (lens.depth(a), lens.depth(b));
-    match (da >= near, db >= near) {
-        (true, true) => Some((a, b)),
-        (false, false) => None,
-        (true, false) => Some((a, a + (b - a) * ((da - near) / (da - db)))),
-        (false, true) => Some((b + (a - b) * ((db - near) / (db - da)), b)),
-    }
-}
-
-fn hidden(eye: &Eye, solids: &[&Solid], point: DVec3) -> bool {
-    let (origin, direction) = match eye.ortho_height {
-        Some(height) => {
-            let forward = (DVec3::from_array(eye.target) - DVec3::from_array(eye.position))
-                .try_normalize()
-                .unwrap_or(DVec3::NEG_Z);
-            let reach = forward * (height + span(eye)) * 1e3;
-            (point - reach, reach)
-        }
-        None => {
-            let origin = DVec3::from_array(eye.position);
-            (origin, point - origin)
-        }
-    };
-    solids.iter().any(|solid| {
-        solid
-            .enters(origin, direction)
-            .is_some_and(|at| at < 1.0 - GRID_SLACK)
-    })
-}
-
-fn rect(lens: &Lens, solid: &Solid) -> Rect {
-    let mut points = Vec::with_capacity(8);
-    for corner in solid.corners() {
-        match lens.project(corner) {
-            Some(point) => points.push(point),
-            None => return Rect::EVERYTHING,
-        }
-    }
-    Rect::from_points(&points)
-}
-
-fn seen(
-    eye: &Eye,
-    lens: &Lens,
-    solids: &[(Rect, &Solid)],
-    [a, b]: [DVec3; 2],
-    rule: Rule,
-    fade: f32,
-    lines: &mut Vec<Line>,
-) {
-    let (Some(from), Some(to)) = (lens.project(a), lens.project(b)) else {
-        return;
-    };
-    let reach = Rect::from_two_pos(from, to);
-    let near: Vec<&Solid> = solids
-        .iter()
-        .filter(|(rect, _)| rect.intersects(reach))
-        .map(|(_, solid)| *solid)
-        .collect();
-    if near.is_empty() {
-        lines.push(Line {
-            from,
-            to,
-            rule,
-            fade,
-        });
-        return;
-    }
-    let mut run: Option<DVec3> = None;
-    for slice in 0..GRID_SLICES {
-        let start = a.lerp(b, slice as f64 / GRID_SLICES as f64);
-        let end = a.lerp(b, (slice + 1) as f64 / GRID_SLICES as f64);
-        let open = !hidden(eye, &near, (start + end) * 0.5);
-        match (open, run) {
-            (true, None) => run = Some(start),
-            (false, Some(first)) => {
-                if let (Some(from), Some(to)) = (lens.project(first), lens.project(start)) {
-                    lines.push(Line {
-                        from,
-                        to,
-                        rule,
-                        fade,
-                    });
-                }
-                run = None;
-            }
-            _ => {}
-        }
-    }
-    if let Some(first) = run
-        && let (Some(from), Some(to)) = (lens.project(first), lens.project(b))
-    {
-        lines.push(Line {
-            from,
-            to,
-            rule,
-            fade,
-        });
-    }
-}
-
-pub fn grid_lines(eye: &Eye, image: Rect, solids: &[Solid]) -> Vec<Line> {
-    let lens = Lens::new(eye, image);
-    let span = span(eye);
-    let step = spacing(eye);
-    let reach = span * GRID_REACH;
-    let target = DVec3::from_array(eye.target);
-    let centre = [
-        (target.x / step).round() as i64,
-        (target.z / step).round() as i64,
-    ];
-    let cells = ((reach / step).ceil() as i64).min(GRID_CELLS);
-    let near = eye
-        .ortho_height
-        .map_or(span * GRID_NEAR, |_| f64::NEG_INFINITY);
-    let solids: Vec<(Rect, &Solid)> = solids
-        .iter()
-        .map(|solid| (rect(&lens, solid), solid))
-        .collect();
-    let mut lines = Vec::new();
-    for along_x in [true, false] {
-        let (own, other) = if along_x { (0, 1) } else { (1, 0) };
-        for k in -cells..=cells {
-            let fixed = centre[other] + k;
-            let rule = match (fixed, along_x) {
-                (0, true) => Rule::X,
-                (0, false) => Rule::Z,
-                _ => Rule::Cell,
-            };
-            for piece in -cells..cells {
-                let run = [centre[own] + piece, centre[own] + piece + 1];
-                let [a, b] = run.map(|at| {
-                    let (at, fixed) = (at as f64 * step, fixed as f64 * step);
-                    if along_x {
-                        DVec3::new(at, 0.0, fixed)
-                    } else {
-                        DVec3::new(fixed, 0.0, at)
-                    }
-                });
-                let middle = (a + b) * 0.5;
-                let away = ((middle.x - target.x).powi(2) + (middle.z - target.z).powi(2)).sqrt();
-                let fade = (1.0 - away / reach).max(0.0).powi(2) as f32;
-                if fade <= 0.0 {
-                    continue;
-                }
-                if let Some((a, b)) = clip(&lens, a, b, near) {
-                    seen(eye, &lens, &solids, [a, b], rule, fade, &mut lines);
-                }
-            }
-        }
-    }
-    lines.sort_by_key(|line| line.rule != Rule::Cell);
-    lines
-}
-
-#[derive(Clone, Default)]
-struct GridMemo {
-    key: Option<(Eye, Rect, Vec<Solid>)>,
-    lines: Arc<Vec<Line>>,
-}
-
-pub fn grid(painter: &Painter, eye: &Eye, image: Rect, solids: &[Solid]) {
-    let id = Id::new("workbench grid lines");
-    let kept = painter.ctx().memory_mut(|memory| {
-        let memo = memory.data.get_temp_mut_or_default::<GridMemo>(id);
-        memo.key
-            .as_ref()
-            .is_some_and(|(seen, rect, held)| seen == eye && *rect == image && held == solids)
-            .then(|| Arc::clone(&memo.lines))
-    });
-    let lines = kept.unwrap_or_else(|| {
-        let lines = Arc::new(grid_lines(eye, image, solids));
-        let memo = GridMemo {
-            key: Some((*eye, image, solids.to_vec())),
-            lines: Arc::clone(&lines),
-        };
-        painter
-            .ctx()
-            .memory_mut(|memory| memory.data.insert_temp(id, memo));
-        lines
-    });
-    let palette = Palette::of(painter.ctx());
-    let clipped = painter.with_clip_rect(image);
-    for line in lines.iter() {
-        clipped.line_segment(
-            [line.from, line.to],
-            Stroke::new(1.0_f32, line.colour(&palette)),
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -715,132 +473,6 @@ mod tests {
         assert_eq!(fade.left(), Some((1, 0.5)));
     }
 
-    fn floor(lens: &Lens, at: Pos2) -> DVec3 {
-        let ray = lens.ray(at);
-        ray.at(-ray.origin.y / ray.direction.y)
-    }
-
-    fn start() -> Eye {
-        eye([-0.2263, 0.2824, 0.5082], [0.0, 0.0576, 0.0])
-    }
-
-    #[test]
-    fn the_grid_lies_on_the_floor_with_the_x_and_z_axes_along_it() {
-        let (eye, image) = (start(), area(800.0, 500.0));
-        let lens = Lens::new(&eye, image);
-        let lines = grid_lines(&eye, image, &[]);
-        let step = spacing(&eye);
-        assert!((step - 0.1).abs() < 1e-12, "{step}");
-        for rule in [Rule::Cell, Rule::X, Rule::Z] {
-            assert!(lines.iter().any(|line| line.rule == rule), "{rule:?}");
-        }
-        for line in &lines {
-            for end in [line.from, line.to] {
-                let hit = floor(&lens, end);
-                let on = |value: f64| (value / step - (value / step).round()).abs() < 0.02;
-                match line.rule {
-                    Rule::X => assert!(hit.z.abs() < 2e-3, "{hit}"),
-                    Rule::Z => assert!(hit.x.abs() < 2e-3, "{hit}"),
-                    Rule::Cell => assert!(on(hit.x) || on(hit.z), "{hit}"),
-                }
-            }
-        }
-        let first_axis = lines
-            .iter()
-            .position(|line| line.rule != Rule::Cell)
-            .unwrap();
-        assert!(
-            lines[first_axis..]
-                .iter()
-                .all(|line| line.rule != Rule::Cell)
-        );
-    }
-
-    #[test]
-    fn the_grid_fades_with_distance_from_the_target() {
-        let (eye, image) = (start(), area(800.0, 500.0));
-        let lens = Lens::new(&eye, image);
-        let lines = grid_lines(&eye, image, &[]);
-        let target = DVec3::from_array(eye.target);
-        let away = |line: &Line| {
-            let middle = floor(&lens, line.from.lerp(line.to, 0.5));
-            ((middle.x - target.x).powi(2) + (middle.z - target.z).powi(2)).sqrt()
-        };
-        let mut by_distance: Vec<(f64, f32)> =
-            lines.iter().map(|line| (away(line), line.fade)).collect();
-        by_distance.sort_by(|a, b| a.0.total_cmp(&b.0));
-        assert!(by_distance[0].1 > 0.9, "{:?}", by_distance[0]);
-        assert!(
-            by_distance.last().unwrap().1 < 0.2,
-            "{:?}",
-            by_distance.last()
-        );
-        assert!(lines.iter().all(|line| line.fade > 0.0 && line.fade <= 1.0));
-        let near = lines.iter().find(|line| line.rule == Rule::X).unwrap();
-        let palette = Palette::new(&crate::theme::workbench());
-        assert!(near.colour(&palette).a() > 0 && near.colour(&palette).a() < 255);
-    }
-
-    #[test]
-    fn the_spacing_follows_the_view_by_powers_of_ten() {
-        let at = |distance: f64| spacing(&eye([0.0, 0.0, distance], [0.0; 3]));
-        assert!((at(0.6) - 0.1).abs() < 1e-12);
-        assert!((at(6.0) - 1.0).abs() < 1e-12);
-        assert!((at(0.05) - 0.01).abs() < 1e-12);
-        let flat = Eye {
-            ortho_height: Some(0.4),
-            ..eye([0.0, 1.0, 0.0], [0.0; 3])
-        };
-        assert!((spacing(&flat) - 0.1).abs() < 1e-12);
-    }
-
-    #[test]
-    fn lines_running_behind_the_eye_are_cut_at_the_near_plane() {
-        let low = eye([0.0, 0.05, 0.0], [0.0, 0.05, -1.0]);
-        let image = area(800.0, 500.0);
-        let lines = grid_lines(&low, image, &[]);
-        assert!(!lines.is_empty());
-        for line in &lines {
-            for end in [line.from, line.to] {
-                assert!(end.x.is_finite() && end.y.is_finite());
-                assert!(end.y >= image.center().y, "{end:?}");
-                assert!(end.x.abs() < 1e6 && end.y.abs() < 1e6, "{end:?}");
-            }
-        }
-        assert!(lines.iter().any(|line| line.rule == Rule::Z));
-    }
-
-    #[test]
-    fn a_solid_hides_the_grid_behind_it_and_not_in_front_of_it() {
-        let eye = eye([0.0, 0.3, 1.0], [0.0, 0.1, 0.0]);
-        let image = area(800.0, 500.0);
-        let lens = Lens::new(&eye, image);
-        let solid = Solid {
-            min: DVec3::new(-0.1, 0.0, -0.05),
-            max: DVec3::new(0.1, 0.2, 0.05),
-            objects: vec![3, 0],
-            name: String::new(),
-        };
-        let along_z = |solids: &[Solid]| -> Vec<f64> {
-            grid_lines(&eye, image, solids)
-                .iter()
-                .filter(|line| line.rule == Rule::Z)
-                .flat_map(|line| (0..=8).map(|k| line.from.lerp(line.to, k as f32 / 8.0)))
-                .map(|at| floor(&lens, at).z)
-                .collect()
-        };
-        let behind = |z: &f64| (-0.6..-0.1).contains(z);
-        let open = along_z(&[]);
-        assert!(open.iter().any(behind));
-        let shut = along_z(std::slice::from_ref(&solid));
-        assert!(!shut.iter().any(behind), "{shut:?}");
-        assert!(shut.iter().any(|z| *z > 0.1));
-        let away = solid.moved(&DMat4::from_translation(DVec3::new(1.0, 0.0, 0.0)));
-        assert_eq!(away.objects, solid.objects);
-        assert!((away.min.x - 0.9).abs() < 1e-12);
-        assert!(along_z(&[away]).iter().any(behind));
-    }
-
     #[test]
     fn the_start_mark_s_parts_are_solids_that_name_their_parents() {
         let state = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/viewport-start");
@@ -864,14 +496,5 @@ mod tests {
                 .iter()
                 .all(|solid| solid.objects[0] != index(crate::start::MARK))
         );
-        let ground = found
-            .iter()
-            .find(|solid| solid.objects[0] == index("ground"))
-            .unwrap();
-        let eye = eye([-0.2263, 0.2824, 0.5082], [0.0, 0.0576, 0.0]);
-        let image = area(800.0, 500.0);
-        let all = grid_lines(&eye, image, &[]).len();
-        let with_ground = grid_lines(&eye, image, std::slice::from_ref(ground)).len();
-        assert_eq!(all, with_ground);
     }
 }

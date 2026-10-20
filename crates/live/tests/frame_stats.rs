@@ -4,9 +4,10 @@ mod output;
 use output::output;
 use std::path::Path;
 
-use pfx_gpu::Gpu;
 use pfx_gpu::pace::Pace;
 use pfx_gpu::screens::{SystemSource, detect};
+use pfx_gpu::{Gpu, wgpu};
+use pfx_live::flat::{CurvePoint, Draw, FlatScene, Light, ShadowCurve, Srgba};
 use pfx_live::renderer::{Exposure, Renderer};
 use pfx_live::stats::FrameStats;
 use pfx_load::scene::Scene;
@@ -15,6 +16,7 @@ const WIDTH: u32 = 160;
 const HEIGHT: u32 = 96;
 const SEED: u32 = 7;
 const FRAMES: u64 = 6;
+const FLAT_FRAMES: u32 = 12;
 
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
@@ -79,4 +81,108 @@ fn frame_stats_carry_a_positive_gpu_time_within_two_frames() {
     }
     assert!(timed > 0, "no line carries a GPU time");
     let _ = std::fs::remove_file(&path);
+}
+
+fn board(frame: u32) -> Vec<Draw> {
+    (0..24u32)
+        .map(|index| {
+            let x = 12.0 + ((index * 37 + frame * 11) % 140) as f32;
+            let y = 10.0 + ((index * 23 + frame * 7) % 76) as f32;
+            Draw::rect([x, y], [14.0, 10.0], 3.0)
+                .fill(Srgba::hex(0x3080c0 + index * 0x0a0400))
+                .elevation(1.0 + (index % 3) as f32)
+        })
+        .collect()
+}
+
+fn flat_frames(in_flight: u64, path: &Path) -> (Vec<u8>, u64) {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let target = gpu
+        .offscreen(WIDTH, HEIGHT, wgpu::TextureFormat::Rgba8UnormSrgb)
+        .unwrap();
+    let mut renderer = Renderer::new_with_output_format(
+        gpu.clone(),
+        WIDTH,
+        HEIGHT,
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+    )
+    .unwrap();
+    renderer.set_frames_in_flight(in_flight);
+    renderer.set_frame_stats(FrameStats::to_file(path).unwrap());
+    let curve = ShadowCurve::new(
+        Srgba::hex(0x000000),
+        vec![CurvePoint::new(1.0, 2.0, 3.0, 0.3)],
+    )
+    .unwrap();
+    let mut most = 0;
+    let mut pace = Pace::new();
+    for frame in 0..FLAT_FRAMES {
+        let draws = board(frame);
+        let scene = FlatScene {
+            layout: [WIDTH as f32, HEIGHT as f32],
+            clear: Some(Srgba::hex(0x101820)),
+            curve: &curve,
+            light: Light::default(),
+            draws: &draws,
+            groups: &[],
+            text: &[],
+            icons: None,
+            sprites: None,
+            environment: None,
+            post: false,
+            frame,
+            seed: SEED,
+        };
+        let renderer = &mut renderer;
+        pace.frame(|| {
+            renderer.render_flat(&scene, &target.view).unwrap();
+        });
+        most = most.max(renderer.frames_in_flight());
+    }
+    let pixels = gpu.readback_rgba8(&target).unwrap();
+    renderer.frame_stats().finish();
+    (pixels, most)
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn flat_frames_in_flight_draw_the_same_bytes_wait_for_nothing_and_stay_bounded() {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("frame-stats");
+    std::fs::create_dir_all(&root).unwrap();
+    let blocking = root.join("blocking.jsonl");
+    let pipelined = root.join("pipelined.jsonl");
+    for path in [&blocking, &pipelined] {
+        let _ = std::fs::remove_file(path);
+    }
+    let (waited, waited_most) = flat_frames(0, &blocking);
+    let (piped, piped_most) = flat_frames(2, &pipelined);
+    assert_eq!(waited, piped);
+    assert_eq!(waited_most, 0);
+    assert!(piped_most <= 2, "{piped_most} frames in flight");
+    let lines = |path: &Path| -> Vec<serde_json::Value> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .filter(|line: &serde_json::Value| line.get("tick").is_some())
+            .collect()
+    };
+    let blocking_lines = lines(&blocking);
+    let pipelined_lines = lines(&pipelined);
+    assert_eq!(blocking_lines.len(), FLAT_FRAMES as usize);
+    assert_eq!(pipelined_lines.len(), FLAT_FRAMES as usize);
+    for line in &blocking_lines {
+        assert_eq!(line["schema_version"], 2);
+        assert!(line["wait_ms"].as_f64().is_some(), "{line}");
+        assert!(line["prepare_ms"].as_f64().is_some(), "{line}");
+        let parts: f64 = ["prepare_ms", "encode_ms", "poll_ms", "queue_ms"]
+            .iter()
+            .map(|key| line[key].as_f64().unwrap())
+            .sum();
+        let submit = line["submit_ms"].as_f64().unwrap();
+        assert!((parts - submit).abs() < 0.01, "{line}");
+    }
+    for path in [&blocking, &pipelined] {
+        let _ = std::fs::remove_file(path);
+    }
 }

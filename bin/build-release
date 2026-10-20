@@ -53,7 +53,10 @@ case $platform in
   windows-x86_64)
     target=x86_64-pc-windows-gnu
     bins=(-p pfx --bin pfx -p pfx-launcher --bin pfx-launcher)
-    export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="-C link-arg=-static"
+    cargo_home=${CARGO_HOME:-$HOME/.cargo}
+    rustup_home=${RUSTUP_HOME:-$HOME/.rustup}
+    remaps="--remap-path-prefix=$HOME=~ --remap-path-prefix=$cargo_home/registry=/cargo/registry --remap-path-prefix=$cargo_home/git=/cargo/git --remap-path-prefix=$rustup_home=/rustup --remap-path-prefix=$root=."
+    export CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS="${CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS:+$CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS }-C link-arg=-static $remaps"
     ;;
   macos-arm64)
     target=aarch64-apple-darwin

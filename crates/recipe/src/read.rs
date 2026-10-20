@@ -16,13 +16,13 @@ use crate::{
     Along, Bake, BakeLayers, Bend, BendForm, Bevel, CAP_LUMINANCE, CAP_MEAN, CAPPED, Camera,
     CameraPath, Caps, Casters, Collection, Constrained, Cup, Curl, Daylight, DetailUv, Drift,
     Dynamics, Ease, Error, Follow, Grade, Kind, LAYER_SIZE, Lines, Loaded, Lod, LodTarget, Look,
-    LookChromatic, LookGrain, Marker, Mover, NO_SIDECAR, NORMAL_SIZE, OLD_HEADER, Object, Orbit,
-    Order, Origin, Ortho, Outline, Output, Owner, PathKey, PathKind, PieceRule, Plate, PlateView,
-    Plates, Play, Problem, Profile, ProfileKind, Projection, Proxy, REFERENCE_HOUR, RELEASE_EASE,
-    RIG_LOOK, RIG_OFFSET, Recipe, Reference, Rig, RigFocus, RigFrame, RigShake, RigTracks, Room,
-    RootMotion, RouteSpec, SCHEMA, Scatter, Shadow, ShadowLook, ShadowQuality, Sky, SkyAmbient,
-    SkyKind, SkyLight, Span, Spring, Stage, Sun, TEXTURE_KEYS, TextSpace, Textures, Timeline,
-    Trace, Use, Uv, Variant, VariantOutput, View, Volume,
+    LookChromatic, LookGrain, MATERIAL_SIZE, Marker, Mover, NO_SIDECAR, NORMAL_SIZE, OLD_HEADER,
+    Object, Orbit, Order, Origin, Ortho, Outline, Output, Owner, PathKey, PathKind, PieceRule,
+    Plate, PlateView, Plates, Play, Problem, Profile, ProfileKind, Projection, Proxy,
+    REFERENCE_HOUR, RELEASE_EASE, RIG_LOOK, RIG_OFFSET, Recipe, Reference, Rig, RigFocus, RigFrame,
+    RigShake, RigTracks, Room, RootMotion, RouteSpec, SCHEMA, Scatter, Shadow, ShadowLook,
+    ShadowQuality, Sky, SkyAmbient, SkyKind, SkyLight, Span, Spring, Stage, Sun, TEXTURE_KEYS,
+    TextSpace, Textures, Timeline, Trace, Use, Uv, Variant, VariantOutput, View, Volume,
 };
 
 pub(crate) struct Source {
@@ -1570,10 +1570,6 @@ fn read_kind(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Kind, Error> 
         },
         "generator" => {
             let generator: String = tab.req(cx, "generator", STR)?;
-            let generator = match generator.strip_prefix(OLD_GENERATORS) {
-                Some(name) => format!("{GENERATORS}{name}"),
-                None => generator,
-            };
             let params = match tab.peek(cx, "params") {
                 Some(item) => match item.as_table_like() {
                     Some(t) => json_map(t),
@@ -1682,7 +1678,7 @@ fn read_pieces(cx: &mut Cx, tab: &mut Tab<'_>, merged: bool) -> Result<Vec<Piece
             cx,
             &path,
             item,
-            "a table of node names, parent/child paths or #indices to { material, hidden }",
+            "a table of node names, parent/child paths or #indices to { material, hidden, spin }",
         ));
     };
     let mut out = Vec::new();
@@ -1693,7 +1689,7 @@ fn read_pieces(cx: &mut Cx, tab: &mut Tab<'_>, merged: bool) -> Result<Vec<Piece
                 cx,
                 &at,
                 value,
-                "a table with `material` or `hidden`",
+                "a table with `material`, `hidden` or `spin`",
             ));
         };
         let line = cx.item_line(value);
@@ -1703,18 +1699,20 @@ fn read_pieces(cx: &mut Cx, tab: &mut Tab<'_>, merged: bool) -> Result<Vec<Piece
         let mut sub = Tab::new(cx, fields, at.clone(), format!("{ipath}.{select}"), line);
         let material = sub.opt(cx, "material", STR)?;
         let hidden = sub.opt(cx, "hidden", BOOL)?;
+        let spin = sub.opt(cx, "spin", BOOL)?;
         sub.finish(cx)?;
-        if material.is_none() && hidden.is_none() {
+        if material.is_none() && hidden.is_none() && spin.is_none() {
             return Err(Error::new(
                 at,
                 Some(line),
-                "expected `material` or `hidden`",
+                "expected `material`, `hidden` or `spin`",
             ));
         }
         out.push(PieceRule {
             select: select.to_string(),
             material,
             hidden,
+            spin,
         });
     }
     Ok(out)
@@ -2035,6 +2033,9 @@ fn read_lod(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Vec<Lod>, Erro
         let bake_normals = sub.or(cx, "bake_normals", false, BOOL)?;
         let size = sub.opt(cx, "normal_size", UINT)?;
         let bake_distance = sub.opt(cx, "bake_distance", NUM)?;
+        let bake_reach = sub.opt(cx, "bake_reach", NUM)?;
+        let bake_material = sub.or(cx, "bake_material", false, BOOL)?;
+        let material_size = sub.opt(cx, "material_size", UINT)?;
         sub.finish(cx)?;
         let fail =
             |key: &str, text: &str| Error::new(dotted(&at, key), Some(line), text.to_string());
@@ -2087,13 +2088,37 @@ fn read_lod(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Vec<Lod>, Erro
         }
         let lock_borders =
             matches!(target, LodTarget::File(_)) || lock_borders.or(locked).unwrap_or(true);
-        if !bake_normals && (size.is_some() || bake_distance.is_some()) {
-            let key = if size.is_some() {
-                "normal_size"
-            } else {
-                "bake_distance"
-            };
-            return Err(fail(key, "goes with bake_normals = true"));
+        if !bake_normals && size.is_some() {
+            return Err(fail("normal_size", "goes with bake_normals = true"));
+        }
+        if bake_material && size.is_some() {
+            return Err(fail(
+                "normal_size",
+                "goes with bake_normals alone; with bake_material = true the normal map is baked at material_size",
+            ));
+        }
+        if !bake_material && material_size.is_some() {
+            return Err(fail("material_size", "goes with bake_material = true"));
+        }
+        if !bake_normals && !bake_material {
+            for (key, given) in [
+                ("bake_distance", bake_distance.is_some()),
+                ("bake_reach", bake_reach.is_some()),
+            ] {
+                if given {
+                    return Err(fail(
+                        key,
+                        "goes with bake_normals = true or bake_material = true",
+                    ));
+                }
+            }
+        }
+        let material_size = material_size.unwrap_or(MATERIAL_SIZE);
+        if !(16..=8192).contains(&material_size) {
+            return Err(fail(
+                "material_size",
+                "expected a whole number from 16 to 8192",
+            ));
         }
         let normal_size = size.unwrap_or(NORMAL_SIZE);
         if !(16..=8192).contains(&normal_size) {
@@ -2107,11 +2132,19 @@ fn read_lod(cx: &mut Cx, tab: &mut Tab<'_>, kind: &str) -> Result<Vec<Lod>, Erro
         {
             return Err(fail("bake_distance", "expected a distance above 0"));
         }
+        if let Some(d) = bake_reach
+            && (d <= 0.0 || !d.is_finite())
+        {
+            return Err(fail("bake_reach", "expected a distance above 0"));
+        }
         levels.push(Lod {
             target,
             bake_normals,
             normal_size,
             bake_distance,
+            bake_reach,
+            bake_material,
+            material_size,
             lock_borders,
         });
     }
@@ -2921,9 +2954,6 @@ fn read_lamp(cx: &mut Cx, t: &dyn TableLike, index: usize, line: usize) -> Resul
     sub.finish(cx)?;
     Ok(lamp)
 }
-
-const GENERATORS: &str = "pfx/";
-const OLD_GENERATORS: &str = "manfred/";
 
 fn read_route(
     cx: &mut Cx,

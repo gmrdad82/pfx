@@ -2,7 +2,9 @@ use std::rc::Rc;
 
 use pfx_core::clock::Tick;
 use pfx_gpu::screens::{Device, Display, ScreenPolicy, ScreenReport};
-use pfx_gpu::window::{Attention, Clock, FramePacer, Host, Pace, Point, PresentPreference, Size};
+use pfx_gpu::window::{
+    Attention, Clock, FramePacer, Host, Pace, Period, Point, Present, PresentPreference, Size,
+};
 use pfx_input::{Backend, BindingMap, InputEvent, KeyLabels, LayoutSource};
 use pfx_play::{
     Cursor, Exit, Notice, PlaySession, Scheme, Settings, Ui, UiFrame, Warm, Warmer, Warming,
@@ -25,12 +27,8 @@ pub enum Event {
     },
 }
 
-pub fn present_preference(vrr: bool, host: Host) -> PresentPreference {
-    if vrr {
-        PresentPreference::vrr(host)
-    } else {
-        PresentPreference::game()
-    }
+pub fn present_preference(present: Present, host: Host, fullscreen: bool) -> PresentPreference {
+    present.preference(host, fullscreen)
 }
 
 pub struct Driver {
@@ -45,7 +43,6 @@ pub struct Driver {
     window: Size,
     report: Option<ScreenReport>,
     last_ns: Option<u64>,
-    refresh: Option<u32>,
     pads: Option<Box<dyn Backend>>,
     scratch: Vec<InputEvent>,
     labels: KeyLabels,
@@ -70,7 +67,7 @@ impl Driver {
     ) -> Self {
         let mut driver = Self {
             session,
-            pacer: FramePacer::new(settings.pacing.caps()),
+            pacer: FramePacer::new(settings.pacing.present()),
             display: Display::new(device, settings.display.clone()),
             applied: settings.clone(),
             device,
@@ -80,7 +77,6 @@ impl Driver {
             window,
             report: None,
             last_ns: None,
-            refresh: None,
             pads,
             scratch: Vec::new(),
             labels: KeyLabels::new(),
@@ -112,10 +108,7 @@ impl Driver {
                 self.display.resized(size);
                 self.refit();
             }
-            Event::Refresh(refresh) => {
-                self.refresh = refresh;
-                self.pace();
-            }
+            Event::Refresh(refresh) => self.pacer.set_refresh(refresh),
             Event::Monitor(name) => self.display.moved_to(name),
             Event::Moved { monitor, position } => self.display.placed(monitor, position),
         }
@@ -219,7 +212,9 @@ impl Driver {
 
     fn apply(&mut self, settings: &Settings, first: bool) {
         if first || settings.pacing != self.applied.pacing {
-            self.pacer.set_caps(settings.pacing.caps());
+            self.pacer.set_present(settings.pacing.present());
+            self.pacer
+                .set_pause_when_minimized(settings.pacing.pause_when_minimized);
         }
         if first || settings.rumble != self.applied.rumble {
             self.session.set_rumble_intensity(settings.rumble.min(100));
@@ -247,12 +242,6 @@ impl Driver {
             self.present_changed = true;
         }
         self.applied = settings.clone();
-        self.pace();
-    }
-
-    fn pace(&mut self) {
-        let vrr = self.applied.pacing.vrr.then_some(self.refresh).flatten();
-        self.pacer.set_vrr(vrr);
     }
 
     fn refit(&mut self) {
@@ -303,12 +292,20 @@ impl Driver {
         Some(&self.display)
     }
 
-    pub fn take_present(&mut self) -> Option<bool> {
+    pub fn take_present(&mut self) -> Option<Present> {
         if !self.present_changed {
             return None;
         }
         self.present_changed = false;
-        Some(self.applied.pacing.vrr)
+        Some(self.present())
+    }
+
+    pub fn present(&self) -> Present {
+        self.applied.pacing.present()
+    }
+
+    pub fn set_vrr_in_effect(&mut self, in_effect: Option<bool>) {
+        self.pacer.set_vrr_in_effect(in_effect);
     }
 
     pub fn cursor(&self) -> Cursor {
@@ -409,8 +406,8 @@ impl Driver {
         self.motors
     }
 
-    pub fn effective_fps(&self) -> Option<u32> {
-        self.pacer.effective_fps()
+    pub fn period(&self) -> Option<Period> {
+        self.pacer.period()
     }
 
     pub fn frames(&self) -> u64 {

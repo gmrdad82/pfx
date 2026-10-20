@@ -50,7 +50,7 @@ Every pixel samples adaptively to a noise threshold of 0.01, and the frame then 
 
 ## Clip masters
 
-A clip's `<stem>.master.mp4` is encoded by pfx itself through [pito-codecs](https://github.com/gmrdad82/pito-codecs) v1.16.2 (MIT, pinned by tag, `pfx_run::encode`); no other program runs and nothing needs installing. The same frames give the same bytes on the same machine, on any thread count.
+A clip's `<stem>.master.mp4` is encoded by pfx itself through [pito-codecs](https://github.com/gmrdad82/pito-codecs) v1.16.3 (MIT, pinned by tag, `pfx_run::encode`); no other program runs and nothing needs installing. The same frames give the same bytes on the same machine, on any thread count.
 
 - Video: H.264 High, CRF 12, preset `Quality`, 2 B-frames, a keyframe at least every second (`gop` = fps), 4:2:0 8-bit, encoded on the CPU. Each 16-bit sRGB frame is rounded to 8 bits, then turned to BT.709 limited-range YUV with left-sited chroma; the stream's VUI tags BT.709 primaries, transfer and matrix, limited range.
 - Audio, when the adapter sends some: AAC-LC, 48 kHz stereo, 320 kbit/s, padded or cut to `round(frames x 48000 / fps)` samples so it ends with the picture, its encoder delay hidden by an edit list.
@@ -63,7 +63,7 @@ Measured once on 600 generated 2160x3840 frames, 16-bit PNGs read one after anot
 
 `pfx encode --manifest` turns an older render's `<stem>.master.mkv` into an MP4 master the same way, decoding it with pito-codecs; an FFV1 master, which pito-codecs does not read, is refused with that reason.
 
-The asset renderer's recipes, masters and outputs are in [crates/assets/README.md](../crates/assets/README.md), and the `pfx` tool's commands are listed in [The crates](../README.md#the-crates). When `pgpu`, a GPU queue, is on `PATH` the render waits its turn there; without it the render runs directly.
+The asset renderer's recipes, masters and outputs are in [crates/assets/README.md](../crates/assets/README.md), and the `pfx` tool's commands are listed in [The command line](../README.md#the-command-line). When `pgpu`, a GPU queue, is on `PATH` the render waits its turn there; without it the render runs directly.
 
 ## In a game's own code
 

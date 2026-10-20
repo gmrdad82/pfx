@@ -19,6 +19,12 @@ pub(super) struct PrintArgs {
     file: Option<String>,
     #[arg(long, help = "Print the file's table as one JSON object")]
     json: bool,
+    #[arg(
+        long,
+        conflicts_with_all = ["file", "json"],
+        help = "Print every entry in a stable order: its TOML whole, every other file by size and CRC-32 (git's textconv for .pitofx)"
+    )]
+    all: bool,
 }
 
 #[derive(clap::Args)]
@@ -155,7 +161,94 @@ fn json_of(text: &str, name: &str) -> Result<String, String> {
     serde_json::to_string(&table).map_err(|e| format!("{name}: {e}"))
 }
 
+const ORDER: [pfx_file::Tag; 10] = [
+    pfx_file::SMET,
+    pfx_file::RCPE,
+    pfx_file::SCNE,
+    pfx_file::FILE,
+    pfx_file::OVRD,
+    pfx_file::FACT,
+    pfx_file::NODE,
+    pfx_file::GLTF,
+    pfx_file::GBIN,
+    pfx_file::THMB,
+];
+
+fn shown_whole(tag: pfx_file::Tag, name: &str) -> bool {
+    match tag {
+        pfx_file::SMET | pfx_file::RCPE | pfx_file::SCNE | pfx_file::OVRD => true,
+        pfx_file::FILE => toml_name(name),
+        _ => false,
+    }
+}
+
+pub(super) fn whole(pfx: &Path) -> Result<String, String> {
+    let shown = pfx.display();
+    if !pfx_file::has_magic(pfx) {
+        return Err(format!(
+            "{shown}: not a .pitofx document (no PFXFILE magic)"
+        ));
+    }
+    let reader = pfx_file::Reader::open(pfx).map_err(|e| format!("{shown}: {e}"))?;
+    let mut order: Vec<(usize, String, &str, usize)> = reader
+        .entries()
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let rank = ORDER
+                .iter()
+                .position(|tag| *tag == entry.tag)
+                .unwrap_or(ORDER.len());
+            (
+                rank,
+                pfx_file::tag_text(entry.tag),
+                entry.name.as_str(),
+                index,
+            )
+        })
+        .collect();
+    order.sort();
+    let mut out = String::new();
+    for (_, tag, name, index) in order {
+        let entry = &reader.entries()[index];
+        let label = if name.is_empty() {
+            tag
+        } else {
+            format!("{tag} {name}")
+        };
+        let text = if shown_whole(entry.tag, name) {
+            let bytes = reader.read(index).map_err(|e| format!("{shown}: {e}"))?;
+            String::from_utf8(bytes.into_owned()).ok()
+        } else {
+            None
+        };
+        match text {
+            Some(text) => {
+                out.push_str(&format!("# {label}\n{text}"));
+                if !text.is_empty() && !text.ends_with('\n') {
+                    out.push('\n');
+                }
+            }
+            None => out.push_str(&format!(
+                "# {label}: {} bytes, crc32 {:08x}\n",
+                entry.raw, entry.crc
+            )),
+        }
+        out.push('\n');
+    }
+    Ok(out)
+}
+
 pub(super) fn print(args: &PrintArgs) -> ExitCode {
+    if args.all {
+        return match whole(&args.pfx) {
+            Ok(text) => {
+                print!("{text}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => refuse("scene print", &e),
+        };
+    }
     let shown = held(&args.pfx).and_then(|held| {
         let (name, text) = held.pick(&args.pfx, args.file.as_deref())?;
         if args.json {
@@ -323,6 +416,50 @@ mod tests {
         let refused = written_recipe(&args, name, &broken, &registry).unwrap_err();
         assert!(refused.contains("left as it was"), "{refused}");
         assert_eq!(std::fs::read(&pfx).unwrap(), before);
+    }
+
+    #[test]
+    fn the_whole_document_prints_the_same_whatever_its_chunk_order_and_lists_packed_bytes() {
+        let (dir, pfx) = super::super::document::tests::saved("pfx-print-all");
+        let first = whole(&pfx).unwrap();
+        assert!(first.starts_with("# SMET\n"), "{first}");
+        assert!(
+            first.contains("\n# RCPE scenes/doc.toml\nrecipe = 1\nname = \"doc\""),
+            "{first}"
+        );
+        assert!(first.contains("\n# FILE shared/rig.toml\n"), "{first}");
+        assert!(first.contains("[materials.wood]"), "{first}");
+        let gbin = first
+            .lines()
+            .find(|line| line.starts_with("# GBIN: "))
+            .unwrap();
+        assert!(gbin.contains(" bytes, crc32 "), "{gbin}");
+        let bytes = std::fs::read(&pfx).unwrap();
+        let reader = pfx_file::Reader::from_bytes(&bytes).unwrap();
+        let mut writer = pfx_file::Writer::new();
+        for index in (0..reader.entries().len()).rev() {
+            writer = writer.copy(&reader, index).unwrap();
+        }
+        let flipped = dir.join("flipped.pitofx");
+        writer.write(&flipped).unwrap();
+        assert_ne!(std::fs::read(&flipped).unwrap(), bytes);
+        assert_eq!(whole(&flipped).unwrap(), first);
+        let held = held(&pfx).unwrap();
+        let (name, text) = held.pick(&pfx, None).unwrap();
+        let args = WriteArgs {
+            pfx: pfx.clone(),
+            file: None,
+        };
+        let moved = text.replace("seed = 3", "seed = 5");
+        written_recipe(&args, name, &moved, &Registry::new()).unwrap();
+        let after = whole(&pfx).unwrap();
+        assert!(after.contains("\nseed = 5\n"), "{after}");
+        assert_eq!(
+            after.replace("seed = 5", "seed = 3").lines().count(),
+            first.lines().count()
+        );
+        let toml = dir.join("project/scenes/doc.toml");
+        assert!(whole(&toml).unwrap_err().ends_with("no PFXFILE magic)"));
     }
 
     #[test]

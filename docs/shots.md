@@ -79,6 +79,6 @@ Release build, Ryzen 9 9950X, `bench_two_thousand_shots_and_fifty_emitters` unde
 
 `bench_two_thousand_shots_against_four_hundred_targets`: 2,000 live shots in 4,096 slots against 400 targets, about 1,080 hits a tick, nearly all one target per shot: `step` and `boxes` 18 µs (24 before the walks stopped at the highest live slot), `resolve` 3.5 µs (15 before a shot with one candidate skipped the entry time and the sort), under a load average of about 22.
 
-Those runs shared the machine with a load average of about 31 on 32 threads (at 94 they took 47 and 52 µs), so an idle machine should take less; rerun the bench before quoting it as a budget. The pool allocates nothing after `new`; `boxes` and the emitters' buffers allocate only while they grow.
+Those runs shared the machine with a load average of about 31 on 32 threads (at 94 they took 47 and 52 µs); rerun the bench before quoting it as a budget. The pool allocates nothing after `new`; `boxes` and the emitters' buffers allocate only while they grow.
 
 `tests.rs` pins two 300-tick scenes (50 emitters of every pattern, bursts, wind-ups, spread, led aim) by a hash of every shot's slot, generation, position and velocity, so a change to any output bit fails it.

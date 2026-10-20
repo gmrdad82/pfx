@@ -632,8 +632,9 @@ fn haze_from_the_scene_marches_live_and_goes_with_an_edit() {
         .unwrap();
     assert!(applied.haze);
     let back = mean(&viewer.frames(1.0, 8));
+    let later = mean(&Viewer::new(&clear).frames(1.0, 8));
     let gone = (0..3)
-        .map(|k| (back[k] - without[k]).abs())
+        .map(|k| (back[k] - later[k]).abs())
         .fold(0.0, f64::max);
     let kept = (0..3)
         .map(|k| (with[k] - without[k]).abs())

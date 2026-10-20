@@ -75,6 +75,7 @@ The job's folder is `<state>/jobs/<name>/`, where `<state>` is `$PFX_STATE` if i
 | `frame`, `samples` | The frame in flight and `{"done", "of"}` samples when the run reports them. |
 | `resume` | What the clip's last resume found ([recipe-clips.md](recipe-clips.md#stop-and-resume)): `{"verified", "redone", "check"}`, the count of frames whose sha256 matched the folder's `frames.json`, the frames made again, and `{"frame", "same"}` for the frame re-rendered before carrying on (`same` null until it is compared, false when it differs and the run stopped), or null. |
 | `frame_seconds`, `median_frame_seconds`, `eta_seconds` | The last 64 frame times, their median and the median times the frames left. |
+| `path` | The sentence the clip's last `path` line gave: the adapter, whether ray queries run and the BVH, or null before it traces. `pfx job status` shows it as `traced on`. |
 | `fails`, `last_error` | Failed tries by frame, and the last run's error. |
 | `runs` | How many runs the job has started. |
 | `created`, `updated`, `finished` | Local times, `YYYY-MM-DDTHH:MM:SS`. |
@@ -83,6 +84,8 @@ The job's folder is `<state>/jobs/<name>/`, where `<state>` is `$PFX_STATE` if i
 `pfx job status --json` prints the same object with `state` as it is seen (a dead supervisor's job as `stopped`), `stale` true when that differs from the file, and `dir`.
 
 ## Numbers
+
+<p align="center"><img src="images/resume.gif" width="800" alt="A terminal: pfx new writes the street starter; pfx clip traces frames 0 to 3 of its timeline at 480x270 and 64 samples into whole/; the same frames start as a job named cut, and once frame 2 is in flight both the supervisor's and the run's process groups are killed with SIGKILL; pfx job list shows cut stopped, 2 of 4 frames, its supervisor gone, and cut/ holds frames 0 and 1; pfx job resume carries on and the list shows cut done, 4 of 4 frames; cmp finds every frame the same bytes as the uninterrupted run."></p>
 
 Measured on Linux with an AMD Radeon RX 9060 XT (RDNA 4, Vulkan through RADV), on the table test scene with an orbiting camera.
 
@@ -94,4 +97,4 @@ Measured on Linux with an AMD Radeon RX 9060 XT (RDNA 4, Vulkan through RADV), o
 | 2 to 4 at 160x100, 64 samples | 1 to 4 levels of 255 | 0.3 to 1.3 % | none | 71 to 77 dB |
 | 3 at 160x100, 256 samples, threshold 0.02 | 4 levels | 1.0 % | none | 72 dB |
 
-Metal on Apple Silicon can't run here, so pfx job and ranges on macOS are built but untested. Expect frames from a Mac to sit about as close as lavapipe's: a few levels on about one pixel in a hundred, invisible as a seam in a joined clip.
+Metal on Apple Silicon can't run here, so pfx job and ranges on macOS are built but untested, and how close a Mac's frames sit to this machine's is not measured.

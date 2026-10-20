@@ -1685,7 +1685,13 @@
         "settle": {
           "type": "boolean"
         },
+        "ssr": {
+          "type": "boolean"
+        },
         "stochastic_reflections": {
+          "type": "boolean"
+        },
+        "taa": {
           "type": "boolean"
         }
       },

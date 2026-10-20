@@ -32,6 +32,7 @@ override TRACE_FLAKES: bool = true;
 override TRACE_MOTION: bool = false;
 override TRACE_FOG: bool = false;
 override TRACE_SPRITES: bool = false;
+override RT_WALK: bool = true;
 override SOBOL_LENGTH: u32 = 256u;
 override STEAM_SPREAD_BASE: f32 = 0.7;
 override STEAM_SPREAD_GROWTH: f32 = 4.0;
@@ -1864,6 +1865,7 @@ fn indirect_capped(value: vec3f, deep: bool) -> vec3f {
     return value*(CLAMP_INDIRECT/luma);
 }
 const FOG_DIM: u32 = 0x100000u;
+const FOG_LIGHT_FLOOR: f32 = 0.25;
 const FOG_PDF_CUTOFF: f32 = 1e-8;
 fn fog_density(y: f32) -> f32 {
     return frame.fog.z*exp(min(-frame.fog.y*(y-frame.fog.x),30.0));
@@ -2171,7 +2173,10 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                     throughput*=transmit;
                 } else if (attenuation>0.0) {
                     ends=scatters+1u>=u32(frame.fog_light.y);
-                    result+=indirect_capped(throughput*fog_direct(o,d,span,attenuation,!ends,state),bounce>0u);
+                    let keep=min(attenuation/FOG_LIGHT_FLOOR,1.0);
+                    if (keep>=1.0 || rnd(state,sobol(FOG_DIM).z)<keep) {
+                        result+=indirect_capped(throughput*fog_direct(o,d,span,attenuation,!ends,state),bounce>0u)/keep;
+                    }
                     let r=rnd(state,sobol(FOG_DIM).x);
                     if (r<attenuation) {
                         scatter=fog_distance(o,d,span.x,span.y,-log(max(1.0-r,1e-30)));

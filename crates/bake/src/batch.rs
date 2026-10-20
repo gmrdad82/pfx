@@ -27,6 +27,7 @@ struct Frame {
     lens: [f32; 4],
     window: [u32; 4],
     columns: [u32; 4],
+    fog: [[f32; 4]; 3],
 }
 
 #[repr(C)]
@@ -361,6 +362,7 @@ impl Batch {
             lens: [0.0, 0.0, 0.0, 1.0],
             window: [WIDTH, HEIGHT, 0, 0],
             columns: [0; 4],
+            fog: [[0.0; 4]; 3],
         };
         Ok(Self {
             frame,
@@ -482,7 +484,16 @@ mod tests {
         assert_eq!(buffers.surfaces.len(), 176);
         assert_eq!(buffers.content_info.len(), 16);
         assert_eq!(buffers.layers.len(), 32);
-        assert_eq!(std::mem::size_of::<super::Frame>(), 176);
+        let frame = module
+            .types
+            .iter()
+            .find(|(_, ty)| ty.name.as_deref() == Some("Frame"))
+            .map(|(_, ty)| match ty.inner {
+                naga::TypeInner::Struct { span, .. } => span,
+                _ => 0,
+            })
+            .unwrap();
+        assert_eq!(std::mem::size_of::<super::Frame>(), frame as usize);
         assert_eq!(std::mem::size_of::<super::FaceRecord>(), 80);
         assert_eq!(super::rows(1), 4);
         assert_eq!(super::rows(16), 4);

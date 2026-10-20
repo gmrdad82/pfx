@@ -22,8 +22,10 @@ pub struct Project {
     select: Option<String>,
     ignore: Vec<PathBuf>,
     screen: Option<toml::Table>,
+    graphics: Option<pfx_settings::Graphics>,
     modules: Vec<PathBuf>,
     flat: bool,
+    redraw_always: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,6 +78,18 @@ fn modules(table: Option<&toml::Table>, file: &Path) -> Result<Vec<PathBuf>, Str
             })
             .collect(),
         Some(_) => Err(refuse()),
+    }
+}
+
+fn redraw_always(pfx: Option<&toml::Table>, file: &Path) -> Result<bool, String> {
+    match pfx.and_then(|pfx| pfx.get("redraw")) {
+        None => Ok(false),
+        Some(toml::Value::String(redraw)) if redraw == "on-demand" => Ok(false),
+        Some(toml::Value::String(redraw)) if redraw == "always" => Ok(true),
+        Some(_) => Err(format!(
+            "{}: redraw is \"on-demand\", drawing a frame only when something changed, or \"always\"",
+            file.display()
+        )),
     }
 }
 
@@ -133,8 +147,10 @@ impl Project {
             select: None,
             ignore: Vec::new(),
             screen: None,
+            graphics: None,
             modules: Vec::new(),
             flat: false,
+            redraw_always: false,
         })
     }
 
@@ -197,6 +213,20 @@ impl Project {
                     ));
                 }
             },
+            graphics: match pfx.and_then(|pfx| pfx.get("graphics")) {
+                None => None,
+                Some(table @ toml::Value::Table(_)) => {
+                    Some(table.clone().try_into().map_err(|error| {
+                        format!("{}: [authoring.pfx.graphics]: {error}", file.display())
+                    })?)
+                }
+                Some(_) => {
+                    return Err(format!(
+                        "{}: [authoring.pfx.graphics] is a table: quality and [authoring.pfx.graphics.effects]",
+                        file.display()
+                    ));
+                }
+            },
             modules: modules(pfx, &file)?,
             flat: match pfx.and_then(|pfx| pfx.get("flat")) {
                 None => false,
@@ -208,6 +238,7 @@ impl Project {
                     ));
                 }
             },
+            redraw_always: redraw_always(pfx, &file)?,
             select: match pfx.and_then(|pfx| pfx.get("select")) {
                 None => None,
                 Some(toml::Value::String(name)) if !name.is_empty() => Some(name.clone()),
@@ -268,8 +299,16 @@ impl Project {
         self.screen.as_ref()
     }
 
+    pub fn graphics(&self) -> Option<pfx_settings::Graphics> {
+        self.graphics
+    }
+
     pub fn flat(&self) -> bool {
         self.flat
+    }
+
+    pub fn redraws_always(&self) -> bool {
+        self.redraw_always
     }
 
     pub fn select(&self) -> Option<&str> {

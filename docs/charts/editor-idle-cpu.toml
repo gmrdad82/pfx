@@ -1,0 +1,11 @@
+title = "EDITOR, IDLE CPU"
+unit = "PERCENT OF ONE THREAD"
+better = "lower"
+subtitle = "RYZEN 9 9950X, RADEON RX 9060 XT, LINUX"
+date = "2026-10-19"
+suffix = " %"
+decimals = 2
+words = { better = "LESS", worse = "MORE", same = "SAME" }
+notes = ["20 S WITH NOTHING MOVING, 10 S AFTER THE FIRST FRAME, EMPTY PROJECT, MEDIAN OF 5. NEITHER EDITOR USES THE GPU WHEN IDLE."]
+parties = [{ name = "PFX 3.1.0" }, { name = "GODOT 4.7.2" }]
+rows = [{ label = "EMPTY PROJECT", values = [0.05, 3.2] }]

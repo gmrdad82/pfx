@@ -1,4 +1,5 @@
 use crate::canopy::{Canopy, CanopyFrame, CanopyMode, Gobo, canopy_light_wgsl};
+use crate::cull::{self, CullStats, Frustum, PassCounts, Run, UNBOUNDED};
 use crate::deform::{self, Deformer, DeformerBuffer, DeformerId, WindFrame};
 use crate::lights::{CASTER_BYTES, CASTER_SLOTS, LIGHTS_WGSL, LightQuality, Lights, LocalLight};
 use crate::lod::LOD_WGSL;
@@ -140,6 +141,7 @@ pub struct Instance {
     pub shadow_only: bool,
     pub casts_shadow: bool,
     pub two_sided: bool,
+    pub max_distance: f32,
 }
 
 impl Instance {
@@ -158,6 +160,7 @@ impl Instance {
             shadow_only: false,
             casts_shadow: true,
             two_sided: false,
+            max_distance: f32::INFINITY,
         }
     }
 }
@@ -335,6 +338,7 @@ struct Mesh {
     skin_len: u32,
     skin_joints: u32,
     morph: MorphRange,
+    sphere: [f32; 4],
 }
 
 struct MeshSlot {
@@ -1126,6 +1130,7 @@ pub struct Frame {
     uploaded_materials: Vec<PackedMaterial>,
     uploaded_map_materials: Vec<GpuMapMaterial>,
     reflections_planned: bool,
+    local_reflections_planned: bool,
     opaque_on: Cell<OpaqueFeatures>,
     opaque_off: Cell<OpaqueFeatures>,
     opaque_drawn: Vec<OpaqueFeatures>,
@@ -1133,6 +1138,22 @@ pub struct Frame {
     coat_reflections: bool,
     jitter: [f32; 2],
     profiler: Option<GpuProfiler>,
+    bounds: Vec<CachedBound>,
+    culling: bool,
+    cull_stats: CullStats,
+    occlusion: Option<crate::occlusion::Occlusion>,
+    occlusion_on: bool,
+    cull_inputs: Vec<crate::occlusion::CullInput>,
+    fades: Vec<f32>,
+}
+
+#[derive(Clone, Copy)]
+struct CachedBound {
+    mesh: MeshHandle,
+    model: Matrix,
+    deformer: DeformerId,
+    epoch: u64,
+    sphere: [f32; 4],
 }
 
 pub fn multiply(a: Matrix, b: Matrix) -> Matrix {
@@ -1382,7 +1403,8 @@ pub fn transmission_batches<'a>(
 #[allow(clippy::too_many_arguments)]
 fn draw_casters(
     pass: &mut wgpu::RenderPass<'_>,
-    casters: &[&Batch],
+    batches: &[Batch],
+    runs: &[Run],
     statics: bool,
     deformers: &wgpu::BindGroup,
     lighting: Option<&wgpu::BindGroup>,
@@ -1390,13 +1412,17 @@ fn draw_casters(
     meshes: &[MeshSlot],
 ) {
     pass.set_bind_group(2, deformers, &[]);
-    if casters.iter().any(|batch| batch.cut)
+    if runs.iter().any(|run| batches[run.batch].cut)
         && let Some(lighting) = lighting
     {
         pass.set_bind_group(3, lighting, &[]);
     }
     let mut current = None;
-    for batch in casters.iter().filter(|batch| batch.moving != statics) {
+    for run in runs
+        .iter()
+        .filter(|run| batches[run.batch].moving != statics)
+    {
+        let batch = &batches[run.batch];
         let kind = if batch.cut {
             2
         } else {
@@ -1414,7 +1440,7 @@ fn draw_casters(
         };
         pass.set_vertex_buffer(0, mesh.vertices.slice(..));
         pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..mesh.count, 0, batch.range.clone());
+        pass.draw_indexed(0..mesh.count, 0, run.range.clone());
     }
 }
 
@@ -1873,32 +1899,38 @@ fn prepass_pipelines(
     cut: bool,
     classic: bool,
 ) -> [wgpu::RenderPipeline; 2] {
-    let buffers = [vertex_layout()];
-    [Some(wgpu::Face::Back), None].map(|cull| {
-        pipeline_with(
-            device,
-            PipelineSpec {
-                label: "live depth and velocity",
-                layout,
-                module,
-                vertex: "vertex_main",
-                fragment: Some(if classic {
-                    "prepass_classic"
-                } else {
-                    "prepass_main"
-                }),
-                buffers: &buffers,
-                targets: &prepass_targets(),
-                cull,
-                write_depth: true,
-                reversed: true,
-                cache: None,
-            },
-            &[
-                ("use_content_cutout", f64::from(u8::from(cut))),
-                ("use_classic_depth", f64::from(u8::from(classic))),
-            ],
-        )
+    let buffers = &[vertex_layout()];
+    std::thread::scope(|scope| {
+        [Some(wgpu::Face::Back), None]
+            .map(|cull| {
+                scope.spawn(move || {
+                    pipeline_with(
+                        device,
+                        PipelineSpec {
+                            label: "live depth and velocity",
+                            layout,
+                            module,
+                            vertex: "vertex_main",
+                            fragment: Some(if classic {
+                                "prepass_classic"
+                            } else {
+                                "prepass_main"
+                            }),
+                            buffers,
+                            targets: &prepass_targets(),
+                            cull,
+                            write_depth: true,
+                            reversed: true,
+                            cache: None,
+                        },
+                        &[
+                            ("use_content_cutout", f64::from(u8::from(cut))),
+                            ("use_classic_depth", f64::from(u8::from(classic))),
+                        ],
+                    )
+                })
+            })
+            .map(|made| made.join().expect("a prepass pipeline"))
     })
 }
 
@@ -2286,6 +2318,7 @@ impl Frame {
             uploaded_materials: Vec::new(),
             uploaded_map_materials: Vec::new(),
             reflections_planned: false,
+            local_reflections_planned: false,
             opaque_on: Cell::new(OpaqueFeatures::NONE),
             opaque_off: Cell::new(OpaqueFeatures::NONE),
             opaque_drawn: Vec::new(),
@@ -2293,6 +2326,13 @@ impl Frame {
             coat_reflections: true,
             jitter: [0.0; 2],
             profiler: Some(profiler),
+            bounds: Vec::new(),
+            culling: true,
+            cull_stats: CullStats::default(),
+            occlusion: None,
+            occlusion_on: false,
+            cull_inputs: Vec::new(),
+            fades: Vec::new(),
             gpu,
         })
     }
@@ -2326,50 +2366,63 @@ impl Frame {
             label: Some("live frame shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source().into()),
         });
-        let buffers = [vertex_layout()];
-        let prepass = prepass_pipelines(device, &pipeline_layout, &module, false, false);
-        let shadow = [
-            ("shadow_vertex", None),
-            ("shadow_clip_vertex", Some("shadow_clip_fragment")),
-        ]
-        .map(|(vertex, fragment)| {
-            pipeline(
-                device,
-                PipelineSpec {
-                    label: "live shadow casters",
-                    layout: &shadow_layout,
-                    module: &module,
-                    vertex,
-                    fragment,
-                    buffers: &buffers,
-                    targets: &[],
-                    cull: None,
-                    write_depth: true,
-                    reversed: false,
-                    cache: None,
-                },
+        let buffers = &[vertex_layout()];
+        let (shadow_layout, module) = (&shadow_layout, &module);
+        let (prepass, shadow, transmit) = std::thread::scope(|scope| {
+            let shadow = [
+                ("shadow_vertex", None),
+                ("shadow_clip_vertex", Some("shadow_clip_fragment")),
+            ]
+            .map(|(vertex, fragment)| {
+                scope.spawn(move || {
+                    pipeline(
+                        device,
+                        PipelineSpec {
+                            label: "live shadow casters",
+                            layout: shadow_layout,
+                            module,
+                            vertex,
+                            fragment,
+                            buffers,
+                            targets: &[],
+                            cull: None,
+                            write_depth: true,
+                            reversed: false,
+                            cache: None,
+                        },
+                    )
+                })
+            });
+            let transmit = scope.spawn(move || {
+                pipeline(
+                    device,
+                    PipelineSpec {
+                        label: "live transmissive casters",
+                        layout: shadow_layout,
+                        module,
+                        vertex: "transmit_vertex",
+                        fragment: Some("transmit_fragment"),
+                        buffers,
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format: crate::shadow::TRANSMISSION_FORMAT,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        cull: None,
+                        write_depth: true,
+                        reversed: false,
+                        cache: None,
+                    },
+                )
+            });
+            let prepass = prepass_pipelines(device, &pipeline_layout, module, false, false);
+            (
+                prepass,
+                shadow.map(|made| made.join().expect("a shadow caster pipeline")),
+                transmit.join().expect("the transmissive caster pipeline"),
             )
         });
-        let transmit = pipeline(
-            device,
-            PipelineSpec {
-                label: "live transmissive casters",
-                layout: &shadow_layout,
-                module: &module,
-                vertex: "transmit_vertex",
-                fragment: Some("transmit_fragment"),
-                buffers: &buffers,
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: crate::shadow::TRANSMISSION_FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                cull: None,
-                write_depth: true,
-                reversed: false,
-                cache: None,
-            },
-        );
+        let module = module.clone();
         let (sender, arrivals) = channel();
         Pipelines {
             prepass,
@@ -2621,6 +2674,10 @@ impl Frame {
         self.reflections_planned = planned;
     }
 
+    pub fn set_local_reflections_planned(&mut self, planned: bool) {
+        self.local_reflections_planned = planned;
+    }
+
     pub fn opaque_keys(
         &self,
         scene: &Scene<'_>,
@@ -2653,7 +2710,7 @@ impl Frame {
             self.scene_features_from(&sample),
             &instance_features,
         );
-        let lit = self.lights.extended();
+        let lit = self.lights.will_extend();
         let mut keys: Vec<OpaqueKey> = Vec::new();
         for (batch, features) in batches.iter().zip(features) {
             let key = OpaqueKey {
@@ -2690,7 +2747,8 @@ impl Frame {
             soft_filter: soft,
             cascade_blend: shadowed && read(28) > 0.0,
             probes: self.probes.live(),
-            local_reflections: self.local_reflections.borrow().is_some(),
+            local_reflections: self.local_reflections.borrow().is_some()
+                || self.local_reflections_planned,
             ssr: self.ssr.is_some() || self.reflections_planned,
             canopy: self.foliage.is_some(),
             ..OpaqueFeatures::NONE
@@ -2717,6 +2775,10 @@ impl Frame {
                     .fold(scene, |all, features| all.union(*features));
                 used.union(self.opaque_on.get())
                     .without(self.opaque_off.get())
+                    .union(OpaqueFeatures {
+                        content_cutout: batch.cut,
+                        ..OpaqueFeatures::NONE
+                    })
             })
             .collect()
     }
@@ -3251,6 +3313,11 @@ impl Frame {
         morph: Option<MorphData<'_>>,
     ) -> Result<MeshHandle, String> {
         check_mesh(&data)?;
+        let sphere = if sway.is_some() || skin.is_some() || morph.is_some() {
+            UNBOUNDED
+        } else {
+            cull::local_sphere(data.positions)
+        };
         let slot = match self.free_meshes.last() {
             Some(&slot) => slot,
             None if self.meshes.len() <= MESH_SLOT_MASK as usize => self.meshes.len(),
@@ -3319,6 +3386,7 @@ impl Frame {
             skin_len,
             skin_joints,
             morph,
+            sphere,
         };
         if slot == self.meshes.len() {
             self.meshes.push(MeshSlot {
@@ -3447,6 +3515,7 @@ impl Frame {
             mesh.index_capacity = data.indices.len();
         }
         mesh.count = data.indices.len() as u32;
+        mesh.sphere = cull::local_sphere(data.positions);
         self.mesh_epoch += 1;
         Ok(())
     }
@@ -3668,7 +3737,7 @@ impl Frame {
                     instance.deformer.0,
                     mesh.sway,
                     instance.age.clamp(0.0, 1.0).to_bits(),
-                    instance.coverage.to_bits(),
+                    (instance.coverage * self.fades.get(index).copied().unwrap_or(1.0)).to_bits(),
                 ],
                 clip: surface.clip,
                 content_uv: [
@@ -3723,6 +3792,8 @@ impl Frame {
             return Err("scene needs at least one material".into());
         }
         let surfaces = self.scene_surfaces(scene.instances.len());
+        self.update_bounds(scene.instances);
+        self.update_fades(scene);
         self.content.borrow().write_caustic(
             &self.gpu.queue,
             Caustic::rows(self.caustic.borrow().as_ref(), scene.sun.direction),
@@ -4049,6 +4120,22 @@ impl Frame {
         ) -> Result<(), String>,
     ) -> Result<(), String> {
         let (batches, surfaces) = self.prepare(scene)?;
+        let camera_runs = self.pass_runs(
+            &batches,
+            Frustum::camera(multiply(
+                jitter_matrix(self.jitter),
+                multiply(scene.camera.projection, scene.camera.view),
+            )),
+            true,
+            |batch| !batch.shadow_only,
+        );
+        let mut stats = CullStats {
+            instances: scene.instances.len() as u32,
+            camera: self.run_counts(&batches, &camera_runs),
+            ..CullStats::default()
+        };
+        let occluding = self.prepare_occlusion(scene, &camera_runs);
+        stats.occlusion_tested = occluding;
         let cut = batches.iter().any(|batch| batch.cut);
         if cut {
             self.pipelines.ensure_cut(&self.gpu.device);
@@ -4096,7 +4183,7 @@ impl Frame {
         }
         if let Some((shadows, fit)) = shadows {
             let cascades = mix_key(key, self.lights.table_key());
-            self.encode_shadows(
+            stats.cascades = self.encode_shadows(
                 cascades,
                 &batches,
                 shadows,
@@ -4116,7 +4203,7 @@ impl Frame {
             );
             shadow_hook(&self.gpu, encoder, shadows, fit)?;
             shadows.fill_unused(encoder);
-            self.encode_lights(key, &batches, encoder, profiler.as_deref_mut());
+            stats.light_faces = self.encode_lights(key, &batches, encoder, profiler.as_deref_mut());
             self.lights.write_uniform(
                 &self.gpu.device,
                 &self.gpu.queue,
@@ -4126,7 +4213,7 @@ impl Frame {
             );
             self.set_shadows(shadows, fit);
         } else {
-            self.encode_lights(key, &batches, encoder, profiler.as_deref_mut());
+            stats.light_faces = self.encode_lights(key, &batches, encoder, profiler.as_deref_mut());
             self.lights.write_uniform(
                 &self.gpu.device,
                 &self.gpu.queue,
@@ -4151,7 +4238,15 @@ impl Frame {
                     classic_depth: self.classic_depth,
                 }),
         );
-        self.encode_surfaces(&batches, &features, encoder, profiler)?;
+        self.encode_surfaces(
+            &batches,
+            &camera_runs,
+            occluding,
+            &features,
+            encoder,
+            profiler,
+        )?;
+        self.cull_stats = stats;
         self.opaque_drawn = batches
             .iter()
             .zip(features)
@@ -4219,8 +4314,23 @@ impl Frame {
         } else {
             0
         };
+        let runs: Vec<Vec<Run>> = if chosen.is_empty() {
+            Vec::new()
+        } else {
+            fit.cascades
+                .iter()
+                .map(|cascade| {
+                    self.pass_runs(
+                        batches,
+                        Frustum::caster(cascade.view_proj.columns),
+                        false,
+                        |batch| chosen.iter().any(|picked| std::ptr::eq(*picked, batch)),
+                    )
+                })
+                .collect()
+        };
         let mut draw = |pass: &mut wgpu::RenderPass<'_>, cascade: usize, statics: bool| {
-            if !chosen.is_empty() && cascade < CASCADE_COUNT {
+            if let Some(runs) = runs.get(cascade).filter(|_| cascade < CASCADE_COUNT) {
                 pass.set_pipeline(&self.pipelines.transmit);
                 pass.set_bind_group(0, &self.scene_group, &[]);
                 pass.set_bind_group(
@@ -4229,13 +4339,16 @@ impl Frame {
                     &[self.cascade_align * cascade as u32],
                 );
                 pass.set_bind_group(2, &self.deformers.group, &[]);
-                for batch in chosen.iter().filter(|batch| batch.moving != statics) {
-                    let Some(mesh) = live_mesh(&self.meshes, batch.mesh) else {
+                for run in runs
+                    .iter()
+                    .filter(|run| batches[run.batch].moving != statics)
+                {
+                    let Some(mesh) = live_mesh(&self.meshes, batches[run.batch].mesh) else {
                         continue;
                     };
                     pass.set_vertex_buffer(0, mesh.vertices.slice(..));
                     pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..mesh.count, 0, batch.range.clone());
+                    pass.draw_indexed(0..mesh.count, 0, run.range.clone());
                 }
             }
             if !statics && let Some(casts) = casts.as_mut() {
@@ -4261,11 +4374,12 @@ impl Frame {
         batches: &[Batch],
         encoder: &mut wgpu::CommandEncoder,
         profiler: Option<&mut GpuProfiler>,
-    ) {
+    ) -> PassCounts {
         let faces = self.lights.faces();
         if faces.is_empty() {
-            return;
+            return PassCounts::default();
         }
+        let mut face_runs: Vec<Vec<Run>> = Vec::new();
         for (layer, matrix) in &faces {
             let mut slot = [0u8; CASTER_BYTES as usize];
             slot[..64].copy_from_slice(bytemuck::cast_slice(matrix));
@@ -4274,9 +4388,23 @@ impl Frame {
                 u64::from(self.cascade_align) * (CASCADE_COUNT as u64 + u64::from(*layer)),
                 &slot,
             );
+            let layer = *layer as usize;
+            if face_runs.len() <= layer {
+                face_runs.resize(layer + 1, Vec::new());
+            }
+            face_runs[layer] = self.pass_runs(batches, Frustum::caster(*matrix), false, |batch| {
+                batch.casts_shadow
+            });
         }
-        let casters = shadow_batches(batches);
-        let moving = casters.iter().any(|batch| batch.moving);
+        let total = face_runs.iter().fold(PassCounts::default(), |all, runs| {
+            let counts = self.run_counts(batches, runs);
+            PassCounts {
+                draws: all.draws + counts.draws,
+                instances: all.instances + counts.instances,
+                triangles: all.triangles + counts.triangles,
+            }
+        });
+        let moving = shadow_batches(batches).iter().any(|batch| batch.moving);
         let scene_group = &self.scene_group;
         let cascade_group = &self.cascade_group;
         let deformers = &self.deformers.group;
@@ -4287,12 +4415,15 @@ impl Frame {
         let mut draw = |pass: &mut wgpu::RenderPass<'_>, layer: usize, statics: bool| {
             pass.set_bind_group(0, scene_group, &[]);
             pass.set_bind_group(1, cascade_group, &[align * (CASCADE_COUNT + layer) as u32]);
-            draw_casters(
-                pass, &casters, statics, deformers, lighting, pipelines, meshes,
-            );
+            if let Some(runs) = face_runs.get(layer) {
+                draw_casters(
+                    pass, batches, runs, statics, deformers, lighting, pipelines, meshes,
+                );
+            }
         };
         self.lights
             .render(&self.gpu.device, encoder, key, moving, &mut draw, profiler);
+        total
     }
 
     fn encode_shadows(
@@ -4303,7 +4434,7 @@ impl Frame {
         fit: &Fit,
         encoder: &mut wgpu::CommandEncoder,
         profiler: Option<&mut GpuProfiler>,
-    ) {
+    ) -> Vec<PassCounts> {
         let mode = if self.lights.any_transmissive() {
             1.0f32
         } else {
@@ -4322,8 +4453,19 @@ impl Frame {
                 &slot,
             );
         }
-        let casters = shadow_batches(batches);
-        let moving = casters.iter().any(|batch| batch.moving);
+        let moving = shadow_batches(batches).iter().any(|batch| batch.moving);
+        let runs: Vec<Vec<Run>> = fit
+            .cascades
+            .iter()
+            .map(|cascade| {
+                self.pass_runs(
+                    batches,
+                    Frustum::caster(cascade.view_proj.columns),
+                    false,
+                    |batch| batch.casts_shadow,
+                )
+            })
+            .collect();
         let mut draw = |pass: &mut wgpu::RenderPass<'_>, cascade: usize, statics: bool| {
             pass.set_bind_group(0, &self.scene_group, &[]);
             pass.set_bind_group(
@@ -4331,15 +4473,189 @@ impl Frame {
                 &self.cascade_group,
                 &[self.cascade_align * cascade as u32],
             );
-            self.draw_casters(pass, &casters, statics);
+            if let Some(runs) = runs.get(cascade) {
+                self.draw_casters(pass, batches, runs, statics);
+            }
         };
         shadows.render_with(encoder, fit, key, moving, &mut draw, profiler);
+        runs.iter()
+            .map(|runs| self.run_counts(batches, runs))
+            .collect()
     }
 
-    fn draw_casters(&self, pass: &mut wgpu::RenderPass<'_>, casters: &[&Batch], statics: bool) {
+    fn update_fades(&mut self, scene: &Scene<'_>) {
+        self.fades.clear();
+        if scene
+            .instances
+            .iter()
+            .all(|instance| !instance.max_distance.is_finite())
+        {
+            return;
+        }
+        let eye = scene.camera.position;
+        for (index, instance) in scene.instances.iter().enumerate() {
+            let sphere = self
+                .bounds
+                .get(index)
+                .map_or(UNBOUNDED, |bound| bound.sphere);
+            let center = if sphere[3].is_finite() {
+                [sphere[0], sphere[1], sphere[2]]
+            } else {
+                [
+                    instance.model[3][0],
+                    instance.model[3][1],
+                    instance.model[3][2],
+                ]
+            };
+            self.fades
+                .push(cull::distance_fade(center, eye, instance.max_distance));
+        }
+    }
+
+    fn update_bounds(&mut self, instances: &[Instance]) {
+        self.bounds.truncate(instances.len());
+        for (index, instance) in instances.iter().enumerate() {
+            if let Some(cached) = self.bounds.get(index)
+                && cached.mesh == instance.mesh
+                && cached.deformer == instance.deformer
+                && cached.epoch == self.mesh_epoch
+                && same_bits(cached.model, instance.model)
+            {
+                continue;
+            }
+            let sphere = match live_mesh(&self.meshes, instance.mesh) {
+                Some(mesh) if instance.deformer == DeformerId::NONE => {
+                    cull::world_sphere(mesh.sphere, instance.model)
+                }
+                _ => UNBOUNDED,
+            };
+            let bound = CachedBound {
+                mesh: instance.mesh,
+                model: instance.model,
+                deformer: instance.deformer,
+                epoch: self.mesh_epoch,
+                sphere,
+            };
+            match self.bounds.get_mut(index) {
+                Some(cached) => *cached = bound,
+                None => self.bounds.push(bound),
+            }
+        }
+    }
+
+    fn pass_runs(
+        &self,
+        batches: &[Batch],
+        frustum: Frustum,
+        faded: bool,
+        keep: impl Fn(&Batch) -> bool,
+    ) -> Vec<Run> {
+        let chosen = batches.iter().enumerate().filter(|(_, batch)| keep(batch));
+        if !self.culling {
+            return cull::all_runs(chosen);
+        }
+        let mut out = Vec::new();
+        cull::runs(
+            chosen,
+            |index| {
+                self.bounds
+                    .get(index)
+                    .is_none_or(|bound| frustum.sees(bound.sphere))
+                    && !(faded && self.fades.get(index).is_some_and(|fade| *fade <= 0.0))
+            },
+            &mut out,
+        );
+        out
+    }
+
+    fn run_counts(&self, batches: &[Batch], runs: &[Run]) -> PassCounts {
+        cull::counts(runs, |index| {
+            live_mesh(&self.meshes, batches[index].mesh).map_or(0, |mesh| u64::from(mesh.count / 3))
+        })
+    }
+
+    fn prepare_occlusion(&mut self, scene: &Scene<'_>, camera_runs: &[Run]) -> bool {
+        if !self.culling
+            || !self.occlusion_on
+            || self.classic_depth
+            || camera_runs.is_empty()
+            || self.occlusion.is_none()
+        {
+            return false;
+        }
+        let mut inputs = std::mem::take(&mut self.cull_inputs);
+        inputs.clear();
+        for (index, instance) in scene.instances.iter().enumerate() {
+            let sphere = self
+                .bounds
+                .get(index)
+                .map_or(UNBOUNDED, |bound| bound.sphere);
+            let bounded = sphere.iter().all(|value| value.is_finite());
+            inputs.push(crate::occlusion::CullInput {
+                sphere: if bounded { sphere } else { [0.0; 4] },
+                index_count: live_mesh(&self.meshes, instance.mesh).map_or(0, |mesh| mesh.count),
+                testable: u32::from(bounded),
+                pad: [0; 2],
+            });
+        }
+        let view_projection = reversed(multiply(
+            jitter_matrix(self.jitter),
+            multiply(scene.camera.projection, scene.camera.view),
+        ));
+        if let Some(occlusion) = self.occlusion.as_mut() {
+            occlusion.prepare(
+                &self.gpu.device,
+                &self.gpu.queue,
+                &inputs,
+                view_projection,
+                &self.targets.depth,
+                self.viewport,
+            );
+        }
+        self.cull_inputs = inputs;
+        true
+    }
+
+    pub fn set_occlusion(&mut self, on: bool) {
+        self.occlusion_on = on;
+        if on && self.occlusion.is_none() && self.occlusion_supported() {
+            self.occlusion = Some(crate::occlusion::Occlusion::new(&self.gpu.device));
+        }
+    }
+
+    pub fn occlusion_supported(&self) -> bool {
+        crate::occlusion::supported(&self.gpu.device)
+    }
+
+    pub fn occlusion_visible(&self) -> Option<Vec<u32>> {
+        self.occlusion
+            .as_ref()
+            .map(|occlusion| occlusion.read_visible(&self.gpu.device, &self.gpu.queue))
+    }
+
+    pub fn set_culling(&mut self, on: bool) {
+        self.culling = on;
+    }
+
+    pub fn culling(&self) -> bool {
+        self.culling
+    }
+
+    pub fn cull_stats(&self) -> &CullStats {
+        &self.cull_stats
+    }
+
+    fn draw_casters(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        batches: &[Batch],
+        runs: &[Run],
+        statics: bool,
+    ) {
         draw_casters(
             pass,
-            casters,
+            batches,
+            runs,
             statics,
             &self.deformers.group,
             self.lighting_group.group.as_ref(),
@@ -4351,6 +4667,8 @@ impl Frame {
     fn encode_surfaces(
         &self,
         batches: &[Batch],
+        runs: &[Run],
+        occluding: bool,
         features: &[OpaqueFeatures],
         encoder: &mut wgpu::CommandEncoder,
         mut profiler: Option<&mut GpuProfiler>,
@@ -4360,20 +4678,39 @@ impl Frame {
             .group
             .as_ref()
             .ok_or("frame lighting is not prepared")?;
-        let depth_timing = profiler
-            .as_deref_mut()
-            .and_then(|timer| timer.pass("depth and velocity"));
-        {
+        let occlusion = self.occlusion.as_ref().filter(|_| occluding);
+        if let Some(occlusion) = occlusion {
+            occlusion.encode_early(encoder, profiler.as_deref_mut());
+        }
+        let phases: Vec<(&str, Option<&wgpu::Buffer>)> = match occlusion {
+            Some(occlusion) => vec![
+                ("depth and velocity", Some(&occlusion.early)),
+                ("depth and velocity late", Some(&occlusion.late)),
+            ],
+            None => vec![("depth and velocity", None)],
+        };
+        for (phase, (label, commands)) in phases.into_iter().enumerate() {
+            if phase > 0
+                && let Some(occlusion) = occlusion
+            {
+                occlusion.encode_late(encoder, profiler.as_deref_mut());
+            }
+            let colour = if phase == 0 {
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+            } else {
+                wgpu::LoadOp::Load
+            };
+            let depth_timing = profiler.as_deref_mut().and_then(|timer| timer.pass(label));
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 multiview_mask: None,
-                label: Some("depth and velocity"),
+                label: Some(label),
                 color_attachments: &[
                     Some(wgpu::RenderPassColorAttachment {
                         view: &self.targets.velocity_view,
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            load: colour,
                             store: wgpu::StoreOp::Store,
                         },
                     }),
@@ -4382,7 +4719,7 @@ impl Frame {
                         resolve_target: None,
                         depth_slice: None,
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            load: colour,
                             store: wgpu::StoreOp::Store,
                         },
                     }),
@@ -4390,7 +4727,11 @@ impl Frame {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.targets.depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
+                        load: if phase == 0 {
+                            wgpu::LoadOp::Clear(0.0)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -4401,19 +4742,28 @@ impl Frame {
                     .and_then(|timer| timer.render_writes(depth_timing)),
             });
             crate::viewport::apply(&mut pass, self.viewport);
-            self.draw_with(&mut pass, batches, lighting, |index, two_sided| {
-                let cut = batches[index].cut && self.pipelines.cut.is_some();
-                let pair = match (
-                    &self.pipelines.classic[usize::from(cut)],
-                    &self.pipelines.cut,
-                ) {
-                    (Some(classic), _) if self.classic_depth => classic,
-                    (_, Some(pipelines)) if cut => &pipelines.prepass,
-                    _ => &self.pipelines.prepass,
-                };
-                &pair[usize::from(two_sided)]
-            });
-            if let Some(foliage) = &self.foliage {
+            self.draw_with(
+                &mut pass,
+                batches,
+                runs,
+                commands,
+                lighting,
+                |index, two_sided| {
+                    let cut = batches[index].cut && self.pipelines.cut.is_some();
+                    let pair = match (
+                        &self.pipelines.classic[usize::from(cut)],
+                        &self.pipelines.cut,
+                    ) {
+                        (Some(classic), _) if self.classic_depth => classic,
+                        (_, Some(pipelines)) if cut => &pipelines.prepass,
+                        _ => &self.pipelines.prepass,
+                    };
+                    &pair[usize::from(two_sided)]
+                },
+            );
+            if phase == 0
+                && let Some(foliage) = &self.foliage
+            {
                 self.draw_cards(&mut pass, foliage, &foliage.prepass, lighting);
             }
         }
@@ -4463,22 +4813,29 @@ impl Frame {
             crate::viewport::apply(&mut pass, self.viewport);
             let lit = self.lights.extended();
             let last: Cell<Option<(OpaqueKey, &wgpu::RenderPipeline)>> = Cell::new(None);
-            self.draw_with(&mut pass, batches, lighting, |index, two_sided| {
-                let key = OpaqueKey {
-                    features: features[index],
-                    lit,
-                    two_sided,
-                    classic_depth: self.classic_depth,
-                };
-                match last.get() {
-                    Some((seen, pipeline)) if seen == key => pipeline,
-                    _ => {
-                        let pipeline = &self.pipelines.opaque[&key];
-                        last.set(Some((key, pipeline)));
-                        pipeline
+            self.draw_with(
+                &mut pass,
+                batches,
+                runs,
+                occlusion.map(|occlusion| &occlusion.last),
+                lighting,
+                |index, two_sided| {
+                    let key = OpaqueKey {
+                        features: features[index],
+                        lit,
+                        two_sided,
+                        classic_depth: self.classic_depth,
+                    };
+                    match last.get() {
+                        Some((seen, pipeline)) if seen == key => pipeline,
+                        _ => {
+                            let pipeline = &self.pipelines.opaque[&key];
+                            last.set(Some((key, pipeline)));
+                            pipeline
+                        }
                     }
-                }
-            });
+                },
+            );
             if let Some(foliage) = &self.foliage {
                 self.draw_cards(&mut pass, foliage, &foliage.opaque, lighting);
             }
@@ -4490,6 +4847,8 @@ impl Frame {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         batches: &[Batch],
+        runs: &[Run],
+        commands: Option<&wgpu::Buffer>,
         lighting: &wgpu::BindGroup,
         pipelines: impl Fn(usize, bool) -> &'p wgpu::RenderPipeline,
     ) {
@@ -4498,12 +4857,9 @@ impl Frame {
         pass.set_bind_group(2, &self.deformers.group, &[]);
         pass.set_bind_group(3, lighting, &[]);
         let mut current: Option<&wgpu::RenderPipeline> = None;
-        for (index, batch) in batches
-            .iter()
-            .enumerate()
-            .filter(|(_, batch)| !batch.shadow_only)
-        {
-            let chosen = pipelines(index, batch.two_sided);
+        for run in runs {
+            let batch = &batches[run.batch];
+            let chosen = pipelines(run.batch, batch.two_sided);
             if !current.is_some_and(|last| std::ptr::eq(last, chosen)) {
                 pass.set_pipeline(chosen);
                 current = Some(chosen);
@@ -4513,7 +4869,14 @@ impl Frame {
             };
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..mesh.count, 0, batch.range.clone());
+            match commands {
+                Some(commands) => pass.multi_draw_indexed_indirect(
+                    commands,
+                    u64::from(run.range.start) * crate::occlusion::COMMAND_BYTES,
+                    run.range.end - run.range.start,
+                ),
+                None => pass.draw_indexed(0..mesh.count, 0, run.range.clone()),
+            }
         }
     }
 
@@ -4686,6 +5049,13 @@ struct MaterialData {
 }
 @group(0) @binding(0) var<uniform> frame: FrameUniforms;
 @group(0) @binding(1) var<storage, read> instances: array<InstanceData>;
+fn toward_eye(world: vec3f) -> vec3f {
+    let m = frame.motion_view_projection;
+    if (m[0].w == 0.0 && m[1].w == 0.0 && m[2].w == 0.0) {
+        return normalize(vec3f(frame.view[0].z, frame.view[1].z, frame.view[2].z));
+    }
+    return normalize(frame.camera_position.xyz - world);
+}
 @group(0) @binding(2) var<storage, read> materials: array<MaterialData>;
 @group(0) @binding(3) var<storage, read> sway_data: array<SwayData>;
 @group(1) @binding(0) var<uniform> shadow_setting: ShadowSample;
@@ -5146,7 +5516,7 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     let flake_t = flake_frame_t(flake.xyz);
     let flake_b = cross(flake.xyz, flake_t);
     lobes_live(material, curvature);
-    let view = normalize(frame.camera_position.xyz - input.world_position);
+    let view = toward_eye(input.world_position);
     let light = normalize(frame.sun_direction.xyz);
     let wo = vec3f(dot(view, t), dot(view, b), dot(view, n));
     let wi = vec3f(dot(light, t), dot(light, b), dot(light, n));

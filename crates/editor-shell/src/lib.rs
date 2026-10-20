@@ -2,6 +2,7 @@ pub mod focus;
 mod offscreen;
 pub mod paint;
 pub mod pgpu;
+pub mod profile;
 mod script;
 mod window;
 pub mod worker;
@@ -17,6 +18,8 @@ use pfx_gpu::Gpu;
 
 pub use offscreen::{MAX_SIDE, check, drive, encode_png, pixels};
 pub use pfx_editor_style::Theme;
+pub use pfx_gpu::stats::{FrameStatsSnapshot, Percentiles};
+pub use pfx_gpu::window::{FrameRate, Present};
 pub use pgpu::Pgpu;
 pub use window::{Pulse, window};
 pub use worker::Wake;
@@ -36,6 +39,17 @@ impl Default for Watch {
             every: WATCH_EVERY,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Frames {
+    pub snapshot: FrameStatsSnapshot,
+    pub shown: Option<(f64, Percentiles)>,
+    pub render_scale: Option<f32>,
+    pub present_mode: String,
+    pub vrr: bool,
+    pub vrr_in_effect: Option<bool>,
+    pub frame_rate: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -89,6 +103,32 @@ pub trait App {
     fn timing(&self) -> Timing {
         Timing::default()
     }
+
+    fn present(&self) -> Present {
+        Present::default()
+    }
+
+    fn raised_priority(&self) -> bool {
+        false
+    }
+
+    fn commands(&mut self) -> Vec<pfx_gpu::wgpu::CommandBuffer> {
+        Vec::new()
+    }
+
+    fn gpu_timings(&self) -> Option<&pfx_gpu::FrameTimings> {
+        None
+    }
+
+    fn render_scale(&self) -> Option<f32> {
+        None
+    }
+
+    fn stats(&self) -> bool {
+        false
+    }
+
+    fn frames(&mut self, _frames: &Frames) {}
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

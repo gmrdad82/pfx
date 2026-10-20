@@ -1577,11 +1577,11 @@ fn scene(out: &mut Out<'_>) {
             format!("`{scene}` is not a TOML file, expected a path ending in `{SCENE_SUFFIX}`"),
         );
     }
-    if o.scene_format > 1 {
+    if o.scene_format != 1 {
         out.same(
             "output.scene_format",
             format!(
-                "pfx writes scene format 0 or 1, not {}, expected 1 (the default) or 0",
+                "pfx writes scene format 1, not {}, expected 1 (the default)",
                 o.scene_format
             ),
         );

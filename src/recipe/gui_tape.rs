@@ -5,13 +5,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use pfx_build::Registry;
+use pfx_core::rate::Rate;
 use pfx_workbench::{Follow, Layout, Mode, Shell, Tape, Viewer, Workbench};
 use serde_json::json;
 
 use super::gui::Args;
 use super::process::on_path;
 
-pub(super) const FPS: [u32; 3] = [30, 60, 120];
+const FPS: Rate = Rate::whole(30);
 const SIZE: [u32; 2] = [1586, 992];
 const ENCODER: &str = "pcod";
 const CRF: &str = "14";
@@ -65,18 +66,21 @@ pub(super) fn poster(text: &str) -> Result<Poster, String> {
 }
 
 impl Poster {
-    fn frame(self, fps: u32, frames: usize) -> Result<usize, String> {
+    fn frame(self, rate: Rate, frames: usize) -> Result<usize, String> {
         match self {
             Poster::First => Ok(0),
             Poster::Last => Ok(frames.saturating_sub(1)),
             Poster::At(seconds) => {
-                let frame = (seconds * fps as f32).round() as usize;
+                let frame = match rate.whole_fps() {
+                    Some(fps) => (seconds * fps as f32).round() as usize,
+                    None => rate.frames(f64::from(seconds)).round() as usize,
+                };
                 if frame < frames {
                     Ok(frame)
                 } else {
                     Err(format!(
                         "the poster at {seconds} s is past the clip's last frame, at {:.3} s",
-                        frames.saturating_sub(1) as f32 / fps as f32
+                        rate.time(frames.saturating_sub(1) as u64)
                     ))
                 }
             }
@@ -92,10 +96,10 @@ impl Poster {
     }
 }
 
-fn pcod_args(fps: u32) -> Vec<String> {
+fn pcod_args(rate: Rate) -> Vec<String> {
     [
         "--fps",
-        &fps.to_string(),
+        &rate.to_string(),
         "--codec",
         "h264",
         "--route",
@@ -107,9 +111,9 @@ fn pcod_args(fps: u32) -> Vec<String> {
     .to_vec()
 }
 
-fn encode_line(frames: &Path, fps: u32, out: &Path) -> Vec<String> {
+fn encode_line(frames: &Path, rate: Rate, out: &Path) -> Vec<String> {
     let mut line = vec!["frames".to_string(), frames.display().to_string()];
-    line.extend(pcod_args(fps));
+    line.extend(pcod_args(rate));
     line.push(out.display().to_string());
     line
 }
@@ -445,6 +449,15 @@ pub(super) fn scale(text: &str) -> Result<f32, String> {
     }
 }
 
+fn stem(shot: &str, size: [u32; 2], rate: Rate) -> String {
+    format!(
+        "{shot}-{}x{}-{}fps",
+        size[0],
+        size[1],
+        rate.label().replace('/', "-")
+    )
+}
+
 fn frame_name(index: usize) -> String {
     format!("frame-{index:05}.png")
 }
@@ -475,9 +488,9 @@ fn png_writers(dir: PathBuf, size: [u32; 2], frames: Receiver<(usize, Vec<u8>)>)
         .collect()
 }
 
-fn encode(frames: &Path, fps: u32, out: &Path, idle: &mut Idle) -> Result<(), String> {
+fn encode(frames: &Path, rate: Rate, out: &Path, idle: &mut Idle) -> Result<(), String> {
     let mut child = Command::new(ENCODER)
-        .args(encode_line(frames, fps, out))
+        .args(encode_line(frames, rate, out))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -515,7 +528,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
     let out = args.clip.clone().unwrap_or_default();
     let tape_path = args.tape.clone().unwrap_or_default();
     let size = args.size.unwrap_or(SIZE);
-    let fps = args.fps.unwrap_or(FPS[0]);
+    let rate = args.fps.unwrap_or(FPS);
     let poster = args.poster.unwrap_or(Poster::First);
     let layout = Layout {
         size,
@@ -527,10 +540,10 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
     let tape_sha256 = sha256(&bytes);
     let text = String::from_utf8(bytes).map_err(|error| named(&tape_path, &error))?;
     let tape = Tape::parse(&text).map_err(|error| named(&tape_path, &error))?;
-    let steps = pfx_workbench::tape_steps(&tape, fps, layout.points())
+    let steps = pfx_workbench::tape_steps(&tape, rate, layout.points())
         .map_err(|error| named(&tape_path, &error))?;
     let frames = steps.len();
-    let poster_frame = poster.frame(fps, frames)?;
+    let poster_frame = poster.frame(rate, frames)?;
     let place = place(args)?;
     if args.bare && matches!(place, Place::Nothing | Place::Folder(_)) {
         return Err(
@@ -562,7 +575,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
         || "tape".to_string(),
         |stem| stem.to_string_lossy().into_owned(),
     );
-    let stem = format!("{shot}-{}x{}-{fps}fps", size[0], size[1]);
+    let stem = stem(&shot, size, rate);
     let master = out.join(format!("{stem}.master.mp4"));
     let partial = out.join(format!("{stem}.partial.mp4"));
     let folder = out.join(&stem);
@@ -595,7 +608,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
         &mut Workbench::new(&mut shell, viewer),
         &tape,
         layout,
-        fps,
+        rate,
         |index, rgba| {
             if index == poster_frame && !args.frames {
                 kept = Some(rgba.to_vec());
@@ -643,7 +656,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
     let played = played.map_err(|error| fail(error.0))?;
     written.map_err(fail)?;
     if encoder.is_some() {
-        encode(&partial_folder, fps, &partial, &mut idle).map_err(fail)?;
+        encode(&partial_folder, rate, &partial, &mut idle).map_err(fail)?;
         let _ = std::fs::remove_dir_all(&partial_folder);
     }
     let bytes = |path: &Path| std::fs::metadata(path).map_or(0, |meta| meta.len());
@@ -651,6 +664,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
         path.file_name()
             .map(|name| name.to_string_lossy().into_owned())
     };
+    let fps = crate::shot::fps_value(rate);
     let mut params = json!({
         "size": size,
         "fps": fps,
@@ -662,6 +676,9 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
         "bare": args.bare,
         "strip": args.strip,
     });
+    if rate.whole_fps().is_none() {
+        params["frame_rate"] = rate.to_string().into();
+    }
     let target = if args.start {
         Some("start".to_string())
     } else {
@@ -697,7 +714,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
             "params": params,
             "frames": {
                 "count": played,
-                "seconds": played as f64 / f64::from(fps),
+                "seconds": rate.time(played as u64),
                 "folder": stem,
                 "pattern": "frame-%05d.png",
             },
@@ -723,7 +740,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
             "params": params,
             "frames": {
                 "master": played,
-                "seconds": played as f64 / f64::from(fps),
+                "seconds": rate.time(played as u64),
                 "poster": poster_frame,
             },
             "outputs": {
@@ -735,7 +752,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
                 {"file": file(&poster_path), "role": "poster", "bytes": bytes(&poster_path), "fps": fps, "size": size, "frame": poster_frame},
             ],
             "encodes": [
-                {"file": file(&master), "role": "master", "fps": fps, "size": size, "encoder": ENCODER, "args": pcod_args(fps)},
+                {"file": file(&master), "role": "master", "fps": fps, "size": size, "encoder": ENCODER, "args": pcod_args(rate)},
             ],
         });
         (value, vec![&master, &poster_path, &manifest])
@@ -754,7 +771,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
                 "stage": "done",
                 "kind": value["kind"],
                 "frames": played,
-                "seconds": played as f64 / f64::from(fps),
+                "seconds": rate.time(played as u64),
                 "manifest": manifest.display().to_string(),
                 "files": files,
             })
@@ -789,7 +806,7 @@ mod tests {
         assert_eq!(parsed.clip, Some(PathBuf::from("tmp/c")));
         assert_eq!(parsed.tape, Some(PathBuf::from("t.tape")));
         assert_eq!(parsed.size, Some([800, 500]));
-        assert_eq!(parsed.fps, Some(60));
+        assert_eq!(parsed.fps, Some(Rate::whole(60)));
         assert_eq!(parsed.poster, Some(Poster::At(1.5)));
         assert!(args("--clip tmp/c --tape t.tape --start").unwrap().start);
         let framed = args(
@@ -811,7 +828,6 @@ mod tests {
         for text in [
             "--clip tmp/c",
             "--tape t.tape",
-            "--clip tmp/c --tape t.tape --fps 24",
             "--clip tmp/c --tape t.tape --poster soon",
             "--clip tmp/c --tape t.tape --shot a.png",
             "--clip tmp/c --tape t.tape --input s.txt",
@@ -834,12 +850,26 @@ mod tests {
     fn the_master_is_pcod_frames_on_the_cpu_at_crf_14() {
         let line = encode_line(
             Path::new("out/t.partial"),
-            60,
+            Rate::whole(60),
             Path::new("out/t.partial.mp4"),
         );
         assert_eq!(
             line.join(" "),
             "frames out/t.partial --fps 60 --codec h264 --route cpu --crf 14 out/t.partial.mp4"
+        );
+        let ntsc = encode_line(
+            Path::new("out/t.partial"),
+            Rate::new(24000, 1001).unwrap(),
+            Path::new("out/t.partial.mp4"),
+        );
+        assert_eq!(
+            ntsc.join(" "),
+            "frames out/t.partial --fps 24000/1001 --codec h264 --route cpu --crf 14 out/t.partial.mp4"
+        );
+        assert_eq!(stem("t", [800, 500], FPS), "t-800x500-30fps");
+        assert_eq!(
+            stem("t", [800, 500], Rate::new(24000, 1001).unwrap()),
+            "t-800x500-23.976fps"
         );
     }
 
@@ -887,10 +917,61 @@ mod tests {
 
     #[test]
     fn a_poster_is_a_frame_inside_the_clip() {
-        assert_eq!(Poster::First.frame(30, 90), Ok(0));
-        assert_eq!(Poster::Last.frame(30, 90), Ok(89));
-        assert_eq!(Poster::At(1.0).frame(30, 90), Ok(30));
-        assert!(Poster::At(3.0).frame(30, 90).is_err());
+        assert_eq!(Poster::First.frame(FPS, 90), Ok(0));
+        assert_eq!(Poster::Last.frame(FPS, 90), Ok(89));
+        assert_eq!(Poster::At(1.0).frame(FPS, 90), Ok(30));
+        assert!(Poster::At(3.0).frame(FPS, 90).is_err());
+    }
+
+    #[test]
+    fn a_tape_at_24000_1001_has_an_exact_frame_count_and_poster_frame() {
+        let rate = Rate::new(24000, 1001).unwrap();
+        let tape = Tape::parse("wait 10.01\n").unwrap();
+        let frames = pfx_workbench::tape_steps(&tape, rate, [200.0, 100.0])
+            .unwrap()
+            .len();
+        assert_eq!(frames, 241);
+        assert_eq!(rate.time(240), 10.01);
+        assert_eq!(Poster::At(1.001).frame(rate, frames), Ok(24));
+        assert_eq!(Poster::At(5.005).frame(rate, frames), Ok(120));
+        assert_eq!(Poster::Last.frame(rate, frames), Ok(240));
+        assert!(Poster::At(10.06).frame(rate, frames).is_err());
+        let whole = Tape::parse("wait 0.35\n").unwrap();
+        assert_eq!(
+            pfx_workbench::tape_steps(&whole, FPS, [200.0, 100.0])
+                .unwrap()
+                .len(),
+            12
+        );
+    }
+
+    #[test]
+    fn fps_takes_the_rates_pfx_clip_takes_and_refuses_the_rest_in_clap_shape() {
+        let base = "--clip tmp/c --tape t.tape --fps";
+        for (fps, num, den) in [
+            ("24", 24, 1),
+            ("120", 120, 1),
+            ("24000/1001", 24000, 1001),
+            ("30000/1001", 30000, 1001),
+            ("60000/1001", 60000, 1001),
+            ("23.976", 24000, 1001),
+            ("23.98", 24000, 1001),
+            ("29.97", 30000, 1001),
+            ("59.94", 60000, 1001),
+        ] {
+            let found = args(&format!("{base} {fps}")).unwrap().fps.unwrap();
+            assert_eq!((found.num(), found.den()), (num, den), "{fps}");
+        }
+        assert_eq!(args("--clip tmp/c --tape t.tape").unwrap().fps, None);
+        let refused = args(&format!("{base} 23.97")).unwrap_err();
+        assert!(
+            refused.contains("invalid value '23.97' for '--fps <F>': ")
+                && refused.contains("use 24000/1001"),
+            "{refused}"
+        );
+        for bad in ["12.5", "0", "241", "1/2", "abc"] {
+            assert!(args(&format!("{base} {bad}")).is_err(), "{bad}");
+        }
     }
 
     #[test]
