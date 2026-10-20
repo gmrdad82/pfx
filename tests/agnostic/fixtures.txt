@@ -99,7 +99,7 @@ f814cd70e5e2d239d6a11cb9f1a3d6265bdc9d0dbb6395f6436a2fd0bc300f4b  docs/images/tu
 d80c65b27d4880f04c2b151050e0a2bb4b8d0fbd4b506f0e98e4cf73e68e5e71  docs/images/denoise.png  generated: the README's denoiser split, the neutral desk traced at 8 samples beside pfx-denoise's output (crates/denoise/examples/compare.rs), labelled
 c552efe752e4109c0d0f4d62d6b8833c4e8fa17ff42552900d6e45b28001d491  docs/images/live.gif  generated: the README's live clip, the neutral desk drawn by the live renderer (crates/live/examples/clip.rs), made a 1280 px, 12 fps GIF with pcod's predecessor
 9bbff16195b3a7abdbac2413a74ebac5494565f4374524e05430e6e1ee2b3b09  docs/images/swarm.png  generated: the README's flat-pass still, the swarm test's particle load drawn by crates/live/examples/swarm.rs
-91f0ed6f0c8dab8182ee483efc869dd55100999bf459e439136031b0b41d59a0  docs/images/new.gif  generated: prec's terminal shot start (render/terminal.toml), made a 1280 px, 15 fps GIF with pcod (NOTICE.md)
+516fc10d73214bf8f9f1e60dca5c55e323eabc4dbc17c2513fa770cc8fbca27a  docs/images/new.gif  generated: prec's terminal shot start (render/terminal.toml), made a 1280 px, 15 fps GIF with pcod (NOTICE.md)
 4096b33dae1d2ff2b765d8f2bcc3c121999ebe3c86279d906602bb2ac97e3ab2  docs/images/film.gif  generated: prec's terminal shot film (render/terminal.toml), made a 1280 px, 15 fps GIF with pcod (NOTICE.md)
 1926cb1bba4c218c0e3ab2b4f78b021d4865986d6ac995a8009445256e298ab9  docs/images/resume.gif  generated: prec's terminal shot resume (render/terminal.toml), made a 1280 px, 15 fps GIF with pcod (NOTICE.md)
 6be880d2faac1e1d491f1e35463a9476c44b5a8ebdb4b978330b9d57157e48ed  docs/images/git.gif  generated: prec's terminal shot git (render/terminal.toml), made a 1280 px, 15 fps GIF with pcod (NOTICE.md)

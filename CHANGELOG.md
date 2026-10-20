@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.1.3 — 2026-10-20
+
+### Added
+
+- Apps can play the Powered by pfx splash in their own window through `pfx_splash::Player`, the same player pfx games run, with the chime handed to the app's own mixer; docs/splash.md shows how an app keeps redrawing and hands over its device while it plays.
+- `show = "always"` in the splash settings plays the splash whatever licence key is present; the default, `"auto"`, still lets a Pro key hide it with `hide = true`.
+
+### Changed
+
+- `pfx_splash::Settings` (and `pfx_game::SplashSettings`) has a new public field, `show`: code that builds the settings field by field without `..Default::default()` adds it.
+- docs/install.md says the macOS release ships the command-line tool, and how to build pfx.app from a checkout.
+
 ## v3.1.2 — 2026-10-20
 
 pfx is now licensed under the AGPL-3.0, with a commercial licence for closed products; versions up to 3.1.1 remain MIT.
