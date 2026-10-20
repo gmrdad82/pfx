@@ -90,10 +90,21 @@ impl Side {
 }
 
 pub fn reverb(dry: &[[f32; 2]], rate: u32, room: Room) -> Vec<[f32; 2]> {
-    let feedback = room.size.clamp(0.0, 1.0) * SCALE_ROOM + OFFSET_ROOM;
-    let damp = room.damp.clamp(0.0, 1.0) * SCALE_DAMP;
-    let wet = room.wet.max(0.0) * SCALE_WET;
-    let width = room.width.clamp(0.0, 1.0);
+    let unit = |value: f32| {
+        if value.is_nan() {
+            0.0
+        } else {
+            value.clamp(0.0, 1.0)
+        }
+    };
+    let feedback = unit(room.size) * SCALE_ROOM + OFFSET_ROOM;
+    let damp = unit(room.damp) * SCALE_DAMP;
+    let wet = if room.wet.is_finite() {
+        room.wet.max(0.0) * SCALE_WET
+    } else {
+        0.0
+    };
+    let width = unit(room.width);
     let wet1 = wet * (width / 2.0 + 0.5);
     let wet2 = wet * ((1.0 - width) / 2.0);
     let mut left = Side::new(rate, 0);

@@ -30,6 +30,8 @@ pub(crate) struct Ramp {
     current: f32,
     target: f32,
     step: f32,
+    start: f32,
+    done: u64,
 }
 
 impl Ramp {
@@ -38,6 +40,8 @@ impl Ramp {
             current: value,
             target: value,
             step: 0.0,
+            start: value,
+            done: 0,
         }
     }
 
@@ -56,11 +60,18 @@ impl Ramp {
     pub(crate) fn to(&mut self, target: f32, frames: u32) {
         self.target = target;
         self.step = (target - self.current) / frames.max(1) as f32;
+        self.start = self.current;
+        self.done = 0;
+    }
+
+    fn at(&self, done: u64) -> f32 {
+        (f64::from(self.start) + f64::from(self.step) * done as f64) as f32
     }
 
     pub(crate) fn next(&mut self) -> f32 {
         if self.current != self.target {
-            self.current += self.step;
+            self.done += 1;
+            self.current = self.at(self.done);
             let passed = if self.step > 0.0 {
                 self.current >= self.target
             } else {
@@ -77,7 +88,8 @@ impl Ramp {
         if self.current == self.target {
             return;
         }
-        let moved = self.current + self.step * frames as f32;
+        self.done = self.done.saturating_add(frames as u64);
+        let moved = self.at(self.done);
         let passed = if self.step > 0.0 {
             moved >= self.target
         } else {
@@ -223,5 +235,22 @@ mod tests {
         assert_eq!(ramp.current(), 0.5);
         ramp.skip(5);
         assert_eq!(ramp.current(), 0.0);
+        let (from, to, frames) = (9.98f32, 5.08f32, 1_536_000u32);
+        let mut stepped = Ramp::new(from);
+        let mut skipped = Ramp::new(from);
+        stepped.to(to, frames);
+        skipped.to(to, frames);
+        for _ in 0..1_248_000 {
+            stepped.next();
+        }
+        skipped.skip(1_000_000);
+        skipped.skip(248_000);
+        assert_eq!(stepped.current(), skipped.current());
+        let exact = from + (to - from) * 1_248_000.0 / frames as f32;
+        assert!(
+            (stepped.current() - exact).abs() < 1e-4,
+            "{}",
+            stepped.current()
+        );
     }
 }

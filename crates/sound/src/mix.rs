@@ -2029,7 +2029,13 @@ mod tests {
         mixer.render(500);
         mixer.glide_channel_pitch(ChannelId::MUSIC, 3.0, 0.2);
         let swept = mixer.render(20_000);
-        assert!(largest_step(&swept) <= intrinsic(1320.0) * 1.05);
+        let mut steady = Mixer::new(48_000, 1);
+        steady.glide_channel_pitch(ChannelId::MUSIC, 3.0, 0.0);
+        looped_sine(&mut steady, 440, 0.5);
+        steady.render(500);
+        let settled = largest_step(&steady.render(20_000));
+        assert!(largest_step(&swept[..9_700]) <= intrinsic(1320.0) * 1.05);
+        assert!(largest_step(&swept) <= settled * 1.05);
         mixer.set_channel_pitch(ChannelId::MUSIC, 1.0);
         let jumped = mixer.render(2000);
         assert!(largest_step(&jumped) <= intrinsic(1320.0) * 1.05);
@@ -2705,9 +2711,9 @@ mod tests {
         assert_eq!(
             hashes,
             vec![
-                14_200_292_695_880_409_801,
-                16_769_013_843_704_761_931,
-                18_164_464_539_029_061_673
+                15_797_300_903_040_038_981,
+                14_799_877_665_379_112_897,
+                12_560_630_241_996_157_637
             ]
         );
     }

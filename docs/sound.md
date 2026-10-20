@@ -322,12 +322,12 @@ stem.lowpass_sweep(0, 2_000.0, 320.0, 9_600);
 let samples = stem.finish();
 ```
 
-- A `Note` starts at frame `at`, holds for `held` frames, then plays its envelope's release. `glide` moves the frequency to `to_hz` over `frames`, starting `after` frames into the note. `fade` fades the note to silence over that many frames from its start. `seed` seeds noise waves.
-- Notes past the end of the buffer are skipped; a note that runs past it is cut there. Each envelope stage is tabulated once per envelope, up to the buffer's length, so a very long envelope costs no more than the stem.
+- A `Note` starts at frame `at`, holds for `held` frames, then plays its envelope's release. `glide` moves the frequency to `to_hz` over `frames`, starting `after` frames into the note. `fade` fades the note to silence over that many frames from its start. `seed` is the noise voice's own seed: the mixer draws each voice's seed from the generator `set_seed` starts, so a noise note matches a mixer voice only when it is given the seed that voice drew. A note whose `hz`, `gain`, `pan` or glide target is NaN or infinite is skipped, so one bad value never turns the stem into NaN.
+- Notes past the end of the buffer are skipped; a note that runs past it is cut there. Each envelope stage is tabulated once per envelope, up to the buffer's length, so a very long envelope costs no more than the stem. The tables are kept per distinct envelope, up to about 4 million samples in all, then dropped and rebuilt as needed: reuse an envelope across notes rather than varying it on every note.
 - `lowpass`, `highpass` and `drive` are the channel's filters and drive, applied at a frame, in the same order as a mixer channel (filters, then drive). Changes at the same frame apply in call order.
   - `lowpass(at, Some(hz), frames)` glides from wherever the filter is: the first call ramps from open, and later calls start from the last cutoff. `frames` of 0 ramps over `FILTER_RAMP_SECONDS` (30 ms), never a jump.
   - `lowpass_sweep(at, from, to, frames)` (and `highpass_sweep`) jumps to `from` and then glides to `to`, so every note it is called on sweeps from the same cutoff. Use it for a pluck or a filter envelope per note.
-- With no filter glide over 100 ms, the stem is the same as the live mixer's, bit for bit. On longer filter glides the filter retunes every 16 frames instead of every frame, and the stem stays within 1% of the mixer's peak.
+- With no filter glide over 100 ms, the stem is the same as the live mixer's, bit for bit (noise notes given the seeds their mixer voices drew). On longer filter glides the filter retunes every 16 frames instead of every frame, and the stem stays within 1% of the mixer's peak.
 - `buffer_mut()` gives the interleaved stereo buffer, for writing a clip or a layer into it before `finish`.
 
 `Wave::Triangle` and `Wave::Pulse(width)` play in the mixer and in `NoteRender` alike. The triangle is band-limited with PolyBLAMP. The pulse's width is clamped to 0.01–0.99, a NaN width plays as 0.5, and its DC is removed, so any width is centred on zero.
@@ -340,13 +340,13 @@ let wet = reverb(&dry, 48_000, Room { size: 0.8, damp: 0.5, wet: 0.3, width: 1.0
 let measure = loudness(&samples, 2, 48_000);
 ```
 
-- `Delay::process` is a feedback delay over a whole interleaved buffer. Its line starts empty on every call, so call it on a whole stem, not a block at a time. `feedback` is clamped to 0–0.95. A delay of 0 frames, or one as long as the buffer or longer, leaves the buffer untouched.
-- `reverb` is the Freeverb room (public domain, Jezar at Dreampoint), its comb and all-pass lengths scaled from 44.1 kHz to the rate. It returns the wet signal only, the length of the dry; mix it in yourself. `size`, `damp` and `width` are 0 to 1.
+- `Delay::process` is a feedback delay over a whole interleaved buffer. Its line starts empty on every call, so call it on a whole stem, not a block at a time. `feedback` is clamped to 0–0.95; a NaN `feedback` or a NaN or infinite `wet` plays as 0. A delay of 0 frames, or one as long as the buffer or longer, leaves the buffer untouched.
+- `reverb` is the Freeverb room (public domain, Jezar at Dreampoint), its comb and all-pass lengths scaled from 44.1 kHz to the rate. It returns the wet signal only, the length of the dry; mix it in yourself. `size`, `damp` and `width` are 0 to 1; a NaN plays as 0, and a NaN or infinite `wet` plays dry (no wet signal).
 - `Loudness` is a BS.1770 meter (ported from ebur128, MIT): `add` interleaved samples in any chunking and read `momentary()` (400 ms), `short_term()` (3 s) and `integrated()` (gated) in LUFS. The result is the same, bit for bit, however the input is split. `loudness(samples, channels, rate)` measures a whole buffer and returns a `Measure` with the maximum short-term and momentary readings, the integrated loudness and the true peak in dBTP.
 
 ### Tone building blocks
 
-`pfx_sound::tone` holds the small pieces the splash chime is made of, for products that draw their own sounds offline: a table sine (`sine`, `Osc`), seeded noise (`Noise`), a biquad (`Biquad`), a decay factor (`decay`), a smoothstep (`smooth`), an equal-power pan (`pan`), an additive bell (`bell` with `Partial`s) and a two-operator FM voice (`fm` with `Fm`). They write into stereo frames at any rate.
+`pfx_sound::tone` holds the small pieces the splash chime is made of, for products that draw their own sounds offline: a table sine (`sine`, `Osc`), seeded noise (`Noise`), a biquad (`Biquad`), a decay factor (`decay`), a smoothstep (`smooth`), an equal-power pan (`pan`), an additive bell (`bell` with `Partial`s) and a two-operator FM voice (`fm` with `Fm`). `Biquad` takes a `Pass` (its kind). `bell` and `fm` add into stereo frames at any rate; the others return one sample at a time.
 
 ## Vorbis (feature `vorbis`)
 

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::channel::{Ramp, ramp_frames};
 use crate::drive::{Drive, DriveStage};
 use crate::envelope::{EnvState, Envelope, Shape};
@@ -7,6 +9,7 @@ use crate::synth::{Synth, Wave};
 use crate::voice::balance;
 
 const TUNE_EVERY: usize = 16;
+const CACHE_FLOATS: usize = 1 << 22;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Glide {
@@ -39,7 +42,6 @@ enum Change {
 }
 
 struct Curves {
-    key: [u32; 5],
     attack: Vec<f32>,
     decay: Vec<f32>,
     sustain: f32,
@@ -70,7 +72,6 @@ impl Curves {
         state.release(0);
         let release = (0..release).map(|_| state.next()).collect();
         Curves {
-            key: key(envelope),
             attack,
             decay,
             sustain,
@@ -112,7 +113,8 @@ pub struct NoteRender {
     frames: usize,
     buffer: Vec<f32>,
     changes: Vec<(u64, Change)>,
-    curves: Vec<Curves>,
+    curves: HashMap<[u32; 5], Curves>,
+    cached: usize,
     level: Vec<f32>,
     wave: Vec<f32>,
 }
@@ -124,7 +126,8 @@ impl NoteRender {
             frames,
             buffer: vec![0.0; frames * 2],
             changes: Vec::new(),
-            curves: Vec::new(),
+            curves: HashMap::new(),
+            cached: 0,
             level: Vec::new(),
             wave: Vec::new(),
         }
@@ -175,14 +178,19 @@ impl NoteRender {
         }
     }
 
-    fn curves(&mut self, envelope: Envelope) -> usize {
+    fn curves(&mut self, envelope: Envelope) -> [u32; 5] {
         let key = key(envelope);
-        if let Some(found) = self.curves.iter().position(|c| c.key == key) {
-            return found;
+        if !self.curves.contains_key(&key) {
+            let made = Curves::new(envelope, self.rate, self.frames);
+            let size = made.attack.len() + made.decay.len() + made.release.len();
+            if self.cached + size > CACHE_FLOATS {
+                self.curves.clear();
+                self.cached = 0;
+            }
+            self.cached += size;
+            self.curves.insert(key, made);
         }
-        self.curves
-            .push(Curves::new(envelope, self.rate, self.frames));
-        self.curves.len() - 1
+        key
     }
 
     pub fn note(&mut self, note: &Note) {
@@ -192,9 +200,16 @@ impl NoteRender {
         if start >= self.frames {
             return;
         }
+        let finite = [note.hz, note.gain, note.pan]
+            .into_iter()
+            .chain(note.glide.map(|glide| glide.to_hz))
+            .all(f32::is_finite);
+        if !finite {
+            return;
+        }
         let curves = self.curves(note.envelope);
         let held = usize::try_from(note.held).unwrap_or(usize::MAX).max(1);
-        let curves = &self.curves[curves];
+        let curves = &self.curves[&curves];
         let from = curves.held(held - 1);
         let length = held.saturating_add(curves.release.len());
         let end = start.saturating_add(length).min(self.frames);
@@ -353,6 +368,10 @@ mod tests {
                 hz: 220.0,
                 fade: Some(8_000),
                 pan: 0.0,
+                envelope: Envelope {
+                    release_ms: 800.0,
+                    ..envelope(0.7, Shape::Exponential)
+                },
                 ..base
             },
             Note {
@@ -470,6 +489,35 @@ mod tests {
     }
 
     #[test]
+    fn a_stem_that_outgrows_the_envelope_cache_still_renders_as_the_live_mixer() {
+        let notes: Vec<Note> = (0..200u64)
+            .map(|k| Note {
+                at: k * 100,
+                held: 600,
+                wave: Wave::Sine,
+                hz: 200.0 + k as f32,
+                glide: None,
+                gain: 0.01,
+                pan: 0.0,
+                envelope: Envelope {
+                    decay_ms: 1_000.0 + k as f32,
+                    ..envelope(0.5, Shape::Exponential)
+                },
+                fade: None,
+                seed: k,
+            })
+            .collect();
+        let mut render = NoteRender::new(RATE, FRAMES);
+        render.drive(0, Some(drive()));
+        for note in &notes {
+            render.note(note);
+        }
+        assert!(render.curves.len() < notes.len());
+        assert!(render.cached <= CACHE_FLOATS);
+        assert_eq!(through_mixer(&notes, None, None), render.finish());
+    }
+
+    #[test]
     fn a_long_glide_and_a_note_released_in_its_attack_stay_close_to_the_live_mixer() {
         let mut notes = notes();
         notes.push(Note {
@@ -523,33 +571,57 @@ mod tests {
     }
 
     #[test]
-    fn an_endless_envelope_renders_only_the_stem() {
+    fn an_endless_envelope_or_a_value_out_of_range_renders_only_the_stem() {
         let mut render = NoteRender::new(RATE, 4_800);
-        for ms in [1e9, f32::INFINITY] {
-            for envelope in [
-                Envelope {
-                    attack_ms: ms,
-                    ..envelope(0.7, Shape::Linear)
-                },
-                Envelope {
-                    decay_ms: ms,
-                    release_ms: ms,
-                    ..envelope(0.7, Shape::Exponential)
-                },
-            ] {
-                render.note(&Note {
-                    at: 0,
-                    held: 2_400,
-                    wave: Wave::Sine,
-                    hz: 220.0,
-                    glide: None,
-                    gain: 0.2,
-                    pan: 0.0,
-                    envelope,
-                    fade: None,
-                    seed: 1,
-                });
-            }
+        let ms = f32::INFINITY;
+        for envelope in [
+            Envelope {
+                attack_ms: ms,
+                ..envelope(0.7, Shape::Linear)
+            },
+            Envelope {
+                decay_ms: ms,
+                release_ms: ms,
+                ..envelope(0.7, Shape::Exponential)
+            },
+        ] {
+            render.note(&Note {
+                at: 0,
+                held: 2_400,
+                wave: Wave::Sine,
+                hz: 220.0,
+                glide: None,
+                gain: 0.2,
+                pan: 0.0,
+                envelope,
+                fade: None,
+                seed: 1,
+            });
+        }
+        let note = Note {
+            at: 100,
+            held: 2_400,
+            wave: Wave::Saw,
+            hz: 110.0,
+            glide: None,
+            gain: 0.2,
+            pan: 0.0,
+            envelope: envelope(0.7, Shape::Linear),
+            fade: None,
+            seed: 1,
+        };
+        for bad in [f32::NAN, f32::INFINITY] {
+            render.note(&Note { hz: bad, ..note });
+            render.note(&Note { gain: bad, ..note });
+            render.note(&Note { pan: bad, ..note });
+            render.note(&Note {
+                glide: Some(Glide {
+                    after: 10,
+                    frames: 100,
+                    to_hz: bad,
+                }),
+                ..note
+            });
         }
         let out = render.finish();
         assert_eq!(out.len(), 9_600);

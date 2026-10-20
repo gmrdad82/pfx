@@ -19,7 +19,7 @@ impl Delay {
         } else {
             self.feedback.clamp(0.0, FEEDBACK_MAX)
         };
-        let wet = if self.wet.is_nan() {
+        let wet = if !self.wet.is_finite() {
             0.0
         } else {
             self.wet.max(0.0)
