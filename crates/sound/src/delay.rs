@@ -11,7 +11,7 @@ impl Delay {
     pub fn process(&self, buf: &mut [f32], channels: usize) {
         let channels = channels.max(1);
         let len = usize::try_from(self.frames).unwrap_or(0);
-        if len == 0 {
+        if len == 0 || len >= buf.len() / channels {
             return;
         }
         let feedback = if self.feedback.is_nan() {

@@ -33,6 +33,8 @@ pub struct Note {
 enum Change {
     LowPass(Option<f32>, u32),
     HighPass(Option<f32>, u32),
+    LowSweep(f32, f32, u32),
+    HighSweep(f32, f32, u32),
     Drive(Option<Drive>),
 }
 
@@ -146,6 +148,16 @@ impl NoteRender {
         self.changes.push((at, Change::HighPass(hz, frames)));
     }
 
+    pub fn lowpass_sweep(&mut self, at: u64, from: f32, to: f32, frames: u64) {
+        let frames = self.glide_frames(frames);
+        self.changes.push((at, Change::LowSweep(from, to, frames)));
+    }
+
+    pub fn highpass_sweep(&mut self, at: u64, from: f32, to: f32, frames: u64) {
+        let frames = self.glide_frames(frames);
+        self.changes.push((at, Change::HighSweep(from, to, frames)));
+    }
+
     pub fn drive(&mut self, at: u64, drive: Option<Drive>) {
         self.changes.push((at, Change::Drive(drive)));
     }
@@ -253,6 +265,16 @@ impl NoteRender {
                         high_every = every(glide, rate);
                         highpass.set(hz, glide, rate);
                     }
+                    Change::LowSweep(from, to, glide) => {
+                        low_every = every(glide, rate);
+                        lowpass.jump(from, rate);
+                        lowpass.set(Some(to), glide, rate);
+                    }
+                    Change::HighSweep(from, to, glide) => {
+                        high_every = every(glide, rate);
+                        highpass.jump(from, rate);
+                        highpass.set(Some(to), glide, rate);
+                    }
                     Change::Drive(config) => drive.set(config, ramp_frames(rate)),
                 }
             }
@@ -277,6 +299,8 @@ mod tests {
 
     const RATE: u32 = 48_000;
     const FRAMES: usize = 24_000;
+
+    type Sweep = (u64, f32, u64);
 
     fn envelope(sustain: f32, shape: Shape) -> Envelope {
         Envelope {
@@ -348,11 +372,14 @@ mod tests {
         }
     }
 
-    fn through_mixer(notes: &[Note], highpass: Option<f32>) -> Vec<f32> {
+    fn through_mixer(notes: &[Note], highpass: Option<f32>, lowpass: Option<Sweep>) -> Vec<f32> {
         let mut mixer = Mixer::new(RATE, 2);
         let channel = ChannelId::custom(9);
         if highpass.is_some() {
             mixer.set_channel_highpass(channel, highpass);
+        }
+        if let Some((at, hz, frames)) = lowpass {
+            mixer.glide_channel_lowpass_at(at, channel, Some(hz), frames as f32 / RATE as f32);
         }
         mixer.set_channel_drive(channel, Some(drive()));
         let mut events: Vec<(u64, usize, bool)> = Vec::new();
@@ -396,10 +423,13 @@ mod tests {
         out
     }
 
-    fn offline(notes: &[Note], highpass: Option<f32>) -> Vec<f32> {
+    fn offline(notes: &[Note], highpass: Option<f32>, lowpass: Option<Sweep>) -> Vec<f32> {
         let mut render = NoteRender::new(RATE, FRAMES);
         if highpass.is_some() {
             render.highpass(0, highpass, 0);
+        }
+        if let Some((at, hz, frames)) = lowpass {
+            render.lowpass(at, Some(hz), frames);
         }
         render.drive(0, Some(drive()));
         for note in notes {
@@ -418,8 +448,8 @@ mod tests {
     #[test]
     fn a_stem_renders_exactly_as_the_live_mixer_renders_it() {
         let notes = notes();
-        let live = through_mixer(&notes, None);
-        let rendered = offline(&notes, None);
+        let live = through_mixer(&notes, None, None);
+        let rendered = offline(&notes, None, None);
         assert_eq!(live.len(), rendered.len());
         assert!(rendered.iter().any(|s| s.abs() > 0.05));
         let first = live.iter().zip(&rendered).position(|(a, b)| a != b);
@@ -429,8 +459,60 @@ mod tests {
             "{:?}",
             first.map(|i| (i, live[i], rendered[i]))
         );
-        let live = through_mixer(&notes, Some(90.0));
-        let rendered = offline(&notes, Some(90.0));
+        let live = through_mixer(&notes, Some(90.0), None);
+        let rendered = offline(&notes, Some(90.0), None);
         assert_eq!(live, rendered);
+    }
+
+    #[test]
+    fn a_long_glide_and_a_note_released_in_its_attack_stay_close_to_the_live_mixer() {
+        let mut notes = notes();
+        notes.push(Note {
+            at: 15_000,
+            held: 300,
+            wave: Wave::Square,
+            hz: 440.0,
+            ..notes[0]
+        });
+        let sweep = Some((1_234, 400.0, 6_000));
+        let live = through_mixer(&notes, None, sweep);
+        let rendered = offline(&notes, None, sweep);
+        assert_eq!(live.len(), rendered.len());
+        let worst = live
+            .iter()
+            .zip(&rendered)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-3, "{worst}");
+    }
+
+    #[test]
+    fn every_note_sweeps_its_filter_from_the_same_cutoff() {
+        let note = Note {
+            at: 0,
+            held: 4_000,
+            wave: Wave::Saw,
+            hz: 55.0,
+            glide: None,
+            gain: 0.3,
+            pan: 0.0,
+            envelope: envelope(0.7, Shape::Exponential),
+            fade: None,
+            seed: 5,
+        };
+        let mut render = NoteRender::new(RATE, FRAMES);
+        for at in [0, 12_000] {
+            render.note(&Note { at, ..note });
+            render.lowpass_sweep(at, 2_000.0, 320.0, 9_600);
+        }
+        let out = render.finish();
+        let (first, second) = (&out[..12_000], &out[24_000..36_000]);
+        assert!(first.iter().any(|s| s.abs() > 0.05));
+        let worst = first
+            .iter()
+            .zip(second)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(worst < 1e-4, "{worst}");
     }
 }

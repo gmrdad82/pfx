@@ -137,12 +137,12 @@ impl Loudness {
                     self.sums[c * SHORT_TERM_BLOCKS + block] = self.partial[c];
                     self.partial[c] = 0.0;
                 }
-            }
-        }
-        for state in &mut self.state {
-            for v in state.iter_mut() {
-                if v.abs() < f64::EPSILON {
-                    *v = 0.0;
+                for state in &mut self.state {
+                    for v in state.iter_mut() {
+                        if v.abs() < f64::EPSILON {
+                            *v = 0.0;
+                        }
+                    }
                 }
             }
         }
