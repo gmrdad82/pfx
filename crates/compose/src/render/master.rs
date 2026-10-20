@@ -1,12 +1,15 @@
 use pfx_core::sim;
-use pfx_sound::{Limiter, Loudness, Room, decibels, reverb, true_peak};
+use pfx_sound::{Limiter, Loudness, Room, decibels, local_peaks, reverb};
 
 use super::RATE;
 
 pub const ROOM_STEM: &str = "room";
-const SETTLE_DB: f64 = 0.25;
+const SETTLE_DB: f64 = 0.5;
 const PASSES: usize = 3;
 const HOP: usize = (RATE / 10) as usize;
+const SLICES: usize = 8;
+const MARGIN: usize = 32;
+const QUIET: f32 = 1e-20;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stem {
@@ -21,6 +24,7 @@ pub struct Mastered {
     pub short_term_max: f64,
     pub integrated: f64,
     pub true_peak_db: f64,
+    pub passes: usize,
 }
 
 pub struct Chain<'a> {
@@ -140,6 +144,30 @@ pub fn measure(samples: &[f32]) -> (f64, f64) {
     (most, meter.integrated())
 }
 
+pub fn peak(samples: &[f32]) -> f32 {
+    let frames = samples.len() / 2;
+    let slice = frames.div_ceil(SLICES).max(1);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..frames)
+            .step_by(slice)
+            .map(|from| {
+                scope.spawn(move || {
+                    let to = (from + slice).min(frames);
+                    let lo = from.saturating_sub(MARGIN);
+                    let hi = (to + MARGIN).min(frames);
+                    local_peaks(&samples[lo * 2..hi * 2], 2)[from - lo..to - lo]
+                        .iter()
+                        .fold(0.0f32, |m, p| m.max(*p))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or(f32::INFINITY))
+            .fold(0.0f32, f32::max)
+    })
+}
+
 pub fn master(mix: &[f32], lufs: f64, ceiling: f32) -> Mastered {
     let limiter = Limiter::new(ceiling - 0.05);
     let (before, _) = measure(mix);
@@ -148,26 +176,46 @@ pub fn master(mix: &[f32], lufs: f64, ceiling: f32) -> Mastered {
     } else {
         0.0
     };
-    let mut pass = 1;
+    let mut passes = 1;
     loop {
         let g = decibels_to_gain(gain_db) as f32;
         let mut out: Vec<f32> = mix.iter().map(|v| v * g).collect();
-        limiter.master(&mut out, 2, RATE);
+        let limited = limiter.master(&mut out, 2, RATE);
         let (short_term_max, integrated) = measure(&out);
         let delta = lufs - short_term_max;
-        if !short_term_max.is_finite() || delta.abs() < SETTLE_DB || pass == PASSES {
-            let true_peak_db = f64::from(decibels(true_peak(&out, 2)));
+        if !limited || !short_term_max.is_finite() || delta.abs() < SETTLE_DB || passes == PASSES {
+            let true_peak_db = f64::from(decibels(peak(&out)));
             return Mastered {
                 mix: out,
                 gain_db,
                 short_term_max,
                 integrated,
                 true_peak_db,
+                passes,
             };
         }
         gain_db += delta;
-        pass += 1;
+        passes += 1;
     }
+}
+
+pub fn curve(before: &[f32], after: &[f32], start: f32) -> Vec<f32> {
+    let mut last = start;
+    before
+        .chunks_exact(2)
+        .zip(after.chunks_exact(2))
+        .map(|(b, a)| {
+            let (x, y) = if b[0].abs() >= b[1].abs() {
+                (b[0], a[0])
+            } else {
+                (b[1], a[1])
+            };
+            if x.abs() > QUIET {
+                last = y / x;
+            }
+            last
+        })
+        .collect()
 }
 
 pub fn chain(
@@ -183,8 +231,10 @@ pub fn chain(
     if let Some(room) = room(stems, sends, chain.room, frames) {
         stems.push(room);
     }
+    for stem in stems.iter_mut() {
+        fade_out(&mut stem.samples, chain.fade);
+    }
     let mut mix = sum(stems, frames);
-    fade_out(&mut mix, chain.fade);
     for (at, cue) in fired {
         let start = (*at as usize).min(frames) * 2;
         for (m, v) in mix[start..].iter_mut().zip(&cue.samples) {
@@ -193,12 +243,26 @@ pub fn chain(
     }
     let mastered = master(&mix, chain.lufs, chain.true_peak);
     let g = decibels_to_gain(mastered.gain_db) as f32;
-    for stem in stems.iter_mut() {
-        for v in &mut stem.samples {
-            *v *= g;
+    let gains = curve(&mix, &mastered.mix, g);
+    std::thread::scope(|scope| {
+        for stem in stems.iter_mut() {
+            let gains = &gains;
+            scope.spawn(move || {
+                for (frame, k) in stem.samples.chunks_exact_mut(2).zip(gains) {
+                    frame[0] *= k;
+                    frame[1] *= k;
+                }
+            });
         }
-    }
+    });
     (mastered, g)
+}
+
+pub fn limit_cue(samples: &mut [f32], gain: f32, ceiling: f32) {
+    for v in samples.iter_mut() {
+        *v *= gain;
+    }
+    Limiter::new(ceiling - 0.05).master(samples, 2, RATE);
 }
 
 #[cfg(test)]

@@ -108,6 +108,7 @@ People edit a `.pitofx` in the editor's inspector or its built-in TOML editor, w
 | `pfx shot <scene.pitofx>`, `pfx clip`, `pfx shoot` | a scene's frames at a fixed clock on the live renderer, a recipe's camera moves and timeline ([docs/render-a-scene.md](docs/render-a-scene.md), [docs/recipe-clips.md](docs/recipe-clips.md)) |
 | `pfx film <script>` | a film of clips, frame folders and cards, with transitions and a true-peak ceiling on the master ([docs/film.md](docs/film.md)) |
 | `pfx sound clean <in.wav> <out.wav>`, `pfx sound mix <script>` | clean a field recording; render a shot's mix script to a WAV ([docs/sound.md](docs/sound.md)) |
+| `pfx compose <doc.pitofx> --style <name> --seed N --seconds S`, `render`, `list`, `print` | compose original music in a style kept in the document, and render it to a mastered WAV ([docs/compose.md](docs/compose.md)) |
 | `pfx bench <scene.pitofx> --seconds N` | a repeatable headless load with frame stats ([docs/benchmark-a-scene.md](docs/benchmark-a-scene.md)) |
 | `pfx bake --scene <dir>` | path-traced probes, lightmaps and plates |
 | `pfx job start`, `status`, `pause`, `stop`, `resume` | run a long clip, film, render or bake detached, and carry it on from its last finished frame ([docs/jobs.md](docs/jobs.md)) |
@@ -133,6 +134,7 @@ Rigid bodies, characters and world queries ([docs/physics.md](docs/physics.md));
 - **Play with a game module:** the window plays the open scene with a game's `.wasm` logic in the sandbox ([docs/play-modules.md](docs/play-modules.md)).
 - **Steam Workshop mods:** subscribed Workshop items load as mods beside the local ones ([docs/steam.md](docs/steam.md#workshop-items-as-mods)).
 - **Adaptive music:** stems of one tempo follow a live intensity and move between sections on the bar or the beat ([docs/sound.md](docs/sound.md#adaptive-music)).
+- **Composed music:** `pfx compose` writes an original score in a style kept in the `.pitofx`, stored as its notes and rendered on demand to a master at the style's loudness under a true-peak ceiling, or to stems and stingers a game's adaptive music plays; the same seed gives the same bytes ([docs/compose.md](docs/compose.md)).
 - **Film transitions and mastering:** `pfx film` cuts between scenes with a dissolve, push or whip, and holds the master under a true-peak ceiling measured as ITU-R BS.1770-4 defines it ([docs/film.md](docs/film.md#transitions), [docs/sound.md](docs/sound.md#true-peak-and-the-limiter)). The same scene, inputs and seed give the same frames on the same GPU and driver ([docs/sim.md](docs/sim.md)). The domain code pfx needs (the denoiser, the Sobol sampler, LZ4, JPEG, the resampler) is ported into it rather than linked ([INSPIRATION.md](INSPIRATION.md)).
 
 ## The crates
@@ -159,6 +161,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-bake` | path-traced light the live renderer shows at raster cost: probes, lightmaps and plates |
 | `pfx-physics` | rigid bodies, characters, world queries, fluid, rope, flocks and wind |
 | `pfx-sound` | live mixing, decoded streams and deterministic mixdown |
+| `pfx-compose` | the composer: styles and scores in a `.pitofx`, the generator and the render to stems and a mastered mix ([docs/compose.md](docs/compose.md)) |
 | `pfx-input` | keyboard, mouse and controllers behind one action map, glyphs, rumble and recording |
 | `pfx-steam` | achievements, stats, Cloud saves, the overlay, leaderboards, lobbies and Steam Input |
 | `pfx-film` | scripted films rendered offline from a game, and footage films (`pfx film`) |

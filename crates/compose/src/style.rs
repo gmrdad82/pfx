@@ -488,6 +488,18 @@ impl Osc {
         if self.wave.is_some() == self.sample.is_some() {
             return Err("wants either `wave` or `sample`".into());
         }
+        if self.bend != 0.0 && self.to_hz.is_some() {
+            return Err("has `bend` and `to_hz`; one oscillator takes one glide".into());
+        }
+        let wave_only = self.width.is_some()
+            || self.hz.is_some()
+            || self.to_hz.is_some()
+            || self.glide_ms != 0.0
+            || self.bend != 0.0
+            || self.env.is_some();
+        if self.sample.is_some() && wave_only {
+            return Err("plays a `sample` once from the note's start, pitched from midi 60; `width`, `hz`, `to_hz`, `glide_ms`, `bend` and `env` are for waves".into());
+        }
         if let Some(width) = self.width {
             within("width", f64::from(width), 0.01, 0.99)?;
         }
@@ -530,6 +542,11 @@ impl Patch {
             osc.check().map_err(|e| format!("osc {}: {e}", index + 1))?;
         }
         env(&self.env)?;
+        if self.lowpass.is_some() && self.sweep.is_some() {
+            return Err(
+                "`lowpass` and `sweep` drive the same filter; give the patch one of them".into(),
+            );
+        }
         if let Some([lo, hi]) = self.lowpass {
             let (lo, hi) = (f64::from(lo), f64::from(hi));
             within("lowpass", lo, 1.0, 24_000.0)?;

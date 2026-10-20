@@ -9,6 +9,8 @@ use pfx_compose::{Compose as Composed, Request, Score, Style, StyleRef};
 use pfx_core::cli::{self, Refusal};
 use serde_json::{Value, json};
 
+mod cache;
+
 pub const USAGE: &str =
     "pfx compose [OPTIONS] --style <STYLE> --seed <SEED> --seconds <SECONDS> <DOC>";
 const RENDER: &str = "pfx compose render [OPTIONS] --score <SCORE> <DOC>";
@@ -348,12 +350,105 @@ fn unknown(shown: &str, kind: &str, name: &str, known: &[String]) -> String {
     }
 }
 
+const MIX: &str = "mix.wav";
+const LEVELS: &str = "master.json";
+
+#[derive(Clone, Debug, PartialEq)]
+struct Levels {
+    gain_db: f64,
+    short_term_max: f64,
+    integrated: f64,
+    true_peak_db: f64,
+    passes: usize,
+}
+
 struct Done {
     score: Score,
-    rendered: Rendered,
+    stems: Vec<String>,
+    levels: Levels,
+    entry: PathBuf,
+    cached: bool,
+    replaced: bool,
     compose_ms: f64,
+    render_ms: f64,
+    master_ms: f64,
     name: String,
     style: String,
+}
+
+fn cached(key: &str) -> Option<(PathBuf, Levels)> {
+    let entry = cache::get(key, &[MIX, LEVELS])?;
+    let text = std::fs::read_to_string(entry.join(LEVELS)).ok()?;
+    let value: Value = serde_json::from_str(&text).ok()?;
+    let number = |key: &str| value.get(key).and_then(Value::as_f64);
+    let levels = Levels {
+        gain_db: number("gain_db")?,
+        short_term_max: number("short_term_max_lufs")?,
+        integrated: number("integrated_lufs")?,
+        true_peak_db: number("true_peak_dbtp")?,
+        passes: value.get("passes").and_then(Value::as_u64)? as usize,
+    };
+    Some((entry, levels))
+}
+
+fn levels_of(rendered: &Rendered) -> Levels {
+    let master = &rendered.master;
+    Levels {
+        gain_db: master.gain_db,
+        short_term_max: master.short_term_max,
+        integrated: master.integrated,
+        true_peak_db: master.true_peak_db,
+        passes: master.passes,
+    }
+}
+
+fn stored(key: &str, rendered: &Rendered, levels: &Levels) -> Result<PathBuf, String> {
+    let json = json!({
+        "gain_db": levels.gain_db,
+        "short_term_max_lufs": levels.short_term_max,
+        "integrated_lufs": levels.integrated,
+        "true_peak_dbtp": levels.true_peak_db,
+        "passes": levels.passes,
+    })
+    .to_string();
+    let mix = render::wav(&rendered.master.mix);
+    cache::put(key, &[(MIX, &mix), (LEVELS, json.as_bytes())])
+}
+
+struct Job<'a> {
+    style: &'a Style,
+    style_name: String,
+    score: Score,
+    name: String,
+    samples: &'a render::Samples<'a>,
+    compose_ms: f64,
+    replaced: bool,
+}
+
+fn produce(job: Job, now: &dyn Fn() -> f64) -> Result<Done, String> {
+    let key = cache::key(&render::recipe(job.style, &job.score, job.samples)?);
+    let (entry, levels, cached, render_ms, master_ms) = match cached(&key) {
+        Some((entry, levels)) => (entry, levels, true, 0.0, 0.0),
+        None => {
+            let rendered = render::render(job.style, &job.score, job.samples, now)?;
+            let levels = levels_of(&rendered);
+            let entry = stored(&key, &rendered, &levels)?;
+            (entry, levels, false, rendered.render_ms, rendered.master_ms)
+        }
+    };
+    Ok(Done {
+        stems: render::stem_names(job.style),
+        score: job.score,
+        levels,
+        entry,
+        cached,
+        replaced: job.replaced,
+        compose_ms: job.compose_ms,
+        render_ms,
+        master_ms,
+        name: job.name,
+        style: job.style_name,
+    })
 }
 
 fn finish(
@@ -366,48 +461,34 @@ fn finish(
 ) -> Result<(), String> {
     let mut text = text;
     if music {
-        let table = render::music_table(style, &done.score, &done.name, &done.rendered);
+        let table = render::music_table(style, &done.score, &done.name);
         text = store::set_table(&text, "music", table)?;
     }
-    let mut files: Vec<(String, Vec<u8>)> = done
-        .rendered
-        .stems
-        .iter()
-        .map(|s| {
-            (
-                store::stem_file(&done.name, &s.name),
-                render::wav(&s.samples),
-            )
-        })
-        .collect();
-    files.extend(done.rendered.cues.iter().map(|c| {
-        (
-            render::cue_file(&done.name, &c.name),
-            render::wav(&c.samples),
-        )
-    }));
-    let mix = render::wav(&done.rendered.master.mix);
-    files.push((store::mix_file(&done.name), mix.clone()));
-    doc.save(&text, Some(&done.name), &files)?;
+    if text != doc.text || doc.holds_audio(&done.name)? {
+        doc.save(&text, Some(&done.name))?;
+    }
     if let Some(path) = wav {
-        std::fs::write(path, &mix).map_err(|e| format!("{}: {e}", path.display()))?;
+        std::fs::copy(done.entry.join(MIX), path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(())
 }
 
 fn report(doc: &Path, done: &Done, json: bool, total_ms: f64) {
     let score = &done.score;
-    let master = &done.rendered.master;
+    let levels = &done.levels;
     let notes: usize = score.tracks.iter().map(|t| t.notes.len()).sum();
     let round = |v: f64, places: i32| {
         let k = 10f64.powi(places);
         (v * k).round() / k
     };
+    let mix = done.entry.join(MIX).display().to_string();
     if json {
         let line = json!({
             "doc": doc.display().to_string(),
             "score": done.name,
             "style": done.style,
+            "replaced": done.replaced,
             "seed": score.seed,
             "seconds": score.seconds,
             "bpm": score.bpm,
@@ -417,32 +498,36 @@ fn report(doc: &Path, done: &Done, json: bool, total_ms: f64) {
                 "name": s.name, "from": s.from, "bars": s.bars, "at": round(s.at, 3)
             })).collect::<Vec<Value>>(),
             "notes": notes,
-            "stems": done.rendered.stems.iter().map(|s| store::stem_file(&done.name, &s.name)).collect::<Vec<_>>(),
-            "mix": store::mix_file(&done.name),
+            "stems": done.stems,
+            "mix": mix,
+            "cached": done.cached,
             "compose_ms": round(done.compose_ms, 3),
-            "render_ms": round(done.rendered.render_ms, 1),
-            "master_ms": round(done.rendered.master_ms, 1),
+            "render_ms": round(done.render_ms, 1),
+            "master_ms": round(done.master_ms, 1),
             "total_ms": round(total_ms, 1),
-            "gain_db": round(master.gain_db, 2),
-            "short_term_max_lufs": round(master.short_term_max, 2),
-            "integrated_lufs": round(master.integrated, 2),
-            "true_peak_dbtp": round(master.true_peak_db, 2),
+            "passes": levels.passes,
+            "gain_db": round(levels.gain_db, 2),
+            "short_term_max_lufs": round(levels.short_term_max, 2),
+            "integrated_lufs": round(levels.integrated, 2),
+            "true_peak_dbtp": round(levels.true_peak_db, 2),
         });
         println!("{line}");
         return;
     }
     println!(
-        "{}: [compose.score.{}] {} at {} bpm, {} sections, {notes} notes, {} stems; {:.2} LUFS short-term max, {:.2} LUFS integrated, {:.2} dBTP; {:.0} ms",
+        "{}: [compose.score.{}]{} {} at {} bpm, {} sections, {notes} notes, {} stems; {:.2} LUFS short-term max, {:.2} LUFS integrated, {:.2} dBTP; {:.0} ms{}",
         doc.display(),
         done.name,
+        if done.replaced { " replaced," } else { "" },
         score.key,
         score.bpm,
         score.sections.len(),
-        done.rendered.stems.len(),
-        master.short_term_max,
-        master.integrated,
-        master.true_peak_db,
+        done.stems.len(),
+        levels.short_term_max,
+        levels.integrated,
+        levels.true_peak_db,
         total_ms,
+        if done.cached { ", cached" } else { "" },
     );
 }
 
@@ -469,17 +554,27 @@ fn run_compose(command: &Compose) -> Result<(), String> {
     let score = pfx_compose::compose(&command.style, style, &request)
         .map_err(|e| format!("{shown}: {e}"))?;
     let compose_ms = (now() - before) * 1000.0;
-    let rendered = render::render(style, &score, &|file| doc.file(file), &now)
-        .map_err(|e| format!("{shown}: {e}"))?;
     let text =
         pfx_compose::write_score(&doc.text, &name, &score).map_err(|e| format!("{shown}: {e}"))?;
-    let done = Done {
-        score,
-        rendered,
-        compose_ms,
-        name,
-        style: command.style.clone(),
-    };
+    let kept = Composed::parse(&text).map_err(|e| format!("{shown}: {e}"))?;
+    let score = kept
+        .score(&name)
+        .map_err(|e| format!("{shown}: {e}"))?
+        .clone();
+    let samples = |file: &str| doc.file(file);
+    let done = produce(
+        Job {
+            style,
+            style_name: command.style.clone(),
+            score,
+            name: name.clone(),
+            samples: &samples,
+            compose_ms,
+            replaced: parsed.scores.contains_key(&name),
+        },
+        &now,
+    )
+    .map_err(|e| format!("{shown}: {e}"))?;
     finish(
         &doc,
         style,
@@ -492,20 +587,16 @@ fn run_compose(command: &Compose) -> Result<(), String> {
     Ok(())
 }
 
-fn beside(doc: &Document, file: &str) -> Result<Document, String> {
-    let relative = Path::new(file);
-    if relative.is_absolute()
-        || relative
-            .components()
-            .any(|part| !matches!(part, std::path::Component::Normal(_)))
-    {
-        return Err(format!(
-            "`{file}` must name a document in {}'s own folder",
-            doc.path.display()
-        ));
+fn styled(doc: &Document, score: &Score) -> Result<Document, String> {
+    match &score.style {
+        StyleRef::Name(_) => Ok(doc.clone()),
+        StyleRef::File { file, .. } => {
+            let folder = doc.path.parent().unwrap_or(Path::new(""));
+            let path =
+                store::beside(folder, file).map_err(|e| format!("{}: {e}", doc.path.display()))?;
+            Document::open(&path)
+        }
     }
-    let folder = doc.path.parent().unwrap_or(Path::new(""));
-    Document::open(&folder.join(relative))
 }
 
 fn run_render(command: &Render) -> Result<(), String> {
@@ -517,28 +608,25 @@ fn run_render(command: &Render) -> Result<(), String> {
         .score(&command.score)
         .map_err(|e| format!("{shown}: {e}"))?
         .clone();
-    let (home, held) = match &score.style {
-        StyleRef::Name(_) => (doc.clone(), None),
-        StyleRef::File { file, .. } => {
-            let other = beside(&doc, file)?;
-            let parsed = Composed::parse(&other.text)
-                .map_err(|e| format!("{}: {e}", other.path.display()))?;
-            (other, Some(parsed))
-        }
-    };
-    let styles = held.as_ref().unwrap_or(&parsed);
-    let style = styles
+    let home = styled(&doc, &score)?;
+    let held = Composed::parse(&home.text).map_err(|e| format!("{}: {e}", home.path.display()))?;
+    let style = held
         .style(score.style.name())
         .map_err(|e| format!("{}: {e}", home.path.display()))?;
-    let rendered = render::render(style, &score, &|file| home.file(file), &now)
-        .map_err(|e| format!("{shown}: {e}"))?;
-    let done = Done {
-        style: score.style.name().to_string(),
-        score,
-        rendered,
-        compose_ms: 0.0,
-        name: command.score.clone(),
-    };
+    let samples = |file: &str| home.file(file);
+    let done = produce(
+        Job {
+            style,
+            style_name: score.style.name().to_string(),
+            score,
+            name: command.score.clone(),
+            samples: &samples,
+            compose_ms: 0.0,
+            replaced: false,
+        },
+        &now,
+    )
+    .map_err(|e| format!("{shown}: {e}"))?;
     finish(
         &doc,
         style,
@@ -551,21 +639,39 @@ fn run_render(command: &Render) -> Result<(), String> {
     Ok(())
 }
 
+fn is_cached(doc: &Document, parsed: &Composed, name: &str) -> Result<bool, String> {
+    let score = parsed.score(name)?;
+    let home = styled(doc, score)?;
+    let held = Composed::parse(&home.text)?;
+    let style = held.style(score.style.name())?;
+    let recipe = render::recipe(style, score, &|file| home.file(file))?;
+    Ok(cached(&cache::key(&recipe)).is_some())
+}
+
 fn run_list(command: &List) -> Result<(), String> {
+    let shown = command.doc.display().to_string();
     let doc = Document::open(&command.doc)?;
-    let table = compose_table(&doc.text).map_err(|e| format!("{}: {e}", command.doc.display()))?;
+    let table = compose_table(&doc.text).map_err(|e| format!("{shown}: {e}"))?;
+    let parsed = Composed::parse(&doc.text).map_err(|e| format!("{shown}: {e}"))?;
     let styles = names(&table, "style");
-    let scores = names(&table, "score");
+    let mut scores = Vec::new();
+    for score in names(&table, "score") {
+        let cached = is_cached(&doc, &parsed, &score).map_err(|e| format!("{shown}: {e}"))?;
+        scores.push((score, cached));
+    }
     if command.json {
+        let scores: Vec<Value> = scores
+            .iter()
+            .map(|(name, cached)| json!({ "name": name, "cached": cached }))
+            .collect();
         println!("{}", json!({ "styles": styles, "scores": scores }));
         return Ok(());
     }
     for style in &styles {
         println!("style[{style}]");
     }
-    for score in &scores {
-        let stems = doc.file(&store::mix_file(score))?.is_some();
-        println!("score[{score}]{}", if stems { "  rendered" } else { "" });
+    for (score, cached) in &scores {
+        println!("score[{score}]{}", if *cached { "  cached" } else { "" });
     }
     Ok(())
 }

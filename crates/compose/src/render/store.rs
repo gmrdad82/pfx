@@ -8,10 +8,6 @@ pub fn stem_file(score: &str, role: &str) -> String {
     format!("{FOLDER}/{score}/{role}.wav")
 }
 
-pub fn mix_file(score: &str) -> String {
-    format!("{FOLDER}/{score}/mix.wav")
-}
-
 #[derive(Clone, Debug)]
 pub struct Document {
     pub path: PathBuf,
@@ -28,8 +24,12 @@ fn has_compose(text: &str) -> bool {
 
 impl Document {
     pub fn open(path: &Path) -> Result<Document, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Document::from_bytes(path, bytes)
+    }
+
+    pub fn from_bytes(path: &Path, bytes: Vec<u8>) -> Result<Document, String> {
         let shown = path.display();
-        let bytes = std::fs::read(path).map_err(|e| format!("{shown}: {e}"))?;
         let reader = Reader::from_bytes(&bytes).map_err(|e| format!("{shown}: {e}"))?;
         let mut first = None;
         let mut found = None;
@@ -66,12 +66,17 @@ impl Document {
             .map_err(|e| format!("{shown}: {e}"))
     }
 
-    pub fn save(
-        &self,
-        text: &str,
-        score: Option<&str>,
-        files: &[(String, Vec<u8>)],
-    ) -> Result<(), String> {
+    pub fn holds_audio(&self, score: &str) -> Result<bool, String> {
+        let shown = self.path.display();
+        let reader = Reader::from_bytes(&self.bytes).map_err(|e| format!("{shown}: {e}"))?;
+        let folder = format!("{FOLDER}/{score}/");
+        Ok(reader
+            .entries()
+            .iter()
+            .any(|e| e.tag == pfx_file::FILE && e.name.starts_with(folder.as_str())))
+    }
+
+    pub fn save(&self, text: &str, score: Option<&str>) -> Result<(), String> {
         let shown = self.path.display();
         let reader = Reader::from_bytes(&self.bytes).map_err(|e| format!("{shown}: {e}"))?;
         let dropped = score.map(|score| format!("{FOLDER}/{score}/"));
@@ -82,10 +87,9 @@ impl Document {
                 continue;
             }
             let stale = entry.tag == pfx_file::FILE
-                && (dropped
+                && dropped
                     .as_ref()
-                    .is_some_and(|d| entry.name.starts_with(d.as_str()))
-                    || files.iter().any(|(name, _)| *name == entry.name));
+                    .is_some_and(|d| entry.name.starts_with(d.as_str()));
             if stale {
                 continue;
             }
@@ -93,13 +97,24 @@ impl Document {
                 .copy(&reader, index)
                 .map_err(|e| format!("{shown}: {e}"))?;
         }
-        for (name, bytes) in files {
-            writer = writer.named(pfx_file::FILE, name, bytes.as_slice(), Codec::Auto);
-        }
         writer
             .write(&self.path)
             .map_err(|e| format!("{shown}: {e}"))
     }
+}
+
+pub fn beside(folder: &Path, file: &str) -> Result<PathBuf, String> {
+    let relative = Path::new(file);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+    {
+        return Err(format!(
+            "`{file}` must name a file in the document's own folder"
+        ));
+    }
+    Ok(folder.join(relative))
 }
 
 pub fn set_table(text: &str, key: &str, table: toml::Table) -> Result<String, String> {
@@ -132,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn saving_a_score_keeps_every_other_chunk_and_replaces_the_old_stems() {
+    fn saving_a_score_keeps_every_other_chunk_and_drops_its_old_audio() {
         let path = folder("store").join("doc.pitofx");
         Writer::new()
             .named(
@@ -165,17 +180,11 @@ mod tests {
         )
         .unwrap();
         assert!(text.starts_with("[sky]\nx = 1\n"), "{text}");
-        doc.save(
-            &text,
-            Some("a"),
-            &[(stem_file("a", "pad"), b"pad".to_vec())],
-        )
-        .unwrap();
+        doc.save(&text, Some("a")).unwrap();
         let again = Document::open(&path).unwrap();
         assert!(again.text.contains("[music]\nbpm = 120"), "{}", again.text);
         assert_eq!(again.file("keep.bin").unwrap().unwrap(), b"keep");
         assert_eq!(again.file("compose/a/old.wav").unwrap(), None);
-        assert_eq!(again.file("compose/a/pad.wav").unwrap().unwrap(), b"pad");
         assert_eq!(
             again.file("compose/b/other.wav").unwrap().unwrap(),
             b"other"

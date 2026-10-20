@@ -1,3 +1,4 @@
+pub mod game;
 pub mod master;
 pub mod music;
 pub mod patch;
@@ -91,7 +92,8 @@ fn cue(
             &frame,
             frames,
             clips,
-        )?;
+        )
+        .map_err(|e| format!("cue `{}`: {e}", cue.name))?;
         for (s, v) in samples.iter_mut().zip(rendered) {
             *s += v;
         }
@@ -139,6 +141,7 @@ pub fn render(
                         frames,
                         clips,
                     )
+                    .map_err(|e| format!("role `{}`: {e}", role.name))
                 })
             })
             .collect();
@@ -167,11 +170,16 @@ pub fn render(
     let fired: Vec<(u64, &Stem)> = score
         .fires
         .iter()
-        .filter_map(|fire| {
-            let stem = cues.iter().find(|c| c.name == fire.cue)?;
-            Some(((fire.at * f64::from(RATE)).round() as u64, stem))
+        .map(|fire| {
+            let stem = cues.iter().find(|c| c.name == fire.cue).ok_or_else(|| {
+                format!(
+                    "the fire at {} s names cue `{}`, which the score lacks",
+                    fire.at, fire.cue
+                )
+            })?;
+            Ok(((fire.at * f64::from(RATE)).round() as u64, stem))
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     let rendered_at = clock();
     let master = &style.master;
     let chain = Chain {
@@ -188,9 +196,7 @@ pub fn render(
     };
     let (mastered, gain) = master::chain(&mut stems, &sends, &fired, &chain, frames);
     for c in &mut cues {
-        for v in &mut c.samples {
-            *v *= gain;
-        }
+        master::limit_cue(&mut c.samples, gain, master.true_peak);
     }
     let done = clock();
     Ok(Rendered {
@@ -202,11 +208,39 @@ pub fn render(
     })
 }
 
+pub fn recipe(style: &Style, score: &Score, samples: &Samples) -> Result<String, String> {
+    let mut all = format!("{style:?}\n{score:?}\n").into_bytes();
+    let names: std::collections::BTreeSet<&str> = style
+        .patch
+        .values()
+        .flat_map(|p| p.osc.iter().filter_map(|o| o.sample.as_deref()))
+        .collect();
+    for name in names {
+        let bytes = samples(name)?.unwrap_or_default();
+        all.extend(name.as_bytes());
+        all.extend((bytes.len() as u64).to_le_bytes());
+        all.extend(bytes);
+    }
+    Ok(pfx_file::sha256::hex(&pfx_file::sha256::sha256(&all)))
+}
+
 pub fn cue_file(score: &str, cue: &str) -> String {
     format!("{}/{score}/{CUES}/{cue}.wav", store::FOLDER)
 }
 
-pub fn music_table(style: &Style, score: &Score, name: &str, rendered: &Rendered) -> toml::Table {
+pub fn stem_names(style: &Style) -> Vec<String> {
+    let mut names: Vec<String> = style.roles.iter().map(|r| r.name.clone()).collect();
+    let sends = style
+        .roles
+        .iter()
+        .any(|r| style.patch.get(&r.patch).is_some_and(|p| p.send > 0.0));
+    if style.master.room[2] > 0.0 && sends {
+        names.push(master::ROOM_STEM.to_string());
+    }
+    names
+}
+
+pub fn music_table(style: &Style, score: &Score, name: &str) -> toml::Table {
     let bpb = f64::from(score.beats_per_bar);
     let parts: Vec<music::Part> = score
         .sections
@@ -217,17 +251,14 @@ pub fn music_table(style: &Style, score: &Score, name: &str, rendered: &Rendered
             intensity: s.intensity,
         })
         .collect();
-    let lines: Vec<music::Line> = rendered
-        .stems
-        .iter()
+    let lines: Vec<music::Line> = stem_names(style)
+        .into_iter()
         .map(|stem| {
-            let notes = score
-                .track(&stem.name)
-                .map_or(&[][..], |t| t.notes.as_slice());
-            let room = style.role(&stem.name).is_none();
+            let notes = score.track(&stem).map_or(&[][..], |t| t.notes.as_slice());
+            let room = style.role(&stem).is_none();
             music::Line {
-                name: stem.name.clone(),
-                file: store::stem_file(name, &stem.name),
+                file: store::stem_file(name, &stem),
+                name: stem,
                 plays: score
                     .sections
                     .iter()
@@ -393,6 +424,20 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
         (score, out)
     }
 
+    fn under_the_ceiling(out: &Rendered, ceiling: f32) {
+        let sum = master::sum(&out.stems, out.master.mix.len() / 2);
+        let stems = pfx_sound::decibels(master::peak(&sum));
+        assert!(stems <= ceiling + 1e-3, "the stems sum to {stems} dBTP");
+        for cue in &out.cues {
+            let peak = pfx_sound::decibels(master::peak(&cue.samples));
+            assert!(
+                peak <= ceiling + 1e-3,
+                "cue `{}` peaks at {peak} dBTP",
+                cue.name
+            );
+        }
+    }
+
     #[test]
     fn the_test_style_renders_the_same_bytes_for_the_same_seed() {
         let (score, out) = rendered(TEST_STYLE, "test", 3, 8.0, &[4.0]);
@@ -408,15 +453,40 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
             out.master.short_term_max
         );
         assert!(out.master.true_peak_db <= -1.0 + 1e-3);
-        let again = rendered(TEST_STYLE, "test", 3, 8.0, &[4.0]).1;
-        assert_eq!(hash(&out), hash(&again));
+        under_the_ceiling(&out, -1.0);
+        let style = crate::Compose::parse(TEST_STYLE).unwrap();
+        let style = style.style("test").unwrap();
+        let text = crate::write_score(TEST_STYLE, "kept", &score).unwrap();
+        let text = store::set_table(&text, "music", music_table(style, &score, "kept")).unwrap();
+        let bytes = pfx_file::Writer::new()
+            .named(
+                pfx_file::SCNE,
+                "main.toml",
+                text.as_bytes(),
+                pfx_file::Codec::Auto,
+            )
+            .to_vec()
+            .unwrap();
+        let music = game::music(&bytes, None).unwrap();
+        assert_eq!(music.track.stems.len(), out.stems.len());
+        for stem in &out.stems {
+            let loaded = music
+                .track
+                .stems
+                .iter()
+                .find(|s| s.name == stem.name)
+                .unwrap();
+            assert!(loaded.clip.samples == stem.samples, "stem `{}`", stem.name);
+        }
+        assert_eq!(music.stingers.len(), 1);
+        assert!(music.stingers[0].clip.samples == out.cues[0].samples);
         assert_ne!(
             hash(&out),
             hash(&rendered(TEST_STYLE, "test", 4, 8.0, &[4.0]).1)
         );
         assert_eq!(
             hash(&out),
-            "f6768ba01718af5c638bc86b44beb7a8cb8a26bd4ef11c503c9f59c59610406f"
+            "d8fff70dda5bc8fc23ab9d5457d31a50718382a4c4f18b43873a3f8fdbff8654"
         );
     }
 
@@ -433,9 +503,47 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
             out.master.short_term_max
         );
         assert!(out.master.true_peak_db <= -1.0 + 1e-3);
+        under_the_ceiling(&out, -1.0);
         assert_eq!(
             hash(&out),
-            "5ba7b108a4a2f91a51d9b868c3305a4aa469ebc2a3fa2f99e05f60d918b97e2b"
+            "38c11307a4bea258b304c80e590108bf4e0dab091890728710d13d287c7185d4"
+        );
+    }
+
+    #[test]
+    fn a_sample_oscillator_plays_its_chunk_and_a_missing_chunk_is_refused() {
+        let text = TEST_STYLE.replace(
+            r#"osc = [{ wave = "sine", hz = 150, to_hz = 55, glide_ms = 40 }, { wave = "white", gain = 0.2, env = [1, 5, 0.0, 0] }]"#,
+            r#"osc = [{ sample = "kick.wav" }]"#,
+        );
+        assert_ne!(text, TEST_STYLE);
+        let doc = crate::Compose::parse(&text).unwrap();
+        let style = doc.style("test").unwrap();
+        let request = crate::Request {
+            seed: 3,
+            seconds: 4.0,
+            hits: vec![2.0],
+            bpm: None,
+            key: None,
+        };
+        let score = crate::compose("test", style, &request).unwrap();
+        let kick = Clip {
+            rate: 24_000,
+            channels: 1,
+            samples: (0..2_400)
+                .map(|i| pfx_core::sim::sinf(i as f32 * 0.03) * (1.0 - i as f32 / 2_400.0))
+                .collect(),
+        }
+        .to_wav();
+        let samples = |name: &str| Ok((name == "kick.wav").then(|| kick.clone()));
+        let out = render(style, &score, &samples, &|| 0.0).unwrap();
+        let stem = out.stems.iter().find(|s| s.name == "kick").unwrap();
+        assert!(stem.samples.iter().any(|v| v.abs() > 1e-3));
+        let none = |_: &str| Ok(None);
+        let refused = render(style, &score, &none, &|| 0.0).err().unwrap();
+        assert!(
+            refused.contains("`kick.wav` is not in the document"),
+            "{refused}"
         );
     }
 }

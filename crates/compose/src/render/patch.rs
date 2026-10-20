@@ -80,10 +80,27 @@ pub fn tail(patch: &Patch) -> u64 {
         .unwrap_or(0)
 }
 
-fn sample(buffer: &mut [f32], source: &[f32], at: u64, step: f64, gain: f32, pan: f32) {
+struct Shot {
+    at: u64,
+    step: f64,
+    gain: f32,
+    pan: f32,
+    fade: Option<u64>,
+}
+
+fn sample(buffer: &mut [f32], source: &[f32], shot: &Shot) {
+    let Shot {
+        at,
+        step,
+        gain,
+        pan,
+        fade,
+    } = *shot;
     let length = source.len() / 2;
     let left = (1.0 - pan).min(1.0) * gain;
     let right = (1.0 + pan).min(1.0) * gain;
+    let fade = fade.map(|f| 1.0 / f.max(1) as f32);
+    let mut level = 1.0f32;
     let frames = buffer.len() / 2;
     let mut read = 0.0f64;
     let mut write = at as usize;
@@ -95,8 +112,14 @@ fn sample(buffer: &mut [f32], source: &[f32], at: u64, step: f64, gain: f32, pan
         let t = (read - i as f64) as f32;
         let l = source[i * 2] + (source[i * 2 + 2] - source[i * 2]) * t;
         let r = source[i * 2 + 1] + (source[i * 2 + 3] - source[i * 2 + 1]) * t;
-        buffer[write * 2] += l * left;
-        buffer[write * 2 + 1] += r * right;
+        if let Some(step) = fade {
+            level -= step;
+            if level <= 0.0 {
+                break;
+            }
+        }
+        buffer[write * 2] += l * left * level;
+        buffer[write * 2 + 1] += r * right * level;
         read += step;
         write += 1;
     }
@@ -140,8 +163,8 @@ pub fn render(
         let end = frame(note.beat + note.beats).max(at + 1);
         if let Some([from, to]) = patch.sweep {
             let span = patch.sweep_ms.map_or(end - at, |m| ms(f64::from(m)));
-            out.lowpass(at, Some(from), 0);
-            out.lowpass(at, Some(to), span);
+            out.lowpass(at, Some(from), 1);
+            out.lowpass(at + 1, Some(to), span.saturating_sub(1).max(1));
         }
         for (k, osc) in patch.osc.iter().enumerate() {
             let start = at + ms(f64::from(osc.at_ms));
@@ -153,15 +176,28 @@ pub fn render(
                 let source = clips
                     .get(name)
                     .ok_or_else(|| format!("sample `{name}` is not in the document"))?;
-                let step = ratio(note.midi - 60.0 + transpose);
-                sample(out.buffer_mut(), source, start, step, gain, pan);
+                let shot = Shot {
+                    at: start,
+                    step: ratio(note.midi - 60.0 + transpose),
+                    gain,
+                    pan,
+                    fade: (note.fade > 0.0).then(|| ms(note.fade * 1000.0)),
+                };
+                sample(out.buffer_mut(), source, &shot);
                 continue;
             };
             let f = osc.hz.unwrap_or_else(|| hz(note.midi + transpose));
             let e = osc.env.unwrap_or(patch.env);
             let bend = f64::from(osc.bend) + note.bend;
+            if bend != 0.0 && osc.to_hz.is_some() {
+                return Err(format!(
+                    "osc {} glides to `to_hz` and the note at beat {} bends; one oscillator takes one glide",
+                    k + 1,
+                    note.beat
+                ));
+            }
             let glide = if bend != 0.0 {
-                let frames = if osc.glide_ms > 0.0 && osc.to_hz.is_none() {
+                let frames = if osc.glide_ms > 0.0 {
                     ms(f64::from(osc.glide_ms))
                 } else {
                     end - at
