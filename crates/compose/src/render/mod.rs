@@ -573,6 +573,50 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
     }
 
     #[test]
+    fn a_game_renders_only_the_score_its_music_is_marked_with_and_refuses_a_part_that_is_not_finite()
+     {
+        let doc = crate::Compose::parse(TEST_STYLE).unwrap();
+        let style = doc.style("test").unwrap();
+        let score = scored(TEST_STYLE, "test", 3, 4.0, &[2.0]);
+        let text = crate::write_score(TEST_STYLE, "kept", &score).unwrap();
+        let text = crate::write_score(&text, "other", &score).unwrap();
+        let text = store::set_table(&text, "music", music_table(style, &score, "kept")).unwrap();
+        let pack = |text: &str, chunk: Option<(&str, &[u8])>| {
+            let mut writer = pfx_file::Writer::new().named(
+                pfx_file::SCNE,
+                "main.toml",
+                text.as_bytes(),
+                pfx_file::Codec::Auto,
+            );
+            if let Some((name, bytes)) = chunk {
+                writer = writer.named(pfx_file::FILE, name, bytes, pfx_file::Codec::Auto);
+            }
+            writer.to_vec().unwrap()
+        };
+        let music = game::music(&pack(&text, None), None).unwrap();
+        assert_eq!(music.stingers.len(), 1);
+        let kick = store::stem_file("kept", "kick");
+        let crossed = text.replace(&kick, &store::stem_file("other", "kick"));
+        assert_ne!(crossed, text);
+        let refused = game::music(&pack(&crossed, None), None).err().unwrap();
+        assert!(
+            refused.contains("renders only [compose.score.kept]"),
+            "{refused}"
+        );
+        let broken = Clip {
+            rate: RATE,
+            channels: 2,
+            samples: vec![f32::NAN; 64],
+        }
+        .to_wav();
+        let sting = cue_file("kept", "sting");
+        let refused = game::music(&pack(&text, Some((&sting, &broken))), None)
+            .err()
+            .unwrap();
+        assert!(refused.contains("not a finite number"), "{refused}");
+    }
+
+    #[test]
     fn the_sample_build_drop_style_renders_its_pinned_bytes() {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/chase.pitofx");

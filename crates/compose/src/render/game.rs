@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 
 use pfx_sound::Clip;
 use pfx_sound::manifest::{Manifest, Music, Stinger};
@@ -61,6 +61,67 @@ fn take(list: &mut Vec<Stem>, name: &str) -> Option<Clip> {
     })
 }
 
+enum Source {
+    Chunk,
+    Beside(PathBuf),
+    Score(String),
+}
+
+fn source(
+    doc: &Document,
+    compose: &Compose,
+    marked: Option<&str>,
+    beside: Option<&Path>,
+    file: &str,
+) -> Result<Source, String> {
+    if doc.holds(file)? {
+        return Ok(Source::Chunk);
+    }
+    if let Some(folder) = beside {
+        let path = store::beside(folder, file)?;
+        if path.is_file() {
+            return Ok(Source::Beside(path));
+        }
+    }
+    let missing = if beside.is_some() {
+        "in neither the document nor its folder"
+    } else {
+        "not in the document"
+    };
+    match part(file) {
+        Some((score, part)) if compose.scores.contains_key(score) => match marked {
+            Some(name) if name == score => Ok(Source::Score(part.to_string())),
+            Some(name) => Err(format!(
+                "`{file}` is {missing}, and a game renders only [compose.score.{name}], the score [music] is marked with"
+            )),
+            None => Err(format!(
+                "`{file}` is {missing}, and [music] is marked with no score to render"
+            )),
+        },
+        _ => Err(format!("`{file}` is {missing}")),
+    }
+}
+
+fn read(file: &str, source: &Source, doc: &Document) -> Result<Vec<u8>, String> {
+    match source {
+        Source::Beside(path) => {
+            let size = std::fs::metadata(path)
+                .map_err(|e| format!("`{file}`: {e}"))?
+                .len();
+            if size > bounds::MAX_PART_BYTES {
+                return Err(format!(
+                    "`{file}` holds {size} bytes; the render reads at most {}",
+                    bounds::MAX_PART_BYTES
+                ));
+            }
+            std::fs::read(path).map_err(|e| format!("`{file}`: {e}"))
+        }
+        _ => doc
+            .file_within(file, bounds::MAX_PART_BYTES)?
+            .ok_or_else(|| format!("`{file}` left the document")),
+    }
+}
+
 pub fn music(bytes: &[u8], beside: Option<&Path>) -> Result<Music, String> {
     let doc = Document::from_bytes(Path::new("document"), bytes.to_vec())?;
     let manifest =
@@ -75,46 +136,72 @@ pub fn music(bytes: &[u8], beside: Option<&Path>) -> Result<Music, String> {
         ));
     }
     let compose = Compose::parse(&doc.text)?;
-    let mut scores: BTreeMap<String, Rendered> = BTreeMap::new();
-    let mut held = 0u64;
+    let marked = manifest.score.as_deref();
+    let files = manifest
+        .stems
+        .iter()
+        .map(|s| s.file.as_str())
+        .chain(manifest.stingers.iter().map(|s| s.file.as_str()));
+    let sources = files
+        .map(|file| source(&doc, &compose, marked, beside, file))
+        .collect::<Result<Vec<Source>, String>>()?;
+    let wanted: BTreeSet<&str> = sources
+        .iter()
+        .filter_map(|s| match s {
+            Source::Score(part) => Some(part.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut stems = Vec::new();
+    let mut cues = Vec::new();
+    if let Some(score) = marked.filter(|_| !wanted.is_empty()) {
+        let Rendered {
+            stems: all,
+            cues: fired,
+            ..
+        } = rendered(&doc, &compose, score, beside)?;
+        stems = all
+            .into_iter()
+            .filter(|s| wanted.contains(s.name.as_str()))
+            .collect();
+        cues = fired
+            .into_iter()
+            .filter(|c| wanted.contains(format!("{CUE_PREFIX}{}", c.name).as_str()))
+            .collect();
+    }
+    let mut held: u64 = stems
+        .iter()
+        .chain(&cues)
+        .map(|s| (s.samples.len() as u64).saturating_mul(4))
+        .fold(0, u64::saturating_add);
+    let mut sources = sources.into_iter();
     let mut clip = |file: &str| -> Result<Clip, String> {
-        let bytes = match doc.file_within(file, bounds::MAX_PART_BYTES)? {
-            Some(bytes) => bytes,
-            None => {
-                if let Some((score, part)) = part(file)
-                    && compose.scores.contains_key(score)
-                {
-                    if !scores.contains_key(score) {
-                        let done = rendered(&doc, &compose, score, beside)?;
-                        scores.insert(score.to_string(), done);
-                    }
-                    let done = scores
-                        .get_mut(score)
-                        .ok_or("a rendered score went missing")?;
-                    let found = match part.strip_prefix(CUE_PREFIX) {
-                        Some(cue) => take(&mut done.cues, cue),
-                        None => take(&mut done.stems, part),
-                    };
-                    return found.ok_or_else(|| {
-                        format!("`{file}`: [compose.score.{score}] renders no such part, or [music] names it twice")
-                    });
-                }
-                let folder = beside.ok_or_else(|| format!("`{file}` is not in the document"))?;
-                let path = store::beside(folder, file)?;
-                let size = std::fs::metadata(&path)
-                    .map_err(|e| format!("`{file}`: {e}"))?
-                    .len();
-                if size > bounds::MAX_PART_BYTES {
-                    return Err(format!(
-                        "`{file}` holds {size} bytes; the render reads at most {}",
-                        bounds::MAX_PART_BYTES
-                    ));
-                }
-                std::fs::read(&path).map_err(|e| format!("`{file}`: {e}"))?
+        let source = sources.next().ok_or("[music] changed while it loaded")?;
+        let clip = match &source {
+            Source::Score(part) => {
+                let found = match part.strip_prefix(CUE_PREFIX) {
+                    Some(cue) => take(&mut cues, cue),
+                    None => take(&mut stems, part),
+                };
+                found.ok_or_else(|| {
+                    format!(
+                        "`{file}`: [compose.score.{}] renders no such part, or [music] names it twice",
+                        marked.unwrap_or_default()
+                    )
+                })?
+            }
+            _ => {
+                let bytes = read(file, &source, &doc)?;
+                bounds::part(file, &bytes, &mut held)?;
+                Clip::from_wav(&bytes).ok_or_else(|| format!("`{file}` is no WAV pfx reads"))?
             }
         };
-        bounds::part(file, &bytes, &mut held)?;
-        Clip::from_wav(&bytes).ok_or_else(|| format!("`{file}` is no WAV pfx reads"))
+        if clip.samples.iter().any(|v| !v.is_finite()) {
+            return Err(format!(
+                "`{file}` holds a sample that is not a finite number"
+            ));
+        }
+        Ok(clip)
     };
     let mut track = manifest.track.clone();
     for stem in &manifest.stems {

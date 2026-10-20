@@ -13,6 +13,8 @@ const MAX_MS: f64 = 60_000.0;
 const MAX_BPM: u32 = 400;
 const MAX_BEATS_PER_BAR: u32 = 32;
 const TEMPO: [f64; 2] = [0.25, 4.0];
+pub const MAX_GAIN: f64 = 64.0;
+pub const OCTAVES: i32 = 8;
 pub const MAX_ROLES: usize = 64;
 pub const MAX_PATCHES: usize = 256;
 pub const MAX_OSCS: usize = 16;
@@ -58,6 +60,10 @@ fn finite(what: &str, values: &[f64]) -> Result<(), String> {
     }
 }
 
+fn gain(what: &str, gain: f32) -> Result<(), String> {
+    within(what, f64::from(gain), -MAX_GAIN, MAX_GAIN)
+}
+
 fn env(what: &str, env: [f32; 4]) -> Result<(), String> {
     let [attack, decay, sustain, release] = env.map(f64::from);
     for stage in [attack, decay, release] {
@@ -75,18 +81,18 @@ fn patch(patch: &Patch) -> Result<(), String> {
         0.0,
         MAX_MS,
     )?;
+    gain("gain", patch.gain)?;
     finite(
-        "gain, send or pan",
-        &[
-            f64::from(patch.gain),
-            f64::from(patch.send),
-            f64::from(patch.pan),
-        ],
+        "send or pan",
+        &[f64::from(patch.send), f64::from(patch.pan)],
     )?;
     let filters = patch.lowpass.into_iter().flatten();
     let filters = filters.chain(patch.sweep.into_iter().flatten());
     let filters: Vec<f64> = filters.chain(patch.highpass).map(f64::from).collect();
     finite("lowpass, highpass or sweep", &filters)?;
+    if let Some((_, drive, mix)) = patch.drive {
+        finite("drive", &[f64::from(drive), f64::from(mix)])?;
+    }
     for (k, osc) in patch.osc.iter().enumerate() {
         let at = |e: String| format!("osc {}: {e}", k + 1);
         within("at_ms", f64::from(osc.at_ms), 0.0, MAX_MS).map_err(at)?;
@@ -94,11 +100,17 @@ fn patch(patch: &Patch) -> Result<(), String> {
         if let Some(e) = osc.env {
             env("env", e).map_err(at)?;
         }
+        gain("gain", osc.gain).map_err(at)?;
+        if !(-OCTAVES..=OCTAVES).contains(&osc.octave) {
+            return Err(at(format!(
+                "`octave` is {}; the render wants -{OCTAVES} to {OCTAVES}",
+                osc.octave
+            )));
+        }
         finite(
-            "cents, gain, bend, pan, width, hz or to_hz",
+            "cents, bend, pan, width, hz or to_hz",
             &[
                 f64::from(osc.cents),
-                f64::from(osc.gain),
                 f64::from(osc.bend),
                 f64::from(osc.pan),
                 f64::from(osc.width.unwrap_or(0.5)),
@@ -142,13 +154,10 @@ pub fn check(style: &Style, score: &Score) -> Result<(), String> {
         .flat_map(|c| c.voices.iter().map(|v| v.notes.len()));
     count("notes", tracked.chain(cued).sum(), MAX_NOTES)?;
     for role in &style.roles {
+        gain("gain", role.gain).map_err(|e| format!("[[role]] `{}`: {e}", role.name))?;
         finite(
-            "gain, accent or ramp",
-            &[
-                f64::from(role.gain),
-                f64::from(role.accent),
-                f64::from(role.ramp),
-            ],
+            "accent or ramp",
+            &[f64::from(role.accent), f64::from(role.ramp)],
         )
         .map_err(|e| format!("[[role]] `{}`: {e}", role.name))?;
     }
@@ -181,7 +190,7 @@ pub fn check(style: &Style, score: &Score) -> Result<(), String> {
         within("beats", cue.beats, 0.0, MAX_SECONDS).map_err(at)?;
         count("[[cue.voice]]", cue.voices.len(), MAX_VOICES).map_err(at)?;
         for voice in &cue.voices {
-            finite("gain", &[f64::from(voice.gain)]).map_err(at)?;
+            gain("gain", voice.gain).map_err(at)?;
             notes(&voice.notes).map_err(at)?;
         }
     }

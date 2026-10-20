@@ -561,6 +561,14 @@ fn music_text(
         return Ok((text, false));
     }
     let table = render::music_table(style, score, name);
+    let held = text
+        .parse::<toml::Table>()
+        .ok()
+        .and_then(|t| t.get("music").cloned())
+        .and_then(|m| serde_json::to_value(m).ok());
+    if held.is_some() && held == serde_json::to_value(&table).ok() {
+        return Ok((text, false));
+    }
     Ok((store::set_table(&text, "music", table)?, true))
 }
 
@@ -948,6 +956,10 @@ fade = 0.5
         let (again, wrote) = music_text(again, &marked, style, &second, "title", false).unwrap();
         assert!(wrote);
         assert_ne!(table(&again), table(&marked));
+        let (same, wrote) =
+            music_text(again.clone(), &again, style, &second, "title", false).unwrap();
+        assert!(!wrote);
+        assert_eq!(same, again);
         assert_eq!(
             serde_json::to_value(table(&again)).unwrap(),
             serde_json::to_value(render::music_table(style, &second, "title")).unwrap()

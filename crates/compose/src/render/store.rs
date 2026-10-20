@@ -82,6 +82,12 @@ impl Document {
             .map_err(|e| format!("{shown}: {e}"))
     }
 
+    pub fn holds(&self, name: &str) -> Result<bool, String> {
+        let shown = self.path.display();
+        let reader = Reader::from_bytes(&self.bytes).map_err(|e| format!("{shown}: {e}"))?;
+        Ok(reader.find_named(pfx_file::FILE, name).is_some())
+    }
+
     pub fn holds_audio(&self, written: &[String]) -> Result<bool, String> {
         let shown = self.path.display();
         let reader = Reader::from_bytes(&self.bytes).map_err(|e| format!("{shown}: {e}"))?;
