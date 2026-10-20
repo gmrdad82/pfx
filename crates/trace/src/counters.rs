@@ -155,6 +155,10 @@ impl Counts {
         self.per(self.mover_queries, self.paths)
     }
 
+    pub fn mover_walks_per_path(&self) -> f64 {
+        self.per(self.mover_walks, self.paths)
+    }
+
     pub fn line(&self) -> String {
         let rays = self.rays_per_path();
         let candidates = self.candidates_per_ray();
@@ -170,7 +174,7 @@ impl Counts {
             candidates.closest,
             candidates.shadow,
             self.mover_queries_per_path(),
-            self.per(self.mover_walks, self.paths)
+            self.mover_walks_per_path()
         )
     }
 }
@@ -215,10 +219,14 @@ impl Counters {
         }
     }
 
-    pub(crate) fn take(&self, gpu: &Gpu) -> Result<Counts, String> {
-        let bytes = crate::checkpoint::read_buffer(gpu, &self.buffer)?;
+    pub(crate) fn clear(&self, gpu: &Gpu) {
         gpu.queue
             .write_buffer(&self.buffer, 0, &[0; BYTES as usize]);
+    }
+
+    pub(crate) fn take(&self, gpu: &Gpu) -> Result<Counts, String> {
+        let bytes = crate::checkpoint::read_buffer(gpu, &self.buffer)?;
+        self.clear(gpu);
         Counts::from_bytes(&bytes)
     }
 }
@@ -275,31 +283,82 @@ mod tests {
         assert!(WGSL.contains(&format!("@binding({BINDING})")));
     }
 
-    #[test]
-    fn the_ratios_are_per_path_and_per_query() {
-        let counts = Counts {
-            paths: 100,
-            primary: 100,
-            bounce: 120,
-            closest: 230,
-            shadow: 400,
-            surface_shadow: 40,
-            closest_candidates: 115,
-            shadow_candidates: 256,
-            mover_queries: 50,
-            mover_walks: 0,
-        };
-        let rays = counts.rays_per_path();
-        assert_eq!(
-            (rays.primary, rays.bounce, rays.other_closest),
-            (1.0, 1.2, 0.1)
+    const LANES: u32 = 1000;
+    const TALLY: &str = "@compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) id: vec3u) {\n    if (id.x>=1000u) { return; }\n    trace_count(0u);\n    for (var i=0u;i<id.x%7u;i++) {\n        if (i==id.x%5u) { break; }\n        trace_count(1u);\n    }\n    if (id.x%3u==0u) { trace_count_by(2u,id.x); }\n    trace_count_by(3u,0x00ffffffu);\n    trace_count_flush();\n}\n";
+
+    fn tallied(gpu: &Gpu, reduce: Reduce, start: &[u32]) -> Counts {
+        let source = format!(
+            "const COUNT_KINDS: u32 = {KINDS}u;\n{WGSL}{}{TALLY}",
+            reduce.wgsl()
         );
-        assert_eq!((rays.surface_shadow, rays.other_shadow), (0.4, 3.6));
-        assert_eq!(rays.total, 6.3);
-        let candidates = counts.candidates_per_ray();
-        assert_eq!((candidates.closest, candidates.shadow), (0.5, 0.64));
-        assert_eq!(counts.mover_queries_per_path(), 0.5);
-        assert_eq!(Counts::default().rays_per_path(), RaysPerPath::default());
+        let module = gpu
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("trace counters tally"),
+                source: wgpu::ShaderSource::Wgsl(source.into()),
+            });
+        let pipeline = gpu
+            .device
+            .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("trace counters tally"),
+                layout: None,
+                module: &module,
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+        let counters = Counters::new(gpu);
+        let bytes: Vec<u8> = start.iter().flat_map(|word| word.to_le_bytes()).collect();
+        gpu.queue.write_buffer(&counters.buffer, 0, &bytes);
+        let binding = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("trace counters tally"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[counters.entry()],
+        });
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("trace counters tally"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("trace counters tally"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipeline);
+            pass.set_bind_group(0, &binding, &[]);
+            pass.dispatch_workgroups(LANES.div_ceil(64), 1, 1);
+        }
+        gpu.queue.submit(Some(encoder.finish()));
+        let counts = counters.take(gpu).unwrap();
+        assert_eq!(counters.take(gpu).unwrap(), Counts::default());
+        counts
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn both_reductions_add_the_same_64_bit_totals() {
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let offered = gpu.adapter.features().contains(wgpu::Features::SUBGROUP);
+        assert_eq!(
+            Reduce::of(gpu.device.features()) == Reduce::Subgroup,
+            offered
+        );
+        let mut start = vec![0u32; 2 * KINDS];
+        start[0] = 0xffff_ff00;
+        let lanes = 0..u64::from(LANES);
+        let expected = Counts {
+            paths: 0xffff_ff00 + u64::from(LANES),
+            primary: lanes.clone().map(|x| (x % 7).min(x % 5)).sum(),
+            bounce: lanes.filter(|x| x % 3 == 0).sum(),
+            closest: u64::from(LANES) * 0x00ff_ffff,
+            ..Counts::default()
+        };
+        assert!(expected.paths > u64::from(u32::MAX));
+        assert_eq!(tallied(&gpu, Reduce::Lane, &start), expected);
+        if offered {
+            assert_eq!(tallied(&gpu, Reduce::Subgroup, &start), expected);
+        }
     }
 
     #[test]

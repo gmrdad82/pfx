@@ -737,7 +737,7 @@ impl Told {
             None => self.line("frame", fields),
             Some(paced) => {
                 let [a, b, c, d, e] = fields;
-                let [counts, rays, candidates, movers] =
+                let [counts, rays, candidates, movers, walks] =
                     super::render::counts_json(paced.counts.as_ref());
                 self.line(
                     "frame",
@@ -756,6 +756,7 @@ impl Told {
                         rays,
                         candidates,
                         movers,
+                        walks,
                     ],
                 )
             }

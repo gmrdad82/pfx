@@ -11,9 +11,9 @@ fn trace_count_add(kind: u32, n: u32) {
     if (low>0xffffffffu-n) { atomicAdd(&trace_counters[2u*kind+1u],1u); }
 }
 fn trace_count_flush() {
-    let first=trace_count_first();
     for (var k=0u;k<COUNT_KINDS;k++) {
         let total=trace_count_reduce(trace_counts[k]);
+        let first=trace_count_first();
         if (first && total>0u) { trace_count_add(k,total); }
     }
 }

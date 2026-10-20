@@ -2326,6 +2326,12 @@ impl Trace {
         self.counters.is_some()
     }
 
+    pub fn clear_counts(&self, gpu: &Gpu) {
+        if let Some(counters) = &self.counters {
+            counters.clear(gpu);
+        }
+    }
+
     pub fn take_counts(&self, gpu: &Gpu) -> Result<Option<crate::counters::Counts>, String> {
         self.counters
             .as_ref()

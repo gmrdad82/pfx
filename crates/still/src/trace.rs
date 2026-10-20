@@ -1080,6 +1080,7 @@ fn traced(
         }
         trace.restore(gpu, &saved).map_err(failed)?;
     }
+    trace.clear_counts(gpu);
     let from = trace.samples();
     let trace = RefCell::new(trace);
     let mut paced = sampled(
@@ -1164,6 +1165,7 @@ fn adapted(
     };
     turns.now();
     tell(&mut watch.borrow_mut());
+    trace.clear_counts(gpu);
     let converged = trace
         .sample_adaptive_kept(
             gpu,

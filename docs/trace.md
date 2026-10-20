@@ -450,7 +450,7 @@ Where the device offers ray queries (Vulkan with `VK_KHR_ray_query`, DX12 with r
 
 ## Counting rays
 
-`Detail::counters` (`pfx render --recipe … --counters`, `pfx clip … --trace --counters`) builds the trace kernel with counters: every invocation keeps its counts in private registers, adds them up across its subgroup at the end of `main` (one lane per subgroup adds the sums to a small buffer with atomics; on a device created without subgroups every lane adds its own) and the host reads the buffer back once a frame (`Trace::take_counts`, which also zeroes it). Each count is 64 bits, a low and a high word with the carry, so a 4K frame at hundreds of samples does not wrap. A trace without counters compiles the same kernel it always did: the hooks are empty functions, and the counted kernel draws the same picture.
+`Detail::counters` (`pfx render --recipe … --counters`, `pfx clip … --trace --counters`) builds the trace kernel with counters: every invocation keeps its counts in private registers, adds them up across its subgroup at the end of `main` (one lane per subgroup adds the sums to a small buffer with atomics; `pfx_gpu` asks for `wgpu::Features::SUBGROUP` wherever the adapter offers it, and on a device without it every lane adds its own) and the host reads the buffer back once a frame (`Trace::take_counts`, which also zeroes it; a frame zeroes it again before it samples, so a stopped frame's counts never reach the next). Each count is 64 bits, a low and a high word with the carry, so a 4K frame at hundreds of samples does not wrap. Without counters the hooks are empty functions, which compile to nothing, and the counted kernel draws the same picture as the plain one.
 
 What it counts (`crates/trace/src/counters.rs`, `Counts`):
 
@@ -460,7 +460,9 @@ What it counts (`crates/trace/src/counters.rs`, `Counts`):
 - **Candidates:** with ray queries, every candidate the hardware hands back to the shader in a world query (non-opaque triangles, analytic shapes, movers' boxes), for closest-hit and shadow queries apart. The software BVH counts none.
 - **Movers:** queries into the movers' structure (box queries and each mover's own) and software mover walks.
 
-`pfx render --recipe` adds them to its summary line and its `done` JSON line, and `pfx clip` to each frame's summary and `frame` JSON line, as `counts` (the raw totals, which add across frames), `rays_per_path` (`primary`, `bounce`, `other_closest`, `surface_shadow`, `other_shadow`, `total`), `candidates_per_ray` (`closest`, `shadow`) and `mover_queries` (a path's average). Without `--counters` the four fields are `null`. A frame resumed from a checkpoint counts only the samples traced after it resumed. The counted kernel is a pipeline of its own, so its first frame pays one more cold compile.
+A query is a call into the tracer's `scene`, `occluded` or `shadow_passed`, so a degenerate ray (a non-finite origin or direction, or no reach) counts though it returns at once, and on the software path a call counts even in a scene with no triangles; that keeps closest-hit queries equal to the primary rays, the bounces and the rest on both paths.
+
+`pfx render --recipe` adds them to its summary line and its `done` JSON line, and `pfx clip` to each frame's summary and `frame` JSON line, as `counts` (the raw totals, which add across frames), `rays_per_path` (`primary`, `bounce`, `other_closest`, `surface_shadow`, `other_shadow`, `total`), `candidates_per_ray` (`closest`, `shadow`), `mover_queries` and `mover_walks` (a path's averages). Without `--counters` the five fields are `null`. `--counters` changes no traced byte, so a render's checkpoint resumes with it or without it. A frame resumed from a checkpoint counts only the samples traced after it resumed. The counted kernel is a pipeline of its own, so its first frame pays one more cold compile.
 
 ## Pacing
 

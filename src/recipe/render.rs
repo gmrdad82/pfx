@@ -423,7 +423,7 @@ impl Watch {
     }
 
     fn done(&self, out: &Path, rendered: &Rendered, at: Duration) -> Option<String> {
-        let [counts, rays, candidates, movers] = counts_json(rendered.paced.counts.as_ref());
+        let [counts, rays, candidates, movers, walks] = counts_json(rendered.paced.counts.as_ref());
         (self.progress == Progress::Json).then(|| {
             json_line(
                 "done",
@@ -472,6 +472,7 @@ impl Watch {
                     rays,
                     candidates,
                     movers,
+                    walks,
                 ],
             )
         })
@@ -498,13 +499,14 @@ pub(super) fn rounded(value: f64, places: i32) -> serde_json::Value {
 
 pub(super) fn counts_json(
     counts: Option<&pfx_still::Counts>,
-) -> [(&'static str, serde_json::Value); 4] {
+) -> [(&'static str, serde_json::Value); 5] {
     let Some(counts) = counts else {
         return [
             ("counts", serde_json::Value::Null),
             ("rays_per_path", serde_json::Value::Null),
             ("candidates_per_ray", serde_json::Value::Null),
             ("mover_queries", serde_json::Value::Null),
+            ("mover_walks", serde_json::Value::Null),
         ];
     };
     let rays = counts.rays_per_path();
@@ -544,6 +546,7 @@ pub(super) fn counts_json(
             }),
         ),
         ("mover_queries", rounded(counts.mover_queries_per_path(), 3)),
+        ("mover_walks", rounded(counts.mover_walks_per_path(), 3)),
     ]
 }
 
@@ -614,6 +617,7 @@ fn traced(
             Args {
                 progress: Progress::Plain,
                 checkpoint: None,
+                counters: false,
                 ..args.clone()
             }
         ),
@@ -1040,12 +1044,22 @@ mod tests {
             serde_json::json!({"closest": 0.5, "shadow": 0.64})
         );
         assert_eq!(read["mover_queries"], 0.5);
+        assert_eq!(read["mover_walks"], 0.02);
+        let none = fields(&json_line(
+            "done",
+            1.0,
+            counts_json(Some(&pfx_still::Counts::default())),
+        ));
+        assert_eq!(none["rays_per_path"]["total"], 0.0);
+        assert_eq!(none["candidates_per_ray"]["shadow"], 0.0);
+        assert_eq!(none["mover_walks"], 0.0);
         let off = fields(&json_line("done", 1.0, counts_json(None)));
         for name in [
             "counts",
             "rays_per_path",
             "candidates_per_ray",
             "mover_queries",
+            "mover_walks",
         ] {
             assert!(off[name].is_null(), "{name}");
         }
