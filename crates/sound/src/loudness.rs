@@ -28,7 +28,9 @@ pub struct Loudness {
     data: Vec<f64>,
     index: usize,
     needed: usize,
-    blocks: Vec<f64>,
+    sums: Vec<f64>,
+    partial: Vec<f64>,
+    gated: Vec<f64>,
 }
 
 impl Loudness {
@@ -49,7 +51,9 @@ impl Loudness {
             data: vec![0.0; window * channels],
             index: 0,
             needed: hundred * MOMENTARY_BLOCKS,
-            blocks: Vec::new(),
+            sums: vec![0.0; SHORT_TERM_BLOCKS * channels],
+            partial: vec![0.0; channels],
+            gated: Vec::new(),
         }
     }
 
@@ -64,7 +68,7 @@ impl Loudness {
             if self.needed == 0 {
                 let energy = self.energy(self.hundred * MOMENTARY_BLOCKS);
                 if energy >= ABSOLUTE_GATE {
-                    self.blocks.push(energy);
+                    self.gated.push(energy);
                 }
                 self.needed = self.hundred;
             }
@@ -80,14 +84,14 @@ impl Loudness {
     }
 
     pub fn integrated(&self) -> f64 {
-        if self.blocks.is_empty() {
+        if self.gated.is_empty() {
             return f64::NEG_INFINITY;
         }
-        let mean = self.blocks.iter().sum::<f64>() / self.blocks.len() as f64;
+        let mean = self.gated.iter().sum::<f64>() / self.gated.len() as f64;
         let threshold = mean * pow(10.0, RELATIVE_GATE_DB / 10.0);
         let mut count = 0usize;
         let mut sum = 0.0;
-        for energy in self.blocks.iter().filter(|e| **e >= threshold) {
+        for energy in self.gated.iter().filter(|e| **e >= threshold) {
             count += 1;
             sum += energy;
         }
@@ -98,25 +102,44 @@ impl Loudness {
     }
 
     fn filter(&mut self, samples: &[f32]) {
-        let frames = samples.len() / self.channels;
+        let channels = self.channels;
+        let frames = samples.len() / channels;
+        let (h, window) = (self.hundred, self.window);
         let [b0, b1, b2, b3, b4] = self.b;
         let [_, a1, a2, a3, a4] = self.a;
-        for c in 0..self.channels {
-            if self.weights[c] == 0.0 {
-                continue;
+        let mut n = 0;
+        while n < frames {
+            let at = self.index + n;
+            let stop = frames.min(n + h - at % h);
+            for (m, frame) in samples[n * channels..stop * channels]
+                .chunks_exact(channels)
+                .enumerate()
+            {
+                for (c, x) in frame.iter().enumerate() {
+                    if self.weights[c] == 0.0 {
+                        continue;
+                    }
+                    let s = &mut self.state[c];
+                    s[0] = f64::from(*x) - (a1 * s[1] + (a2 * s[2] + a3 * s[3] + a4 * s[4]));
+                    let y = b0 * s[0] + b1 * s[1] + b2 * s[2] + b3 * s[3] + b4 * s[4];
+                    s[4] = s[3];
+                    s[3] = s[2];
+                    s[2] = s[1];
+                    s[1] = s[0];
+                    self.data[c * window + at + m] = y;
+                    self.partial[c] += y * y;
+                }
             }
-            let state = &mut self.state[c];
-            let lane = &mut self.data[c * self.window..(c + 1) * self.window];
-            for n in 0..frames {
-                let x = f64::from(samples[n * self.channels + c]);
-                state[0] = x - a1 * state[1] - a2 * state[2] - a3 * state[3] - a4 * state[4];
-                lane[self.index + n] =
-                    b0 * state[0] + b1 * state[1] + b2 * state[2] + b3 * state[3] + b4 * state[4];
-                state[4] = state[3];
-                state[3] = state[2];
-                state[2] = state[1];
-                state[1] = state[0];
+            n = stop;
+            if (self.index + n).is_multiple_of(h) {
+                let block = (self.index + n) / h - 1;
+                for c in 0..channels {
+                    self.sums[c * SHORT_TERM_BLOCKS + block] = self.partial[c];
+                    self.partial[c] = 0.0;
+                }
             }
+        }
+        for state in &mut self.state {
             for v in state.iter_mut() {
                 if v.abs() < f64::EPSILON {
                     *v = 0.0;
@@ -124,12 +147,16 @@ impl Loudness {
             }
         }
         self.index += frames;
-        if self.index == self.window {
+        if self.index == window {
             self.index = 0;
         }
     }
 
     fn energy(&self, frames: usize) -> f64 {
+        let h = self.hundred;
+        let current = self.index / h;
+        let rest = frames - self.index % h;
+        let (full, left) = (rest / h, rest % h);
         let mut sum = 0.0;
         for c in 0..self.channels {
             let weight = self.weights[c];
@@ -137,16 +164,14 @@ impl Loudness {
                 continue;
             }
             let lane = &self.data[c * self.window..(c + 1) * self.window];
-            let mut lane_sum = 0.0;
-            if self.index < frames {
-                for v in &lane[..self.index] {
-                    lane_sum += v * v;
-                }
-                for v in &lane[self.window - frames + self.index..] {
-                    lane_sum += v * v;
-                }
-            } else {
-                for v in &lane[self.index - frames..self.index] {
+            let sums = &self.sums[c * SHORT_TERM_BLOCKS..(c + 1) * SHORT_TERM_BLOCKS];
+            let mut lane_sum = self.partial[c];
+            for k in 1..=full {
+                lane_sum += sums[(current + SHORT_TERM_BLOCKS - k) % SHORT_TERM_BLOCKS];
+            }
+            if left > 0 {
+                let end = (current + SHORT_TERM_BLOCKS - full - 1) % SHORT_TERM_BLOCKS * h + h;
+                for v in &lane[end - left..end] {
                     lane_sum += v * v;
                 }
             }

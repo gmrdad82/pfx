@@ -386,3 +386,18 @@ fn bench_pad_stem() {
         notes.len()
     );
 }
+
+#[test]
+#[ignore = "bench; run with --release"]
+fn bench_loudness_30s() {
+    let samples = pad_offline(&pad_notes());
+    let mut runs: Vec<f64> = (0..5)
+        .map(|_| {
+            let started = Instant::now();
+            std::hint::black_box(pfx_sound::loudness(&samples, 2, RATE));
+            started.elapsed().as_secs_f64() * 1000.0
+        })
+        .collect();
+    runs.sort_by(f64::total_cmp);
+    println!("loudness of a 30 s stereo stem: {:.1} ms", runs[2]);
+}
