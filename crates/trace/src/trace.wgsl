@@ -1783,9 +1783,6 @@ fn emitter_weight(hit: Hit, p: vec3f, previous_point: vec3f, previous_pdf: f32) 
 fn light_hits(o: vec3f, d: vec3f, limit: f32, previous_point: vec3f, previous_pdf: f32) -> vec3f {
     return vec3f(0.0);
 }
-fn emitters_looped() -> u32 {
-    return 0u;
-}
 fn light_position(i: u32) -> vec3f {
     return vec3f(0.0);
 }
@@ -1796,6 +1793,21 @@ fn sampled_emitter(hit: Hit) -> bool {
     return false;
 }
 fn direct_light(slot: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>, u: vec4f) -> Candidate {
+    return Candidate(vec3f(0.0,0.0,1.0),vec3f(0.0),0.0,0.0,vec3f(0.0,0.0,1.0),-1.0,0u);
+}
+fn emitters_sampled() -> bool {
+    return false;
+}
+fn segment_slots() -> u32 {
+    return 0u;
+}
+fn segment_importance(slot: u32, p: vec3f, d: vec3f, t: f32) -> f32 {
+    return 0.0;
+}
+fn segment_light(slot: u32, p: vec3f, d: vec3f, t: f32, start: f32) -> vec2f {
+    return vec2f(0.0);
+}
+fn volume_light(index: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>, u: vec4f) -> Candidate {
     return Candidate(vec3f(0.0,0.0,1.0),vec3f(0.0),0.0,0.0,vec3f(0.0,0.0,1.0),-1.0,0u);
 }
 fn trace_lights_end() {}
@@ -1939,13 +1951,7 @@ fn fog_phase_sample(d: vec3f, g: f32, u: vec2f) -> vec4f {
     let phi=2.0*PI*u.y;
     return vec4f(normalize(basis(d)*vec3f(sine*cos(phi),sine*sin(phi),cosine)),fog_phase(cosine,g));
 }
-fn fog_light_at(k: u32) -> vec4f {
-    if (k<3u) { return vec4f(0.0); }
-    let slot=k-2u;
-    if (slot>u32(emitters_looped())) { return vec4f(0.0); }
-    return vec4f(light_position(slot-1u),1.0);
-}
-fn fog_lit(k: u32, x: vec3f, d: vec3f, mis: bool, state: ptr<function,u32>, u: vec4f) -> vec3f {
+fn fog_lit(k: u32, index: u32, x: vec3f, d: vec3f, mis: bool, state: ptr<function,u32>, u: vec4f) -> vec3f {
     let g=frame.fog_tint.w;
     var direction=vec3f(0.0,0.0,1.0);
     var strength=vec3f(0.0);
@@ -1972,7 +1978,8 @@ fn fog_lit(k: u32, x: vec3f, d: vec3f, mis: bool, state: ptr<function,u32>, u: v
     } else {
         let transform=basis(d);
         volume_vertex=true;
-        let picked=direct_light(k-2u,transform,x,x,d,state,u);
+        var picked: Candidate;
+        if (k==2u) { picked=direct_light(0u,transform,x,x,d,state,u); } else { picked=volume_light(index,transform,x,x,d,state,u); }
         volume_vertex=false;
         if (picked.limit<0.0) { return vec3f(0.0); }
         direction=normalize(transform*picked.wi);
@@ -2007,54 +2014,88 @@ fn fog_lit(k: u32, x: vec3f, d: vec3f, mis: bool, state: ptr<function,u32>, u: v
     if (k==0u) { seen=mix(vec3f(1.0),seen,frame.fog_light.x); }
     return strength*phase*seen;
 }
+fn fog_importance(k: u32, p: vec3f, d: vec3f, t: f32) -> f32 {
+    if (k==0u) { return select(0.0,dot(frame.sun_color.xyz,INDIRECT_LUMA)*frame.sun_color.w*t,frame.sun_color.w>0.0); }
+    if (k==1u) { return select(0.0,max(sky_cdf.energy,0.0)*t,sky_cdf.width>0u); }
+    return segment_importance(k-2u,p,d,t);
+}
+fn fog_pick(p: vec3f, d: vec3f, t: f32, start: f32) -> vec3f {
+    let by_weight=start>0.5;
+    var rand=start*2.0-select(0.0,1.0,by_weight);
+    var selected=-1;
+    var chosen=0.0;
+    var total=0.0;
+    var valid=0.0;
+    for (var k=0u;k<2u+segment_slots();k++) {
+        let weight=fog_importance(k,p,d,t);
+        if (!(weight>0.0)) { continue; }
+        total+=weight;
+        valid+=1.0;
+        let thresh=select(1.0/valid,weight/total,by_weight);
+        if (rand<=thresh) {
+            selected=i32(k);
+            chosen=weight;
+            rand=rand/thresh;
+        } else {
+            rand=(rand-thresh)/(1.0-thresh);
+        }
+        rand=clamp(rand,0.0,1.0);
+    }
+    if (selected<0) { return vec3f(-1.0,0.0,0.0); }
+    return vec3f(f32(selected),0.5*(chosen/total+1.0/valid),rand);
+}
+fn fog_point(o: vec3f, d: vec3f, span: vec2f, attenuation: f32, light: vec4f, u: f32) -> vec2f {
+    var r=u;
+    let equiangular=light.w>0.5;
+    var chose_equiangular=false;
+    if (equiangular) {
+        if (r<0.5) { r*=2.0; } else { r=(r-0.5)*2.0; chose_equiangular=true; }
+    }
+    if (chose_equiangular) {
+        let sample=fog_equiangular(o,d,light.xyz,span,r);
+        if (!(sample.y>FOG_PDF_CUTOFF)) { return vec2f(0.0); }
+        let t=sample.x;
+        let density=fog_density(o.y+d.y*t);
+        let transmit=exp(-fog_depth(o,d,span.x,t));
+        let distance=fog_distance_pdf(o,d,span,attenuation,t);
+        let ratio=distance/sample.y;
+        return vec2f(t,density*transmit/sample.y*2.0/(1.0+ratio*ratio));
+    }
+    let depth=-log(max(1.0-r*attenuation,1e-30));
+    let t=fog_distance(o,d,span.x,span.y,depth);
+    var weight=attenuation;
+    if (equiangular) {
+        let distance=fog_density(o.y+d.y*t)*exp(-depth)/attenuation;
+        let ratio=fog_equiangular_pdf(o,d,light.xyz,span,t)/max(distance,1e-30);
+        weight*=2.0/(1.0+ratio*ratio);
+    }
+    return vec2f(t,weight);
+}
 fn fog_direct(o: vec3f, d: vec3f, span: vec2f, attenuation: f32, mis: bool, state: ptr<function,u32>) -> vec3f {
     var total=vec3f(0.0);
     let albedo=frame.fog_tint.xyz;
-    let sun=dot(frame.sun_color.xyz,INDIRECT_LUMA)*max(frame.sun_color.w,0.0);
-    let sky=select(0.0,max(sky_cdf.energy,0.0),sky_cdf.width>0u);
-    var pick=select(0.0,1.0,sun>0.0);
-    if (sun>0.0 && sky>0.0) { pick=clamp(sun/(sun+sky),0.1,0.9); }
-    let sun_picked=rnd(state,sobol(FOG_DIM).y)<pick;
-    for (var k=0u;k<2u+light_slots();k++) {
-        var chance=1.0;
-        if (k==0u) {
-            if (!sun_picked) { continue; }
-            chance=pick;
-        } else if (k==1u) {
-            if (sun_picked) { continue; }
-            chance=1.0-pick;
+    let start=o+d*span.x;
+    let extent=span.y-span.x;
+    let picked=fog_pick(start,d,extent,rnd(state,sobol(FOG_DIM).y));
+    if (picked.x>=0.0) {
+        let k=u32(picked.x);
+        var chance=picked.y;
+        var index=0u;
+        var light=vec4f(0.0);
+        if (k>=2u) {
+            let local=segment_light(k-2u,start,d,extent,picked.z);
+            chance*=local.y;
+            index=u32(local.x);
+            light=vec4f(light_position(index),1.0);
         }
-        let u=sobol(FOG_DIM+2u+2u*k);
-        var r=rnd(state,u.x);
-        let light=fog_light_at(k);
-        var t=0.0;
-        var weight=0.0;
-        let equiangular=light.w>0.5;
-        var chose_equiangular=false;
-        if (equiangular) {
-            if (r<0.5) { r*=2.0; } else { r=(r-0.5)*2.0; chose_equiangular=true; }
+        let at=fog_point(o,d,span,attenuation,light,rnd(state,sobol(FOG_DIM+2u).x));
+        if (chance>0.0 && at.y>0.0) {
+            total+=albedo*(at.y/chance)*fog_lit(select(k,3u,k>=2u),index,o+d*at.x,d,mis,state,sobol(FOG_DIM+3u));
         }
-        if (chose_equiangular) {
-            let sample=fog_equiangular(o,d,light.xyz,span,r);
-            if (!(sample.y>FOG_PDF_CUTOFF)) { continue; }
-            t=sample.x;
-            let density=fog_density(o.y+d.y*t);
-            let transmit=exp(-fog_depth(o,d,span.x,t));
-            let distance=fog_distance_pdf(o,d,span,attenuation,t);
-            let ratio=distance/sample.y;
-            weight=density*transmit/sample.y*2.0/(1.0+ratio*ratio);
-        } else {
-            let depth=-log(max(1.0-r*attenuation,1e-30));
-            t=fog_distance(o,d,span.x,span.y,depth);
-            weight=attenuation;
-            if (equiangular) {
-                let distance=fog_density(o.y+d.y*t)*exp(-depth)/attenuation;
-                let ratio=fog_equiangular_pdf(o,d,light.xyz,span,t)/max(distance,1e-30);
-                weight*=2.0/(1.0+ratio*ratio);
-            }
-        }
-        if (!(weight>0.0)) { continue; }
-        total+=albedo*(weight/chance)*fog_lit(k,o+d*t,d,mis,state,sobol(FOG_DIM+3u+2u*k));
+    }
+    if (emitters_sampled()) {
+        let at=fog_point(o,d,span,attenuation,vec4f(0.0),rnd(state,sobol(FOG_DIM+4u).x));
+        if (at.y>0.0) { total+=albedo*at.y*fog_lit(2u,0u,o+d*at.x,d,mis,state,sobol(FOG_DIM+5u)); }
     }
     return total;
 }

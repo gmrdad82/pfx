@@ -391,9 +391,6 @@ fn tree_light(transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, sta
     candidate.scale/=picked.y;
     return candidate;
 }
-fn emitters_looped() -> u32 {
-    return u32(emitters[0].a.y);
-}
 fn light_position(i: u32) -> vec3f {
     return lights[i].a.xyz;
 }
@@ -406,4 +403,179 @@ fn direct_light(slot: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometri
     if (slot>0u) { return light_candidate(lights[slot-1u],transform,p,origin,geometric,state,u); }
     if (emitters[0].a.x<0.5) { return candidate_none(); }
     return emitter_candidate(transform,p,origin,state,u);
+}
+fn emitters_sampled() -> bool {
+    return emitters[0].a.x>0.5;
+}
+fn volume_light(index: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>, u: vec4f) -> Candidate {
+    return light_candidate(lights[index],transform,p,origin,geometric,state,u);
+}
+fn segment_slots() -> u32 {
+    return u32(emitters[0].a.y)+select(0u,1u,emitters[0].a.w>0.5);
+}
+fn segment_theta(closest: f32, distance: f32, t: f32) -> f32 {
+    return atan2(t,distance-closest*select(0.0,(t-closest)/distance,distance!=0.0));
+}
+fn segment_v(centroid: vec3f, p: vec3f, d: vec3f, axis: vec3f, t: f32) -> vec3f {
+    let v0=normalize(p-centroid);
+    let v1=normalize(p-centroid+d*min(t,1e12));
+    let side=cross(v0,v1);
+    let s=length(side);
+    if (!(s>1e-9)) { return select(v1,v0,dot(v0,axis)>dot(v1,axis)); }
+    let o1=cross(side/s,v0);
+    let a0=dot(v0,axis);
+    let a1=dot(o1,axis);
+    let span=a0*a0+a1*a1;
+    if (!(span>0.0)) { return v0; }
+    let inv=inverseSqrt(span);
+    let cos_phi0=a0*inv;
+    if (a1<0.0 || dot(v0,v1)>cos_phi0) { return select(v1,v0,a0>dot(v1,axis)); }
+    return cos_phi0*v0+a1*inv*o1;
+}
+fn segment_outgoing(v: vec3f, cos_u: f32, axis: vec3f, theta_o: f32, theta_e: f32) -> f32 {
+    var cos_t=1.0;
+    var sin_t=0.0;
+    if (any(axis!=v)) {
+        cos_t=dot(axis,v);
+        sin_t=sin_from_cos(cos_t);
+    }
+    let sin_u=sin_from_cos(cos_u);
+    let cos_t_minus_u=cos_t*cos_u+sin_t*sin_u;
+    let cos_o=cos(theta_o);
+    if (cos_t>=cos_u || cos_t_minus_u>=cos_o) { return 1.0; }
+    if (theta_o+theta_e>PI || cos_t_minus_u>cos(theta_o+theta_e)) {
+        return abs(cos_t_minus_u*cos_o+sin_from_cos(cos_t_minus_u)*sin(theta_o));
+    }
+    return 0.0;
+}
+fn segment_emitter(light: Light, p: vec3f, d: vec3f, t: f32) -> f32 {
+    let centroid=light.a.xyz;
+    let closest=dot(centroid-p,d);
+    let line=length(centroid-p-d*closest);
+    let at=p+d*clamp(closest,0.0,t);
+    let near=max(length(centroid-at),1e-6);
+    if (near>=light.b.w) { return 0.0; }
+    let theta_d=segment_theta(closest,line,t);
+    let kind=u32(light.a.w);
+    var energy=(light.b.x+light.b.y+light.b.z)/3.0;
+    if (kind==0u) { return energy*theta_d/near; }
+    var axis=light.c.xyz;
+    var theta_o=0.0;
+    var theta_e=PI/2.0;
+    var cos_u=1.0;
+    if (kind==1u) {
+        theta_e=acos(clamp(-light.d.y/light.d.x,-1.0,1.0));
+        cos_u=near/sqrt(light.c.w*light.c.w+near*near);
+    } else {
+        let plane=area_frame(light);
+        axis=plane.xyz;
+        energy*=plane.w;
+        if (light.c.w>0.5) { theta_o=PI; }
+        var u_axis=light.c.xyz;
+        var v_axis=light.d.xyz;
+        if (kind==3u) {
+            let disc=basis(light.c.xyz);
+            u_axis=disc[0]*light.d.x;
+            v_axis=disc[1]*light.d.x;
+        }
+        let toward=(centroid-at)/near;
+        for (var i=0u;i<4u;i++) {
+            let corner=centroid+u_axis*select(-1.0,1.0,(i&1u)!=0u)+v_axis*select(-1.0,1.0,(i&2u)!=0u);
+            cos_u=min(cos_u,dot(toward,normalize(corner-at)));
+        }
+    }
+    let outgoing=segment_outgoing(segment_v(centroid,p,d,axis,t),cos_u,axis,theta_o,theta_e);
+    return energy*outgoing*theta_d/near;
+}
+fn segment_node(node: Light, p: vec3f, d: vec3f, t: f32) -> f32 {
+    let centroid=0.5*(node.a.xyz+node.b.xyz);
+    let extent=node.b.xyz-centroid;
+    let radius2=dot(extent,extent);
+    let closest=dot(centroid-p,d);
+    let line=length(centroid-p-d*closest);
+    let at=p+d*clamp(closest,0.0,t);
+    let reach2=dot(centroid-at,centroid-at);
+    if (sqrt(reach2)-sqrt(radius2)>=node.b.w) { return 0.0; }
+    let theta_d=segment_theta(closest,line,t);
+    var cos_u=-1.0;
+    if (reach2>radius2) { cos_u=sqrt(max(1.0-radius2/reach2,0.0)); }
+    let distance=max(max(0.5*sqrt(radius2),line),1e-6);
+    let outgoing=segment_outgoing(segment_v(centroid,p,d,node.c.xyz,t),cos_u,node.c.xyz,node.c.w,node.d.x);
+    return node.a.w*outgoing*theta_d/distance;
+}
+fn segment_child(node: Light, p: vec3f, d: vec3f, t: f32) -> f32 {
+    if (u32(node.d.y)==1u) { return segment_emitter(lights[u32(node.d.z)],p,d,t); }
+    return segment_node(node,p,d,t);
+}
+fn segment_root() -> u32 {
+    return u32(emitters[0].a.y+emitters[0].a.w);
+}
+fn segment_importance(slot: u32, p: vec3f, d: vec3f, t: f32) -> f32 {
+    if (slot<u32(emitters[0].a.y)) { return segment_emitter(lights[slot],p,d,t); }
+    return segment_child(lights[segment_root()],p,d,t);
+}
+fn segment_leaf(first: u32, count: u32, p: vec3f, d: vec3f, t: f32, start: f32) -> vec2f {
+    let by_weight=start>0.5;
+    var rand=start;
+    if (count>1u) { rand=rand*2.0-select(0.0,1.0,by_weight); }
+    var selected=-1;
+    var chosen=0.0;
+    var total=0.0;
+    var valid=0.0;
+    for (var i=0u;i<count;i++) {
+        let weight=segment_emitter(lights[first+i],p,d,t);
+        if (!(weight>0.0)) { continue; }
+        total+=weight;
+        valid+=1.0;
+        let thresh=select(1.0/valid,weight/total,by_weight);
+        if (rand<=thresh) {
+            selected=i32(first+i);
+            chosen=weight;
+            rand=rand/thresh;
+        } else {
+            rand=(rand-thresh)/(1.0-thresh);
+        }
+        rand=clamp(rand,0.0,1.0);
+    }
+    if (selected<0) { return vec2f(0.0); }
+    return vec2f(f32(selected),0.5*(chosen/total+1.0/valid));
+}
+fn segment_tree(p: vec3f, d: vec3f, t: f32, start: f32) -> vec2f {
+    var at=segment_root();
+    var rand=start;
+    var pdf=1.0;
+    loop {
+        let node=lights[at];
+        let count=u32(node.d.y);
+        if (count>0u) {
+            let leaf=segment_leaf(u32(node.d.z),count,p,d,t,rand);
+            return vec2f(leaf.x,leaf.y*pdf);
+        }
+        let left=at+1u;
+        let right=u32(node.d.z);
+        let l=segment_child(lights[left],p,d,t);
+        let r=segment_child(lights[right],p,d,t);
+        let total=l+r;
+        if (!(total>0.0)) { return vec2f(0.0); }
+        let probability_min=0.5*(select(0.0,1.0,l>0.0)+select(0.0,1.0,r==0.0));
+        let left_probability=0.5*(l/total+probability_min);
+        let right_weight=1.0-left_probability;
+        at=left;
+        if (right_weight>0.0) {
+            let thresh=right_weight;
+            if (rand<=thresh) {
+                at=right;
+                rand=rand/thresh;
+            } else {
+                rand=(rand-thresh)/(1.0-thresh);
+            }
+            rand=clamp(rand,0.0,1.0);
+        }
+        pdf*=select(1.0-left_probability,left_probability,at==left);
+    }
+    return vec2f(0.0);
+}
+fn segment_light(slot: u32, p: vec3f, d: vec3f, t: f32, start: f32) -> vec2f {
+    if (slot<u32(emitters[0].a.y)) { return vec2f(f32(slot),1.0); }
+    return segment_tree(p,d,t,start);
 }
