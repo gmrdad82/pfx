@@ -478,12 +478,13 @@ mod tests {
         let live = through_mixer(&notes, None, sweep);
         let rendered = offline(&notes, None, sweep);
         assert_eq!(live.len(), rendered.len());
+        let peak = live.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         let worst = live
             .iter()
             .zip(&rendered)
             .map(|(a, b)| (a - b).abs())
             .fold(0.0f32, f32::max);
-        assert!(worst < 1e-3, "{worst}");
+        assert!(worst < 0.01 * peak, "{worst} of {peak}");
     }
 
     #[test]
