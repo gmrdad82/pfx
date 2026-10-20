@@ -184,8 +184,8 @@ fn two_node_wheel() -> Vec<u8> {
     pfx_build::library::join_glb(&document, &bin)
 }
 
-fn mesh_wheel(pieces: &str) -> Result<Built, pfx_build::Error> {
-    let dir = common::scratch("ride-still-nodes");
+fn mesh_wheel(name: &str, pieces: &str) -> Result<Built, pfx_build::Error> {
+    let dir = common::scratch(name);
     std::fs::write(dir.join("wheel.glb"), two_node_wheel()).unwrap();
     let text = format!(
         "recipe = 1\nname = \"t\"\nseed = 3\n\n[timeline]\nfps = 30\nframes = 30\n\n[[route]]\nname = \"main\"\npoints = {CURVED}\n\n[[object]]\nname = \"car\"\nkind = \"box\"\nsize = [1.8, 0.6, 4.0]\nat = [0.0, 0.5, 0.0]\n\n[[object]]\nname = \"car.wheel_fl\"\nkind = \"mesh\"\npath = \"wheel.glb\"\nparent = \"car\"\nat = [0.8, -0.16, 1.3]\npieces = {{ {pieces} }}\n\n[[follow]]\nobject = \"car\"\nroute = \"main\"\nspeed = [[0.0, 10.0]]\n"
@@ -196,7 +196,7 @@ fn mesh_wheel(pieces: &str) -> Result<Built, pfx_build::Error> {
 
 #[test]
 fn listed_nodes_of_an_imported_wheel_follow_and_steer_but_do_not_spin() {
-    let b = mesh_wheel("Caliper = { spin = false }").unwrap();
+    let b = mesh_wheel("ride-still-nodes", "Caliper = { spin = false }").unwrap();
     let car = turns(&b, "car");
     let tyre = turns(&b, "car.wheel_fl");
     let caliper = turns(&b, "car.wheel_fl.Caliper");
@@ -215,7 +215,7 @@ fn listed_nodes_of_an_imported_wheel_follow_and_steer_but_do_not_spin() {
         assert!((tyre_at[n] - caliper_at[n]).length() < 1e-6, "frame {n}");
     }
     assert!((caliper_at[25] - caliper_at[10]).length() > 1.0);
-    let plain = mesh_wheel("Tyre = { hidden = false }").unwrap();
+    let plain = mesh_wheel("ride-still-nodes-plain", "Tyre = { hidden = false }").unwrap();
     assert!(
         !plain
             .tracks
@@ -226,7 +226,7 @@ fn listed_nodes_of_an_imported_wheel_follow_and_steer_but_do_not_spin() {
 
 #[test]
 fn a_still_node_the_wheel_lacks_is_refused_with_its_nodes() {
-    let Err(e) = mesh_wheel("Brake = { spin = false }") else {
+    let Err(e) = mesh_wheel("ride-still-nodes-missing", "Brake = { spin = false }") else {
         panic!("built");
     };
     assert_eq!(
