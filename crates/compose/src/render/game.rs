@@ -4,6 +4,7 @@ use std::path::Path;
 use pfx_sound::Clip;
 use pfx_sound::manifest::{Manifest, Music, Stinger};
 
+use super::bounds;
 use super::master::Stem;
 use super::store::{self, Document};
 use super::{RATE, Rendered, Target};
@@ -28,7 +29,7 @@ fn rendered(
         StyleRef::Name(style) => super::render(
             compose.style(style)?,
             score,
-            &|f| doc.file(f),
+            &|f| doc.sample(f),
             &|| 0.0,
             Target::Game,
         ),
@@ -42,7 +43,7 @@ fn rendered(
             super::render(
                 parsed.style(style)?,
                 score,
-                &|f| other.file(f),
+                &|f| other.sample(f),
                 &|| 0.0,
                 Target::Game,
             )
@@ -64,10 +65,20 @@ pub fn music(bytes: &[u8], beside: Option<&Path>) -> Result<Music, String> {
     let doc = Document::from_bytes(Path::new("document"), bytes.to_vec())?;
     let manifest =
         Manifest::parse(&doc.text)?.ok_or("the text holding [compose] has no [music] table")?;
+    if manifest.stems.len() > bounds::MAX_ROLES + 1 || manifest.stingers.len() > bounds::MAX_CUES {
+        return Err(format!(
+            "[music] names {} stems and {} stingers; a game loads at most {} and {}",
+            manifest.stems.len(),
+            manifest.stingers.len(),
+            bounds::MAX_ROLES + 1,
+            bounds::MAX_CUES
+        ));
+    }
     let compose = Compose::parse(&doc.text)?;
     let mut scores: BTreeMap<String, Rendered> = BTreeMap::new();
+    let mut held = 0u64;
     let mut clip = |file: &str| -> Result<Clip, String> {
-        let bytes = match doc.file(file)? {
+        let bytes = match doc.file_within(file, bounds::MAX_PART_BYTES)? {
             Some(bytes) => bytes,
             None => {
                 if let Some((score, part)) = part(file)
@@ -90,9 +101,19 @@ pub fn music(bytes: &[u8], beside: Option<&Path>) -> Result<Music, String> {
                 }
                 let folder = beside.ok_or_else(|| format!("`{file}` is not in the document"))?;
                 let path = store::beside(folder, file)?;
+                let size = std::fs::metadata(&path)
+                    .map_err(|e| format!("`{file}`: {e}"))?
+                    .len();
+                if size > bounds::MAX_PART_BYTES {
+                    return Err(format!(
+                        "`{file}` holds {size} bytes; the render reads at most {}",
+                        bounds::MAX_PART_BYTES
+                    ));
+                }
                 std::fs::read(&path).map_err(|e| format!("`{file}`: {e}"))?
             }
         };
+        bounds::part(file, &bytes, &mut held)?;
         Clip::from_wav(&bytes).ok_or_else(|| format!("`{file}` is no WAV pfx reads"))
     };
     let mut track = manifest.track.clone();

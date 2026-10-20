@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 pub const KIND: &str = "compose";
-pub const FORMAT: u32 = 2;
+pub const FORMAT: u32 = 3;
 const USED: &str = ".used";
 
 pub fn root() -> Result<PathBuf, String> {
@@ -26,18 +26,24 @@ fn entry(root: &Path, key: &str) -> PathBuf {
     root.join(KIND).join(key)
 }
 
-pub fn get(root: &Path, key: &str, files: &[&str], touch: bool) -> Option<PathBuf> {
+pub fn get(root: &Path, key: &str, files: &[&str]) -> Option<PathBuf> {
     let entry = entry(root, key);
-    if !files.iter().all(|file| entry.join(file).is_file()) {
-        return None;
-    }
-    if touch {
-        let _ = std::fs::write(entry.join(USED), b"");
-    }
-    Some(entry)
+    files
+        .iter()
+        .all(|file| entry.join(file).is_file())
+        .then_some(entry)
 }
 
-pub fn put(root: &Path, key: &str, files: &[(&str, &[u8])]) -> Result<PathBuf, String> {
+pub fn touch(entry: &Path) {
+    let _ = std::fs::write(entry.join(USED), b"");
+}
+
+pub fn put(
+    root: &Path,
+    key: &str,
+    files: &[(&str, &[u8])],
+    keep: &dyn Fn(&Path) -> bool,
+) -> Result<PathBuf, String> {
     let entry = entry(root, key);
     let folder = entry.parent().unwrap_or(Path::new(""));
     std::fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
@@ -52,14 +58,22 @@ pub fn put(root: &Path, key: &str, files: &[(&str, &[u8])]) -> Result<PathBuf, S
         let _ = std::fs::remove_dir_all(&part);
         return Err(format!("{}: {e}", part.display()));
     }
-    if std::fs::rename(&part, &entry).is_err() {
-        let _ = std::fs::remove_dir_all(&entry);
-        if let Err(e) = std::fs::rename(&part, &entry) {
-            let _ = std::fs::remove_dir_all(&part);
-            let names: Vec<&str> = files.iter().map(|(name, _)| *name).collect();
-            if get(root, key, &names, false).is_none() {
-                return Err(format!("{}: {e}", entry.display()));
-            }
+    if std::fs::rename(&part, &entry).is_ok() {
+        return Ok(entry);
+    }
+    if keep(&entry) {
+        let _ = std::fs::remove_dir_all(&part);
+        return Ok(entry);
+    }
+    let old = folder.join(format!(".{key}.old-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&old);
+    let _ = std::fs::rename(&entry, &old);
+    let moved = std::fs::rename(&part, &entry);
+    let _ = std::fs::remove_dir_all(&old);
+    if let Err(e) = moved {
+        let _ = std::fs::remove_dir_all(&part);
+        if !keep(&entry) {
+            return Err(format!("{}: {e}", entry.display()));
         }
     }
     Ok(entry)

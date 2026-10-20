@@ -75,6 +75,7 @@ pub fn oversampled(samples: &[f32]) -> Vec<f32> {
 pub fn local_peaks(samples: &[f32], channels: usize) -> Vec<f32> {
     let channels = channels.max(1);
     let frames = samples.len() / channels;
+    let samples = &samples[..frames * channels];
     let threads = std::thread::available_parallelism()
         .map_or(1, |n| n.get())
         .min(frames / SLICE_FRAMES)

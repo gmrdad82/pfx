@@ -38,6 +38,7 @@ pub struct Compose {
     pub bpm: Option<u32>,
     pub key: Option<String>,
     pub music: bool,
+    pub fresh: bool,
     pub wav: Option<PathBuf>,
     pub json: bool,
 }
@@ -47,6 +48,7 @@ pub struct Render {
     pub doc: PathBuf,
     pub score: String,
     pub music: bool,
+    pub fresh: bool,
     pub wav: Option<PathBuf>,
     pub json: bool,
 }
@@ -250,7 +252,7 @@ fn plan_compose(args: &[String]) -> Result<Compose, Refusal> {
             "--key",
             "--wav",
         ],
-        &["--music", "--json"],
+        &["--music", "--fresh", "--json"],
         USAGE,
     )?;
     missing(&found, &["--style", "--seed", "--seconds"], USAGE)?;
@@ -297,18 +299,25 @@ fn plan_compose(args: &[String]) -> Result<Compose, Refusal> {
         bpm,
         key: value("--key").map(str::to_string),
         music: found.switches.contains("--music"),
+        fresh: found.switches.contains("--fresh"),
         wav: value("--wav").map(wav_path).transpose()?,
         json: found.switches.contains("--json"),
     })
 }
 
 fn plan_render(args: &[String]) -> Result<Render, Refusal> {
-    let found = words(args, &["--score", "--wav"], &["--music", "--json"], RENDER)?;
+    let found = words(
+        args,
+        &["--score", "--wav"],
+        &["--music", "--fresh", "--json"],
+        RENDER,
+    )?;
     missing(&found, &["--score"], RENDER)?;
     Ok(Render {
         doc: found.doc.clone().unwrap_or_default(),
         score: name_ok(&found.values["--score"], "--score")?,
         music: found.switches.contains("--music"),
+        fresh: found.switches.contains("--fresh"),
         wav: found.values.get("--wav").map(|v| wav_path(v)).transpose()?,
         json: found.switches.contains("--json"),
     })
@@ -405,10 +414,15 @@ fn whole_wav(path: &Path, bytes: u64) -> bool {
 }
 
 fn cached(root: &Path, key: &str, touch: bool) -> Option<(PathBuf, Levels)> {
-    let entry = cache::get(root, key, &[MIX, LEVELS], false)?;
+    let entry = cache::get(root, key, &[MIX, LEVELS])?;
     let text = std::fs::read_to_string(entry.join(LEVELS)).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;
-    let number = |key: &str| value.get(key).and_then(Value::as_f64);
+    let number = |key: &str| {
+        let found = value.get(key)?;
+        found
+            .as_f64()
+            .or(found.is_null().then_some(f64::NEG_INFINITY))
+    };
     let levels = Levels {
         gain_db: number("gain_db")?,
         short_term_max: number("short_term_max_lufs")?,
@@ -421,7 +435,7 @@ fn cached(root: &Path, key: &str, touch: bool) -> Option<(PathBuf, Levels)> {
         return None;
     }
     if touch {
-        cache::get(root, key, &[MIX, LEVELS], true)?;
+        cache::touch(&entry);
     }
     Some((entry, levels))
 }
@@ -437,7 +451,24 @@ fn levels_of(rendered: &Rendered) -> Levels {
     }
 }
 
-fn stored(root: &Path, key: &str, mix: Vec<f32>, levels: &Levels) -> Result<PathBuf, String> {
+fn stored(
+    root: &Path,
+    key: &str,
+    mix: Vec<f32>,
+    levels: &Levels,
+    fresh: bool,
+) -> Result<PathBuf, String> {
+    let values = [
+        levels.gain_db,
+        levels.short_term_max,
+        levels.integrated,
+        levels.true_peak_db,
+    ];
+    if values.iter().any(|v| v.is_nan()) {
+        return Err(format!(
+            "the master measured {values:?}; a level that isn't a number is a fault in the score or the render"
+        ));
+    }
     let mix = render::wav(mix);
     let json = json!({
         "gain_db": levels.gain_db,
@@ -446,10 +477,10 @@ fn stored(root: &Path, key: &str, mix: Vec<f32>, levels: &Levels) -> Result<Path
         "true_peak_dbtp": levels.true_peak_db,
         "passes": levels.passes,
         "mix_bytes": mix.len(),
-        "mix_sha256": pfx_file::sha256::hex(&pfx_file::sha256::sha256(&mix)),
     })
     .to_string();
-    cache::put(root, key, &[(MIX, &mix), (LEVELS, json.as_bytes())])
+    let keep = |_: &Path| !fresh && cached(root, key, false).is_some();
+    cache::put(root, key, &[(MIX, &mix), (LEVELS, json.as_bytes())], &keep)
 }
 
 struct Job<'a> {
@@ -460,11 +491,17 @@ struct Job<'a> {
     samples: &'a render::Samples<'a>,
     compose_ms: f64,
     replaced: bool,
+    fresh: bool,
 }
 
 fn produce(job: Job, root: &Path, now: &dyn Fn() -> f64) -> Result<Done, String> {
     let key = cache::key(&render::recipe(job.style, &job.score, job.samples)?);
-    let (entry, levels, cached, render_ms, master_ms) = match cached(root, &key, true) {
+    let hit = if job.fresh {
+        None
+    } else {
+        cached(root, &key, true)
+    };
+    let (entry, levels, cached, render_ms, master_ms) = match hit {
         Some((entry, levels)) => (entry, levels, true, 0.0, 0.0),
         None => {
             let rendered = render::render(
@@ -476,7 +513,7 @@ fn produce(job: Job, root: &Path, now: &dyn Fn() -> f64) -> Result<Done, String>
             )?;
             let levels = levels_of(&rendered);
             let (render_ms, master_ms) = (rendered.render_ms, rendered.master_ms);
-            let entry = stored(root, &key, rendered.master.mix, &levels)?;
+            let entry = stored(root, &key, rendered.master.mix, &levels, job.fresh)?;
             (entry, levels, false, render_ms, master_ms)
         }
     };
@@ -502,28 +539,46 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+fn refuse_wav(doc: &Path, wav: Option<&Path>) -> Result<(), String> {
+    match wav {
+        Some(path) if same_file(path, doc) => Err(format!(
+            "--wav {} names the document itself; give the mix its own .wav path",
+            path.display()
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn music_text(
+    text: String,
+    was: &str,
+    style: &Style,
+    score: &Score,
+    name: &str,
+    asked: bool,
+) -> Result<(String, bool), String> {
+    if !asked && !render::marks_music(was, name) {
+        return Ok((text, false));
+    }
+    let table = render::music_table(style, score, name);
+    Ok((store::set_table(&text, "music", table)?, true))
+}
+
 fn finish(
     doc: &Document,
     style: &Style,
     done: &Done,
     text: String,
     music: bool,
+    drop: bool,
     wav: Option<&Path>,
-) -> Result<(), String> {
-    if let Some(path) = wav
-        && same_file(path, &doc.path)
-    {
-        return Err(format!(
-            "--wav {} names the document itself; give the mix its own .wav path",
-            path.display()
-        ));
-    }
-    let mut text = text;
-    if music {
-        let table = render::music_table(style, &done.score, &done.name);
-        text = store::set_table(&text, "music", table)?;
-    }
-    let written = render::written(style, &done.score, &done.name);
+) -> Result<bool, String> {
+    let (text, music) = music_text(text, &doc.text, style, &done.score, &done.name, music)?;
+    let written = if drop {
+        render::written(style, &done.score, &done.name)
+    } else {
+        Vec::new()
+    };
     if text != doc.text || doc.holds_audio(&written)? {
         doc.save(&text, &written)?;
     }
@@ -531,10 +586,10 @@ fn finish(
         std::fs::copy(done.entry.join(MIX), path)
             .map_err(|e| format!("{}: {e}", path.display()))?;
     }
-    Ok(())
+    Ok(music)
 }
 
-fn report(doc: &Path, done: &Done, json: bool, total_ms: f64) {
+fn report(doc: &Path, done: &Done, music: bool, json: bool, total_ms: f64) {
     let score = &done.score;
     let levels = &done.levels;
     let notes: usize = score.tracks.iter().map(|t| t.notes.len()).sum();
@@ -561,6 +616,7 @@ fn report(doc: &Path, done: &Done, json: bool, total_ms: f64) {
             "stems": done.stems,
             "mix": mix,
             "cached": done.cached,
+            "music": music,
             "compose_ms": round(done.compose_ms, 3),
             "render_ms": round(done.render_ms, 1),
             "master_ms": round(done.master_ms, 1),
@@ -575,7 +631,7 @@ fn report(doc: &Path, done: &Done, json: bool, total_ms: f64) {
         return;
     }
     println!(
-        "{}: [compose.score.{}]{} {} at {} bpm, {} sections, {notes} notes, {} stems; {:.2} LUFS short-term max, {:.2} LUFS integrated, {:.2} dBTP; {:.0} ms{}",
+        "{}: [compose.score.{}]{} {} at {} bpm, {} sections, {notes} notes, {} stems; {:.2} LUFS short-term max, {:.2} LUFS integrated, {:.2} dBTP; {:.0} ms{}{}",
         doc.display(),
         done.name,
         if done.replaced { " replaced," } else { "" },
@@ -588,6 +644,7 @@ fn report(doc: &Path, done: &Done, json: bool, total_ms: f64) {
         levels.true_peak_db,
         total_ms,
         if done.cached { ", cached" } else { "" },
+        if music { ", [music] written" } else { "" },
     );
 }
 
@@ -621,7 +678,8 @@ fn run_compose(command: &Compose) -> Result<(), String> {
         .score(&name)
         .map_err(|e| format!("{shown}: {e}"))?
         .clone();
-    let samples = |file: &str| doc.file(file);
+    refuse_wav(&command.doc, command.wav.as_deref())?;
+    let samples = |file: &str| doc.sample(file);
     let done = produce(
         Job {
             style,
@@ -631,20 +689,22 @@ fn run_compose(command: &Compose) -> Result<(), String> {
             samples: &samples,
             compose_ms,
             replaced: parsed.scores.contains_key(&name),
+            fresh: command.fresh,
         },
         &cache::root()?,
         &now,
     )
     .map_err(|e| format!("{shown}: {e}"))?;
-    finish(
+    let music = finish(
         &doc,
         style,
         &done,
         text,
         command.music,
+        true,
         command.wav.as_deref(),
     )?;
-    report(&command.doc, &done, command.json, now() * 1000.0);
+    report(&command.doc, &done, music, command.json, now() * 1000.0);
     Ok(())
 }
 
@@ -674,7 +734,8 @@ fn run_render(command: &Render) -> Result<(), String> {
     let style = held
         .style(score.style.name())
         .map_err(|e| format!("{}: {e}", home.path.display()))?;
-    let samples = |file: &str| home.file(file);
+    refuse_wav(&command.doc, command.wav.as_deref())?;
+    let samples = |file: &str| home.sample(file);
     let done = produce(
         Job {
             style,
@@ -684,20 +745,22 @@ fn run_render(command: &Render) -> Result<(), String> {
             samples: &samples,
             compose_ms: 0.0,
             replaced: false,
+            fresh: command.fresh,
         },
         &cache::root()?,
         &now,
     )
     .map_err(|e| format!("{shown}: {e}"))?;
-    finish(
+    let music = finish(
         &doc,
         style,
         &done,
         doc.text.clone(),
         command.music,
+        false,
         command.wav.as_deref(),
     )?;
-    report(&command.doc, &done, command.json, now() * 1000.0);
+    report(&command.doc, &done, music, command.json, now() * 1000.0);
     Ok(())
 }
 
@@ -713,7 +776,7 @@ fn is_cached(doc: &Document, parsed: &Composed, name: &str, root: &Path) -> Resu
         }
     };
     let style = held.style(score.style.name())?;
-    let recipe = render::recipe(style, score, &|file| home.file(file))?;
+    let recipe = render::recipe(style, score, &|file| home.sample(file))?;
     Ok(cached(root, &cache::key(&recipe), false).is_some())
 }
 
@@ -861,6 +924,43 @@ fade = 0.5
 "#;
 
     #[test]
+    fn composing_again_under_the_name_music_marks_rewrites_the_music_table() {
+        let parsed = Composed::parse(STYLE).unwrap();
+        let style = parsed.style("small").unwrap();
+        let score = |seed: u64, seconds: f64| {
+            let request = Request {
+                seed,
+                seconds,
+                hits: Vec::new(),
+                bpm: None,
+                key: None,
+            };
+            pfx_compose::compose("small", style, &request).unwrap()
+        };
+        let table = |text: &str| text.parse::<toml::Table>().unwrap()["music"].clone();
+        let first = score(5, 8.0);
+        let text = pfx_compose::write_score(STYLE, "title", &first).unwrap();
+        let (marked, wrote) =
+            music_text(text.clone(), &text, style, &first, "title", true).unwrap();
+        assert!(wrote);
+        let second = score(6, 12.0);
+        let again = pfx_compose::write_score(&marked, "title", &second).unwrap();
+        let (again, wrote) = music_text(again, &marked, style, &second, "title", false).unwrap();
+        assert!(wrote);
+        assert_ne!(table(&again), table(&marked));
+        assert_eq!(
+            serde_json::to_value(table(&again)).unwrap(),
+            serde_json::to_value(render::music_table(style, &second, "title")).unwrap()
+        );
+        let other = pfx_compose::write_score(&again, "other", &first).unwrap();
+        let (kept, wrote) =
+            music_text(other.clone(), &again, style, &first, "other", false).unwrap();
+        assert!(!wrote);
+        assert_eq!(kept, other);
+        assert_eq!(table(&kept), table(&again));
+    }
+
+    #[test]
     fn a_cache_hit_hands_out_the_bytes_a_fresh_render_makes_and_a_broken_entry_heals() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/compose-tests/cache");
         let _ = std::fs::remove_dir_all(&root);
@@ -883,13 +983,19 @@ fade = 0.5
             samples: &none,
             compose_ms: 0.0,
             replaced: false,
+            fresh: false,
         };
         let clock = || 0.0;
         let cold = produce(job(), &root, &clock).unwrap();
         assert!(!cold.cached);
         let hit = produce(job(), &root, &clock).unwrap();
         assert!(hit.cached);
-        assert_eq!(hit.levels, cold.levels);
+        assert_eq!(hit.levels.passes, cold.levels.passes);
+        let near = |a: f64, b: f64| a == b || (a - b).abs() < 1e-9;
+        assert!(near(hit.levels.gain_db, cold.levels.gain_db));
+        assert!(near(hit.levels.short_term_max, cold.levels.short_term_max));
+        assert!(near(hit.levels.integrated, cold.levels.integrated));
+        assert!(near(hit.levels.true_peak_db, cold.levels.true_peak_db));
         let fresh = render::render(style, &score, &none, &clock, render::Target::Film).unwrap();
         let mix = hit.entry.join(MIX);
         assert!(std::fs::read(&mix).unwrap() == render::wav(fresh.master.mix));

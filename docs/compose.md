@@ -195,15 +195,17 @@ role = "lead"
 notes = [[32.0, 81.0, 0.45, 0.543], [32.5, 81.0, 0.45, 0.543]]
 ```
 
-The score is the source of truth after composing: edit a note by hand, and `pfx compose render` plays the edit. `style = { file = "music.pitofx", name = "..." }` takes the style from another document in the document's folder or below it, never from outside it. Composing again under an existing name replaces that score, and the output says so (`replaced` in `--json`).
+The score is the source of truth after composing: edit a note by hand, and `pfx compose render` plays the edit. `style = { file = "music.pitofx", name = "..." }` takes the style from another document in the document's folder or below it, never from outside it. Composing again under an existing name replaces that score, and the output says so (`replaced` in `--json`). When the document's `[music]` table is marked with that name, it is rewritten from the new score too, with or without `--music`, so a game never loops the new stems on the old score's sections (`[music] written`, `"music": true` in `--json`).
 
 ## Stored as a recipe, rendered on demand
 
 A document holds the score and no audio: a 30 second, 19 stem score adds a few KB to the `.pitofx`. The audio is rendered from the score whenever it is needed, and the same score always renders the same bytes.
 
-Before anything is allocated, the render refuses a score or style it can't play safely, naming the key: a length over 600 seconds, a tempo of 0 or over 400 bpm, a section tempo outside 0.25 to 4, an envelope stage, `at_ms`, `glide_ms` or `sweep_ms` over 60 seconds, a value that isn't a finite number, a cue that would render over 600 seconds, a role named `room` (the room stem's name), and a sample chunk outside 8 to 192 kHz or over 600 seconds once resampled.
+Before anything is allocated, the render refuses a score or style it can't play safely, naming the key: a length over 600 seconds, a tempo of 0 or over 400 bpm, a section tempo outside 0.25 to 4, an envelope stage, `at_ms`, `glide_ms` or `sweep_ms` over 60 seconds, a number that isn't finite in a note, a gain, a pan, a filter, an oscillator or the master, a cue that would render over 600 seconds, a role named `room` (the room stem's name), and more than 64 roles, 256 patches, 16 oscillators in a patch, 256 sections, 200,000 notes, 64 cues, 16 voices in a cue, 4,096 fires or 64 distinct samples. A sample chunk is refused from its size and its WAV header, before it is decompressed or decoded, when it is over 64 MiB, outside 8 to 192 kHz, over 8 channels, or over 600 seconds of stereo as stored or once resampled.
 
-The render runs each role's patch into its own stem on pfx-sound's offline note renderer, the stems shared over as many threads as the machine has cores, then the master chain:
+Each stem, cue and resampled sample is held as stereo 32-bit float for the whole render, 0.38 MB per second, alongside the master chain's working buffers and each patch's precomputed envelope curves. A 30 second score of 19 stems holds about 300 MB while it renders; at the 600 second limit each stem is 230 MB, so a dozen roles and the chain's buffers take about 4.6 GB. The render adds this up before it allocates and refuses a score that would hold over 6 GiB at once, or render over 2^35 oscillator frames, with the figure in the message.
+
+The render runs each role's patch into its own stem on pfx-sound's offline note renderer, as many threads as the machine has cores each taking the next stem, then the master chain:
 
 1. the sidechain ducks the bed stems under the key stems;
 2. the room (Freeverb) runs on the patches' sends and becomes its own `room` stem;
@@ -212,7 +214,7 @@ The render runs each role's patch into its own stem on pfx-sound's offline note 
 5. one gain to the style's maximum short-term loudness, from one loudness measurement;
 6. the true-peak limiter at the ceiling, its 4x oversampled peak scan cut into time slices that run in parallel and read the same peaks as one pass.
 
-`pfx compose` and `pfx compose render` keep the master in pfx's cache, `${XDG_CACHE_HOME:-~/.cache}/pfx/compose/<key>/` (or `$PFX_CACHE_DIR/compose/<key>/`), as `mix.wav` and `master.json`, its measured levels with the WAV's length and SHA-256, written to a temporary folder and renamed into place. The key is a SHA-256 of the recipe (the style, the score and any sample chunks the style reads), the render's own pinned output hashes, pfx's version and the cache's format version. So an edit renders again, a build whose render sounds different never reads an older build's master, and an unchanged score is read back in milliseconds. A cached master whose WAV is missing, cut short or unreadable is rendered again and replaced. `--wav` copies the cached master out, and refuses a path that doesn't end in `.wav` or that names the document. Nothing prunes the cache yet: delete `compose/` under it to reclaim the space, about 11.5 MB per 30 seconds of master.
+`pfx compose` and `pfx compose render` keep the master in pfx's cache, `${XDG_CACHE_HOME:-~/.cache}/pfx/compose/<key>/` (or `$PFX_CACHE_DIR/compose/<key>/`), as `mix.wav` and `master.json`, its measured levels with the WAV's length, written to a temporary folder and renamed into place. The key is a SHA-256 of the recipe (the style, the score and the SHA-256 of each sample chunk the style reads), the render's own pinned output hashes, pfx's version and the cache's format version. So an edit renders again, and an unchanged score is read back in milliseconds. The pinned hashes are three renders' outputs (a test style with its game stems and cues, the `build_drop` sample and a sample oscillator), held by the render's tests: a change to what the render plays fails those tests until the hashes are pinned again, and pinning them moves every key, so a released build never reads another build's master. Between a change to the render and that pin, `--fresh` renders past the cache and replaces the entry. A cached master whose WAV is missing, cut short or unreadable is rendered again and replaced; when two runs write the same entry at once, the one that finds a whole entry already in place keeps it. `--wav` copies the cached master out, and refuses a path that doesn't end in `.wav` or that names the document. Nothing prunes the cache: delete `compose/` under it to reclaim the space, about 11.5 MB per 30 seconds of master.
 
 ## Loudness and true peak
 
@@ -221,8 +223,8 @@ The target is the maximum short-term loudness (ITU-R BS.1770, 3 second windows i
 ## The command line
 
 ```
-pfx compose <doc.pitofx> --style <name> --seed <N> --seconds <S> [--name <score>] [--hits <t,t,...>] [--bpm <B>] [--key <E:minor>] [--music] [--wav <out.wav>] [--json]
-pfx compose render <doc.pitofx> --score <name> [--music] [--wav <out.wav>] [--json]
+pfx compose <doc.pitofx> --style <name> --seed <N> --seconds <S> [--name <score>] [--hits <t,t,...>] [--bpm <B>] [--key <E:minor>] [--music] [--fresh] [--wav <out.wav>] [--json]
+pfx compose render <doc.pitofx> --score <name> [--music] [--fresh] [--wav <out.wav>] [--json]
 pfx compose list <doc.pitofx> [--json]
 pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
 ```
@@ -236,8 +238,9 @@ pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
 | `--hits` | rising seconds inside `--seconds`; a section with `hit = n` starts on the bar nearest the n-th |
 | `--bpm`, `--key` | pin the tempo (20 to 400) or the key instead of drawing them |
 | `--music` | writes the document's `[music]` table from the score, for a game |
+| `--fresh` | renders the master even when the cache holds one, and replaces the cached entry |
 | `--wav` | writes the master as a WAV |
-| `--json` | one JSON line: the score, the style, the seed, bpm, key, chords, sections with their start seconds, the note count, the stems, the cached master's path and whether it was cached, the ms to compose, render and master, the limiter passes, the gain, the short-term maximum and integrated LUFS, and dBTP |
+| `--json` | one JSON line: the score, the style, the seed, bpm, key, chords, sections with their start seconds, the note count, the stems, the cached master's path, whether it was cached and whether `[music]` was written, the ms to compose, render and master, the limiter passes, the gain, the short-term maximum and integrated LUFS, and dBTP |
 
 A command line pfx cannot parse is refused as clap refuses it: on stderr, exit 2, with the usage line. A refusal after parsing, such as a style the document lacks, is one line, exit 1, and the document is left as it was.
 
@@ -245,7 +248,7 @@ A command line pfx cannot parse is refused as clap refuses it: on stderr, exit 2
 
 `--music` writes a `[music]` table for pfx-sound's adaptive music ([sound.md](sound.md#adaptive-music)), marked `score = "<score>"`: one stem per role and the room, named `compose/<score>/<role>.wav`, with gain curves from each role's presence per section; the sections by name with their bars (a name used twice becomes variants); and each cue as a `[[music.stinger]]` with its event. Sections start on the bar nearest their start, so a style with `tempo` ratios loops close to its bars, not exactly on them.
 
-The stems are not stored in the document, so pfx-sound's own loaders (`manifest::load`, `load_bytes`, `load_music`, `music_bytes`, `Manifest::track`) refuse a table marked `score` and name the loader to use. A game loads it with `pfx_compose::render::game::music(bytes, folder)`, which renders the score's stems and stingers on load and returns pfx-sound's `Music`, the adaptive track and its stingers. Call it on a worker thread before the music first plays; the 30 second sample takes about a third of a second (below), and a three-minute score proportionally longer. A file the table names that is a FILE chunk in the document, or a file beside it, is read as it is; only the parts missing from both are rendered.
+The stems are not stored in the document, so pfx-sound's own loaders (`manifest::load`, `load_bytes`, `load_music`, `music_bytes`, `Manifest::track`) refuse a table marked `score` and name the loader to use. A game loads it with `pfx_compose::render::game::music(bytes, folder)`, which renders the score's stems and stingers on load and returns pfx-sound's `Music`, the adaptive track and its stingers. Call it on a worker thread before the music first plays; the 30 second sample takes about a third of a second (below), and a three-minute score proportionally longer. A file the table names that is a FILE chunk in the document, or a file beside it, is read as it is; only the parts missing from both are rendered. Such a part is refused from its size and WAV header before it is read in full when it is over 256 MiB, outside 8 to 192 kHz, over 8 channels or over 600 seconds of stereo, and a table naming over 65 stems or 64 stingers is refused. Composing a score again under a name drops the chunks at that score's own part names (`compose/<score>/<role>.wav` and `compose/<score>/cue/<cue>.wav`), since they belong to the score it replaces; `pfx compose render` keeps them.
 
 The game's stems are mastered on their own: the same gain and limiter as the master, measured on the stems without the cues and with no end fade, so a looped section neither fades nor dips where the film's cues fired, and the stems sum under the ceiling. Each stinger takes the same gain and its own limiter pass. A stinger played over a full stem mix can still pass the ceiling, so a game that plays `[music]` stingers turns on its mixer's limiter (`set_limiter`, [sound.md](sound.md)).
 
@@ -256,7 +259,7 @@ The game's stems are mastered on their own: the same gain and limiter as the mas
 | | |
 |---|---|
 | compose (the notes) | 0.09 ms |
-| render (the stems, one thread each) | 79 ms |
+| render (the stems, over the cores) | 79 ms |
 | master (sidechain, room, loudness, limiter, true peak) | 239 ms |
 | the whole command, writing the document and the cached master | 357 ms |
 | the same command with the master cached | 12 ms |

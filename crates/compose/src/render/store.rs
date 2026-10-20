@@ -58,8 +58,24 @@ impl Document {
     }
 
     pub fn file(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        self.file_within(name, u64::MAX)
+    }
+
+    pub fn sample(&self, name: &str) -> Result<Option<Vec<u8>>, String> {
+        self.file_within(name, super::bounds::MAX_SAMPLE_BYTES)
+    }
+
+    pub fn file_within(&self, name: &str, most: u64) -> Result<Option<Vec<u8>>, String> {
         let shown = self.path.display();
         let reader = Reader::from_bytes(&self.bytes).map_err(|e| format!("{shown}: {e}"))?;
+        if let Some(index) = reader.find_named(pfx_file::FILE, name) {
+            let raw = reader.entries()[index].raw;
+            if raw > most {
+                return Err(format!(
+                    "{shown}: `{name}` holds {raw} bytes; the render reads at most {most}"
+                ));
+            }
+        }
         reader
             .named(pfx_file::FILE, name)
             .map(|found| found.map(std::borrow::Cow::into_owned))

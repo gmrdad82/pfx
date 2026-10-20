@@ -58,3 +58,4 @@ pub use sound::{SoundId, SoundSpec, Steal};
 pub use synth::Wave;
 #[cfg(feature = "vorbis")]
 pub use vorbis::VorbisSource;
+pub use wav::WavInfo;

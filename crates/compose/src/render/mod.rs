@@ -6,6 +6,8 @@ pub mod patch;
 pub mod store;
 
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use pfx_sound::Clip;
 
@@ -16,9 +18,10 @@ pub use master::Target;
 
 pub const RATE: u32 = 48_000;
 pub const CUES: &str = "cue";
-pub const RENDER: [&str; 2] = [
+pub const RENDER: [&str; 3] = [
     "d8fff70dda5bc8fc23ab9d5457d31a50718382a4c4f18b43873a3f8fdbff8654",
     "38c11307a4bea258b304c80e590108bf4e0dab091890728710d13d287c7185d4",
+    "0000000000000000000000000000000000000000000000000000000000000000",
 ];
 
 pub type Samples<'a> = dyn Fn(&str) -> Result<Option<Vec<u8>>, String> + 'a;
@@ -47,20 +50,20 @@ pub fn threads(jobs: usize) -> usize {
         .max(1)
 }
 
-fn clips(style: &Style, samples: &Samples) -> Result<BTreeMap<String, Vec<f32>>, String> {
+fn clips(
+    style: &Style,
+    samples: &Samples,
+    mut held: u64,
+) -> Result<BTreeMap<String, Vec<f32>>, String> {
     let mut clips = BTreeMap::new();
-    for patch in style.patch.values() {
-        for name in patch.osc.iter().filter_map(|o| o.sample.as_deref()) {
-            if clips.contains_key(name) {
-                continue;
-            }
-            let bytes =
-                samples(name)?.ok_or_else(|| format!("sample `{name}` is not in the document"))?;
-            let clip = Clip::from_wav(&bytes)
-                .ok_or_else(|| format!("sample `{name}` is no WAV pfx reads"))?;
-            bounds::sample(name, &clip)?;
-            clips.insert(name.to_string(), clip.at_rate(RATE, 2));
-        }
+    for name in bounds::samples(style) {
+        let bytes =
+            samples(name)?.ok_or_else(|| format!("sample `{name}` is not in the document"))?;
+        bounds::sample(name, &bytes, &mut held)?;
+        let clip =
+            Clip::from_wav(&bytes).ok_or_else(|| format!("sample `{name}` is no WAV pfx reads"))?;
+        drop(bytes);
+        clips.insert(name.to_string(), clip.at_rate(RATE, 2));
     }
     Ok(clips)
 }
@@ -72,13 +75,7 @@ fn patch<'a>(style: &'a Style, name: &str, of: &str) -> Result<&'a crate::Patch,
         .ok_or_else(|| format!("{of} names patch `{name}`, which the style lacks"))
 }
 
-fn cue(
-    style: &Style,
-    score: &Score,
-    cue: &ScoreCue,
-    seed: u64,
-    clips: &BTreeMap<String, Vec<f32>>,
-) -> Result<Stem, String> {
+pub fn cue_frames(style: &Style, score: &Score, cue: &ScoreCue) -> Result<u64, String> {
     let tempo = Tempo::new(f64::from(score.bpm), score.beats_per_bar, &[]);
     let frame = patch::tempo_frames(&tempo);
     let mut length = frame(cue.beats);
@@ -92,7 +89,22 @@ fn cue(
             .unwrap_or(0);
         length = length.max(last.saturating_add(patch::tail(p)));
     }
-    let frames = bounds::frames(&format!("cue `{}`", cue.name), length)?;
+    bounds::frames(&format!("cue `{}`", cue.name), length).map(|f| f as u64)
+}
+
+fn cue(
+    style: &Style,
+    score: &Score,
+    cue: &ScoreCue,
+    seed: u64,
+    clips: &BTreeMap<String, Vec<f32>>,
+) -> Result<Stem, String> {
+    let tempo = Tempo::new(f64::from(score.bpm), score.beats_per_bar, &[]);
+    let frame = patch::tempo_frames(&tempo);
+    let frames = bounds::frames(
+        &format!("cue `{}`", cue.name),
+        cue_frames(style, score, cue)?,
+    )?;
     let mut samples = vec![0.0f32; frames * 2];
     for (vi, voice) in cue.voices.iter().enumerate() {
         let p = patch(style, &voice.patch, &format!("cue `{}`", cue.name))?;
@@ -133,49 +145,49 @@ fn stems(
     frames: usize,
 ) -> Vec<Result<Vec<f32>, String>> {
     let tempo = score.tempo();
-    let each = jobs.len().div_ceil(threads(jobs.len())).max(1);
+    let next = AtomicUsize::new(0);
+    let slots: Vec<OnceLock<Result<Vec<f32>, String>>> =
+        jobs.iter().map(|_| OnceLock::new()).collect();
     std::thread::scope(|scope| {
-        let handles: Vec<_> = jobs
-            .chunks(each)
-            .map(|group| {
-                let tempo = &tempo;
-                scope.spawn(move || {
-                    let frame = patch::tempo_frames(tempo);
-                    group
-                        .iter()
-                        .map(|(ri, role, p, track)| {
-                            let seed = score.seed.wrapping_add((*ri as u64 + 1).wrapping_mul(7919));
-                            patch::render(
-                                &patch::Stem {
-                                    patch: p,
-                                    notes: track.map_or(&[][..], |t| t.notes.as_slice()),
-                                    lowpass: track.map_or(&[][..], |t| t.lowpass.as_slice()),
-                                    gain: role.gain,
-                                    seed,
-                                },
-                                &frame,
-                                frames,
-                                clips,
-                            )
-                            .map_err(|e| format!("role `{}`: {e}", role.name))
-                        })
-                        .collect::<Vec<_>>()
+        let workers: Vec<_> = (0..threads(jobs.len()))
+            .map(|_| {
+                scope.spawn(|| {
+                    let frame = patch::tempo_frames(&tempo);
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some((ri, role, p, track)) = jobs.get(index) else {
+                            break;
+                        };
+                        let seed = score.seed.wrapping_add((*ri as u64 + 1).wrapping_mul(7919));
+                        let done = patch::render(
+                            &patch::Stem {
+                                patch: p,
+                                notes: track.map_or(&[][..], |t| t.notes.as_slice()),
+                                lowpass: track.map_or(&[][..], |t| t.lowpass.as_slice()),
+                                gain: role.gain,
+                                seed,
+                            },
+                            &frame,
+                            frames,
+                            clips,
+                        )
+                        .map_err(|e| format!("role `{}`: {e}", role.name));
+                        let _ = slots[index].set(done);
+                    }
                 })
             })
             .collect();
-        handles
-            .into_iter()
-            .zip(jobs.chunks(each))
-            .flat_map(|(h, group)| {
-                h.join().unwrap_or_else(|_| {
-                    group
-                        .iter()
-                        .map(|_| Err("a stem's render panicked".into()))
-                        .collect()
-                })
-            })
-            .collect()
-    })
+        for worker in workers {
+            let _ = worker.join();
+        }
+    });
+    slots
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .unwrap_or_else(|| Err("a stem's render panicked".into()))
+        })
+        .collect()
 }
 
 pub fn render(
@@ -191,7 +203,8 @@ pub fn render(
         "the score",
         (score.seconds * f64::from(RATE)).round() as u64,
     )?;
-    let clips = clips(style, samples)?;
+    let held = bounds::budget(style, score, frames)?;
+    let clips = clips(style, samples, held)?;
     let mut jobs: Vec<Job> = Vec::new();
     for (ri, role) in style.roles.iter().enumerate() {
         let p = patch(style, &role.patch, &format!("role `{}`", role.name))?;
@@ -256,19 +269,26 @@ pub fn render(
 }
 
 pub fn recipe(style: &Style, score: &Score, samples: &Samples) -> Result<String, String> {
+    bounds::check(style, score)?;
     let mut all = format!("{RENDER:?}\n{style:?}\n{score:?}\n").into_bytes();
-    let names: std::collections::BTreeSet<&str> = style
-        .patch
-        .values()
-        .flat_map(|p| p.osc.iter().filter_map(|o| o.sample.as_deref()))
-        .collect();
-    for name in names {
+    for name in bounds::samples(style) {
         let bytes = samples(name)?.unwrap_or_default();
         all.extend(name.as_bytes());
         all.extend((bytes.len() as u64).to_le_bytes());
-        all.extend(bytes);
+        all.extend(pfx_file::sha256::sha256(&bytes));
     }
     Ok(pfx_file::sha256::hex(&pfx_file::sha256::sha256(&all)))
+}
+
+pub fn marks_music(text: &str, name: &str) -> bool {
+    let table: Option<toml::Table> = text.parse().ok();
+    table
+        .as_ref()
+        .and_then(|t| t.get("music"))
+        .and_then(toml::Value::as_table)
+        .and_then(|m| m.get(pfx_sound::manifest::SCORE))
+        .and_then(toml::Value::as_str)
+        == Some(name)
 }
 
 pub fn cue_file(score: &str, cue: &str) -> String {
@@ -599,6 +619,7 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
         let out = render(style, &score, &samples, &|| 0.0, Target::Film).unwrap();
         let stem = out.stems.iter().find(|s| s.name == "kick").unwrap();
         assert!(stem.samples.iter().any(|v| v.abs() > 1e-3));
+        assert_eq!(hash(&out, None), RENDER[2]);
         let none = |_: &str| Ok(None);
         let refused = render(style, &score, &none, &|| 0.0, Target::Film)
             .err()
@@ -658,6 +679,133 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
         .err()
         .unwrap();
         assert!(err.contains("room stem"), "{err}");
+    }
+
+    fn wav8(rate: u32, channels: u16, bytes: usize) -> Vec<u8> {
+        let mut out = b"RIFF".to_vec();
+        out.extend(((36 + bytes) as u32).to_le_bytes());
+        out.extend(b"WAVEfmt ");
+        out.extend(16u32.to_le_bytes());
+        out.extend(1u16.to_le_bytes());
+        out.extend(channels.to_le_bytes());
+        out.extend(rate.to_le_bytes());
+        out.extend((rate * u32::from(channels)).to_le_bytes());
+        out.extend(channels.to_le_bytes());
+        out.extend(8u16.to_le_bytes());
+        out.extend(b"data");
+        out.extend((bytes as u32).to_le_bytes());
+        out.resize(out.len() + bytes, 128);
+        out
+    }
+
+    #[test]
+    fn a_sample_chunk_too_large_or_too_long_is_refused_before_it_decodes() {
+        let mut held = 0;
+        bounds::sample("kick.wav", &kick(48_000), &mut held).unwrap();
+        assert!(held > 0);
+        let long = wav8(8_000, 1, (bounds::MAX_FRAMES / 6 + 1) as usize);
+        let refused = bounds::sample("long.wav", &long, &mut 0).err().unwrap();
+        assert!(
+            refused.contains("sample `long.wav` lasts over"),
+            "{refused}"
+        );
+        let wide = wav8(48_000, bounds::MAX_CHANNELS + 1, 64);
+        let refused = bounds::sample("wide.wav", &wide, &mut 0).err().unwrap();
+        assert!(refused.contains("channels"), "{refused}");
+        let mut full = bounds::MAX_BYTES;
+        let refused = bounds::sample("kick.wav", &kick(48_000), &mut full)
+            .err()
+            .unwrap();
+        assert!(refused.contains("GiB"), "{refused}");
+        let refused = bounds::part("compose/a/kick.wav", &long, &mut 0)
+            .err()
+            .unwrap();
+        assert!(refused.contains("lasts over"), "{refused}");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tmp/compose-tests/capped.pitofx");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        pfx_file::Writer::new()
+            .named(
+                pfx_file::SCNE,
+                "main.toml",
+                kick_style().as_bytes(),
+                pfx_file::Codec::Auto,
+            )
+            .named(
+                pfx_file::FILE,
+                "kick.wav",
+                vec![0u8; 4_096].as_slice(),
+                pfx_file::Codec::Auto,
+            )
+            .write(&path)
+            .unwrap();
+        let stored = store::Document::open(&path).unwrap();
+        let refused = stored.file_within("kick.wav", 1_024).err().unwrap();
+        assert!(refused.contains("`kick.wav` holds 4096 bytes"), "{refused}");
+        assert_eq!(stored.sample("kick.wav").unwrap().unwrap().len(), 4_096);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_style_or_score_past_the_render_counts_is_refused_with_its_key() {
+        let doc = crate::Compose::parse(TEST_STYLE).unwrap();
+        let base = doc.style("test").unwrap();
+        let score = scored(TEST_STYLE, "test", 3, 4.0, &[2.0]);
+        let none = |_: &str| Ok(None);
+        let refused = |style: &Style, score: &Score| {
+            render(style, score, &none, &|| 0.0, Target::Film)
+                .err()
+                .unwrap()
+        };
+        let role = base.roles[0].clone();
+        let mut crowded = base.clone();
+        crowded.roles = (0..=bounds::MAX_ROLES)
+            .map(|i| crate::Role {
+                name: format!("r{i}"),
+                ..role.clone()
+            })
+            .collect();
+        let err = refused(&crowded, &score);
+        assert!(err.contains("[[role]]"), "{err}");
+        let mut wide = base.clone();
+        let pad = wide.patch.get_mut("pad").unwrap();
+        pad.osc = vec![pad.osc[0].clone(); bounds::MAX_OSCS + 1];
+        let err = refused(&wide, &score);
+        assert!(
+            err.contains("[patch.pad]") && err.contains("`osc`"),
+            "{err}"
+        );
+        let mut heavy = base.clone();
+        let pad = heavy.patch.get_mut("pad").unwrap();
+        pad.osc = (0..bounds::MAX_OSCS)
+            .map(|k| crate::Osc {
+                env: Some([60_000.0, 60_000.0, 0.5, 60_000.0 - k as f32]),
+                ..pad.osc[0].clone()
+            })
+            .collect();
+        heavy.roles = (0..bounds::MAX_ROLES)
+            .map(|i| crate::Role {
+                name: format!("r{i}"),
+                patch: "pad".into(),
+                ..role.clone()
+            })
+            .collect();
+        let err = refused(&heavy, &score);
+        assert!(err.contains("GiB"), "{err}");
+        let mut busy = score.clone();
+        busy.fires = vec![
+            crate::Fire {
+                cue: "sting".into(),
+                at: 0.0,
+            };
+            bounds::MAX_FIRES + 1
+        ];
+        let err = refused(base, &busy);
+        assert!(err.contains("[[fire]]"), "{err}");
+        let mut nan = base.clone();
+        nan.patch.get_mut("pad").unwrap().pan = f32::NAN;
+        let err = refused(&nan, &score);
+        assert!(err.contains("[patch.pad]") && err.contains("pan"), "{err}");
     }
 
     #[test]
