@@ -417,8 +417,10 @@ fn segment_theta(closest: f32, distance: f32, t: f32) -> f32 {
     return atan2(t,distance-closest*select(0.0,(t-closest)/distance,distance!=0.0));
 }
 fn segment_v(centroid: vec3f, p: vec3f, d: vec3f, axis: vec3f, t: f32) -> vec3f {
-    let v0=normalize(p-centroid);
-    let v1=normalize(p-centroid+d*min(t,1e12));
+    let u0=p-centroid;
+    let u1=u0+d*min(t,1e12);
+    let v0=select(d,u0*inverseSqrt(dot(u0,u0)),dot(u0,u0)>1e-30);
+    let v1=select(-d,u1*inverseSqrt(dot(u1,u1)),dot(u1,u1)>1e-30);
     let side=cross(v0,v1);
     let s=length(side);
     if (!(s>1e-9)) { return select(v1,v0,dot(v0,axis)>dot(v1,axis)); }

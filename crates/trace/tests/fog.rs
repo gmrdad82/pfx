@@ -358,6 +358,7 @@ fn empty_fog(
     fog: Fog,
     lamps: Vec<pfx_trace::lights::LocalLight>,
     sun: f32,
+    sky: f32,
     samples: u32,
 ) -> Vec<[f32; 4]> {
     let aspect = EMPTY_SIZE[0] as f32 / EMPTY_SIZE[1] as f32;
@@ -379,7 +380,7 @@ fn empty_fog(
         sky: pfx_load::Sky {
             width: 1,
             height: 1,
-            texels: vec![[0.0; 4]],
+            texels: vec![[sky, sky, sky, 1.0]],
         },
         camera: pfx_trace::Camera {
             origin: [0.0; 3],
@@ -424,22 +425,12 @@ fn block_errors(pixels: &[[f32; 4]], wanted: &[f32]) -> Vec<([u32; 2], f32)> {
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
 fn the_fog_scatters_the_sun_and_a_lamp_as_their_integral_says() {
-    use pfx_trace::lights::LocalLight;
     let gpu = pollster::block_on(Gpu::headless()).unwrap();
-    let fog = Fog {
-        height: 0.0,
-        falloff: 0.0,
-        density: 0.05,
-        reach: EMPTY_REACH,
-        shafts: 1.0,
-        color: [0.2; 3],
-        phase: 0.5,
-        bounces: 0,
-    };
-    let lamp = LocalLight::point(EMPTY_LAMP, [1.0; 3], 20.0, 1.0e4);
+    let fog = empty_haze(0);
+    let lamp = lamp(EMPTY_LAMP, 20.0, 1.0e4);
     let sun = 3.0;
     let aspect = EMPTY_SIZE[0] as f32 / EMPTY_SIZE[1] as f32;
-    let pixels = empty_fog(&gpu, fog, vec![lamp], sun, 512);
+    let pixels = empty_fog(&gpu, fog, vec![lamp], sun, 0.0, 512);
     let wanted = integrals(&fog, &[lamp], sun, 2000);
     let lamp_pixel = [
         (EMPTY_LAMP[0] / -EMPTY_LAMP[2] / (EMPTY_TAN * aspect) + 1.0) * 0.5 * EMPTY_SIZE[0] as f32,
@@ -470,13 +461,8 @@ fn the_fog_scatters_the_sun_and_a_lamp_as_their_integral_says() {
         beside * 100.0
     );
 }
-
-#[test]
-#[ignore = "needs a GPU; run under pgpu"]
-fn one_light_a_fog_segment_from_a_tree_of_lamps_keeps_the_integral_at_1024_spp() {
-    use pfx_trace::lights::{LightShape, LocalLight};
-    let gpu = pollster::block_on(Gpu::headless()).unwrap();
-    let fog = Fog {
+fn empty_haze(bounces: u32) -> Fog {
+    Fog {
         height: 0.0,
         falloff: 0.0,
         density: 0.05,
@@ -484,47 +470,76 @@ fn one_light_a_fog_segment_from_a_tree_of_lamps_keeps_the_integral_at_1024_spp()
         shafts: 1.0,
         color: [0.2; 3],
         phase: 0.5,
-        bounces: 0,
-    };
-    let point = |position: [f32; 3], intensity: f32, range: f32| {
-        LocalLight::point(position, [1.0; 3], intensity, range)
-    };
-    let mut lamps = vec![
-        LocalLight::rect(
-            [0.0, 0.0, 3.0],
-            [1.0, 0.0, 0.0],
-            [0.0, -1.0, 0.0],
-            [1.0; 3],
-            30.0,
-        ),
-        point([3.0, 1.0, 2.0], 15.0, 1.0e4),
-        point([-3.0, 0.5, 1.0], 10.0, 1.0e4),
-        point([0.0, 4.0, -6.0], 30.0, 1.0e4),
-        point([6.0, -1.0, -3.0], 20.0, 8.0),
-        point([-8.5, 2.0, -8.0], 25.0, 1.0e4),
-        point([2.0, -4.0, -5.0], 12.0, 6.0),
-        point([-1.0, 3.0, 4.0], 18.0, 1.0e4),
-        point([11.0, 1.0, -12.0], 40.0, 1.0e4),
-        point([-4.0, -3.0, 3.0], 8.0, 5.0),
-        point([0.5, 6.0, -10.0], 35.0, 3.0),
-    ];
-    lamps.push(LocalLight {
-        shape: LightShape::Spot {
-            direction: [0.0, -1.0, -0.5],
+        bounces,
+    }
+}
+
+fn lamp(position: [f32; 3], intensity: f32, range: f32) -> pfx_trace::lights::LocalLight {
+    pfx_trace::lights::LocalLight::point(position, [1.0; 3], intensity, range)
+}
+
+fn spot(position: [f32; 3], direction: [f32; 3], intensity: f32) -> pfx_trace::lights::LocalLight {
+    pfx_trace::lights::LocalLight {
+        shape: pfx_trace::lights::LightShape::Spot {
+            direction,
             inner_deg: 20.0,
             outer_deg: 35.0,
         },
-        ..point([0.0, 5.0, -4.0], 40.0, 1.0e4)
-    });
-    let sun = 1.0;
-    let pixels = empty_fog(&gpu, fog, lamps.clone(), sun, 1024);
-    let wanted = integrals(&fog, &lamps, sun, 1000);
+        ..lamp(position, intensity, 1.0e4)
+    }
+}
+
+fn panel(intensity: f32) -> pfx_trace::lights::LocalLight {
+    pfx_trace::lights::LocalLight::rect(
+        [0.0, 0.0, 3.0],
+        [1.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [1.0; 3],
+        intensity,
+    )
+}
+
+fn tree_lamps() -> Vec<pfx_trace::lights::LocalLight> {
+    vec![
+        lamp([3.0, 1.0, 2.0], 15.0, 1.0e4),
+        lamp([-3.0, 0.5, 1.0], 10.0, 1.0e4),
+        lamp([0.0, 4.0, -6.0], 30.0, 1.0e4),
+        lamp([6.0, -1.0, -3.0], 20.0, 8.0),
+        lamp([-8.5, 2.0, -8.0], 25.0, 1.0e4),
+        lamp([2.0, -4.0, -5.0], 12.0, 6.0),
+        lamp([-1.0, 3.0, 4.0], 18.0, 1.0e4),
+        lamp([11.0, 1.0, -12.0], 40.0, 1.0e4),
+        lamp([-4.0, -3.0, 3.0], 8.0, 5.0),
+        lamp([0.5, 6.0, -10.0], 35.0, 3.0),
+        spot([0.0, 5.0, -4.0], [0.0, -1.0, -0.5], 40.0),
+    ]
+}
+
+fn against_integral(pixels: &[[f32; 4]], wanted: &[f32]) -> (f32, f32) {
     let found: f32 = pixels.iter().map(|p| p[0]).sum();
     let mean = (found / wanted.iter().sum::<f32>() - 1.0).abs();
-    let worst = block_errors(&pixels, &wanted)
+    let worst = block_errors(pixels, wanted)
         .into_iter()
         .map(|(_, off)| off)
         .fold(0.0_f32, f32::max);
+    (mean, worst)
+}
+
+fn frame_mean(pixels: &[[f32; 4]]) -> f64 {
+    pixels.iter().map(|p| p[0] as f64).sum::<f64>() / pixels.len() as f64
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn one_light_a_fog_segment_from_a_tree_of_lamps_keeps_the_integral_at_1024_spp() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let fog = empty_haze(0);
+    let mut lamps = vec![panel(30.0)];
+    lamps.extend(tree_lamps());
+    let sun = 1.0;
+    let pixels = empty_fog(&gpu, fog, lamps.clone(), sun, 0.0, 1024);
+    let wanted = integrals(&fog, &lamps, sun, 1000);
+    let (mean, worst) = against_integral(&pixels, &wanted);
     println!(
         "a sun, a rect and a tree of eleven lamps: the frame's mean is {:.3}% from the integral, every 16 px block within {:.2}%",
         mean * 100.0,
@@ -532,6 +547,66 @@ fn one_light_a_fog_segment_from_a_tree_of_lamps_keeps_the_integral_at_1024_spp()
     );
     assert!(mean < 0.005, "the fog's mean strays {:.3}%", mean * 100.0);
     assert!(worst < 0.03, "a block strays {:.2}%", worst * 100.0);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_light_tree_centred_on_the_camera_still_lights_the_fog_it_starts_in() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let fog = empty_haze(0);
+    let lamps = vec![
+        lamp([4.0, 0.0, 1.0], 20.0, 1.0e4),
+        lamp([-4.0, 0.0, -1.0], 15.0, 1.0e4),
+        spot([0.0, 3.0, 0.5], [0.0, -1.0, -1.0], 40.0),
+        lamp([0.0, -3.0, -0.5], 10.0, 1.0e4),
+        lamp([5.0, -1.0, 2.0], 25.0, 1.0e4),
+        lamp([-5.0, 1.0, -2.0], 12.0, 1.0e4),
+    ];
+    let sun = 1.0;
+    let pixels = empty_fog(&gpu, fog, lamps.clone(), sun, 0.0, 1024);
+    let wanted = integrals(&fog, &lamps, sun, 1000);
+    let (mean, worst) = against_integral(&pixels, &wanted);
+    println!(
+        "a sun and a tree of six lamps whose bounds are centred on the camera: the frame's mean is {:.3}% from the integral, every 16 px block within {:.2}%",
+        mean * 100.0,
+        worst * 100.0
+    );
+    assert!(mean < 0.005, "the fog's mean strays {:.3}%", mean * 100.0);
+    assert!(worst < 0.03, "a block strays {:.2}%", worst * 100.0);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn fog_bounces_light_a_shared_pick_as_the_sum_of_its_lights_alone() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let fog = empty_haze(2);
+    let (sun, sky) = (1.0, 0.05);
+    let mut everything = vec![panel(120.0)];
+    everything.extend(tree_lamps());
+    let whole = frame_mean(&empty_fog(&gpu, fog, everything, sun, sky, 1024));
+    let parts = [
+        ("the sun and the sky", Vec::new(), sun, sky),
+        ("the rect", vec![panel(120.0)], 0.0, 0.0),
+        ("the tree", tree_lamps(), 0.0, 0.0),
+    ]
+    .map(|(name, lamps, sun, sky)| {
+        (
+            name,
+            frame_mean(&empty_fog(&gpu, fog, lamps, sun, sky, 1024)),
+        )
+    });
+    let sum: f64 = parts.iter().map(|(_, mean)| mean).sum();
+    let off = (whole / sum - 1.0).abs();
+    println!(
+        "two fog bounces: every light together {whole:.6}, alone {parts:?}, summed {sum:.6}, {:.3}% apart",
+        off * 100.0
+    );
+    assert!(parts.iter().all(|(_, mean)| *mean > 0.0));
+    assert!(
+        off < 0.005,
+        "the lights together stray {:.3}% from their sum",
+        off * 100.0
+    );
 }
 
 #[test]
