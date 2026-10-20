@@ -585,3 +585,103 @@ fn a_thin_puff_scatters_as_the_live_pass_formula_says() {
         }
     }
 }
+
+fn sprayed(
+    scene: &Scene,
+    bare: &Scene,
+    size: [u32; 2],
+    time: f32,
+    blur: &[f32],
+) -> stage::Staged<pfx_trace::sky::Environment> {
+    let aspect = size[0] as f32 / size[1] as f32;
+    let mut staged = stage::scene_at(bare, aspect, time).unwrap();
+    if !blur.is_empty() {
+        staged.detail.motion = Some(pfx_trace::motion::Motion {
+            steps: blur.len(),
+            cameras: Vec::new(),
+            curve: Vec::new(),
+        });
+    }
+    let puffs = stage::scene_puffs(scene, &scene.camera_or_default(), time);
+    let camera = stage::scene_camera(&scene.camera_or_default(), aspect).0;
+    staged
+        .spray(&Spray {
+            steps: blur,
+            ..Spray::new(&puffs, camera)
+        })
+        .unwrap();
+    staged.detail.sprite_room = 4400;
+    staged
+}
+
+fn bytes(gpu: &Gpu, trace: &mut pfx_trace::Trace) -> pfx_trace::gpu::Output {
+    let mut pacer = Pacer::default();
+    let mut turns = Turns::default();
+    trace
+        .sample_paced(gpu, 6, 11, &mut pacer, |ms| turns.add(ms))
+        .unwrap();
+    turns.turn();
+    trace.readback(gpu).unwrap()
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_kept_trace_takes_each_frames_sprites_and_traces_the_bytes_of_a_fresh_one() {
+    const SIZE: [u32; 2] = [192, 108];
+    let with = scene("kept", &format!("{PLUME}{DUST}"));
+    let bare = scene("kept-bare", "");
+    let aspect = SIZE[0] as f32 / SIZE[1] as f32;
+    let camera = stage::scene_camera(&with.camera_or_default(), aspect).0;
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    for rt in [true, false] {
+        hardware(rt);
+        for blur in [&[][..], &[-0.02, 0.0, 0.02][..]] {
+            let first = sprayed(&with, &bare, SIZE, 1.0, blur);
+            let mut kept = first.trace(&gpu, SIZE[0], SIZE[1]).unwrap();
+            assert_eq!(kept.hardware_rays(), rt);
+            let built = kept.builds();
+            let mut before = bytes(&gpu, &mut kept);
+            for time in [1.6, 1.2, 2.5] {
+                let puffs = stage::scene_puffs(&with, &with.camera_or_default(), time);
+                kept.set_spray(
+                    &gpu,
+                    &Spray {
+                        steps: blur,
+                        ..Spray::new(&puffs, camera)
+                    },
+                )
+                .unwrap();
+                let fresh = sprayed(&with, &bare, SIZE, time, blur);
+                let mut trace = fresh.trace(&gpu, SIZE[0], SIZE[1]).unwrap();
+                let (a, b) = (bytes(&gpu, &mut kept), bytes(&gpu, &mut trace));
+                assert!(
+                    a == b,
+                    "ray queries {rt}, blur {blur:?}: {} sprites at {time} s trace other bytes on a kept trace",
+                    puffs.len()
+                );
+                assert!(a != before, "the sprites at {time} s change nothing");
+                before = a;
+            }
+            let puffs = stage::scene_puffs(&with, &with.camera_or_default(), 2.5);
+            let shown: Vec<_> = Spray::new(&puffs, camera).shown().copied().collect();
+            let crowd: Vec<_> = shown
+                .iter()
+                .copied()
+                .cycle()
+                .take(kept.sprite_room() + 1)
+                .collect();
+            assert!(
+                kept.set_spray(
+                    &gpu,
+                    &Spray {
+                        steps: blur,
+                        ..Spray::new(&crowd, camera)
+                    },
+                )
+                .is_err(),
+                "ray queries {rt}, blur {blur:?}: more sprites than the room were taken"
+            );
+            assert_eq!(kept.builds().bottom, built.bottom);
+        }
+    }
+}

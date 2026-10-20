@@ -13,6 +13,7 @@ pub struct RtGeometry {
     pub instances: Vec<RtInstance>,
     pub tail: Vec<u32>,
     pub movers: Vec<[f32; 6]>,
+    pub room: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,10 +62,11 @@ impl RtGeometry {
             instances: Vec::new(),
             tail: Vec::new(),
             movers: Vec::new(),
+            room: 0,
         }
     }
 
-    pub(crate) fn place(&mut self, levels: &crate::levels::Levels, opaque: &[bool]) {
+    pub(crate) fn place(&mut self, levels: &crate::levels::Levels, opaque: &[bool], room: usize) {
         self.meshes = levels
             .meshes
             .iter()
@@ -82,6 +84,8 @@ impl RtGeometry {
                 walked: placed.word & crate::gpu::SPRITE != 0 || placed.deform > 1,
             });
         }
+        self.map.extend(std::iter::repeat_n(0, room));
+        self.room = room;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -201,6 +205,9 @@ pub struct Rt {
     pub map: wgpu::Buffer,
     pub bytes: u64,
     first_instance: usize,
+    movers_slot: usize,
+    bases_at: usize,
+    sprite_mesh: Option<usize>,
     sprites: Vec<bool>,
     walked: Vec<bool>,
     movers: [Option<(wgpu::Blas, wgpu::Buffer)>; 2],
@@ -390,7 +397,7 @@ impl Rt {
         let leading = [&tri_blas, &box_blas].into_iter().flatten().count();
         let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
             label: Some("trace rt world"),
-            max_instances: (leading + geometry.instances.len() + 1) as u32,
+            max_instances: (leading + geometry.instances.len() + geometry.room + 1) as u32,
             flags,
             update_mode: wgpu::AccelerationStructureUpdateMode::Build,
         });
@@ -414,10 +421,9 @@ impl Rt {
         let walked: Vec<bool> = geometry.instances.iter().map(|i| i.walked).collect();
         let [walked_boxes, hardware_boxes] = split_movers(&geometry.movers, &moving, &walked);
         let world_movers = movers_blas(gpu, &walked_boxes);
+        let movers_slot = leading + geometry.instances.len() + geometry.room;
         if let Some((blas, _, _)) = &world_movers {
-            *tlas
-                .get_mut_single(leading + geometry.instances.len())
-                .unwrap() = Some(wgpu::TlasInstance::new(
+            *tlas.get_mut_single(movers_slot).unwrap() = Some(wgpu::TlasInstance::new(
                 blas,
                 IDENTITY,
                 crate::moving::MOVERS,
@@ -427,7 +433,7 @@ impl Rt {
         let movers = movers_blas(gpu, &hardware_boxes);
         let mut movers_tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
             label: Some("trace rt movers"),
-            max_instances: (geometry.instances.len() + 1) as u32,
+            max_instances: (geometry.instances.len() + geometry.room + 1) as u32,
             flags,
             update_mode: wgpu::AccelerationStructureUpdateMode::Build,
         });
@@ -538,13 +544,20 @@ impl Rt {
         let bytes = inputs.iter().map(wgpu::Buffer::size).sum::<u64>()
             + map.size()
             + 3 * inputs.iter().map(wgpu::Buffer::size).sum::<u64>() / 2
-            + 64 * (leading + 2 * geometry.instances.len() + 1) as u64;
+            + 64 * (leading + 2 * (geometry.instances.len() + geometry.room) + 1) as u64;
         Self {
             tlas,
             movers_tlas,
             map,
             bytes,
             first_instance: leading,
+            movers_slot,
+            bases_at: geometry.map[2] as usize,
+            sprite_mesh: geometry
+                .instances
+                .iter()
+                .position(|instance| instance.sprite)
+                .map(|k| instance_mesh[k]),
             sprites: geometry.instances.iter().map(|i| i.sprite).collect(),
             walked,
             movers: [world_movers, movers]
@@ -589,12 +602,10 @@ impl Rt {
             movers_blas(gpu, &walked_boxes),
             movers_blas(gpu, &hardware_boxes),
         ];
-        *self
-            .tlas
-            .get_mut_single(self.first_instance + self.walked.len())
-            .unwrap() = built[0].as_ref().map(|(blas, _, _)| {
-            wgpu::TlasInstance::new(blas, IDENTITY, crate::moving::MOVERS, 0xff)
-        });
+        *self.tlas.get_mut_single(self.movers_slot).unwrap() =
+            built[0].as_ref().map(|(blas, _, _)| {
+                wgpu::TlasInstance::new(blas, IDENTITY, crate::moving::MOVERS, 0xff)
+            });
         *self.movers_tlas.get_mut_single(0).unwrap() = built[1].as_ref().map(|(blas, _, _)| {
             wgpu::TlasInstance::new(blas, IDENTITY, crate::moving::MOVERS, BOX_MASK)
         });
@@ -622,7 +633,69 @@ impl Rt {
         self.movers = built.map(|built| built.map(|(blas, buffer, _)| (blas, buffer)));
     }
 
-    pub(crate) fn set_transforms(&mut self, gpu: &Gpu, transforms: &[[f32; 12]]) {
+    pub(crate) fn set_sprites(
+        &mut self,
+        gpu: &Gpu,
+        first: usize,
+        sprites: &[([f32; 12], bool)],
+        base: u32,
+    ) -> Result<(), String> {
+        let Some(variant) = self.sprite_mesh else {
+            return Err("this trace was staged without sprites".into());
+        };
+        let room = self
+            .movers_slot
+            .checked_sub(self.first_instance + first)
+            .ok_or("the sprites start past the trace's instances")?;
+        if sprites.len() > room {
+            return Err(format!(
+                "this trace has room for {room} sprites and {} were given",
+                sprites.len()
+            ));
+        }
+        for j in 0..room {
+            let k = first + j;
+            *self.tlas.get_mut_single(self.first_instance + k).unwrap() =
+                sprites.get(j).map(|&(transform, moving)| {
+                    wgpu::TlasInstance::new(
+                        &self.meshes[variant],
+                        transform,
+                        k as u32 + 1,
+                        mask(moving, true),
+                    )
+                });
+            if let Some(slot) = self.movers_tlas.get_mut_single(k + 1) {
+                *slot = None;
+            }
+        }
+        let count = first + sprites.len();
+        self.sprites.truncate(first);
+        self.sprites.resize(count, true);
+        self.walked.truncate(first);
+        self.walked.resize(count, true);
+        self.instance_mesh.truncate(first);
+        self.instance_mesh.resize(count, variant);
+        if !sprites.is_empty() {
+            gpu.queue.write_buffer(
+                &self.map,
+                4 * (self.bases_at + first) as u64,
+                bytemuck::cast_slice(&vec![base; sprites.len()]),
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn build_top(&self, gpu: &Gpu) {
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("trace rt top"),
+            });
+        encoder.build_acceleration_structures(std::iter::empty(), [&self.tlas, &self.movers_tlas]);
+        gpu.queue.submit([encoder.finish()]);
+    }
+
+    pub(crate) fn set_transforms(&mut self, transforms: &[[f32; 12]]) {
         for (k, transform) in transforms.iter().enumerate() {
             if let Some(Some(instance)) = self.tlas.get_mut_single(self.first_instance + k) {
                 instance.transform = *transform;
@@ -631,13 +704,6 @@ impl Rt {
                 instance.transform = *transform;
             }
         }
-        let mut encoder = gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("trace rt top"),
-            });
-        encoder.build_acceleration_structures(std::iter::empty(), [&self.tlas, &self.movers_tlas]);
-        gpu.queue.submit([encoder.finish()]);
     }
 }
 

@@ -2,6 +2,7 @@ const SAME_POSITION: f64 = 1e-5;
 const SAME_PLACE: f64 = 1e-6;
 const SAME_NORMAL: f64 = 1e-4;
 const FLAT: f64 = 1e-6;
+const SKEWED: f64 = 1e-4;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Shape<'a> {
@@ -102,6 +103,22 @@ fn corners(positions: &[[f32; 3]], points: [usize; 4], planar: bool) -> [[f64; 3
     [p[0], p[1], p[2], top]
 }
 
+fn tolerance(positions: &[[f32; 3]]) -> f64 {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for point in positions {
+        for k in 0..3 {
+            lo[k] = lo[k].min(f64::from(point[k]));
+            hi[k] = hi[k].max(f64::from(point[k]));
+        }
+    }
+    let extent = (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max);
+    let reach = (0..3)
+        .map(|k| lo[k].abs().max(hi[k].abs()))
+        .fold(0.0, f64::max);
+    SAME_POSITION * extent + SAME_PLACE * reach
+}
+
 pub fn anchors(positions: &[[f32; 3]]) -> Option<Anchors> {
     if positions.len() < 3 {
         return None;
@@ -127,7 +144,7 @@ pub fn anchors(positions: &[[f32; 3]]) -> Option<Anchors> {
     }
     let last = farthest(&|q| dot3(normal, minus(q, p(first))).abs());
     let height = dot3(normal, minus(p(last), p(first))).abs() / length3(normal);
-    let planar = height <= size * FLAT;
+    let planar = height <= tolerance(positions);
     let points = [first, second, third, last];
     let rows = corners(positions, points, planar).map(|q| [q[0], q[1], q[2], 1.0]);
     Some(Anchors {
@@ -148,19 +165,7 @@ pub fn register(lead: Shape<'_>, anchors: &Anchors, piece: Shape<'_>) -> Option<
             *value = (0..4).map(|i| anchors.solve[c][i] * targets[i][r]).sum();
         }
     }
-    let mut lo = [f64::INFINITY; 3];
-    let mut hi = [f64::NEG_INFINITY; 3];
-    for point in piece.positions {
-        for k in 0..3 {
-            lo[k] = lo[k].min(f64::from(point[k]));
-            hi[k] = hi[k].max(f64::from(point[k]));
-        }
-    }
-    let extent = (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max);
-    let reach = (0..3)
-        .map(|k| lo[k].abs().max(hi[k].abs()))
-        .fold(0.0, f64::max);
-    let tolerance = SAME_POSITION * extent + SAME_PLACE * reach;
+    let tolerance = tolerance(piece.positions);
     for (from, to) in lead.positions.iter().zip(piece.positions) {
         let p = wide(*from);
         for (r, row) in rows.iter().enumerate() {
@@ -177,7 +182,10 @@ pub fn register(lead: Shape<'_>, anchors: &Anchors, piece: Shape<'_>) -> Option<
         m(r0, c0) * m(r1, c1) - m(r0, c1) * m(r1, c0)
     };
     let determinant: f64 = (0..3).map(|c| m(0, c) * cofactor(0, c)).sum();
-    if determinant.is_nan() || determinant == 0.0 {
+    let volume: f64 = (0..3)
+        .map(|c| length3([0, 1, 2].map(|r| m(r, c))))
+        .product();
+    if determinant.is_nan() || determinant.abs() <= volume * SKEWED {
         return None;
     }
     let sign = determinant.signum();
@@ -246,5 +254,78 @@ mod tests {
             normals: &normals,
         };
         assert!(register(lead, &anchors, bent).is_none());
+    }
+
+    fn wheel(heading: f32, centre: [f32; 3], spin: f32) -> (Vec<[f32; 3]>, Vec<[f32; 3]>) {
+        let (sin, cos) = heading.sin_cos();
+        let axle = [cos, 0.0, sin];
+        let forward = [-sin, 0.0, cos];
+        (0..16)
+            .map(|k| {
+                let angle = spin + std::f32::consts::TAU * k as f32 / 16.0;
+                let (up, ahead) = (0.2 * angle.cos(), 0.2 * angle.sin());
+                let at =
+                    std::array::from_fn(|r| centre[r] + [0.0, up, 0.0][r] + forward[r] * ahead);
+                (at, axle)
+            })
+            .unzip()
+    }
+
+    fn squareness(rows: &Rows) -> f64 {
+        let a = |r: usize, c: usize| f64::from(rows[r][c] as f32);
+        let determinant = a(0, 0) * (a(1, 1) * a(2, 2) - a(1, 2) * a(2, 1))
+            - a(0, 1) * (a(1, 0) * a(2, 2) - a(1, 2) * a(2, 0))
+            + a(0, 2) * (a(1, 0) * a(2, 1) - a(1, 1) * a(2, 0));
+        let volume: f64 = (0..3)
+            .map(|c| (0..3).map(|r| a(r, c) * a(r, c)).sum::<f64>().sqrt())
+            .product();
+        determinant.abs() / volume
+    }
+
+    #[test]
+    fn a_flat_ring_far_from_the_origin_registers_its_copies_as_turns_never_as_a_flattened_fit() {
+        let (positions, normals) = wheel(0.3, [9.0, 0.32, 169.2], 0.1);
+        let lead = Shape {
+            positions: &positions,
+            normals: &normals,
+        };
+        let anchors = anchors(&positions).unwrap();
+        for step in (0..48).chain([1626, 3167]) {
+            let t = step as f32;
+            let (moved, turned) = wheel(
+                0.3 + 0.05 * t,
+                [9.0 - 0.07 * t, 0.32, 169.2 - 0.9 * t],
+                0.1 + 0.37 * t,
+            );
+            let piece = Shape {
+                positions: &moved,
+                normals: &turned,
+            };
+            let rows = register(lead, &anchors, piece).unwrap_or_else(|| panic!("step {step}"));
+            assert!(squareness(&rows) > 0.999, "step {step}: {rows:?}");
+        }
+    }
+
+    #[test]
+    fn a_fit_that_shears_a_solid_lead_flat_is_refused() {
+        let positions = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ];
+        let normals = [[0.0, 0.0, 0.0]; 4];
+        let flat = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 1e-7],
+        ];
+        let anchors = anchors(&positions).unwrap();
+        let shape = |positions| Shape {
+            positions,
+            normals: &normals,
+        };
+        assert!(register(shape(&positions), &anchors, shape(&flat)).is_none());
     }
 }

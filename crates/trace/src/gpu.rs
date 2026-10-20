@@ -338,6 +338,7 @@ pub struct Trace {
     sky_halvings: u32,
     moving: Option<MovingState>,
     fogged: bool,
+    sprites: Option<SpriteRoom>,
 }
 
 struct MovingState {
@@ -380,6 +381,52 @@ pub struct SceneBuffers {
     bottom_builds: usize,
     features: Features,
     moving: Option<crate::moving::Moving>,
+    sprites: Option<SpriteRoom>,
+}
+
+struct SpriteRoom {
+    first: usize,
+    record: u32,
+    mesh: usize,
+    triangles: std::sync::Arc<[TriangleDetail]>,
+    total: usize,
+}
+
+fn instance_word(instance: &crate::detail::Instance) -> u32 {
+    let surface = instance.surface;
+    let mut word = surface.face.code() << FACE_SHIFT;
+    if instance.shadow_only {
+        word |= SHADOW_ONLY;
+    }
+    if !surface.casts_shadow {
+        word |= CASTS_NO_SHADOW;
+    }
+    if surface.cutout {
+        word |= CUTOUT;
+    }
+    if !instance.two_sided {
+        word |= ONE_SIDED;
+    }
+    if surface.sprite.is_some() {
+        word |= SPRITE;
+    }
+    word
+}
+
+fn sprite_tail(instances: &[crate::detail::Instance]) -> Option<usize> {
+    let first = instances
+        .iter()
+        .rposition(|instance| instance.surface.sprite.is_none())
+        .map_or(0, |last| last + 1);
+    let sprites = instances.get(first..).filter(|tail| !tail.is_empty())?;
+    sprites
+        .iter()
+        .all(|sprite| {
+            !sprite.triangles.is_empty()
+                && !sprite.surface.layer.active()
+                && std::sync::Arc::ptr_eq(&sprite.triangles, &sprites[0].triangles)
+        })
+        .then_some(first)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -514,26 +561,10 @@ impl SceneBuffers {
         let mut placed_layers = Vec::new();
         let mut words = Vec::with_capacity(detail.instances.len());
         for instance in &detail.instances {
-            let surface = instance.surface;
-            let mut word = surface.face.code() << FACE_SHIFT;
-            if surface.layer.active() {
-                placed_layers.push(GpuLayer::from(surface.layer));
+            let mut word = instance_word(instance);
+            if instance.surface.layer.active() {
+                placed_layers.push(GpuLayer::from(instance.surface.layer));
                 word |= ((materials.len() + placed_layers.len()) as u32) << LAYER_SHIFT;
-            }
-            if instance.shadow_only {
-                word |= SHADOW_ONLY;
-            }
-            if !surface.casts_shadow {
-                word |= CASTS_NO_SHADOW;
-            }
-            if surface.cutout {
-                word |= CUTOUT;
-            }
-            if !instance.two_sided {
-                word |= ONE_SIDED;
-            }
-            if surface.sprite.is_some() {
-                word |= SPRITE;
             }
             words.push(word);
         }
@@ -711,7 +742,15 @@ impl SceneBuffers {
             .collect();
         crate::moving::check(detail)?;
         let moves = crate::moving::moves(detail);
-        let laid = crate::levels::lay(&world, &detail.instances, &words, &unique, moves)?;
+        let tail = sprite_tail(&detail.instances);
+        let room = tail.map_or(0, |first| {
+            let others = materials.len() + first;
+            let total = detail
+                .sprite_room
+                .min(LAYER_LIMIT.saturating_sub(others + 1));
+            total.saturating_sub(detail.instances.len() - first)
+        });
+        let laid = crate::levels::lay(&world, &detail.instances, &words, &unique, moves, room)?;
         let order = &laid.order;
         let slots = laid.slots;
         let stride = std::mem::size_of::<GpuTriangle>();
@@ -751,6 +790,7 @@ impl SceneBuffers {
                         },
                 );
             }
+            records.extend(std::iter::repeat_n(GpuSurface::world(), room));
         }
         if packed_materials.iter().any(crate::textured::wants_uvs1) {
             let meshes = laid.levels.iter().flat_map(|levels| &levels.meshes);
@@ -868,7 +908,7 @@ impl SceneBuffers {
         };
         let mut rt = crate::rt::RtGeometry::new(&placed, &solid, boxes);
         if let Some(levels) = &laid.levels {
-            rt.place(levels, &opaque);
+            rt.place(levels, &opaque, room);
         }
         let moving = match (&detail.motion, moves) {
             (Some(motion), true) => {
@@ -876,7 +916,7 @@ impl SceneBuffers {
                     .levels
                     .as_ref()
                     .map_or(0, |levels| levels.placed.iter().flatten().count());
-                let mut moving = crate::moving::Moving::new(motion, slots);
+                let mut moving = crate::moving::Moving::new(motion, slots + room);
                 if let Some(levels) = &laid.levels {
                     for (instance, placed) in detail.instances.iter().zip(&levels.placed) {
                         let Some(placed) = placed.as_ref().filter(|placed| placed.deform > 0)
@@ -906,6 +946,16 @@ impl SceneBuffers {
         let laid_lights = crate::tree::lay(&detail.lights);
         let list = build_emitters(&candidates, laid_lights.looped, laid_lights.tree);
         let lights = laid_lights.rows;
+        let sprites = match (tail, &laid.levels) {
+            (Some(first), Some(levels)) => levels.placed[first].as_ref().map(|placed| SpriteRoom {
+                first,
+                record: placed.record,
+                mesh: placed.mesh,
+                triangles: detail.instances[first].triangles.clone(),
+                total: detail.instances.len() - first + room,
+            }),
+            _ => None,
+        };
         Ok(Self {
             triangles: triangle_bytes,
             nodes: {
@@ -944,6 +994,7 @@ impl SceneBuffers {
             bottom_builds: laid.bottom_builds,
             features,
             moving,
+            sprites,
         })
     }
 }
@@ -1896,12 +1947,13 @@ impl Trace {
         )?;
         let hardware = crate::rt::wanted(gpu)
             && !buffers.rt.is_empty()
-            && buffers.rt.instances.len() <= crate::rt::MAX_INSTANCES;
+            && buffers.rt.instances.len() + buffers.rt.room <= crate::rt::MAX_INSTANCES;
         let mut motion_at = [0_u32; 3];
         let moving = match buffers.moving.take() {
             Some(moving) => {
                 let levels = buffers.levels.as_ref().map(|placing| &placing.levels);
-                let (block, movers) = moving.block(levels);
+                let (mut block, movers) = moving.block(levels);
+                block.resize(moving.len(moving.firsts.len()), [0.0; 4]);
                 let offset = if hardware {
                     let mut words = Vec::new();
                     let first_mesh = levels
@@ -2236,6 +2288,7 @@ impl Trace {
             sky_halvings: halvings,
             moving,
             fogged: detail.fog.is_some(),
+            sprites: buffers.sprites.take(),
         })
     }
 
@@ -2258,9 +2311,20 @@ impl Trace {
         gpu: &Gpu,
         transforms: &[crate::detail::Transform],
     ) -> Result<(), String> {
+        if self.move_instances(transforms, gpu)? {
+            self.finish_tops(gpu, false);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn move_instances(
+        &mut self,
+        transforms: &[crate::detail::Transform],
+        gpu: &Gpu,
+    ) -> Result<bool, String> {
         let Some(placing) = self.placing.as_mut() else {
             return if transforms.is_empty() {
-                Ok(())
+                Ok(false)
             } else {
                 Err("this trace has no instances to move".into())
             };
@@ -2291,7 +2355,7 @@ impl Trace {
             .zip(transforms)
             .any(|(placed, transform)| placed.as_ref().is_some_and(|p| moved(p, transform)))
         {
-            return Ok(());
+            return Ok(false);
         }
         let mut emitters_moved = false;
         let record_size = std::mem::size_of::<GpuSurface>() as u64;
@@ -2330,8 +2394,6 @@ impl Trace {
                 bytemuck::cast_slice(&[rows3(pose.rows()), rows3(placed.inverse)]),
             );
         }
-        gpu.queue
-            .write_buffer(&self.node_buffer, 0, bytemuck::cast_slice(&levels.top()));
         if emitters_moved {
             let list = build_emitters(&placing.candidates, placing.lights, placing.tree);
             gpu.queue
@@ -2348,11 +2410,26 @@ impl Trace {
                     crate::detail::Pose::new(placed.transform).map_or([0.0; 12], |pose| pose.rows())
                 })
                 .collect();
-            rt.set_transforms(gpu, &rows);
+            rt.set_transforms(&rows);
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn finish_tops(&mut self, gpu: &Gpu, motion: bool) {
+        if let Some(placing) = &self.placing {
+            gpu.queue.write_buffer(
+                &self.node_buffer,
+                0,
+                bytemuck::cast_slice(&placing.levels.top()),
+            );
+        }
+        if motion && self.moving.is_some() {
+            self.place_motion(gpu);
+        } else if let Some(rt) = &self.rt {
+            rt.build_top(gpu);
         }
         self.builds.top += 1;
         self.samples = 0;
-        Ok(())
     }
 
     pub fn sky_halvings(&self) -> u32 {
@@ -2379,6 +2456,16 @@ impl Trace {
     pub fn set_motion(
         &mut self,
         gpu: &Gpu,
+        transforms: &[Vec<crate::detail::Transform>],
+        cameras: &[Camera],
+    ) -> Result<(), String> {
+        self.pose_motion(transforms, cameras)?;
+        self.finish_tops(gpu, true);
+        Ok(())
+    }
+
+    pub(crate) fn pose_motion(
+        &mut self,
         transforms: &[Vec<crate::detail::Transform>],
         cameras: &[Camera],
     ) -> Result<(), String> {
@@ -2441,6 +2528,13 @@ impl Trace {
                 levels.set_motion(index, moved);
             }
         }
+        Ok(())
+    }
+
+    fn place_motion(&mut self, gpu: &Gpu) {
+        let Some(state) = self.moving.as_ref() else {
+            return;
+        };
         let levels = self.placing.as_ref().map(|placing| &placing.levels);
         let (block, boxes) = state.moving.block(levels);
         match &mut self.rt {
@@ -2466,18 +2560,126 @@ impl Trace {
                     state.offset,
                     bytemuck::cast_slice(&crate::moving::as_nodes(&block)),
                 );
-                if let Some(levels) = levels {
-                    gpu.queue.write_buffer(
-                        &self.node_buffer,
-                        0,
-                        bytemuck::cast_slice(&levels.top()),
-                    );
-                }
             }
         }
-        self.builds.top += 1;
-        self.samples = 0;
+    }
+
+    pub fn sprite_quad(&self) -> Option<std::sync::Arc<[TriangleDetail]>> {
+        self.sprites.as_ref().map(|room| room.triangles.clone())
+    }
+
+    pub fn motion_steps(&self) -> Option<usize> {
+        self.moving.as_ref().map(|state| state.moving.steps)
+    }
+
+    pub fn set_sprites(
+        &mut self,
+        gpu: &Gpu,
+        sprites: &[crate::detail::Instance],
+    ) -> Result<(), String> {
+        if self.place_sprites(sprites, gpu)? {
+            self.finish_tops(gpu, true);
+        }
         Ok(())
+    }
+
+    pub fn sprite_room(&self) -> usize {
+        self.sprites.as_ref().map_or(0, |room| room.total)
+    }
+
+    pub(crate) fn place_sprites(
+        &mut self,
+        sprites: &[crate::detail::Instance],
+        gpu: &Gpu,
+    ) -> Result<bool, String> {
+        let Some(room) = self.sprites.as_ref() else {
+            return if sprites.is_empty() {
+                Ok(false)
+            } else {
+                Err("this trace was staged without sprites; stage it again".into())
+            };
+        };
+        if sprites.len() > room.total {
+            return Err(format!(
+                "this trace has room for {} sprites and {} were given",
+                room.total,
+                sprites.len()
+            ));
+        }
+        let Some(placing) = self.placing.as_mut() else {
+            return Err("this trace has no instances to place sprites among".into());
+        };
+        let steps = self.moving.as_ref().map(|state| state.moving.steps);
+        for sprite in sprites {
+            if sprite.surface.sprite.is_none()
+                || !sprite.surface.valid()
+                || sprite.surface.layer.active()
+                || !std::sync::Arc::ptr_eq(&sprite.triangles, &room.triangles)
+            {
+                return Err("a sprite must be a quad of this trace's spray".into());
+            }
+            if let Some(motion) = sprite
+                .motion
+                .as_ref()
+                .filter(|motion| motion.moves(&sprite.transform))
+            {
+                let Some(steps) = steps else {
+                    return Err(
+                        "this trace was staged without motion; stage it again to blur its sprites"
+                            .into(),
+                    );
+                };
+                crate::moving::check_instance(motion, sprite.triangles.len(), steps)?;
+            }
+        }
+        let levels = &mut placing.levels;
+        let placed = sprites
+            .iter()
+            .enumerate()
+            .map(|(k, sprite)| {
+                crate::levels::place(
+                    &levels.meshes,
+                    room.mesh,
+                    sprite,
+                    instance_word(sprite),
+                    room.record + k as u32,
+                    steps.is_some(),
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let records = sprites
+            .iter()
+            .zip(&placed)
+            .map(|(sprite, placed)| GpuSurface::placed(sprite.surface, placed))
+            .collect::<Result<Vec<_>, _>>()?;
+        let rows: Vec<([f32; 12], bool)> = placed
+            .iter()
+            .map(|placed| {
+                (
+                    crate::detail::Pose::new(placed.transform)
+                        .map_or([0.0; 12], |pose| pose.rows()),
+                    placed.moving(),
+                )
+            })
+            .collect();
+        if let Some(rt) = &mut self.rt {
+            rt.set_sprites(
+                gpu,
+                room.record as usize - 1,
+                &rows,
+                levels.meshes[room.mesh].first,
+            )?;
+        }
+        if !records.is_empty() {
+            gpu.queue.write_buffer(
+                &self.surface_buffer,
+                std::mem::size_of::<GpuSurface>() as u64 * u64::from(room.record),
+                bytemuck::cast_slice(&records),
+            );
+        }
+        levels.placed.truncate(room.first);
+        levels.placed.extend(placed.into_iter().map(Some));
+        Ok(true)
     }
 
     fn banded_pacer() -> Pacer {

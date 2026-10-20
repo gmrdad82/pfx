@@ -361,6 +361,7 @@ pub struct Rendered {
     pub region: Region,
     pub rect: [u32; 4],
     pub left_out: Vec<&'static str>,
+    pub restaged: Option<String>,
 }
 
 impl Rendered {
@@ -556,6 +557,7 @@ pub fn render_kept(
         region: frame,
         rect: request.crop.map_or(frame.rect(), |crop| crop.rect),
         left_out: pfx_recipe_scene::unapplied(&recipe, true),
+        restaged: None,
     })
 }
 
@@ -572,6 +574,7 @@ pub struct Reel {
     moving_cameras: Vec<Camera>,
     time: f64,
     emitted: Vec<pfx_build::Emitted>,
+    sprite_room: usize,
     shutter: Vec<f64>,
     plan: MemoryPlan,
 }
@@ -631,6 +634,10 @@ impl Reel {
             kept: None,
             moving_cameras: Vec::new(),
             time: 0.0,
+            sprite_room: emitted
+                .iter()
+                .map(|emitter| emitter.recipe.max as usize)
+                .sum(),
             emitted,
             shutter: Vec::new(),
             plan,
@@ -798,14 +805,21 @@ impl Reel {
         if let Some(steps) = self.staging.steps.as_mut() {
             steps.cameras = traced_cameras;
         }
-        let moves = self.staging.steps.as_ref().is_some_and(Steps::moves);
+        let puffs = self.puffs();
+        let blur = self.sprite_steps(&puffs);
+        let spray = Spray {
+            steps: &blur,
+            ..Spray::new(&puffs, lens.camera)
+        };
+        let moves = self.staging.steps.as_ref().is_some_and(Steps::moves) || spray.moves();
         let mut since = Builds::default();
+        let mut restaged = None;
         let mut kept = match self.kept.take() {
             Some(mut kept)
                 if kept.size == size
                     && kept.samples == samples
                     && kept.trace.moving() == moves
-                    && self.emitted.is_empty()
+                    && kept.trace.sprite_quad().is_some() == spray.shown().next().is_some()
                     && kept.trace.sky_halvings()
                         == pfx_trace::gpu::sky_halvings(
                             &self.staging.sky,
@@ -818,23 +832,20 @@ impl Reel {
                 let placements = self.staging.placements(&lens.eye);
                 let models: Vec<Matrix> =
                     placements.iter().map(|placement| placement.model).collect();
-                kept.trace
-                    .set_instance_transforms(&self.gpu, &models)
-                    .map_err(failed)?;
                 kept.trace.set_projection(lens.projection).map_err(failed)?;
                 kept.trace.set_lens(lens.lens).map_err(failed)?;
                 kept.trace.set_camera(lens.camera).map_err(failed)?;
                 if let Some(fog) = self.staging.fog {
                     kept.trace.set_fog(fog).map_err(failed)?;
                 }
-                match self.staging.steps.as_ref().filter(|_| moves) {
-                    Some(steps) => {
+                let motion: Option<(Vec<Vec<Matrix>>, &[pfx_trace::Camera])> =
+                    self.staging.steps.as_ref().filter(|_| moves).map(|steps| {
                         let per_step: Vec<Vec<Matrix>> = steps
                             .posed
                             .iter()
                             .map(|posed| self.staging.models(posed, &lens.eye))
                             .collect();
-                        let motion: Vec<Vec<Matrix>> = (0..models.len())
+                        let motion = (0..models.len())
                             .map(|piece| {
                                 per_step
                                     .iter()
@@ -842,18 +853,31 @@ impl Reel {
                                     .collect()
                             })
                             .collect();
-                        match kept.trace.set_motion(&self.gpu, &motion, &steps.cameras) {
-                            Ok(()) => kept,
-                            Err(_) => {
-                                since = Builds::default();
-                                self.restage(lens, size, samples)?
-                            }
-                        }
+                        (motion, &steps.cameras[..])
+                    });
+                let shown = spray.shown().count();
+                if shown > kept.trace.sprite_room() {
+                    restaged = Some(format!(
+                        "{shown} particles outgrew the trace's room for {}, so this frame staged a new trace",
+                        kept.trace.sprite_room()
+                    ));
+                }
+                match kept.trace.set_frame(
+                    &self.gpu,
+                    &models,
+                    &spray,
+                    motion
+                        .as_ref()
+                        .map(|(motion, cameras)| (&motion[..], *cameras)),
+                ) {
+                    Ok(()) => kept,
+                    Err(_) => {
+                        since = Builds::default();
+                        self.restage(lens, size, samples, &spray)?
                     }
-                    None => kept,
                 }
             }
-            _ => self.restage(lens, size, samples)?,
+            _ => self.restage(lens, size, samples, &spray)?,
         };
         turn(Report::default());
         if self.denoiser.is_none() {
@@ -908,7 +932,29 @@ impl Reel {
                 .into_iter()
                 .filter(|key| *key != "motion_blur" || self.staging.steps.is_none())
                 .collect(),
+            restaged,
         })
+    }
+
+    fn puffs(&self) -> Vec<pfx_trace::sprites::Puff> {
+        crate::sprays::puffs(
+            &self.emitted,
+            &self.built,
+            self.base
+                .timeline
+                .map_or(pfx_build::Rate::whole(1), |t| t.fps),
+            self.time,
+        )
+    }
+
+    fn sprite_steps(&self, puffs: &[pfx_trace::sprites::Puff]) -> Vec<f32> {
+        if puffs.is_empty() || self.staging.steps.is_none() || self.shutter.len() < 2 {
+            return Vec::new();
+        }
+        self.shutter
+            .iter()
+            .map(|at| (at - self.time) as f32)
+            .collect()
     }
 
     fn restage(
@@ -916,38 +962,18 @@ impl Reel {
         lens: crate::staging::Eyepiece,
         size: [u32; 2],
         samples: u32,
+        spray: &Spray<'_>,
     ) -> Result<Kept, Fault> {
         let mut staged = self.staging.stage(lens)?;
-        let puffs = crate::sprays::puffs(
-            &self.emitted,
-            &self.built,
-            self.base
-                .timeline
-                .map_or(pfx_build::Rate::whole(1), |t| t.fps),
-            self.time,
-        );
-        let blurred = !puffs.is_empty() && self.staging.steps.is_some() && self.shutter.len() >= 2;
-        if blurred && staged.detail.motion.is_none() {
+        if !spray.steps.is_empty() && staged.detail.motion.is_none() {
             staged.detail.motion = Some(pfx_trace::motion::Motion {
                 steps: self.shutter.len(),
                 cameras: Vec::new(),
                 curve: Vec::new(),
             });
         }
-        let steps: Vec<f32> = if blurred {
-            self.shutter
-                .iter()
-                .map(|at| (at - self.time) as f32)
-                .collect()
-        } else {
-            Vec::new()
-        };
-        staged
-            .spray(&Spray {
-                steps: &steps,
-                ..Spray::new(&puffs, lens.camera)
-            })
-            .map_err(Fault::Failed)?;
+        staged.spray(spray).map_err(Fault::Failed)?;
+        staged.detail.sprite_room = self.sprite_room;
         staged.detail.sampler = Sampler::Sobol { samples };
         staged.detail.fit_textures = Some(size);
         Ok(Kept {

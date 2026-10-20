@@ -682,6 +682,51 @@ mod tests {
     }
 
     #[test]
+    fn flat_rings_posed_far_from_the_origin_share_one_mesh_with_transforms_the_tracer_accepts() {
+        let recipe = parse(SCENE).unwrap();
+        let built = pfx_build::build(&recipe, Path::new("")).unwrap();
+        let ring = |step: f32| {
+            let mut piece = pfx_recipe_scene::pieces(&built.parts).swap_remove(0);
+            let (sin, cos) = (0.3 + 0.05 * step).sin_cos();
+            let centre = [9.0 - 0.07 * step, 0.32, 169.2 - 0.9 * step];
+            let spin = 0.1 + 0.37 * step;
+            let geometry = &mut piece.geometry;
+            geometry.positions = (0..16)
+                .map(|k| {
+                    let angle = spin + std::f32::consts::TAU * k as f32 / 16.0;
+                    let (up, ahead) = (0.2 * angle.cos(), 0.2 * angle.sin());
+                    [
+                        centre[0] - sin * ahead,
+                        centre[1] + up,
+                        centre[2] + cos * ahead,
+                    ]
+                })
+                .collect();
+            geometry.normals = vec![[cos, 0.0, sin]; 16];
+            geometry.uvs = (0..16).map(|k| [k as f32 / 16.0, 0.0]).collect();
+            geometry.indices = (1..15).flat_map(|k| [0, k, k + 1]).collect();
+            piece
+        };
+        let pieces: Vec<Piece> = (0..48)
+            .chain([1626, 3167])
+            .map(|step| ring(step as f32))
+            .collect();
+        let shared = shared(&pieces, &[]);
+        for (step, shared) in shared.iter().enumerate() {
+            let instance = pfx_trace::detail::Instance {
+                triangles: Vec::new().into(),
+                transform: shared.model,
+                surface: pfx_trace::detail::InstanceSurface::default(),
+                shadow_only: false,
+                two_sided: false,
+                motion: None,
+            };
+            assert!(instance.transformed().is_ok(), "{step}: {:?}", shared.model);
+        }
+        assert!(shared.iter().all(|shared| shared.mesh == 0));
+    }
+
+    #[test]
     fn the_recipes_trace_key_reaches_the_tracers_detail() {
         let (recipe, plain) = staging(SCENE);
         let eye = eyepiece(&recipe.cameras[0], View::Lens, [8, 8]).unwrap();

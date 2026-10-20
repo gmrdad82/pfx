@@ -4,10 +4,11 @@ use pfx_core::sim::particles::{Blend, Sprite};
 use pfx_materials::Material;
 
 use crate::detail::{Instance, InstanceSurface, SpriteLook, Transform, TriangleDetail};
-use crate::gpu::Camera;
+use crate::gpu::{Camera, Trace};
 use crate::math::{add, cross, dot, length, normalize, scale, sub};
 use crate::motion::InstanceMotion;
 use crate::stage::Staged;
+use pfx_gpu::Gpu;
 
 pub const SOFT_FLOOR: f32 = 0.02;
 
@@ -35,6 +36,76 @@ impl<'a> Spray<'a> {
             soft: true,
             steps: &[],
         }
+    }
+
+    pub fn shown(&self) -> impl Iterator<Item = &'a Puff> + use<'a> {
+        self.puffs.iter().filter(|puff| {
+            let sprite = &puff.sprite;
+            sprite.size > 0.0
+                && sprite.size.is_finite()
+                && sprite.alpha > 0.0
+                && sprite.position.iter().all(|v| v.is_finite())
+        })
+    }
+
+    pub fn instances(&self, triangles: &Arc<[TriangleDetail]>, moving: bool) -> Vec<Instance> {
+        self.shown()
+            .map(|puff| {
+                let sprite = &puff.sprite;
+                let additive = puff.blend == Blend::Add;
+                let look = SpriteLook {
+                    colour: sprite.colour.map(|c| c.max(0.0)),
+                    alpha: sprite.alpha.clamp(0.0, 1.0),
+                    lit: puff.lit,
+                    additive,
+                    soft: if self.soft {
+                        (0.5 * sprite.size).max(SOFT_FLOOR)
+                    } else {
+                        0.0
+                    },
+                };
+                let motion = moving.then(|| InstanceMotion {
+                    transforms: self
+                        .steps
+                        .iter()
+                        .map(|&dt| {
+                            transform(
+                                &self.camera,
+                                puff,
+                                add(sprite.position, scale(sprite.velocity, dt)),
+                            )
+                        })
+                        .collect(),
+                    shapes: Vec::new(),
+                });
+                Instance {
+                    triangles: triangles.clone(),
+                    transform: transform(&self.camera, puff, sprite.position),
+                    surface: InstanceSurface {
+                        casts_shadow: !additive,
+                        sprite: Some(look),
+                        ..InstanceSurface::default()
+                    },
+                    shadow_only: false,
+                    two_sided: true,
+                    motion,
+                }
+            })
+            .collect()
+    }
+
+    pub fn moves(&self) -> bool {
+        self.shown().any(|puff| {
+            let sprite = &puff.sprite;
+            let still = transform(&self.camera, puff, sprite.position);
+            self.steps.iter().any(|&dt| {
+                transform(
+                    &self.camera,
+                    puff,
+                    add(sprite.position, scale(sprite.velocity, dt)),
+                ) != still
+            })
+        })
     }
 }
 
@@ -107,18 +178,7 @@ pub fn transform(camera: &Camera, puff: &Puff, at: [f32; 3]) -> Transform {
 
 impl<E> Staged<E> {
     pub fn spray(&mut self, spray: &Spray<'_>) -> Result<usize, String> {
-        let shown: Vec<&Puff> = spray
-            .puffs
-            .iter()
-            .filter(|puff| {
-                let sprite = &puff.sprite;
-                sprite.size > 0.0
-                    && sprite.size.is_finite()
-                    && sprite.alpha > 0.0
-                    && sprite.position.iter().all(|v| v.is_finite())
-            })
-            .collect();
-        if shown.is_empty() {
+        if spray.shown().next().is_none() {
             return Ok(0);
         }
         let moving = match &self.detail.motion {
@@ -133,49 +193,59 @@ impl<E> Staged<E> {
         let slot = self.scene.materials.len() as u32;
         self.scene.materials.push(material());
         let triangles: Arc<[TriangleDetail]> = Arc::new(quad(slot));
-        self.detail.instances.reserve(shown.len());
-        for puff in shown {
-            let sprite = &puff.sprite;
-            let additive = puff.blend == Blend::Add;
-            let look = SpriteLook {
-                colour: sprite.colour.map(|c| c.max(0.0)),
-                alpha: sprite.alpha.clamp(0.0, 1.0),
-                lit: puff.lit,
-                additive,
-                soft: if spray.soft {
-                    (0.5 * sprite.size).max(SOFT_FLOOR)
-                } else {
-                    0.0
-                },
-            };
-            let motion = moving.then(|| InstanceMotion {
-                transforms: spray
-                    .steps
-                    .iter()
-                    .map(|&dt| {
-                        transform(
-                            &spray.camera,
-                            puff,
-                            add(sprite.position, scale(sprite.velocity, dt)),
-                        )
-                    })
-                    .collect(),
-                shapes: Vec::new(),
-            });
-            self.detail.instances.push(Instance {
-                triangles: triangles.clone(),
-                transform: transform(&spray.camera, puff, sprite.position),
-                surface: InstanceSurface {
-                    casts_shadow: !additive,
-                    sprite: Some(look),
-                    ..InstanceSurface::default()
-                },
-                shadow_only: false,
-                two_sided: true,
-                motion,
-            });
-        }
+        self.detail
+            .instances
+            .extend(spray.instances(&triangles, moving));
         Ok(self.detail.instances.len())
+    }
+}
+
+impl Trace {
+    pub fn set_spray(&mut self, gpu: &Gpu, spray: &Spray<'_>) -> Result<(), String> {
+        let sprites = self.spray_instances(spray)?;
+        if self.place_sprites(&sprites, gpu)? {
+            self.finish_tops(gpu, true);
+        }
+        Ok(())
+    }
+
+    pub fn set_frame(
+        &mut self,
+        gpu: &Gpu,
+        transforms: &[Transform],
+        spray: &Spray<'_>,
+        motion: Option<(&[Vec<Transform>], &[Camera])>,
+    ) -> Result<(), String> {
+        let sprites = self.spray_instances(spray)?;
+        let moved = self.move_instances(transforms, gpu)?;
+        let sprayed = self.place_sprites(&sprites, gpu)?;
+        let posed = match motion {
+            Some((transforms, cameras)) => {
+                self.pose_motion(transforms, cameras)?;
+                true
+            }
+            None => false,
+        };
+        if moved || sprayed || posed {
+            self.finish_tops(gpu, sprayed || posed);
+        }
+        Ok(())
+    }
+
+    fn spray_instances(&self, spray: &Spray<'_>) -> Result<Vec<Instance>, String> {
+        let Some(quad) = self.sprite_quad() else {
+            return match spray.shown().next() {
+                None => Ok(Vec::new()),
+                Some(_) => Err("this trace was staged without sprites; stage it again".into()),
+            };
+        };
+        if let Some(steps) = self.motion_steps()
+            && !spray.steps.is_empty()
+            && spray.steps.len() != steps
+        {
+            return Err("particle motion needs one time per shutter step".into());
+        }
+        Ok(spray.instances(&quad, !spray.steps.is_empty()))
     }
 }
 

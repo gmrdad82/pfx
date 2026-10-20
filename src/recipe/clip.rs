@@ -528,18 +528,20 @@ impl Renderer {
                 }
                 .map_err(|e| e.0)?;
                 let paced = rendered.paced;
-                Ok((
-                    format!(
-                        "{} submissions, the longest {:.2} ms, {:.0} ms on the GPU, {} bottom and {} top BVH builds this frame; {}",
-                        paced.submissions,
-                        paced.longest_ms,
-                        paced.gpu_ms,
-                        paced.builds.bottom,
-                        paced.builds.top,
-                        super::render::memory_line(&paced)
-                    ),
-                    Some(paced),
-                ))
+                let mut summary = format!(
+                    "{} submissions, the longest {:.2} ms, {:.0} ms on the GPU, {} bottom and {} top BVH builds this frame; {}",
+                    paced.submissions,
+                    paced.longest_ms,
+                    paced.gpu_ms,
+                    paced.builds.bottom,
+                    paced.builds.top,
+                    super::render::memory_line(&paced)
+                );
+                if let Some(restaged) = &rendered.restaged {
+                    summary.push_str("; ");
+                    summary.push_str(restaged);
+                }
+                Ok((summary, Some(paced)))
             }
         }
     }

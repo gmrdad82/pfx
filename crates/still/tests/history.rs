@@ -128,6 +128,27 @@ const BLUR: &str = r#"
 shutter = 0.5
 "#;
 
+const SPRAY: &str = r#"
+[[particles]]
+name = "spray"
+at = [0.2, 0.3, 0.0]
+rate = 400.0
+max = 600
+lifetime = [0.1, 0.3]
+speed = [1.0, 3.0]
+direction = [0.0, 0.6, -1.0]
+cone = 25.0
+inherit = 0.7
+gravity = [0.0, -9.8, 0.0]
+drag = 3.0
+size = [0.03, 0.12]
+alpha = [[0.0, 0.0], [0.1, 0.5], [1.0, 0.0]]
+color = [0.8, 0.85, 0.9]
+stretch = 2.0
+lit = true
+seed = 7
+"#;
+
 fn recipe(name: &str, parts: &[&str]) -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let dir = root.join("tmp/still-tests/history").join(name);
@@ -204,7 +225,7 @@ fn carried(name: &str, parts: &[&str]) -> Option<String> {
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
 fn a_traced_frame_is_the_same_after_its_predecessors_or_first_on_a_fresh_reel() {
-    let cases: [(&str, &[&str]); 9] = [
+    let cases: [(&str, &[&str]); 12] = [
         ("camera", &[SUN, MOVING_CAMERA]),
         ("mover", &[SUN, STILL_CAMERA, MOVER]),
         ("glow", &[SUN, STILL_CAMERA, GLOW]),
@@ -213,6 +234,9 @@ fn a_traced_frame_is_the_same_after_its_predecessors_or_first_on_a_fresh_reel() 
         ("sky", &[SUN, SKY, WIDE]),
         ("haze", &[SUN, STILL_CAMERA, HAZE]),
         ("daylight", &[DAYLIGHT, STILL_CAMERA]),
+        ("spray", &[SUN, STILL_CAMERA, SPRAY]),
+        ("spray-blur", &[SUN, STILL_CAMERA, SPRAY, BLUR]),
+        ("spray-all", &[SUN, MOVING_CAMERA, MOVER, SPRAY, BLUR]),
         (
             "all",
             &[SUN, SKY, MOVING_CAMERA, MOVER, GLOW, LAMP, BLUR, HAZE],
@@ -227,4 +251,39 @@ fn a_traced_frame_is_the_same_after_its_predecessors_or_first_on_a_fresh_reel() 
         "state carried between frames:\n{}",
         carried.join("\n")
     );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_traced_clip_with_particles_restages_once_when_they_appear_then_keeps_its_trace() {
+    for (name, parts) in [
+        ("kept-spray", &[SUN, STILL_CAMERA, SPRAY][..]),
+        (
+            "kept-spray-blur",
+            &[SUN, MOVING_CAMERA, MOVER, SPRAY, BLUR][..],
+        ),
+    ] {
+        let recipe = recipe(name, parts);
+        let mut reel = Reel::open(&recipe, None, &[], None, &Registry::new()).unwrap();
+        let builds: Vec<_> = (0..6)
+            .map(|frame| {
+                let camera = reel.pose_moving(f64::from(frame) / FPS, "main").unwrap();
+                reel.frame(&camera, take(), &mut |_| {})
+                    .unwrap()
+                    .paced
+                    .builds
+            })
+            .collect();
+        let staged: Vec<usize> = (1..builds.len())
+            .filter(|&frame| builds[frame].bottom > 0)
+            .collect();
+        assert!(builds[0].bottom > 0, "{name}: {builds:?}");
+        assert!(staged.len() <= 1, "{name}: {builds:?}");
+        let appeared = staged.first().copied().unwrap_or(0);
+        assert!(appeared <= 2, "{name}: {builds:?}");
+        for kept in &builds[appeared + 1..] {
+            assert_eq!(kept.bottom, 0, "{name}: {builds:?}");
+            assert!(kept.top > 0, "{name}: {builds:?}");
+        }
+    }
 }

@@ -394,6 +394,7 @@ pub struct Detail {
     pub fit_textures: Option<[u32; 2]>,
     pub motion: Option<crate::motion::Motion>,
     pub fog: Option<crate::fog::Fog>,
+    pub sprite_room: usize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

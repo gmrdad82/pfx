@@ -44,6 +44,7 @@ pub(crate) struct Levels {
     pub placed: Vec<Option<Placed>>,
     pub world: Option<(Bounds, u32)>,
     pub world_nodes: Vec<Node>,
+    pub room: usize,
 }
 
 pub(crate) struct Laid {
@@ -181,6 +182,40 @@ pub(crate) fn motion_steps(transforms: &[Transform]) -> Vec<Decomposed> {
     decompose_steps(&transforms.iter().map(rows).collect::<Vec<_>>())
 }
 
+pub(crate) fn place(
+    meshes: &[Mesh],
+    mesh: usize,
+    instance: &Instance,
+    word: u32,
+    record: u32,
+    moving: bool,
+) -> Result<Placed, String> {
+    let pose = Pose::new(instance.transform)?;
+    let motion = instance
+        .motion
+        .as_ref()
+        .filter(|motion| moving && motion.moves(&instance.transform));
+    let steps = motion_steps(motion.map_or(&[][..], |motion| &motion.transforms));
+    let local = meshes[mesh].bounds;
+    let bounds = if steps.is_empty() {
+        placed_bounds(&pose, local)
+    } else {
+        swept(local, &steps)
+    };
+    Ok(Placed {
+        mesh,
+        base: meshes[mesh].first,
+        record,
+        transform: instance.transform,
+        word,
+        material: one_material(&instance.triangles),
+        bounds,
+        inverse: pose.inverse_rows(),
+        motion: steps,
+        deform: motion.map_or(0, |motion| motion.shapes.len()),
+    })
+}
+
 struct Known {
     source: Arc<[TriangleDetail]>,
     hash: u64,
@@ -193,6 +228,7 @@ pub(crate) fn lay(
     words: &[u32],
     unique: &[bool],
     moving: bool,
+    room: usize,
 ) -> Result<Laid, String> {
     let mut world_triangles = memory::vec(world.len(), "the tracer's world triangles")?;
     world_triangles.extend(world.iter().copied().map(TriangleDetail::triangle));
@@ -219,7 +255,7 @@ pub(crate) fn lay(
             placed.push(None);
             continue;
         }
-        let pose = Pose::new(instance.transform)?;
+        Pose::new(instance.transform)?;
         let motion = instance
             .motion
             .as_ref()
@@ -310,24 +346,7 @@ pub(crate) fn lay(
             });
         }
         record += 1;
-        let steps = motion_steps(motion.map_or(&[][..], |motion| &motion.transforms));
-        let bounds = if steps.is_empty() {
-            placed_bounds(&pose, meshes[mesh].bounds)
-        } else {
-            swept(meshes[mesh].bounds, &steps)
-        };
-        placed.push(Some(Placed {
-            mesh,
-            base: meshes[mesh].first,
-            record,
-            transform: instance.transform,
-            word,
-            material,
-            bounds,
-            inverse: pose.inverse_rows(),
-            motion: steps,
-            deform,
-        }));
+        placed.push(Some(place(&meshes, mesh, instance, word, record, moving)?));
     }
     let world_root = world_bvh.nodes.first().map(bounds_of);
     let mut levels = Levels {
@@ -335,6 +354,7 @@ pub(crate) fn lay(
         placed,
         world: world_root.map(|bounds| (bounds, 0)),
         world_nodes: Vec::new(),
+        room,
     };
     let mut offset = levels.top_len() as u32;
     if let Some(bounds) = world_root {
@@ -348,6 +368,7 @@ pub(crate) fn lay(
         offset += mesh.nodes.len() as u32;
     }
     let mut nodes = levels.top();
+    nodes.resize(levels.top_len(), bytemuck::Zeroable::zeroed());
     nodes.extend_from_slice(&levels.world_nodes);
     for mesh in &levels.meshes {
         nodes.extend_from_slice(&mesh.nodes);
@@ -398,7 +419,7 @@ impl Levels {
     }
 
     pub(crate) fn top_len(&self) -> usize {
-        let groups = self.group_count();
+        let groups = self.group_count() + self.room;
         if groups == 0 { 0 } else { 3 * groups - 1 }
     }
 
@@ -614,7 +635,7 @@ mod tests {
                 shared.iter().copied().collect(),
             ),
         ];
-        let laid = lay(&world, &instances, &[0; 4], &[false; 4], false).unwrap();
+        let laid = lay(&world, &instances, &[0; 4], &[false; 4], false, 0).unwrap();
         assert_eq!(laid.bottom_builds, 3);
         assert_eq!(laid.slots, 30 + 60 + 40);
         let levels = laid.levels.as_ref().unwrap();
@@ -691,7 +712,7 @@ mod tests {
             ],
         });
         let instances = vec![spun, grown];
-        let laid = lay(&[], &instances, &[0, 0], &[false, false], true).unwrap();
+        let laid = lay(&[], &instances, &[0, 0], &[false, false], true, 0).unwrap();
         let levels = laid.levels.unwrap();
         let spun = levels.placed[0].as_ref().unwrap();
         let motion = crate::motion::decompose_steps(&steps.map(|step| rows(&step)));
