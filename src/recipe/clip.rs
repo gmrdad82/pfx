@@ -130,6 +130,12 @@ pub(super) struct Args {
     checkpoint: Option<Every>,
     #[arg(
         long,
+        requires = "trace",
+        help = "Count the tracer's rays by kind and the candidates its queries hand back, and report them for each frame"
+    )]
+    counters: bool,
+    #[arg(
+        long,
         help = "Progress on stderr as JSON lines: the frame, of how many, its samples and an ETA"
     )]
     json: bool,
@@ -537,6 +543,10 @@ impl Renderer {
                     paced.builds.top,
                     super::render::memory_line(&paced)
                 );
+                if let Some(counts) = &paced.counts {
+                    summary.push_str("; ");
+                    summary.push_str(&counts.line());
+                }
                 if let Some(restaged) = &rendered.restaged {
                     summary.push_str("; ");
                     summary.push_str(restaged);
@@ -571,7 +581,7 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
             (Renderer::Live(Box::new(reel), base), recipe)
         }
         Some(samples) => {
-            let reel = pfx_still::Reel::open_for(
+            let mut reel = pfx_still::Reel::open_for(
                 &args.recipe,
                 args.variant.as_deref(),
                 &args.set,
@@ -580,6 +590,7 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
                 args.size,
             )
             .map_err(|e| e.to_string())?;
+            reel.counters = args.counters;
             let recipe = reel.recipe.clone();
             let noise = noise(args, &recipe.trace, samples);
             (
@@ -726,6 +737,8 @@ impl Told {
             None => self.line("frame", fields),
             Some(paced) => {
                 let [a, b, c, d, e] = fields;
+                let [counts, rays, candidates, movers] =
+                    super::render::counts_json(paced.counts.as_ref());
                 self.line(
                     "frame",
                     [
@@ -739,6 +752,10 @@ impl Told {
                         ("gpu_ms", super::render::rounded(paced.gpu_ms, 0)),
                         ("bottom_builds", paced.builds.bottom.into()),
                         ("top_builds", paced.builds.top.into()),
+                        counts,
+                        rays,
+                        candidates,
+                        movers,
                     ],
                 )
             }
@@ -1244,7 +1261,7 @@ mod tests {
     #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
-            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --checkpoint 30 --json --rerender-from 3 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16 --memory-limit 6",
+            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --checkpoint 30 --counters --json --rerender-from 3 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16 --memory-limit 6",
         ))
         .unwrap();
         assert_eq!(
@@ -1264,6 +1281,7 @@ mod tests {
                 spp: Some(16),
                 threshold: Some(0.02),
                 checkpoint: Some(Every::Minutes(30.0)),
+                counters: true,
                 json: true,
                 rerender_from: Some(3),
                 variant: Some("bare".into()),
@@ -1821,6 +1839,7 @@ mod tests {
             crop: None,
             denoise: true,
             time: None,
+            counters: false,
         };
         let rendered = pfx_still::render(&request, &Registry::new(), &mut |_| {}).unwrap();
         let pixels =

@@ -6,6 +6,7 @@ mod text;
 mod trace;
 
 pub use pfx_trace::checkpoint::{Keeper, Rounds, Saved};
+pub use pfx_trace::counters::Counts;
 pub use pfx_trace::rt::{Path as TracePath, RayQueries};
 pub use picture::{
     Film, Format, Look, Reach, crop_refusal, cut, developed, dithered, dithered_at, finished,
