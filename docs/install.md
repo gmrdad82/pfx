@@ -7,7 +7,6 @@ Every tag's [GitHub Release](https://github.com/gmrdad82/pfx/releases) carries t
 | `pfx-vX.Y.Z-linux-x86_64.tar.gz` | `pfx`, and `share/` with the desktop file, the MIME type and the icons |
 | `pfx-vX.Y.Z-windows-x86_64.zip` | `pfx.com`, the console tool; `pfx.exe`, the window launcher; and `associate.ps1` for the file type and the Start menu |
 | `pfx-vX.Y.Z-macos-arm64.tar.gz` | `pfx` for Apple Silicon |
-| `pfx-vX.Y.Z-macos-arm64.app.zip` | `pfx.app`, the same binary in an app bundle that declares the file type and carries the icon |
 | `docs-vX.Y.Z.tar.gz` | these docs |
 | `SHA256SUMS` | the sha256 of every asset above, one `<hash>  <file>` line each |
 
@@ -78,7 +77,7 @@ tar -xzf pfx-vX.Y.Z-macos-arm64.tar.gz
 sudo install -m755 pfx /usr/local/bin/pfx
 ```
 
-The app: unzip `pfx-vX.Y.Z-macos-arm64.app.zip` and move `pfx.app` to Applications. Its `Info.plist` exports `com.pitomd.pfx.document`, pfx's own document type (the `pitofx` extension and `application/x-pfx`, conforming to `public.data` and `public.content`, with `pfx.icns` as its icon), and lists it as a document type pfx edits, with pfx as its owner; `CFBundleIconFile` is `pfx`, the bundle's `pfx.icns`. The release builds are not signed or notarized, so Gatekeeper asks before the first launch; `xattr -dr com.apple.quarantine /Applications/pfx.app` clears that for a download you have checked.
+The release ships the command-line tool alone. The app is built from a checkout on a Mac with Apple Silicon: `bin/build-release vX.Y.Z macos-arm64` writes `pfx-vX.Y.Z-macos-arm64.app.zip` into `tmp/release/vX.Y.Z/`; unzip it and move `pfx.app` to Applications. Its `Info.plist` exports `com.pitomd.pfx.document`, pfx's own document type (the `pitofx` extension and `application/x-pfx`, conforming to `public.data` and `public.content`, with `pfx.icns` as its icon), and lists it as a document type pfx edits, with pfx as its owner; `CFBundleIconFile` is `pfx`, the bundle's `pfx.icns`. The release builds are not signed or notarized, so Gatekeeper asks before the first launch; `xattr -dr com.apple.quarantine /Applications/pfx.app` clears that for a download you have checked.
 
 Finder hands a document to a running app as an Apple Event, not as an argument, and the window does not read that event: a double-clicked `.pitofx` starts the window on its start scene, and the file is opened from its File menu. `pfx <file.pitofx>` from a terminal opens it directly.
 
