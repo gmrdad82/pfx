@@ -4,6 +4,7 @@ pub(crate) mod fft;
 pub mod flanger;
 mod line;
 pub mod ring;
+pub mod spectrum;
 mod stft;
 pub mod stretch;
 pub mod syllables;

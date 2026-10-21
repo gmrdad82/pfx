@@ -59,6 +59,8 @@ const USAGE: &str = "usage:
   pfx compose render <doc.pitofx> --score <name> [--music] [--fresh] [--wav <out.wav>] [--json]
   pfx compose list <doc.pitofx> [--json]
   pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
+  pfx compose analyze <doc.pitofx|script.film.toml|in.wav|stems/> --into <doc.pitofx> --name <style> [--score <name>] [--json]
+| --score <name>] [--json]
   pfx render --recipe <file.pitofx> --camera <name> --out <png|exr|hdr> [flags]
   pfx shot <file.pitofx> --still --camera <name> --size WxH --out <png> [flags]
   pfx new <out.pitofx> --from street [--seed N] [--json]
@@ -2058,7 +2060,12 @@ mod tests {
             ),
             (
                 "compose analyze x.pitofx",
-                "unrecognized subcommand 'analyze'",
+                "the following required arguments were not provided:\n  --into <INTO>\n  --name <NAME>",
+                "pfx compose analyze [OPTIONS] --into <INTO> --name <NAME> <SOURCE>",
+            ),
+            (
+                "compose remix x.pitofx",
+                "unrecognized subcommand 'remix'",
                 "pfx compose <COMMAND>",
             ),
             (

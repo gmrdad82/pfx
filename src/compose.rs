@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use pfx_cache::{Key, Keyer, Store};
+use pfx_compose::analyze::cli::{self as analyze, Analyze};
 use pfx_compose::render::{
     self, Rendered,
     store::{self, Document},
@@ -11,12 +12,15 @@ use pfx_compose::{Compose as Composed, Request, Score, Style, StyleRef};
 use pfx_core::cli::{self, Refusal};
 use serde_json::{Value, json};
 
+mod film;
+
 pub const USAGE: &str =
     "pfx compose [OPTIONS] --style <STYLE> --seed <SEED> --seconds <SECONDS> <DOC>";
 const RENDER: &str = "pfx compose render [OPTIONS] --score <SCORE> <DOC>";
 const LIST: &str = "pfx compose list [OPTIONS] <DOC>";
 const PRINT: &str = "pfx compose print [OPTIONS] <DOC>";
-const COMMANDS: &[&str] = &["render", "list", "print"];
+const ANALYZE: &str = analyze::USAGE;
+const COMMANDS: &[&str] = &["render", "list", "print", "analyze"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
@@ -24,6 +28,7 @@ pub enum Command {
     Render(Render),
     List(List),
     Print(Print),
+    Analyze(Analyze),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -228,6 +233,7 @@ pub fn plan(args: &[String]) -> Result<Command, Refusal> {
             }))
         }
         Some("print") => plan_print(&args[1..]).map(Command::Print),
+        Some("analyze") => plan_analyze(&args[1..]).map(Command::Analyze),
         Some(word)
             if !word.starts_with('-')
                 && !word.contains(['.', '/', '\\'])
@@ -341,6 +347,32 @@ fn plan_print(args: &[String]) -> Result<Print, Refusal> {
     Ok(Print {
         doc: found.doc.clone().unwrap_or_default(),
         pick,
+        json: found.switches.contains("--json"),
+    })
+}
+
+fn plan_analyze(args: &[String]) -> Result<Analyze, Refusal> {
+    let found = words(args, &["--into", "--name", "--score"], &["--json"], ANALYZE)?;
+    let mut absent: Vec<String> = ["--into", "--name"]
+        .iter()
+        .filter(|flag| !found.values.contains_key(*flag))
+        .map(|flag| cli::with_value(flag))
+        .collect();
+    if found.doc.is_none() {
+        absent.push("<SOURCE>".to_string());
+    }
+    if !absent.is_empty() {
+        return Err(Refusal::new(cli::required(&absent)).under(ANALYZE));
+    }
+    Ok(Analyze {
+        source: found.doc.clone().unwrap_or_default(),
+        into: PathBuf::from(&found.values["--into"]),
+        name: name_ok(&found.values["--name"], "--name")?,
+        score: found
+            .values
+            .get("--score")
+            .map(|v| name_ok(v, "--score"))
+            .transpose()?,
         json: found.switches.contains("--json"),
     })
 }
@@ -873,12 +905,36 @@ fn run_print(command: &Print) -> Result<(), String> {
     Ok(())
 }
 
+fn run_analyze(command: &Analyze) -> Result<(), String> {
+    let now = clock();
+    let ms = || now() * 1000.0;
+    let outcome = analyze::run(command, &film::Film, &ms)?;
+    if command.json {
+        let mut value =
+            serde_json::to_value(&outcome.analysis.report).map_err(|e| e.to_string())?;
+        if let Value::Object(map) = &mut value {
+            map.insert(
+                "written".to_string(),
+                serde_json::to_value(&outcome.written).map_err(|e| e.to_string())?,
+            );
+            map.insert("ms".to_string(), json!((outcome.ms * 10.0).round() / 10.0));
+            map.insert("doc".to_string(), json!(command.into.display().to_string()));
+            map.insert("name".to_string(), json!(command.name));
+        }
+        println!("{value}");
+    } else {
+        print!("{}", analyze::text(command, &outcome));
+    }
+    Ok(())
+}
+
 pub fn run(command: &Command) -> Result<(), String> {
     match command {
         Command::Compose(c) => run_compose(c),
         Command::Render(r) => run_render(r),
         Command::List(l) => run_list(l),
         Command::Print(p) => run_print(p),
+        Command::Analyze(a) => run_analyze(a),
     }
 }
 

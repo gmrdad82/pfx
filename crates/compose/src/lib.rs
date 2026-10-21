@@ -1,3 +1,4 @@
+pub mod analyze;
 pub mod doc;
 pub mod generate;
 pub mod render;

@@ -245,6 +245,7 @@ pfx compose <doc.pitofx> --style <name> --seed <N> --seconds <S> [--name <score>
 pfx compose render <doc.pitofx> --score <name> [--music] [--fresh] [--wav <out.wav>] [--json]
 pfx compose list <doc.pitofx> [--json]
 pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
+pfx compose analyze <SOURCE> --into <doc.pitofx> --name <style> [--score <name>] [--json]
 ```
 
 | | |
@@ -253,6 +254,7 @@ pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
 | `render` | renders a score already in the document, after a hand edit or on another machine |
 | `list` | the document's styles and scores, and whether each score's master is in the cache |
 | `print` | the `[compose]` TOML, or one style or score, as TOML or JSON |
+| `analyze` | derives a style from music that already exists and writes it as `[compose.style.<name>]` into `--into` (see below) |
 | `--hits` | rising seconds inside `--seconds`; a section with `hit = n` starts on the bar nearest the n-th |
 | `--bpm`, `--key` | pin the tempo (20 to 400) or the key instead of drawing them |
 | `--plan` | composes the form from the sections in that plan (`plans`) in place of the sections in none, and records the plan in the score |
@@ -262,6 +264,16 @@ pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
 | `--json` | one JSON line: the score, the style, the seed, bpm, key, chords, sections with their start seconds, the note count, the stems, the `--wav` path (null without one), whether it was cached and whether `[music]` was written, the ms to compose, render and master, the limiter passes, the gain, the short-term maximum and integrated LUFS, and dBTP |
 
 A command line pfx cannot parse is refused as clap refuses it: on stderr, exit 2, with the usage line. A refusal after parsing, such as a style the document lacks, is one line, exit 1, and the document is left as it was.
+
+## Deriving a style: `pfx compose analyze`
+
+`analyze` reads a source, derives a style from it and writes it as `[compose.style.<name>]` into the `--into` document, created when it is missing. An existing document keeps every other table, comment and chunk byte for byte, and a style of the same name is replaced where it lives. The source is told apart by its contents:
+
+- **a `.pitofx` with composed scores:** the exact notes of every `[compose.score.*]`, or of the one `--score` names. `--into` may be the same document, so the style lands beside its scores;
+- **a film script** (a `.toml` with a `[film]` table, `[film] bpm` and `[film] score`): each score recipe a cue plays becomes a patch and a part, each cue (with its `every`, `until` and `accel` repeats) a note on the film's beat grid at the recipe's pitch plus the cue's `pitch`, each scene a section with its `score_db`, and an unpitched cue on a scene's first frame a hit. No image, clip or sample is read;
+- **a `.wav` or a folder of `.wav` stems,** for music not written in pfx: tempo, meter, onsets, chroma and level from the audio, so harmony, melody and patches are approximate (`coarse`).
+
+The key comes from the Temperley–Kostka–Payne profile on the duration-weighted pitch classes, Krumhansl–Kessler breaking ties; then the harmony's Roman-numeral Markov table, the melody's range, steps, rhythm, rests and motifs, each part's role, patterns, cycles and patch, the sections with their rounds, risers, rolls, impacts and hits, and the master. The style is plain data: tune any value by hand or in the editor. `--json` prints the report (bpm, meter, the ranked keys, the chords, roles, notes and sections), what was written and where, and the ms the analysis took. A source past analyze's bounds (sample rates, lengths, channel counts, sizes, notes outside MIDI 0 to 127, non-finite values) is refused, naming the file and the field.
 
 ## In a game
 
@@ -285,4 +297,4 @@ The game's stems are mastered on their own: the same gain and limiter as the mas
 
 ## Credits
 
-The music theory is ported, not invented: the scale and chord tables and the Euclidean rhythms from Sonic Pi, the Roman numerals, voicings and applied dominants from tonal, and the counter-line's first-species rules and cadence from foox, all MIT. The loudness meter and true-peak scanner come from ebur128 (MIT) and the room from Freeverb (public domain), through pfx-sound. Each is pinned by commit in [INSPIRATION.md](../INSPIRATION.md), with its licence in [NOTICE.md](../NOTICE.md).
+The music theory is ported, not invented: the scale and chord tables and the Euclidean rhythms from Sonic Pi, the Roman numerals, voicings and applied dominants from tonal, and the counter-line's first-species rules and cadence from foox, all MIT. The loudness meter and true-peak scanner come from ebur128 (MIT) and the room from Freeverb (public domain), through pfx-sound. `analyze` takes its key profiles and correlation from music21 (BSD-3-Clause) and its audio onsets, tempo, chroma and flatness from librosa (ISC). Each is pinned by commit in [INSPIRATION.md](../INSPIRATION.md), with its licence in [NOTICE.md](../NOTICE.md).

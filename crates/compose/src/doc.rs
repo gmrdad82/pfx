@@ -121,16 +121,18 @@ pub struct Found {
 
 pub fn find(reader: &pfx_file::Reader) -> Result<Vec<Found>, String> {
     let mut out = Vec::new();
-    for (chunk, bytes) in reader.chunks(pfx_file::SCNE).map_err(|e| e.to_string())? {
-        let text =
-            String::from_utf8(bytes.into_owned()).map_err(|_| format!("`{chunk}` is not UTF-8"))?;
-        let compose = Compose::parse(&text).map_err(|e| format!("`{chunk}`: {e}"))?;
-        if !compose.is_empty() {
-            out.push(Found {
-                chunk: chunk.to_string(),
-                text,
-                compose,
-            });
+    for tag in [pfx_file::SCNE, pfx_file::RCPE] {
+        for (chunk, bytes) in reader.chunks(tag).map_err(|e| e.to_string())? {
+            let text = String::from_utf8(bytes.into_owned())
+                .map_err(|_| format!("`{chunk}` is not UTF-8"))?;
+            let compose = Compose::parse(&text).map_err(|e| format!("`{chunk}`: {e}"))?;
+            if !compose.is_empty() {
+                out.push(Found {
+                    chunk: chunk.to_string(),
+                    text,
+                    compose,
+                });
+            }
         }
     }
     Ok(out)

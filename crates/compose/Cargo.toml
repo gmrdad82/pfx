@@ -14,7 +14,7 @@ name = "pfx_compose"
 [dependencies]
 pfx-core = { path = "../core" }
 pfx-file = { path = "../file" }
-pfx-sound = { path = "../sound", features = ["music"] }
+pfx-sound = { path = "../sound", features = ["music", "voicefx"] }
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 toml_edit = "0.25"

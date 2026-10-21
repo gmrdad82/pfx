@@ -17,14 +17,23 @@ fn base(name: &str) -> PathBuf {
     base
 }
 
-fn compose(base: &Path, cache: &Path) -> Output {
+fn pfx(base: &Path, cache: &Path, args: &[&str]) -> Output {
     let home = base.join("home");
     Command::new(env!("CARGO_BIN_EXE_pfx"))
         .env("PFX_CACHE_DIR", cache)
         .env("HOME", &home)
         .env("XDG_CACHE_HOME", home.join("xdg"))
         .env("LOCALAPPDATA", home.join("local"))
-        .args([
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+fn compose(base: &Path, cache: &Path) -> Output {
+    pfx(
+        base,
+        cache,
+        &[
             "compose",
             base.join("chase.pitofx").to_str().unwrap(),
             "--style",
@@ -36,9 +45,8 @@ fn compose(base: &Path, cache: &Path) -> Output {
             "--wav",
             base.join("out.wav").to_str().unwrap(),
             "--json",
-        ])
-        .output()
-        .unwrap()
+        ],
+    )
 }
 
 fn line(output: &Output) -> Value {
@@ -102,6 +110,54 @@ fn compose_refuses_a_master_in_a_cache_others_can_write() {
     assert!(files(&cache) == kept);
     let after: Vec<Vec<u8>> = kept.iter().map(|p| std::fs::read(p).unwrap()).collect();
     assert!(after == before);
+    assert!(files(&base.join("home")).is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn analyze_derives_a_style_from_a_composed_score_that_composes_again() {
+    let base = base("analyze");
+    let off = Path::new("off");
+    line(&compose(&base, off));
+    let source = base.join("chase.pitofx");
+    let derived = base.join("derived.pitofx");
+    let report = line(&pfx(
+        &base,
+        off,
+        &[
+            "compose",
+            "analyze",
+            source.to_str().unwrap(),
+            "--into",
+            derived.to_str().unwrap(),
+            "--name",
+            "derived",
+            "--json",
+        ],
+    ));
+    assert_eq!(report["name"], "derived");
+    assert_eq!(report["doc"], derived.to_str().unwrap());
+    assert_eq!(report["written"]["created"], true);
+    assert_eq!(report["written"]["replaced"], false);
+    assert_eq!(report["origins"], serde_json::json!(["score"]));
+    assert!(report["notes"].as_u64().unwrap() > 0);
+    assert!(report["ms"].as_f64().unwrap() >= 0.0);
+    let again = line(&pfx(
+        &base,
+        off,
+        &[
+            "compose",
+            derived.to_str().unwrap(),
+            "--style",
+            "derived",
+            "--seed",
+            "1",
+            "--seconds",
+            "4",
+            "--json",
+        ],
+    ));
+    assert_eq!(again["style"], "derived");
     assert!(files(&base.join("home")).is_empty());
     let _ = std::fs::remove_dir_all(&base);
 }
