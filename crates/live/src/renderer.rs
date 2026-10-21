@@ -3102,7 +3102,7 @@ impl Renderer {
     }
 
     pub fn set_frame_stats(&mut self, stats: FrameStats) {
-        self.stats = stats;
+        self.stats = stats.joined();
     }
 
     fn begin_frame(&mut self, kind: FrameKind) {
@@ -4513,7 +4513,8 @@ impl Renderer {
         self.stats.span(Span::Queue, queued);
         self.text.recycle();
         let (width, height) = self.size();
-        self.stats.submitted(number, [width, height]);
+        self.stats
+            .submitted_as(number, [width, height], slot.is_some());
         if std::mem::take(&mut self.resolution_frame)
             && let Some(resolution) = self.resolution.as_mut()
         {

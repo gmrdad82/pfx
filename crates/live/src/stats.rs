@@ -243,6 +243,14 @@ struct Resolved {
     count: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Submission {
+    submitter: u64,
+    frame: u64,
+    tick: u64,
+    timed: bool,
+}
+
 fn rank(kind: FrameKind) -> u8 {
     match kind {
         FrameKind::Idle => 0,
@@ -271,9 +279,10 @@ struct State {
     last_submit: Option<Instant>,
     pending: Option<Line>,
     frames: u64,
-    ticks: VecDeque<(u64, u64)>,
+    ticks: VecDeque<Submission>,
     gpu: Option<Resolved>,
     gpu_reported: bool,
+    superseded: Option<Resolved>,
     hud_start: Option<Instant>,
     keep: usize,
     recent: VecDeque<Sample>,
@@ -282,21 +291,52 @@ struct State {
 
 impl State {
     fn submissions(&self, tick: u64) -> usize {
-        self.ticks.iter().filter(|(_, kept)| *kept == tick).count()
+        self.ticks
+            .iter()
+            .filter(|kept| kept.tick == tick && kept.timed)
+            .count()
     }
 
     fn forget(&mut self, tick: u64) {
-        self.ticks.retain(|(_, kept)| *kept != tick);
+        self.ticks.retain(|kept| kept.tick != tick);
         if self.gpu.is_some_and(|resolved| resolved.tick == tick) {
             self.gpu = None;
             self.gpu_reported = true;
         }
+        if self
+            .superseded
+            .is_some_and(|resolved| resolved.tick == tick)
+        {
+            self.superseded = None;
+        }
+    }
+
+    fn written(&mut self) -> Option<Resolved> {
+        let held = self.gpu.filter(|resolved| {
+            !self.gpu_reported && resolved.count >= self.submissions(resolved.tick)
+        });
+        if held.is_some() {
+            self.gpu_reported = true;
+        }
+        let written = held.or(self.superseded);
+        self.superseded = None;
+        let resolved = written?;
+        if let Some(sample) = self
+            .recent
+            .iter_mut()
+            .rev()
+            .find(|sample| sample.tick == resolved.tick)
+        {
+            sample.gpu_ms = Some(resolved.ms);
+        }
+        Some(resolved)
     }
 }
 
 struct Shared {
     state: Mutex<State>,
     dropped: AtomicU64,
+    submitters: AtomicU64,
 }
 
 impl Shared {
@@ -305,12 +345,8 @@ impl Shared {
     }
 
     fn emit(&self, state: &mut State, mut line: Line) {
-        if !state.gpu_reported
-            && let Some(resolved) = state.gpu
-            && resolved.count >= state.submissions(resolved.tick)
-        {
+        if let Some(resolved) = state.written() {
             line.gpu = Some((resolved.tick, resolved.ms));
-            state.gpu_reported = true;
         }
         let Some(sender) = &state.sender else {
             return;
@@ -374,6 +410,7 @@ impl Drop for Shared {
 #[derive(Clone, Default)]
 pub struct FrameStats {
     shared: Option<Arc<Shared>>,
+    submitter: u64,
 }
 
 impl std::fmt::Debug for FrameStats {
@@ -454,14 +491,30 @@ impl FrameStats {
                     ticks: VecDeque::new(),
                     gpu: None,
                     gpu_reported: true,
+                    superseded: None,
                     hud_start: None,
                     keep: 0,
                     recent: VecDeque::new(),
                     device: None,
                 }),
                 dropped: AtomicU64::new(0),
+                submitters: AtomicU64::new(1),
             })),
+            submitter: 0,
         }
+    }
+
+    pub fn joined(&self) -> Self {
+        Self {
+            shared: self.shared.clone(),
+            submitter: self.shared.as_ref().map_or(0, |shared| {
+                shared.submitters.fetch_add(1, Ordering::Relaxed)
+            }),
+        }
+    }
+
+    pub fn submitter(&self) -> u64 {
+        self.submitter
     }
 
     pub fn enabled(&self) -> bool {
@@ -671,12 +724,20 @@ impl FrameStats {
     }
 
     pub fn submitted(&self, frame: u64, size: [u32; 2]) {
+        self.submitted_as(frame, size, true);
+    }
+
+    pub fn submitted_as(&self, frame: u64, size: [u32; 2], timed: bool) {
         if self.shared.is_some() {
-            self.submitted_at(frame, size, Instant::now());
+            self.submitted_as_at(frame, size, timed, Instant::now());
         }
     }
 
     pub fn submitted_at(&self, frame: u64, size: [u32; 2], now: Instant) {
+        self.submitted_as_at(frame, size, true, now);
+    }
+
+    pub fn submitted_as_at(&self, frame: u64, size: [u32; 2], timed: bool, now: Instant) {
         let Some(shared) = &self.shared else {
             return;
         };
@@ -685,7 +746,12 @@ impl FrameStats {
             return;
         };
         let tick = state.frames;
-        state.ticks.push_back((frame, tick));
+        state.ticks.push_back(Submission {
+            submitter: self.submitter,
+            frame,
+            tick,
+            timed,
+        });
         while state.ticks.len() > KEPT_FRAMES {
             state.ticks.pop_front();
         }
@@ -816,8 +882,8 @@ impl FrameStats {
         let Some(tick) = state
             .ticks
             .iter()
-            .find(|(submitted, _)| *submitted == frame)
-            .map(|(_, tick)| *tick)
+            .find(|kept| kept.submitter == self.submitter && kept.frame == frame)
+            .map(|kept| kept.tick)
         else {
             return;
         };
@@ -832,7 +898,10 @@ impl FrameStats {
                 }
             }
             Some(held) if held.tick > tick => {}
-            _ => {
+            held => {
+                if let Some(held) = held.filter(|_| !state.gpu_reported) {
+                    state.superseded = Some(held);
+                }
                 state.gpu = Some(Resolved {
                     tick,
                     ms: milliseconds,
@@ -840,14 +909,6 @@ impl FrameStats {
                 });
                 state.gpu_reported = false;
             }
-        }
-        if let Some(sample) = state
-            .recent
-            .iter_mut()
-            .rev()
-            .find(|sample| sample.tick == tick)
-        {
-            sample.gpu_ms = Some(sample.gpu_ms.unwrap_or(0.0) + milliseconds);
         }
     }
 }
@@ -1233,10 +1294,9 @@ mod tests {
         stats.presented_at(size, ms(base, 44));
         stats.gpu(5, 6.0);
         stats.gpu(4, 8.0);
-        let recent = stats.recent();
-        assert_eq!(recent[0].gpu_ms, Some(5.0));
-        assert_eq!(recent[4].gpu_ms, Some(6.0));
         stats.finish();
+        let recent: Vec<_> = stats.recent().iter().map(|sample| sample.gpu_ms).collect();
+        assert_eq!(recent, [Some(5.0), None, None, None, Some(6.0)]);
         let lines = sink.lines();
         assert_eq!(lines.len(), 6);
         let gpu: Vec<_> = lines[..5]
@@ -1260,6 +1320,100 @@ mod tests {
         assert_eq!(sources, ["game", "ui", "ui", "game", "game"]);
         assert!(lines[..5].iter().all(|line| line["kind"] == "full"));
         assert_eq!(lines[0]["submit_ms"], 4.0);
+    }
+
+    fn shown(stats: &FrameStats, base: Instant, at: u64, frames: &[(&FrameStats, u64, bool)]) {
+        stats.present_begin_at(Source::Ui, ms(base, at));
+        for (by, number, timed) in frames {
+            by.begin_at(FrameKind::Full, ms(base, at + 1));
+            by.submitted_as_at(*number, [64, 64], *timed, ms(base, at + 2));
+        }
+        stats.presented_at([64, 64], ms(base, at + 3));
+    }
+
+    fn written_gpu(sink: &Sink, stats: &FrameStats) -> Vec<(Option<u64>, Option<f64>)> {
+        let lines = sink.lines();
+        let (_, frames) = lines.split_last().unwrap();
+        let written: Vec<_> = frames
+            .iter()
+            .map(|line| (line["gpu_tick"].as_u64(), line["gpu_ms"].as_f64()))
+            .collect();
+        let recent = stats.recent();
+        for sample in &recent {
+            let line = written
+                .iter()
+                .find(|(tick, _)| *tick == Some(sample.tick))
+                .and_then(|(_, ms)| *ms);
+            assert_eq!(
+                sample.gpu_ms, line,
+                "tick {}: the HUD and the file",
+                sample.tick
+            );
+        }
+        written
+    }
+
+    #[test]
+    fn two_renderers_on_one_handle_count_their_own_frame_numbers() {
+        let sink = Sink::default();
+        let stats = FrameStats::to_writer(Box::new(sink.clone()), 16);
+        stats.keep_recent(8);
+        let a = stats.joined();
+        let b = stats.joined();
+        assert_eq!(stats.submitter(), 0);
+        assert!(a.submitter() != 0 && b.submitter() != 0 && a.submitter() != b.submitter());
+        assert_eq!(FrameStats::off().joined().submitter(), 0);
+        let base = Instant::now();
+        shown(&stats, base, 0, &[(&a, 0, true)]);
+        shown(&stats, base, 10, &[(&a, 1, true)]);
+        shown(&stats, base, 20, &[(&b, 0, true), (&a, 2, true)]);
+        a.gpu(0, 1.0);
+        shown(&stats, base, 30, &[]);
+        b.gpu(0, 4.0);
+        a.gpu(2, 0.5);
+        shown(&stats, base, 40, &[]);
+        stats.finish();
+        assert_eq!(
+            written_gpu(&sink, &stats),
+            [
+                (None, None),
+                (None, None),
+                (Some(0), Some(1.0)),
+                (Some(2), Some(4.5)),
+                (None, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_renderer_frame_that_times_nothing_or_never_resolves_holds_no_gpu_time_back() {
+        let sink = Sink::default();
+        let stats = FrameStats::to_writer(Box::new(sink.clone()), 16);
+        stats.keep_recent(8);
+        let base = Instant::now();
+        shown(&stats, base, 0, &[(&stats, 0, true), (&stats, 1, false)]);
+        shown(&stats, base, 10, &[(&stats, 2, true), (&stats, 3, true)]);
+        stats.gpu(0, 2.0);
+        shown(&stats, base, 20, &[]);
+        stats.gpu(2, 1.0);
+        shown(&stats, base, 30, &[(&stats, 4, true), (&stats, 5, true)]);
+        stats.gpu(4, 3.0);
+        stats.gpu(3, 9.0);
+        shown(&stats, base, 40, &[]);
+        stats.gpu(5, 0.5);
+        stats.finish();
+        assert_eq!(
+            written_gpu(&sink, &stats),
+            [
+                (None, None),
+                (Some(0), Some(2.0)),
+                (None, None),
+                (Some(1), Some(1.0)),
+                (Some(3), Some(3.5)),
+            ]
+        );
+        let recent: Vec<_> = stats.recent().iter().map(|sample| sample.gpu_ms).collect();
+        assert_eq!(recent, [Some(2.0), Some(1.0), None, Some(3.5), None]);
     }
 
     #[test]
@@ -1411,9 +1565,12 @@ mod tests {
         assert_eq!(recent[0].interval_ms, Some(16.0));
         assert!(recent[0].gpu_ms.is_none());
         stats.gpu(3, 4.25);
+        assert!(stats.recent().iter().all(|sample| sample.gpu_ms.is_none()));
+        frame(&stats, base, 5, 84, FrameKind::Full);
         let recent = stats.recent();
-        assert_eq!(recent[1].gpu_ms, Some(4.25));
-        assert_eq!(recent[1].submit_ms, 2.0);
+        assert_eq!(recent[0].tick, 3);
+        assert_eq!(recent[0].gpu_ms, Some(4.25));
+        assert_eq!(recent[0].submit_ms, 2.0);
         let early = FrameStats::measure();
         early.keep_recent(4);
         frame(&early, base, 0, 0, FrameKind::Full);
@@ -1423,13 +1580,14 @@ mod tests {
         early.hud_begin_at(ms(base, 20));
         early.hud_end_at(ms(base, 23));
         early.gpu(0, 1.5);
+        frame(&early, base, 2, 33, FrameKind::Full);
         let recent = early.recent();
         assert_eq!(recent[0].gpu_ms, Some(1.5));
         assert!(recent[0].hud_ms.is_none());
         assert_eq!(recent[1].sim_ms, Some(2.0));
         assert_eq!(recent[1].hud_ms, Some(3.0));
         stats.finish();
-        assert_eq!(stats.frames(), 5);
+        assert_eq!(stats.frames(), 6);
     }
 
     #[test]

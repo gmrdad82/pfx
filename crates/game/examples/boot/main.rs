@@ -18,7 +18,8 @@ const SIZES: [f32; 2] = [96.0, 32.0];
 
 struct Boot {
     seconds: f64,
-    warmed: Vec<Option<[u32; 2]>>,
+    warmed: Vec<(u32, bool, Option<[u32; 2]>)>,
+    first: Option<[u32; 2]>,
     loader: bool,
     loading: Option<JoinHandle<()>>,
 }
@@ -33,7 +34,7 @@ impl Game for Boot {
     }
 
     fn warm(&mut self, warm: &mut Warm<'_>) -> Result<Warming, GameError> {
-        self.warmed.push(warm.size());
+        self.warmed.push((warm.pass(), warm.again(), warm.size()));
         if self.loader
             && self.loading.is_none()
             && let Some(renderer) = warm.renderer()
@@ -54,10 +55,11 @@ impl Game for Boot {
         let [width, height] = frame.layout;
         let centre = [width * 0.5, height * 0.5];
         let time = world.time() as f32;
+        self.first.get_or_insert(frame.window);
         let mut ui = Ui::new();
         ui.clear(Srgba::hex(0x101820));
         if world.time() < IDENT {
-            let alpha = (time / 0.5).min(1.0);
+            let alpha = 1.0 - (1.0 - (time / 0.5).min(1.0)).powi(3);
             ui.label(
                 Label::new("IDENT", FAMILY, SIZES[0], centre)
                     .anchor(Anchor::Center)
@@ -97,11 +99,15 @@ impl Game for Boot {
         if let Some(loading) = self.loading.take() {
             let _ = loading.join();
         }
-        for (pass, size) in self.warmed.iter().enumerate() {
+        for (pass, again, size) in &self.warmed {
+            let again = if *again { " again" } else { "" };
             match size {
-                Some([width, height]) => eprintln!("warm pass {pass}: {width}x{height}"),
-                None => eprintln!("warm pass {pass}: no size"),
+                Some([width, height]) => eprintln!("warm pass {pass}{again}: {width}x{height}"),
+                None => eprintln!("warm pass {pass}{again}: no size"),
             }
+        }
+        if let Some([width, height]) = self.first {
+            eprintln!("first frame: {width}x{height}");
         }
     }
 }
@@ -121,6 +127,7 @@ fn main() -> ExitCode {
     let boot = Boot {
         seconds,
         warmed: Vec::new(),
+        first: None,
         loader: std::env::var_os("BOOT_RENDERER").is_some_and(|value| value == "1"),
         loading: None,
     };

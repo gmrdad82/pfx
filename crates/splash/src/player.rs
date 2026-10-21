@@ -23,6 +23,7 @@ pub struct Player {
     shown: Option<Shown>,
     composing: Option<([u32; 2], Composing)>,
     pass: Option<FlatPass>,
+    warmed: Option<[u32; 2]>,
     timeline: Timeline,
     start_ns: Option<u64>,
     curve: ShadowCurve,
@@ -51,6 +52,7 @@ impl Player {
             shown: None,
             composing: Some((size, compose(settings, size))),
             pass: None,
+            warmed: None,
             timeline: Timeline,
             start_ns: None,
             curve: ShadowCurve::none(),
@@ -60,6 +62,10 @@ impl Player {
 
     pub fn ready(&self) -> bool {
         self.shown.is_some()
+    }
+
+    pub fn warmed(&self) -> Option<[u32; 2]> {
+        self.warmed
     }
 
     pub fn phase(&mut self, now_ns: u64, loaded: bool) -> Phase {
@@ -128,6 +134,9 @@ impl Player {
         if size[0] == 0 || size[1] == 0 {
             return Ok(());
         }
+        if self.composing.as_ref().is_some_and(|(at, _)| *at != size) {
+            self.composing = None;
+        }
         if let Some((_, job)) = self.composing.take() {
             self.show(gpu, job)?;
         }
@@ -154,7 +163,9 @@ impl Player {
             at: LENGTH * 0.5,
             opacity: 1.0,
         };
-        self.draw(gpu, &view, format, size, phase)
+        self.draw(gpu, &view, format, size, phase)?;
+        self.warmed = Some(size);
+        Ok(())
     }
 
     pub fn draw(
@@ -260,6 +271,7 @@ mod tests {
             shown: None,
             composing: None,
             pass: None,
+            warmed: None,
             timeline: Timeline,
             start_ns: Some(0),
             curve: ShadowCurve::none(),
@@ -440,9 +452,11 @@ mod tests {
         let mut player = always([320, 180]);
         player.warm(&gpu, FORMAT, [0, 180]).unwrap();
         assert!(player.pass.is_none());
+        assert_eq!(player.warmed(), None);
         assert!(!player.ready());
         player.warm(&gpu, FORMAT, [640, 360]).unwrap();
         assert!(player.ready());
+        assert_eq!(player.warmed(), Some([640, 360]));
         assert_eq!(
             player.shown.as_ref().unwrap().composition.size(),
             [640, 360]
@@ -458,5 +472,41 @@ mod tests {
             .draw(&gpu, &target.view, FORMAT, [640, 360], phase)
             .unwrap();
         assert_eq!(player.pass.as_ref().unwrap().pipelines_made(), made);
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn warming_again_at_the_size_the_first_frame_draws_leaves_nothing_for_the_timeline() {
+        let gpu = gpu();
+        let small = [320, 180];
+        let big = [640, 360];
+        let mut player = always(small);
+        player.warm(&gpu, FORMAT, small).unwrap();
+        assert_eq!(player.warmed(), Some(small));
+        player.warm(&gpu, FORMAT, big).unwrap();
+        assert_eq!(player.warmed(), Some(big));
+        assert_eq!(player.shown.as_ref().unwrap().composition.size(), big);
+        assert!(player.composing.is_none());
+        let made = player.pass.as_ref().unwrap().pipelines_made();
+        let target = gpu.offscreen(big[0], big[1], FORMAT).unwrap();
+        for step in 0..20u64 {
+            let phase = player.phase(step * 100_000_000, true);
+            player.settle(&gpu, big).unwrap();
+            assert!(
+                player.composing.is_none(),
+                "the splash composed again at {phase:?}"
+            );
+            player.draw(&gpu, &target.view, FORMAT, big, phase).unwrap();
+            assert_eq!(
+                player.pass.as_ref().unwrap().pipelines_made(),
+                made,
+                "the splash made a pipeline at {phase:?}"
+            );
+        }
+        let mut stale = always(small);
+        stale.warm(&gpu, FORMAT, big).unwrap();
+        assert_eq!(stale.shown.as_ref().unwrap().composition.size(), big);
+        assert!(stale.composing.is_none());
+        assert_eq!(stale.warmed(), Some(big));
     }
 }

@@ -44,9 +44,7 @@ struct Live {
     driver: Driver,
     sound: Option<Sound>,
     minimized: bool,
-    warming: Option<Warmup>,
-    #[cfg(feature = "splash")]
-    rewarm: Rewarm,
+    boot: Boot,
     pointer: Pointer,
     locked: bool,
     at: [f32; 2],
@@ -60,6 +58,8 @@ struct Live {
     refollow: bool,
     #[cfg(feature = "splash")]
     splash: Option<Player>,
+    #[cfg(feature = "splash")]
+    splash_shown: bool,
     pacing: Pacing,
     dirty: bool,
     asked: bool,
@@ -178,14 +178,12 @@ pub(crate) fn rest_until(next_tick_ns: Option<u64>, at: u64, tick_dt: f64) -> u6
     next_tick_ns.unwrap_or_else(|| at.saturating_add((tick_dt * 1e9) as u64))
 }
 
-#[cfg(feature = "splash")]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct Rewarm {
     size: Option<Size>,
     last: Option<Warmup>,
 }
 
-#[cfg(feature = "splash")]
 impl Rewarm {
     pub(crate) fn passed(&mut self, warmup: &Warmup, window: Size) {
         if warmup.passes() == 1 {
@@ -198,6 +196,54 @@ impl Rewarm {
         let size = self.size?;
         (size != window).then(|| self.last.map(|last| last.again()))?
     }
+}
+
+#[cfg_attr(not(feature = "splash"), allow(dead_code))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SplashState {
+    Off,
+    First,
+    Shown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Boot {
+    warming: Option<Warmup>,
+    rewarm: Rewarm,
+}
+
+impl Boot {
+    pub(crate) fn new(budget: f64) -> Self {
+        Self {
+            warming: Some(Warmup::new(budget)),
+            rewarm: Rewarm::default(),
+        }
+    }
+
+    pub(crate) fn warming(&self) -> bool {
+        self.warming.is_some()
+    }
+
+    pub(crate) fn next(&mut self, window: Size, splash: SplashState) -> Option<Warmup> {
+        let restarts = splash != SplashState::Off || self.warming.is_some();
+        if restarts && let Some(again) = self.rewarm.restart(window) {
+            self.warming = Some(again);
+        }
+        if splash == SplashState::First {
+            return None;
+        }
+        self.warming
+    }
+
+    pub(crate) fn passed(&mut self, warmup: Warmup, window: Size, done: bool) {
+        self.rewarm.passed(&warmup, window);
+        self.warming = (!done).then_some(warmup);
+    }
+}
+
+#[cfg(feature = "splash")]
+pub(crate) fn warms_splash(shown: bool, warmed: Option<[u32; 2]>, size: [u32; 2]) -> bool {
+    !shown && size[0] > 0 && size[1] > 0 && warmed != Some(size)
 }
 
 fn size_of(window: &Window) -> Size {
@@ -291,7 +337,7 @@ fn open(
     );
     apply_display(&window, &display).map_err(|error| format!("the display mode: {error}"))?;
     #[cfg(feature = "splash")]
-    let mut splash = {
+    let splash = {
         let size = size_of(&window);
         Player::start(
             &config.splash,
@@ -321,18 +367,6 @@ fn open(
     let grounded = present_ground(&gpu, &target, &window, ground);
     let size = size_of(&window);
     let painter = Painter::live(gpu, scene, &config, size)?;
-    #[cfg(feature = "splash")]
-    {
-        let surface = &target.config;
-        let gpu = painter.renderer().gpu();
-        let warmed = splash
-            .as_mut()
-            .map(|player| player.warm(gpu, surface.format, [surface.width, surface.height]));
-        if let Some(Err(error)) = warmed {
-            eprintln!("the splash is left out: {error}");
-            splash = None;
-        }
-    }
     let sound = sound(&config);
     let audio = sound.as_ref().map_or((48_000, 2), |sound| {
         (sound.sender.rate(), sound.sender.channels())
@@ -379,9 +413,7 @@ fn open(
         driver,
         sound,
         minimized: false,
-        warming: Some(Warmup::new(config.warm_budget)),
-        #[cfg(feature = "splash")]
-        rewarm: Rewarm::default(),
+        boot: Boot::new(config.warm_budget),
         pointer,
         locked: false,
         at: [0.0; 2],
@@ -395,6 +427,8 @@ fn open(
         refollow: false,
         #[cfg(feature = "splash")]
         splash,
+        #[cfg(feature = "splash")]
+        splash_shown: false,
         pacing: Pacing::from_env(GUI_BUDGET_NS),
         dirty: false,
         asked: false,
@@ -418,8 +452,9 @@ impl Live {
         }
     }
 
-    fn warm(&mut self, now_ns: u64) -> Result<(), String> {
-        let Some(warmup) = &mut self.warming else {
+    fn warm(&mut self, now_ns: u64, splash: SplashState) -> Result<(), String> {
+        let window = self.driver.window();
+        let Some(mut warmup) = self.boot.next(window, splash) else {
             return Ok(());
         };
         if !self.grounded {
@@ -427,18 +462,52 @@ impl Live {
             self.grounded = present_ground(gpu, &self.target, &self.window, self.ground);
         }
         let format = self.target.config.format;
-        #[cfg(feature = "splash")]
-        let window = self.driver.window();
         let done = warmup.pass(&mut self.painter, &mut self.driver, format, now_ns)?;
-        #[cfg(feature = "splash")]
-        self.rewarm.passed(warmup, window);
-        if done {
-            self.warming = None;
-        }
+        self.boot.passed(warmup, window, done);
         Ok(())
     }
 
+    fn take_resize(&mut self) {
+        let Some(size) = self.resize.take() else {
+            return;
+        };
+        let max = self
+            .painter
+            .renderer()
+            .gpu()
+            .device
+            .limits()
+            .max_texture_dimension_2d;
+        let (width, height) = pfx_gpu::surface_size(size.width, size.height, max);
+        let config = &mut self.target.config;
+        if (config.width, config.height) != (width, height) {
+            config.width = width;
+            config.height = height;
+            self.stale = true;
+        }
+    }
+
+    #[cfg(feature = "splash")]
+    fn ready_splash(&mut self) {
+        let config = &self.target.config;
+        let (format, size) = (config.format, [config.width, config.height]);
+        let Some(splash) = &mut self.splash else {
+            return;
+        };
+        if !warms_splash(self.splash_shown, splash.warmed(), size) {
+            return;
+        }
+        let gpu = self.painter.renderer().gpu();
+        if let Err(error) = splash.warm(gpu, format, size) {
+            eprintln!("the splash is left out: {error}");
+            self.splash = None;
+        }
+    }
+
     fn frame(&mut self, now_ns: u64, exposed: bool) -> Result<bool, String> {
+        self.take_resize();
+        #[cfg(feature = "splash")]
+        self.ready_splash();
         #[cfg(feature = "splash")]
         let splash = self.splash.is_some();
         #[cfg(not(feature = "splash"))]
@@ -459,22 +528,6 @@ impl Live {
 
     fn draw(&mut self, now_ns: u64, exposed: bool) -> Result<bool, String> {
         self.rested = false;
-        if let Some(size) = self.resize.take() {
-            let max = self
-                .painter
-                .renderer()
-                .gpu()
-                .device
-                .limits()
-                .max_texture_dimension_2d;
-            let (width, height) = pfx_gpu::surface_size(size.width, size.height, max);
-            let config = &mut self.target.config;
-            if (config.width, config.height) != (width, height) {
-                config.width = width;
-                config.height = height;
-                self.stale = true;
-            }
-        }
         let ready = if std::mem::take(&mut self.stale) || !self.target.configured() {
             self.dirty = true;
             self.configure(now_ns)?
@@ -489,9 +542,9 @@ impl Live {
                 Ok(false)
             };
         }
-        if self.warming.is_some() {
+        if self.boot.warming() {
             return if ready {
-                self.warm(now_ns).map(|()| false)
+                self.warm(now_ns, SplashState::Off).map(|()| false)
             } else {
                 Ok(false)
             };
@@ -629,14 +682,14 @@ impl Live {
 
     #[cfg(feature = "splash")]
     fn splash_frame(&mut self, now_ns: u64) -> Result<bool, String> {
-        if let Some(again) = self.rewarm.restart(self.driver.window()) {
-            self.warming = Some(again);
-        }
-        if self.warming.is_some() {
-            self.grounded = true;
-            self.warm(now_ns)?;
-        }
-        let loaded = self.warming.is_none();
+        let state = if self.splash_shown {
+            SplashState::Shown
+        } else {
+            SplashState::First
+        };
+        self.grounded = true;
+        self.warm(now_ns, state)?;
+        let loaded = !self.boot.warming();
         let Some(splash) = &mut self.splash else {
             return Ok(false);
         };
@@ -695,6 +748,7 @@ impl Live {
         }
         self.window.pre_present_notify();
         gpu.queue.present(texture);
+        self.splash_shown = true;
         Ok(true)
     }
 
@@ -800,14 +854,7 @@ impl ApplicationHandler for App {
             scene.as_ref(),
             self.schemes.take(),
         ) {
-            Ok(mut live) => {
-                if let Err(error) = live.warm(window::Clock::now_ns(&self.clock)) {
-                    self.error = Some(error);
-                    event_loop.exit();
-                    return;
-                }
-                self.live = Some(live);
-            }
+            Ok(live) => self.live = Some(live),
             Err(error) => {
                 self.error = Some(error);
                 event_loop.exit();
@@ -909,9 +956,9 @@ impl ApplicationHandler for App {
             return;
         };
         #[cfg(feature = "splash")]
-        let starting = live.warming.is_some() || live.splash.is_some();
+        let starting = live.boot.warming() || live.splash.is_some();
         #[cfg(not(feature = "splash"))]
-        let starting = live.warming.is_some();
+        let starting = live.boot.warming();
         if starting {
             live.window.request_redraw();
             live.asked = true;

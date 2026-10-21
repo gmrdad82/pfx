@@ -670,7 +670,6 @@ fn a_rest_after_a_skipped_frame_ends_at_the_next_tick_or_a_whole_tick_later_with
     assert_eq!(rest_until(None, u64::MAX - 1, 1.0 / 60.0), u64::MAX);
 }
 
-#[cfg(feature = "splash")]
 #[test]
 fn a_size_change_under_the_splash_warms_again_from_pass_zero_within_the_first_budget() {
     use crate::host::Rewarm;
@@ -708,4 +707,160 @@ fn a_size_change_under_the_splash_warms_again_from_pass_zero_within_the_first_bu
     assert_eq!(late.step(1_510 * ms), None);
     assert_eq!(rewarm.restart(small), None);
     assert_eq!(rewarm.restart(large).map(|warmup| warmup.passes()), Some(0));
+}
+
+fn booted(
+    boot: &mut crate::host::Boot,
+    window: Size,
+    splash: crate::host::SplashState,
+    now_ns: u64,
+    needed: u32,
+    warmed: &mut Vec<(u32, bool, Size)>,
+) {
+    let Some(mut warmup) = boot.next(window, splash) else {
+        return;
+    };
+    let done = match warmup.step(now_ns) {
+        Some((pass, _)) => {
+            warmed.push((pass, warmup.is_again(), window));
+            pass + 1 >= needed
+        }
+        None => true,
+    };
+    boot.passed(warmup, window, done);
+}
+
+const WINDOWED: Size = Size {
+    width: 1280,
+    height: 720,
+};
+const FULL: Size = Size {
+    width: 2560,
+    height: 1440,
+};
+const MS: u64 = 1_000_000;
+
+#[test]
+fn a_window_that_goes_fullscreen_before_its_first_frame_warms_once_at_its_full_size() {
+    use crate::host::{Boot, SplashState};
+    let mut warmed = Vec::new();
+    let mut boot = Boot::new(1.0);
+    booted(&mut boot, FULL, SplashState::First, 0, 2, &mut warmed);
+    assert!(warmed.is_empty(), "the splash's first frame warms nothing");
+    assert!(boot.warming());
+    for frame in 1..6 {
+        booted(
+            &mut boot,
+            FULL,
+            SplashState::Shown,
+            frame * 8 * MS,
+            2,
+            &mut warmed,
+        );
+    }
+    assert!(!boot.warming());
+    assert_eq!(warmed, [(0, false, FULL), (1, false, FULL)]);
+    booted(&mut boot, FULL, SplashState::Off, 900 * MS, 2, &mut warmed);
+    assert_eq!(
+        warmed.len(),
+        2,
+        "the first frame after the splash warms nothing"
+    );
+    let mut bare = Boot::new(1.0);
+    let mut alone = Vec::new();
+    booted(&mut bare, FULL, SplashState::Off, 0, 1, &mut alone);
+    assert_eq!(alone, [(0, false, FULL)]);
+    assert!(!bare.warming());
+    booted(&mut bare, WINDOWED, SplashState::Off, 8 * MS, 1, &mut alone);
+    assert_eq!(
+        alone.len(),
+        1,
+        "a resize after the warm-up is a plain resize"
+    );
+}
+
+#[test]
+fn a_size_change_after_pass_zero_warms_again_under_the_splash_and_while_warming_without_it() {
+    use crate::host::{Boot, SplashState};
+    let mut warmed = Vec::new();
+    let mut boot = Boot::new(1.0);
+    booted(&mut boot, WINDOWED, SplashState::First, 0, 2, &mut warmed);
+    booted(
+        &mut boot,
+        WINDOWED,
+        SplashState::Shown,
+        8 * MS,
+        2,
+        &mut warmed,
+    );
+    booted(
+        &mut boot,
+        WINDOWED,
+        SplashState::Shown,
+        16 * MS,
+        2,
+        &mut warmed,
+    );
+    assert!(!boot.warming());
+    booted(&mut boot, FULL, SplashState::Shown, 24 * MS, 2, &mut warmed);
+    booted(&mut boot, FULL, SplashState::Shown, 32 * MS, 2, &mut warmed);
+    booted(&mut boot, FULL, SplashState::Shown, 40 * MS, 2, &mut warmed);
+    assert_eq!(
+        warmed,
+        [
+            (0, false, WINDOWED),
+            (1, false, WINDOWED),
+            (0, true, FULL),
+            (1, true, FULL),
+        ]
+    );
+    assert!(!boot.warming());
+    let mut bare = Boot::new(1.0);
+    let mut alone = Vec::new();
+    booted(&mut bare, WINDOWED, SplashState::Off, 0, 3, &mut alone);
+    booted(&mut bare, FULL, SplashState::Off, 8 * MS, 3, &mut alone);
+    booted(&mut bare, FULL, SplashState::Off, 16 * MS, 3, &mut alone);
+    booted(&mut bare, FULL, SplashState::Off, 24 * MS, 3, &mut alone);
+    assert_eq!(
+        alone,
+        [
+            (0, false, WINDOWED),
+            (0, true, FULL),
+            (1, true, FULL),
+            (2, true, FULL),
+        ]
+    );
+    assert!(!bare.warming());
+    let mut late = Boot::new(0.5);
+    let mut spent = Vec::new();
+    booted(&mut late, WINDOWED, SplashState::Shown, 0, 3, &mut spent);
+    booted(
+        &mut late,
+        WINDOWED,
+        SplashState::Shown,
+        100 * MS,
+        3,
+        &mut spent,
+    );
+    booted(&mut late, FULL, SplashState::Shown, 600 * MS, 3, &mut spent);
+    booted(&mut late, FULL, SplashState::Shown, 608 * MS, 3, &mut spent);
+    assert_eq!(
+        spent,
+        [(0, false, WINDOWED), (1, false, WINDOWED), (0, true, FULL)],
+        "a warm-up run again after the budget runs its pass 0 alone"
+    );
+    assert!(!late.warming());
+}
+
+#[cfg(feature = "splash")]
+#[test]
+fn the_splash_warms_at_the_size_its_first_frame_draws_and_never_once_it_shows() {
+    use crate::host::warms_splash;
+    assert!(warms_splash(false, None, [2560, 1440]));
+    assert!(warms_splash(false, Some([1280, 720]), [2560, 1440]));
+    assert!(!warms_splash(false, Some([2560, 1440]), [2560, 1440]));
+    assert!(!warms_splash(true, Some([1280, 720]), [2560, 1440]));
+    assert!(!warms_splash(true, None, [2560, 1440]));
+    assert!(!warms_splash(false, None, [0, 1440]));
+    assert!(!warms_splash(false, Some([1280, 720]), [2560, 0]));
 }
