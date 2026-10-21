@@ -108,7 +108,7 @@ impl Counts {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Counts, String> {
-        if bytes.len() % 4 != 0 {
+        if !bytes.len().is_multiple_of(4) {
             return Err(format!(
                 "the trace counters' {} bytes are not whole words",
                 bytes.len()
