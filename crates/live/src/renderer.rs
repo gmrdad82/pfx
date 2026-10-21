@@ -1627,6 +1627,10 @@ impl Renderer {
         self.history.invalidate();
     }
 
+    pub fn set_crowds(&mut self, crowds: &[crate::crowd::Crowd<'_>]) -> Result<(), String> {
+        self.frame.set_crowds(crowds)
+    }
+
     pub fn frame(&self) -> &Frame {
         &self.frame
     }
@@ -1641,6 +1645,10 @@ impl Renderer {
 
     pub fn cull_stats(&self) -> &crate::cull::CullStats {
         self.frame.cull_stats()
+    }
+
+    pub fn packed_records(&self) -> usize {
+        self.frame.packed_records()
     }
 
     pub fn last_jitter(&self) -> [f32; 2] {

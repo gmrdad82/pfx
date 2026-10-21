@@ -9,6 +9,7 @@ mod cards;
 mod census;
 mod cube;
 mod eye;
+pub mod keyed;
 mod light;
 mod maps;
 mod memory;
@@ -24,6 +25,7 @@ pub use cards::{
     premultiplied,
 };
 pub use census::{admit, census, census_of};
+pub use keyed::Keyed;
 pub use light::{Lighting, Lit, Shine};
 pub use maps::Set as MapSet;
 pub use memory::Memory;
@@ -105,29 +107,7 @@ pub fn poses(
     fps: pfx_build::Rate,
     time: f64,
 ) -> std::collections::BTreeMap<String, Matrix> {
-    let mut posed = std::collections::BTreeMap::new();
-    for track in built.tracks.iter().filter(|track| track.camera.is_none()) {
-        if track.keys.is_empty() {
-            continue;
-        }
-        let world = pfx_build::matrix(&pfx_build::sample(&track.keys, fps, time));
-        for part in built
-            .parts
-            .iter()
-            .filter(|part| part.node.name == track.node)
-        {
-            let model = if part.node.keep_transform {
-                world * part.node.transform.inverse()
-            } else {
-                world
-            };
-            let model = model
-                .to_cols_array_2d()
-                .map(|column| column.map(|v| v as f32));
-            posed.insert(part.node.name.clone(), model);
-        }
-    }
-    posed
+    Keyed::of(built, fps).posed(built, time)
 }
 
 pub fn posed(recipe: &Recipe, built: &Built, time: f64) -> Result<(Recipe, Built), Error> {
@@ -448,6 +428,14 @@ impl Reel {
 
     pub fn set_poses(&mut self, posed: std::collections::BTreeMap<String, Matrix>) -> bool {
         self.stage.set_poses(posed)
+    }
+
+    pub fn bind_keys(&mut self, names: &[String]) {
+        self.stage.bind_keys(names)
+    }
+
+    pub fn set_keyed(&mut self, models: &[Matrix]) {
+        self.stage.set_keyed(models)
     }
 
     pub fn reshape(&mut self, parts: &[Part]) -> Result<usize, Error> {

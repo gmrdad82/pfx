@@ -114,6 +114,8 @@ pub struct Prepared {
     maps: Option<maps::Set>,
     shadows: Shadows,
     eye: Option<[f32; 3]>,
+    crowd_of: Vec<Option<usize>>,
+    crowds: Vec<parts::Crowd>,
 }
 
 fn shadows_of(recipe: &Recipe) -> Shadows {
@@ -144,7 +146,35 @@ impl Prepared {
     }
 
     pub fn kept(recipe: &Recipe, parts: &[Part], memory: &Memory) -> Result<Prepared, Error> {
-        let dressed = cards::dress(recipe, parts::pieces(parts), memory)?;
+        let mut baked = refused_crowds(recipe, parts)?;
+        loop {
+            let prepared = Prepared::split(recipe, parts, memory, &baked)?;
+            let refused: BTreeSet<(u32, u32)> = prepared
+                .crowd_of
+                .iter()
+                .enumerate()
+                .filter_map(|(at, crowd)| {
+                    let crowd = (*crowd)?;
+                    let worn = &prepared.dress[at];
+                    (prepared.glass[at] || worn.card.is_some() || worn.surface.clipped())
+                        .then(|| prepared.crowds[crowd].key)
+                })
+                .collect();
+            if refused.is_empty() {
+                return Ok(prepared);
+            }
+            baked.extend(refused);
+        }
+    }
+
+    fn split(
+        recipe: &Recipe,
+        parts: &[Part],
+        memory: &Memory,
+        baked: &BTreeSet<(u32, u32)>,
+    ) -> Result<Prepared, Error> {
+        let split = parts::split(parts, baked);
+        let dressed = cards::dress(recipe, split.pieces, memory)?;
         let pieces = dressed.pieces;
         let Palette {
             names,
@@ -169,11 +199,12 @@ impl Prepared {
             .collect();
         let lighting = Lighting::kept(recipe, memory)?;
         let text = Laid::of(recipe, parts)?;
-        let bounds = match parts::bounds(&pieces, false) {
+        let bounds = match parts::placed_bounds(&pieces, &split.crowd_of, &split.crowds, false) {
             Some(bounds) => text::widen(bounds, text.bounds()),
             None => text.bounds().unwrap_or(EMPTY),
         };
-        let receiver = parts::bounds(&pieces, true).unwrap_or(bounds);
+        let receiver =
+            parts::placed_bounds(&pieces, &split.crowd_of, &split.crowds, true).unwrap_or(bounds);
         Ok(Prepared {
             marks: marks(&pieces),
             pieces,
@@ -194,6 +225,8 @@ impl Prepared {
             maps,
             shadows: shadows_of(recipe),
             eye: crate::cube::scene_eye(recipe),
+            crowd_of: split.crowd_of,
+            crowds: split.crowds,
         })
     }
 
@@ -211,9 +244,54 @@ impl Prepared {
     }
 }
 
+fn refused_crowds(recipe: &Recipe, parts: &[Part]) -> Result<BTreeSet<(u32, u32)>, Error> {
+    let mut refused = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    for part in parts.iter().filter(|part| !part.hidden) {
+        let Some(copy) = part.scattered else {
+            continue;
+        };
+        let key = (copy.scatter, copy.piece);
+        if !seen.insert(key) {
+            continue;
+        }
+        let card = recipe
+            .objects
+            .get(part.object)
+            .is_some_and(|object| matches!(object.kind, pfx_recipe::Kind::Card { .. }));
+        let clipped = pfx_live::frame::InstanceSurface {
+            clip: cards::clips(recipe, part.object),
+            ..Default::default()
+        }
+        .clipped();
+        let mut glass = false;
+        let named: Vec<&str> = match part.node.mesh.slots.as_slice() {
+            [] => vec![parts::DEFAULT_MATERIAL],
+            slots => slots.iter().map(|slot| slot.material.as_str()).collect(),
+        };
+        for name in named {
+            if let Some(material) = parts::material(recipe, name)? {
+                glass |= parts::glassy(&material);
+            }
+        }
+        if card || clipped || glass {
+            refused.insert(key);
+        }
+    }
+    Ok(refused)
+}
+
 struct Uploaded {
     mark: Mark,
     handle: MeshHandle,
+}
+
+struct Crowds<'a> {
+    pieces: &'a [Piece],
+    slots: &'a [u32],
+    marks: &'a [Mark],
+    crowd_of: &'a [Option<usize>],
+    crowds: &'a [parts::Crowd],
 }
 
 struct Glassed {
@@ -259,6 +337,14 @@ pub struct Stage {
     swept: BTreeSet<u32>,
     eye: Option<[f32; 3]>,
     cubed: bool,
+    crowd_meshes: Vec<Uploaded>,
+    crowd_at: Vec<usize>,
+    crowd_models: Vec<Vec<Matrix>>,
+    crowd_key: u64,
+    crowd_copies: usize,
+    keyed_names: Vec<String>,
+    keyed: Vec<(usize, usize)>,
+    keyed_glass: Vec<(usize, usize)>,
 }
 
 pub struct Outline<'a> {
@@ -358,6 +444,14 @@ impl Stage {
             swept: BTreeSet::new(),
             eye: None,
             cubed: false,
+            crowd_meshes: Vec::new(),
+            crowd_at: Vec::new(),
+            crowd_models: Vec::new(),
+            crowd_key: 0,
+            crowd_copies: 0,
+            keyed_names: Vec::new(),
+            keyed: Vec::new(),
+            keyed_glass: Vec::new(),
         };
         stage.apply(prepared)?;
         Ok(stage)
@@ -393,14 +487,20 @@ impl Stage {
             maps,
             shadows,
             eye,
+            crowd_of,
+            crowds,
         } = prepared;
-        let opaque = opaque_at(&glass);
+        let opaque: Vec<usize> = opaque_at(&glass)
+            .into_iter()
+            .filter(|&at| crowd_of[at].is_none())
+            .collect();
         let opaque_marks: Vec<Mark> = opaque.iter().map(|&at| marks[at].clone()).collect();
         let plan = plan(self.uploaded.iter().map(|u| &u.mark), &opaque_marks);
         let mut change = Change {
             sky: self.sky.as_ref() != Some(&sky),
             ..Change::default()
         };
+        let crowd_key = self.crowd_key;
         let glassed = glaze(
             &mut self.renderer,
             &pieces,
@@ -458,6 +558,17 @@ impl Stage {
                 .map_err(|e| Error(format!("object {}: {e}", self.uploaded[at].mark.key.name)))?;
             change.released += 1;
         }
+        self.stage_crowds(
+            Crowds {
+                pieces: &pieces,
+                slots: &slots,
+                marks: &marks,
+                crowd_of: &crowd_of,
+                crowds: &crowds,
+            },
+            &mut change,
+        )?;
+        let crowded = self.crowd_key != crowd_key;
         let dress: Vec<Dress> = opaque.iter().map(|&index| dress[index]).collect();
         self.instances = instances(&pieces, &slots, &dress, &uploaded, &opaque);
         self.restore_models(&uploaded);
@@ -467,9 +578,13 @@ impl Stage {
         self.dress = dress;
         self.faced.clear();
         self.uploaded = uploaded;
+        if !self.keyed_names.is_empty() {
+            self.rebind();
+        }
         let recapture = !self.cubed
             || change.added + change.replaced + change.released > 0
             || change.sky
+            || crowded
             || self.eye != eye
             || self.lighting.lights != lighting.lights
             || self.materials != materials;
@@ -506,7 +621,7 @@ impl Stage {
         if recapture {
             self.eye = eye;
             self.cubed = true;
-            self.scene_reflections(&pieces, &slots)?;
+            self.scene_reflections(&pieces, &slots, &crowd_of, &crowds)?;
         }
         self.pieces = pieces;
         self.generation += 1;
@@ -521,7 +636,78 @@ impl Stage {
         Ok(change)
     }
 
-    fn scene_reflections(&mut self, pieces: &[Piece], slots: &[u32]) -> Result<(), Error> {
+    fn stage_crowds(&mut self, given: Crowds<'_>, change: &mut Change) -> Result<(), Error> {
+        let mut spare = std::mem::take(&mut self.crowd_meshes);
+        let mut made = Vec::new();
+        for (at, crowd) in given.crowd_of.iter().enumerate() {
+            let Some(crowd) = *crowd else {
+                continue;
+            };
+            let mark = given.marks[at].clone();
+            let handle = match spare.iter().position(|old| old.mark == mark) {
+                Some(found) => {
+                    change.kept += 1;
+                    spare.remove(found).handle
+                }
+                None => {
+                    change.added += 1;
+                    upload(&mut self.renderer, &given.pieces[at])?
+                }
+            };
+            made.push((at, crowd, Uploaded { mark, handle }));
+        }
+        let key = crowd_key(
+            &given,
+            made.iter()
+                .map(|(at, crowd, uploaded)| (*at, *crowd, uploaded.handle)),
+        );
+        if key != self.crowd_key {
+            let models: Vec<Vec<Matrix>> = made
+                .iter()
+                .map(|(_, crowd, _)| given.crowds[*crowd].models())
+                .collect();
+            let shown: Vec<pfx_live::crowd::Crowd<'_>> = made
+                .iter()
+                .zip(&models)
+                .map(|((at, _, uploaded), models)| {
+                    let piece = &given.pieces[*at];
+                    pfx_live::crowd::Crowd {
+                        mesh: uploaded.handle,
+                        material: given.slots[*at],
+                        id: piece.object as u32 + 1,
+                        models,
+                        casts_shadow: piece.shadow != Shadow::None,
+                        shadow_only: piece.shadow == Shadow::Only,
+                        two_sided: piece.two_sided,
+                        alpha_cutoff: cutoff(uploaded.handle),
+                    }
+                })
+                .collect();
+            self.renderer
+                .set_crowds(&shown)
+                .map_err(|e| Error(format!("the live renderer: {e}")))?;
+            self.crowd_key = key;
+            self.crowd_copies = models.iter().map(Vec::len).sum();
+            self.crowd_models = models;
+        }
+        for old in spare {
+            self.renderer
+                .release_mesh(old.handle)
+                .map_err(|e| Error(format!("object {}: {e}", old.mark.key.name)))?;
+            change.released += 1;
+        }
+        self.crowd_at = made.iter().map(|(at, _, _)| *at).collect();
+        self.crowd_meshes = made.into_iter().map(|(_, _, uploaded)| uploaded).collect();
+        Ok(())
+    }
+
+    fn scene_reflections(
+        &mut self,
+        pieces: &[Piece],
+        slots: &[u32],
+        crowd_of: &[Option<usize>],
+        crowds: &[parts::Crowd],
+    ) -> Result<(), Error> {
         let Some(settings) = self.renderer.scene_reflections() else {
             return Ok(());
         };
@@ -531,6 +717,8 @@ impl Stage {
                 &crate::cube::Scene {
                     pieces,
                     slots,
+                    crowd_of,
+                    crowds,
                     materials: &self.materials,
                     lighting: &self.lighting,
                     hour: self.hour,
@@ -577,6 +765,57 @@ impl Stage {
 
     pub fn instance_count(&self) -> usize {
         self.instances.len()
+    }
+
+    pub fn crowd_copies(&self) -> usize {
+        self.crowd_copies
+    }
+
+    pub fn draw_count(&self) -> u32 {
+        self.renderer.cull_stats().camera.draws
+    }
+
+    pub fn packed_records(&self) -> usize {
+        self.renderer.packed_records()
+    }
+
+    pub fn bind_keys(&mut self, names: &[String]) {
+        self.keyed_names = names.to_vec();
+        self.rebind();
+    }
+
+    fn rebind(&mut self) {
+        let slots: BTreeMap<&str, usize> = self
+            .keyed_names
+            .iter()
+            .enumerate()
+            .map(|(slot, name)| (name.as_str(), slot))
+            .collect();
+        self.keyed = self
+            .uploaded
+            .iter()
+            .enumerate()
+            .filter_map(|(at, uploaded)| Some((at, *slots.get(uploaded.mark.key.name.as_str())?)))
+            .collect();
+        self.keyed_glass = self
+            .glassed
+            .iter()
+            .enumerate()
+            .filter_map(|(at, glassed)| Some((at, *slots.get(glassed.mark.key.name.as_str())?)))
+            .collect();
+    }
+
+    pub fn set_keyed(&mut self, models: &[Matrix]) {
+        for &(at, slot) in &self.keyed {
+            if let (Some(instance), Some(model)) = (self.instances.get_mut(at), models.get(slot)) {
+                instance.model = *model;
+            }
+        }
+        for &(at, slot) in &self.keyed_glass {
+            if let (Some(surface), Some(model)) = (self.glass.get_mut(at), models.get(slot)) {
+                surface.model = *model;
+            }
+        }
     }
 
     #[cfg(test)]
@@ -653,7 +892,23 @@ impl Stage {
             .filter_map(|((&at, surface), glassed)| {
                 outline(at, glassed.mark.hash, surface.model, surface.id)
             });
-        opaque.chain(glass).collect()
+        let crowds = self
+            .crowd_at
+            .iter()
+            .zip(&self.crowd_meshes)
+            .zip(&self.crowd_models)
+            .filter(|&((&at, _), _)| {
+                self.pieces
+                    .get(at)
+                    .is_some_and(|piece| piece.shadow != Shadow::Only)
+            })
+            .flat_map(|((&at, uploaded), models)| {
+                let id = self.pieces[at].object as u32 + 1;
+                models
+                    .iter()
+                    .filter_map(move |&model| outline(at, uploaded.mark.hash, model, id))
+            });
+        opaque.chain(glass).chain(crowds).collect()
     }
 
     pub fn preview(&mut self, object: usize, motion: Matrix) -> Result<(), Error> {
@@ -1307,6 +1562,33 @@ fn surfaces(renderer: &Renderer, dress: &[Dress]) -> Result<(), Error> {
         .map_err(|e| Error(format!("the live renderer: {e}")))
 }
 
+fn crowd_key(given: &Crowds<'_>, made: impl Iterator<Item = (usize, usize, MeshHandle)>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for (at, crowd, handle) in made {
+        let piece = &given.pieces[at];
+        let worlds = &given.crowds[crowd].worlds;
+        (
+            handle,
+            given.slots[at],
+            piece.object,
+            piece.shadow != Shadow::None,
+            piece.shadow == Shadow::Only,
+            piece.two_sided,
+            cutoff(handle).to_bits(),
+            worlds.len(),
+        )
+            .hash(&mut hasher);
+        for world in worlds {
+            floats(&mut hasher, &world.to_cols_array().map(|v| v as f32));
+        }
+    }
+    hasher.finish()
+}
+
+fn cutoff(mesh: MeshHandle) -> f32 {
+    Instance::new(mesh, IDENTITY, 0, 0).alpha_cutoff
+}
+
 fn upload(renderer: &mut Renderer, piece: &Piece) -> Result<MeshHandle, Error> {
     renderer
         .upload_mesh(data(piece))
@@ -1530,6 +1812,51 @@ mod tests {
     const BASE: &str = "recipe = 1\nname = \"diff\"\n\n[materials.glass]\nfamily = \"glass\"\nbase = [0.9, 0.95, 1.0]\nroughness = 0.02\ntransmission = 1.0\nior = 1.5\nthickness = 0.004\n\n[materials.orange]\nfamily = \"lacquer\"\nbase = [0.73, 0.06, 0.0]\nroughness = 0.45\nclearcoat = 1.0\nclearcoat_roughness = 0.07\n\n[[camera]]\nname = \"main\"\nposition = [0.0, 1.0, 6.0]\ntarget = [0.0, 0.0, 0.0]\nfov_y_deg = 40.0\n\n[[object]]\nname = \"a\"\nkind = \"box\"\nmaterial = \"orange\"\nsize = [1.0, 1.0, 1.0]\n\n[[object]]\nname = \"b\"\nkind = \"box\"\nmaterial = \"orange\"\nsize = [0.5, 0.5, 0.5]\nat = [2.0, 0.0, 0.0]\n\n[[object]]\nname = \"c\"\nkind = \"box\"\nmaterial = \"orange\"\nsize = [0.25, 0.25, 0.25]\nat = [-2.0, 0.0, 0.0]\n";
 
     const ROOM: &str = "[sky.room]\nwidth = 64\nfloor = [0.22, 0.135, 0.068]\nwall = [0.19, 0.13, 0.07]\nceiling = [0.28, 0.23, 0.16]\n[[sky.room.lights]]\nname = \"window\"\naz = -64.0\nel = 14.0\nwidth = 37.5\nheight = 29.0\npower = 10.5\ncolor = [1.0, 0.86, 0.66]\nsoft = 0.05\nslats = 6.0\nopen = 0.7\n";
+
+    const CROWD: &str = "recipe = 1\nname = \"crowd\"\n\n[[object]]\nname = \"ground\"\nkind = \"plane\"\nsize = [4.0, 4.0]\n\nOBJECTS[[object]]\nname = \"leaf\"\nkind = \"box\"\nsize = [0.16, 0.02, 0.1]\nhidden = true\nLEAF\n[[scatter]]\nname = \"leaves\"\nobject = \"leaf\"\non = \"ground\"\nseed = 9\nspacing = 0.5\n";
+
+    fn crowd_of(objects: &str, leaf: &str) -> (Vec<Vec<[f64; 16]>>, u64) {
+        let text = CROWD.replace("OBJECTS", objects).replace("LEAF", leaf);
+        let prepared = kept(&Memory::default(), &text);
+        let given = Crowds {
+            pieces: &prepared.pieces,
+            slots: &prepared.slots,
+            marks: &prepared.marks,
+            crowd_of: &prepared.crowd_of,
+            crowds: &prepared.crowds,
+        };
+        let made = prepared
+            .crowd_of
+            .iter()
+            .enumerate()
+            .filter_map(|(at, crowd)| Some((at, (*crowd)?, MeshHandle(1))));
+        let worlds = prepared
+            .crowds
+            .iter()
+            .map(|crowd| crowd.worlds.iter().map(|w| w.to_cols_array()).collect())
+            .collect();
+        (worlds, crowd_key(&given, made))
+    }
+
+    #[test]
+    fn a_crowd_restages_when_its_shadow_sides_or_object_change() {
+        let (worlds, key) = crowd_of("", "");
+        assert!(!worlds.is_empty());
+        assert_eq!(crowd_of("", ""), (worlds.clone(), key));
+        for (objects, leaf) in [
+            ("", "shadow = \"none\"\n"),
+            ("", "shadow = \"only\"\n"),
+            ("", "two_sided = true\n"),
+            (
+                "[[object]]\nname = \"far\"\nkind = \"box\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 50.0, 0.0]\n\n",
+                "",
+            ),
+        ] {
+            let (moved, edited) = crowd_of(objects, leaf);
+            assert_eq!(moved, worlds, "{objects}{leaf}");
+            assert_ne!(edited, key, "{objects}{leaf}");
+        }
+    }
 
     fn texels(prepared: &Prepared) -> Vec<[f32; 4]> {
         match prepared.lighting.at(None).sky {

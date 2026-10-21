@@ -280,6 +280,14 @@ pub struct Part {
     pub two_sided: bool,
     pub hidden: bool,
     pub looks: Arc<Looks>,
+    pub scattered: Option<Scattered>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Scattered {
+    pub scatter: u32,
+    pub piece: u32,
+    pub copy: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -1775,6 +1783,7 @@ fn assemble(
                 two_sided: object.two_sided,
                 hidden,
                 looks: Arc::default(),
+                scattered: None,
             });
         }
     }

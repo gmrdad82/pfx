@@ -5,7 +5,7 @@ use glam::{DMat4, DQuat, DVec3};
 use pfx_core::sim::{Rng, mix64};
 use pfx_recipe::{Recipe, Scatter};
 
-use crate::{Error, Part, local_matrix, poisson, rotation, world};
+use crate::{Error, Part, Scattered, local_matrix, poisson, rotation, world};
 
 pub const MAX_COPIES: usize = 100_000;
 
@@ -274,7 +274,7 @@ pub fn triangles(parts: &[Part], object: usize) -> Vec<[DVec3; 3]> {
 
 pub(crate) fn scatter(recipe: &Recipe, base: &Path, parts: &mut Vec<Part>) -> Result<usize, Error> {
     let first = parts.len();
-    for scatter in &recipe.scatters {
+    for (number, scatter) in recipe.scatters.iter().enumerate() {
         let at = |key: &str| format!("scatter[{}].{key}", scatter.name);
         let index = |name: &str, key: &str| {
             recipe
@@ -318,7 +318,7 @@ pub(crate) fn scatter(recipe: &Recipe, base: &Path, parts: &mut Vec<Part>) -> Re
         let pieces = shown.len();
         let mut copies = Vec::with_capacity(placed.len() * pieces);
         for (n, matrix) in placed.iter().enumerate() {
-            for part in &shown {
+            for (piece, part) in shown.iter().enumerate() {
                 let mut node = part.node.clone();
                 let placement = if node.keep_transform {
                     node.transform
@@ -340,6 +340,11 @@ pub(crate) fn scatter(recipe: &Recipe, base: &Path, parts: &mut Vec<Part>) -> Re
                     two_sided: part.two_sided,
                     hidden,
                     looks: Arc::clone(&part.looks),
+                    scattered: Some(Scattered {
+                        scatter: number as u32,
+                        piece: piece as u32,
+                        copy: n as u32,
+                    }),
                 });
             }
         }
