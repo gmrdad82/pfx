@@ -340,6 +340,115 @@ fn the_same_surfaces_give_the_same_samples() {
     assert_ne!(mono(&other.mix(RATE as usize).unwrap()), a);
 }
 
+fn tyre_script(seed: u64, keys: &str, slip: &str) -> Result<Script, String> {
+    let text = format!(
+        "seed = {seed}\n[[curve]]\nname = \"slip\"\nkeys = {slip}\n[[tyre]]\nslip = \"slip\"\n{keys}\n"
+    );
+    Script::parse(&text, Path::new(""))
+}
+
+fn tyre(keys: &str, slip: &str, seconds: f32) -> Vec<f32> {
+    let frames = (seconds * RATE as f32) as usize;
+    mono(&tyre_script(5, keys, slip).unwrap().mix(frames).unwrap())
+}
+
+fn span(signal: &[f32], from: f32, to: f32) -> &[f32] {
+    let at = |t: f32| ((t * RATE as f32) as usize).min(signal.len());
+    &signal[at(from)..at(to)]
+}
+
+const SLIDE: &str = "[[0.0, 0.0], [0.5, 0.0], [0.6, 6.0], [1.4, 9.0], [1.6, 0.0], [2.0, 0.0]]";
+
+#[test]
+fn a_tyre_repeats_by_seed_and_curve() {
+    let a = tyre("", SLIDE, 2.0);
+    assert_eq!(a, tyre("", SLIDE, 2.0));
+    assert!(a.iter().all(|s| s.is_finite()) && rms(&a) > 0.01);
+    let other = tyre_script(6, "", SLIDE).unwrap();
+    assert_ne!(mono(&other.mix(2 * RATE as usize).unwrap()), a);
+    let skid = Script::parse(
+        &format!(
+            "seed = 5\n[[curve]]\nname = \"slip\"\nkeys = {SLIDE}\n[[skid]]\nslip = \"slip\"\n"
+        ),
+        Path::new(""),
+    )
+    .unwrap();
+    assert_eq!(mono(&skid.mix(2 * RATE as usize).unwrap()), a);
+}
+
+#[test]
+fn a_tyre_squeals_only_above_its_threshold() {
+    let only = "scrub = 0\nchirp = 0\nthreshold = 2\nrange = 2";
+    let under = tyre(only, "[[0.0, 1.9], [1.0, 1.9]]", 1.0);
+    assert!(under.iter().all(|&s| s == 0.0));
+    let over = tyre(only, "[[0.0, 4.0], [1.0, 4.0]]", 1.0);
+    assert!(rms(span(&over, 0.2, 1.0)) > 0.05);
+    let back = tyre(
+        only,
+        "[[0.0, 4.0], [0.5, 4.0], [0.55, 0.5], [2.5, 0.5]]",
+        2.5,
+    );
+    assert!(rms(span(&back, 0.2, 0.5)) > 0.05);
+    assert!(span(&back, 2.0, 2.5).iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn a_tyre_chirps_at_the_onset_of_each_slide_only() {
+    let only = "scrub = 0\nsqueal = 0\ngrip = 0.5\nthreshold = 2";
+    let slip = "[[0.0, 0.0], [1.0, 0.0], [1.05, 5.0], [2.0, 5.0], [2.05, 0.0], [3.0, 0.0], [3.05, 5.0], [4.5, 5.0]]";
+    let out = tyre(only, slip, 4.5);
+    assert!(span(&out, 0.0, 1.0).iter().all(|&s| s == 0.0));
+    assert!(rms(span(&out, 1.0, 1.15)) > 0.02);
+    assert!(span(&out, 1.9, 3.0).iter().all(|&s| s == 0.0));
+    assert!(rms(span(&out, 3.0, 3.15)) > 0.02);
+    assert!(span(&out, 3.9, 4.5).iter().all(|&s| s == 0.0));
+    let started = tyre(only, "[[0.0, 5.0], [1.0, 5.0]]", 1.0);
+    assert!(started.iter().all(|&s| s == 0.0));
+}
+
+#[test]
+fn a_tyre_scrubs_louder_as_it_slips_faster() {
+    let only = "chirp = 0\nsqueal = 0";
+    let level = |slip: f32| {
+        let out = tyre(only, &format!("[[0.0, {slip}], [1.0, {slip}]]"), 1.0);
+        rms(span(&out, 0.2, 1.0))
+    };
+    let still = tyre(only, "[[0.0, 0.0], [1.0, 0.0]]", 1.0);
+    assert!(still.iter().all(|&s| s == 0.0));
+    let levels = [level(1.0), level(4.0), level(12.0)];
+    assert!(levels[0] > 0.001, "{levels:?}");
+    assert!(levels[1] > levels[0] * 1.5, "{levels:?}");
+    assert!(levels[2] > levels[1] * 1.5, "{levels:?}");
+    let heavy = tyre(
+        &format!("{only}\nload = 2"),
+        "[[0.0, 4.0], [1.0, 4.0]]",
+        1.0,
+    );
+    assert!(rms(span(&heavy, 0.2, 1.0)) > levels[1]);
+}
+
+#[test]
+fn a_tyre_refuses_values_out_of_bounds() {
+    let refused = |keys: &str, words: &str| {
+        let err = tyre_script(1, keys, "[[0.0, 1.0]]").unwrap_err();
+        assert!(err.contains("[[tyre]] 1") && err.contains(words), "{err}");
+    };
+    refused("hz = 9000", "`hz` must be 200 to 4000 Hz, not 9000");
+    refused("threshold = 0", "`threshold` must be 0.05 to 40 m/s");
+    refused(
+        "grip = 3\nthreshold = 2",
+        "`grip` (3 m/s) must not be above `threshold` (2 m/s)",
+    );
+    refused("load = -1", "`load` must be 0 to 4");
+    refused("squeal = 5", "`squeal` must be 0 to 4");
+    refused("whine = 1", "whine");
+    let text = "[[tyre]]\nslip = -2\n";
+    let err = Script::parse(text, Path::new("")).unwrap_err();
+    assert!(err.contains("`slip` must be 0 to 200 m/s"), "{err}");
+    let err = Script::parse("[[tyre]]\nslip = \"nope\"\n", Path::new("")).unwrap_err();
+    assert!(err.contains("no curve named `nope`"), "{err}");
+}
+
 #[test]
 #[ignore = "bench; run with --release"]
 fn bench_recorded_engine() {

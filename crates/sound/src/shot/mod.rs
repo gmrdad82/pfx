@@ -6,6 +6,7 @@ mod layers;
 mod read;
 mod recording;
 mod surface;
+mod tyre;
 
 pub use curve::{Curve, Ease};
 
@@ -100,6 +101,20 @@ pub struct Squeal {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct Tyre {
+    pub slip: Value,
+    pub load: Value,
+    pub grip: f32,
+    pub threshold: f32,
+    pub range: f32,
+    pub hz: f32,
+    pub rise: f32,
+    pub scrub: f32,
+    pub chirp: f32,
+    pub squeal: f32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Spray {
     pub speed: Value,
     pub wet: Value,
@@ -128,6 +143,7 @@ pub enum Kind {
     Engine(Engine),
     Road(Road),
     Squeal(Squeal),
+    Tyre(Tyre),
     Spray(Spray),
     Whoosh(Whoosh),
     Ambience(Ambience),
@@ -173,7 +189,9 @@ pub fn audio_frames(frames: usize, fps: Rate) -> usize {
     fps.samples_nearest(frames as u64, RATE) as usize
 }
 
-const KINDS: [&str; 6] = ["engine", "road", "squeal", "spray", "whoosh", "ambience"];
+const KINDS: [&str; 8] = [
+    "engine", "road", "squeal", "tyre", "skid", "spray", "whoosh", "ambience",
+];
 
 impl Script {
     pub fn load(path: &Path) -> Result<Script, String> {
@@ -276,6 +294,10 @@ impl Script {
                     if let Some(name) = &s.curve {
                         known(&Value::Curve(name.clone()))?;
                     }
+                }
+                Kind::Tyre(t) => {
+                    known(&t.slip)?;
+                    known(&t.load)?;
                 }
                 Kind::Spray(s) => {
                     known(&s.speed)?;
@@ -563,6 +585,7 @@ fn layer(kind: &str, table: &toml::Table, i: usize, dir: &Path) -> Result<Layer,
             range: f.number_or("range", 0.5)?.max(1e-3),
             hz: f.value("hz", 1_400.0)?,
         }),
+        "tyre" | "skid" => Kind::Tyre(tyre(&mut f, &at)?),
         "spray" => Kind::Spray(Spray {
             speed: f.value("speed", 0.0)?,
             wet: f.value("wet", 1.0)?,
@@ -584,4 +607,61 @@ fn layer(kind: &str, table: &toml::Table, i: usize, dir: &Path) -> Result<Layer,
     };
     f.finish()?;
     Ok(Layer { common, kind })
+}
+
+fn bounded(
+    f: &mut Fields,
+    at: &str,
+    key: &'static str,
+    default: f32,
+    [lo, hi]: [f32; 2],
+    unit: &str,
+) -> Result<f32, String> {
+    let v = f.number_or(key, default)?;
+    if (lo..=hi).contains(&v) {
+        Ok(v)
+    } else {
+        Err(format!("{at}: `{key}` must be {lo} to {hi}{unit}, not {v}"))
+    }
+}
+
+fn bounded_value(
+    f: &mut Fields,
+    at: &str,
+    key: &'static str,
+    default: f32,
+    [lo, hi]: [f32; 2],
+    unit: &str,
+) -> Result<Value, String> {
+    let value = f.value(key, default)?;
+    if let Value::Fixed(v) = value
+        && !(lo..=hi).contains(&v)
+    {
+        return Err(format!(
+            "{at}: `{key}` must be {lo} to {hi}{unit} or a curve name, not {v}"
+        ));
+    }
+    Ok(value)
+}
+
+fn tyre(f: &mut Fields, at: &str) -> Result<Tyre, String> {
+    let tyre = Tyre {
+        slip: bounded_value(f, at, "slip", 0.0, [0.0, 200.0], " m/s")?,
+        load: bounded_value(f, at, "load", 1.0, [0.0, 4.0], "")?,
+        grip: bounded(f, at, "grip", 0.5, [0.01, 20.0], " m/s")?,
+        threshold: bounded(f, at, "threshold", 2.0, [0.05, 40.0], " m/s")?,
+        range: bounded(f, at, "range", 3.0, [0.05, 40.0], " m/s")?,
+        hz: bounded(f, at, "hz", 1_000.0, [200.0, 4_000.0], " Hz")?,
+        rise: bounded(f, at, "rise", 25.0, [0.0, 400.0], " Hz per m/s")?,
+        scrub: bounded(f, at, "scrub", 1.0, [0.0, 4.0], "")?,
+        chirp: bounded(f, at, "chirp", 1.0, [0.0, 4.0], "")?,
+        squeal: bounded(f, at, "squeal", 1.0, [0.0, 4.0], "")?,
+    };
+    if tyre.grip > tyre.threshold {
+        return Err(format!(
+            "{at}: `grip` ({} m/s) must not be above `threshold` ({} m/s)",
+            tyre.grip, tyre.threshold
+        ));
+    }
+    Ok(tyre)
 }

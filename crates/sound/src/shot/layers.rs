@@ -1,10 +1,9 @@
 use super::ambience::City;
-use super::dsp::{
-    Noise, OnePole, Pink, Svf, Wander, decay_per_sample, fract, pan, sin_turns, smooth_step,
-};
+use super::dsp::{Noise, OnePole, Pink, Svf, Wander, decay_per_sample, pan, smooth_step};
 use super::engine::Model;
 use super::recording::{Bank, Range};
 use super::surface::{self, Cobbles, Gravel};
+use super::tyre::{TyreVoice, Whine};
 use super::{CONTROL, Common, Ctx, Kind, Knob, RATE, Surface};
 use crate::DriveCurve;
 use crate::drive::shape;
@@ -100,12 +99,9 @@ pub(crate) fn voice(
             range: s.range,
             hz: ctx.knob(&s.hz),
             gate: 0.0,
-            phase: 0.0,
-            white: Noise::new(seeds.seed()),
-            ring: Svf::new(1_400.0, 14.0),
-            wobble: Wander::new(seeds.seed(), 6.0),
-            flutter: Wander::new(seeds.seed(), 28.0),
+            whine: Whine::new(&mut seeds),
         }),
+        Kind::Tyre(t) => Box::new(TyreVoice::new(t, &mut seeds, ctx)),
         Kind::Spray(s) => Box::new(SprayVoice {
             speed: ctx.knob(&s.speed),
             wet: ctx.knob(&s.wet),
@@ -388,11 +384,7 @@ struct SquealVoice {
     range: f32,
     hz: Knob,
     gate: f32,
-    phase: f32,
-    white: Noise,
-    ring: Svf,
-    wobble: Wander,
-    flutter: Wander,
+    whine: Whine,
 }
 
 impl Voice for SquealVoice {
@@ -416,15 +408,9 @@ impl Voice for SquealVoice {
         }
         let gate = self.gate;
         let base = ctx.get(self.hz, t).max(20.0) * (0.92 + 0.12 * gate);
-        self.ring.tune(base, 14.0);
+        self.whine.tune(base);
         for frame in out.iter_mut() {
-            let hz = base * (1.0 + 0.02 * self.wobble.tick());
-            self.phase += hz / RATE as f32;
-            self.phase = fract(self.phase);
-            let tone = sin_turns(self.phase) + 0.3 * sin_turns(self.phase * 2.0);
-            let ring = self.ring.band(self.white.white()) * 0.6;
-            let flutter = 0.75 + 0.25 * self.flutter.tick();
-            frame[0] = gate * flutter * 0.5 * (tone * 0.6 + ring);
+            frame[0] = self.whine.tick(base, gate);
         }
     }
 }
