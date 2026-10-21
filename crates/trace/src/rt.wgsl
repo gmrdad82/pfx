@@ -281,7 +281,9 @@ fn traverse(o: vec3f, d: vec3f, limit: f32, mode: u32) -> Traced {
     } else if (TRACE_MOTION && mover>0u && !(triangle && committed_t<best)) {
         traced.hit=moved;
     } else if (triangle) {
-        tri_fill(committed_at.x,committed_at.y,committed_t,committed_uv.x,committed_uv.y,&traced.hit);
+        var filled=traced.hit;
+        tri_fill(committed_at.x,committed_at.y,committed_t,committed_uv.x,committed_uv.y,&filled);
+        traced.hit=filled;
     }
     if (!RT_BOXES) { shapes_through(o,d,limit,mode,&traced); }
     traced.hit=world_hit(traced.hit);

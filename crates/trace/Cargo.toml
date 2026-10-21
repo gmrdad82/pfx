@@ -30,7 +30,7 @@ pfx-gpu = { path = "../gpu", features = ["dev-hooks"] }
 pfx-text = { path = "../text", features = ["fixture"] }
 pfx-geom = { path = "../geom" }
 pfx-live = { path = "../live" }
-naga = { version = "30", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in", "spv-out"] }
 pollster = "0.4"
 png = "0.17"
 serde_json = "1"

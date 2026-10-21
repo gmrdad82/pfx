@@ -1097,6 +1097,7 @@ fn traverse(o: vec3f, d: vec3f, limit: f32, mode: u32) -> Traced {
     let closest=mode==QUERY_CLOSEST;
     trace_count(select(COUNT_SHADOW,COUNT_CLOSEST,closest));
     var traced=Traced(empty_hit(limit),vec3f(1.0));
+    var hit=traced.hit;
     if (frame.counts.x>0u) {
         var stack: array<u32,64>;
         var top=1u;
@@ -1121,7 +1122,7 @@ fn traverse(o: vec3f, d: vec3f, limit: f32, mode: u32) -> Traced {
                 continue;
             }
             let node=nodes[index];
-            if (!box_hit(node,ro,rd,traced.hit.t)) { continue; }
+            if (!box_hit(node,ro,rd,hit.t)) { continue; }
             if (node.pad.x==INSTANCE_LEAF) {
                 if (TRACE_SPRITES && sprites_hidden && (instance_surfaces[bitcast<u32>(node.lo.w)].info.x&SPRITE)!=0u) { continue; }
                 if (top+2u<=64u) {
@@ -1155,7 +1156,7 @@ fn traverse(o: vec3f, d: vec3f, limit: f32, mode: u32) -> Traced {
                 for (var j=0u;j<node.count;j++) {
                     let i=base+node.first+j;
                     if (closest) {
-                        tri_hit(i,record,word,inv_det,ro,rd,o,d,false,&traced.hit);
+                        tri_hit(i,record,word,inv_det,ro,rd,o,d,false,&hit);
                     } else if (tri_blocks(i,record,word,inv_det,ro,rd,o,d,limit)) {
                         if (mode==QUERY_OCCLUDED) { traced.passed=vec3f(0.0); } else { traced.passed*=tri_tint(i,record); }
                         if (all(traced.passed<=vec3f(0.0))) {
@@ -1167,6 +1168,7 @@ fn traverse(o: vec3f, d: vec3f, limit: f32, mode: u32) -> Traced {
             }
         }
     }
+    traced.hit=hit;
     shapes_through(o,d,limit,mode,&traced);
     if (closest) { traced.hit=world_hit(traced.hit); }
     return traced;

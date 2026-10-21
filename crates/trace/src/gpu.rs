@@ -3602,6 +3602,50 @@ mod tests {
         }
     }
     #[test]
+    fn every_trace_kernel_writes_spir_v() {
+        let counting = [
+            None,
+            Some(crate::counters::Reduce::Subgroup),
+            Some(crate::counters::Reduce::Lane),
+        ];
+        for lit in [false, true] {
+            for rt in [false, true] {
+                for reduce in counting {
+                    let source = counted_source(lit, rt, reduce);
+                    let module = naga::front::wgsl::parse_str(&source)
+                        .unwrap_or_else(|error| panic!("{}", error.emit_to_string(&source)));
+                    let info = naga::valid::Validator::new(
+                        naga::valid::ValidationFlags::all(),
+                        naga::valid::Capabilities::all(),
+                    )
+                    .validate(&module)
+                    .unwrap();
+                    let (module, info) = naga::back::pipeline_constants::process_overrides(
+                        &module,
+                        &info,
+                        None,
+                        &naga::back::PipelineConstants::default(),
+                    )
+                    .unwrap();
+                    let written = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        naga::back::spv::write_vec(
+                            &module,
+                            &info,
+                            &naga::back::spv::Options::default(),
+                            None,
+                        )
+                    }));
+                    let words = written
+                        .unwrap_or_else(|_| {
+                            panic!("lit {lit} rt {rt} {reduce:?}: the SPIR-V writer panicked")
+                        })
+                        .unwrap_or_else(|error| panic!("lit {lit} rt {rt} {reduce:?}: {error}"));
+                    assert!(words.len() > 1000, "lit {lit} rt {rt} {reduce:?}");
+                }
+            }
+        }
+    }
+    #[test]
     fn the_shader_budget_defaults_to_the_reference_budget() {
         let source = include_str!("trace.wgsl");
         for (name, value) in bounce_limits(Bounces::REFERENCE) {
