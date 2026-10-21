@@ -110,7 +110,6 @@ pub mod code {
     pub const PLACEMENT_KEY: &str = "placement-key";
     pub const OLD_FORMAT: &str = "old-format";
     pub const NEWER_FORMAT: &str = "newer-format";
-    pub const MIGRATION: &str = "migration";
 
     pub const ALL: &[&str] = &[
         SYNTAX,
@@ -141,6 +140,5 @@ pub mod code {
         PLACEMENT_KEY,
         OLD_FORMAT,
         NEWER_FORMAT,
-        MIGRATION,
     ];
 }

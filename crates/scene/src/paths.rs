@@ -153,49 +153,6 @@ impl Listing {
     }
 }
 
-pub(crate) fn lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for part in path.components() {
-        match part {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            other => out.push(other),
-        }
-    }
-    out
-}
-
-pub(crate) fn deepest_common(folders: &[PathBuf]) -> PathBuf {
-    let mut iter = folders.iter();
-    let Some(first) = iter.next() else {
-        return PathBuf::new();
-    };
-    let mut common: Vec<_> = first.components().collect();
-    for folder in iter {
-        let parts: Vec<_> = folder.components().collect();
-        let same = common
-            .iter()
-            .zip(&parts)
-            .take_while(|(a, b)| a == b)
-            .count();
-        common.truncate(same);
-    }
-    common.iter().collect()
-}
-
-pub(crate) fn up_to(from: &Path, ancestor: &Path) -> String {
-    let below = from.components().count();
-    let above = ancestor.components().count();
-    let steps = below.saturating_sub(above);
-    if steps == 0 {
-        ".".to_string()
-    } else {
-        vec![".."; steps].join("/")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,17 +176,5 @@ mod tests {
         assert_eq!(join("", "C:/a"), Err(PathError::Absolute));
         assert_eq!(join("", "a\\b"), Err(PathError::Backslash));
         assert_eq!(join("", "."), Err(PathError::Empty));
-    }
-
-    #[test]
-    fn the_deepest_common_folder_is_found() {
-        let found = deepest_common(&[
-            lexical(Path::new("/w/a/b/../b/c")),
-            "/w/a/b/d".into(),
-            "/w/a/b".into(),
-        ]);
-        assert_eq!(found, PathBuf::from("/w/a/b"));
-        assert_eq!(up_to(Path::new("/w/a/b"), Path::new("/w")), "../..");
-        assert_eq!(up_to(Path::new("/w"), Path::new("/w")), ".");
     }
 }

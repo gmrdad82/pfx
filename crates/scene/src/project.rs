@@ -7,10 +7,10 @@ use toml_edit::DocumentMut;
 
 use crate::code;
 use crate::edit::first_error;
-use crate::migrate::{add_ids, entry_kinds};
+use crate::ids::{add_ids, entry_kinds};
 use crate::mount::{GLTF_PATH, Mount};
 use crate::paths::{Found, Listing, PathError, folder, join, rooted, slashed};
-use crate::read::{self, Context, Doc, Finding, Parsed};
+use crate::read::{self, Doc, Finding, Parsed};
 use crate::rules::{self, Issues};
 use crate::scene::{Entry, Scene};
 use crate::spans::{KeyPath, Part};
@@ -510,10 +510,7 @@ impl Project {
                 .parse()
                 .map_err(|error: toml_edit::TomlError| refuse(path, error.message().trim()))?;
             if doc.get("format").and_then(toml_edit::Item::as_integer) != Some(FORMAT.into()) {
-                return Err(refuse(
-                    path,
-                    "is not format 1; migrate it, which writes its ids",
-                ));
+                return Err(refuse(path, "is not format 1, so its ids are not written"));
             }
             let exact = doc.to_string() == text;
             if add_ids(&mut doc, &slashed(path), kind, &mut taken).is_empty() {
@@ -602,67 +599,6 @@ impl Project {
         match typed {
             Some(file) if !diagnostics.iter().any(Diagnostic::is_error) => Ok(file),
             _ => Err(self.shown_all(diagnostics)),
-        }
-    }
-
-    pub fn migrate(&self, file: &Path) -> Result<String, Vec<Diagnostic>> {
-        let relative = self.relative(file);
-        let overlay = BTreeMap::new();
-        let kind = self.kind_of(&relative, &overlay).unwrap_or(FileKind::Scene);
-        let text = self.source(&relative).map_err(|error| {
-            vec![Diagnostic {
-                file: relative.clone(),
-                line: 1,
-                column: 1,
-                end_line: 1,
-                end_column: 1,
-                severity: Severity::Error,
-                code: code::UNREADABLE,
-                key: String::new(),
-                message: format!("cannot read {}: {error}", relative.display()),
-                related: Vec::new(),
-            }]
-        })?;
-        migrate(&text, &relative, &self.root, kind)
-    }
-}
-
-pub fn migrate(
-    text: &str,
-    file: &Path,
-    root: &Path,
-    kind: FileKind,
-) -> Result<String, Vec<Diagnostic>> {
-    let format = toml::de::DeTable::parse(text).ok().and_then(|table| {
-        table.get_ref().get("format").and_then(|value| {
-            value
-                .get_ref()
-                .as_integer()
-                .map(|integer| integer.as_str().to_string())
-        })
-    });
-    if format.as_deref().is_some_and(|format| format != "0") {
-        return Ok(text.to_string());
-    }
-    let relative = PathBuf::from(slashed(file));
-    match crate::migrate::migrate(text, &relative, root, kind, true) {
-        Ok(migration) => Ok(migration.text),
-        Err(problems) => {
-            let findings: Vec<Finding> = problems
-                .into_iter()
-                .map(|problem| {
-                    Finding::new(
-                        &relative,
-                        problem.path,
-                        Part::Value,
-                        problem.code,
-                        problem.message,
-                    )
-                })
-                .collect();
-            let mut parsed = BTreeMap::new();
-            parsed.insert(relative.clone(), Box::new(read::plain(text, kind)));
-            Err(read::report(&findings, &parsed))
         }
     }
 }
@@ -1057,15 +993,10 @@ impl<'p> Checker<'p> {
         let layers = match self.text(file) {
             None => Some(Rc::new(Layers::new())),
             Some(Err(_)) => None,
-            Some(Ok(text)) => {
-                let context = Context {
-                    root: &self.project.root,
-                };
-                read::parse(file, &text, FileKind::Project, &context)
-                    .doc
-                    .filter(|doc| !doc.layers_unread)
-                    .map(|doc| Rc::new(doc.layers.unwrap_or_default()))
-            }
+            Some(Ok(text)) => read::parse(file, &text, FileKind::Project)
+                .doc
+                .filter(|doc| !doc.layers_unread)
+                .map(|doc| Rc::new(doc.layers.unwrap_or_default())),
         };
         self.layers = Some(layers.clone());
         layers
@@ -1140,14 +1071,7 @@ impl<'p> Checker<'p> {
             let text = self.text(file)?;
             self.kinds.insert(file.to_path_buf(), kind);
             let parsed = match text {
-                Ok(text) => read::parse(
-                    file,
-                    &text,
-                    kind,
-                    &Context {
-                        root: &self.project.root,
-                    },
-                ),
+                Ok(text) => read::parse(file, &text, kind),
                 Err(message) => {
                     let code = if message.contains("UTF-8") {
                         code::NOT_UTF8
@@ -1182,10 +1106,6 @@ impl<'p> Checker<'p> {
         extensions: &[&str],
         needed: bool,
     ) -> Option<PathBuf> {
-        let old = self
-            .parsed
-            .get(file)
-            .is_some_and(|parsed| parsed.origin.is_some());
         let overlay: BTreeSet<String> = self.overlay.keys().map(|key| slashed(key)).collect();
         let rooted = match self
             .project
@@ -1193,9 +1113,7 @@ impl<'p> Checker<'p> {
         {
             Ok(rooted) => rooted,
             Err(error) => {
-                if !(old && matches!(error, PathError::Outside(_))) {
-                    self.issue(file, path, error.code(), error.message(raw));
-                }
+                self.issue(file, path, error.code(), error.message(raw));
                 return None;
             }
         };
@@ -1658,9 +1576,6 @@ impl<'p> Checker<'p> {
         for (place, row) in rows.iter().enumerate() {
             let at = under(path, &["rows".into(), place.to_string()]);
             let start = self.parsed.get(file).and_then(|parsed| {
-                if parsed.origin.is_some() {
-                    return None;
-                }
                 let range = parsed.locate(&at, Part::Value);
                 let raw = parsed.text.get(range.clone())?;
                 let quoted = (raw.starts_with('"') && !raw.starts_with("\"\"\""))

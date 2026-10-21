@@ -456,65 +456,6 @@ fn leftovers(path: &std::path::Path) -> Vec<String> {
 }
 
 #[test]
-fn a_format_0_scene_shows_but_the_gizmo_refuses_before_the_drag_starts() {
-    let mut rig = Rig::open("drive-format0", common::format0("drive-format0"));
-    let before = common::read(&rig.path);
-    assert!(!before.contains("format"));
-    assert_eq!(rig.viewport.error(), None);
-    assert_eq!(rig.crate_at(), [0.7, 0.2, 0.3]);
-    assert_eq!(rig.viewport.scene().unwrap().objects.len(), 4);
-    let on = rig.at([0.7, 0.2, 0.3]);
-    rig.click(on);
-    assert_eq!(rig.viewport.selection().unwrap().name, "crate");
-    rig.viewport.take_events();
-    let eye = rig.viewport.eye().unwrap();
-    let from = rig.handle(DVec3::X);
-    let to = from + Vec2::new(40.0, 0.0);
-    rig.run(&Script {
-        steps: vec![
-            Step::Press {
-                at: [from.x, from.y],
-                mods: Mods::default(),
-            },
-            Step::Move([from.x + 20.0, from.y]),
-            Step::Frame,
-            Step::Move([to.x, to.y]),
-            Step::Frame,
-        ],
-    });
-    assert!(rig.viewport.gizmo().dragging().is_none());
-    assert_eq!(
-        rig.viewport.shown().unwrap().object("crate").unwrap().at,
-        [0.7, 0.2, 0.3]
-    );
-    assert_eq!(rig.viewport.eye().unwrap(), eye);
-    let events = rig.viewport.take_events();
-    let refused = match &events[..] {
-        [Event::Refused(error)] => error.clone(),
-        _ => panic!("{events:?}"),
-    };
-    assert!(
-        refused.starts_with("stand.scene.toml")
-            && refused.ends_with("is not format 1; migrate it before editing it"),
-        "{refused}"
-    );
-    assert_eq!(rig.viewport.refusal(), Some(refused.as_str()));
-    rig.run(&Script {
-        steps: vec![Step::Release([to.x, to.y]), Step::Frame],
-    });
-    assert!(rig.viewport.take_events().is_empty());
-    assert_eq!(common::read(&rig.path), before);
-    assert_eq!(rig.files.text(&rig.path).unwrap(), before);
-    assert_eq!(rig.history.undo_len(), 0);
-    assert_eq!(rig.crate_at(), [0.7, 0.2, 0.3]);
-    assert!(
-        leftovers(&rig.path).is_empty(),
-        "{:?}",
-        leftovers(&rig.path)
-    );
-}
-
-#[test]
 fn one_commit_writes_the_file_once_through_the_apps_save() {
     let mut rig = Rig::new("drive-once");
     let before = common::read(&rig.path);

@@ -81,7 +81,7 @@ pub use play::{
     Body, BodyKind, BodyShape, Character, CharacterPlane, Cue, Physics, Sound, Trigger,
 };
 pub use pose::billboard;
-pub use rewrite::{fix, migrate};
+pub use rewrite::fix;
 pub use watch::{DEBOUNCE, Reload, SceneWatch};
 
 pub type Matrix = [[f32; 4]; 4];

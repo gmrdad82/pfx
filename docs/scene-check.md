@@ -62,7 +62,7 @@ fn main() {
 Each `Diagnostic` has:
 
 - `file`, relative to the project root, and `line`, `column`, `end_line`, `end_column`: 1-based, columns counting characters, the end just past the span.
-- `severity`: `Error` or `Warning`. A warning, such as `missing-id` or `old-format`, doesn't stop a scene from loading.
+- `severity`: `Error` or `Warning`. A warning, such as `missing-id`, doesn't stop a scene from loading.
 - `code`: a stable string such as `bad-reference`, `path-case`, `missing-key`, `bad-type`, `duplicate-id` or `include-cycle`. `pfx_scene::code::ALL` lists every code, and [the format](scene-format.md) says when each is given.
 - `key`, the key the finding is about, and `message`, in plain words.
 - `related`: other places involved, such as the first holder of a duplicate id, or each include of a cycle.

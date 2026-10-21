@@ -176,18 +176,8 @@ fn a_derived_id_taken_elsewhere_in_the_project_is_suffixed() {
 }
 
 #[test]
-fn a_fix_writes_nothing_and_refuses_an_old_file_or_a_scene_that_does_not_load() {
+fn a_fix_writes_nothing_and_refuses_a_scene_that_does_not_load() {
     let folder = unfixed("fix-refused");
-    let old = LIGHTS.replace("format = 1\n\n", "");
-    folder.write("lights.scene.toml", &old);
-    let error = folder
-        .project()
-        .fix(&folder.path("room.scene.toml"))
-        .unwrap_err();
-    assert_eq!(error.file, folder.path("lights.scene.toml"));
-    assert_eq!(error.key, "fix ids");
-    assert!(error.message.contains("migrate"), "{error}");
-    folder.write("lights.scene.toml", LIGHTS);
     let broken = folder
         .read("room.scene.toml")
         .replace("material = \"grey\"", "material = \"nothing\"");
@@ -199,6 +189,26 @@ fn a_fix_writes_nothing_and_refuses_an_old_file_or_a_scene_that_does_not_load() 
     assert_eq!(error.code, code::BAD_REFERENCE);
     assert_eq!(error.file, folder.path("room.scene.toml"));
     assert_eq!(folder.read("room.scene.toml"), broken);
+}
+
+#[test]
+fn a_fix_writes_nothing_and_refuses_a_file_that_is_not_format_1() {
+    for (name, old) in [
+        ("fix-unnamed", LIGHTS.replace("format = 1\n\n", "")),
+        ("fix-zero", LIGHTS.replace("format = 1\n", "format = 0\n")),
+    ] {
+        let folder = unfixed(name);
+        folder.write("lights.scene.toml", &old);
+        let room = folder.read("room.scene.toml");
+        let error = folder
+            .project()
+            .fix(&folder.path("room.scene.toml"))
+            .unwrap_err();
+        assert_eq!(error.file, folder.path("lights.scene.toml"), "{name}");
+        assert!(error.message.contains("format"), "{name}: {error}");
+        assert_eq!(folder.read("lights.scene.toml"), old, "{name}");
+        assert_eq!(folder.read("room.scene.toml"), room, "{name}");
+    }
 }
 
 #[test]

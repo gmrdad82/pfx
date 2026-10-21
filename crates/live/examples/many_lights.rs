@@ -15,7 +15,9 @@ const COUNTS: [usize; 3] = [0, 16, 128];
 
 fn street(lights: usize) -> String {
     let mut text = String::from(
-        "materials = [\"street.materials.toml\"]
+        "format = 1
+
+materials = [\"street.materials.toml\"]
 fallback = \"asphalt\"
 
 [mesh.block]
@@ -109,7 +111,7 @@ fn folder(lights: usize) -> PathBuf {
     .unwrap();
     std::fs::write(
         root.join("street.materials.toml"),
-        "[materials.asphalt]\nbase = [0.08, 0.08, 0.09]\nroughness = 0.6\n\n[materials.wall]\nbase = [0.5, 0.45, 0.4]\nroughness = 0.9\n\n[materials.paint]\nbase = [0.6, 0.05, 0.04]\nroughness = 0.3\n",
+        "format = 1\n\n[materials.asphalt]\nbase = [0.08, 0.08, 0.09]\nroughness = 0.6\n\n[materials.wall]\nbase = [0.5, 0.45, 0.4]\nroughness = 0.9\n\n[materials.paint]\nbase = [0.6, 0.05, 0.04]\nroughness = 0.3\n",
     )
     .unwrap();
     std::fs::write(root.join("street.scene.toml"), street(lights)).unwrap();

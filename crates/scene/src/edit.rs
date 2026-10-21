@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use toml_edit::{Array, ArrayOfTables, DocumentMut, InlineTable, Item, Table, Value as Toml};
 
-use crate::migrate::add_ids;
+use crate::ids::add_ids;
 use crate::paths::slashed;
 use crate::project::Project;
 use crate::types::{FileKind, Material};
@@ -819,10 +819,7 @@ impl Tree {
             ));
         }
         if doc.get("format").and_then(Item::as_integer).unwrap_or(0) != i64::from(crate::FORMAT) {
-            return Err(Refusal::new(
-                path,
-                "is not format 1; migrate it before editing it",
-            ));
+            return Err(Refusal::new(path, "is not format 1, so it is not edited"));
         }
         let kind = if role == Role::Library {
             FileKind::Materials

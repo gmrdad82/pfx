@@ -79,14 +79,21 @@ fn a_file_that_cannot_be_written_back_exactly_is_not_opened() {
 }
 
 #[test]
-fn a_format_0_file_is_migrated_before_it_is_edited() {
-    let folder = Folder::room("edit-old");
-    folder.write("lights.scene.toml", &LIGHTS.replace("format = 1\n\n", ""));
-    let error = SceneEdit::open(folder.path("room.scene.toml"))
-        .err()
-        .expect("a format 0 file is refused");
-    assert!(error.message.contains("migrate"), "{error}");
-    assert!(error.file.ends_with("lights.scene.toml"));
+fn a_file_that_is_not_format_1_is_not_opened_for_editing() {
+    for (name, old) in [
+        ("edit-unnamed", LIGHTS.replace("format = 1\n\n", "")),
+        ("edit-zero", LIGHTS.replace("format = 1\n", "format = 0\n")),
+        ("edit-newer", LIGHTS.replace("format = 1\n", "format = 2\n")),
+    ] {
+        let folder = Folder::room(name);
+        folder.write("lights.scene.toml", &old);
+        let error = SceneEdit::open(folder.path("room.scene.toml"))
+            .err()
+            .expect("a file that is not format 1 is refused");
+        assert!(error.message.contains("format"), "{name}: {error}");
+        assert!(error.file.ends_with("lights.scene.toml"), "{name}: {error}");
+        assert_eq!(folder.read("lights.scene.toml"), old, "{name}");
+    }
 }
 
 #[test]

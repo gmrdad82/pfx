@@ -4,7 +4,7 @@ use std::path::Path;
 
 use common::{Folder, LAMP, LIGHTS, ROOM, show};
 use pfx_scene::types::{Casters, Plates, ProxyKind};
-use pfx_scene::{Diagnostic, File, FileKind, Id, Kind, SceneEdit, Target, check, code, migrate};
+use pfx_scene::{Diagnostic, File, Id, Kind, SceneEdit, Target, check, code};
 
 const MORE: &str = "\n[[object]]\nid = \"card000001\"\nname = \"card\"\nmesh = \"panel\"\nface_camera = true\n\n[[object]]\nid = \"s10t000001\"\nname = \"slot\"\nmesh = \"block\"\ndynamic = true\n\n[[object]]\nid = \"kn0b000001\"\nname = \"knob\"\nmesh = \"block\"\nparent = \"crate\"\n\n[[object]]\nid = \"p1nned0001\"\nname = \"pinned\"\nmesh = \"block\"\nparent = \"crate\"\ndynamic = false\n";
 
@@ -345,22 +345,6 @@ fn an_unsaved_proxies_buffer_is_checked_against_its_scene() {
         )],
         "{}",
         show(&marks)
-    );
-}
-
-#[test]
-fn a_format_0_plates_table_migrates_its_paths_to_the_root() {
-    let text = "[plates]\ndir = \"plates/main\"\nproxies = \"room.proxies.toml\"\n";
-    let migrated = migrate(
-        text,
-        Path::new("scenes/room.scene.toml"),
-        Path::new("/project"),
-        FileKind::Scene,
-    )
-    .unwrap();
-    assert_eq!(
-        migrated,
-        "format = 1\n\n[plates]\ndir = \"scenes/plates/main\"\nproxies = \"scenes/room.proxies.toml\"\n"
     );
 }
 

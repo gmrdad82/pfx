@@ -21,7 +21,7 @@ fn main() {
 }
 ```
 
-`fix` writes nothing itself: it returns the patch group, checked as a whole, and `write()` writes it, refused when a file no longer holds the text the group starts from. A scene that does not load is refused with its errors in `EditError::diagnostics`, and a format 0 file is refused too: [migrate it](scene-migrate.md), which writes its ids. An editor that opens a scene through `SceneEdit` fills them on its first write of each file.
+`fix` writes nothing itself: it returns the patch group, checked as a whole, and `write()` writes it, refused when a file no longer holds the text the group starts from. A scene that does not load is refused with its errors in `EditError::diagnostics`. An editor that opens a scene through `SceneEdit` fills them on its first write of each file.
 
 ## How a filled id is made
 

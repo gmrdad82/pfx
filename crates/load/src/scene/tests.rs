@@ -1570,57 +1570,6 @@ fn open_with_wakes_the_viewer_after_the_debounce_and_pending_says_when() {
 }
 
 #[test]
-fn a_format_0_scene_migrates_in_memory_with_one_warning_per_file() {
-    let scene = Scene::open(fixtures().join("legacy.scene.toml")).unwrap();
-    assert_eq!(scene.warnings.len(), 1, "{:?}", scene.warnings);
-    assert!(scene.warnings[0].file.ends_with("legacy.scene.toml"));
-    assert_eq!(scene.object("crate").unwrap().id, 7);
-    assert_eq!(scene.object("floor").unwrap().id, 1);
-    assert_eq!(scene.bodies["crate"].restitution, 0.4);
-    assert!(scene.lights.contains_key("warm"));
-    assert_eq!(scene.fallback.as_deref(), Some("grey"));
-    let room = Scene::open(fixtures().join("room.scene.toml")).unwrap();
-    assert!(room.warnings.is_empty(), "{:?}", room.warnings);
-}
-
-#[test]
-fn migrate_rewrites_format_0_on_disk_keeping_comments_and_dry_run_writes_nothing() {
-    let folder = Folder::new("migrate");
-    let path = folder.path("legacy.scene.toml");
-    let before = folder.read("legacy.scene.toml");
-    let memory = Scene::open(&path).unwrap();
-    let planned = migrate(&path, true).unwrap();
-    assert_eq!(folder.read("legacy.scene.toml"), before);
-    assert_eq!(planned.patches.len(), 1);
-    assert!(planned.patches[0].file.ends_with("legacy.scene.toml"));
-    let done = migrate(&path, false).unwrap();
-    assert_eq!(done, planned);
-    let text = folder.read("legacy.scene.toml");
-    assert_eq!(text, planned.patches[0].after);
-    assert!(
-        text.starts_with("format = 1\n\n# a format 0 scene"),
-        "{text}"
-    );
-    assert!(text.contains("scale = 0.7 # small\npick = 7\n"), "{text}");
-    assert!(
-        text.contains("[object.body]\nrestitution = 0.4\n"),
-        "{text}"
-    );
-    let disk = Scene::open(&path).unwrap();
-    assert!(disk.warnings.is_empty(), "{:?}", disk.warnings);
-    assert_eq!(disk.objects, memory.objects);
-    assert_eq!(disk.bodies, memory.bodies);
-    assert!(migrate(&path, false).unwrap().is_empty());
-    folder.write(
-        "broken.scene.toml",
-        "[[object]]\nname = \"x\"\nmesh = \"none\"\n",
-    );
-    let broken = folder.read("broken.scene.toml");
-    assert!(migrate(folder.path("broken.scene.toml"), false).is_err());
-    assert_eq!(folder.read("broken.scene.toml"), broken);
-}
-
-#[test]
 fn fix_writes_the_missing_ids_and_refuses_a_scene_that_does_not_check() {
     let folder = Folder::new("fix");
     let text = "format = 1\n\n# by hand\n[mesh.block]\nfile = \"block.gltf\"\n\n[[object]]\nname = \"box\"\nmesh = \"block\"\n";
@@ -1644,7 +1593,6 @@ fn fix_writes_the_missing_ids_and_refuses_a_scene_that_does_not_check() {
     folder.write("hand.scene.toml", &broken);
     assert!(fix(&path, false).is_err());
     assert_eq!(folder.read("hand.scene.toml"), broken);
-    assert!(fix(folder.path("legacy.scene.toml"), false).is_err());
 }
 
 #[test]

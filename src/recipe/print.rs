@@ -463,19 +463,18 @@ mod tests {
     }
 
     #[test]
-    fn an_old_scene_is_imported_once_migrated_inside_and_printed() {
+    fn a_scene_is_imported_once_and_printed() {
         let dir = scene_dir("pfx-scene-import");
-        let toml = dir.join("legacy.scene.toml");
+        let toml = dir.join("room.scene.toml");
         let original = std::fs::read(&toml).unwrap();
         migrate(&toml).unwrap();
-        let pfx = dir.join("legacy.pitofx");
+        let pfx = dir.join("room.pitofx");
         assert_eq!(std::fs::read(&toml).unwrap(), original);
         let found = held(&pfx).unwrap();
         assert_eq!(found.kind, Kind::Scene);
         let (name, text) = found.pick(&pfx, None).unwrap();
-        assert_eq!(name, "legacy.scene.toml");
+        assert_eq!(name, "room.scene.toml");
         assert!(text.starts_with("format = 1"), "{text}");
-        assert!(text.contains("scale = 0.7 # small"), "{text}");
         assert!(found.texts.iter().any(|(n, _)| n == "lights.scene.toml"));
         pfx_load::scene::Scene::open(&pfx).unwrap();
         let again = migrate(&toml).unwrap_err();
@@ -498,7 +497,7 @@ mod tests {
     fn a_folder_is_imported_scene_by_scene_and_a_toml_is_refused_by_print() {
         let dir = scene_dir("pfx-folder-import");
         migrate(&dir).unwrap();
-        for scene in ["legacy", "lights", "room"] {
+        for scene in ["lights", "room"] {
             assert!(dir.join(format!("{scene}.pitofx")).is_file(), "{scene}");
         }
         assert!(!dir.join("materials.pitofx").exists());

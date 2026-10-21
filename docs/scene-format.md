@@ -1,6 +1,6 @@
 # The scene format, version 1
 
-This is the specification of format 1: one TOML format for 3D scenes, prefabs, material libraries and their projects, which an engine and an editor both read and write. It is pure data: no engine type, no GPU and no clock. `pfx-scene` parses it, checks it, writes it back keeping comments, spacing and order, and migrates older files. An engine loads a checked project into its own types; an editor edits it through the crate's writer; a build tool emits it.
+This is the specification of format 1: one TOML format for 3D scenes, prefabs, material libraries and their projects, which an engine and an editor both read and write. It is pure data: no engine type, no GPU and no clock. `pfx-scene` parses it, checks it, and writes it back keeping comments, spacing and order. An engine loads a checked project into its own types; an editor edits it through the crate's writer; a build tool emits it.
 
 In pfx these files reach a user inside a scene's `.pitofx`, compressed in one file ([Scenes in a .pitofx file](#scenes-in-a-pfx-file), [.pitofx files](pfx-file.md#the-user-file)): this page is the format of the TOML inside it, which `pfx scene print <scene.pitofx>` shows and pfx's editor edits in its TOML panel.
 
@@ -14,9 +14,9 @@ In pfx these files reach a user inside a scene's `.pitofx`, compressed in one fi
 | `*.materials.toml` | a material library: `[materials.<name>]` tables. |
 | `*.proxies.toml` | a plate's invisible stand-ins: `[[proxy]]` entries. |
 
-The kind of a file comes from its name: `project.toml`, `*.scene.toml` (and a format 0 `scene.toml`), `*.prefab.toml`, `*.materials.toml` and `*.proxies.toml`. A format 0 material library may keep any name (`materials.toml`); it is read as a library because a scene's `materials` names it. Inside a `.pitofx` each TOML entry keeps such a name (`scenes/room.scene.toml`), and that is how its kind is told; a user opens and shares the `.pitofx`, never a loose entry.
+The kind of a file comes from its name: `project.toml`, `*.scene.toml` (or a plain `scene.toml`), `*.prefab.toml`, `*.materials.toml` and `*.proxies.toml`. A material library may keep any name (`materials.toml`); it is read as a library because a scene's `materials` names it. Inside a `.pitofx` each TOML entry keeps such a name (`scenes/room.scene.toml`), and that is how its kind is told; a user opens and shares the `.pitofx`, never a loose entry.
 
-Every file starts with `format = 1`. A file without `format` is format 0 and is read through the migration below.
+Every file starts with `format = 1`; a file without it is refused ([Format](#format)).
 
 Assets are referenced by path, never embedded: glTF 2.0 (`.glb`, or `.gltf` with its buffers beside it) for meshes and animation, PNG for images and sprite atlases, WAV or Ogg Vorbis for sound, TTF or OTF for fonts, Radiance `.hdr` for skies.
 
@@ -34,7 +34,7 @@ Assets are referenced by path, never embedded: glTF 2.0 (`.glb`, or `.gltf` with
 - A writer makes an id random (an editor, when a person adds an entry, passes its own random bits: `Id::from_bits` keeps the low 50), or derives it from a stable key it owns (a build, which must give the same bytes for the same input): `Id::derive` takes the first 50 bits of the SHA-256 of that key, such as the authoring file's project-relative path and the entry's name. The crate reads no clock and no system randomness. Either way the writer checks that the id is unique in the project.
 - An id is written once, when the entry is made, and never changes: renaming, moving or re-parenting keeps it. A tool that derives ids keeps them across renames by recording the id in its own source.
 - The checker refuses an id used twice anywhere in the project, naming both places (`duplicate-id`).
-- A hand-written entry may leave `id` out. The checker warns (`missing-id`), and the first write of that file through `pfx-scene` (an editor's save, a fix) adds one, derived as the migration derives them (below). Nothing else writes ids.
+- A hand-written entry may leave `id` out. The checker warns (`missing-id`), and the first write of that file through `pfx-scene` (an editor's save, a fix) adds one, derived as [Format](#format) says. Nothing else writes ids.
 - Names are labels. `name` on a list entry, and the key of a keyed table (`[mesh.<name>]`), are free text for people and may change. A list entry's `name` is required, non-empty, and has no space at either end; a material name also holds no control character (`bad-name`). Names stay unique within their kind across a scene and its includes (`duplicate-name`), so that a name can still stand for an id.
 
 ## References
@@ -285,7 +285,7 @@ The loader computes missing normals (smooth, area weighted); missing tangents ar
 | `hidden` | bool | `false` | not drawn; its parts are not uploaded. |
 | `clip` | array of `[nx, ny, nz, d]` | `[]` | at most two planes; a point `p` is cut where `n·p > d`. With the planes of the movers that move it, at most two. |
 | `content` | reference | none | a content: the image shown in the object's material's content layer. Two objects showing different content through one slot are refused by the loader. |
-| `pick` | unsigned integer | its 1-based place among the objects | the pick id. Format 0 called it `id`. |
+| `pick` | unsigned integer | its 1-based place among the objects | the pick id. |
 | `alpha_cutoff` | number, 0 to 1 | `0.5` | texels of a cut-out material below this alpha are dropped. |
 | `face_camera` | bool | `false` | a card: it keeps its position and scale, and turns every frame so its local +Z faces the camera with its +Y along the camera's up (its `rotate` is ignored). |
 | `dynamic` | bool | derived | whether the object moves or changes at run time: a plate leaves a dynamic object out, and a live renderer draws it over the plate (`[plates]`). Without the key, an object is dynamic when a `[[mover]]` moves it, when it is a character, when it is animated, when it faces the camera, or when its parent is dynamic; every other object is static. `true` marks what a game moves itself; `false` keeps an object static, and a character or an animated object refuses it. |
@@ -1184,19 +1184,11 @@ A proxy is never drawn. It stands in for one static object: it casts that object
 
 A box takes no `points` or `triangles`, and a hull no `at`, `rotate` or `size` (`bad-value`). The checker refuses a corner past the last point; keeping the winding counter-clockwise is the writer's part.
 
-## Migration
+## Format
 
-`format` counts whole versions; a file never mixes two. Reading an older file migrates it in memory and warns once per file (`old-format`); diagnostics on it point into the file as written. The migration also rewrites a file on disk through the same code, keeping comments, spacing and order. Format 0 to 1:
+`format` counts whole versions; a file never mixes two. Every file starts with `format = 1`: a file that names no format, or an older one, is refused (`old-format`), and a newer `format` than the reader knows is refused, naming the version it knows (`newer-format`).
 
-1. Adds `format = 1` on the first line, followed by a blank line.
-2. Rewrites each path from relative to its file to relative to the project root. A path that would leave the root is refused, as any such path is (`outside-root`). A lone scene with no `project.toml` has its own folder as its root, so a format 0 path with `..` past that folder can't migrate as it stands: the migration names each such path and suggests a `project.toml` at the deepest folder that holds every file the scene reads.
-3. Renames `[[object]] id` to `pick`.
-4. Moves each `[body.<object>]` into its object, in the same file, as `[object.body]`. A body whose object is in another file can't move (`migration`); move it by hand.
-5. Writes an `id` into every entry that can be referenced. References stay names; they still resolve, and an editor writes ids as it touches them.
-
-A migrated id is derived: `Id::derive` of `"<project-relative path>\n<kind>\n<name>"`, where the kind is the entry's table key (`mesh`, `object`, `light`, `emitter`, `mover`, `content`, `text`, `sound`, `rig`, `tiles`, `materials` or `proxy`) and the name is its `name` or table key (a proxy, which has no name, uses `"<object>\n<place>"`). If that id is taken, `"\n1"`, `"\n2"`, … is appended to the key until it is free. A written id goes after the entry's existing keys.
-
-A newer `format` than the reader knows is refused, naming the version it knows (`newer-format`).
+A derived id, the one `pfx scene fix` writes into an entry that has none, is `Id::derive` of `"<project-relative path>\n<kind>\n<name>"`, where the kind is the entry's table key (`mesh`, `object`, `light`, `emitter`, `mover`, `content`, `text`, `sound`, `rig`, `tiles`, `materials` or `proxy`) and the name is its `name` or table key (a proxy, which has no name, uses `"<object>\n<place>"`). If that id is taken, `"\n1"`, `"\n2"`, … is appended to the key until it is free. A written id goes after the entry's existing keys.
 
 ## Writing
 
@@ -1206,7 +1198,7 @@ A newer `format` than the reader knows is refused, naming the version it knows (
 - An entry is edited in the file that holds it, a material in its library; a section where it is, or in the root scene file when no file holds it yet. A new entry goes into the root scene file (a material into the first library) unless a file of the scene is given.
 - Every edit is checked before it is written: the edited texts are checked in memory as `check` checks them, and a refused edit writes nothing. An edit is also refused when a file changed on disk since it was read. Files are written by a temporary file and a rename.
 - Editors group patches into undo steps. Each edit returns a patch group: a label and one patch per file it touched, with that file's exact text before and after, so undo and redo bring the bytes back exactly. A group can span many edits (a drag), keeping the first text before and the last text after per file; a group whose net text is unchanged is no step. Patches and groups are plain values with their inverse, so an editor with its own history can apply them itself.
-- Ids are written only when an entry is made, or when a file is fixed or migrated; the first write of a file through the writer fills its missing ids.
+- Ids are written only when an entry is made, or when a file is fixed; the first write of a file through the writer fills its missing ids.
 
 The writer is `SceneEdit`, opened on a scene `.pitofx` (or a scene or prefab file of format 1 in a loose project):
 
@@ -1224,7 +1216,7 @@ edit.undo()?;
 - `SceneEdit::open`, an edit and a dry run read the scene's includes without recursing, so a scene that includes itself, or nests its includes more than 64 deep, is refused with the `include-cycle` or `include-depth` finding and its chain, as `Project::scene` gives it, on any stack.
 - `dry_run(|edit| …)` runs edits on the texts in memory and returns their merged group, labelled by its first edit, without writing a file or touching undo or `scene()`. Each edit sees the ones before it and the ids they made; the group is checked as a whole at the end, so a step may pass through a state that alone would be refused (an object naming a material the next edit adds). `apply(&group)` then writes it. Inside a dry run, `begin`, `undo`, `redo`, `apply`, `reload` and another dry run are refused.
 - `PatchGroup::after()` maps each file to its text after the group: the overlay for `Project::scene_with` and `check_with`, so an editor runs its own checks (asset contents) on an edit before it writes. `PatchGroup::write()` writes a group without an editor, refused when a file no longer holds the text the group starts from; a failed write puts back the files already written.
-- `Project::fix(file)` fills the missing ids of every file a scene or prefab reads (the file, its includes, its libraries, the prefabs it places and its proxies file), derived as the migration derives them, with every id of the project taken. It returns the patch group, checked as a whole, and writes nothing. A scene that does not load, a format 0 file (migrate it, which writes its ids) and a file that can't be written back byte for byte are refused. A scene that does not load is refused with the errors `Project::scene` gives in `EditError::diagnostics`: a cycle or a nesting too deep with its chain in the message and its includes or placements in `related`, as `check` reports them.
+- `Project::fix(file)` fills the missing ids of every file a scene or prefab reads (the file, its includes, its libraries, the prefabs it places and its proxies file), derived as [Format](#format) says, with every id of the project taken. It returns the patch group, checked as a whole, and writes nothing. A scene that does not load and a file that can't be written back byte for byte are refused. A scene that does not load is refused with the errors `Project::scene` gives in `EditError::diagnostics`: a cycle or a nesting too deep with its chain in the message and its includes or placements in `related`, as `check` reports them.
 
 ## Checking
 
@@ -1241,7 +1233,6 @@ impl Project {
     pub fn check_with(&self, overlay: BTreeMap<PathBuf, String>) -> Vec<Diagnostic>;
     pub fn fix(&self, file: &Path) -> Result<PatchGroup, EditError>;
     pub fn read(&self, file: &Path) -> Result<File, Vec<Diagnostic>>;
-    pub fn migrate(&self, file: &Path) -> Result<String, Vec<Diagnostic>>;
     pub fn root_of(file: &Path) -> PathBuf;
 }
 
@@ -1253,8 +1244,6 @@ pub struct EditError {
     pub message: String,
     pub diagnostics: Vec<Diagnostic>,
 }
-
-pub fn migrate(text: &str, file: &Path, root: &Path, kind: FileKind) -> Result<String, Vec<Diagnostic>>;
 
 pub const MAX_DEPTH: usize = 64;
 
@@ -1282,14 +1271,14 @@ pub struct Location {
 - `Project::check` checks every file `Project::open` found; each top scene (a scene no other scene includes, or one caught in an include cycle) with everything it reads; each prefab on its own; and each proxies file against the scenes whose `[plates]` name it, or against the project's objects when no scene does. It resolves every include, prefab, reference and id, and checks that each asset path exists with that case.
 - `scene_with` and `check_with` resolve and check as `scene` and `check` do, with the overlay's texts in place of the files they name. Its paths are absolute or relative to the root; a file only the overlay holds counts as existing, so an unsaved new include resolves.
 - `check` runs on an editor's unsaved buffer: it checks that one text in every context it takes part in, against the project for references, and returns the diagnostics located in that file, so a TOML editor marks errors as it types.
-- `Project::read` returns one file as its typed data (`File::Scene`, `File::Materials`, …), migrated in memory when it is older. `Project::migrate` and `migrate` return a file's text migrated to format 1, or the diagnostics of the steps that can't run; a format 1 text comes back as it is.
+- `Project::read` returns one file as its typed data (`File::Scene`, `File::Materials`, …).
 - `Project::scene` returns the resolved scene, with its warnings: includes merged, prefabs placed with namespaced ids, every reference rewritten to the key of the entry it names, and paths relative to the root. A top-level entry's key is its name; a placed entry's key is `"<placement key>/<inner key>"`. Every object's `dynamic` is set, derived where the file leaves it out. `Scene::rigs` holds the rigs, each `target` rewritten to its object's key like any reference. `Scene::proxies` holds the proxies of `[plates] proxies`, each keyed by its 0-based place in its file, and `Scene::files` lists every file the scene read, the proxies file and the tile layers' prefabs among them. `Scene::tiles` holds the tile layers, keyed by name, each palette value rewritten to its prefab's root-relative path (a placement's id to that placement's prefab); a loader resolves each of those prefabs once (`Project::scene` on its path) and places it at every cell that names it. `Tiles::cells` lists a layer's filled cells as `([i, j], tile)`, from `rows` or `cells`, and `Tiles::position` gives a cell's position. `Scene::layers` holds the project's `[layers]`, empty without them, so a loader builds its physics from the scene alone.
 - A layer name is checked against `project.toml` as the overlay or the disk holds it. When `[layers]` can't be read (the file doesn't parse, or the table has the wrong shape), the layer names of scenes and prefabs go unchecked and `Scene::layers` is empty; `Project::check` reports the project file's own error.
 - `file` is relative to the project root. Lines and columns are 1-based, columns count characters, and `end_line` and `end_column` point just past the span.
 - `related` holds the other places a diagnostic names: the first use of a duplicate id, each entry an ambiguous name matches, the other file of a table held twice, and for an include or prefab cycle or a chain nested too deep, the `include` or `prefab` key of each file on the chain, outermost first, ending with the diagnostic's own place.
 - Resolving keeps the chain of files it is in on the heap, never on the call stack, so the stack it needs stays the same however deep includes and prefabs nest: the tests resolve includes and placements 64 deep, and refuse chains 1000 deep, on a 2 MB thread in a debug build.
 - `key` is the dotted path to the value, with a list entry named by its id when it has one and by its 0-based place otherwise: `object.7k2m9q4xzr.at`, `light.0.intensity`.
-- `severity` is `Error` or `Warning`. The warnings are `missing-id` and `old-format`; everything else is an error.
+- `severity` is `Error` or `Warning`. The one warning is `missing-id`; everything else is an error.
 - `code` is a stable short name that editors may key help on:
 
 | code | when |
@@ -1320,9 +1309,8 @@ pub struct Location {
 | `held-twice` | `fallback` or a one-file table is held by two files of a scene. |
 | `bad-override` | an `[object.set]` key names no entry or a key that entry doesn't take, or its value doesn't fit (a layer name the project doesn't name among them), or it puts a body or a character under an ordinary object or a moved placement, or it breaks a relation (Prefabs). |
 | `placement-key` | a placement holds a key only an object with a mesh takes (`body`, `character`, `trigger` and `animation` among them). |
-| `old-format` | a format 0 file, read through the migration (a warning). |
+| `old-format` | a file that names no format, or an older one than format 1. |
 | `newer-format` | a file's `format` is newer than the reader knows. |
-| `migration` | a migration step can't run, such as a `[body.<object>]` whose object is in another file. |
 
 ## JSON Schema
 
@@ -1346,4 +1334,4 @@ A `.pitofx` scene lays its files over the project: inside it, a path resolves to
 
 ## The crate
 
-`pfx-scene` is licensed with pfx (AGPL-3.0-only, or a commercial licence: [Licence](../README.md#licence)). It depends on `toml`, `toml_edit`, `serde` and `serde_json`, and on `pfx-file` (`crates/file`) for `.pitofx` scenes. The optional `schema` feature adds `schemars` for `json_schema`. Vectors are plain arrays (`[f32; 3]`), never a maths crate's types. Its semver is its own; the `format` number changes only with a migration.
+`pfx-scene` is licensed with pfx (AGPL-3.0-only, or a commercial licence: [Licence](../README.md#licence)). It depends on `toml`, `toml_edit`, `serde` and `serde_json`, and on `pfx-file` (`crates/file`) for `.pitofx` scenes. The optional `schema` feature adds `schemars` for `json_schema`. Vectors are plain arrays (`[f32; 3]`), never a maths crate's types. Its semver is its own; the `format` number changes only when the format does.

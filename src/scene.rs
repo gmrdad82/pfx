@@ -186,13 +186,9 @@ fn import_recipe(path: &Path, target: &Path, bare: bool) -> Result<Vec<String>, 
 }
 
 fn import_scene(path: &Path, target: &Path) -> Result<(), String> {
-    pfx_load::scene::pack(path, target).map_err(|e| e.to_string())?;
-    let migrated = pfx_load::scene::migrate(target, false);
-    if let Err(e) = migrated {
-        let _ = std::fs::remove_file(target);
-        return Err(e.to_string());
-    }
-    Ok(())
+    pfx_load::scene::pack(path, target)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn import(path: &Path, dry_run: bool, bare: bool) -> Result<String, String> {
@@ -289,34 +285,26 @@ fn report(group: &PatchGroup, done: &str, would: &str, dry_run: bool) -> String 
 
 pub fn run(command: &Command) -> Result<(), String> {
     let path = &command.path;
-    let pfx = pfx_load::scene::is_pfx_path(path);
-    let (outcome, done, would) = match command.action {
+    match command.action {
         Action::Migrate if path.is_dir() => {
             println!("{}", import_folder(path, command.dry_run, command.bare)?);
-            return Ok(());
         }
-        Action::Migrate if !pfx => {
-            println!("{}", import(path, command.dry_run, command.bare)?);
-            return Ok(());
+        Action::Migrate if pfx_load::scene::is_pfx_path(path) => {
+            return Err(format!(
+                "{} is a pfx document already; scene migrate imports a .toml",
+                path.display()
+            ));
         }
-        Action::Migrate => (
-            pfx_load::scene::migrate(path, command.dry_run),
-            "migrated",
-            "would migrate",
-        ),
+        Action::Migrate => println!("{}", import(path, command.dry_run, command.bare)?),
         Action::Fix => {
             if let Some(refusal) = legacy(path) {
                 return Err(refusal);
             }
-            (
-                pfx_load::scene::fix(path, command.dry_run),
-                "fixed",
-                "would fix",
-            )
+            let group =
+                pfx_load::scene::fix(path, command.dry_run).map_err(|error| error.to_string())?;
+            println!("{}", report(&group, "fixed", "would fix", command.dry_run));
         }
-    };
-    let group = outcome.map_err(|error| error.to_string())?;
-    println!("{}", report(&group, done, would, command.dry_run));
+    }
     Ok(())
 }
 

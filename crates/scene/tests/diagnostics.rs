@@ -479,7 +479,7 @@ fn every_code_fires_where_it_should() {
         1,
         1,
     );
-    assert_eq!(old.severity, Severity::Warning);
+    assert_eq!(old.severity, Severity::Error);
 
     let newer = expect(
         "newer-format",
@@ -490,16 +490,6 @@ fn every_code_fires_where_it_should() {
         10,
     );
     assert!(newer.message.contains("format 1"), "{newer}");
-
-    let migration = expect(
-        "migration",
-        &[("a.scene.toml", "[body.ghost]\nkind = \"fixed\"\n")],
-        code::MIGRATION,
-        "a.scene.toml",
-        1,
-        1,
-    );
-    assert!(migration.message.contains("ghost"), "{migration}");
 
     {
         let folder = Folder::empty("not-utf8");
@@ -899,4 +889,31 @@ fn a_scene_file_that_is_not_found_is_named_in_a_diagnostic() {
     let edit = pfx_scene::SceneEdit::open(&missing).err().unwrap();
     assert_eq!(edit.code, code::MISSING_FILE, "{edit}");
     assert!(edit.message.contains("gone.scene.toml"), "{edit}");
+}
+
+#[test]
+fn a_file_naming_format_0_or_none_is_refused_wherever_it_sits() {
+    let (_folder, diagnostics) = run("zero-format", &[("a.scene.toml", "format = 0\n")]);
+    let zero = find(&diagnostics, code::OLD_FORMAT);
+    at(zero, "a.scene.toml", 1, 10);
+    assert_eq!(zero.severity, Severity::Error);
+    assert!(zero.message.contains("older than this reader"), "{zero}");
+
+    let (_folder, diagnostics) = run(
+        "old-library",
+        &[
+            (
+                "a.scene.toml",
+                "format = 1\n\nmaterials = [\"m.materials.toml\"]\n",
+            ),
+            (
+                "m.materials.toml",
+                "[materials.grey]\nbase = [0.5, 0.5, 0.5]\n",
+            ),
+        ],
+    );
+    let library = find(&diagnostics, code::OLD_FORMAT);
+    at(library, "m.materials.toml", 1, 1);
+    assert_eq!(library.severity, Severity::Error);
+    assert!(library.message.contains("names no format"), "{library}");
 }

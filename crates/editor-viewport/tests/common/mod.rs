@@ -51,13 +51,6 @@ pub fn group(name: &str) -> PathBuf {
     scene
 }
 
-pub fn format0(name: &str) -> PathBuf {
-    let to = scratch(name);
-    copy(&data("stand"), &to);
-    copy(&data("format0"), &to);
-    to.join(SCENE)
-}
-
 pub fn read(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap()
 }

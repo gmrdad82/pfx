@@ -7,7 +7,6 @@ use toml::Spanned;
 use toml::de::{DeTable, DeValue, ValueDeserializer};
 
 use crate::code;
-use crate::migrate::{self, Migration};
 use crate::spans::{KeyPath, Part, Spans};
 use crate::types::{
     Camera, Content, Emitter, FORMAT, File, FileKind, Finish, FinishKeys, Flare, Haze, Light,
@@ -42,7 +41,7 @@ impl Finding {
             path,
             part,
             span: None,
-            severity: if code == code::MISSING_ID || code == code::OLD_FORMAT {
+            severity: if code == code::MISSING_ID {
                 Severity::Warning
             } else {
                 Severity::Error
@@ -102,62 +101,18 @@ pub(crate) struct Doc {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Origin {
-    pub(crate) spans: Spans,
-    pub(crate) bodies: BTreeMap<usize, String>,
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct Parsed {
     pub(crate) kind: FileKind,
     pub(crate) format: u32,
     pub(crate) text: String,
     pub(crate) spans: Spans,
-    pub(crate) origin: Option<Origin>,
     pub(crate) doc: Option<Doc>,
     pub(crate) findings: Vec<Finding>,
 }
 
 impl Parsed {
-    pub(crate) fn translate(&self, path: &[String]) -> KeyPath {
-        let Some(origin) = &self.origin else {
-            return path.to_vec();
-        };
-        match path {
-            [list, place, key, rest @ ..] if list == "object" && key == "pick" => {
-                let mut out = vec![list.clone(), place.clone(), "id".to_string()];
-                out.extend(rest.iter().cloned());
-                out
-            }
-            [list, place, key, rest @ ..] if list == "object" && key == "body" => {
-                match place
-                    .parse::<usize>()
-                    .ok()
-                    .and_then(|at| origin.bodies.get(&at))
-                {
-                    Some(name) => {
-                        let mut out = vec!["body".to_string(), name.clone()];
-                        out.extend(rest.iter().cloned());
-                        out
-                    }
-                    None => path.to_vec(),
-                }
-            }
-            [list, place, key] if key == "id" && !origin.spans.has(path) => {
-                vec![list.clone(), place.clone()]
-            }
-            _ => path.to_vec(),
-        }
-    }
-
-    pub(crate) fn shown_spans(&self) -> &Spans {
-        self.origin
-            .as_ref()
-            .map_or(&self.spans, |origin| &origin.spans)
-    }
-
     pub(crate) fn locate(&self, path: &[String], part: Part) -> Range<usize> {
-        self.shown_spans().span(&self.translate(path), part)
+        self.spans.span(path, part)
     }
 
     pub(crate) fn file(&self) -> Option<File> {
@@ -434,10 +389,6 @@ impl Reader<'_> {
     }
 }
 
-pub(crate) struct Context<'a> {
-    pub(crate) root: &'a Path,
-}
-
 fn format_of(table: &DeTable<'_>) -> Result<u32, (Range<usize>, String)> {
     let Some(value) = table.get("format") else {
         return Ok(0);
@@ -456,13 +407,12 @@ fn format_of(table: &DeTable<'_>) -> Result<u32, (Range<usize>, String)> {
     }
 }
 
-pub(crate) fn parse(file: &Path, text: &str, kind: FileKind, context: &Context<'_>) -> Parsed {
+pub(crate) fn parse(file: &Path, text: &str, kind: FileKind) -> Parsed {
     let mut parsed = Parsed {
         kind,
         format: FORMAT,
         text: text.to_string(),
         spans: Spans::new(text, None),
-        origin: None,
         doc: None,
         findings: Vec::new(),
     };
@@ -529,62 +479,28 @@ pub(crate) fn parse(file: &Path, text: &str, kind: FileKind, context: &Context<'
         return parsed;
     }
     if format < FORMAT {
-        let Migration {
-            text: migrated,
-            bodies,
-            problems,
-        } = match migrate::migrate(text, file, context.root, kind, false) {
-            Ok(migration) => migration,
-            Err(problems) => {
-                for problem in problems {
-                    parsed.findings.push(Finding::new(
-                        file,
-                        problem.path,
-                        Part::Value,
-                        problem.code,
-                        problem.message,
-                    ));
-                }
-                parsed.spans = spans;
-                return parsed;
-            }
+        let (path, message) = if table.get_ref().contains_key("format") {
+            (
+                vec!["format".into()],
+                format!("format = {format} is older than this reader, which reads format {FORMAT}"),
+            )
+        } else {
+            (
+                Vec::new(),
+                format!(
+                    "this file names no format, expected `format = {FORMAT}` on its first line"
+                ),
+            )
         };
         parsed.findings.push(Finding::new(
             file,
-            Vec::new(),
+            path,
             Part::Value,
             code::OLD_FORMAT,
-            format!("this file is format {format}; it is read as format {FORMAT} and its migration rewrites it"),
+            message,
         ));
-        for problem in problems {
-            parsed.findings.push(Finding::new(
-                file,
-                problem.path,
-                Part::Value,
-                problem.code,
-                problem.message,
-            ));
-        }
-        let mut again = parse(file, &migrated, kind, context);
-        again.format = format;
-        again.origin = Some(Origin { spans, bodies });
-        again.text = text.to_string();
-        let translated: Vec<Finding> = again
-            .findings
-            .drain(..)
-            .map(|mut finding| {
-                if let Some(span) = finding.span.take()
-                    && let Some((path, part)) = again.spans.path_at(&span)
-                {
-                    finding.path = path;
-                    finding.part = part;
-                }
-                finding
-            })
-            .collect();
-        parsed.findings.extend(translated);
-        again.findings = parsed.findings;
-        return again;
+        parsed.spans = spans;
+        return parsed;
     }
     parsed.spans = spans.clone();
     let mut reader = Reader {
@@ -676,19 +592,6 @@ pub(crate) fn parse(file: &Path, text: &str, kind: FileKind, context: &Context<'
     parsed
 }
 
-pub(crate) fn plain(text: &str, kind: FileKind) -> Parsed {
-    let table = DeTable::parse(text).ok();
-    Parsed {
-        kind,
-        format: 0,
-        text: text.to_string(),
-        spans: Spans::new(text, table.as_ref()),
-        origin: None,
-        doc: None,
-        findings: Vec::new(),
-    }
-}
-
 pub(crate) fn report<P: std::ops::Deref<Target = Parsed>>(
     findings: &[Finding],
     parsed: &BTreeMap<PathBuf, P>,
@@ -701,7 +604,7 @@ pub(crate) fn report<P: std::ops::Deref<Target = Parsed>>(
             {
                 Some(parsed) => {
                     let range = span.unwrap_or_else(|| parsed.locate(path, part));
-                    let spans = parsed.shown_spans();
+                    let spans = &parsed.spans;
                     let (line, column) = spans.position(range.start);
                     let (end_line, end_column) = spans.position(range.end);
                     let key = crate::spans::dotted(path, &parsed.spans);

@@ -7,7 +7,7 @@ use pfx_editor_doc::{Edit, Files, History};
 use pfx_editor_viewport::edit::{STARTS_FROM, commit, stale};
 use pfx_editor_viewport::gizmo::Pose;
 use pfx_editor_viewport::{ScenePatch, Selection};
-use pfx_load::scene::{PatchGroup, SceneEdit, migrate};
+use pfx_load::scene::{PatchGroup, SceneEdit};
 
 fn pose(edit: &SceneEdit, name: &str) -> Pose {
     let index = Selection::named(edit.scene(), name).unwrap().index;
@@ -29,25 +29,6 @@ fn files_at(path: &Path, text: &str) -> Files {
     let mut files = Files::new();
     files.open(path, text);
     files
-}
-
-#[test]
-fn the_fixtures_are_the_engines_own_migration_of_format_0() {
-    let path = common::format0("edit-migrate");
-    let rewrites = migrate(&path, false).unwrap();
-    assert_eq!(
-        rewrites
-            .patches
-            .iter()
-            .filter(|p| p.before != p.after)
-            .count(),
-        2
-    );
-    for name in [common::SCENE, "materials.toml"] {
-        let migrated = common::read(&path.with_file_name(name));
-        assert!(migrated.starts_with("format = 1\n"), "{migrated}");
-        assert_eq!(migrated, common::read(&common::data("stand").join(name)));
-    }
 }
 
 #[test]

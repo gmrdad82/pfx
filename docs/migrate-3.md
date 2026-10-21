@@ -94,7 +94,7 @@ A scene folder (a `.scene.toml` with its includes, `.materials.toml` files, pref
 pfx scene migrate content/room.scene.toml
 ```
 
-It imports the scene and every file it reads into `content/room.pitofx` beside it, once, and rewrites any format 0 file as format 1 inside it, keeping its comments; the `.toml` is never written again. `pfx scene print content/room.pitofx [file]` shows each TOML file inside it. The packed scene opens from its file alone: `Scene::open("content/room.pitofx")`, `pfx gui content/room.pitofx`, `pfx shot content/room.pitofx`.
+It imports the scene and every file it reads into `content/room.pitofx` beside it, once; the `.toml` is never written again. `pfx scene print content/room.pitofx [file]` shows each TOML file inside it. The packed scene opens from its file alone: `Scene::open("content/room.pitofx")`, `pfx gui content/room.pitofx`, `pfx shot content/room.pitofx`.
 
 ## Converting a recipe
 

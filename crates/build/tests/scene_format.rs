@@ -327,3 +327,23 @@ fn a_declared_project_root_holds_assets_in_place_and_must_carry_a_project_file()
     assert_eq!(error.path, "project_root");
     assert!(error.text.contains("project.toml"), "{}", error.text);
 }
+
+#[test]
+fn a_scene_format_other_than_1_is_refused_at_its_key_and_writes_no_scene() {
+    for format in [0, 2] {
+        let name = format!("format-refused-{format}");
+        let (root, mut r) = project("table", &name, "", &[]);
+        r.output.scene_format = format;
+        let error = emit(&root, &r).unwrap_err();
+        assert_eq!(error.path, "output.scene_format", "{error}");
+        assert!(
+            error.text.contains(&format!("not {format}")),
+            "{format}: {error}"
+        );
+        assert!(!root.join("scenes/table.scene.toml").exists(), "{format}");
+        assert!(
+            !root.join("scenes/table.materials.toml").exists(),
+            "{format}"
+        );
+    }
+}

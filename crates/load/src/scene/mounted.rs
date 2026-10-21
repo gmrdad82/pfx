@@ -202,7 +202,7 @@ pub fn pack(scene: &Path, out: &Path) -> Result<usize, SceneError> {
     let project = build::project(&root)?;
     let bytes =
         pfx_scene::pack(&project, &absolute(scene)).map_err(|found| refused(&root, &found))?;
-    let staged = out.with_extension("pfx.tmp");
+    let staged = out.with_extension("pitofx.tmp");
     std::fs::write(&staged, &bytes)
         .and_then(|()| std::fs::rename(&staged, out))
         .map_err(|e| SceneError::new(out, None, format!("cannot write: {e}")))?;

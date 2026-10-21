@@ -1,13 +1,12 @@
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
-use pfx_scene::{EditError, PatchGroup, Project, SceneEdit};
+use pfx_scene::{EditError, PatchGroup, SceneEdit};
 
 const USAGE: &str = "usage: scene-write <scene> move <object> <x> <y> <z>
        scene-write <scene> material <object> <material>
-       scene-write <scene> rename <object> <new name>
-       scene-write migrate <file>";
+       scene-write <scene> rename <object> <new name>";
 
 fn paint(code: &str, text: &str) -> String {
     if std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
@@ -50,29 +49,9 @@ fn usage() -> EditError {
     }
 }
 
-fn migrate(file: &Path) -> Result<String, String> {
-    let absolute = std::path::absolute(file).map_err(|e| e.to_string())?;
-    let project = Project::open(&Project::root_of(&absolute)).map_err(|d| d.to_string())?;
-    let relative = project.relative(&absolute);
-    let text = project.migrate(&relative).map_err(|diagnostics| {
-        diagnostics
-            .iter()
-            .map(|d| d.to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    })?;
-    std::fs::write(&absolute, text).map_err(|e| e.to_string())?;
-    Ok(format!(
-        "{} is format {} now",
-        relative.display(),
-        pfx_scene::FORMAT
-    ))
-}
-
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let done = match args.as_slice() {
-        [verb, file] if verb == "migrate" => migrate(Path::new(file)),
         [scene, words @ ..] => match edit(scene, words) {
             Ok((root, group)) => {
                 let files: Vec<String> = group
