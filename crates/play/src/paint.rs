@@ -51,6 +51,7 @@ pub struct Warm<'a> {
     pass: u32,
     elapsed: f64,
     budget: f64,
+    again: bool,
 }
 
 impl<'a> Warm<'a> {
@@ -60,7 +61,13 @@ impl<'a> Warm<'a> {
             pass,
             elapsed,
             budget,
+            again: false,
         }
+    }
+
+    pub fn rewarming(mut self, again: bool) -> Self {
+        self.again = again;
+        self
     }
 
     pub fn glyphs(
@@ -91,6 +98,10 @@ impl<'a> Warm<'a> {
 
     pub fn pass(&self) -> u32 {
         self.pass
+    }
+
+    pub fn again(&self) -> bool {
+        self.again
     }
 
     pub fn elapsed(&self) -> f64 {
@@ -170,5 +181,22 @@ mod tests {
         let warm = Warm::new(&mut none, 0, 0.0, 2.0);
         assert_eq!(warm.size(), None);
         assert_eq!(warm.format(), None);
+    }
+
+    #[test]
+    fn a_warm_up_says_when_it_runs_again_and_keeps_its_pass_and_budget() {
+        let mut none = NoWarmer;
+        let first = Warm::new(&mut none, 0, 0.0, 2.0);
+        assert!(!first.again());
+        let again = first.rewarming(true);
+        assert!(again.again());
+        assert_eq!(
+            (again.pass(), again.elapsed(), again.budget()),
+            (0, 0.0, 2.0)
+        );
+        let mut none = NoWarmer;
+        let late = Warm::new(&mut none, 3, 2.5, 2.0).rewarming(true);
+        assert_eq!((late.pass(), late.left()), (3, 0.0));
+        assert!(!late.rewarming(false).again());
     }
 }

@@ -10,7 +10,7 @@ use pfx_live::stats::FrameStats;
 use pfx_play::{Game, GameError, Label, Settings, Ui, UiFrame, Warm, Warming, World};
 
 use crate::tests::{capped, world};
-use crate::{Config, Count, Event, Headless};
+use crate::{Config, Count, Event, Headless, Warmup};
 
 const FONT: &[u8] = pfx_text::fixture::DM_SANS;
 
@@ -817,6 +817,17 @@ fn every_drawn_frame_writes_one_stats_line_with_its_source() {
     assert_eq!(frames[0]["source"], "game");
     assert_eq!(frames[0]["kind"], "full");
     assert_eq!(frames.last().unwrap()["source"], "ui");
+    for line in frames {
+        let source = line["source"].as_str().unwrap();
+        assert!(source == "game" || source == "ui", "{line}");
+        let frame_ms = line["frame_ms"].as_f64().unwrap();
+        let submit_ms = line["submit_ms"].as_f64().unwrap();
+        assert!(submit_ms <= frame_ms, "{line}");
+        if source == "ui" {
+            assert_eq!(submit_ms, 0.0, "{line}");
+        }
+        assert!(line["acquire_ms"].is_null(), "{line}");
+    }
 
     let path = dir.join("flat.jsonl");
     let config = Config::flat("flat", "0.0.0")
@@ -836,11 +847,17 @@ fn every_drawn_frame_writes_one_stats_line_with_its_source() {
     assert_eq!(frames.len() as u64, count.frames);
     assert!(frames.iter().all(|line| line["source"] == "ui"));
     assert!(frames.iter().all(|line| line["kind"] == "full"));
+    assert!(frames.iter().all(|line| line["submit_ms"] == 0.0));
+    assert!(
+        frames
+            .iter()
+            .all(|line| line["frame_ms"].as_f64().is_some())
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 struct Sized {
-    sizes: std::rc::Rc<std::cell::RefCell<Vec<Option<[u32; 2]>>>>,
+    sizes: std::rc::Rc<std::cell::RefCell<Vec<(Option<[u32; 2]>, bool)>>>,
 }
 
 impl Game for Sized {
@@ -849,7 +866,7 @@ impl Game for Sized {
     fn tick(&mut self, _world: &mut World, _tick: &Tick, _input: &Input) {}
 
     fn warm(&mut self, warm: &mut Warm<'_>) -> Result<Warming, GameError> {
-        self.sizes.borrow_mut().push(warm.size());
+        self.sizes.borrow_mut().push((warm.size(), warm.again()));
         Ok(Warming::Done)
     }
 }
@@ -876,5 +893,16 @@ fn warm_gives_the_windows_inner_size_after_a_resize() {
         height: 1440,
     }));
     run.warm().unwrap();
-    assert_eq!(*sizes.borrow(), [Some([2560, 1440])]);
+    assert_eq!(*sizes.borrow(), [(Some([2560, 1440]), false)]);
+    run.feed(Event::Resized(Size {
+        width: 1280,
+        height: 720,
+    }));
+    let mut again = Warmup::new(2.0).again();
+    assert!(run.warm_up(&mut again, 0).unwrap());
+    assert_eq!(
+        *sizes.borrow(),
+        [(Some([2560, 1440]), false), (Some([1280, 720]), true)]
+    );
+    assert_eq!(again.passes(), 1);
 }

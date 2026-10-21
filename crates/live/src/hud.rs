@@ -793,6 +793,8 @@ mod tests {
             kind: FrameKind::Full,
             size: [320, 180],
             hud_ms: None,
+            frame_ms: None,
+            acquire_ms: None,
             source: crate::stats::Source::Game,
         }
     }

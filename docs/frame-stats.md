@@ -9,7 +9,7 @@ PFX_FRAME_STATS=<path> <game>
 When the variable is set to a non-empty path, `pfx-live`'s `Renderer` opens the file for append (creating it) when it is built, and writes one line per presented frame. When it is unset, nothing is opened, nothing is written and a frame pays one branch: no allocation, no clock read.
 
 - A file that cannot be opened turns the stats off and prints one line to stderr naming the variable.
-- One renderer per process is the supported case. Two renderers pointing at the same file interleave their lines, each with its own ticks and its own end line.
+- One renderer per process is the supported case. Every renderer opens the variable's file when it is built, so two that both draw interleave their lines, each with its own ticks and its own end line. A stream that never counts a frame writes nothing, not even its end line, so a second renderer that only builds (a loader compiling its pipelines) or a handle replaced by `set_frame_stats` before any frame leaves the file to the one that draws. A renderer on another thread that should stay out of the file gets `set_frame_stats(FrameStats::off())`.
 - The file is JSON Lines: UTF-8, one object per line, `\n` ended, flushed whenever the writer catches up, so a reader may tail it.
 
 ## What counts as a frame
@@ -37,16 +37,17 @@ stats.presented([width, height]);
 ```
 
 - `present_begin(source)` opens the frame; `presented(size)` closes it and writes its line, right after the present call; `present_abandon()` drops it when nothing was presented (the surface was lost, nothing changed), and no line is written; a second `present_begin` before `presented` drops the open frame the same way, and `presented` with no frame open writes nothing.
-- Renderer frames submitted while it is open write no line of their own: they fold into the presented frame's line. Its `kind` is the strongest of them (`full` over `partial` over `reproject` over `idle`), or `full` when the renderer drew nothing, since the product drew the whole output; its `poll_ms` and `queue_ms` are theirs, summed; a GPU time they resolve is joined to the presented frame's `tick`.
-- Its `submit_ms` runs from `present_begin` to `presented`, so it holds all the product's work on the frame (the game's update, the renderer, the UI and the present); `wait_ms` is the time blocked inside it, waiting for the GPU or for the surface's next image (pfx-game reports its acquire as a wait); `encode_ms` is the rest, `submit_ms` minus `poll_ms`, `queue_ms` and `wait_ms`; `prepare_ms` is `null`; `hud_ms` is the dev HUD's draw inside it; `size` is the output's size, the window's.
+- Renderer frames submitted while it is open write no line of their own: they fold into the presented frame's line. Its `kind` is the strongest of them (`full` over `partial` over `reproject` over `idle`), or `full` when the renderer drew nothing, since the product drew the whole output; its `submit_ms`, `prepare_ms`, `encode_ms`, `poll_ms` and `queue_ms` are theirs, summed, so they keep the meaning the key table gives them (all `0` and `prepare_ms` `null` when the renderer drew nothing); its `gpu_ms` is the sum of their GPU times, written against the presented frame's `tick` once every one of them has resolved ([below](#gpu_ms-and-its-tick)).
+- `frame_ms` is the presented frame's own time on the CPU, from `present_begin` to `presented`: everything the product did for it (the game's update, which `sim_ms` also counts, the renderer, the UI, the acquire and the present). `acquire_ms` is the part of it spent waiting for the surface's next image (pfx-game reports its `get_current_texture` as `Span::Acquire`); `wait_ms` is the renderer's own waits for the GPU inside it, as in the key table; `hud_ms` is the dev HUD's draw inside it; `size` is the output's size, the window's.
 - `source` says what drew it: `splash`, `ui` when the renderer drew nothing in it, and `game` when the renderer drew in a frame opened as `ui`. A line outside a presented frame (a game with its own loop, `pfx bench`) is `game`.
+- A handle's presented frame belongs to the thread that opened it: a renderer drawing on another thread with the same handle would fold its frames into whichever frame is open, and its `present_begin` would drop that frame. A renderer on another thread gets its own stats, or none.
 
-pfx-game does this in a game's window and in `Headless` with the GPU, so a game splits its boot by `source`: the splash's frames, then the UI's (an ident, a title), then the game's. The window's two ground presents while the game is built come before the renderer, and its stats, exist, and have no line.
+pfx-game does this in a game's window and in `Headless` with the GPU, so a game splits its boot by `source`: the splash's frames, then the UI's (an ident, a title), then the game's. The window's ground presents while the game is built and warmed (two before the renderer, and its stats, exist, and one more when the window's size changes during the warm-up) are not frames the game or the splash drew, and have no line.
 
 ## The line
 
 ```json
-{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
+{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"frame_ms":null,"acquire_ms":null,"source":"game"}
 ```
 
 Every key is always present, in this order. Times are milliseconds as JSON numbers with three decimals, never negative.
@@ -57,7 +58,7 @@ Every key is always present, in this order. Times are milliseconds as JSON numbe
 | `tick` | integer | the frame's index, from 0, counting the frames of this file (not the renderer's submission count, which also counts `wake`) |
 | `t_ms` | number | monotonic time from the start of the first frame to the start of this one; the first line is `0.000` |
 | `sim_ms` | number or null | the time the game's simulation took since the previous frame's submit: the sum of the `sim_begin`/`sim_end` spans completed in that interval, which `pfx-play`'s `PlaySession::advance` and `step` report when given the stats (`set_frame_stats`). `null` when no span was reported |
-| `submit_ms` | number | CPU time of the frame from the renderer's first work on it to the end of `queue.submit`: encoding and submitting, not waiting for the GPU |
+| `submit_ms` | number | CPU time of the frame from the renderer's first work on it to the end of `queue.submit`: encoding and submitting, not waiting for the GPU; in a presented frame, the sum over the renderer frames folded into it, `0` when there were none. It never holds the simulation, so `sim_ms + submit_ms` is the frame's CPU work |
 | `prepare_ms` | number or null | the part of `submit_ms` spent preparing the scene before any command is encoded: a flat frame's draw, text and buffer uploads (`FlatPass::prepare`). `null` for frames whose path has no separate prepare step (the 3D frame, a flat look, frames on demand), where that work is in `encode_ms` |
 | `encode_ms` | number | the rest of `submit_ms`: recording the frame's passes and finishing the command buffer (`submit_ms` minus `prepare_ms`, `poll_ms` and `queue_ms`) |
 | `poll_ms` | number | the part of `submit_ms` in the non-blocking `device.poll` before the submit and in reading the GPU times it resolved. A large value is the driver or the OS holding that call |
@@ -66,11 +67,15 @@ Every key is always present, in this order. Times are milliseconds as JSON numbe
 | `gpu_ms` | number or null | GPU time, see below |
 | `gpu_tick` | integer or null | the `tick` that `gpu_ms` measured; `null` exactly when `gpu_ms` is |
 | `present_interval_ms` | number or null | time from the previous frame's submit to this one's. The renderer does not own the swapchain, so this is submit to submit, which a product that presents once per frame holds to its present to present. `null` on the first line |
-| `kind` | string | `full`, `partial`, `reproject` or `idle`, as in the table above |
-| `size` | `[w, h]` | the renderer's drawn size in pixels |
+| `kind` | string | `full`, `partial`, `reproject` or `idle`, as in the table above; in a presented frame, the strongest of its renderer frames, or `full` when the renderer drew nothing in it (a splash or UI frame: read `source` to tell them from the renderer's own full frames) |
+| `size` | `[w, h]` | the renderer's drawn size in pixels; in a presented frame, the output's (the window's) |
 | `device` | string or null | the device the game runs on: `steam-deck-lcd`, `steam-deck-oled` or `desktop` (`docs/screens.md`). Detected once when the stats open a file (the variable, or `FrameStats::to_file`), with `PFX_DEVICE` as an override; `null` for stats made with `to_writer` and no `set_device` |
 | `hud_ms` | number or null | the dev HUD's own draw cost over this frame, from the start of its draw to the end of its `queue.submit` (see [Dev HUD](#dev-hud)); `null` when the HUD did not draw over the frame: hidden, or built without the `dev-hud` feature |
-| `source` | string | what drew the frame: `splash`, `ui` or `game` ([Presented frames](#presented-frames)). Added within schema version 2, as the last key: a reader that finds no `source` (a file written before it) reads `game`, and a reader that ignores it reads every other key as before |
+| `frame_ms` | number or null | a presented frame's whole time on the CPU, from `present_begin` to `presented`, sim, UI, acquire and present included ([Presented frames](#presented-frames)); `null` on a line outside a presented frame |
+| `acquire_ms` | number or null | the part of `frame_ms` spent waiting for the surface's next image; `null` outside a presented frame, and when nothing was acquired (`Headless`, an offscreen target) |
+| `source` | string | what drew the frame: `splash`, `ui` or `game` ([Presented frames](#presented-frames)) |
+
+`frame_ms`, `acquire_ms` and `source` were added within schema version 2, after `hud_ms`, and every other key keeps its meaning: a reader that finds no `source` (a file written before them) reads `game` and `null` for the other two, and a reader that ignores them reads every line as before.
 
 ### `gpu_ms` and its tick
 
@@ -78,7 +83,7 @@ GPU time comes from the renderer's timestamp queries and resolves a frame or two
 
 - `gpu_tick` is that tick. It is the line's own tick when the frame had already resolved (a product that waits on its frames, such as `render`), and an earlier one otherwise, at most two frames earlier.
 - `gpu_ms` is the sum of the frame's timed GPU passes. It is one number for the whole frame, with no gaps between passes, so it is below the frame's wall time whenever the GPU idles.
-- Each GPU time is written once, on the first line after it resolved. A line with no new time has `gpu_ms` and `gpu_tick` both `null`; if two resolve between two lines, only the newer is written. A reader joins GPU time to frames by `gpu_tick`, never by the line it sits on.
+- Each GPU time is written once, on the first line after it resolved. A presented frame that folded in several renderer frames has one GPU time, their sum, written on the first line after the last of them resolved; if a newer frame's time resolves first, the older one is not written. A line with no new time has `gpu_ms` and `gpu_tick` both `null`; if two resolve between two lines, only the newer is written. A reader joins GPU time to frames by `gpu_tick`, never by the line it sits on.
 - A timing that resolves later than the renderer's two-frame lag is not reported at all. Never assume one GPU time per line.
 - The first frame of a run usually shows `null`: its timing resolves after its line is written and is superseded by the next.
 - On a device with no timestamp queries every line has `null`.
@@ -89,29 +94,29 @@ The renderer hands each line to a writer thread through a bounded channel of 256
 
 ## The end line
 
-On a clean exit (the renderer, and every handle to its stats, dropped, or `FrameStats::finish` called) the last line is written:
+On a clean exit (the renderer, and every handle to its stats, dropped, or `FrameStats::finish` called) of a stream that counted at least one frame, the last line is written:
 
 ```json
 {"schema_version":2,"end":true,"frames":6,"dropped":0}
 ```
 
-`frames` is the number of frames the run presented, dropped ones included; `dropped` is how many of them have no line. So the file holds `frames - dropped` frame lines before the end line. A file without an end line came from a process that did not exit cleanly (a kill, a crash, `process::exit`): its lines are valid up to the last complete one.
+`frames` is the number of frames the run presented, dropped ones included; `dropped` is how many of them have no line. So the file holds `frames - dropped` frame lines before the end line. A file without an end line came from a process that did not exit cleanly (a kill, a crash, `process::exit`): its lines are valid up to the last complete one. A stream that counted no frame writes no end line, and nothing else.
 
 ## An example
 
 The first three frames of a measured run of `crates/game/examples/flat` at 2560×1440 (one `render_flat` per frame, the renderer waiting for each frame: `FLAT_IN_FLIGHT=0`):
 
 ```json
-{"schema_version":2,"tick":0,"t_ms":0.000,"sim_ms":0.001,"submit_ms":201.512,"prepare_ms":198.993,"encode_ms":2.312,"poll_ms":0.035,"queue_ms":0.172,"wait_ms":5.379,"gpu_ms":4.880,"gpu_tick":0,"present_interval_ms":null,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
-{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
-{"schema_version":2,"tick":2,"t_ms":214.727,"sim_ms":0.001,"submit_ms":1.629,"prepare_ms":0.412,"encode_ms":1.128,"poll_ms":0.012,"queue_ms":0.079,"wait_ms":5.015,"gpu_ms":4.855,"gpu_tick":2,"present_interval_ms":7.445,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
+{"schema_version":2,"tick":0,"t_ms":0.000,"sim_ms":0.001,"submit_ms":201.512,"prepare_ms":198.993,"encode_ms":2.312,"poll_ms":0.035,"queue_ms":0.172,"wait_ms":5.379,"gpu_ms":4.880,"gpu_tick":0,"present_interval_ms":null,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"frame_ms":null,"acquire_ms":null,"source":"game"}
+{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"frame_ms":null,"acquire_ms":null,"source":"game"}
+{"schema_version":2,"tick":2,"t_ms":214.727,"sim_ms":0.001,"submit_ms":1.629,"prepare_ms":0.412,"encode_ms":1.128,"poll_ms":0.012,"queue_ms":0.079,"wait_ms":5.015,"gpu_ms":4.855,"gpu_tick":2,"present_interval_ms":7.445,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"frame_ms":null,"acquire_ms":null,"source":"game"}
 ```
 
 (The first frame's 199 ms of `prepare_ms` is pipeline creation; a target report skips frames until the interval settles.) Every frame of that run blocks about 5 ms in `wait_ms`. The same game with two frames in flight (`FLAT_IN_FLIGHT=2`, the default) waits for nothing, and its GPU time arrives a frame later, joined by `gpu_tick`:
 
 ```json
-{"schema_version":2,"tick":999,"t_ms":3656.506,"sim_ms":0.000,"submit_ms":1.355,"prepare_ms":0.419,"encode_ms":0.883,"poll_ms":0.001,"queue_ms":0.051,"wait_ms":null,"gpu_ms":2.846,"gpu_tick":998,"present_interval_ms":3.640,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
-{"schema_version":2,"tick":1000,"t_ms":3659.224,"sim_ms":0.001,"submit_ms":1.327,"prepare_ms":0.391,"encode_ms":0.900,"poll_ms":0.001,"queue_ms":0.036,"wait_ms":null,"gpu_ms":2.847,"gpu_tick":999,"present_interval_ms":2.691,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
+{"schema_version":2,"tick":999,"t_ms":3656.506,"sim_ms":0.000,"submit_ms":1.355,"prepare_ms":0.419,"encode_ms":0.883,"poll_ms":0.001,"queue_ms":0.051,"wait_ms":null,"gpu_ms":2.846,"gpu_tick":998,"present_interval_ms":3.640,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"frame_ms":null,"acquire_ms":null,"source":"game"}
+{"schema_version":2,"tick":1000,"t_ms":3659.224,"sim_ms":0.001,"submit_ms":1.327,"prepare_ms":0.391,"encode_ms":0.900,"poll_ms":0.001,"queue_ms":0.036,"wait_ms":null,"gpu_ms":2.847,"gpu_tick":999,"present_interval_ms":2.691,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"frame_ms":null,"acquire_ms":null,"source":"game"}
 ```
 
 A clean exit then closes the file with its end line, as above.

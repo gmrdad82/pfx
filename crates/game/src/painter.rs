@@ -290,6 +290,18 @@ impl Painter {
         elapsed: f64,
         budget: f64,
     ) -> Result<Warming, String> {
+        self.warm_with(driver, format, pass, elapsed, budget, false)
+    }
+
+    pub(crate) fn warm_with(
+        &mut self,
+        driver: &mut Driver,
+        format: wgpu::TextureFormat,
+        pass: u32,
+        elapsed: f64,
+        budget: f64,
+        again: bool,
+    ) -> Result<Warming, String> {
         let window = driver.window();
         let size = [window.width.max(1), window.height.max(1)];
         let pixels_per_unit = driver
@@ -304,7 +316,7 @@ impl Painter {
             size,
             pixels_per_unit,
         };
-        driver.warm(&mut warmer, pass, elapsed, budget)
+        driver.warm(&mut warmer, pass, elapsed, budget, again)
     }
 
     fn sync_pages(&mut self) -> Result<usize, String> {
@@ -769,10 +781,12 @@ impl Painter {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Warmup {
     passes: u32,
     start_ns: Option<u64>,
     budget: f64,
+    again: bool,
 }
 
 impl Warmup {
@@ -781,11 +795,32 @@ impl Warmup {
             passes: 0,
             start_ns: None,
             budget,
+            again: false,
+        }
+    }
+
+    pub fn again(&self) -> Self {
+        Self {
+            passes: 0,
+            again: true,
+            ..*self
         }
     }
 
     pub fn passes(&self) -> u32 {
         self.passes
+    }
+
+    pub fn is_again(&self) -> bool {
+        self.again
+    }
+
+    pub(crate) fn step(&mut self, now_ns: u64) -> Option<(u32, f64)> {
+        let start = *self.start_ns.get_or_insert(now_ns);
+        let elapsed = now_ns.saturating_sub(start) as f64 / 1e9;
+        let pass = self.passes;
+        self.passes += 1;
+        (pass == 0 || elapsed < self.budget).then_some((pass, elapsed))
     }
 
     pub fn pass(
@@ -795,14 +830,11 @@ impl Warmup {
         format: wgpu::TextureFormat,
         now_ns: u64,
     ) -> Result<bool, String> {
-        let start = *self.start_ns.get_or_insert(now_ns);
-        let elapsed = now_ns.saturating_sub(start) as f64 / 1e9;
-        let pass = self.passes;
-        self.passes += 1;
-        if pass > 0 && elapsed >= self.budget {
+        let Some((pass, elapsed)) = self.step(now_ns) else {
             return Ok(true);
-        }
-        Ok(painter.warm(driver, format, pass, elapsed, self.budget)? == Warming::Done)
+        };
+        let warming = painter.warm_with(driver, format, pass, elapsed, self.budget, self.again)?;
+        Ok(warming == Warming::Done)
     }
 }
 

@@ -132,6 +132,9 @@ impl Player {
             self.show(gpu, job)?;
         }
         self.settle(gpu, size)?;
+        if let Some((_, job)) = self.composing.take() {
+            self.show(gpu, job)?;
+        }
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("pfx splash warm"),
             size: wgpu::Extent3d {
@@ -404,6 +407,16 @@ mod tests {
             .unwrap();
         assert_eq!(player.pass.as_ref().unwrap().pipelines_made(), made);
         let pixels = gpu.readback_rgba8(&target).unwrap();
+        let walk = gpu.offscreen(size[0], size[1], FORMAT).unwrap();
+        for step in 0..20u64 {
+            let phase = player.phase(step * 100_000_000, true);
+            player.draw(&gpu, &walk.view, FORMAT, size, phase).unwrap();
+            assert_eq!(
+                player.pass.as_ref().unwrap().pipelines_made(),
+                made,
+                "the splash made a pipeline at {phase:?}"
+            );
+        }
         let [r, g, b] = Settings::default().background.0;
         let ground = |pixel: &[u8]| {
             pixel[0].abs_diff(r) <= 1 && pixel[1].abs_diff(g) <= 1 && pixel[2].abs_diff(b) <= 1
@@ -422,7 +435,7 @@ mod tests {
 
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]
-    fn warming_at_no_size_does_nothing_and_at_a_new_size_recomposes_for_it() {
+    fn warming_at_no_size_does_nothing_and_at_a_new_size_shows_that_size_before_the_first_frame() {
         let gpu = gpu();
         let mut player = always([320, 180]);
         player.warm(&gpu, FORMAT, [0, 180]).unwrap();
@@ -432,9 +445,18 @@ mod tests {
         assert!(player.ready());
         assert_eq!(
             player.shown.as_ref().unwrap().composition.size(),
-            [320, 180]
+            [640, 360]
         );
-        assert_eq!(player.composing.as_ref().unwrap().0, [640, 360]);
+        assert!(player.composing.is_none());
         assert!(player.pass.is_some());
+        let made = player.pass.as_ref().unwrap().pipelines_made();
+        player.settle(&gpu, [640, 360]).unwrap();
+        assert!(player.composing.is_none());
+        let target = gpu.offscreen(640, 360, FORMAT).unwrap();
+        let phase = player.phase(0, true);
+        player
+            .draw(&gpu, &target.view, FORMAT, [640, 360], phase)
+            .unwrap();
+        assert_eq!(player.pass.as_ref().unwrap().pipelines_made(), made);
     }
 }

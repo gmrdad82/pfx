@@ -553,17 +553,128 @@ fn a_surface_configure_that_fails_is_retried_until_its_bound_then_errors() {
     assert!(error.contains("refused 1 of them"), "{error}");
 }
 
+#[derive(Clone, Default)]
+struct Lines(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Lines {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Lines {
+    fn read(&self) -> Vec<serde_json::Value> {
+        String::from_utf8(self.0.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+}
+
 #[test]
-fn every_frame_the_window_presents_is_a_splash_or_a_ui_frame_until_the_renderer_draws() {
-    use pfx_live::stats::Source;
-    assert_eq!(crate::host::frame_source(true), Source::Splash);
-    assert_eq!(crate::host::frame_source(false), Source::Ui);
+fn every_frame_the_window_presents_writes_one_line_by_source_and_a_frame_it_drops_writes_none() {
+    use crate::host::{frame_source, presenting};
+    use pfx_live::stats::{FrameKind, FrameStats, Source, Span};
+    let lines = Lines::default();
+    let stats = FrameStats::to_writer(Box::new(lines.clone()), 64);
+    let window = [2560, 1440];
+    let shown = |splash: bool| {
+        presenting(
+            &stats,
+            frame_source(splash),
+            || Ok(Some(window)),
+            |size| *size,
+        )
+    };
+    assert_eq!(shown(true), Ok(Some(window)));
+    assert_eq!(shown(true), Ok(Some(window)));
+    assert_eq!(shown(false), Ok(Some(window)));
+    let drew = presenting(
+        &stats,
+        frame_source(false),
+        || {
+            stats.begin(FrameKind::Partial);
+            stats.submitted(1, [1280, 720]);
+            stats.span(Span::Acquire, stats.now());
+            Ok(Some(window))
+        },
+        |size| *size,
+    );
+    assert_eq!(drew, Ok(Some(window)));
+    let skipped = presenting(
+        &stats,
+        frame_source(false),
+        || {
+            stats.begin(FrameKind::Full);
+            stats.submitted(2, [1280, 720]);
+            Ok(None::<[u32; 2]>)
+        },
+        |size| *size,
+    );
+    assert_eq!(skipped, Ok(None));
+    assert!(!stats.presenting());
+    let lost = presenting(
+        &stats,
+        frame_source(true),
+        || Err::<Option<[u32; 2]>, _>("lost".to_string()),
+        |size| *size,
+    );
+    assert_eq!(lost, Err("lost".to_string()));
+    assert!(!stats.presenting());
+    stats.gpu(2, 9.0);
+    assert_eq!(shown(false), Ok(Some(window)));
+    stats.finish();
+    let lines = lines.read();
+    let (end, frames) = lines.split_last().unwrap();
+    assert_eq!(end["end"], true);
+    assert_eq!(end["frames"], 5);
+    let column = |key: &str| {
+        frames
+            .iter()
+            .map(|line| line[key].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(column("tick"), [0, 1, 2, 3, 4]);
+    assert_eq!(column("source"), ["splash", "splash", "ui", "game", "ui"]);
+    assert_eq!(column("kind"), ["full", "full", "full", "partial", "full"]);
+    assert!(
+        frames
+            .iter()
+            .all(|line| line["size"] == serde_json::json!(window))
+    );
+    assert!(
+        frames
+            .iter()
+            .all(|line| line["frame_ms"].as_f64().is_some())
+    );
+    assert!(frames[3]["acquire_ms"].as_f64().is_some());
+    assert!(frames.iter().all(|line| line["gpu_ms"] != 9.0));
+    assert_eq!(Source::default(), Source::Game);
+}
+
+#[test]
+fn a_rest_after_a_skipped_frame_ends_at_the_next_tick_or_a_whole_tick_later_without_one() {
+    use crate::host::rest_until;
+    assert_eq!(
+        rest_until(Some(41_666_667), 30_000_000, 1.0 / 60.0),
+        41_666_667
+    );
+    assert_eq!(rest_until(None, 30_000_000, 1.0 / 60.0), 46_666_666);
+    assert_eq!(rest_until(None, 0, 0.5), 500_000_000);
+    assert_eq!(rest_until(None, u64::MAX - 1, 1.0 / 60.0), u64::MAX);
 }
 
 #[cfg(feature = "splash")]
 #[test]
-fn the_warm_up_runs_again_under_the_splash_only_when_the_window_changed_size_after_it() {
-    use crate::host::rewarm;
+fn a_size_change_under_the_splash_warms_again_from_pass_zero_within_the_first_budget() {
+    use crate::host::Rewarm;
+    use crate::painter::Warmup;
     let small = Size {
         width: 1280,
         height: 720,
@@ -572,8 +683,29 @@ fn the_warm_up_runs_again_under_the_splash_only_when_the_window_changed_size_aft
         width: 2560,
         height: 1440,
     };
-    assert!(rewarm(false, Some(small), large));
-    assert!(!rewarm(false, Some(large), large));
-    assert!(!rewarm(true, Some(small), large));
-    assert!(!rewarm(false, None, large));
+    let ms = 1_000_000;
+    let mut rewarm = Rewarm::default();
+    assert_eq!(rewarm.restart(large), None);
+    let mut warmup = Warmup::new(1.0);
+    assert_eq!(warmup.step(0), Some((0, 0.0)));
+    rewarm.passed(&warmup, small);
+    assert_eq!(rewarm.restart(small), None);
+    let mut again = rewarm.restart(large).unwrap();
+    assert!(again.is_again() && !warmup.is_again());
+    assert_eq!(again.passes(), 0);
+    assert_eq!(again.step(100 * ms), Some((0, 0.1)));
+    rewarm.passed(&again, large);
+    assert_eq!(rewarm.restart(large), None);
+    assert_eq!(again.step(500 * ms), Some((1, 0.5)));
+    rewarm.passed(&again, small);
+    assert_eq!(rewarm.restart(large), None);
+    assert!(rewarm.restart(small).is_some());
+    assert_eq!(again.step(1_000 * ms), None);
+    rewarm.passed(&again, large);
+    let mut late = rewarm.restart(small).unwrap();
+    assert_eq!(late.step(1_500 * ms), Some((0, 1.5)));
+    rewarm.passed(&late, small);
+    assert_eq!(late.step(1_510 * ms), None);
+    assert_eq!(rewarm.restart(small), None);
+    assert_eq!(rewarm.restart(large).map(|warmup| warmup.passes()), Some(0));
 }

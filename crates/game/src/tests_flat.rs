@@ -5,10 +5,10 @@ use pfx_core::clock::Tick;
 use pfx_gpu::screens::Device;
 use pfx_input::Input;
 use pfx_live::flat::Srgba;
-use pfx_play::{Game, GameError, Settings, Ui, UiFrame, Warm, Warming, World};
+use pfx_play::{Game, GameError, NoWarmer, Settings, Ui, UiFrame, Warm, Warming, World};
 
 use crate::tests::{WINDOW, capped, world};
-use crate::{Config, Count, Headless, WARM_BUDGET};
+use crate::{Config, Count, Headless, WARM_BUDGET, Warmup};
 
 #[derive(Clone, Debug, PartialEq)]
 enum Step {
@@ -144,4 +144,78 @@ fn warming_stops_when_its_budget_passes() {
     assert_eq!(log.len(), 11);
     assert_eq!(log[9], Step::Warm(9, 0.009));
     assert_eq!(log[10], Step::Ui);
+}
+
+struct Loader {
+    settings: Settings,
+    seen: Rc<RefCell<Vec<(u32, bool)>>>,
+    started: Rc<RefCell<u32>>,
+}
+
+impl Game for Loader {
+    fn start(&mut self, _world: &mut World) {}
+
+    fn tick(&mut self, _world: &mut World, _tick: &Tick, _input: &Input) {}
+
+    fn warm(&mut self, warm: &mut Warm<'_>) -> Result<Warming, GameError> {
+        self.seen.borrow_mut().push((warm.pass(), warm.again()));
+        if warm.pass() == 1 && !warm.again() {
+            *self.started.borrow_mut() += 1;
+        }
+        if warm.pass() < 2 {
+            Ok(Warming::More)
+        } else {
+            Ok(Warming::Done)
+        }
+    }
+
+    fn settings(&self) -> Option<&Settings> {
+        Some(&self.settings)
+    }
+}
+
+#[test]
+fn a_warm_up_run_again_tells_the_game_so_its_one_time_work_starts_once() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let started = Rc::new(RefCell::new(0));
+    let game = Loader {
+        settings: capped(),
+        seen: Rc::clone(&seen),
+        started: Rc::clone(&started),
+    };
+    let config = Config::flat("flat", "0.0.0").device(Device::Desktop);
+    let mut run = Headless::new(game, config, WINDOW).unwrap();
+    let ms = 1_000_000;
+    let mut warm = |warmup: &mut Warmup, now_ns: u64| -> Option<Warming> {
+        let (pass, elapsed) = warmup.step(now_ns)?;
+        let warming = run
+            .driver
+            .warm(&mut NoWarmer, pass, elapsed, 1.0, warmup.is_again())
+            .unwrap();
+        Some(warming)
+    };
+    let mut first = Warmup::new(1.0);
+    assert_eq!(warm(&mut first, 0), Some(Warming::More));
+    assert_eq!(warm(&mut first, 8 * ms), Some(Warming::More));
+    assert_eq!(warm(&mut first, 16 * ms), Some(Warming::Done));
+    let mut again = first.again();
+    assert_eq!(warm(&mut again, 400 * ms), Some(Warming::More));
+    assert_eq!(warm(&mut again, 408 * ms), Some(Warming::More));
+    assert_eq!(warm(&mut again, 416 * ms), Some(Warming::Done));
+    let mut late = again.again();
+    assert_eq!(warm(&mut late, 2_000 * ms), Some(Warming::More));
+    assert_eq!(warm(&mut late, 2_008 * ms), None);
+    assert_eq!(
+        *seen.borrow(),
+        [
+            (0, false),
+            (1, false),
+            (2, false),
+            (0, true),
+            (1, true),
+            (2, true),
+            (0, true)
+        ]
+    );
+    assert_eq!(*started.borrow(), 1);
 }

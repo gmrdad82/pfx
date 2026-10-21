@@ -8,7 +8,7 @@ use pfx_gpu::window::{self, Attention, Pace, Size, SystemClock};
 use pfx_gpu::{Gpu, WindowTarget, wgpu};
 use pfx_input::{Backend, InputEvent, LayoutSource, SteamPrecedence};
 use pfx_live::flat::Srgba;
-use pfx_live::stats::{Source, Span};
+use pfx_live::stats::{FrameStats, Source, Span};
 use pfx_load::scene::Scene;
 use pfx_play::{Configuring, Cursor, Game, Scheme};
 use pfx_sound::{ChannelId, Level, Output, PcmSender};
@@ -32,6 +32,7 @@ use crate::surface::{Attempt, Retry};
 pub const AUDIO_SECONDS: f32 = 0.25;
 
 struct Sound {
+    #[cfg_attr(not(feature = "splash"), allow(dead_code))]
     output: Output,
     sender: PcmSender,
 }
@@ -45,9 +46,7 @@ struct Live {
     minimized: bool,
     warming: Option<Warmup>,
     #[cfg(feature = "splash")]
-    warmed: Option<Size>,
-    #[cfg(feature = "splash")]
-    warm_budget: f64,
+    rewarm: Rewarm,
     pointer: Pointer,
     locked: bool,
     at: [f32; 2],
@@ -160,9 +159,45 @@ pub(crate) fn frame_source(splash: bool) -> Source {
     if splash { Source::Splash } else { Source::Ui }
 }
 
+pub(crate) fn presenting<T>(
+    stats: &FrameStats,
+    source: Source,
+    draw: impl FnOnce() -> Result<Option<T>, String>,
+    size: impl FnOnce(&T) -> [u32; 2],
+) -> Result<Option<T>, String> {
+    stats.present_begin(source);
+    let drawn = draw();
+    match &drawn {
+        Ok(Some(drawn)) => stats.presented(size(drawn)),
+        _ => stats.present_abandon(),
+    }
+    drawn
+}
+
+pub(crate) fn rest_until(next_tick_ns: Option<u64>, at: u64, tick_dt: f64) -> u64 {
+    next_tick_ns.unwrap_or_else(|| at.saturating_add((tick_dt * 1e9) as u64))
+}
+
 #[cfg(feature = "splash")]
-pub(crate) fn rewarm(warming: bool, warmed: Option<Size>, window: Size) -> bool {
-    !warming && warmed.is_some_and(|size| size != window)
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct Rewarm {
+    size: Option<Size>,
+    last: Option<Warmup>,
+}
+
+#[cfg(feature = "splash")]
+impl Rewarm {
+    pub(crate) fn passed(&mut self, warmup: &Warmup, window: Size) {
+        if warmup.passes() == 1 {
+            self.size = Some(window);
+        }
+        self.last = Some(*warmup);
+    }
+
+    pub(crate) fn restart(&self, window: Size) -> Option<Warmup> {
+        let size = self.size?;
+        (size != window).then(|| self.last.map(|last| last.again()))?
+    }
 }
 
 fn size_of(window: &Window) -> Size {
@@ -346,9 +381,7 @@ fn open(
         minimized: false,
         warming: Some(Warmup::new(config.warm_budget)),
         #[cfg(feature = "splash")]
-        warmed: None,
-        #[cfg(feature = "splash")]
-        warm_budget: config.warm_budget,
+        rewarm: Rewarm::default(),
         pointer,
         locked: false,
         at: [0.0; 2],
@@ -395,10 +428,11 @@ impl Live {
         }
         let format = self.target.config.format;
         #[cfg(feature = "splash")]
-        {
-            self.warmed = Some(self.driver.window());
-        }
-        if warmup.pass(&mut self.painter, &mut self.driver, format, now_ns)? {
+        let window = self.driver.window();
+        let done = warmup.pass(&mut self.painter, &mut self.driver, format, now_ns)?;
+        #[cfg(feature = "splash")]
+        self.rewarm.passed(warmup, window);
+        if done {
             self.warming = None;
         }
         Ok(())
@@ -410,15 +444,17 @@ impl Live {
         #[cfg(not(feature = "splash"))]
         let splash = false;
         let stats = self.painter.renderer().frame_stats();
-        stats.present_begin(frame_source(splash));
-        let presented = self.draw(now_ns, exposed);
-        if matches!(presented, Ok(true)) {
-            let config = &self.target.config;
-            stats.presented([config.width, config.height]);
-        } else {
-            stats.present_abandon();
-        }
-        presented
+        let shown = presenting(
+            &stats,
+            frame_source(splash),
+            || {
+                let shown = self.draw(now_ns, exposed)?;
+                let config = &self.target.config;
+                Ok(shown.then_some([config.width, config.height]))
+            },
+            |size| *size,
+        )?;
+        Ok(shown.is_some())
     }
 
     fn draw(&mut self, now_ns: u64, exposed: bool) -> Result<bool, String> {
@@ -515,7 +551,7 @@ impl Live {
         self.painter
             .renderer()
             .frame_stats()
-            .span(Span::Wait, Some(asking));
+            .span(Span::Acquire, Some(asking));
         let texture = match acquired {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
@@ -578,9 +614,8 @@ impl Live {
     }
 
     fn rest_until(&self, at: u64) -> u64 {
-        self.driver.next_tick_ns().unwrap_or_else(|| {
-            at.saturating_add((self.driver.session().world().clock().tick_dt() * 1e9) as u64)
-        })
+        let tick_dt = self.driver.session().world().clock().tick_dt();
+        rest_until(self.driver.next_tick_ns(), at, tick_dt)
     }
 
     fn audio(&mut self) {
@@ -594,8 +629,8 @@ impl Live {
 
     #[cfg(feature = "splash")]
     fn splash_frame(&mut self, now_ns: u64) -> Result<bool, String> {
-        if rewarm(self.warming.is_some(), self.warmed, self.driver.window()) {
-            self.warming = Some(Warmup::new(self.warm_budget));
+        if let Some(again) = self.rewarm.restart(self.driver.window()) {
+            self.warming = Some(again);
         }
         if self.warming.is_some() {
             self.grounded = true;
@@ -635,7 +670,7 @@ impl Live {
         self.painter
             .renderer()
             .frame_stats()
-            .span(Span::Wait, Some(asking));
+            .span(Span::Acquire, Some(asking));
         let texture = match acquired {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
@@ -765,7 +800,14 @@ impl ApplicationHandler for App {
             scene.as_ref(),
             self.schemes.take(),
         ) {
-            Ok(live) => self.live = Some(live),
+            Ok(mut live) => {
+                if let Err(error) = live.warm(window::Clock::now_ns(&self.clock)) {
+                    self.error = Some(error);
+                    event_loop.exit();
+                    return;
+                }
+                self.live = Some(live);
+            }
             Err(error) => {
                 self.error = Some(error);
                 event_loop.exit();

@@ -164,8 +164,9 @@ impl Driver {
         pass: u32,
         elapsed: f64,
         budget: f64,
+        again: bool,
     ) -> Result<Warming, String> {
-        let mut warm = Warm::new(warmer, pass, elapsed, budget);
+        let mut warm = Warm::new(warmer, pass, elapsed, budget).rewarming(again);
         self.session
             .game_mut()
             .warm(&mut warm)

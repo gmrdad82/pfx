@@ -11,6 +11,7 @@ use pfx_play::{Game, NoWarmer, Warming};
 
 use crate::config::{Config, Crash, Pads, report};
 use crate::driver::{Driver, Event, present_preference};
+use crate::host::presenting;
 use crate::painter::{Drawn, Painter};
 use crate::start;
 
@@ -214,6 +215,18 @@ impl Headless {
         self.frame_before(u64::MAX)
     }
 
+    #[cfg(test)]
+    pub(crate) fn warm_up(
+        &mut self,
+        warmup: &mut crate::Warmup,
+        now_ns: u64,
+    ) -> Result<bool, String> {
+        match &mut self.gpu {
+            Some(gpu) => warmup.pass(&mut gpu.painter, &mut self.driver, TARGET_FORMAT, now_ns),
+            None => Ok(true),
+        }
+    }
+
     pub fn warm(&mut self) -> Result<u32, String> {
         while !self.warmed {
             let elapsed = self.warm_passes as f64 * self.frame_cost_ns as f64 / 1e9;
@@ -232,7 +245,9 @@ impl Headless {
                     });
                     result?
                 }
-                None => self.driver.warm(&mut NoWarmer, pass, elapsed, budget)?,
+                None => self
+                    .driver
+                    .warm(&mut NoWarmer, pass, elapsed, budget, false)?,
             };
             self.warm_passes += 1;
             if warming == Warming::Done {
@@ -279,19 +294,19 @@ impl Headless {
             let mut result = Ok(None);
             let stats = painter.renderer().frame_stats();
             gpu.pace.frame(|| {
-                stats.present_begin(Source::Ui);
-                result = match on_demand {
-                    false => painter.draw(driver, view, TARGET_FORMAT),
-                    true => match painter.prepare(driver, false) {
-                        Ok(true) => painter.compose(driver, view, TARGET_FORMAT),
-                        Ok(false) => Ok(None),
-                        Err(error) => Err(error),
+                result = presenting(
+                    &stats,
+                    Source::Ui,
+                    || match on_demand {
+                        false => painter.draw(driver, view, TARGET_FORMAT),
+                        true => match painter.prepare(driver, false) {
+                            Ok(true) => painter.compose(driver, view, TARGET_FORMAT),
+                            Ok(false) => Ok(None),
+                            Err(error) => Err(error),
+                        },
                     },
-                };
-                match &result {
-                    Ok(Some(drawn)) => stats.presented(drawn.output),
-                    _ => stats.present_abandon(),
-                }
+                    |drawn| drawn.output,
+                );
             });
             let drawn = result?;
             self.composed += u64::from(drawn.is_some());
