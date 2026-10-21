@@ -168,7 +168,7 @@ impl Grade {
             ));
         }
         let crt = Crt {
-            scanlines: (finish.scanlines > 0.0).then(|| Scanlines {
+            scanlines: (finish.scanlines > 0.0).then_some(Scanlines {
                 period: finish.scanline_period * k,
                 strength: finish.scanlines,
             }),
@@ -177,7 +177,7 @@ impl Grade {
                 corner: CURVE_CORNER,
                 bezel: BLACK,
             }),
-            aberration: (self.split > 0.0).then(|| Aberration {
+            aberration: (self.split > 0.0).then_some(Aberration {
                 shift: self.split * k,
             }),
             glow: None,

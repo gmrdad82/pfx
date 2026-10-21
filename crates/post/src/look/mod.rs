@@ -1,7 +1,10 @@
 pub mod gpu;
+pub mod screen;
 pub mod shader;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod screen_tests;
 
 pub use gpu::LookGpu;
 
