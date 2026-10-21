@@ -408,6 +408,10 @@ fn emitters_sampled() -> bool {
     return emitters[0].a.x>0.5;
 }
 fn volume_light(index: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometric: vec3f, state: ptr<function,u32>, u: vec4f) -> Candidate {
+    if (index==VOLUME_EMITTERS) {
+        if (emitters[0].a.x<0.5) { return candidate_none(); }
+        return emitter_candidate(transform,p,origin,state,u);
+    }
     return light_candidate(lights[index],transform,p,origin,geometric,state,u);
 }
 fn segment_slots() -> u32 {

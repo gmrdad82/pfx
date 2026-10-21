@@ -1980,6 +1980,7 @@ fn fog_phase_sample(d: vec3f, g: f32, u: vec2f) -> vec4f {
     let phi=2.0*PI*u.y;
     return vec4f(normalize(basis(d)*vec3f(sine*cos(phi),sine*sin(phi),cosine)),fog_phase(cosine,g));
 }
+const VOLUME_EMITTERS: u32 = 0xffffffffu;
 fn fog_lit(k: u32, index: u32, x: vec3f, d: vec3f, mis: bool, state: ptr<function,u32>, u: vec4f) -> vec3f {
     let g=frame.fog_tint.w;
     var direction=vec3f(0.0,0.0,1.0);
@@ -2008,7 +2009,7 @@ fn fog_lit(k: u32, index: u32, x: vec3f, d: vec3f, mis: bool, state: ptr<functio
         let transform=basis(d);
         volume_vertex=true;
         var picked: Candidate;
-        if (k==2u) { picked=direct_light(0u,transform,x,x,d,state,u); } else { picked=volume_light(index,transform,x,x,d,state,u); }
+        picked=volume_light(index,transform,x,x,d,state,u);
         volume_vertex=false;
         if (picked.limit<0.0) { return vec3f(0.0); }
         direction=normalize(transform*picked.wi);
@@ -2106,25 +2107,30 @@ fn fog_direct(o: vec3f, d: vec3f, span: vec2f, attenuation: f32, mis: bool, stat
     let start=o+d*span.x;
     let extent=span.y-span.x;
     let picked=fog_pick(start,d,extent,rnd(state,sobol(FOG_DIM).y));
-    if (picked.x>=0.0) {
-        let k=u32(picked.x);
-        var chance=picked.y;
-        var index=0u;
+    let passes=select(1u,2u,emitters_sampled());
+    for (var j=0u;j<passes;j++) {
+        var k=2u;
+        var chance=1.0;
+        var index=VOLUME_EMITTERS;
         var light=vec4f(0.0);
-        if (k>=2u) {
-            let local=segment_light(k-2u,start,d,extent,picked.z);
-            chance*=local.y;
-            index=u32(local.x);
-            light=vec4f(light_position(index),1.0);
+        var dim=FOG_DIM+4u;
+        if (j==0u) {
+            if (picked.x<0.0) { continue; }
+            k=u32(picked.x);
+            chance=picked.y;
+            dim=FOG_DIM+2u;
+            if (k>=2u) {
+                let local=segment_light(k-2u,start,d,extent,picked.z);
+                chance*=local.y;
+                index=u32(local.x);
+                light=vec4f(light_position(index),1.0);
+                k=3u;
+            }
         }
-        let at=fog_point(o,d,span,attenuation,light,rnd(state,sobol(FOG_DIM+2u).x));
+        let at=fog_point(o,d,span,attenuation,light,rnd(state,sobol(dim).x));
         if (chance>0.0 && at.y>0.0) {
-            total+=albedo*(at.y/chance)*fog_lit(select(k,3u,k>=2u),index,o+d*at.x,d,mis,state,sobol(FOG_DIM+3u));
+            total+=albedo*(at.y/chance)*fog_lit(k,index,o+d*at.x,d,mis,state,sobol(dim+1u));
         }
-    }
-    if (emitters_sampled()) {
-        let at=fog_point(o,d,span,attenuation,vec4f(0.0),rnd(state,sobol(FOG_DIM+4u).x));
-        if (at.y>0.0) { total+=albedo*at.y*fog_lit(2u,0u,o+d*at.x,d,mis,state,sobol(FOG_DIM+5u)); }
     }
     return total;
 }
