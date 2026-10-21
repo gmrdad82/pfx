@@ -25,7 +25,7 @@ let ui = ChannelId::custom(0);
 mixer.play_on(ui, &click, Level::default());
 ```
 
-- Volumes run 0 to 1. A change ramps linearly over `RAMP_SECONDS` (10 ms), so it never clicks; mute ramps the same way. The largest step per frame is 1 / (rate * 0.01), about 0.002 at 48 kHz.
+- Volumes run 0 to 1. A change ramps linearly over `RAMP_SECONDS` (10 ms), so it never clicks; mute ramps the same way. A volume or mute set before the mixer has made its first sample holds from that sample, with no ramp, so a game that starts muted or at master 0 lets nothing out. The largest step per frame is 1 / (rate * 0.01), about 0.002 at 48 kHz.
 - A channel set before it has audio takes its volume at once, with no ramp.
 - `play`, `play_at` and `Timeline` placements are unchanged and play on `EFFECTS` at volume 1, so a render's mixdown stays byte for byte what it was.
 - `Mixer::stop(id, fade_seconds)` ends a voice, with an equal-power fade when the time is above zero.

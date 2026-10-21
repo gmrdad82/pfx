@@ -357,12 +357,12 @@ impl Mixer {
 
     pub fn set_master_volume(&mut self, volume: f32) {
         self.master.volume = clamp_volume(volume);
-        retarget(&mut self.master, self.rate);
+        retarget(&mut self.master, self.rate, self.clock);
     }
 
     pub fn set_master_muted(&mut self, muted: bool) {
         self.master.muted = muted;
-        retarget(&mut self.master, self.rate);
+        retarget(&mut self.master, self.rate, self.clock);
     }
 
     pub fn master_volume(&self) -> f32 {
@@ -388,12 +388,12 @@ impl Mixer {
     }
 
     pub fn set_channel_volume(&mut self, channel: ChannelId, volume: f32) {
-        let rate = self.rate;
+        let (rate, clock) = (self.rate, self.clock);
         let volume = clamp_volume(volume);
         match self.buses.get_mut(&channel) {
             Some(bus) => {
                 bus.volume = volume;
-                retarget(bus, rate);
+                retarget(bus, rate, clock);
             }
             None => {
                 let mut bus = Channel::new();
@@ -405,11 +405,11 @@ impl Mixer {
     }
 
     pub fn set_channel_muted(&mut self, channel: ChannelId, muted: bool) {
-        let rate = self.rate;
+        let (rate, clock) = (self.rate, self.clock);
         match self.buses.get_mut(&channel) {
             Some(bus) => {
                 bus.muted = muted;
-                retarget(bus, rate);
+                retarget(bus, rate, clock);
             }
             None => {
                 let mut bus = Channel::new();
@@ -1411,9 +1411,13 @@ impl Mixer {
     }
 }
 
-fn retarget(channel: &mut Channel, rate: u32) {
+fn retarget(channel: &mut Channel, rate: u32, clock: u64) {
     let target = channel.effective();
-    channel.gain.to(target, ramp_frames(rate));
+    if clock == 0 {
+        channel.gain.snap(target);
+    } else {
+        channel.gain.to(target, ramp_frames(rate));
+    }
 }
 
 fn seconds_to_frames(seconds: f32, rate: u32) -> u64 {
@@ -1774,6 +1778,21 @@ mod tests {
         assert_eq!(*up.last().unwrap(), 1.0);
         assert!(down[0] > 0.0 && down[0] < 1.0);
         assert_eq!(*master.last().unwrap(), 0.0);
+    }
+
+    #[test]
+    fn volumes_and_mutes_set_before_the_first_sample_hold_from_it() {
+        for set in [
+            |mixer: &mut Mixer| mixer.set_master_volume(0.0),
+            |mixer: &mut Mixer| mixer.set_master_muted(true),
+            |mixer: &mut Mixer| mixer.set_channel_volume(ChannelId::EFFECTS, 0.0),
+            |mixer: &mut Mixer| mixer.set_channel_muted(ChannelId::EFFECTS, true),
+        ] {
+            let mut mixer = Mixer::new(48_000, 1);
+            mixer.play(&constant(1.0, 4000), Level::default());
+            set(&mut mixer);
+            assert!(mixer.render(600).iter().all(|sample| *sample == 0.0));
+        }
     }
 
     #[test]
