@@ -111,6 +111,13 @@ pub const GUIDES: &[(&str, u32, Option<&str>)] = &[
         ),
     ),
     (
+        "compose",
+        219,
+        Some(
+            "pfx compose writes original music in a style kept in a .pitofx: the score as a recipe of notes, rendered on demand to a mastered WAV or a game's adaptive stems, the same bytes for the same seed.",
+        ),
+    ),
+    (
         "live-renderer",
         301,
         Some(

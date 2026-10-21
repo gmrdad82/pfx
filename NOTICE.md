@@ -146,11 +146,11 @@ These stay under the MIT licence, so a game that uses them or starts from them c
 
 ## ebur128, under the MIT licence
 
-`local_peaks`, `true_peak` and `oversampled` in `crates/sound/src/peak.rs` (in the package `pfx-sound`) follow the true-peak scanner of the ebur128 crate (https://github.com/sdroege/ebur128, `src/true_peak.rs` and `src/interp.rs`, version 0.1.10, commit `ef08d2b84d6b042dbe6dd25f4e7074de4787a27e`), itself a port of libebur128: each channel's history run through every phase of a 48-tap, 4-phase polyphase interpolator per input frame, the rectified maximum kept, and 4x oversampling below 96 kHz. The filter's taps are not ebur128's windowed sinc but the 48 coefficients of ITU-R BS.1770-4, Annex 2. The crate is also a test-only dependency of pfx-sound, the reference its meter is checked against, and of pfx-splash, whose chime level it checks. Copyright (c) 2011 Jan Kokemüller, Copyright (c) 2020 Sebastian Dröge, licensed MIT; its licence text ships verbatim, with its author's address, as `crates/sound/LICENSE-ebur128.md` in the source and next to this file in every release.
+`local_peaks`, `true_peak` and `oversampled` in `crates/sound/src/peak.rs` (in the package `pfx-sound`) follow the true-peak scanner of the ebur128 crate (https://github.com/sdroege/ebur128, `src/true_peak.rs` and `src/interp.rs`, version 0.1.10, commit `ef08d2b84d6b042dbe6dd25f4e7074de4787a27e`), itself a port of libebur128: each channel's history run through every phase of a 48-tap, 4-phase polyphase interpolator per input frame, the rectified maximum kept, and 4x oversampling below 96 kHz. The filter's taps are not ebur128's windowed sinc but the 48 coefficients of ITU-R BS.1770-4, Annex 2. The loudness meter in `crates/sound/src/loudness.rs` (`Loudness`, `loudness`) is ported from the same crate (`src/ebur128.rs`, `src/filter.rs`, `src/history.rs` and `src/utils.rs`): the BS.1770 K-weighting pre-filter and its high-pass with their exact constants (1681.974450955533 Hz, 3.999843853973347 dB, Q 0.7071752369554196; 38.13547087602444 Hz, Q 0.5003270373238773) cascaded into one fifth-order section, the 100 ms hops, the 400 ms momentary and 3 s short-term windows over a ring of filtered samples, the channel weights (1.41 for surrounds, the fourth channel unused), the absolute gate at -70 LUFS and the -10 LU relative gate for the integrated loudness, kept; the tangent and powers come from pfx-core's deterministic math, and the filter state is flushed below machine epsilon after every block on every platform. The crate is also a test-only dependency of pfx-sound, the reference its meter is checked against, and of pfx-splash, whose chime level it checks. Copyright (c) 2011 Jan Kokemüller, Copyright (c) 2020 Sebastian Dröge, licensed MIT; its licence text ships verbatim, with its author's address, as `crates/sound/LICENSE-ebur128.md` in the source and next to this file in every release.
 
 ## Freeverb, in the public domain
 
-The splash chime's room in `crates/splash/src/chime/reverb.rs` (in the package `pfx-splash`) is ported from Freeverb by Jezar at Dreampoint (version 3, June 2000, `revmodel.cpp`, `revmodel.hpp`, `comb.hpp`, `allpass.hpp` and `tuning.h`), which its author released into the public domain. The port keeps its eight low-pass feedback combs and four allpasses per side, its comb and allpass tunings (1116, 1188, 1277, 1356, 1422, 1491, 1557 and 1617; 556, 441, 341 and 225 samples), the right side's spread of 23 samples, the fixed input gain of 0.015, the wet scale of 3, the damping scale of 0.4, the room scale of 0.28 with its offset of 0.7, the allpass feedback of 0.5 and the wet1 and wet2 width mix. The tunings are scaled from 44.1 kHz to the output rate.
+The room in `crates/sound/src/reverb.rs` (in the package `pfx-sound`, used by the splash chime and by music renders) is ported from Freeverb by Jezar at Dreampoint (version 3, June 2000, `revmodel.cpp`, `revmodel.hpp`, `comb.hpp`, `allpass.hpp` and `tuning.h`), which its author released into the public domain. The port keeps its eight low-pass feedback combs and four allpasses per side, its comb and allpass tunings (1116, 1188, 1277, 1356, 1422, 1491, 1557 and 1617; 556, 441, 341 and 225 samples), the right side's spread of 23 samples, the fixed input gain of 0.015, the wet scale of 3, the damping scale of 0.4, the room scale of 0.28 with its offset of 0.7, the allpass feedback of 0.5 and the wet1 and wet2 width mix. The tunings are scaled from 44.1 kHz to the output rate.
 
 ## Sonic Pi, under the MIT licence
 
@@ -158,7 +158,7 @@ The composer's scales in `crates/compose/src/theory/scale.rs`, its chords in `cr
 
 ## tonal, under the MIT licence
 
-The composer's Roman numerals in `crates/compose/src/theory/numeral.rs` and its voicings in `crates/compose/src/theory/voicing.rs` (in the package `pfx-compose`) are ported from tonal (https://github.com/tonaljs/tonal, commit `e555422aef910daa87cb924028f71f0a013f3ed7`): the numeral tokens (accidentals, the numeral and its case, the chord type) of `packages/roman-numeral/index.ts`, the interval names to semitones of `packages/pitch-interval/index.ts`, the triad and left-hand voicing tables of `packages/voicing-dictionary/data.ts`, `search` over a range from `packages/voicing/index.ts` and `topNoteDiff` from `packages/voice-leading/index.ts`.
+The composer's Roman numerals in `crates/compose/src/theory/numeral.rs` and its voicings in `crates/compose/src/theory/voicing.rs` (in the package `pfx-compose`) are ported from tonal (https://github.com/tonaljs/tonal, commit `e555422aef910daa87cb924028f71f0a013f3ed7`): the numeral tokens (accidentals, the numeral and its case, the chord type) of `packages/roman-numeral/index.ts`, the interval names to semitones of `packages/pitch-interval/index.ts`, the triad and left-hand voicing tables of `packages/voicing-dictionary/data.ts`, `search` over a range from `packages/voicing/index.ts` and `topNoteDiff` from `packages/voice-leading/index.ts`; `Key::secondary` in `crates/compose/src/theory/key.rs` ports the secondary dominants of `keyScale` in `packages/key/index.ts` (a dominant seventh a fifth above a diatonic root, kept only when that seventh chord is not already in the key).
 
 > Copyright (c) 2015 danigb
 >
@@ -175,6 +175,29 @@ The composer's Roman numerals in `crates/compose/src/theory/numeral.rs` and its 
 > The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 >
 > THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## foox, under the MIT licence
+
+The counter-line in `crates/compose/src/generate.rs` (`counter_cost` and `Part::cadence`, in the package `pfx-compose`) takes its first-species rules from foox (https://github.com/ntoll/foox, commit `4a1aeb642088ec001ca89f5d9c626b802043194f`, `foox/species/first.py`): consonance against the leading voice, the parallel fifths and octaves punishment of 0.5, and the ending rules with their weights (a stepwise last note, rewarded 1 or punished 0.7; contrary last motion, 1 or 0.1; a penultimate note prepared by a step, 1 or 0.7, and punished 0.1 when repeated). foox scores a whole line as a genetic fitness and punishes repeats, parallel motion and leaps only past a count; pfx scores note by note, and its weights for repeats (0.4), leaps (0.04 per semitone over a whole tone), melodic tritones and sevenths (1.0), parallel motion (0.1), the reward for contrary motion in the body (0.1), the chord-tone and passing-tone candidates and the turn-back cost are its own.
+
+> Copyright (c) 2012 Nicholas H.Tollervey (http://ntoll.org)
+>
+> Permission is hereby granted, free of charge, to any person obtaining a copy of
+> this software and associated documentation files (the "Software"), to deal in
+> the Software without restriction, including without limitation the rights to
+> use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+> the Software, and to permit persons to whom the Software is furnished to do so,
+> subject to the following conditions:
+>
+> The above copyright notice and this permission notice shall be included in all
+> copies or substantial portions of the Software.
+>
+> THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+> IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+> FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+> COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+> IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+> CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ## mda VST plug-ins, under the MIT licence
 

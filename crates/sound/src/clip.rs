@@ -10,6 +10,10 @@ impl Clip {
         crate::wav::parse(bytes)
     }
 
+    pub fn wav_info(bytes: &[u8]) -> Option<crate::WavInfo> {
+        crate::wav::info(bytes)
+    }
+
     pub fn to_wav(&self) -> Vec<u8> {
         crate::wav::write_f32(self)
     }

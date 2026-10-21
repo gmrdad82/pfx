@@ -5,6 +5,9 @@ const TAPS: usize = 12;
 const LATE: usize = TAPS / 2;
 const PASSES: usize = 4;
 const LN2: f64 = std::f64::consts::LN_2;
+const MARGIN: usize = 2 * TAPS;
+const SLICE_FRAMES: usize = 1 << 15;
+const MAX_SLICES: usize = 16;
 
 const STEP: f32 = 1.0 / 8192.0;
 
@@ -71,6 +74,31 @@ pub fn oversampled(samples: &[f32]) -> Vec<f32> {
 
 pub fn local_peaks(samples: &[f32], channels: usize) -> Vec<f32> {
     let channels = channels.max(1);
+    let frames = samples.len() / channels;
+    let samples = &samples[..frames * channels];
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |n| n.get())
+        .min(frames / SLICE_FRAMES)
+        .min(MAX_SLICES);
+    if threads < 2 {
+        return scan(samples, channels);
+    }
+    let slice = frames.div_ceil(threads);
+    let mut out = vec![0.0f32; frames];
+    std::thread::scope(|scope| {
+        for (index, part) in out.chunks_mut(slice).enumerate() {
+            let from = index * slice;
+            let to = from + part.len();
+            let lo = from.saturating_sub(MARGIN);
+            let hi = (to + MARGIN).min(frames);
+            let window = &samples[lo * channels..hi * channels];
+            scope.spawn(move || part.copy_from_slice(&scan(window, channels)[from - lo..to - lo]));
+        }
+    });
+    out
+}
+
+fn scan(samples: &[f32], channels: usize) -> Vec<f32> {
     let frames = samples.len() / channels;
     let mut out = vec![0.0f32; frames];
     for c in 0..channels {
@@ -183,5 +211,25 @@ impl Limiter {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_sliced_scan_reads_the_same_peaks_as_one_pass() {
+        let frames = SLICE_FRAMES * 5 + 77;
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let samples: Vec<f32> = (0..frames * 2)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (state >> 40) as f32 / (1u64 << 23) as f32 - 1.0
+            })
+            .collect();
+        assert!(local_peaks(&samples, 2) == scan(&samples, 2));
     }
 }

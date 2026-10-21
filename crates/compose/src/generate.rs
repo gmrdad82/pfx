@@ -2,8 +2,8 @@ use pfx_core::sim::{Rng, ln, pow};
 
 use crate::score::{CueTrack, Fire, Glide, Note, Placed, Score, ScoreCue, StyleRef, Tempo, Track};
 use crate::style::{
-    Cue, CuePlays, MAX_BARS, MAX_BPM, MAX_NOTE_BEATS, MAX_NOTES, MAX_SECONDS, Plays, Role, Section,
-    Style, Voicing, midi_of,
+    Cue, CuePlays, Develop, MAX_BARS, MAX_BPM, MAX_NOTE_BEATS, MAX_NOTES, MAX_SECONDS, Plays, Role,
+    Section, Style, Voicing, midi_of,
 };
 use crate::theory::{Key, spread, voicing};
 
@@ -14,6 +14,7 @@ pub struct Request {
     pub hits: Vec<f64>,
     pub bpm: Option<u32>,
     pub key: Option<String>,
+    pub plan: Option<String>,
 }
 
 impl Request {
@@ -404,6 +405,31 @@ fn nearest_tone(midi: i32, chord: &[i32]) -> i32 {
     best
 }
 
+fn nearest_toward(midi: i32, chord: &[i32], dir: i32) -> i32 {
+    let mut best = (i32::MAX, midi);
+    for &c in chord {
+        for o in -4..=4 {
+            let m = c + 12 * o;
+            let rank = 2 * (m - midi).abs() + i32::from((m - midi).signum() != dir.signum());
+            if rank < best.0 {
+                best = (rank, m);
+            }
+        }
+    }
+    best.1
+}
+
+fn clashes(midi: f64, chord: &[i32], strict: bool) -> bool {
+    let m = midi.round() as i32;
+    if chord.iter().any(|t| (m - t).rem_euclid(12) == 0) {
+        return false;
+    }
+    strict
+        || chord
+            .iter()
+            .any(|t| matches!((m - t).rem_euclid(12), 1 | 11))
+}
+
 fn pattern(role: &Role, intensity: f64, rotate: u32) -> Vec<bool> {
     let at = |len: usize| ((intensity * (len as f64 - 1.0)).round().max(0.0) as usize).min(len - 1);
     if !role.patterns.is_empty() {
@@ -447,6 +473,110 @@ fn motif(
     out
 }
 
+fn ring(line: &mut [(f64, i32, f64)], beats: f64) {
+    for k in 0..line.len() {
+        let end = line.get(k + 1).map_or(beats, |n| n.0);
+        let (b, _, l) = &mut line[k];
+        if *b + *l > end + 1e-9 {
+            *l = (end - *b).max(0.0) * 0.9;
+        }
+    }
+}
+
+fn fragment(line: &[(f64, i32, f64)], beats: f64, step: i32) -> Vec<(f64, i32, f64)> {
+    let half = beats / 2.0;
+    let mut head: Vec<(f64, i32, f64)> =
+        line.iter().filter(|n| n.0 < half - 1e-9).copied().collect();
+    if head.is_empty() {
+        return line.to_vec();
+    }
+    ring(&mut head, half);
+    let again = head.iter().map(|&(b, d, l)| (b + half, d + step, l));
+    let mut out: Vec<(f64, i32, f64)> = head.iter().copied().chain(again).collect();
+    ring(&mut out, beats);
+    out
+}
+
+fn split(line: &[(f64, i32, f64)], beats: f64) -> Vec<(f64, i32, f64)> {
+    let mut out = Vec::with_capacity(line.len() * 2);
+    for (k, &(b, d, l)) in line.iter().enumerate() {
+        let next = line.get(k + 1);
+        let slot = next.map_or(beats, |n| n.0) - b;
+        if slot < 1.0 - 1e-9 || l < 0.9 - 1e-9 {
+            out.push((b, d, l));
+            continue;
+        }
+        let toward = next.map_or(-1, |n| (n.1 - d).signum());
+        let toward = if toward == 0 { 1 } else { toward };
+        out.push((b, d, 0.45));
+        out.push((b + 0.5, d + toward, (l - 0.45).min((slot - 0.5) * 0.9)));
+    }
+    out
+}
+
+fn next_hit(pat: &[bool], i: usize, bar_beat: f64, step: f64, bpb: f64) -> f64 {
+    match pat.iter().skip(i + 1).position(|on| *on) {
+        Some(k) => bar_beat + (i + 1 + k) as f64 * step,
+        None => bar_beat + bpb + pat.iter().position(|on| *on).unwrap_or(0) as f64 * step,
+    }
+}
+
+fn counter_cost(
+    m: i32,
+    tone: bool,
+    strong: bool,
+    lead: Option<i32>,
+    prev: Option<(i32, Option<i32>)>,
+    back: Option<i32>,
+) -> f64 {
+    let dissonance = if strong { 1.0 } else { 0.3 };
+    let mut cost = if tone { 0.0 } else { dissonance };
+    if let Some(l) = lead {
+        let gap = l - m;
+        if gap < 3 {
+            cost += 2.0;
+        }
+        let class = gap.rem_euclid(12);
+        cost += match class {
+            3 | 4 | 8 | 9 => 0.0,
+            0 | 7 => 0.1,
+            _ => dissonance,
+        };
+        if let Some((pm, Some(pl))) = prev {
+            let was = (pl - pm).rem_euclid(12);
+            if (class == 0 || class == 7) && class == was && pm != m && pl != l {
+                cost += 0.5;
+            }
+            let (dm, dl) = ((m - pm).signum(), (l - pl).signum());
+            if dm != 0 && dm == dl {
+                cost += 0.1;
+            }
+            if dm != 0 && dm == -dl {
+                cost -= 0.1;
+            }
+        }
+    }
+    if let Some((pm, _)) = prev {
+        let leap = (m - pm).abs();
+        if leap > 2 {
+            cost += 0.04 * f64::from(leap - 2);
+        }
+        if leap == 0 {
+            cost += 0.4;
+        }
+        if matches!(leap, 6 | 10 | 11) || leap > 12 {
+            cost += 1.0;
+        }
+        if !tone && leap > 2 {
+            cost += 1.0;
+        }
+        if back == Some(m) && leap > 0 {
+            cost += 0.1;
+        }
+    }
+    cost
+}
+
 struct Frame<'a> {
     style: &'a Style,
     key: Key,
@@ -454,7 +584,15 @@ struct Frame<'a> {
     bpb: f64,
     sections: Vec<Placed>,
     specs: Vec<&'a Section>,
-    chords: Vec<(Vec<i32>, String)>,
+    chords: Vec<Chord>,
+    cadence: f64,
+}
+
+struct Chord {
+    beat: f64,
+    tones: Vec<i32>,
+    name: String,
+    applied: bool,
 }
 
 impl Frame<'_> {
@@ -466,16 +604,57 @@ impl Frame<'_> {
     }
 
     fn chord_index(&self, beat: f64) -> usize {
-        ((beat / self.style.harmony.beats + 1e-9).floor().max(0.0) as usize)
-            .min(self.chords.len() - 1)
+        let within = beat + 1e-9 * self.style.harmony.beats;
+        self.chords
+            .partition_point(|c| c.beat <= within)
+            .saturating_sub(1)
+    }
+
+    fn intensity(&self, beat: f64) -> f64 {
+        let sec = &self.sections[self.section_at(beat)];
+        let [i0, i1] = sec.intensity.map(f64::from);
+        let from = f64::from(sec.from) * self.bpb;
+        let beats = f64::from(sec.bars) * self.bpb;
+        if beats <= 0.0 {
+            return i0;
+        }
+        i0 + (i1 - i0) * ((beat - from) / beats).clamp(0.0, 1.0)
     }
 
     fn chord_at(&self, beat: f64) -> &[i32] {
-        &self.chords[self.chord_index(beat)].0
+        &self.chords[self.chord_index(beat)].tones
+    }
+
+    fn triads(&self, beat: f64) -> bool {
+        self.specs[self.section_at(beat)].triads
+            || (self.style.harmony.land
+                && self.chords.last().is_some_and(|c| beat >= c.beat - 1e-9))
+    }
+
+    fn voiced(&self, beat: f64) -> &[i32] {
+        let c = self.chord_at(beat);
+        if self.triads(beat) {
+            &c[..c.len().min(3)]
+        } else {
+            c
+        }
+    }
+
+    fn line_tones(&self, beat: f64) -> &[i32] {
+        let c = &self.chords[self.chord_index(beat)];
+        if (c.applied && !self.style.harmony.sevenths) || self.triads(beat) {
+            &c.tones[..c.tones.len().min(3)]
+        } else {
+            &c.tones
+        }
+    }
+
+    fn split(&self, k: usize) -> bool {
+        k > 0 && k < self.chords.len() && (self.chords[k].applied || self.chords[k - 1].applied)
     }
 }
 
-fn harmony(frame: &mut Frame, total_beats: f64, base: &Rng) -> Result<(), String> {
+fn harmony(frame: &mut Frame, total_beats: f64, base: &Rng, applied: &Rng) -> Result<(), String> {
     let h = &frame.style.harmony;
     let mut rngs: Vec<Rng> = frame
         .specs
@@ -490,23 +669,82 @@ fn harmony(frame: &mut Frame, total_beats: f64, base: &Rng) -> Result<(), String
             "the harmony changes {steps} times; a score holds at most {MAX_NOTES} chords, so lengthen `harmony.beats` or shorten the music"
         ));
     }
-    for i in 0..steps {
-        let from_end = steps - i;
-        if from_end <= h.cadence.len() {
-            current = h.cadence[h.cadence.len() - from_end].clone();
+    let phrase = h.phrase as usize;
+    let cadence_from = steps.saturating_sub(h.cadence.len());
+    frame.cadence = cadence_from as f64 * h.beats;
+    let turn = |i: usize| -> &[String] {
+        if phrase == 0 || h.turns.is_empty() {
+            &h.turn
+        } else {
+            &h.turns[(i / phrase) % h.turns.len()]
         }
-        let si = frame.section_at(i as f64 * h.beats);
-        let rng = &mut rngs[si];
-        let lift = frame.specs[si].lift;
-        let chord: Vec<i32> = frame
-            .key
-            .chord(&current, h.sevenths)?
-            .iter()
-            .map(|m| m + lift)
-            .collect();
-        frame.chords.push((chord, current.clone()));
+    };
+    let turn_slot =
+        |i: usize| phrase > 0 && i < cadence_from && i % phrase + turn(i).len() >= phrase;
+    let mut names = Vec::with_capacity(steps);
+    for i in 0..steps {
+        if turn_slot(i) {
+            current = turn(i)[i % phrase + turn(i).len() - phrase].clone();
+        }
+        if steps - i <= h.cadence.len() {
+            current = h.cadence[h.cadence.len() - (steps - i)].clone();
+        }
+        frame.key.chord(&current, h.sevenths)?;
+        names.push(current.clone());
+        let rng = &mut rngs[frame.section_at(i as f64 * h.beats)];
         if let Some(next) = h.markov.get(&current) {
             current = pick(rng, next);
+            let ahead = i + 2;
+            let forced = if phrase == 0 || turn_slot(i + 1) {
+                None
+            } else if ahead == cadence_from {
+                h.cadence.first()
+            } else if turn_slot(ahead) {
+                turn(ahead).first()
+            } else {
+                None
+            };
+            if forced.is_some() && forced == Some(&current) {
+                let others: Vec<(String, u32)> = next
+                    .iter()
+                    .filter(|(n, w)| *w > 0 && Some(n) != forced)
+                    .cloned()
+                    .collect();
+                if !others.is_empty() {
+                    current = pick(&mut applied.fork((1 << 32) | i as u64), &others);
+                }
+            }
+        }
+    }
+    for (i, name) in names.iter().enumerate() {
+        let beat = i as f64 * h.beats;
+        let mut slots = vec![(beat, name.clone())];
+        let chance = frame.specs[frame.section_at(beat)]
+            .secondary
+            .unwrap_or(h.secondary);
+        if chance > 0.0 && h.beats >= 2.0 && i + 1 < steps && !turn_slot(i) {
+            let target = &names[i + 1];
+            if target != name
+                && let Some(dominant) = frame.key.secondary(target)
+                && applied.fork((2 << 32) | i as u64).next_f64() < chance
+            {
+                slots.push((beat + h.beats / 2.0, dominant));
+            }
+        }
+        for (at, numeral) in slots {
+            let lift = frame.specs[frame.section_at(at)].lift;
+            let tones: Vec<i32> = frame
+                .key
+                .chord(&numeral, h.sevenths)?
+                .iter()
+                .map(|m| m + lift)
+                .collect();
+            frame.chords.push(Chord {
+                beat: at,
+                tones,
+                applied: numeral.contains('/'),
+                name: numeral,
+            });
         }
     }
     Ok(())
@@ -535,15 +773,28 @@ struct Part<'a> {
     notes: Vec<Note>,
     lowpass: Vec<Glide>,
     voicing: Vec<i32>,
+    seed: Rng,
+    theme: Vec<(f64, i32, f64)>,
+    contour: Vec<i32>,
+    slot: usize,
+    sequence: i32,
+    direction: i32,
+    bass: Vec<i32>,
+    leader: &'a [Note],
+    last_chord: usize,
 }
 
 impl Part<'_> {
+    fn full(&self, si: usize) -> String {
+        format!(
+            "[[role]] `{}` in section `{}` takes the score past {MAX_NOTES} notes; shorten the music or thin its roles",
+            self.role.name, self.frame.specs[si].name
+        )
+    }
+
     fn push(&mut self, si: usize, note: Note) -> Result<(), String> {
         if self.notes.len() >= self.room {
-            return Err(format!(
-                "[[role]] `{}` in section `{}` takes the score past {MAX_NOTES} notes; shorten the music or thin its roles",
-                self.role.name, self.frame.specs[si].name
-            ));
+            return Err(self.full(si));
         }
         self.notes.push(note);
         Ok(())
@@ -618,8 +869,8 @@ impl Part<'_> {
         let onset = |k: u32, change: usize| {
             let held = entry + f64::from(k) * hold;
             let held = (held < end - 1e-9).then_some(held);
-            let moved = change as f64 * step;
-            let moved = (change < frame.chords.len() && moved < end - 1e-9).then_some(moved);
+            let moved = frame.chords.get(change).map(|c| c.beat);
+            let moved = moved.filter(|m| *m < end - 1e-9);
             match (held, moved) {
                 (Some(h), Some(m)) if (h - m).abs() < 1e-9 => Some((m, change, k + 1, change + 1)),
                 (Some(h), Some(m)) if m < h => Some((m, change, k, change + 1)),
@@ -641,7 +892,13 @@ impl Part<'_> {
                 }
                 None => hold.min(end - beat),
             };
-            let voicing = voice(role, &self.voicing, &frame.chords[chord].0);
+            let tones = &frame.chords[chord].tones;
+            let tones = if frame.triads(beat) {
+                &tones[..tones.len().min(3)]
+            } else {
+                tones
+            };
+            let voicing = voice(role, &self.voicing, tones);
             let vel = (0.6 + 0.3 * intensity) * swell;
             for &m in &voicing {
                 self.push(si, Note::new(beat, f64::from(m), len, vel))?;
@@ -682,6 +939,11 @@ impl Part<'_> {
                 beats: round(end_beat - entry_beat, 1e6),
             });
         }
+        match role.plays {
+            Plays::Counter => return self.counter(si, entry, rng),
+            Plays::Answer => return self.answer(si, entry),
+            _ => {}
+        }
         let rotate = if role.rotate.is_empty() {
             0
         } else {
@@ -709,7 +971,7 @@ impl Part<'_> {
                             continue;
                         }
                         let beat = bar_beat + i as f64 * step;
-                        let voicing = voice(role, &self.voicing, frame.chord_at(beat));
+                        let voicing = voice(role, &self.voicing, frame.voiced(beat));
                         let len = if last { spec.tail } else { role.hold.max(step) };
                         for &m in &voicing {
                             self.push(
@@ -723,7 +985,10 @@ impl Part<'_> {
                 Plays::Melody => {
                     let mb = frame.style.melody.motif_bars.max(1);
                     let in_motif = (bar - entry) % mb;
-                    if in_motif == 0 {
+                    let developed = !frame.style.melody.develop.is_empty();
+                    if in_motif == 0 && developed {
+                        motif_notes = self.develop(f64::from(mb) * bpb, bar_beat);
+                    } else if in_motif == 0 {
                         let reuse =
                             !motif_notes.is_empty() && rng.next_f64() < frame.style.melody.repeat;
                         if !reuse {
@@ -743,26 +1008,11 @@ impl Part<'_> {
                             continue;
                         }
                         let beat = bar_beat + b - lo;
-                        let c = frame.chord_at(beat);
-                        let midi = if frame.style.melody.chord_tones {
-                            let n = c.len() as i32;
-                            let root = root_voicing(c, 0);
-                            fold(
-                                root[d.rem_euclid(n) as usize]
-                                    + 12 * (d.div_euclid(n) + role.octave),
-                                frame.style.melody.range,
-                            )
+                        let melody = &frame.style.melody;
+                        let midi = if developed {
+                            d
                         } else {
-                            let lift = frame.specs[frame.section_at(beat)].lift;
-                            let m = frame.key.pitch(d) + 12 * role.octave + lift;
-                            let m = if b.fract() == 0.0 {
-                                let shifted: Vec<i32> =
-                                    c.iter().map(|x| x + 12 * role.octave).collect();
-                                nearest_tone(m, &shifted)
-                            } else {
-                                m
-                            };
-                            fold(m, frame.style.melody.range)
+                            fold(self.line_pitch(beat, b, d, 0), melody.range)
                         };
                         self.push(
                             si,
@@ -784,7 +1034,7 @@ impl Part<'_> {
                         }
                         let b = i as f64 * step;
                         let beat = bar_beat + b;
-                        let c = frame.chord_at(beat);
+                        let c = frame.voiced(beat);
                         let accent = if b.fract() == 0.0 {
                             1.0
                         } else {
@@ -792,6 +1042,10 @@ impl Part<'_> {
                         };
                         let jitter = rng.next_f64() * 0.08;
                         let midi = match role.plays {
+                            Plays::Bass if role.walk > 0.0 || role.inversions > 0.0 => {
+                                let next = next_hit(&pat, i, bar_beat, step, bpb);
+                                self.walking(beat, next, hit_n, rng)
+                            }
                             Plays::Bass => {
                                 c[0] + 12 * (role.octave + cycle(&role.octaves, hit_n))
                                     + cycle(&role.semis, hit_n)
@@ -830,9 +1084,765 @@ impl Part<'_> {
         Ok(())
     }
 
-    fn finish(mut self, humanize: &mut [Rng]) -> Track {
+    fn line_pitch(&self, beat: f64, b: f64, d: i32, shift: i32) -> i32 {
         let frame = self.frame;
-        let plays = self.role.plays;
+        let octave = self.role.octave;
+        let c = frame.line_tones(beat);
+        let lift = frame.specs[frame.section_at(beat)].lift;
+        if frame.style.melody.chord_tones {
+            let n = c.len() as i32;
+            let root = root_voicing(c, 0);
+            let m = root[d.rem_euclid(n) as usize] + 12 * (d.div_euclid(n) + octave);
+            if shift == 0 {
+                return m;
+            }
+            let m = frame.key.pitch(frame.key.index(m - lift) + shift) + lift;
+            if b.fract() == 0.0 {
+                nearest_toward(m, c, shift)
+            } else {
+                m
+            }
+        } else {
+            let m = frame.key.pitch(d + shift) + 12 * octave + lift;
+            if b.fract() == 0.0 {
+                let shifted: Vec<i32> = c.iter().map(|x| x + 12 * octave).collect();
+                nearest_tone(m, &shifted)
+            } else {
+                m
+            }
+        }
+    }
+
+    fn develop(&mut self, beats: f64, start: f64) -> Vec<(f64, i32, f64)> {
+        let frame = self.frame;
+        let style = frame.style;
+        let m = &style.melody;
+        let octave = self.role.octave;
+        let step_of = |part: &Self, b: f64, d: i32| {
+            let beat = start + b;
+            let lift = frame.specs[frame.section_at(beat)].lift;
+            frame.key.index(part.line_pitch(beat, b, d, 0) - lift)
+        };
+        if self.theme.is_empty() {
+            let mut degree = 0;
+            self.theme = motif(
+                style,
+                &frame.key,
+                &mut self.seed.fork(0),
+                beats,
+                &mut degree,
+                octave,
+            );
+            if m.chord_tones {
+                self.contour = self
+                    .theme
+                    .iter()
+                    .map(|&(b, d, _)| step_of(self, b, d))
+                    .collect();
+            }
+        }
+        let plan = m.develop[self.slot % m.develop.len()];
+        let mut rng = self.seed.fork(1 + self.slot as u64);
+        self.slot += 1;
+        let line: Vec<(f64, i32, f64)> = if m.chord_tones {
+            self.theme
+                .iter()
+                .zip(&self.contour)
+                .map(|(&(b, _, l), &i)| (b, i, l))
+                .collect()
+        } else {
+            self.theme.clone()
+        };
+        let axis = line.iter().map(|n| n.1).min().unwrap_or(0)
+            + line.iter().map(|n| n.1).max().unwrap_or(0);
+        let level = frame.intensity(start);
+        let reaches = |at: Option<f64>| at.is_some_and(|a| level >= a - 1e-9);
+        let fragments = plan == Develop::Sequence && reaches(m.fragment);
+        let mut shift = 0;
+        let out: Vec<(f64, i32, f64)> = match plan {
+            Develop::Sequence => {
+                let leaves = |s: i32, direction: i32| {
+                    let heard = if fragments {
+                        fragment(&line, beats, m.sequence * direction)
+                    } else {
+                        line.clone()
+                    };
+                    self.realize(&heard, start, s)
+                        .iter()
+                        .any(|&(_, p, _)| p < m.range[0] || p > m.range[1])
+                };
+                let mut next = self.sequence + m.sequence * self.direction;
+                if leaves(next, self.direction) {
+                    self.direction = -self.direction;
+                    next = self.sequence + m.sequence * self.direction;
+                }
+                self.sequence = next;
+                shift = next;
+                line
+            }
+            Develop::Invert => line.iter().map(|&(b, d, l)| (b, axis - d, l)).collect(),
+            Develop::Vary => {
+                let half = beats / 2.0;
+                let mut kept: Vec<(f64, i32, f64)> =
+                    line.iter().filter(|n| n.0 < half - 1e-9).copied().collect();
+                let first = self.theme.first().map_or(0, |n| n.1);
+                let mut degree = self
+                    .theme
+                    .iter()
+                    .rfind(|n| n.0 < half - 1e-9)
+                    .map_or(first, |n| n.1);
+                let tail = motif(
+                    style,
+                    &frame.key,
+                    &mut rng,
+                    beats - half,
+                    &mut degree,
+                    octave,
+                );
+                for (b, d, l) in tail {
+                    let b = b + half;
+                    let d = if m.chord_tones {
+                        step_of(self, b, d)
+                    } else {
+                        d
+                    };
+                    kept.push((b, d, l));
+                }
+                ring(&mut kept, beats);
+                kept
+            }
+            Develop::State | Develop::Repeat | Develop::Return => line,
+        };
+        let out = if fragments {
+            fragment(&out, beats, m.sequence * self.direction)
+        } else {
+            out
+        };
+        let out = if reaches(m.split) {
+            split(&out, beats)
+        } else {
+            out
+        };
+        if plan != Develop::Sequence {
+            self.sequence = 0;
+            self.direction = 1;
+        }
+        let notes = self.realize(&out, start, shift);
+        self.register(notes, start)
+    }
+
+    fn realize(&self, notes: &[(f64, i32, f64)], start: f64, shift: i32) -> Vec<(f64, i32, f64)> {
+        let frame = self.frame;
+        if !frame.style.melody.chord_tones {
+            return notes
+                .iter()
+                .map(|&(b, d, l)| (b, self.line_pitch(start + b, b, d, shift), l))
+                .collect();
+        }
+        let key = &frame.key;
+        let mut prev: Option<i32> = None;
+        notes
+            .iter()
+            .map(|&(b, i, l)| {
+                let beat = start + b;
+                let lift = frame.specs[frame.section_at(beat)].lift;
+                let c = frame.line_tones(beat);
+                let heard = frame.voiced(beat);
+                let at = i + shift;
+                let p = key.pitch(at) + lift;
+                let dir = if shift != 0 {
+                    shift.signum()
+                } else {
+                    prev.map_or(1, |q| (p - q).signum())
+                };
+                let dir = if dir == 0 { 1 } else { dir };
+                let strong = b.fract() == 0.0;
+                let fits = |q: i32| {
+                    if strong {
+                        c.iter().any(|t| (q - t).rem_euclid(12) == 0)
+                    } else {
+                        !clashes(f64::from(q), heard, false)
+                    }
+                };
+                let q = if fits(p) {
+                    p
+                } else {
+                    [at + dir, at - dir]
+                        .into_iter()
+                        .map(|j| key.pitch(j) + lift)
+                        .find(|q| fits(*q))
+                        .unwrap_or_else(|| nearest_toward(p, c, dir))
+                };
+                prev = Some(q);
+                (b, q, l)
+            })
+            .collect()
+    }
+
+    fn register(&self, notes: Vec<(f64, i32, f64)>, start: f64) -> Vec<(f64, i32, f64)> {
+        let frame = self.frame;
+        let [lo, hi] = frame.style.melody.range;
+        let outside = |k: i32| -> i32 {
+            notes
+                .iter()
+                .map(|&(_, p, _)| (lo - p - 12 * k).max(0) + (p + 12 * k - hi).max(0))
+                .sum()
+        };
+        let mut best = (outside(0), 0);
+        for k in [-1, 1, -2, 2] {
+            let o = outside(k);
+            if o < best.0 {
+                best = (o, k);
+            }
+        }
+        let k = best.1;
+        notes
+            .into_iter()
+            .map(|(b, p, l)| {
+                (
+                    b,
+                    self.inside(start + b, b.fract() == 0.0, p + 12 * k, [lo, hi]),
+                    l,
+                )
+            })
+            .collect()
+    }
+
+    fn bass_note(&mut self, ci: usize) -> i32 {
+        let frame = self.frame;
+        let role = self.role;
+        let base = frame.key.root + 12 * role.octave;
+        let near = |tone: i32, to: i32| {
+            let mut m = tone + 12 * (to - tone).div_euclid(12);
+            if (m + 12 - to).abs() < (m - to).abs() {
+                m += 12;
+            }
+            while m > base + 11 {
+                m -= 12;
+            }
+            while m < base - 1 {
+                m += 12;
+            }
+            m
+        };
+        while self.bass.len() <= ci {
+            let k = self.bass.len();
+            let c = &frame.chords[k].tones;
+            let root = c[0] + 12 * role.octave;
+            let note = match self.bass.last() {
+                None => root,
+                Some(&prev) => {
+                    let home = near(c[0], prev);
+                    let mut rng = self.seed.fork((1 << 32) | k as u64);
+                    let cadence = frame.chords[k].beat >= frame.cadence - 1e-9;
+                    if k + 1 < frame.chords.len()
+                        && c.len() >= 3
+                        && !cadence
+                        && rng.next_f64() < role.inversions
+                    {
+                        let third = near(c[1], prev);
+                        let fifth = near(c[2], prev);
+                        let after = near(frame.chords[k + 1].tones[0], fifth);
+                        if (1..=4).contains(&(third - prev).abs()) {
+                            third
+                        } else if (1..=2).contains(&(fifth - prev).abs())
+                            && (1..=2).contains(&(after - fifth).abs())
+                        {
+                            fifth
+                        } else {
+                            home
+                        }
+                    } else {
+                        home
+                    }
+                }
+            };
+            self.bass.push(note);
+        }
+        self.bass[ci]
+    }
+
+    fn walking(&mut self, beat: f64, next: f64, hit: usize, rng: &mut Rng) -> i32 {
+        let frame = self.frame;
+        let role = self.role;
+        let ci = frame.chord_index(beat);
+        let here = self.bass_note(ci);
+        let first = self.last_chord != ci;
+        self.last_chord = ci;
+        let cn = frame.chord_index(next);
+        if cn != ci && !first && rng.next_f64() < role.walk {
+            let target = self.bass_note(cn);
+            let lift = frame.specs[frame.section_at(next)].lift;
+            let at = frame.key.index(target - lift);
+            let below = frame.key.pitch(at - 1) + lift;
+            let above = frame.key.pitch(at + 1) + lift;
+            let (pick, other) = if below == here
+                || (above != here && (above - here).abs() < (below - here).abs())
+            {
+                (above, below)
+            } else {
+                (below, above)
+            };
+            let now = frame.voiced(beat);
+            let fits = |m: i32| m != here && !clashes(f64::from(m), now, false);
+            if fits(pick) {
+                return pick;
+            }
+            if fits(other) {
+                return other;
+            }
+            let lead = nearest_tone(target, now);
+            return if lead != target && (lead - target).abs() <= 2 {
+                lead
+            } else {
+                here
+            };
+        }
+        if first {
+            return here;
+        }
+        let semis = if role.semis.is_empty() {
+            0
+        } else {
+            role.semis[hit % role.semis.len()]
+        };
+        nearest_tone(here + semis, frame.voiced(beat))
+    }
+
+    fn sounding(&self, beat: f64) -> Option<&Note> {
+        self.leader
+            .iter()
+            .rev()
+            .find(|n| n.beat <= beat + 1e-9 && n.beat + n.beats > beat + 1e-9)
+    }
+
+    fn range(&self) -> [i32; 2] {
+        let [lo, hi] = self.role.range.unwrap_or([55, 72]);
+        [lo + 12 * self.role.octave, hi + 12 * self.role.octave]
+    }
+
+    fn counter(&mut self, si: usize, entry: u32, rng: &mut Rng) -> Result<(), String> {
+        let frame = self.frame;
+        let role = self.role;
+        let sec = &frame.sections[si];
+        let bpb = frame.bpb;
+        let sec_start = f64::from(sec.from) * bpb;
+        let sec_beats = f64::from(sec.bars) * bpb;
+        let [i0, i1] = sec.intensity.map(f64::from);
+        let [lo, hi] = self.range();
+        let mut prev: Option<(i32, Option<i32>)> = self
+            .notes
+            .last()
+            .map(|n| (n.midi as i32, self.sounding(n.beat).map(|l| l.midi as i32)));
+        let mut back = self
+            .notes
+            .len()
+            .checked_sub(2)
+            .map(|i| self.notes[i].midi as i32);
+        for bar in entry..sec.from + sec.bars {
+            let bar_beat = f64::from(bar) * bpb;
+            let t = (bar_beat - sec_start) / sec_beats;
+            let intensity = i0 + (i1 - i0) * t;
+            let swell = 1.0 + f64::from(role.ramp) * (t - 0.5);
+            let pat = if role.patterns.is_empty() && role.euclid.is_empty() {
+                vec![true, false]
+            } else {
+                pattern(role, intensity, 0)
+            };
+            let step = bpb / pat.len() as f64;
+            let hits: Vec<usize> = (0..pat.len()).filter(|i| pat[*i]).collect();
+            for (k, &i) in hits.iter().enumerate() {
+                let beat = bar_beat + i as f64 * step;
+                let until = hits.get(k + 1).map_or(bpb, |j| *j as f64 * step);
+                let len = if role.hold > 0.0 {
+                    role.hold
+                } else {
+                    until - i as f64 * step
+                };
+                let c = frame.line_tones(beat);
+                let strong = beat.fract() == 0.0;
+                let lift = frame.specs[frame.section_at(beat)].lift;
+                let lead = self.sounding(beat).map(|n| n.midi.round() as i32);
+                let mut candidates: Vec<(i32, bool)> = (lo..=hi)
+                    .filter(|m| c.iter().any(|t| (m - t).rem_euclid(12) == 0))
+                    .map(|m| (m, true))
+                    .collect();
+                if !strong {
+                    candidates.extend(
+                        (lo..=hi)
+                            .filter(|m| frame.key.pitch(frame.key.index(m - lift)) + lift == *m)
+                            .filter(|m| c.iter().all(|t| (m - t).rem_euclid(12) != 0))
+                            .map(|m| (m, false)),
+                    );
+                }
+                if let Some(l) = lead
+                    && candidates.iter().any(|(m, _)| l - m >= 3)
+                {
+                    candidates.retain(|(m, _)| l - m >= 3);
+                }
+                let mut best = (f64::MAX, None);
+                for (m, tone) in candidates {
+                    let cost =
+                        counter_cost(m, tone, strong, lead, prev, back) + rng.next_f64() * 0.05;
+                    if cost < best.0 {
+                        best = (cost, Some(m));
+                    }
+                }
+                let Some(m) = best.1 else {
+                    continue;
+                };
+                self.push(
+                    si,
+                    Note::new(beat, f64::from(m), len, (0.5 + 0.3 * intensity) * swell),
+                )?;
+                back = prev.map(|p| p.0);
+                prev = Some((m, lead));
+            }
+        }
+        Ok(())
+    }
+
+    fn answer(&mut self, si: usize, entry: u32) -> Result<(), String> {
+        let frame = self.frame;
+        let role = self.role;
+        let sec = &frame.sections[si];
+        let bpb = frame.bpb;
+        let sec_start = f64::from(sec.from) * bpb;
+        let sec_beats = f64::from(sec.bars) * bpb;
+        let from = f64::from(entry) * bpb;
+        let end = f64::from(sec.from + sec.bars) * bpb;
+        let [i0, i1] = sec.intensity.map(f64::from);
+        let [lo, hi] = self.range();
+        let onsets: Vec<f64> = self.leader.iter().map(|n| n.beat).collect();
+        let statement = f64::from(frame.style.melody.motif_bars.max(1)) * bpb;
+        let origin = role
+            .follows
+            .as_deref()
+            .and_then(|name| frame.style.roles.iter().find(|r| r.name == name))
+            .and_then(|leader| entry_bar(frame, leader, si))
+            .map_or(sec_start, |bar| f64::from(bar) * bpb);
+        let mut group: Option<i64> = None;
+        let mut start = self.notes.len();
+        for l in self.leader {
+            let beat = l.beat + role.delay;
+            if beat < from - 1e-9 || beat >= end - 1e-9 {
+                continue;
+            }
+            if onsets.iter().any(|o| (o - beat).abs() < 0.2) {
+                continue;
+            }
+            let g = ((l.beat - origin) / statement + 1e-9).floor() as i64;
+            if group != Some(g) {
+                self.place(start, [lo, hi]);
+                start = self.notes.len();
+                group = Some(g);
+            }
+            let c = frame.line_tones(beat);
+            let lift = frame.specs[frame.section_at(beat)].lift;
+            let at = frame
+                .key
+                .index(l.midi.round() as i32 + 12 * role.octave - lift)
+                + role.interval;
+            let mut m = frame.key.pitch(at) + lift;
+            let heard = frame.voiced(beat);
+            if beat.fract() == 0.0 {
+                m = nearest_tone(m, c);
+            } else if clashes(f64::from(m), heard, false) {
+                m = [at - 1, at + 1]
+                    .into_iter()
+                    .map(|j| frame.key.pitch(j) + lift)
+                    .find(|q| !clashes(f64::from(*q), heard, false))
+                    .unwrap_or_else(|| nearest_tone(m, c));
+            }
+            if let Some(n) = self.sounding(beat)
+                && (n.midi.round() as i32 - m).rem_euclid(12) == 0
+            {
+                m = nearest_tone(m - 3, c);
+            }
+            let next = onsets
+                .iter()
+                .filter(|o| **o > beat + 1e-9)
+                .fold(end, |a, b| a.min(*b));
+            let t = (beat - sec_start) / sec_beats;
+            let intensity = i0 + (i1 - i0) * t;
+            let swell = 1.0 + f64::from(role.ramp) * (t - 0.5);
+            self.push(
+                si,
+                Note::new(
+                    beat,
+                    f64::from(m),
+                    l.beats.min(next - beat).max(0.25),
+                    (0.45 + 0.3 * intensity) * swell,
+                ),
+            )?;
+        }
+        self.place(start, [lo, hi]);
+        Ok(())
+    }
+
+    fn place(&mut self, from: usize, [lo, hi]: [i32; 2]) {
+        let notes = &self.notes[from.min(self.notes.len())..];
+        let outside = |k: i32| -> i32 {
+            notes
+                .iter()
+                .map(|n| {
+                    let p = n.midi.round() as i32 + 12 * k;
+                    (lo - p).max(0) + (p - hi).max(0)
+                })
+                .sum()
+        };
+        let mut best = (outside(0), 0);
+        for k in [-1, 1, -2, 2, -3, 3, -4, 4] {
+            let o = outside(k);
+            if o < best.0 {
+                best = (o, k);
+            }
+        }
+        let k = best.1;
+        for i in from..self.notes.len() {
+            let n = &self.notes[i];
+            let q = n.midi.round() as i32 + 12 * k;
+            let m = self.inside(n.beat, n.beat.fract() == 0.0, q, [lo, hi]);
+            self.notes[i].midi = f64::from(m);
+        }
+    }
+
+    fn inside(&self, beat: f64, strong: bool, q: i32, [lo, hi]: [i32; 2]) -> i32 {
+        if (lo..=hi).contains(&q) {
+            return q;
+        }
+        let frame = self.frame;
+        let lift = frame.specs[frame.section_at(beat)].lift;
+        let c = frame.line_tones(beat);
+        let heard = frame.voiced(beat);
+        let fits = |x: &i32| {
+            if strong {
+                c.iter().any(|t| (x - t).rem_euclid(12) == 0)
+            } else {
+                frame.key.pitch(frame.key.index(x - lift)) + lift == *x
+                    && !clashes(f64::from(*x), heard, false)
+            }
+        };
+        let lead = self.sounding(beat).map(|n| n.midi.round() as i32);
+        let apart = |x: &i32| lead.is_none_or(|p| (x - p).rem_euclid(12) != 0);
+        (lo..=hi)
+            .filter(|x| fits(x) && apart(x))
+            .min_by_key(|x| (x - q).abs())
+            .or_else(|| (lo..=hi).filter(fits).min_by_key(|x| (x - q).abs()))
+            .unwrap_or_else(|| fold(q, [lo, hi]))
+    }
+
+    fn last_bar(&self) -> Option<f64> {
+        let last = self.frame.sections.last()?;
+        Some(f64::from(last.from + last.bars).max(1.0) * self.frame.bpb - self.frame.bpb)
+    }
+
+    fn land(&mut self) {
+        let frame = self.frame;
+        let Some(last_bar) = self.last_bar() else {
+            return;
+        };
+        let Some(last) = frame.chords.last() else {
+            return;
+        };
+        let bar = last_bar.max(last.beat);
+        let end = last_bar + frame.bpb;
+        let (sec, spec) = (
+            &frame.sections[frame.sections.len() - 1],
+            frame.specs[frame.specs.len() - 1],
+        );
+        let until = if spec.stop > 0.0 && !spec.through.contains(&self.role.name) {
+            (end - spec.stop).max(f64::from(sec.from) * frame.bpb)
+        } else {
+            end
+        };
+        if until - bar <= 1e-9 {
+            return;
+        }
+        let Some(first) = self
+            .notes
+            .iter()
+            .filter(|n| n.beat >= bar - 1e-9)
+            .min_by(|a, b| a.beat.total_cmp(&b.beat))
+            .cloned()
+        else {
+            return;
+        };
+        let root = last.tones[0];
+        let midi = first.midi.round() as i32;
+        let vel = self
+            .notes
+            .iter()
+            .filter(|n| n.beat >= bar - 1e-9)
+            .fold(0.0f64, |v, n| v.max(n.vel));
+        self.notes.retain(|n| n.beat < bar - 1e-9);
+        for n in &mut self.notes {
+            if n.beat + n.beats > bar {
+                n.beats = bar - n.beat;
+            }
+        }
+        let target = if self.role.plays == Plays::Bass {
+            let m = nearest_tone(midi, &[root]);
+            if self.role.range.is_some() {
+                fold(m, self.range())
+            } else {
+                m
+            }
+        } else {
+            self.cadence(bar, root, midi)
+        };
+        self.notes.push(Note {
+            beat: bar,
+            midi: f64::from(target),
+            beats: until - bar,
+            vel,
+            ..first
+        });
+    }
+
+    fn cadence(&mut self, bar: f64, root: i32, near: i32) -> i32 {
+        let frame = self.frame;
+        let key = &frame.key;
+        let range = if self.role.plays == Plays::Melody {
+            frame.style.melody.range
+        } else {
+            self.range()
+        };
+        let finals: Vec<i32> = (range[0]..=range[1])
+            .filter(|m| (m - root).rem_euclid(12) == 0)
+            .collect();
+        let mut order: Vec<usize> = (0..self.notes.len()).collect();
+        order.sort_by(|a, b| self.notes[*a].beat.total_cmp(&self.notes[*b].beat));
+        let Some(&at) = order.last() else {
+            return nearest_tone(near, &[root]);
+        };
+        if finals.is_empty() {
+            return nearest_tone(near, &[root]);
+        }
+        let pen = self.notes[at].midi.round() as i32;
+        let pen_beat = self.notes[at].beat;
+        let ante = order
+            .len()
+            .checked_sub(2)
+            .map(|i| self.notes[order[i]].midi.round() as i32);
+        let lift = frame.specs[frame.section_at(bar)].lift;
+        let step = |m: i32| key.index(m - lift);
+        let lead = |beat: f64| self.sounding(beat).map(|n| n.midi.round() as i32);
+        let (lead_final, lead_pen) = (lead(bar), lead(pen_beat));
+        let pen_chord = frame.voiced(pen_beat);
+        let mut best = (f64::MAX, finals[0], pen);
+        for &f in &finals {
+            let up = key.pitch(step(f) + 1) + lift;
+            let down = key.pitch(step(f) - 1) + lift;
+            for p in [pen, up, down] {
+                if p != pen && (p < range[0] || p > range[1]) {
+                    continue;
+                }
+                let mut cost = if (step(f) - step(p)).abs() == 1 {
+                    -1.0
+                } else {
+                    0.7
+                };
+                if let (Some(lf), Some(lp)) = (lead_final, lead_pen) {
+                    let (dl, dc) = ((lf - lp).signum(), (f - p).signum());
+                    cost += if dl != 0 && dc == -dl { -1.0 } else { 0.1 };
+                    if lf - f < 3 {
+                        cost += 2.0;
+                    }
+                    let (was, now) = ((lp - p).rem_euclid(12), (lf - f).rem_euclid(12));
+                    if (now == 0 || now == 7) && now == was && p != f && lp != lf {
+                        cost += 0.5;
+                    }
+                }
+                if let Some(a) = ante {
+                    cost += if a == p {
+                        0.1
+                    } else if (step(p) - step(a)).abs() < 2 {
+                        -1.0
+                    } else {
+                        0.7
+                    };
+                }
+                if let Some(lp) = lead_pen {
+                    if lp - p < 3 {
+                        cost += 2.0;
+                    }
+                    if !matches!((lp - p).rem_euclid(12), 0 | 3 | 4 | 7 | 8 | 9) {
+                        cost += 1.0;
+                    }
+                }
+                if p != pen {
+                    cost += 0.5;
+                    if pen_chord.iter().all(|t| (p - t).rem_euclid(12) != 0) {
+                        cost += 1.0;
+                    }
+                }
+                cost += 0.01 * f64::from((f - near).abs());
+                if cost < best.0 - 1e-9 {
+                    best = (cost, f, p);
+                }
+            }
+        }
+        self.notes[at].midi += f64::from(best.2 - pen);
+        best.1
+    }
+
+    fn passing(&mut self) -> Result<(), String> {
+        let frame = self.frame;
+        let m = &frame.style.melody;
+        if self.role.plays != Plays::Melody || !m.chord_tones || m.passing <= 0.0 {
+            return Ok(());
+        }
+        let key = &frame.key;
+        let mut rng = self.seed.fork(2 << 32);
+        self.notes.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        let mut added = Vec::new();
+        for k in 1..self.notes.len() {
+            let (a, b) = (&self.notes[k - 1], &self.notes[k]);
+            let mid = (a.beat + b.beat) / 2.0;
+            let gap = b.beat - a.beat;
+            if !(1.0 - 1e-9..=2.0 + 1e-9).contains(&gap)
+                || (mid.fract() - 0.5).abs() > 1e-9
+                || a.beat + a.beats < mid - 0.05
+                || frame.section_at(a.beat) != frame.section_at(b.beat)
+            {
+                continue;
+            }
+            let lift = frame.specs[frame.section_at(mid)].lift;
+            let (pa, pb) = (a.midi.round() as i32, b.midi.round() as i32);
+            let (ia, ib) = (key.index(pa - lift), key.index(pb - lift));
+            if (ib - ia).abs() != 2
+                || key.pitch(ia) + lift != pa
+                || key.pitch(ib) + lift != pb
+                || rng.next_f64() >= m.passing
+            {
+                continue;
+            }
+            let p = key.pitch((ia + ib) / 2) + lift;
+            if clashes(f64::from(p), frame.voiced(mid), false) {
+                continue;
+            }
+            if self.notes.len() + added.len() >= self.room {
+                return Err(self.full(frame.section_at(mid)));
+            }
+            added.push((
+                k - 1,
+                Note::new(mid, f64::from(p), (b.beat - mid) * 0.9, a.vel * 0.85),
+            ));
+        }
+        for (k, note) in &added {
+            let a = &mut self.notes[*k];
+            a.beats = a.beats.min(note.beat - a.beat);
+        }
+        self.notes.extend(added.into_iter().map(|(_, n)| n));
+        self.notes.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        Ok(())
+    }
+
+    fn trim(&mut self) {
+        let frame = self.frame;
+        let role = self.role;
+        let plays = role.plays;
         if plays == Plays::Chord {
             self.notes.sort_by(|a, b| a.beat.total_cmp(&b.beat));
             let onsets: Vec<f64> = self.notes.iter().map(|n| n.beat).collect();
@@ -844,13 +1854,70 @@ impl Part<'_> {
                 if let Some(at) = onsets.get(next) {
                     note.beats = note.beats.min(at - note.beat);
                 }
-                let step = frame.style.harmony.beats;
-                let change = frame.chord_index(note.beat) + 1;
-                if change < frame.chords.len() {
-                    note.beats = note.beats.min(change as f64 * step - note.beat);
+                if let Some(change) = frame.chords.get(frame.chord_index(note.beat) + 1) {
+                    note.beats = note.beats.min(change.beat - note.beat);
                 }
             }
         }
+        if !plays.event() {
+            for (sec, spec) in frame.sections.iter().zip(&frame.specs) {
+                if spec.stop <= 0.0 || sec.bars == 0 || spec.through.contains(&role.name) {
+                    continue;
+                }
+                let end = f64::from(sec.from + sec.bars) * frame.bpb;
+                let from = (end - spec.stop).max(f64::from(sec.from) * frame.bpb);
+                self.notes
+                    .retain(|n| n.beat < from - 1e-9 || n.beat >= end - 1e-9);
+                for n in &mut self.notes {
+                    if n.beat < from && n.beat + n.beats > from + 1e-9 {
+                        n.beats = from - n.beat;
+                    }
+                }
+            }
+        }
+        if !plays.event() && plays != Plays::Hit {
+            let every = plays == Plays::Chord;
+            for note in &mut self.notes {
+                for k in 1..frame.chords.len() {
+                    let at = frame.chords[k].beat;
+                    if (every || frame.split(k))
+                        && note.beat < at - 1e-9
+                        && note.beat + note.beats > at + 1e-9
+                        && clashes(note.midi, frame.voiced(at), every)
+                    {
+                        note.beats = at - note.beat;
+                        break;
+                    }
+                }
+            }
+        }
+        let eighth = |b: f64| (b * 2.0 + 1e-6).floor() as i64;
+        self.notes.retain(|n| {
+            let s = i64::from(frame.specs[frame.section_at(n.beat)].stutter);
+            s == 0 || eighth(n.beat).rem_euclid(s) != s - 1
+        });
+        if !frame.style.harmony.land {
+            return;
+        }
+        match plays {
+            Plays::Melody | Plays::Counter | Plays::Bass => self.land(),
+            Plays::Answer => {
+                if let Some(bar) = self.last_bar() {
+                    self.notes.retain(|n| n.beat < bar - 1e-9);
+                    for n in &mut self.notes {
+                        if n.beat + n.beats > bar {
+                            n.beats = bar - n.beat;
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn finish(mut self, humanize: &mut [Rng]) -> Track {
+        let frame = self.frame;
+        let plays = self.role.plays;
         for note in &mut self.notes {
             let spec = frame.specs[frame.section_at(note.beat)];
             if spec.pitch != 1.0 {
@@ -866,11 +1933,6 @@ impl Part<'_> {
                 note.vel *= pow(10.0, f64::from(spec.gain_db) / 20.0);
             }
         }
-        let eighth = |b: f64| (b * 2.0 + 1e-6).floor() as i64;
-        self.notes.retain(|n| {
-            let s = i64::from(frame.specs[frame.section_at(n.beat)].stutter);
-            s == 0 || eighth(n.beat).rem_euclid(s) != s - 1
-        });
         let style = frame.style;
         let homes: Vec<usize> = self
             .notes
@@ -988,6 +2050,13 @@ fn stinger(cue: &Cue, key: &Key) -> Result<ScoreCue, String> {
 
 pub fn compose(name: &str, style: &Style, request: &Request) -> Result<Score, String> {
     style.check()?;
+    let planned = request.plan.as_deref().map(|p| style.plan(p)).transpose()?;
+    let style = planned.as_ref().unwrap_or(style);
+    let resolved = style.resolved();
+    let style = resolved.as_ref().unwrap_or(style);
+    if style.sections.is_empty() {
+        return Err("every [[section]] is in a plan; compose one plan of the style".into());
+    }
     request.check()?;
     if let Some(need) = style.sections.iter().filter_map(|s| s.hit).max()
         && !request.hits.is_empty()
@@ -1052,11 +2121,13 @@ pub fn compose(name: &str, style: &Style, request: &Request) -> Result<Score, St
         sections,
         specs: style.sections.iter().collect(),
         chords: Vec::new(),
+        cadence: f64::MAX,
     };
     harmony(
         &mut frame,
         f64::from(total) * bpb,
         &stream(&root, &["harmony"]),
+        &stream(&root, &["applied"]),
     )?;
     let cues = style
         .cues
@@ -1068,32 +2139,70 @@ pub fn compose(name: &str, style: &Style, request: &Request) -> Result<Score, St
         .flat_map(|c| &c.voices)
         .map(|v| v.notes.len())
         .sum();
-    let mut tracks = Vec::with_capacity(style.roles.len());
-    for role in &style.roles {
-        let lane = stream(&root, &["role", &role.name]);
-        let mut humanize: Vec<Rng> = frame
-            .specs
-            .iter()
-            .map(|s| stream(&lane, &["humanize", &s.name]))
-            .collect();
-        let mut part = Part {
-            frame: &frame,
-            role,
-            room: MAX_NOTES.saturating_sub(used),
-            notes: Vec::new(),
-            lowpass: Vec::new(),
-            voicing: Vec::new(),
-        };
-        for (si, spec) in frame.specs.iter().enumerate() {
-            if role.plays.event() {
-                part.events(si)?;
+    let mut tracks: Vec<Option<Track>> = style.roles.iter().map(|_| None).collect();
+    let mut raw: Vec<(&str, Vec<Note>)> = Vec::new();
+    for followers in [false, true] {
+        for (ri, role) in style.roles.iter().enumerate() {
+            if role.follower() != followers {
+                continue;
             }
-            part.section(si, &mut stream(&lane, &["section", &spec.name]))?;
+            let lane = stream(&root, &["role", &role.name]);
+            let mut humanize: Vec<Rng> = frame
+                .specs
+                .iter()
+                .map(|s| stream(&lane, &["humanize", &s.name]))
+                .collect();
+            let leader = role
+                .follows
+                .as_deref()
+                .and_then(|name| raw.iter().find(|(n, _)| *n == name))
+                .map_or(&[][..], |(_, notes)| notes.as_slice());
+            let mut part = Part {
+                frame: &frame,
+                role,
+                room: MAX_NOTES.saturating_sub(used),
+                notes: Vec::new(),
+                lowpass: Vec::new(),
+                voicing: Vec::new(),
+                seed: stream(&lane, &["develop"]),
+                theme: Vec::new(),
+                contour: Vec::new(),
+                slot: 0,
+                sequence: 0,
+                direction: 1,
+                bass: Vec::new(),
+                leader,
+                last_chord: usize::MAX,
+            };
+            for (si, spec) in frame.specs.iter().enumerate() {
+                if role.plays.event() {
+                    part.events(si)?;
+                }
+                part.section(si, &mut stream(&lane, &["section", &spec.name]))?;
+            }
+            part.passing()?;
+            part.trim();
+            let notes = (!followers).then(|| part.notes.clone());
+            let track = part.finish(&mut humanize);
+            used += track.notes.len();
+            tracks[ri] = Some(track);
+            if let Some(notes) = notes {
+                raw.push((role.name.as_str(), notes));
+            }
         }
-        let track = part.finish(&mut humanize);
-        used += track.notes.len();
-        tracks.push(track);
     }
+    let tracks: Vec<Track> = tracks.into_iter().flatten().collect();
+    let slot = style.harmony.beats;
+    let split = frame
+        .chords
+        .iter()
+        .enumerate()
+        .any(|(i, c)| (c.beat - i as f64 * slot).abs() > 1e-9);
+    let chord_beats = if split {
+        frame.chords.iter().map(|c| round(c.beat, 1e6)).collect()
+    } else {
+        Vec::new()
+    };
     let fires = style
         .sections
         .iter()
@@ -1108,11 +2217,13 @@ pub fn compose(name: &str, style: &Style, request: &Request) -> Result<Score, St
         seed: request.seed,
         seconds: request.seconds,
         hits: request.hits.clone(),
+        plan: request.plan.clone(),
         bpm,
         beats_per_bar: style.beats_per_bar,
         key: frame.key.name(),
         bars: total,
-        chords: frame.chords.iter().map(|c| c.1.clone()).collect(),
+        chords: frame.chords.iter().map(|c| c.name.clone()).collect(),
+        chord_beats,
         sections: frame.sections,
         tracks,
         cues,

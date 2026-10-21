@@ -1,8 +1,8 @@
 use std::time::Instant;
 
 use pfx_sound::{
-    AdaptiveTrack, ChannelId, Clip, Level, Mixer, Quantize, Section, SoundSpec, Stem, StemGain,
-    Wave,
+    AdaptiveTrack, ChannelId, Clip, Envelope, Level, Mixer, Note, NoteRender, Quantize, Section,
+    Shape, SoundSpec, Stem, StemGain, Wave,
 };
 
 const RATE: u32 = 48_000;
@@ -257,4 +257,147 @@ fn bench_adaptive_eight_stems() {
         let best = (0..5).map(|_| adaptive_cost(case)).fold(f64::MAX, f64::min);
         println!("8 stereo stems, {case}: {best:.3} ms a second of audio");
     }
+}
+
+const PAD_SECONDS: usize = 30;
+const PAD_CHORD: u64 = 96_000;
+const PAD_ENVELOPE: Envelope = Envelope {
+    attack_ms: 40.0,
+    decay_ms: 0.0,
+    sustain: 0.85,
+    release_ms: 300.0,
+    shape: Shape::Exponential,
+};
+
+fn pad_notes() -> Vec<Note> {
+    let chords = [[52, 55, 59], [52, 57, 60], [52, 55, 60], [51, 54, 59]];
+    let mut notes = Vec::new();
+    for c in 0..(PAD_SECONDS as u64 * u64::from(RATE) / PAD_CHORD) {
+        for midi in chords[c as usize % chords.len()] {
+            for (cents, pan) in [(-9.0f32, -0.5f32), (9.0, 0.5)] {
+                notes.push(Note {
+                    at: c * PAD_CHORD,
+                    held: PAD_CHORD,
+                    wave: Wave::Saw,
+                    hz: 440.0 * 2f32.powf((midi as f32 - 69.0 + cents / 100.0) / 12.0),
+                    glide: None,
+                    gain: 0.02,
+                    pan,
+                    envelope: PAD_ENVELOPE,
+                    fade: None,
+                    seed: c,
+                });
+            }
+        }
+    }
+    notes
+}
+
+fn pad_lowpass() -> Vec<(u64, f32, f32)> {
+    (0..PAD_SECONDS as u64 / 4)
+        .map(|k| (k * 4 * u64::from(RATE), 1500.0 + 170.0 * k as f32, 4.0))
+        .collect()
+}
+
+fn pad_mixer(notes: &[Note]) -> Vec<f32> {
+    let frames = PAD_SECONDS * RATE as usize;
+    let mut mixer = Mixer::new(RATE, 2);
+    let ch = ChannelId::custom(100);
+    mixer.set_channel_highpass(ch, Some(150.0));
+    let mut events: Vec<(u64, usize, u8)> = Vec::new();
+    for (i, n) in notes.iter().enumerate() {
+        events.push((n.at, i, 0));
+        events.push((n.at + n.held, i, 1));
+    }
+    for (i, (at, _, _)) in pad_lowpass().iter().enumerate() {
+        events.push((*at, i, 2));
+    }
+    events.sort();
+    let lowpass = pad_lowpass();
+    let mut ids = vec![None; notes.len()];
+    let mut out = Vec::with_capacity(frames * 2);
+    let mut clock = 0u64;
+    for (at, i, kind) in events {
+        if at > clock {
+            out.extend(mixer.render((at - clock) as usize));
+            clock = at;
+        }
+        match kind {
+            0 => {
+                let n = notes[i];
+                let id = mixer.tone(ch, n.wave, n.hz, n.gain);
+                mixer.set_envelope(id, Some(n.envelope));
+                mixer.set_pan(id, n.pan);
+                ids[i] = Some(id);
+            }
+            1 => {
+                if let Some(id) = ids[i] {
+                    mixer.stop(id, notes[i].envelope.release_ms / 1000.0);
+                }
+            }
+            _ => {
+                let (_, hz, secs) = lowpass[i];
+                mixer.glide_channel_lowpass(ch, Some(hz), secs);
+            }
+        }
+    }
+    out.extend(mixer.render(frames - clock as usize));
+    out
+}
+
+fn pad_offline(notes: &[Note]) -> Vec<f32> {
+    let mut render = NoteRender::new(RATE, PAD_SECONDS * RATE as usize);
+    render.highpass(0, Some(150.0), 0);
+    for (at, hz, secs) in pad_lowpass() {
+        render.lowpass(at, Some(hz), (secs * RATE as f32) as u64);
+    }
+    for note in notes {
+        render.note(note);
+    }
+    render.finish()
+}
+
+#[test]
+#[ignore = "bench; run with --release"]
+fn bench_pad_stem() {
+    let notes = pad_notes();
+    let time = |f: &dyn Fn() -> Vec<f32>| {
+        let mut runs: Vec<f64> = (0..5)
+            .map(|_| {
+                let started = Instant::now();
+                std::hint::black_box(f());
+                started.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        runs.sort_by(f64::total_cmp);
+        runs[2]
+    };
+    let live = time(&|| pad_mixer(&notes));
+    let offline = time(&|| pad_offline(&notes));
+    let a = pad_mixer(&notes);
+    let b = pad_offline(&notes);
+    let diff = a
+        .iter()
+        .zip(&b)
+        .map(|(x, y)| (x - y).abs())
+        .fold(0.0f32, f32::max);
+    println!(
+        "pad stem, {} notes, {PAD_SECONDS} s: live mixer {live:.1} ms, offline {offline:.1} ms, max difference {diff:.2e}",
+        notes.len()
+    );
+}
+
+#[test]
+#[ignore = "bench; run with --release"]
+fn bench_loudness_30s() {
+    let samples = pad_offline(&pad_notes());
+    let mut runs: Vec<f64> = (0..5)
+        .map(|_| {
+            let started = Instant::now();
+            std::hint::black_box(pfx_sound::loudness(&samples, 2, RATE));
+            started.elapsed().as_secs_f64() * 1000.0
+        })
+        .collect();
+    runs.sort_by(f64::total_cmp);
+    println!("loudness of a 30 s stereo stem: {:.1} ms", runs[2]);
 }

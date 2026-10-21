@@ -8,6 +8,7 @@ use crate::clip::Clip;
 
 const MUSIC_KEYS: &[&str] = &[
     "bpm",
+    "tempo",
     "beats_per_bar",
     "offset",
     "start",
@@ -17,9 +18,13 @@ const MUSIC_KEYS: &[&str] = &[
     "transition",
     "stem",
     "section",
+    "stinger",
+    SCORE,
 ];
+pub const SCORE: &str = "score";
 const STEM_KEYS: &[&str] = &["name", "file", "gain", "shape"];
 const SECTION_KEYS: &[&str] = &["name", "bars", "next", "avoid_repeat"];
+const STINGER_KEYS: &[&str] = &["name", "event", "file"];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct StemFile {
@@ -28,13 +33,44 @@ pub struct StemFile {
     pub gain: StemGain,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StingerFile {
+    pub name: String,
+    pub event: String,
+    pub file: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct Stinger {
+    pub name: String,
+    pub event: String,
+    pub clip: Clip,
+}
+
+#[derive(Clone, Debug)]
+pub struct Music {
+    pub track: AdaptiveTrack,
+    pub stingers: Vec<Stinger>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Manifest {
+    pub score: Option<String>,
     pub stems: Vec<StemFile>,
+    pub stingers: Vec<StingerFile>,
     pub track: AdaptiveTrack,
 }
 
 impl Manifest {
+    pub fn composed(&self) -> Result<(), String> {
+        match &self.score {
+            Some(score) => Err(format!(
+                "[music] plays [compose.score.{score}], whose stems are rendered on load; load it with pfx_compose::render::game::music"
+            )),
+            None => Ok(()),
+        }
+    }
+
     pub fn parse(text: &str) -> Result<Option<Manifest>, String> {
         let document: Table = toml::from_str(text).map_err(|e| e.to_string())?;
         match document.get("music") {
@@ -50,6 +86,7 @@ impl Manifest {
         let bpm = number(music, "bpm", at)?.ok_or("[music]: `bpm` is required")?;
         let beats_per_bar = whole(music, "beats_per_bar", at)?.unwrap_or(4);
         let mut track = AdaptiveTrack::new(Vec::new(), bpm, beats_per_bar);
+        track.tempo = tempo(music, at)?;
         track.offset = number(music, "offset", at)?.unwrap_or(0.0);
         track.start = text(music, "start", at)?;
         track.intensity = number(music, "intensity", at)?.unwrap_or(0.0) as f32;
@@ -73,18 +110,31 @@ impl Manifest {
         if stems.is_empty() {
             return Err("[music]: at least one [[music.stem]] is required".into());
         }
+        let mut stingers = Vec::new();
+        for (index, table) in tables(music, "stinger", at)?.into_iter().enumerate() {
+            stingers.push(stinger_file(
+                table,
+                &format!("[[music.stinger]] {}", index + 1),
+            )?);
+        }
         for (index, table) in tables(music, "section", at)?.into_iter().enumerate() {
             track
                 .sections
                 .push(section(table, &format!("[[music.section]] {}", index + 1))?);
         }
-        Ok(Manifest { stems, track })
+        Ok(Manifest {
+            score: text(music, SCORE, at)?,
+            stems,
+            stingers,
+            track,
+        })
     }
 
     pub fn track(
         &self,
         mut read: impl FnMut(&str) -> Result<Vec<u8>, String>,
     ) -> Result<AdaptiveTrack, String> {
+        self.composed()?;
         let mut track = self.track.clone();
         for stem in &self.stems {
             let bytes = read(&stem.file).map_err(|e| format!("stem `{}`: {e}", stem.name))?;
@@ -102,15 +152,25 @@ impl Manifest {
 }
 
 pub fn load(path: &Path) -> Result<AdaptiveTrack, String> {
+    load_music(path).map(|music| music.track)
+}
+
+pub fn load_music(path: &Path) -> Result<Music, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new(""));
-    load_bytes(&bytes, Some(dir)).map_err(|e| format!("{}: {e}", path.display()))
+    music_bytes(&bytes, Some(dir)).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 pub fn load_bytes(bytes: &[u8], beside: Option<&Path>) -> Result<AdaptiveTrack, String> {
+    music_bytes(bytes, beside).map(|music| music.track)
+}
+
+pub fn music_bytes(bytes: &[u8], beside: Option<&Path>) -> Result<Music, String> {
     let reader = pfx_file::Reader::from_bytes(bytes).map_err(|e| e.to_string())?;
     let mut manifest = None;
-    for (name, chunk) in reader.chunks(pfx_file::SCNE).map_err(|e| e.to_string())? {
+    let mut texts = reader.chunks(pfx_file::SCNE).map_err(|e| e.to_string())?;
+    texts.extend(reader.chunks(pfx_file::RCPE).map_err(|e| e.to_string())?);
+    for (name, chunk) in texts {
         let text = std::str::from_utf8(&chunk).map_err(|_| format!("`{name}` is not UTF-8"))?;
         if let Some(found) = Manifest::parse(text).map_err(|e| format!("`{name}`: {e}"))? {
             manifest = Some(found);
@@ -118,7 +178,8 @@ pub fn load_bytes(bytes: &[u8], beside: Option<&Path>) -> Result<AdaptiveTrack, 
         }
     }
     let manifest = manifest.ok_or("no scene in the file has a [music] table")?;
-    manifest.track(|file| {
+    manifest.composed()?;
+    let read = |file: &str| -> Result<Vec<u8>, String> {
         if let Some(chunk) = reader
             .named(pfx_file::FILE, file)
             .map_err(|e| e.to_string())?
@@ -137,7 +198,32 @@ pub fn load_bytes(bytes: &[u8], beside: Option<&Path>) -> Result<AdaptiveTrack, 
             return Err(format!("`{file}` must stay inside the file's folder"));
         }
         std::fs::read(dir.join(relative)).map_err(|e| format!("`{file}`: {e}"))
-    })
+    };
+    let track = manifest.track(&read)?;
+    let mut stingers = Vec::new();
+    for stinger in &manifest.stingers {
+        let bytes = read(&stinger.file).map_err(|e| format!("stinger `{}`: {e}", stinger.name))?;
+        let clip = Clip::from_wav(&bytes).ok_or_else(|| {
+            format!(
+                "stinger `{}`: `{}` is no WAV pfx reads",
+                stinger.name, stinger.file
+            )
+        })?;
+        stingers.push(Stinger {
+            name: stinger.name.clone(),
+            event: stinger.event.clone(),
+            clip,
+        });
+    }
+    Ok(Music { track, stingers })
+}
+
+fn stinger_file(table: &Table, at: &str) -> Result<StingerFile, String> {
+    known(table, STINGER_KEYS, at)?;
+    let name = text(table, "name", at)?.ok_or_else(|| format!("{at}: `name` is required"))?;
+    let file = text(table, "file", at)?.ok_or_else(|| format!("{at}: `file` is required"))?;
+    let event = text(table, "event", at)?.unwrap_or_else(|| name.clone());
+    Ok(StingerFile { name, event, file })
 }
 
 fn stem_file(table: &Table, at: &str) -> Result<StemFile, String> {
@@ -178,6 +264,26 @@ fn stem_file(table: &Table, at: &str) -> Result<StemFile, String> {
         file,
         gain: StemGain { keys, power },
     })
+}
+
+fn tempo(music: &Table, at: &str) -> Result<Vec<(u32, f64)>, String> {
+    let want = || format!("{at}: `tempo` is [[bar, bpm], ...], a whole bar and the bpm from it on");
+    let Some(value) = music.get("tempo") else {
+        return Ok(Vec::new());
+    };
+    value
+        .as_array()
+        .ok_or_else(want)?
+        .iter()
+        .map(|row| match row.as_array().map(Vec::as_slice) {
+            Some([bar, bpm]) => bar
+                .as_integer()
+                .and_then(|n| u32::try_from(n).ok())
+                .zip(as_number(bpm))
+                .ok_or_else(want),
+            _ => Err(want()),
+        })
+        .collect()
 }
 
 fn section(table: &Table, at: &str) -> Result<Section, String> {
@@ -372,7 +478,11 @@ next = "calm"
     fn a_wrong_music_table_names_its_table_and_key() {
         let cases = [
             ("[music]\nbeats_per_bar = 4", "`bpm` is required"),
-            ("[music]\nbpm = 1\ntempo = 2", "unknown key `tempo`"),
+            ("[music]\nbpm = 1\nswing = 2", "unknown key `swing`"),
+            (
+                "[music]\nbpm = 1\ntempo = 2",
+                "`tempo` is [[bar, bpm], ...]",
+            ),
             ("[music]\nbpm = 1", "at least one [[music.stem]]"),
             (
                 "[music]\nbpm = 1\n[[music.stem]]\nname = \"a\"\nfile = \"a.wav\"\ngain = [1]",

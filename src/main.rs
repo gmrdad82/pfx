@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 mod bake;
 mod cache_report;
+mod compose;
 mod film;
 mod help;
 mod job;
@@ -54,6 +55,10 @@ const USAGE: &str = "usage:
   pfx film <script.film.toml> --out <dir> [--memory-limit GB] [--json] [--plan]
   pfx sound clean <in.wav> <out.wav> [--keep harmonic [--f0 LOW,HIGH]] [--remove transients] [--gate [--noise START,END] [--reduce DB]] [--mask <png>] [--json]
   pfx sound mix <script.sound.toml> --frames N [--fps N] --out <out.wav> [--json]
+  pfx compose <doc.pitofx> --style <name> --seed N --seconds S [--name <score>] [--hits T,T...] [--bpm B] [--key <E:minor>] [--plan <plan>] [--music] [--fresh] [--wav <out.wav>] [--json]
+  pfx compose render <doc.pitofx> --score <name> [--music] [--fresh] [--wav <out.wav>] [--json]
+  pfx compose list <doc.pitofx> [--json]
+  pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
   pfx render --recipe <file.pitofx> --camera <name> --out <png|exr|hdr> [flags]
   pfx shot <file.pitofx> --still --camera <name> --size WxH --out <png> [flags]
   pfx new <out.pitofx> --from street [--seed N] [--json]
@@ -383,6 +388,7 @@ const COMMANDS: &[&str] = &[
     "shot",
     "scene",
     "film",
+    "compose",
     "sound",
     "build",
     "check",
@@ -434,6 +440,7 @@ fn shape(command: &str) -> &'static str {
         "shot" => "pfx shot [OPTIONS] <--seconds <SECONDS>|--frames <FRAMES>> <SCENE>",
         "scene" => "pfx scene <COMMAND>",
         "film" => film::USAGE,
+        "compose" => compose::USAGE,
         "sound" => "pfx sound <COMMAND>",
         _ => TOP,
     }
@@ -509,6 +516,7 @@ enum Plan {
     Shot(Vec<String>),
     Scene(scene::Command),
     Film(film::Command),
+    Compose(compose::Command),
     #[cfg(feature = "sound-clean")]
     Sound(sound::Command),
     Project(project::Command),
@@ -1149,6 +1157,7 @@ fn plan(args: &[String]) -> Result<Plan, Refusal> {
         "shot" => plan_shot(rest).map_err(Refusal::from),
         "scene" => scene::plan(rest).map(Plan::Scene),
         "film" => film::plan(rest).map(Plan::Film),
+        "compose" => compose::plan(rest).map(Plan::Compose),
         "sound" => plan_sound(rest),
         "new" => project::plan(rest)
             .map(Plan::Project)
@@ -1292,6 +1301,7 @@ fn perform(plan: Plan) -> Result<(), String> {
         Plan::Shot(args) => render_shot(&args),
         Plan::Scene(command) => scene::run(&command),
         Plan::Film(command) => film::run(&command),
+        Plan::Compose(command) => compose::run(&command),
         #[cfg(feature = "sound-clean")]
         Plan::Sound(command) => sound::run(&command),
         Plan::Project(command) => project::run(&command),
@@ -1994,7 +2004,7 @@ mod tests {
         for (line, message, usage) in [
             (
                 "",
-                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, gui, new, bench, shot, scene, film, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, align, asset, credits, git, job, settings, help]",
+                "'pfx' requires a subcommand but one was not provided\n  [subcommands: render, encode, archive, list, bake, steam, cache, font, gui, new, bench, shot, scene, film, compose, sound, build, check, diff, clip, route, set, get, curve, key, unkey, timeline, shoot, library, add, remove, duplicate, import, export, align, asset, credits, git, job, settings, help]",
                 TOP,
             ),
             ("tui", "unrecognized subcommand 'tui'", TOP),
@@ -2040,6 +2050,21 @@ mod tests {
                 "film",
                 "the following required arguments were not provided:\n  --out <OUT>\n  <SCRIPT>",
                 shape("film"),
+            ),
+            (
+                "compose",
+                "the following required arguments were not provided:\n  --style <STYLE>\n  --seed <SEED>\n  --seconds <SECONDS>\n  <DOC>",
+                shape("compose"),
+            ),
+            (
+                "compose analyze x.pitofx",
+                "unrecognized subcommand 'analyze'",
+                "pfx compose <COMMAND>",
+            ),
+            (
+                "compose print a.pitofx --style a --score b",
+                "the argument '--style <STYLE>' cannot be used with '--score <SCORE>'",
+                "pfx compose print [OPTIONS] <DOC>",
             ),
         ] {
             assert_eq!(

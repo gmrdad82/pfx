@@ -1,6 +1,27 @@
 use crate::clip::Clip;
 
-pub fn parse(bytes: &[u8]) -> Option<Clip> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WavInfo {
+    pub rate: u32,
+    pub channels: u16,
+    pub bits: u16,
+    pub samples: u64,
+}
+
+impl WavInfo {
+    pub fn frames(&self) -> u64 {
+        self.samples / u64::from(self.channels.max(1))
+    }
+}
+
+struct Header<'a> {
+    rate: u32,
+    channels: u16,
+    bits: u16,
+    data: &'a [u8],
+}
+
+fn header(bytes: &[u8]) -> Option<Header<'_>> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
         return None;
     }
@@ -32,17 +53,41 @@ pub fn parse(bytes: &[u8]) -> Option<Clip> {
         at = next;
     }
     let data = data?;
-    if rate == 0 || channels == 0 {
+    if rate == 0 || channels == 0 || !matches!(bits, 8 | 16 | 32) {
         return None;
     }
+    Some(Header {
+        rate,
+        channels,
+        bits,
+        data,
+    })
+}
+
+pub fn info(bytes: &[u8]) -> Option<WavInfo> {
+    let head = header(bytes)?;
+    Some(WavInfo {
+        rate: head.rate,
+        channels: head.channels,
+        bits: head.bits,
+        samples: (head.data.len() / usize::from(head.bits / 8)) as u64,
+    })
+}
+
+pub fn parse(bytes: &[u8]) -> Option<Clip> {
+    let Header {
+        rate,
+        channels,
+        bits,
+        data,
+    } = header(bytes)?;
     let samples = match bits {
         16 => decode_i16(data),
         8 => data
             .iter()
             .map(|b| (f32::from(*b) - 128.0) / 128.0)
             .collect(),
-        32 => decode_f32(data),
-        _ => return None,
+        _ => decode_f32(data),
     };
     Some(Clip {
         rate,
