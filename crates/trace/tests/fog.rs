@@ -430,7 +430,7 @@ fn the_fog_scatters_the_sun_and_a_lamp_as_their_integral_says() {
     let lamp = lamp(EMPTY_LAMP, 20.0, 1.0e4);
     let sun = 3.0;
     let aspect = EMPTY_SIZE[0] as f32 / EMPTY_SIZE[1] as f32;
-    let pixels = empty_fog(&gpu, fog, vec![lamp], sun, 0.0, 512);
+    let pixels = empty_fog(&gpu, fog, vec![lamp], sun, 0.0, 1024);
     let wanted = integrals(&fog, &[lamp], sun, 2000);
     let lamp_pixel = [
         (EMPTY_LAMP[0] / -EMPTY_LAMP[2] / (EMPTY_TAN * aspect) + 1.0) * 0.5 * EMPTY_SIZE[0] as f32,

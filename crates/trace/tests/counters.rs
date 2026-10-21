@@ -1,6 +1,6 @@
 use pfx_gpu::Gpu;
 use pfx_load::Sky;
-use pfx_materials::Material;
+use pfx_materials::{AlphaMode, Material};
 use pfx_trace::bvh::Triangle;
 use pfx_trace::counters::Counts;
 use pfx_trace::detail::Detail;
@@ -20,6 +20,12 @@ fn scene() -> Scene {
         [half, 0.0, half],
         [-half, 0.0, half],
     ];
+    let card = [
+        [-0.4, 1.2, -0.4],
+        [1.2, 1.2, -0.4],
+        [1.2, 1.2, 1.0],
+        [-0.4, 1.2, 1.0],
+    ];
     Scene {
         triangles: vec![
             Triangle {
@@ -29,6 +35,14 @@ fn scene() -> Scene {
             Triangle {
                 vertices: [corners[0], corners[2], corners[3]],
                 material: 0,
+            },
+            Triangle {
+                vertices: [card[0], card[1], card[2]],
+                material: 2,
+            },
+            Triangle {
+                vertices: [card[0], card[2], card[3]],
+                material: 2,
             },
         ],
         shapes: vec![Shape::Ellipsoid {
@@ -45,6 +59,12 @@ fn scene() -> Scene {
             Material {
                 base: [0.8, 0.5, 0.3],
                 roughness: 0.3,
+                ..Material::default()
+            },
+            Material {
+                base: [0.4, 0.6, 0.3],
+                roughness: 0.6,
+                alpha_mode: AlphaMode::Mask,
                 ..Material::default()
             },
         ],
