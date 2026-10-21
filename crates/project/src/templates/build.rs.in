@@ -28,6 +28,9 @@ fn licence() {
         let token: String = key.split_whitespace().collect();
         println!("cargo:rustc-env=PFX_LICENCE_KEY={token}");
     }
+    if !store.splash_hidden() {
+        println!("cargo:rustc-env=PFX_SPLASH_SHOWN=1");
+    }
 }
 
 fn git(root: &Path, args: &[&str]) -> Option<String> {

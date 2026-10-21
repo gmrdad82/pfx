@@ -4048,6 +4048,7 @@ dependencies = [
  "pfx-editor-viewport",
  "pfx-file",
  "pfx-game",
+ "pfx-geom",
  "pfx-gpu",
  "pfx-live",
  "pfx-load",
@@ -4062,6 +4063,7 @@ dependencies = [
  "pfx-splash",
  "png 0.18.1",
  "serde_json",
+ "swash",
  "toml_edit",
 ]
 

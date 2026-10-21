@@ -153,6 +153,18 @@ fn resolve(base: &Path, relative: &str) -> PathBuf {
     out
 }
 
+fn marks_copy(marks: &Path, resolved: &Path) -> Option<String> {
+    if let Ok(name) = resolved.strip_prefix(marks) {
+        return Some(name.to_string_lossy().into_owned());
+    }
+    let name = resolved.file_name()?.to_string_lossy().into_owned();
+    let folder = resolved.parent()?;
+    let crates = marks.parent()?.parent()?.join("crates");
+    let in_crate = folder.file_name()? == "assets" && folder.parent()?.parent()? == crates;
+    let same = std::fs::read(resolved).ok()? == std::fs::read(marks.join(&name)).ok()?;
+    (in_crate && same).then_some(name)
+}
+
 fn lockup_includes(root: &Path, file: &str) -> Vec<String> {
     let path = root.join(file);
     let text = read(&path);
@@ -166,13 +178,9 @@ fn lockup_includes(root: &Path, file: &str) -> Vec<String> {
                 continue;
             }
             let resolved = resolve(base, target);
-            let name = resolved
-                .strip_prefix(&marks)
-                .unwrap_or_else(|_| {
-                    panic!("{file}: {target} is not bin/marks' copy in assets/marks/")
-                })
-                .to_string_lossy()
-                .into_owned();
+            let name = marks_copy(&marks, &resolved).unwrap_or_else(|| {
+                panic!("{file}: {target} is not bin/marks' copy in assets/marks/ or in a crate's assets/")
+            });
             found.push(name);
         }
     }

@@ -210,11 +210,21 @@ pub struct Rt {
     sprite_mesh: Option<usize>,
     sprites: Vec<bool>,
     walked: Vec<bool>,
+    opaque: Vec<bool>,
     movers: [Option<(wgpu::Blas, wgpu::Buffer)>; 2],
     _blases: Vec<wgpu::Blas>,
     meshes: Vec<wgpu::Blas>,
     instance_mesh: Vec<usize>,
     _inputs: Vec<wgpu::Buffer>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Listed {
+    pub mask: Option<u8>,
+    pub rows: Option<[f32; 12]>,
+    pub custom: Option<u32>,
+    pub opaque: bool,
+    pub mover: bool,
 }
 
 pub const SPRITE_MASK: u8 = 1;
@@ -560,12 +570,29 @@ impl Rt {
                 .map(|k| instance_mesh[k]),
             sprites: geometry.instances.iter().map(|i| i.sprite).collect(),
             walked,
+            opaque: geometry.instances.iter().map(|i| i.opaque).collect(),
             movers: [world_movers, movers]
                 .map(|built| built.map(|(blas, buffer, _)| (blas, buffer))),
             _blases: blases,
             meshes,
             instance_mesh,
             _inputs: inputs,
+        }
+    }
+
+    pub fn listed(&self, k: usize) -> Listed {
+        let tlas = self.tlas.get();
+        let instance = tlas.get(self.first_instance + k).and_then(Option::as_ref);
+        Listed {
+            mask: instance.map(|instance| instance.mask),
+            rows: instance.map(|instance| instance.transform),
+            custom: instance.map(|instance| instance.custom_data),
+            opaque: self.opaque.get(k).copied().unwrap_or(false),
+            mover: self
+                .movers_tlas
+                .get()
+                .get(k + 1)
+                .is_some_and(Option::is_some),
         }
     }
 
@@ -673,6 +700,8 @@ impl Rt {
         self.sprites.resize(count, true);
         self.walked.truncate(first);
         self.walked.resize(count, true);
+        self.opaque.truncate(first);
+        self.opaque.resize(count, false);
         self.instance_mesh.truncate(first);
         self.instance_mesh.resize(count, variant);
         if !sprites.is_empty() {

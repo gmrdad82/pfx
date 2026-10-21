@@ -77,7 +77,7 @@ fn outline(font: FontRef, text: &str, tracking: f32) -> Result<String, String> {
 
 fn main() -> Result<(), String> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let path = root.join("../../assets/fonts/JetBrainsMonoNerdFont-Bold.ttf");
+    let path = root.join("../build/fonts/JetBrainsMonoNerdFont-Bold.ttf");
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
     let font = FontRef::from_index(&bytes, 0).ok_or("not a font")?;
     let out = root.join("art").join("site.svg");

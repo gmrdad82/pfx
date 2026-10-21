@@ -2,5 +2,5 @@ JetBrainsMonoNerdFont-Regular.ttf and JetBrainsMonoNerdFont-Bold.ttf: JetBrains 
 https://github.com/JetBrains/JetBrainsMono
 https://github.com/ryanoasis/nerd-fonts
 Regular: md5 f20bd29f740659e99d2258b55d250410, 2,571,596 bytes. Bold: md5 fe61854b05399b974fffe355609f1ca1, 2,575,364 bytes.
-pfx's one family, embedded in the binary.
+pfx's one family, embedded in the binary by pfx-build (pfx_build::fonts), which pfx-recipe-scene takes from it.
 The licence, SIL Open Font License 1.1, is OFL.txt beside the fonts, copied from the package's own /usr/share/licenses/ttf-jetbrains-mono-nerd-basic/OFL.txt.

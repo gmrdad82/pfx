@@ -1158,7 +1158,10 @@ fn the_runtime_collects_the_notices_of_a_games_modules_and_keeps_running() {
     assert!(ran.ticks >= 20, "{ran:?}");
 }
 
-const ROOM: &[u8] = include_bytes!("../../load/tests/data/room.pitofx");
+fn room() -> &'static [u8] {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../load/tests/data/room.pitofx");
+    std::fs::read(&path).unwrap().leak()
+}
 
 struct Seen(Rc<RefCell<Vec<String>>>);
 
@@ -1173,7 +1176,7 @@ impl Game for Seen {
 #[test]
 fn a_game_plays_a_scene_embedded_as_pitofx_bytes() {
     let seen = Rc::new(RefCell::new(Vec::new()));
-    let config = Config::packed("room", "0.0.0", ROOM).device(Device::Desktop);
+    let config = Config::packed("room", "0.0.0", room()).device(Device::Desktop);
     let mut run = Headless::new(Seen(seen.clone()), config, WINDOW).unwrap();
     run.run_for(0.1).unwrap();
     let seen = seen.borrow();

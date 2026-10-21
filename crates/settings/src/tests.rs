@@ -32,6 +32,12 @@ fn preferences_round_trip_through_the_settings_file_and_keep_its_other_tables() 
     store.keep_licence_key(Some("PITO1.a.b\n")).unwrap();
     assert_eq!(store.preferences(), chosen);
     assert_eq!(store.licence_key().as_deref(), Some("PITO1.a.b"));
+    assert!(store.splash_hidden());
+    store.keep_splash_hidden(false).unwrap();
+    assert!(!store.splash_hidden());
+    store.keep_licence_key(Some("PITO1.c.d")).unwrap();
+    assert!(!store.splash_hidden());
+    assert_eq!(store.licence_key().as_deref(), Some("PITO1.c.d"));
     let text = store.document().to_string();
     assert!(text.contains("recent = [\"/a.pitofx\"]"), "{text}");
     assert!(text.contains("frame_rate = \"auto\""), "{text}");

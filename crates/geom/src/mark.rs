@@ -683,7 +683,9 @@ fn extrude(region: &Region, form: &Form, bevel: f64, mul: f32, base: f32, world:
         }
         let path = path.build();
         let mut buffers: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
-        let options = FillOptions::default().with_fill_rule(lyon_tessellation::FillRule::EvenOdd);
+        let options = FillOptions::default()
+            .with_fill_rule(lyon_tessellation::FillRule::EvenOdd)
+            .with_tolerance(form.tolerance);
         let result = FillTessellator::new().tessellate_path(
             &path,
             &options,

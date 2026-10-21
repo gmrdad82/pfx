@@ -132,6 +132,44 @@ pfx clip chase.pitofx --camera chase --timeline --size 1080x1920 --out chase
 
 A recipe with a `[timeline]` (the recipe guide's "Timeline") films with `--timeline` in place of `--frames` and `--fps`: frames 0 to the timeline's last at its `fps`, each the scene posed at exactly `n × den / num` seconds, so a resumed folder's frames match a full run's byte for byte, through `--camera`, which the timeline moves when it keys that camera. `--video` encodes at the timeline's `fps`.
 
+## List what a traced frame holds
+
+`--dump-scene <file.jsonl>` (with `--trace`) writes every instance each traced frame holds, so an object that is missing from a frame can be named: dropped in staging, placed wrong, hidden in the hardware top level, or held and never hit. It reads the trace after the frame is written and changes no pixel.
+
+```sh
+pfx clip chase.pitofx --camera chase --timeline --trace --size 540x960 --spp 16 --range 240..240 --out tmp/list --dump-scene tmp/list-scene.jsonl
+jq -c '.list[] | select(.object == "lamp") | {name, traced, mesh, instanced, bounds, squash, one_sided, tlas_mask, tlas_in_place}' tmp/list-scene.jsonl
+```
+
+- **When it is written.** The file is emptied when the run starts and gets one JSON line, flushed, after each frame this run renders (the K−1 check included, see [Stop and resume](#stop-and-resume)). Frames already finished in `--out` are not rendered, so they are not listed: the run says how many it leaves out, and a fresh `--out` lists them all. A stopped run keeps the lines of its finished frames.
+- **Each line:** `recipe` (its path), `camera`, `frame`, `instances` (the entries in `list`), `traced` (those with triangles in the trace), `meshes` (one `{ mesh, triangles, instances }` per trace mesh) and `list`, one entry per instance in staging order.
+- **Every entry has:**
+
+| key | meaning |
+|---|---|
+| `index` | the instance's place in the trace |
+| `name` | the recipe piece, or `particle.N` for the frame's Nth sprite and `lettering.N` for the Nth text carrier |
+| `object`, `material` | the recipe object and material, `null` for a sprite or a text carrier |
+| `traced` | `true` when the instance has triangles in the trace; `false` means it has none (an empty piece), not that it was placed and then dropped |
+| `mesh` | the trace's mesh id, `null` when not traced |
+| `shared` | the staging fit group: pieces of one group are one mesh placed by a rigid or scaled fit |
+| `triangles` | the trace mesh's triangle count |
+| `instanced` | every instance on that trace mesh, other objects that fit it by scale included, so it is not a count of copies of one file |
+| `moving`, `deforming`, `sprite` | whether the instance moves over the shutter, deforms, or is a particle sprite |
+
+- **Present only sometimes:**
+
+| keys | when | meaning |
+|---|---|---|
+| `two_sided` | pieces | what the recipe or the file asked for |
+| `base`, `alpha`, `alpha_mode`, `alpha_cutoff`, `transmission` | a material was found for the piece | the material's values |
+| `one_sided`, `shadow_only`, `casts_shadow`, `cutout`, `clipped`, `cutoff` | traced | what the tracer applies: `one_sided` drops a camera ray that hits the back of a face, `shadow_only` hides it from camera rays, `cutout` tests the alpha against `cutoff` (a card's own cutoff where it sets one), `clipped` cuts it at its clip planes |
+| `bounds` | traced | `{ lo, hi }` in world metres, swept over the shutter for a mover |
+| `determinant`, `squash` | traced | of the instance's transform: `squash` is the determinant's size over the product of the column lengths, 1 for a turned or scaled copy and near 0 for a skewed or flattened fit; a negative determinant is a mirrored copy |
+| `tlas_mask`, `tlas_custom`, `tlas_in_place`, `tlas_opaque`, `hardware_mover` | the frame traced on ray queries | the instance's hardware top-level slot: its mask (255 drawn, 1 for a still sprite, 0 hidden from the top level as a mover, `null` when the slot is empty), its custom index, whether the slot holds exactly the transform and record the trace places the instance by, whether it took the opaque BLAS the hardware commits by itself (otherwise the shader's own hit test runs), and whether it sits in the movers' top level |
+
+`PFX_TRACE_RT=0` traces the same frame on the software BVH ([trace.md](trace.md)), so a frame that draws there and not on ray queries points at the hardware path. `a_traced_clip_holds_every_copy_of_a_shared_two_sided_card_from_either_side_and_a_thin_pole_among_sprites_frame_after_frame` (`crates/still/tests/instances.rs`) holds these invariants on a generated street over four frames.
+
 ## Make the video
 
 ```sh

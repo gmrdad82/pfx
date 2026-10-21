@@ -204,6 +204,24 @@ impl Store {
             .filter(|key| !key.trim().is_empty())
     }
 
+    pub fn splash_hidden(&self) -> bool {
+        self.document()
+            .get("licence")
+            .and_then(Item::as_table_like)
+            .and_then(|licence| licence.get("hide_splash"))
+            .and_then(Item::as_bool)
+            .unwrap_or(true)
+    }
+
+    pub fn keep_splash_hidden(&self, hidden: bool) -> std::io::Result<()> {
+        if self.path.is_none() {
+            return Ok(());
+        }
+        let mut document = self.document();
+        table(&mut document, "licence")["hide_splash"] = value(hidden);
+        self.keep(&document)
+    }
+
     pub fn keep_licence_key(&self, key: Option<&str>) -> std::io::Result<()> {
         if self.path.is_none() {
             return Ok(());

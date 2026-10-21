@@ -18,6 +18,7 @@ pub mod document;
 mod edit;
 mod extras;
 mod facts;
+pub mod fonts;
 pub mod gltf_io;
 mod holes;
 mod layers;

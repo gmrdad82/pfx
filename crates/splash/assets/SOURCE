@@ -1,0 +1,2 @@
+powered-by.svg is assets/marks/powered-by.svg, which bin/marks copies from the PITO MD brand masters at f5780929e8af805420c0640c7d801b42f655cda2 (exports/pfx/assets/marks/powered-by.svg) and into this folder, so the crate builds from its own folder.
+powered-by-light.svg is assets/marks/powered-by-light.svg, which bin/marks copies from the PITO MD brand masters at f5780929e8af805420c0640c7d801b42f655cda2 (exports/pfx/assets/marks/powered-by-light.svg) and into this folder, so the crate builds from its own folder.

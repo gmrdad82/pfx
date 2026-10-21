@@ -596,6 +596,17 @@ pub struct Reel {
 
 pub const MOTION_STEPS: u32 = 1;
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct TracedPiece {
+    pub name: String,
+    pub object: Option<String>,
+    pub material: Option<String>,
+    pub shared: Option<u32>,
+    pub two_sided: Option<bool>,
+    pub look: Option<pfx_materials::Material>,
+    pub traced: pfx_trace::gpu::TracedInstance,
+}
+
 struct Kept {
     trace: Trace,
     size: [u32; 2],
@@ -670,6 +681,52 @@ impl Reel {
         format!(
             "{}, {:?}, {} {}",
             info.name, info.backend, info.driver, info.driver_info
+        )
+    }
+
+    pub fn traced_instances(&self) -> Option<Vec<TracedPiece>> {
+        let kept = self.kept.as_ref()?;
+        let pieces = &self.staging.pieces;
+        let (mut particles, mut letterings) = (0, 0);
+        Some(
+            kept.trace
+                .traced_instances()
+                .into_iter()
+                .map(|traced| {
+                    let piece = pieces.get(traced.index);
+                    let name = match piece {
+                        Some(piece) => piece.name.clone(),
+                        None if traced.sprite => {
+                            particles += 1;
+                            format!("particle.{}", particles - 1)
+                        }
+                        None => {
+                            letterings += 1;
+                            format!("lettering.{}", letterings - 1)
+                        }
+                    };
+                    TracedPiece {
+                        name,
+                        object: piece
+                            .and_then(|piece| self.recipe.objects.get(piece.object))
+                            .map(|object| object.name.clone()),
+                        material: piece.map(|piece| piece.material.clone()),
+                        shared: self
+                            .staging
+                            .shared
+                            .get(traced.index)
+                            .map(|shared| shared.mesh),
+                        two_sided: piece.map(|piece| piece.two_sided),
+                        look: self
+                            .staging
+                            .slots
+                            .get(traced.index)
+                            .and_then(|&slot| self.staging.materials.get(slot as usize))
+                            .cloned(),
+                        traced,
+                    }
+                })
+                .collect(),
         )
     }
 

@@ -12,11 +12,7 @@ use std::path::Path;
 
 use fonts::{BOLD, REGULAR};
 
-pub mod fonts {
-    pub static REGULAR: &[u8] =
-        include_bytes!("../../../assets/fonts/JetBrainsMonoNerdFont-Regular.ttf");
-    pub static BOLD: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMonoNerdFont-Bold.ttf");
-}
+pub use pfx_build::fonts;
 
 pub const UNITS_PER_METRE: f32 = 8192.0;
 pub const LINE: f32 = 1.25;
@@ -763,7 +759,11 @@ mod tests {
         assert!(fonts.files.is_empty());
     }
 
-    const TABLE: &str = include_str!("../../../tests/golden/table/table.toml");
+    fn table_text() -> String {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/table/table.toml");
+        std::fs::read_to_string(&path).unwrap()
+    }
     const STILL: [u32; 2] = [640, 400];
     const SURFACE: &str = "\n[[object]]\nname = \"badge\"\nkind = \"text\"\non = \"crate\"\nspans = [{ text = \"pfx \", size = 0.016, weight = 700, color = [1.0, 0.95, 0.85] }, { text = \"surface\", size = 0.012, color = [0.1, 0.1, 0.12] }]\n";
     const LIT: &str = "\n[[object]]\nname = \"poster\"\nkind = \"text\"\non = \"wall\"\nspace = \"lit\"\nat = [0.12, -0.36, 0.0]\nspans = [{ text = \"lit, on the wall\", size = 0.03, color = [0.05, 0.05, 0.08] }]\n";
@@ -786,16 +786,17 @@ mod tests {
     #[test]
     #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
     fn a_text_recipe_draws_in_each_space() {
-        let bare = still(TABLE);
+        let table = table_text();
+        let bare = still(&table);
         crate::pace::turn();
         for (space, text) in [("surface", SURFACE), ("lit", LIT), ("overlay", OVERLAY)] {
-            let drawn = still(&format!("{TABLE}{text}"));
+            let drawn = still(&format!("{table}{text}"));
             let count = changed(&bare, &drawn);
             println!("{space}: {count} pixels changed");
             assert!(count > 150, "{space} text changed only {count} pixels");
             crate::pace::turn();
         }
-        let all = still(&format!("{TABLE}{SURFACE}{LIT}{OVERLAY}"));
+        let all = still(&format!("{table}{SURFACE}{LIT}{OVERLAY}"));
         let out = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp/text-spaces.png");
         crate::write_png(&out, STILL, &all).unwrap();
         crate::pace::turn();
@@ -804,7 +805,8 @@ mod tests {
     #[test]
     #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
     fn a_still_with_text_is_the_same_bytes_twice() {
-        let text = format!("{TABLE}{SURFACE}{LIT}{OVERLAY}");
+        let table = table_text();
+        let text = format!("{table}{SURFACE}{LIT}{OVERLAY}");
         let first = still(&text);
         crate::pace::turn();
         let second = still(&text);

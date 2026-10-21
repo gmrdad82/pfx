@@ -346,6 +346,56 @@ struct MovingState {
     offset: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TracedInstance {
+    pub index: usize,
+    pub mesh: Option<usize>,
+    pub triangles: usize,
+    pub instanced: usize,
+    pub record: Option<u32>,
+    pub transform: Option<crate::detail::Transform>,
+    pub rows: Option<[f32; 12]>,
+    pub bounds: Option<crate::bvh::Bounds>,
+    pub moving: bool,
+    pub deforming: bool,
+    pub sprite: bool,
+    pub one_sided: bool,
+    pub shadow_only: bool,
+    pub casts_shadow: bool,
+    pub cutout: bool,
+    pub clipped: bool,
+    pub alpha_cutoff: Option<f32>,
+    pub hardware: Option<crate::rt::Listed>,
+}
+
+impl TracedInstance {
+    pub fn determinant(&self) -> Option<f64> {
+        let [a, b, c] = self.columns()?;
+        Some(
+            a[0] * (b[1] * c[2] - b[2] * c[1]) - b[0] * (a[1] * c[2] - a[2] * c[1])
+                + c[0] * (a[1] * b[2] - a[2] * b[1]),
+        )
+    }
+
+    pub fn squash(&self) -> Option<f64> {
+        let length = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        let volume: f64 = self.columns()?.map(length).iter().product();
+        let determinant = self.determinant()?;
+        Some(if volume > 0.0 {
+            determinant.abs() / volume
+        } else {
+            0.0
+        })
+    }
+
+    fn columns(&self) -> Option<[[f64; 3]; 3]> {
+        let m = self.transform?;
+        Some(std::array::from_fn(|c| {
+            std::array::from_fn(|r| f64::from(m[c][r]))
+        }))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Builds {
     pub bottom: usize,
@@ -390,6 +440,10 @@ struct SpriteRoom {
     mesh: usize,
     triangles: std::sync::Arc<[TriangleDetail]>,
     total: usize,
+}
+
+fn clipped(surface: &InstanceSurface) -> bool {
+    surface.clip[0][..3] != [0.0; 3] || surface.clip[1][..3] != [0.0; 3]
 }
 
 fn instance_word(instance: &crate::detail::Instance) -> u32 {
@@ -476,6 +530,7 @@ impl Features {
 
 struct Placing {
     levels: crate::levels::Levels,
+    surfaces: Vec<InstanceSurface>,
     candidates: Vec<Candidate>,
     lights: usize,
     tree: usize,
@@ -784,8 +839,7 @@ impl SceneBuffers {
                 opaque.push(
                     placed.word & (SHADOW_ONLY | CASTS_NO_SHADOW | CUTOUT | ONE_SIDED | SPRITE)
                         == 0
-                        && instance.surface.clip[0][..3] == [0.0; 3]
-                        && instance.surface.clip[1][..3] == [0.0; 3]
+                        && !clipped(&instance.surface)
                         && match placed.material {
                             Some(material) => clear(material),
                             None => mesh.triangles.iter().all(|tri| clear(tri.material)),
@@ -988,6 +1042,11 @@ impl SceneBuffers {
             light_count: detail.lights.len() as u32,
             rt,
             levels: laid.levels.map(|levels| Placing {
+                surfaces: detail
+                    .instances
+                    .iter()
+                    .map(|instance| instance.surface)
+                    .collect(),
                 levels,
                 candidates,
                 lights: laid_lights.looped,
@@ -2308,6 +2367,58 @@ impl Trace {
             .map_or(0, |placing| placing.levels.instance_count())
     }
 
+    pub fn traced_instances(&self) -> Vec<TracedInstance> {
+        let Some(placing) = &self.placing else {
+            return Vec::new();
+        };
+        let levels = &placing.levels;
+        let mut instanced = vec![0; levels.meshes.len()];
+        for placed in levels.placed.iter().flatten() {
+            instanced[placed.mesh] += 1;
+        }
+        let mut slot = 0;
+        levels
+            .placed
+            .iter()
+            .enumerate()
+            .map(|(index, placed)| {
+                let Some(placed) = placed else {
+                    return TracedInstance {
+                        index,
+                        ..TracedInstance::default()
+                    };
+                };
+                let k = slot;
+                slot += 1;
+                TracedInstance {
+                    index,
+                    mesh: Some(placed.mesh),
+                    triangles: levels.meshes[placed.mesh].triangles.len(),
+                    instanced: instanced[placed.mesh],
+                    record: Some(placed.record),
+                    transform: Some(placed.transform),
+                    rows: crate::detail::Pose::new(placed.transform)
+                        .ok()
+                        .map(|pose| pose.rows()),
+                    bounds: Some(placed.bounds),
+                    moving: placed.moving(),
+                    deforming: placed.deform > 0,
+                    sprite: placed.word & SPRITE != 0,
+                    one_sided: placed.word & ONE_SIDED != 0,
+                    shadow_only: placed.word & SHADOW_ONLY != 0,
+                    casts_shadow: placed.word & CASTS_NO_SHADOW == 0,
+                    cutout: placed.word & CUTOUT != 0,
+                    clipped: placing.surfaces.get(index).is_some_and(clipped),
+                    alpha_cutoff: placing
+                        .surfaces
+                        .get(index)
+                        .map(|surface| surface.alpha_cutoff),
+                    hardware: self.rt.as_ref().map(|rt| rt.listed(k)),
+                }
+            })
+            .collect()
+    }
+
     pub fn set_instance_transforms(
         &mut self,
         gpu: &Gpu,
@@ -2681,6 +2792,10 @@ impl Trace {
         }
         levels.placed.truncate(room.first);
         levels.placed.extend(placed.into_iter().map(Some));
+        placing.surfaces.truncate(room.first);
+        placing
+            .surfaces
+            .extend(sprites.iter().map(|sprite| sprite.surface));
         Ok(true)
     }
 

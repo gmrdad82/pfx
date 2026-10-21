@@ -5,7 +5,10 @@ mod staging;
 mod text;
 mod trace;
 
+pub use pfx_trace::bvh::Bounds as TraceBounds;
 pub use pfx_trace::checkpoint::{Keeper, Rounds, Saved};
+pub use pfx_trace::gpu::TracedInstance;
+pub use pfx_trace::rt::Listed as TlasListed;
 pub use pfx_trace::rt::{Path as TracePath, RayQueries};
 pub use picture::{
     Film, Format, Look, PASSES, Reach, crop_refusal, cut, delivered, developed, dithered,
@@ -18,5 +21,5 @@ pub use staging::{Eyepiece, IDENTITY, Shared, Staging, Steps, View, eyepiece};
 pub use text::{Letter, Lettering, Overlay, Way};
 pub use trace::{
     Crop, DRAFT, EQUIRECT_SIZE, Fault, NOISE, Noise, Paced, Plan, Reel, Region, Rendered, Request,
-    SAMPLES, SIZE, Seed, Shot, Step, Take, converge, render, render_kept, trace,
+    SAMPLES, SIZE, Seed, Shot, Step, Take, TracedPiece, converge, render, render_kept, trace,
 };

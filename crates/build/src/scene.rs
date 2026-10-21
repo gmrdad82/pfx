@@ -1,4 +1,5 @@
 use crate::bake::{Section, absolute, list, number, shade_at, string};
+use crate::fonts::{BOLD, REGULAR};
 use crate::{Built, Error, GeneratedLight, Look, Part, local_matrix, world};
 use glam::{DMat4, DVec3};
 use pfx_core::daylight::{Authored, Daylight};
@@ -47,8 +48,6 @@ const BOLD_FROM: u32 = 501;
 const ASSETS: &str = "assets";
 const REGULAR_FONT: &str = "JetBrainsMonoNerdFont-Regular.ttf";
 const BOLD_FONT: &str = "JetBrainsMonoNerdFont-Bold.ttf";
-static REGULAR: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMonoNerdFont-Regular.ttf");
-static BOLD: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMonoNerdFont-Bold.ttf");
 const VIGNETTE: [f64; 3] = [2.4, 0.8, 1.28];
 const MIX_FILL: f64 = 0.25;
 const MIX_FLOOR: f64 = 1e-9;

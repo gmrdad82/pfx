@@ -12,3 +12,15 @@ for file in pfx.svg wordmark.svg lockup.svg lockup-light.svg pfx-icon.png pfx.ic
   git -C "$assets" show "$rev:exports/pfx/assets/marks/$file" > "assets/marks/$file"
 done
 git -C "$assets" show "$rev:exports/pfx/.github/icon.png" > .github/icon.png
+for crate in splash project workbench launcher; do
+  rm -f "crates/$crate/assets/SOURCE"
+done
+for copy in crates/splash/assets/powered-by.svg crates/splash/assets/powered-by-light.svg \
+  crates/project/assets/powered-by-128.png crates/project/assets/powered-by-light-128.png \
+  crates/workbench/assets/pfx-icon.png crates/launcher/assets/pfx.ico; do
+  dir=$(dirname "$copy")
+  file=$(basename "$copy")
+  mkdir -p "$dir"
+  cp "assets/marks/$file" "$copy"
+  echo "$file is assets/marks/$file, which bin/marks copies from the PITO MD brand masters at $rev (exports/pfx/assets/marks/$file) and into this folder, so the crate builds from its own folder." >> "$dir/SOURCE"
+done

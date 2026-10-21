@@ -1,0 +1,29 @@
+colors = "master"
+
+[material]
+base = "#808080"
+metallic = 0.0
+roughness = 0.34
+coat = 0.75
+coat_roughness = 0.06
+
+[form]
+depth = 0.026
+bevel = 0.004
+segments = 6
+layer = 0.7
+inset = 0.25
+
+[rig]
+world = "studio"
+strength = 0.7
+turn = 18.0
+key = 1.0
+fill = 0.5
+rim = 0.55
+
+[camera]
+tilt = 0.0
+turn = 0.0
+ortho = true
+margin = 1.04

@@ -130,6 +130,13 @@ pub(super) struct Args {
     )]
     checkpoint: Option<Every>,
     #[arg(
+        long = "dump-scene",
+        value_name = "file.jsonl",
+        requires = "trace",
+        help = "List every instance each traced frame holds in this file, one JSON line a frame (docs/recipe-clips.md): its piece, object, material, mesh and how many instances share it, its world bounds, its transform's determinant and squash, its sides, cut-out and clip, whether it moves, and its hardware slot"
+    )]
+    dump_scene: Option<PathBuf>,
+    #[arg(
         long,
         value_name = "off|on",
         action = clap::ArgAction::Set,
@@ -482,6 +489,13 @@ impl Renderer {
 
     fn traced(&self) -> bool {
         matches!(self, Renderer::Traced(..))
+    }
+
+    fn traced_instances(&self) -> Option<Vec<pfx_still::TracedPiece>> {
+        match self {
+            Renderer::Traced(reel, ..) => reel.traced_instances(),
+            Renderer::Live(..) => None,
+        }
     }
 
     fn build(&self) -> Option<String> {
@@ -991,6 +1005,20 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
         }
     }
     progress(done);
+    let mut dump = match &args.dump_scene {
+        Some(path) => {
+            if done > 0 {
+                eprintln!(
+                    "pfx clip: {} lists only the frames this run renders; the {} already finished in {} are left out, so use a fresh --out to list them all",
+                    path.display(),
+                    plural(done as usize, "frame"),
+                    args.out.display()
+                );
+            }
+            Some(Dump::create(path)?)
+        }
+        None => None,
+    };
     if todo.is_empty() {
         return Ok(());
     }
@@ -1123,6 +1151,12 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
             kept.as_mut().map(|kept| kept as &mut dyn pfx_still::Keeper),
             args.passes.as_deref().filter(|_| !checking),
         )?;
+        if let Some(dump) = &mut dump {
+            let pieces = renderer.traced_instances().ok_or_else(|| {
+                format!("frame {frame} was traced but its trace lists no instances")
+            })?;
+            dump.frame(args, listed(frame, &pieces))?;
+        }
         if checking {
             let again = std::fs::read(&to).map_err(|e| format!("{}: {e}", to.display()));
             let _ = std::fs::remove_file(&to);
@@ -1162,6 +1196,118 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
         progress(done + written);
     }
     Ok(())
+}
+
+struct Dump {
+    path: PathBuf,
+    file: std::io::BufWriter<std::fs::File>,
+}
+
+impl Dump {
+    fn create(path: &Path) -> Result<Self, String> {
+        let failed = |e: std::io::Error| format!("{}: {e}", path.display());
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            std::fs::create_dir_all(parent).map_err(failed)?;
+        }
+        Ok(Self {
+            path: path.to_path_buf(),
+            file: std::io::BufWriter::new(std::fs::File::create(path).map_err(failed)?),
+        })
+    }
+
+    fn frame(&mut self, args: &Args, mut line: serde_json::Value) -> Result<(), String> {
+        use std::io::Write;
+        line["recipe"] = serde_json::json!(args.recipe.display().to_string());
+        line["camera"] = serde_json::json!(args.camera);
+        let failed = |e: std::io::Error| format!("{}: {e}", self.path.display());
+        serde_json::to_writer(&mut self.file, &line).map_err(|e| failed(e.into()))?;
+        self.file.write_all(b"\n").map_err(failed)?;
+        self.file.flush().map_err(failed)
+    }
+}
+
+fn listed(frame: u32, pieces: &[pfx_still::TracedPiece]) -> serde_json::Value {
+    use serde_json::json;
+    let mut meshes = std::collections::BTreeMap::new();
+    for traced in pieces.iter().map(|piece| &piece.traced) {
+        if let Some(mesh) = traced.mesh {
+            meshes.insert(mesh, (traced.triangles, traced.instanced));
+        }
+    }
+    let list: Vec<serde_json::Value> = pieces
+        .iter()
+        .map(|piece| {
+            let traced = &piece.traced;
+            let mut fields = json!({
+                "index": traced.index,
+                "name": piece.name,
+                "object": piece.object,
+                "material": piece.material,
+                "traced": traced.mesh.is_some(),
+                "mesh": traced.mesh,
+                "shared": piece.shared,
+                "triangles": traced.triangles,
+                "instanced": traced.instanced,
+                "moving": traced.moving,
+                "deforming": traced.deforming,
+                "sprite": traced.sprite,
+            });
+            if let Some(two_sided) = piece.two_sided {
+                fields["two_sided"] = json!(two_sided);
+            }
+            if let Some(look) = &piece.look {
+                fields["base"] = json!(look.base);
+                fields["alpha"] = json!(look.alpha);
+                fields["alpha_mode"] = json!(look.alpha_mode);
+                fields["alpha_cutoff"] = json!(look.alpha_cutoff);
+                fields["transmission"] = json!(look.transmission);
+            }
+            if traced.mesh.is_some() {
+                fields["one_sided"] = json!(traced.one_sided);
+                fields["shadow_only"] = json!(traced.shadow_only);
+                fields["casts_shadow"] = json!(traced.casts_shadow);
+                fields["cutout"] = json!(traced.cutout);
+                fields["clipped"] = json!(traced.clipped);
+                fields["cutoff"] = json!(traced.alpha_cutoff);
+            }
+            if let Some(bounds) = traced.bounds {
+                fields["bounds"] = json!({ "lo": bounds.lo, "hi": bounds.hi });
+            }
+            if let (Some(det), Some(squash)) = (traced.determinant(), traced.squash()) {
+                fields["determinant"] = json!(det);
+                fields["squash"] = super::render::rounded(squash, 6);
+            }
+            if let Some(listed) = traced.hardware {
+                fields["tlas_mask"] = json!(listed.mask);
+                fields["tlas_custom"] = json!(listed.custom);
+                fields["tlas_in_place"] = json!(
+                    listed.rows.is_some()
+                        && listed.rows == traced.rows
+                        && listed.custom == traced.record
+                );
+                fields["tlas_opaque"] = json!(listed.opaque);
+                fields["hardware_mover"] = json!(listed.mover);
+            }
+            fields
+        })
+        .collect();
+    json!({
+        "frame": frame,
+        "instances": list.len(),
+        "traced": pieces.iter().filter(|piece| piece.traced.mesh.is_some()).count(),
+        "meshes": meshes
+            .iter()
+            .map(|(mesh, (triangles, instances))| json!({
+                "mesh": mesh,
+                "triangles": triangles,
+                "instances": instances,
+            }))
+            .collect::<Vec<_>>(),
+        "list": list,
+    })
 }
 
 fn unencoded(args: &Args, video: &Path) -> String {
@@ -1300,7 +1446,7 @@ mod tests {
     #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
-            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --checkpoint 30 --json --rerender-from 3 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16 --memory-limit 6 --denoise off --passes tmp/p",
+            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --checkpoint 30 --dump-scene tmp/c-scene.jsonl --json --rerender-from 3 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16 --memory-limit 6 --denoise off --passes tmp/p",
         ))
         .unwrap();
         assert_eq!(
@@ -1322,6 +1468,7 @@ mod tests {
                 checkpoint: Some(Every::Minutes(30.0)),
                 denoise: Some(false),
                 passes: Some("tmp/p".into()),
+                dump_scene: Some("tmp/c-scene.jsonl".into()),
                 json: true,
                 rerender_from: Some(3),
                 variant: Some("bare".into()),
@@ -2064,5 +2211,162 @@ keys = { at = [[0.0, [0.0, 0.5, 0.0]], [0.5, [1.5, 0.5, 0.0]]] }
                 "frame {frame} after resuming"
             );
         }
+    }
+
+    #[test]
+    fn the_scene_dump_lists_every_instance_with_its_mesh_bounds_and_squash() {
+        let traced = |index: usize, mesh: Option<usize>, transform: Option<Matrix>| {
+            let rows = transform.map(|m| {
+                [
+                    m[0][0], m[1][0], m[2][0], m[3][0], m[0][1], m[1][1], m[2][1], m[3][1],
+                    m[0][2], m[1][2], m[2][2], m[3][2],
+                ]
+            });
+            pfx_still::TracedInstance {
+                index,
+                mesh,
+                triangles: if mesh.is_some() { 12 } else { 0 },
+                instanced: usize::from(mesh.is_some()) * 2,
+                record: mesh.map(|_| index as u32 + 1),
+                transform,
+                rows,
+                bounds: mesh.map(|_| pfx_still::TraceBounds {
+                    lo: [0.0, 0.0, 0.0],
+                    hi: [1.0, 2.0, 3.0],
+                }),
+                casts_shadow: mesh.is_some(),
+                alpha_cutoff: mesh.map(|_| 0.5),
+                hardware: mesh.map(|_| pfx_still::TlasListed {
+                    mask: Some(0xff),
+                    rows,
+                    custom: Some(index as u32 + 1),
+                    opaque: true,
+                    mover: false,
+                }),
+                ..pfx_still::TracedInstance::default()
+            }
+        };
+        let piece = |name: &str, traced| pfx_still::TracedPiece {
+            name: name.into(),
+            object: Some("tree".into()),
+            material: Some("leaf".into()),
+            shared: Some(0),
+            two_sided: Some(true),
+            look: Some(Default::default()),
+            traced,
+        };
+        let turned = [
+            [0.0, 0.0, -2.0, 0.0],
+            [0.0, 2.0, 0.0, 0.0],
+            [2.0, 0.0, 0.0, 0.0],
+            [5.0, 0.0, 9.0, 1.0],
+        ];
+        let sheared = [
+            [1.0, 0.0, 0.0, 0.0],
+            [0.9, 0.1, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ];
+        let mut drifted = piece("tree.d", traced(3, Some(3), Some(turned)));
+        if let Some(listed) = &mut drifted.traced.hardware {
+            listed.custom = Some(1);
+        }
+        let listed = listed(
+            7,
+            &[
+                piece("tree.a", traced(0, Some(3), Some(turned))),
+                piece("tree.b", traced(1, Some(3), Some(sheared))),
+                piece("tree.c", traced(2, None, None)),
+                drifted,
+            ],
+        );
+        assert_eq!(listed["frame"], 7);
+        assert_eq!(listed["instances"], 4);
+        assert_eq!(listed["traced"], 3);
+        assert_eq!(
+            listed["meshes"],
+            serde_json::json!([{ "mesh": 3, "triangles": 12, "instances": 2 }])
+        );
+        let list = listed["list"].as_array().unwrap();
+        let keys = |entry: &serde_json::Value| -> Vec<String> {
+            let mut keys: Vec<String> = entry.as_object().unwrap().keys().cloned().collect();
+            keys.sort_unstable();
+            keys
+        };
+        let mut traced_keys = vec![
+            "alpha",
+            "alpha_cutoff",
+            "alpha_mode",
+            "base",
+            "bounds",
+            "casts_shadow",
+            "clipped",
+            "cutoff",
+            "cutout",
+            "deforming",
+            "determinant",
+            "hardware_mover",
+            "index",
+            "instanced",
+            "material",
+            "mesh",
+            "moving",
+            "name",
+            "object",
+            "one_sided",
+            "shadow_only",
+            "shared",
+            "sprite",
+            "squash",
+            "tlas_custom",
+            "tlas_in_place",
+            "tlas_mask",
+            "tlas_opaque",
+            "traced",
+            "transmission",
+            "triangles",
+            "two_sided",
+        ];
+        traced_keys.sort_unstable();
+        assert_eq!(keys(&list[0]), traced_keys);
+        let untraced: Vec<&str> = traced_keys
+            .iter()
+            .copied()
+            .filter(|key| {
+                ![
+                    "bounds",
+                    "casts_shadow",
+                    "clipped",
+                    "cutoff",
+                    "cutout",
+                    "determinant",
+                    "hardware_mover",
+                    "one_sided",
+                    "shadow_only",
+                    "squash",
+                    "tlas_custom",
+                    "tlas_in_place",
+                    "tlas_mask",
+                    "tlas_opaque",
+                ]
+                .contains(key)
+            })
+            .collect();
+        assert_eq!(keys(&list[2]), untraced);
+        assert_eq!(list[0]["name"], "tree.a");
+        assert_eq!(list[0]["mesh"], 3);
+        assert_eq!(list[0]["instanced"], 2);
+        assert_eq!(list[0]["bounds"]["hi"], serde_json::json!([1.0, 2.0, 3.0]));
+        assert_eq!(list[0]["determinant"], 8.0);
+        assert_eq!(list[0]["squash"], 1.0);
+        assert_eq!(list[0]["tlas_mask"], 255);
+        assert_eq!(list[0]["tlas_custom"], 1);
+        assert_eq!(list[0]["tlas_in_place"], true);
+        assert_eq!(list[0]["one_sided"], false);
+        assert_eq!(list[0]["casts_shadow"], true);
+        assert_eq!(list[0]["cutoff"], 0.5);
+        assert!(list[1]["squash"].as_f64().unwrap() < 0.2);
+        assert_eq!(list[2]["traced"], false);
+        assert_eq!(list[3]["tlas_in_place"], false);
     }
 }
