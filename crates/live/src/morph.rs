@@ -1,16 +1,16 @@
 use std::cell::{Cell, Ref, RefCell};
 use std::ops::Range;
 
-use wgpu::util::DeviceExt;
-
 use crate::ranges::FreeRanges;
 
 pub const NO_MORPH: u32 = u32::MAX;
 pub const MORPH_BINDING: u32 = 5;
+pub const MORPH_WEIGHTS_BINDING: u32 = 6;
 const NORMALS: u32 = 1 << 31;
 
 pub const MORPH_WGSL: &str = r#"
 @group(0) @binding(5) var<storage, read> morph_data: array<vec4u>;
+@group(0) @binding(6) var<storage, read> morph_weights: array<vec4u>;
 struct Morphed {
     position: vec3f,
     normal: vec3f,
@@ -26,7 +26,7 @@ fn morph_vertex(position: vec3f, normal: vec3f, vertex: u32, morph: vec4u) -> Mo
     let count = morph.w & 0x7fffffffu;
     let first = morph.x + vertex * morph.y * stride;
     for (var i = 0u; i < count; i = i + 1u) {
-        let weight = morph_data[morph.z + i];
+        let weight = morph_weights[morph.z + i];
         let at = first + weight.x * stride;
         let delta = bitcast<vec4f>(morph_data[at]).xyz;
         let current = bitcast<f32>(weight.y);
@@ -44,7 +44,7 @@ fn morph_position(position: vec3f, vertex: u32, morph: vec4u) -> vec3f {
     let first = morph.x + vertex * morph.y * stride;
     var out = position;
     for (var i = 0u; i < count; i = i + 1u) {
-        let weight = morph_data[morph.z + i];
+        let weight = morph_weights[morph.z + i];
         out = out + bitcast<vec4f>(morph_data[first + weight.x * stride]).xyz * bitcast<f32>(weight.y);
     }
     return out;
@@ -126,7 +126,6 @@ pub(crate) struct Placed {
 pub(crate) struct WeightLayout {
     pub placed: Vec<(usize, Placed)>,
     pub words: Vec<[u32; 4]>,
-    pub base: u32,
 }
 
 impl WeightLayout {
@@ -176,20 +175,58 @@ impl MorphRange {
 }
 
 pub(crate) struct MorphStore {
-    records: Vec<[u32; 4]>,
+    extent: Vec<()>,
     free: FreeRanges,
+    data: wgpu::Buffer,
+    data_capacity: usize,
+    last_growth: Option<wgpu::SubmissionIndex>,
+    weight_buffer: wgpu::Buffer,
     weight_capacity: usize,
-    buffer: wgpu::Buffer,
     weights: RefCell<Vec<StoredWeights>>,
     layout: RefCell<WeightLayout>,
     pending: Cell<bool>,
+    stats: MorphStats,
 }
 
-fn layout(base: u32, stored: &[StoredWeights]) -> WeightLayout {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MorphStats {
+    pub data_buffers: u32,
+    pub data_capacity: u64,
+    pub data_written: u64,
+    pub data_copied: u64,
+    pub weight_buffers: u32,
+    pub weight_capacity: u64,
+    pub weight_written: u64,
+}
+
+const WORD: u64 = 16;
+const FIRST_DATA: usize = 64;
+const FIRST_WEIGHTS: usize = 4;
+
+fn grown(capacity: usize, needed: usize, limit: usize) -> usize {
+    if needed <= capacity {
+        return capacity;
+    }
+    needed
+        .next_power_of_two()
+        .max(capacity.saturating_mul(2))
+        .min(limit)
+        .max(needed)
+}
+
+fn limit_words(device: &wgpu::Device) -> usize {
+    let limits = device.limits();
+    let bytes = limits
+        .max_storage_buffer_binding_size
+        .min(limits.max_buffer_size);
+    usize::try_from(bytes / WORD).unwrap_or(usize::MAX)
+}
+
+fn layout(stored: &[StoredWeights]) -> WeightLayout {
     let mut words = Vec::new();
     let mut placed = Vec::with_capacity(stored.len());
     for weights in stored {
-        let offset = base + words.len() as u32;
+        let offset = words.len() as u32;
         words.extend(
             weights
                 .current
@@ -201,7 +238,7 @@ fn layout(base: u32, stored: &[StoredWeights]) -> WeightLayout {
                     [target as u32, current.to_bits(), previous.to_bits(), 0]
                 }),
         );
-        let active = base + words.len() as u32 - offset;
+        let active = words.len() as u32 - offset;
         if active > 0 {
             placed.push((
                 weights.instance,
@@ -213,42 +250,102 @@ fn layout(base: u32, stored: &[StoredWeights]) -> WeightLayout {
             ));
         }
     }
-    WeightLayout {
-        placed,
-        words,
-        base,
-    }
+    WeightLayout { placed, words }
 }
 
 impl MorphStore {
     pub fn new(device: &wgpu::Device) -> Self {
-        let weight_capacity = 4;
         Self {
-            records: Vec::new(),
+            extent: Vec::new(),
             free: FreeRanges::default(),
-            weight_capacity,
-            buffer: morph_buffer(device, &[], weight_capacity),
+            data: morph_buffer(device, "live morphs", FIRST_DATA),
+            data_capacity: FIRST_DATA,
+            last_growth: None,
+            weight_buffer: morph_buffer(device, "live morph weights", FIRST_WEIGHTS),
+            weight_capacity: FIRST_WEIGHTS,
             weights: RefCell::new(Vec::new()),
-            layout: RefCell::new(layout(0, &[])),
+            layout: RefCell::new(layout(&[])),
             pending: Cell::new(true),
+            stats: MorphStats {
+                data_buffers: 1,
+                data_capacity: FIRST_DATA as u64 * WORD,
+                weight_buffers: 1,
+                weight_capacity: FIRST_WEIGHTS as u64 * WORD,
+                ..MorphStats::default()
+            },
         }
     }
 
     pub fn buffer(&self) -> &wgpu::Buffer {
-        &self.buffer
+        &self.data
     }
 
-    fn rebuild(&mut self, device: &wgpu::Device) {
-        self.buffer = morph_buffer(device, &self.records, self.weight_capacity);
-        self.pending.set(true);
+    pub fn weight_buffer(&self) -> &wgpu::Buffer {
+        &self.weight_buffer
+    }
+
+    pub fn stats(&self) -> MorphStats {
+        self.stats
+    }
+
+    fn grow_data(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        needed: usize,
+        keep: usize,
+    ) -> Result<bool, String> {
+        let capacity = grown(self.data_capacity, needed, limit_words(device));
+        if capacity == self.data_capacity {
+            return Ok(false);
+        }
+        if let Some(index) = self.last_growth.take() {
+            device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: Some(index),
+                    timeout: None,
+                })
+                .map_err(|error| format!("growing the morph targets: {error}"))?;
+        }
+        let next = morph_buffer(device, "live morphs", capacity);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("live morphs grow"),
+        });
+        let kept = keep as u64 * WORD;
+        if kept > 0 {
+            encoder.copy_buffer_to_buffer(&self.data, 0, &next, 0, kept);
+        }
+        self.last_growth = Some(queue.submit(Some(encoder.finish())));
+        self.data = next;
+        self.data_capacity = capacity;
+        self.stats.data_buffers += 1;
+        self.stats.data_capacity = capacity as u64 * WORD;
+        self.stats.data_copied += kept;
+        Ok(true)
+    }
+
+    pub fn reserve(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        deltas: usize,
+    ) -> Result<bool, String> {
+        if deltas > limit_words(device) {
+            return Err(format!(
+                "{deltas} morph deltas are over the device's storage buffer limit"
+            ));
+        }
+        let keep = self.extent.len();
+        self.grow_data(device, queue, deltas, keep)
     }
 
     pub fn allocate(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         vertices: usize,
         morph: MorphData<'_>,
-    ) -> Result<MorphRange, String> {
+    ) -> Result<(MorphRange, bool), String> {
         let stride = morph.stride();
         let none = [0.0f32; 3];
         let mut words: Vec<[u32; 4]> =
@@ -263,33 +360,61 @@ impl MorphStore {
                 }
             }
         }
-        let limits = device.limits();
-        let bytes = (self.records.len() + words.len() + self.weight_capacity) as u64 * 16;
-        if bytes
-            > limits
-                .max_storage_buffer_binding_size
-                .min(limits.max_buffer_size)
-        {
+        let limit = limit_words(device);
+        let keep = self.extent.len();
+        let base = self
+            .free
+            .take(&mut self.extent, words.len(), (), "morphed vertices")?;
+        if self.extent.len() > limit {
+            let bytes = self.extent.len() as u64 * WORD;
+            self.extent.truncate(base as usize);
             return Err(format!(
                 "morph targets need {bytes} bytes, over the device's storage buffer limit"
             ));
         }
-        let base = self
-            .free
-            .take(&mut self.records, words.len(), [0; 4], "morphed vertices")?;
-        self.records[base as usize..base as usize + words.len()].copy_from_slice(&words);
-        *self.layout.get_mut() = layout(self.records.len() as u32, &self.weights.borrow());
-        self.rebuild(device);
-        Ok(MorphRange {
+        let range = MorphRange {
             base,
             len: words.len() as u32,
             targets: morph.targets.len() as u32,
             stride,
-        })
+        };
+        let grew = match self.grow_data(device, queue, self.extent.len(), keep) {
+            Ok(grew) => grew,
+            Err(error) => {
+                if base as usize >= keep {
+                    self.extent.truncate(keep);
+                } else {
+                    self.release(range.range());
+                }
+                return Err(error);
+            }
+        };
+        if !words.is_empty() {
+            let bytes: &[u8] = bytemuck::cast_slice(&words);
+            queue.write_buffer(&self.data, u64::from(base) * WORD, bytes);
+            self.stats.data_written += bytes.len() as u64;
+        }
+        Ok((range, grew))
     }
 
     pub fn release(&mut self, range: Range<u32>) {
         self.free.give(range);
+    }
+
+    pub fn reserve_weights(&mut self, device: &wgpu::Device, weights: usize) -> bool {
+        if weights <= self.weight_capacity {
+            return false;
+        }
+        self.grow_weights(device, weights);
+        self.pending.set(true);
+        true
+    }
+
+    fn grow_weights(&mut self, device: &wgpu::Device, needed: usize) {
+        self.weight_capacity = grown(self.weight_capacity, needed, limit_words(device));
+        self.weight_buffer = morph_buffer(device, "live morph weights", self.weight_capacity);
+        self.stats.weight_buffers += 1;
+        self.stats.weight_capacity = self.weight_capacity as u64 * WORD;
     }
 
     pub fn set_weights(&self, weights: &[InstanceWeights<'_>]) -> Result<(), String> {
@@ -331,7 +456,7 @@ impl MorphStore {
         {
             return Err("two morph weights name the same instance".into());
         }
-        *self.layout.borrow_mut() = layout(self.records.len() as u32, &stored);
+        *self.layout.borrow_mut() = layout(&stored);
         *self.weights.borrow_mut() = stored;
         self.pending.set(true);
         Ok(())
@@ -358,32 +483,28 @@ impl MorphStore {
             return false;
         }
         let needed = self.layout.get_mut().words.len();
-        let mut rebuilt = false;
-        if needed > self.weight_capacity {
-            self.weight_capacity = needed.next_power_of_two();
-            self.rebuild(device);
-            self.pending.set(false);
-            rebuilt = true;
+        let grew = needed > self.weight_capacity;
+        if grew {
+            self.grow_weights(device, needed);
         }
-        let layout = self.layout.get_mut();
-        if !layout.words.is_empty() {
-            queue.write_buffer(
-                &self.buffer,
-                u64::from(layout.base) * 16,
-                bytemuck::cast_slice(&layout.words),
-            );
+        let words = &self.layout.get_mut().words;
+        if !words.is_empty() {
+            let bytes: &[u8] = bytemuck::cast_slice(words);
+            queue.write_buffer(&self.weight_buffer, 0, bytes);
+            self.stats.weight_written += bytes.len() as u64;
         }
-        rebuilt
+        grew
     }
 }
 
-fn morph_buffer(device: &wgpu::Device, records: &[[u32; 4]], weights: usize) -> wgpu::Buffer {
-    let mut contents = records.to_vec();
-    contents.resize(records.len() + weights.max(1), [0; 4]);
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("live morphs"),
-        contents: bytemuck::cast_slice(&contents),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+fn morph_buffer(device: &wgpu::Device, label: &str, words: usize) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: words.max(1) as u64 * WORD,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
     })
 }
 
@@ -405,11 +526,11 @@ mod tests {
                 previous: vec![0.0, 0.0],
             },
         ];
-        let layout = layout(10, &stored);
+        let layout = layout(&stored);
         assert_eq!(
             layout.get(2),
             Some(Placed {
-                offset: 10,
+                offset: 0,
                 active: 2,
                 weights: 3
             })
@@ -428,5 +549,29 @@ mod tests {
             MorphRange::NONE.pack(layout.get(2), 2),
             Ok([NO_MORPH, 0, 0, 0])
         );
+    }
+
+    #[test]
+    fn appending_meshes_grows_the_capacity_a_logarithmic_number_of_times() {
+        let mut capacity = FIRST_DATA;
+        let mut growths = 0u32;
+        let mut copied = 0usize;
+        let mut extent = 0usize;
+        for _ in 0..10_000 {
+            let next = grown(capacity, extent + 37, usize::MAX);
+            if next != capacity {
+                assert!(next >= capacity * 2);
+                growths += 1;
+                copied += extent;
+                capacity = next;
+            }
+            extent += 37;
+            assert!(capacity >= extent);
+        }
+        assert!(growths <= extent.ilog2() + 1, "{growths} growths");
+        assert!(copied < 2 * extent, "{copied} words copied for {extent}");
+        assert_eq!(grown(8, 9, 12), 12);
+        assert_eq!(grown(8, 20, 12), 20);
+        assert_eq!(grown(8, 8, 12), 8);
     }
 }

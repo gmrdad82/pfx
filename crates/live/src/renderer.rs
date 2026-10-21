@@ -2177,6 +2177,14 @@ impl Renderer {
         self.frame.set_weights(weights)
     }
 
+    pub fn reserve_weights(&mut self, weights: usize) {
+        self.frame.reserve_weights(weights);
+    }
+
+    pub fn reserve_morph_deltas(&mut self, deltas: usize) -> Result<(), String> {
+        self.frame.reserve_morph_deltas(deltas)
+    }
+
     pub fn set_surfaces(&mut self, surfaces: &[frame::InstanceSurface]) -> Result<(), String> {
         if self.frame.surfaces().as_slice() == surfaces {
             return Ok(());

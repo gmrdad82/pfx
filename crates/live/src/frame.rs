@@ -8,7 +8,8 @@ use crate::maps::{
     GpuMapMaterial, MapImages, MapIndices, MapTextures,
 };
 use crate::morph::{
-    InstanceWeights, MORPH_BINDING, MORPH_WGSL, MorphData, MorphRange, MorphStore, NO_MORPH,
+    InstanceWeights, MORPH_BINDING, MORPH_WEIGHTS_BINDING, MORPH_WGSL, MorphData, MorphRange,
+    MorphStats, MorphStore, NO_MORPH,
 };
 use crate::pipeline_cache::{CacheLoad, PipelineCache};
 use crate::probes::{
@@ -1672,6 +1673,7 @@ pub fn scene_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
         buffer_entry(3, wgpu::ShaderStages::VERTEX, read),
         buffer_entry(SKIN_BINDING, wgpu::ShaderStages::VERTEX, read),
         buffer_entry(MORPH_BINDING, wgpu::ShaderStages::VERTEX, read),
+        buffer_entry(MORPH_WEIGHTS_BINDING, wgpu::ShaderStages::VERTEX, read),
     ]
 }
 
@@ -2112,6 +2114,7 @@ impl Frame {
                 &sway,
                 skins.buffer(),
                 morphs.buffer(),
+                morphs.weight_buffer(),
             ],
         );
         let shadow_layout = layout(device, "live shadow seam", &shadow_entries());
@@ -2472,7 +2475,7 @@ impl Frame {
     fn make_scene_group(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        buffers: [&wgpu::Buffer; 6],
+        buffers: [&wgpu::Buffer; 7],
     ) -> wgpu::BindGroup {
         let entries: Vec<wgpu::BindGroupEntry<'_>> = buffers
             .iter()
@@ -2500,6 +2503,7 @@ impl Frame {
                 &self.sway,
                 self.skins.buffer(),
                 self.morphs.buffer(),
+                self.morphs.weight_buffer(),
             ],
         );
     }
@@ -3360,11 +3364,14 @@ impl Frame {
             Some(sway) => (self.allocate_sway(sway)?, sway.len() as u32),
             None => (NO_SWAY, 0),
         };
-        let morph = match morph {
-            Some(morph) => self
-                .morphs
-                .allocate(&self.gpu.device, data.positions.len(), morph)?,
-            None => MorphRange::NONE,
+        let (morph, morph_grew) = match morph {
+            Some(morph) => self.morphs.allocate(
+                &self.gpu.device,
+                &self.gpu.queue,
+                data.positions.len(),
+                morph,
+            )?,
+            None => (MorphRange::NONE, false),
         };
         let (skin_base, skin_len, skin_joints) = match skin {
             Some(skin) => match self.skins.allocate(&self.gpu.device, skin) {
@@ -3373,12 +3380,15 @@ impl Frame {
                     if morph.base != NO_MORPH {
                         self.morphs.release(morph.range());
                     }
+                    if morph_grew {
+                        self.rebuild_scene_group();
+                    }
                     return Err(error);
                 }
             },
             None => (NO_SKIN, 0, 0),
         };
-        if morph.base != NO_MORPH || skin_base != NO_SKIN {
+        if morph_grew || skin_base != NO_SKIN {
             self.rebuild_scene_group();
         }
         let mesh = Mesh {
@@ -3586,8 +3596,12 @@ impl Frame {
         })
     }
 
-    pub(crate) fn deform_stores(&self) -> (&wgpu::Buffer, &wgpu::Buffer) {
-        (self.skins.buffer(), self.morphs.buffer())
+    pub(crate) fn deform_stores(&self) -> (&wgpu::Buffer, &wgpu::Buffer, &wgpu::Buffer) {
+        (
+            self.skins.buffer(),
+            self.morphs.buffer(),
+            self.morphs.weight_buffer(),
+        )
     }
 
     pub fn jitter(&self) -> [f32; 2] {
@@ -3614,6 +3628,26 @@ impl Frame {
 
     pub fn same_weights(&self, weights: &[InstanceWeights<'_>]) -> bool {
         self.morphs.same(weights)
+    }
+
+    pub fn reserve_weights(&mut self, weights: usize) {
+        if self.morphs.reserve_weights(&self.gpu.device, weights) {
+            self.rebuild_scene_group();
+        }
+    }
+
+    pub fn reserve_morph_deltas(&mut self, deltas: usize) -> Result<(), String> {
+        if self
+            .morphs
+            .reserve(&self.gpu.device, &self.gpu.queue, deltas)?
+        {
+            self.rebuild_scene_group();
+        }
+        Ok(())
+    }
+
+    pub fn morph_stats(&self) -> MorphStats {
+        self.morphs.stats()
     }
 
     pub fn render(&mut self, scene: &Scene<'_>) -> Result<&FrameTargets, String> {
