@@ -187,8 +187,22 @@ fn traverse(o: vec3f, d: vec3f, limit: f32, mode: u32) -> Traced {
                         if (mode==QUERY_OCCLUDED) { rayQueryConfirmIntersection(&rq); } else { traced.passed*=tri_tint(i,record); }
                     }
                 } else if (TRACE_MOTION && c.instance_custom_data==RT_MOVERS) {
-                    let s=mover_slot(c.primitive_index)+1u;
-                    if (s>after) { more=rt_keep(&batch,&count,s) || more; }
+                    let s=mover_slot(c.primitive_index);
+                    let word=instance_surfaces[s+1u].info.x;
+                    if ((motion_word(slot_at(s)).x>>1u)<2u && (word&SPRITE)==0u) {
+                        if (s+1u>after) { more=rt_keep(&batch,&count,s+1u) || more; }
+                    } else if (RT_WALK && phase==RT_WORLD && !(TRACE_SPRITES && sprites_hidden && (word&SPRITE)!=0u)) {
+                        var walked=empty_hit(best);
+                        let through=mover_walk(s,o,d,best,mode,!closest,&walked);
+                        if (!closest) {
+                            traced.passed*=through;
+                        } else if (walked.t<best) {
+                            best=walked.t;
+                            moved=walked;
+                            mover=s+1u;
+                            shape=0u;
+                        }
+                    }
                 } else {
                     let i=rt_shape(c);
                     let t=shape_t(i,o,d,best);
@@ -254,19 +268,6 @@ fn traverse(o: vec3f, d: vec3f, limit: f32, mode: u32) -> Traced {
                 phase=RT_MOVER;
                 queued=true;
                 break;
-            }
-            if (RT_WALK) {
-                var walked=empty_hit(reach);
-                let through=mover_walk(s,o,d,reach,mode,!closest,&walked);
-                if (!closest) {
-                    traced.passed*=through;
-                } else if (walked.t<reach) {
-                    reach=walked.t;
-                    best=walked.t;
-                    moved=walked;
-                    mover=s+1u;
-                    shape=0u;
-                }
             }
         }
         if (!queued) { break; }

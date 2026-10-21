@@ -62,7 +62,7 @@ With the tree, 128 lights cost 6% more than 4; light by light they cost 105% mor
 
 ## Shadow rays
 
-All shadow rays (sun, sky, emitter and local light) go through one any-hit traversal, `occluded`, over the scene's own BVH, triangles, clip planes and analytic shapes. It answers "is anything between here and there", stops at the first blocker and carries no hit record; it counts `shadow_only` triangles, as the sun's shadow always has. The answer is the one the closest-hit `scene()` gave. Sun and sky shadows are unchanged, and shadow rays are cheaper: a desk scene without emitters traces in 180.5 ms per sample against 213.4 ms before.
+All shadow rays (sun, sky, emitter and local light) go through one any-hit traversal, `traverse` in its occluded mode, over the scene's own BVH, triangles, clip planes and analytic shapes. It answers "is anything between here and there", stops at the first blocker and carries no hit record; it counts `shadow_only` triangles, as the sun's shadow always has. The answer is the one its closest mode gives. Sun and sky shadows are unchanged, and shadow rays are cheaper: a desk scene without emitters traces in 180.5 ms per sample against 213.4 ms before.
 
 ## One shader per scene
 
