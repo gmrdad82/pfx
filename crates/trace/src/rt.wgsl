@@ -20,21 +20,7 @@ fn rt_finite(v: f32) -> bool {
 fn rt_valid(o: vec3f, d: vec3f, limit: f32) -> bool {
     return rt_finite(o.x) && rt_finite(o.y) && rt_finite(o.z) && rt_finite(d.x) && rt_finite(d.y) && rt_finite(d.z) && (bitcast<u32>(limit)&0x7fffffffu)<=0x7f800000u;
 }
-fn rt_shape_t(i: u32, o: vec3f, d: vec3f, limit: f32) -> f32 {
-    if (u32(shapes[i].a.w)==5u) { return union_hit(i,o,d,limit); }
-    return primitive_hit(i,o,d,limit);
-}
-fn rt_shape_hit(i: u32, o: vec3f, d: vec3f, t: f32) -> Hit {
-    let p=o+d*t;
-    let e=0.0002;
-    let n=normalize(vec3f(
-        shape_distance(i,p+vec3f(e,0.0,0.0))-shape_distance(i,p-vec3f(e,0.0,0.0)),
-        shape_distance(i,p+vec3f(0.0,e,0.0))-shape_distance(i,p-vec3f(0.0,e,0.0)),
-        shape_distance(i,p+vec3f(0.0,0.0,e))-shape_distance(i,p-vec3f(0.0,0.0,e))));
-    return Hit(t,n,n,u32(shapes[i].c.w),vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,i+1u,0u);
-}
 const RT_MOVERS: u32 = 16777215u;
-const RT_BOX_MASK: u32 = 1u;
 const RT_MOVER_MASK: u32 = 2u;
 fn node_at(i: u32) -> Node {
     let at=frame.columns.z+(i-frame.columns.w)*12u;
@@ -45,9 +31,6 @@ fn node_at(i: u32) -> Node {
 fn motion_vec(k: u32) -> vec4f {
     let at=frame.columns.y+k*4u;
     return bitcast<vec4f>(vec4u(rt_map[at],rt_map[at+1u],rt_map[at+2u],rt_map[at+3u]));
-}
-fn empty_hit(limit: f32) -> Hit {
-    return Hit(limit,vec3f(0.0),vec3f(0.0),0u,vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,0u,0u);
 }
 fn mover_walk(s: u32, o: vec3f, d: vec3f, limit: f32, mode: u32, shadow_ray: bool, hit: ptr<function,Hit>) -> vec3f {
     trace_count(COUNT_MOVER_WALKS);
@@ -111,336 +94,195 @@ fn mover_desc(r: MoverRay, far: f32) -> RayDesc {
 fn mover_mine(c: RayIntersection, s: u32) -> bool {
     return c.kind==RAY_QUERY_INTERSECTION_TRIANGLE && c.instance_custom_data==s+1u;
 }
-fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
-    trace_count(COUNT_CLOSEST);
-    var hit=Hit(limit,vec3f(0.0),vec3f(0.0),0u,vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,0u,0u);
-    if (!rt_valid(o,d,limit)) { return hit; }
+const RT_BOXES_MASK: u32 = 128u;
+const RT_WORLD: u32 = 0u;
+const RT_OVERFLOW: u32 = 1u;
+const RT_MOVER: u32 = 2u;
+fn rt_keep(batch: ptr<function,array<u32,4>>, count: ptr<function,u32>, s: u32) -> bool {
+    if (*count<4u) {
+        (*batch)[*count]=s;
+        *count+=1u;
+        return false;
+    }
+    var top=0u;
+    for (var j=1u;j<4u;j++) {
+        if ((*batch)[j]>(*batch)[top]) { top=j; }
+    }
+    if (s<(*batch)[top]) { (*batch)[top]=s; }
+    return true;
+}
+fn traverse(o: vec3f, d: vec3f, limit: f32, mode: u32) -> Traced {
+    let closest=mode==QUERY_CLOSEST;
+    trace_count(select(COUNT_SHADOW,COUNT_CLOSEST,closest));
+    var traced=Traced(empty_hit(limit),vec3f(1.0));
+    if (!rt_valid(o,d,limit)) {
+        if (!closest) { traced.passed=vec3f(0.0); }
+        return traced;
+    }
     var rq: ray_query;
-    rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_NONE,rt_mask(),0.0001,limit,o,d));
     var best=limit;
     var shape=0u;
     var mover=0u;
-    var moved=hit;
-    var pending=array<u32,4>(0u,0u,0u,0u);
-    var waiting=0u;
-    while (rayQueryProceed(&rq)) {
-        let c=rayQueryGetCandidateIntersection(&rq);
-        trace_count(COUNT_CLOSEST_CANDIDATES);
-        if (c.kind==RAY_QUERY_INTERSECTION_TRIANGLE) {
-            var probe=hit;
-            probe.t=best;
-            let record=rt_record(c);
-            let info=instance_surfaces[record].info;
-            tri_hit(rt_triangle(c),record,info.x,bitcast<f32>(info.w),record_ray(record,o,1.0),record_ray(record,d,0.0),o,d,shadow_ray,&probe);
-            if (probe.t<best) {
-                rayQueryConfirmIntersection(&rq);
-                best=probe.t;
-                shape=0u;
-                mover=0u;
-            }
-        } else if (TRACE_MOTION && RT_WALK && c.instance_custom_data==RT_MOVERS) {
-            let slot=mover_slot(c.primitive_index);
-            if (waiting<4u) {
-                pending[waiting]=slot;
-                waiting+=1u;
-            } else {
-                var probe=empty_hit(best);
-                _ = mover_walk(slot,o,d,best,0u,shadow_ray,&probe);
-                if (probe.t<best) {
-                    best=probe.t;
-                    moved=probe;
-                    mover=slot+1u;
-                    shape=0u;
-                }
-            }
-        } else {
-            let i=rt_shape(c);
-            let t=rt_shape_t(i,o,d,best);
-            if (t<best && t>0.0001) {
-                best=t;
-                shape=i+1u;
-                mover=0u;
-            }
-        }
-    }
-    let committed=rayQueryGetCommittedIntersection(&rq);
-    let triangle=committed.kind==RAY_QUERY_INTERSECTION_TRIANGLE;
-    if (TRACE_MOTION) {
-        var reach=best;
-        if (triangle) { reach=min(reach,committed.t); }
-        if (RT_WALK) {
-            for (var k=0u;k<waiting;k++) {
-                var probe=empty_hit(reach);
-                _ = mover_walk(pending[k],o,d,reach,0u,shadow_ray,&probe);
-                if (probe.t<reach) {
-                    reach=probe.t;
-                    best=probe.t;
-                    moved=probe;
-                    mover=pending[k]+1u;
-                    shape=0u;
-                }
-            }
-        }
-        let fixed=reach;
-        var skip=0u;
-        loop {
-            var batch=array<u32,4>(0u,0u,0u,0u);
-            var count=0u;
-            var seen=0u;
-            var more=false;
+    var moved=traced.hit;
+    var triangle=false;
+    var committed_t=limit;
+    var committed_at=vec2u(0u);
+    var committed_uv=vec2f(0.0);
+    var batch=array<u32,4>(0u,0u,0u,0u);
+    var count=0u;
+    var next=0u;
+    var after=0u;
+    var more=false;
+    var phase=RT_WORLD;
+    var current=0u;
+    var ray=MoverRay(Moved(o,d,1.0),o,d,0u,false);
+    var probe=traced.hit;
+    var far=limit;
+    var reach=limit;
+    loop {
+        if (phase==RT_MOVER) {
             trace_count(COUNT_MOVER_QUERIES);
-            rayQueryInitialize(&rq,rt_movers,RayDesc(RAY_FLAG_NONE,RT_BOX_MASK,0.0001,fixed,o,d));
-            while (rayQueryProceed(&rq)) {
-                let c=rayQueryGetCandidateIntersection(&rq);
-                if (c.kind!=RAY_QUERY_INTERSECTION_AABB) { continue; }
-                if (seen>=skip) {
-                    if (count==4u) {
-                        more=true;
-                        rayQueryTerminate(&rq);
-                        continue;
-                    }
-                    batch[count]=mover_slot(c.primitive_index);
-                    count+=1u;
-                }
-                seen+=1u;
+            rayQueryInitialize(&rq,rt_movers,mover_desc(ray,far));
+        } else {
+            var desc=RayDesc(select(RAY_FLAG_TERMINATE_ON_FIRST_HIT,RAY_FLAG_NONE,closest),rt_mask(),0.0001,limit,o,d);
+            if (phase==RT_OVERFLOW) {
+                trace_count(COUNT_MOVER_QUERIES);
+                desc=RayDesc(RAY_FLAG_NONE,RT_BOXES_MASK,0.0001,reach,o,d);
             }
-            for (var k=0u;k<count;k++) {
-                var probe=empty_hit(reach);
-                let s=batch[k];
-                let r=mover_ray(s,o,d,reach);
-                if (r.hardware) {
-                    var far=reach;
-                    trace_count(COUNT_MOVER_QUERIES);
-                    rayQueryInitialize(&rq,rt_movers,mover_desc(r,far));
-                    while (rayQueryProceed(&rq)) {
-                        let c=rayQueryGetCandidateIntersection(&rq);
-                        if (!mover_mine(c,s)) { continue; }
-                        tri_hit(rt_triangle(c),s+1u,r.word,r.m.inv_det,r.m.ro,r.m.rd,o,d,shadow_ray,&probe);
-                        if (probe.t<far) {
-                            far=probe.t;
+            rayQueryInitialize(&rq,rt_world,desc);
+        }
+        while (rayQueryProceed(&rq)) {
+            let c=rayQueryGetCandidateIntersection(&rq);
+            if (phase==RT_MOVER) {
+                if (!mover_mine(c,current)) { continue; }
+                let i=rt_triangle(c);
+                if (closest) {
+                    tri_hit(i,current+1u,ray.word,ray.m.inv_det,ray.m.ro,ray.m.rd,o,d,false,&probe);
+                    if (probe.t<far) {
+                        far=probe.t;
+                        rayQueryConfirmIntersection(&rq);
+                    }
+                } else if (tri_blocks(i,current+1u,ray.word,ray.m.inv_det,ray.m.ro,ray.m.rd,o,d,limit)) {
+                    if (mode==QUERY_OCCLUDED) { traced.passed=vec3f(0.0); } else { traced.passed*=tri_tint(i,current+1u); }
+                }
+            } else {
+                if (phase==RT_WORLD) { trace_count(select(COUNT_SHADOW_CANDIDATES,COUNT_CLOSEST_CANDIDATES,closest)); }
+                if (c.kind==RAY_QUERY_INTERSECTION_TRIANGLE) {
+                    let record=rt_record(c);
+                    let info=instance_surfaces[record].info;
+                    let i=rt_triangle(c);
+                    let ro=record_ray(record,o,1.0);
+                    let rd=record_ray(record,d,0.0);
+                    if (closest) {
+                        var candidate=traced.hit;
+                        candidate.t=best;
+                        tri_hit(i,record,info.x,bitcast<f32>(info.w),ro,rd,o,d,false,&candidate);
+                        if (candidate.t<best) {
                             rayQueryConfirmIntersection(&rq);
+                            best=candidate.t;
+                            shape=0u;
+                            mover=0u;
+                        }
+                    } else if (tri_blocks(i,record,info.x,bitcast<f32>(info.w),ro,rd,o,d,limit)) {
+                        if (mode==QUERY_OCCLUDED) { rayQueryConfirmIntersection(&rq); } else { traced.passed*=tri_tint(i,record); }
+                    }
+                } else if (TRACE_MOTION && c.instance_custom_data==RT_MOVERS) {
+                    let s=mover_slot(c.primitive_index)+1u;
+                    if (s>after) { more=rt_keep(&batch,&count,s) || more; }
+                } else {
+                    let i=rt_shape(c);
+                    let t=shape_t(i,o,d,best);
+                    if (t<best && t>0.0001) {
+                        if (closest) {
+                            best=t;
+                            shape=i+1u;
+                            mover=0u;
+                        } else if (mode==QUERY_OCCLUDED) {
+                            traced.passed=vec3f(0.0);
+                        } else {
+                            traced.passed*=cast_tint(u32(shapes[i].c.w));
                         }
                     }
-                    mover_leave();
-                } else if (RT_WALK) {
-                    _ = mover_walk(s,o,d,reach,0u,shadow_ray,&probe);
                 }
-                if (probe.t<reach) {
-                    reach=probe.t;
-                    best=probe.t;
-                    moved=probe;
-                    mover=batch[k]+1u;
+            }
+            if (!closest && all(traced.passed<=vec3f(0.0))) { rayQueryTerminate(&rq); }
+        }
+        if (phase==RT_WORLD) {
+            let c=rayQueryGetCommittedIntersection(&rq);
+            if (!closest) {
+                if (c.kind!=RAY_QUERY_INTERSECTION_NONE) { traced.passed=vec3f(0.0); }
+            } else if (c.kind==RAY_QUERY_INTERSECTION_TRIANGLE) {
+                triangle=true;
+                committed_t=c.t;
+                committed_at=vec2u(rt_triangle(c),rt_record(c));
+                committed_uv=c.barycentrics;
+                reach=min(best,c.t);
+            } else {
+                reach=best;
+            }
+        } else if (phase==RT_MOVER) {
+            mover_leave();
+            if (closest && probe.t<reach) {
+                reach=probe.t;
+                best=probe.t;
+                moved=probe;
+                mover=current+1u;
+                shape=0u;
+            }
+        }
+        var queued=false;
+        loop {
+            if (!closest && all(traced.passed<=vec3f(0.0))) { break; }
+            if (next>=count) {
+                if (more) {
+                    for (var j=0u;j<count;j++) { after=max(after,batch[j]); }
+                    count=0u;
+                    next=0u;
+                    more=false;
+                    phase=RT_OVERFLOW;
+                    queued=true;
+                }
+                break;
+            }
+            let s=batch[next]-1u;
+            next+=1u;
+            ray=mover_ray(s,o,d,reach);
+            if (ray.hardware) {
+                current=s;
+                probe=empty_hit(reach);
+                far=reach;
+                phase=RT_MOVER;
+                queued=true;
+                break;
+            }
+            if (RT_WALK) {
+                var walked=empty_hit(reach);
+                let through=mover_walk(s,o,d,reach,mode,!closest,&walked);
+                if (!closest) {
+                    traced.passed*=through;
+                } else if (walked.t<reach) {
+                    reach=walked.t;
+                    best=walked.t;
+                    moved=walked;
+                    mover=s+1u;
                     shape=0u;
                 }
             }
-            if (!more) { break; }
-            skip+=4u;
         }
+        if (!queued) { break; }
     }
-    if (shape>0u && !(triangle && committed.t<best)) {
-        hit=rt_shape_hit(shape-1u,o,d,best);
-    } else if (TRACE_MOTION && mover>0u && !(triangle && committed.t<best)) {
-        hit=moved;
+    if (!closest) {
+        if (!RT_BOXES && any(traced.passed>vec3f(0.0))) { shapes_through(o,d,limit,mode,&traced); }
+        return traced;
+    }
+    if (shape>0u && !(triangle && committed_t<best)) {
+        traced.hit=shape_hit(shape-1u,o,d,best);
+    } else if (TRACE_MOTION && mover>0u && !(triangle && committed_t<best)) {
+        traced.hit=moved;
     } else if (triangle) {
-        tri_fill(rt_triangle(committed),rt_record(committed),committed.t,committed.barycentrics.x,committed.barycentrics.y,&hit);
+        tri_fill(committed_at.x,committed_at.y,committed_t,committed_uv.x,committed_uv.y,&traced.hit);
     }
-    if (!RT_BOXES) {
-        for (var i=0u;i<frame.counts.y;i++) {
-            if (shapes[i].d.x > 0.5) { continue; }
-            let t=rt_shape_t(i,o,d,hit.t);
-            if (t<hit.t && t>0.0001) { hit=rt_shape_hit(i,o,d,t); }
-        }
-    }
-    return world_hit(hit);
-}
-fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
-    trace_count(COUNT_SHADOW);
-    if (!rt_valid(o,d,limit)) { return true; }
-    var rq: ray_query;
-    rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT,rt_mask(),0.0001,limit,o,d));
-    var blocked=false;
-    var pending=array<u32,4>(0u,0u,0u,0u);
-    var waiting=0u;
-    while (rayQueryProceed(&rq)) {
-        let c=rayQueryGetCandidateIntersection(&rq);
-        trace_count(COUNT_SHADOW_CANDIDATES);
-        if (c.kind==RAY_QUERY_INTERSECTION_TRIANGLE) {
-            let record=rt_record(c);
-            let info=instance_surfaces[record].info;
-            if (tri_blocks(rt_triangle(c),record,info.x,bitcast<f32>(info.w),record_ray(record,o,1.0),record_ray(record,d,0.0),o,d,limit)) { rayQueryConfirmIntersection(&rq); }
-        } else if (TRACE_MOTION && RT_WALK && c.instance_custom_data==RT_MOVERS) {
-            let slot=mover_slot(c.primitive_index);
-            if (waiting<4u) {
-                pending[waiting]=slot;
-                waiting+=1u;
-            } else {
-                var none=empty_hit(limit);
-                if (all(mover_walk(slot,o,d,limit,1u,true,&none)<=vec3f(0.0))) {
-                    blocked=true;
-                    rayQueryTerminate(&rq);
-                }
-            }
-        } else {
-            let t=rt_shape_t(rt_shape(c),o,d,limit);
-            if (t<limit && t>0.0001) {
-                blocked=true;
-                rayQueryTerminate(&rq);
-            }
-        }
-    }
-    if (blocked || rayQueryGetCommittedIntersection(&rq).kind!=RAY_QUERY_INTERSECTION_NONE) { return true; }
-    if (TRACE_MOTION) {
-        if (RT_WALK) {
-            for (var k=0u;k<waiting;k++) {
-                var none=empty_hit(limit);
-                if (all(mover_walk(pending[k],o,d,limit,1u,true,&none)<=vec3f(0.0))) { return true; }
-            }
-        }
-        var skip=0u;
-        loop {
-            var batch=array<u32,4>(0u,0u,0u,0u);
-            var count=0u;
-            var seen=0u;
-            var more=false;
-            trace_count(COUNT_MOVER_QUERIES);
-            rayQueryInitialize(&rq,rt_movers,RayDesc(RAY_FLAG_NONE,RT_BOX_MASK,0.0001,limit,o,d));
-            while (rayQueryProceed(&rq)) {
-                let c=rayQueryGetCandidateIntersection(&rq);
-                if (c.kind!=RAY_QUERY_INTERSECTION_AABB) { continue; }
-                if (seen>=skip) {
-                    if (count==4u) {
-                        more=true;
-                        rayQueryTerminate(&rq);
-                        continue;
-                    }
-                    batch[count]=mover_slot(c.primitive_index);
-                    count+=1u;
-                }
-                seen+=1u;
-            }
-            for (var k=0u;k<count;k++) {
-                var none=empty_hit(limit);
-                let s=batch[k];
-                let r=mover_ray(s,o,d,limit);
-                if (r.hardware) {
-                    var blocks=false;
-                    trace_count(COUNT_MOVER_QUERIES);
-                    rayQueryInitialize(&rq,rt_movers,mover_desc(r,limit));
-                    while (rayQueryProceed(&rq)) {
-                        let c=rayQueryGetCandidateIntersection(&rq);
-                        if (mover_mine(c,s) && tri_blocks(rt_triangle(c),s+1u,r.word,r.m.inv_det,r.m.ro,r.m.rd,o,d,limit)) {
-                            blocks=true;
-                            rayQueryTerminate(&rq);
-                        }
-                    }
-                    mover_leave();
-                    if (blocks) { return true; }
-                } else if (RT_WALK && all(mover_walk(s,o,d,limit,1u,true,&none)<=vec3f(0.0))) { return true; }
-            }
-            if (!more) { break; }
-            skip+=4u;
-        }
-    }
-    if (!RT_BOXES) {
-        for (var i=0u;i<frame.counts.y;i++) {
-            if (shapes[i].d.x > 0.5) { continue; }
-            let t=rt_shape_t(i,o,d,limit);
-            if (t<limit && t>0.0001) { return true; }
-        }
-    }
-    return false;
-}
-fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
-    trace_count(COUNT_SHADOW);
-    if (!rt_valid(o,d,limit)) { return vec3f(0.0); }
-    var passed=vec3f(1.0);
-    var rq: ray_query;
-    var pending=array<u32,4>(0u,0u,0u,0u);
-    var waiting=0u;
-    rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT,rt_mask(),0.0001,limit,o,d));
-    while (rayQueryProceed(&rq)) {
-        let c=rayQueryGetCandidateIntersection(&rq);
-        trace_count(COUNT_SHADOW_CANDIDATES);
-        if (c.kind==RAY_QUERY_INTERSECTION_TRIANGLE) {
-            let record=rt_record(c);
-            let info=instance_surfaces[record].info;
-            passed*=tri_passes(rt_triangle(c),record,info.x,bitcast<f32>(info.w),record_ray(record,o,1.0),record_ray(record,d,0.0),o,d,limit);
-        } else if (TRACE_MOTION && RT_WALK && c.instance_custom_data==RT_MOVERS) {
-            let slot=mover_slot(c.primitive_index);
-            if (waiting<4u) {
-                pending[waiting]=slot;
-                waiting+=1u;
-            } else {
-                var none=empty_hit(limit);
-                passed*=mover_walk(slot,o,d,limit,2u,true,&none);
-            }
-        } else {
-            let i=rt_shape(c);
-            let t=rt_shape_t(i,o,d,limit);
-            if (t<limit && t>0.0001) { passed*=cast_tint(u32(shapes[i].c.w)); }
-        }
-        if (all(passed<=vec3f(0.0))) { rayQueryTerminate(&rq); }
-    }
-    if (rayQueryGetCommittedIntersection(&rq).kind!=RAY_QUERY_INTERSECTION_NONE) { return vec3f(0.0); }
-    if (TRACE_MOTION) {
-        if (RT_WALK) {
-            for (var k=0u;k<waiting;k++) {
-                var none=empty_hit(limit);
-                passed*=mover_walk(pending[k],o,d,limit,2u,true,&none);
-                if (all(passed<=vec3f(0.0))) { return vec3f(0.0); }
-            }
-        }
-        var skip=0u;
-        loop {
-            var batch=array<u32,4>(0u,0u,0u,0u);
-            var count=0u;
-            var seen=0u;
-            var more=false;
-            trace_count(COUNT_MOVER_QUERIES);
-            rayQueryInitialize(&rq,rt_movers,RayDesc(RAY_FLAG_NONE,RT_BOX_MASK,0.0001,limit,o,d));
-            while (rayQueryProceed(&rq)) {
-                let c=rayQueryGetCandidateIntersection(&rq);
-                if (c.kind!=RAY_QUERY_INTERSECTION_AABB) { continue; }
-                if (seen>=skip) {
-                    if (count==4u) {
-                        more=true;
-                        rayQueryTerminate(&rq);
-                        continue;
-                    }
-                    batch[count]=mover_slot(c.primitive_index);
-                    count+=1u;
-                }
-                seen+=1u;
-            }
-            for (var k=0u;k<count;k++) {
-                var none=empty_hit(limit);
-                let s=batch[k];
-                let r=mover_ray(s,o,d,limit);
-                if (r.hardware) {
-                    trace_count(COUNT_MOVER_QUERIES);
-                    rayQueryInitialize(&rq,rt_movers,mover_desc(r,limit));
-                    while (rayQueryProceed(&rq)) {
-                        let c=rayQueryGetCandidateIntersection(&rq);
-                        if (!mover_mine(c,s)) { continue; }
-                        passed*=tri_passes(rt_triangle(c),s+1u,r.word,r.m.inv_det,r.m.ro,r.m.rd,o,d,limit);
-                        if (all(passed<=vec3f(0.0))) { rayQueryTerminate(&rq); }
-                    }
-                    mover_leave();
-                } else if (RT_WALK) {
-                    passed*=mover_walk(s,o,d,limit,2u,true,&none);
-                }
-                if (all(passed<=vec3f(0.0))) { return vec3f(0.0); }
-            }
-            if (!more) { break; }
-            skip+=4u;
-        }
-    }
-    if (!RT_BOXES) {
-        for (var i=0u;i<frame.counts.y;i++) {
-            if (shapes[i].d.x > 0.5) { continue; }
-            let t=rt_shape_t(i,o,d,limit);
-            if (t<limit && t>0.0001) { passed*=cast_tint(u32(shapes[i].c.w)); }
-        }
-    }
-    return passed;
+    if (!RT_BOXES) { shapes_through(o,d,limit,mode,&traced); }
+    traced.hit=world_hit(traced.hit);
+    return traced;
 }

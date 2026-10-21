@@ -1012,84 +1012,6 @@ fn union_hit(i: u32, o: vec3f, d: vec3f, limit: f32) -> f32 {
     }
     return limit;
 }
-fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
-    trace_count(COUNT_CLOSEST);
-    var hit=Hit(limit,vec3f(0.0),vec3f(0.0),0u,vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,0u,0u);
-    if (frame.counts.x>0u) {
-        var stack: array<u32,64>;
-        var top=1u;
-        stack[0]=0u;
-        var ro=o;
-        var rd=d;
-        var base=0u;
-        var record=0u;
-        var word=0u;
-        var inv_det=1.0;
-        while (top>0u) {
-            top-=1u;
-            let index=stack[top];
-            if (index==ENTRYPOINT_SENTINEL) {
-                ro=o;
-                rd=d;
-                base=0u;
-                record=0u;
-                word=0u;
-                inv_det=1.0;
-                mover_leave();
-                continue;
-            }
-            let node=nodes[index];
-            if (!box_hit(node,ro,rd,hit.t)) { continue; }
-            if (node.pad.x==INSTANCE_LEAF) {
-                if (TRACE_SPRITES && sprites_hidden && (instance_surfaces[bitcast<u32>(node.lo.w)].info.x&SPRITE)!=0u) { continue; }
-                if (top+2u<=64u) {
-                    stack[top]=ENTRYPOINT_SENTINEL;
-                    stack[top+1u]=node.first;
-                    top+=2u;
-                    base=node.count;
-                    record=bitcast<u32>(node.lo.w);
-                    let info=instance_surfaces[record].info;
-                    word=info.x;
-                    inv_det=bitcast<f32>(info.w);
-                    if (node.pad.y>0u) {
-                        let m=nodes[node.pad.y];
-                        ro=to_object(m,o,1.0);
-                        rd=to_object(m,d,0.0);
-                        if (TRACE_MOTION && record>0u && mover_moves(record-1u)) {
-                            let moved=mover_enter(record-1u,o,d);
-                            ro=moved.ro;
-                            rd=moved.rd;
-                            inv_det=moved.inv_det;
-                        }
-                    }
-                }
-            } else if (node.count==0u) {
-                if (top+2u<=64u) {
-                    stack[top]=node.first;
-                    stack[top+1u]=index+1u;
-                    top+=2u;
-                }
-            } else {
-                for (var j=0u;j<node.count;j++) { tri_hit(base+node.first+j,record,word,inv_det,ro,rd,o,d,shadow_ray,&hit); }
-            }
-        }
-    }
-    for (var i=0u;i<frame.counts.y;i++) {
-        if (shapes[i].d.x > 0.5) { continue; }
-        var t=hit.t;
-        if (u32(shapes[i].a.w)==5u) { t=union_hit(i,o,d,hit.t); } else { t=primitive_hit(i,o,d,hit.t); }
-        if (t<hit.t && t>0.0001) {
-            let p=o+d*t;
-            let e=0.0002;
-            let n=normalize(vec3f(
-                shape_distance(i,p+vec3f(e,0.0,0.0))-shape_distance(i,p-vec3f(e,0.0,0.0)),
-                shape_distance(i,p+vec3f(0.0,e,0.0))-shape_distance(i,p-vec3f(0.0,e,0.0)),
-                shape_distance(i,p+vec3f(0.0,0.0,e))-shape_distance(i,p-vec3f(0.0,0.0,e))));
-            hit=Hit(t,n,n,u32(shapes[i].c.w),vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,i+1u,0u);
-        }
-    }
-    return world_hit(hit);
-}
 fn tri_blocks(i: u32, record: u32, word: u32, inv_det: f32, o: vec3f, d: vec3f, wo: vec3f, wd: vec3f, limit: f32) -> bool {
     let tri = tri_at(i);
     if ((word&2u)!=0u) { return false; }
@@ -1110,80 +1032,6 @@ fn tri_blocks(i: u32, record: u32, word: u32, inv_det: f32, o: vec3f, d: vec3f, 
     if (clipped_at(instance_surfaces[record],wo+wd*t)) { return false; }
     return !cut_out(i,record,u,v,wo,wd);
 }
-fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
-    trace_count(COUNT_SHADOW);
-    if (frame.counts.x>0u) {
-        var stack: array<u32,64>;
-        var top=1u;
-        stack[0]=0u;
-        var ro=o;
-        var rd=d;
-        var base=0u;
-        var record=0u;
-        var word=0u;
-        var inv_det=1.0;
-        while (top>0u) {
-            top-=1u;
-            let index=stack[top];
-            if (index==ENTRYPOINT_SENTINEL) {
-                ro=o;
-                rd=d;
-                base=0u;
-                record=0u;
-                word=0u;
-                inv_det=1.0;
-                mover_leave();
-                continue;
-            }
-            let node=nodes[index];
-            if (!box_hit(node,ro,rd,limit)) { continue; }
-            if (node.pad.x==INSTANCE_LEAF) {
-                if (TRACE_SPRITES && sprites_hidden && (instance_surfaces[bitcast<u32>(node.lo.w)].info.x&SPRITE)!=0u) { continue; }
-                if (top+2u<=64u) {
-                    stack[top]=ENTRYPOINT_SENTINEL;
-                    stack[top+1u]=node.first;
-                    top+=2u;
-                    base=node.count;
-                    record=bitcast<u32>(node.lo.w);
-                    let info=instance_surfaces[record].info;
-                    word=info.x;
-                    inv_det=bitcast<f32>(info.w);
-                    if (node.pad.y>0u) {
-                        let m=nodes[node.pad.y];
-                        ro=to_object(m,o,1.0);
-                        rd=to_object(m,d,0.0);
-                        if (TRACE_MOTION && record>0u && mover_moves(record-1u)) {
-                            let moved=mover_enter(record-1u,o,d);
-                            ro=moved.ro;
-                            rd=moved.rd;
-                            inv_det=moved.inv_det;
-                        }
-                    }
-                }
-            } else if (node.count==0u) {
-                if (top+2u<=64u) {
-                    stack[top]=node.first;
-                    stack[top+1u]=index+1u;
-                    top+=2u;
-                }
-            } else {
-                for (var j=0u;j<node.count;j++) {
-                    if (tri_blocks(base+node.first+j,record,word,inv_det,ro,rd,o,d,limit)) {
-                        mover_leave();
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    for (var i=0u;i<frame.counts.y;i++) {
-        if (shapes[i].d.x > 0.5) { continue; }
-        var t=limit;
-        if (u32(shapes[i].a.w)==5u) { t=union_hit(i,o,d,limit); } else { t=primitive_hit(i,o,d,limit); }
-        if (t<limit && t>0.0001) { return true; }
-    }
-    return false;
-}
 fn cast_tint(material: u32) -> vec3f {
     let transmission=clamp(material_row(material,2u).y,0.0,1.0)*(1.0-clamp(material_row(material,1u).x,0.0,1.0));
     if (transmission<=0.0) { return vec3f(0.0); }
@@ -1193,13 +1041,62 @@ fn cast_tint(material: u32) -> vec3f {
     if (thickness>0.0 && absorption>0.0) { passed=beer(thickness,passed,absorption); }
     return clamp(passed*transmission,vec3f(0.0),vec3f(1.0));
 }
-fn tri_passes(i: u32, record: u32, word: u32, inv_det: f32, o: vec3f, d: vec3f, wo: vec3f, wd: vec3f, limit: f32) -> vec3f {
-    if (!tri_blocks(i,record,word,inv_det,o,d,wo,wd,limit)) { return vec3f(1.0); }
+fn tri_tint(i: u32, record: u32) -> vec3f {
     return sqrt(cast_tint(record_material(instance_surfaces[record].info,triangles[i])));
 }
-fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
-    trace_count(COUNT_SHADOW);
-    var passed=vec3f(1.0);
+fn tri_passes(i: u32, record: u32, word: u32, inv_det: f32, o: vec3f, d: vec3f, wo: vec3f, wd: vec3f, limit: f32) -> vec3f {
+    if (!tri_blocks(i,record,word,inv_det,o,d,wo,wd,limit)) { return vec3f(1.0); }
+    return tri_tint(i,record);
+}
+const QUERY_CLOSEST: u32 = 0u;
+const QUERY_OCCLUDED: u32 = 1u;
+const QUERY_PASSED: u32 = 2u;
+const QUERY_NONE: u32 = 3u;
+struct Query { o: vec3f, d: vec3f, limit: f32, mode: u32, hidden: bool }
+struct Traced { hit: Hit, passed: vec3f }
+fn empty_hit(limit: f32) -> Hit {
+    return Hit(limit,vec3f(0.0),vec3f(0.0),0u,vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,0u,0u);
+}
+fn no_query() -> Query {
+    return Query(vec3f(0.0),vec3f(0.0,0.0,1.0),0.0,QUERY_NONE,false);
+}
+fn shadow_mode() -> u32 {
+    return select(QUERY_OCCLUDED,QUERY_PASSED,TRANSMISSIVE_SHADOWS);
+}
+fn shape_t(i: u32, o: vec3f, d: vec3f, limit: f32) -> f32 {
+    if (u32(shapes[i].a.w)==5u) { return union_hit(i,o,d,limit); }
+    return primitive_hit(i,o,d,limit);
+}
+fn shape_hit(i: u32, o: vec3f, d: vec3f, t: f32) -> Hit {
+    let p=o+d*t;
+    let e=0.0002;
+    let n=normalize(vec3f(
+        shape_distance(i,p+vec3f(e,0.0,0.0))-shape_distance(i,p-vec3f(e,0.0,0.0)),
+        shape_distance(i,p+vec3f(0.0,e,0.0))-shape_distance(i,p-vec3f(0.0,e,0.0)),
+        shape_distance(i,p+vec3f(0.0,0.0,e))-shape_distance(i,p-vec3f(0.0,0.0,e))));
+    return Hit(t,n,n,u32(shapes[i].c.w),vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,i+1u,0u);
+}
+fn shapes_through(o: vec3f, d: vec3f, limit: f32, mode: u32, traced: ptr<function,Traced>) {
+    for (var i=0u;i<frame.counts.y;i++) {
+        if (shapes[i].d.x > 0.5) { continue; }
+        let reach=select(limit,(*traced).hit.t,mode==QUERY_CLOSEST);
+        let t=shape_t(i,o,d,reach);
+        if (t<reach && t>0.0001) {
+            if (mode==QUERY_CLOSEST) {
+                (*traced).hit=shape_hit(i,o,d,t);
+            } else if (mode==QUERY_OCCLUDED) {
+                (*traced).passed=vec3f(0.0);
+                return;
+            } else {
+                (*traced).passed*=cast_tint(u32(shapes[i].c.w));
+            }
+        }
+    }
+}
+fn traverse(o: vec3f, d: vec3f, limit: f32, mode: u32) -> Traced {
+    let closest=mode==QUERY_CLOSEST;
+    trace_count(select(COUNT_SHADOW,COUNT_CLOSEST,closest));
+    var traced=Traced(empty_hit(limit),vec3f(1.0));
     if (frame.counts.x>0u) {
         var stack: array<u32,64>;
         var top=1u;
@@ -1224,7 +1121,7 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
                 continue;
             }
             let node=nodes[index];
-            if (!box_hit(node,ro,rd,limit)) { continue; }
+            if (!box_hit(node,ro,rd,traced.hit.t)) { continue; }
             if (node.pad.x==INSTANCE_LEAF) {
                 if (TRACE_SPRITES && sprites_hidden && (instance_surfaces[bitcast<u32>(node.lo.w)].info.x&SPRITE)!=0u) { continue; }
                 if (top+2u<=64u) {
@@ -1256,22 +1153,23 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
                 }
             } else {
                 for (var j=0u;j<node.count;j++) {
-                    passed*=tri_passes(base+node.first+j,record,word,inv_det,ro,rd,o,d,limit);
-                    if (all(passed<=vec3f(0.0))) {
-                        mover_leave();
-                        return vec3f(0.0);
+                    let i=base+node.first+j;
+                    if (closest) {
+                        tri_hit(i,record,word,inv_det,ro,rd,o,d,false,&traced.hit);
+                    } else if (tri_blocks(i,record,word,inv_det,ro,rd,o,d,limit)) {
+                        if (mode==QUERY_OCCLUDED) { traced.passed=vec3f(0.0); } else { traced.passed*=tri_tint(i,record); }
+                        if (all(traced.passed<=vec3f(0.0))) {
+                            mover_leave();
+                            return traced;
+                        }
                     }
                 }
             }
         }
     }
-    for (var i=0u;i<frame.counts.y;i++) {
-        if (shapes[i].d.x > 0.5) { continue; }
-        var t=limit;
-        if (u32(shapes[i].a.w)==5u) { t=union_hit(i,o,d,limit); } else { t=primitive_hit(i,o,d,limit); }
-        if (t<limit && t>0.0001) { passed*=cast_tint(u32(shapes[i].c.w)); }
-    }
-    return passed;
+    shapes_through(o,d,limit,mode,&traced);
+    if (closest) { traced.hit=world_hit(traced.hit); }
+    return traced;
 }
 fn offset_axis(position: f32, normal: f32) -> f32 {
     if (abs(position) < 1.0/32.0) { return position + normal/65536.0; }
@@ -1456,33 +1354,6 @@ fn steam_density(p: vec3f) -> f32 {
         steam_fbm(q*0.5+vec3f(3.1,0.0,t*STEAM_WARP_RATE)))*STEAM_WARP_AMP;
     let turbulence=smoothstep(STEAM_THRESHOLD_LOW,STEAM_THRESHOLD_HIGH,steam_fbm(q+warp+vec3f(0.0,-t*STEAM_CHURN,0.0)));
     return core*turbulence*fade*effects().thick_sub_film.w;
-}
-fn steam_composite(origin: vec3f, direction: vec3f, surface_depth: f32, color: vec3f) -> vec3f {
-    if (effects().thick_sub_film.w<=0.0) { return color; }
-    let inv=1.0/select(direction,sign(direction)*vec3f(1e-8),abs(direction)<vec3f(1e-8));
-    let t0=(effects().thick_sub_film.xyz-origin)*inv;
-    let t1=(effects().tint_absorption.xyz-origin)*inv;
-    let enter=max(max(min(t0.x,t1.x),min(t0.y,t1.y)),max(min(t0.z,t1.z),0.0));
-    let leave=min(min(max(t0.x,t1.x),max(t0.y,t1.y)),min(max(t0.z,t1.z),surface_depth));
-    if (enter>=leave) { return color; }
-    let dt=(leave-enter)/20.0;
-    var transmittance=1.0;
-    var scattered=vec3f(0.0);
-    let sun=normalize(frame.sun_dir.xyz);
-    let g=effects().metal_spec_coat.w;
-    let phase=(1.0-g*g)/pow(1.0+g*g-2.0*g*dot(direction,sun),1.5);
-    for (var k=0u;k<20u;k++) {
-        let p=origin+direction*(enter+(f32(k)+0.5)*dt);
-        let density=steam_density(p);
-        if (density>1e-4) {
-            let extinction=exp(-density*90.0*dt);
-            let open=select(1.0,0.0,scene(spawn_point(p,sun,p,0.0),sun,1e20,true).t<1e19);
-            let lit=frame.sun_color.xyz*frame.sun_color.w*open*phase;
-            scattered+=transmittance*(lit+vec3f(effects().tint_absorption.w))*(1.0-extinction)*0.85;
-            transmittance*=extinction;
-        }
-    }
-    return scattered+transmittance*color;
 }
 fn texels_at(offset: u32, width: u32, height: u32, uv: vec2f) -> vec4f {
     let size=vec2f(f32(width),f32(height));
@@ -1830,64 +1701,6 @@ fn volume_light(index: u32, transform: mat3x3f, p: vec3f, origin: vec3f, geometr
     return Candidate(vec3f(0.0,0.0,1.0),vec3f(0.0),0.0,0.0,vec3f(0.0,0.0,1.0),-1.0,0u);
 }
 fn trace_lights_end() {}
-fn catcher_visible(origin: vec3f, direction: vec3f, limit: f32) -> f32 {
-    if (TRANSMISSIVE_SHADOWS) { return dot(shadow_passed(origin,direction,limit),vec3f(0.2126,0.7152,0.0722)); }
-    return select(1.0,0.0,occluded(origin,direction,limit));
-}
-fn catcher_shadow(p: vec3f, n: vec3f, o: vec3f, t: f32, state: ptr<function,u32>) -> f32 {
-    let transform=basis(n);
-    let origin=spawn_point(p,n,o,t);
-    var open=0.0;
-    var seen=0.0;
-    for (var k=0u;k<2u+light_slots();k++) {
-        let u=sobol(light_dim(k));
-        var direction=vec3f(0.0,0.0,1.0);
-        var strength=0.0;
-        var limit=1e19;
-        var shape=0u;
-        if (k==0u) {
-            if (frame.sun_color.w<=0.0) { continue; }
-            direction=normalize(frame.sun_dir.xyz);
-            if (frame.sun_dir.w<1.0) {
-                let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
-                let radius=sqrt(max(0.0,1.0-height*height));
-                let phi=2.0*PI*rnd(state,u.y);
-                direction=normalize(basis(direction)*vec3f(radius*cos(phi),radius*sin(phi),height));
-            }
-            strength=dot(frame.sun_color.xyz,vec3f(0.2126,0.7152,0.0722))*frame.sun_color.w*max(dot(direction,n),0.0);
-        } else if (k==1u) {
-            if (sky_cdf.width==0u) { continue; }
-            for (var j=0u;j<4u;j++) {
-                let light=sky_sample(vec2f(random(state),random(state)));
-                if (!(light.pdf>0.0)) { continue; }
-                let part=dot(sky_surface_radiance(light.direction),vec3f(0.2126,0.7152,0.0722))*max(dot(light.direction,n),0.0)/light.pdf*0.25;
-                if (!(part>0.0)) { continue; }
-                open+=part;
-                seen+=part*catcher_visible(origin,light.direction,1e19);
-            }
-            continue;
-        } else {
-            let picked=direct_light(k-2u,transform,p,origin,n,state,u);
-            if (picked.limit<0.0) { continue; }
-            direction=picked.direction;
-            limit=picked.limit;
-            shape=picked.shape;
-            strength=dot(picked.scale,vec3f(0.2126,0.7152,0.0722))*max(picked.wi.z,0.0)/select(1.0,picked.pdf,picked.pdf>0.0);
-        }
-        if (!(strength>0.0)) { continue; }
-        if (shape>0u) {
-            let i=shape-1u;
-            var hit_t=1e20;
-            if (u32(shapes[i].a.w)==5u) { hit_t=union_hit(i,origin,direction,1e20); } else { hit_t=primitive_hit(i,origin,direction,1e20); }
-            if (hit_t<=0.0001 || hit_t>=1e19) { continue; }
-            limit=hit_t*0.9999-0.0002;
-        }
-        open+=strength;
-        if (limit>0.0) { seen+=strength*catcher_visible(origin,direction,limit); } else { seen+=strength; }
-    }
-    if (open<=0.0) { return 0.0; }
-    return clamp(1.0-seen/open,0.0,1.0);
-}
 const INDIRECT_LUMA: vec3f = vec3f(0.2126,0.7152,0.0722);
 fn indirect_capped(value: vec3f, deep: bool) -> vec3f {
     if (!(CLAMP_INDIRECT>0.0) || !deep) { return value; }
@@ -1970,69 +1783,6 @@ fn fog_phase_sample(d: vec3f, g: f32, u: vec2f) -> vec4f {
     let phi=2.0*PI*u.y;
     return vec4f(normalize(basis(d)*vec3f(sine*cos(phi),sine*sin(phi),cosine)),fog_phase(cosine,g));
 }
-fn fog_lit(k: u32, index: u32, x: vec3f, d: vec3f, mis: bool, state: ptr<function,u32>, u: vec4f) -> vec3f {
-    let g=frame.fog_tint.w;
-    var direction=vec3f(0.0,0.0,1.0);
-    var strength=vec3f(0.0);
-    var limit=1e19;
-    var pdf=0.0;
-    var shape=0u;
-    if (k==0u) {
-        if (frame.sun_color.w<=0.0) { return vec3f(0.0); }
-        direction=normalize(frame.sun_dir.xyz);
-        if (frame.sun_dir.w<1.0) {
-            let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
-            let radius=sqrt(max(0.0,1.0-height*height));
-            let phi=2.0*PI*rnd(state,u.y);
-            direction=normalize(basis(direction)*vec3f(radius*cos(phi),radius*sin(phi),height));
-        }
-        strength=frame.sun_color.xyz*frame.sun_color.w;
-    } else if (k==1u) {
-        if (sky_cdf.width==0u) { return vec3f(0.0); }
-        let light=sky_sample(vec2f(rnd(state,u.x),rnd(state,u.y)));
-        direction=light.direction;
-        strength=sky_surface_radiance(direction);
-        pdf=light.pdf;
-        if (!(pdf>0.0)) { return vec3f(0.0); }
-    } else {
-        let transform=basis(d);
-        volume_vertex=true;
-        var picked: Candidate;
-        if (k==2u) { picked=direct_light(0u,transform,x,x,d,state,u); } else { picked=volume_light(index,transform,x,x,d,state,u); }
-        volume_vertex=false;
-        if (picked.limit<0.0) { return vec3f(0.0); }
-        direction=normalize(transform*picked.wi);
-        strength=picked.scale;
-        pdf=picked.pdf;
-        limit=picked.limit;
-        shape=picked.shape;
-    }
-    let phase=fog_phase(dot(d,direction),g);
-    if (pdf>0.0 && !mis) {
-        strength/=pdf;
-    } else if (pdf>0.0) {
-        if (k==1u) {
-            strength/=pdf+phase;
-        } else {
-            let ratio=phase/pdf;
-            strength/=pdf*(1.0+ratio*ratio);
-        }
-    }
-    if (shape>0u) {
-        let i=shape-1u;
-        var t=1e20;
-        if (u32(shapes[i].a.w)==5u) { t=union_hit(i,x,direction,1e20); } else { t=primitive_hit(i,x,direction,1e20); }
-        if (t<=0.0001 || t>=1e19) { return vec3f(0.0); }
-        limit=t*0.9999-0.0002;
-    }
-    var seen=vec3f(1.0);
-    if (limit>0.0) {
-        if (TRANSMISSIVE_SHADOWS) { seen=shadow_passed(x,direction,limit); } else if (occluded(x,direction,limit)) { seen=vec3f(0.0); }
-        seen*=fog_transmit(x,direction,limit);
-    }
-    if (k==0u) { seen=mix(vec3f(1.0),seen,frame.fog_light.x); }
-    return strength*phase*seen;
-}
 fn fog_importance(k: u32, p: vec3f, d: vec3f, t: f32) -> f32 {
     if (k==0u) { return select(0.0,dot(frame.sun_color.xyz,INDIRECT_LUMA)*frame.sun_color.w*t,frame.sun_color.w>0.0); }
     if (k==1u) { return select(0.0,max(sky_cdf.energy,0.0)*t,sky_cdf.width>0u); }
@@ -2090,34 +1840,6 @@ fn fog_point(o: vec3f, d: vec3f, span: vec2f, attenuation: f32, light: vec4f, u:
     }
     return vec2f(t,weight);
 }
-fn fog_direct(o: vec3f, d: vec3f, span: vec2f, attenuation: f32, mis: bool, state: ptr<function,u32>) -> vec3f {
-    var total=vec3f(0.0);
-    let albedo=frame.fog_tint.xyz;
-    let start=o+d*span.x;
-    let extent=span.y-span.x;
-    let picked=fog_pick(start,d,extent,rnd(state,sobol(FOG_DIM).y));
-    if (picked.x>=0.0) {
-        let k=u32(picked.x);
-        var chance=picked.y;
-        var index=0u;
-        var light=vec4f(0.0);
-        if (k>=2u) {
-            let local=segment_light(k-2u,start,d,extent,picked.z);
-            chance*=local.y;
-            index=u32(local.x);
-            light=vec4f(light_position(index),1.0);
-        }
-        let at=fog_point(o,d,span,attenuation,light,rnd(state,sobol(FOG_DIM+2u).x));
-        if (chance>0.0 && at.y>0.0) {
-            total+=albedo*(at.y/chance)*fog_lit(select(k,3u,k>=2u),index,o+d*at.x,d,mis,state,sobol(FOG_DIM+3u));
-        }
-    }
-    if (emitters_sampled()) {
-        let at=fog_point(o,d,span,attenuation,vec4f(0.0),rnd(state,sobol(FOG_DIM+4u).x));
-        if (at.y>0.0) { total+=albedo*at.y*fog_lit(2u,0u,o+d*at.x,d,mis,state,sobol(FOG_DIM+5u)); }
-    }
-    return total;
-}
 fn sprite_phase() -> f32 {
     return select(0.5,frame.fog_tint.w,TRACE_FOG);
 }
@@ -2131,14 +1853,37 @@ fn sprite_sample(d: vec3f, n: vec3f, thick: f32, u: vec3f) -> vec3f {
     let phi=2.0*PI*u.y;
     return normalize(basis(n)*vec3f(sine*cos(phi),sine*sin(phi),cosine));
 }
-fn sprite_lit(k: u32, x: vec3f, d: vec3f, n: vec3f, thick: f32, state: ptr<function,u32>, u: vec4f) -> vec3f {
+struct LightRay { o: vec3f, d: vec3f, limit: f32, value: vec3f, sun: bool }
+fn dark_ray() -> LightRay {
+    return LightRay(vec3f(0.0),vec3f(0.0,0.0,1.0),-1.0,vec3f(0.0),false);
+}
+fn light_query(light: LightRay, hidden: bool) -> Query {
+    if (!(light.limit>0.0)) { return no_query(); }
+    return Query(light.o,light.d,light.limit,shadow_mode(),hidden);
+}
+fn lit_seen(light: LightRay, passed: vec3f) -> vec3f {
+    var seen=vec3f(1.0);
+    if (light.limit>0.0) {
+        seen=passed;
+        if (TRACE_FOG) { seen*=fog_transmit(light.o,light.d,light.limit); }
+    }
+    if (light.sun && TRACE_FOG) { seen=mix(vec3f(1.0),seen,frame.fog_light.x); }
+    return light.value*seen;
+}
+fn shape_reach(shape: u32, o: vec3f, d: vec3f) -> f32 {
+    let t=shape_t(shape-1u,o,d,1e20);
+    if (t<=0.0001 || t>=1e19) { return -1.0; }
+    return t*0.9999-0.0002;
+}
+fn fog_ray(k: u32, index: u32, x: vec3f, d: vec3f, mis: bool, state: ptr<function,u32>, u: vec4f) -> LightRay {
+    let g=frame.fog_tint.w;
     var direction=vec3f(0.0,0.0,1.0);
     var strength=vec3f(0.0);
     var limit=1e19;
     var pdf=0.0;
     var shape=0u;
     if (k==0u) {
-        if (frame.sun_color.w<=0.0) { return vec3f(0.0); }
+        if (frame.sun_color.w<=0.0) { return dark_ray(); }
         direction=normalize(frame.sun_dir.xyz);
         if (frame.sun_dir.w<1.0) {
             let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
@@ -2148,18 +1893,71 @@ fn sprite_lit(k: u32, x: vec3f, d: vec3f, n: vec3f, thick: f32, state: ptr<funct
         }
         strength=frame.sun_color.xyz*frame.sun_color.w;
     } else if (k==1u) {
-        if (sky_cdf.width==0u) { return vec3f(0.0); }
+        if (sky_cdf.width==0u) { return dark_ray(); }
         let light=sky_sample(vec2f(rnd(state,u.x),rnd(state,u.y)));
         direction=light.direction;
         strength=sky_surface_radiance(direction);
         pdf=light.pdf;
-        if (!(pdf>0.0)) { return vec3f(0.0); }
+        if (!(pdf>0.0)) { return dark_ray(); }
+    } else {
+        let transform=basis(d);
+        volume_vertex=true;
+        var picked: Candidate;
+        if (k==2u) { picked=direct_light(0u,transform,x,x,d,state,u); } else { picked=volume_light(index,transform,x,x,d,state,u); }
+        volume_vertex=false;
+        if (picked.limit<0.0) { return dark_ray(); }
+        direction=normalize(transform*picked.wi);
+        strength=picked.scale;
+        pdf=picked.pdf;
+        limit=picked.limit;
+        shape=picked.shape;
+    }
+    let phase=fog_phase(dot(d,direction),g);
+    if (pdf>0.0 && !mis) {
+        strength/=pdf;
+    } else if (pdf>0.0) {
+        if (k==1u) {
+            strength/=pdf+phase;
+        } else {
+            let ratio=phase/pdf;
+            strength/=pdf*(1.0+ratio*ratio);
+        }
+    }
+    if (shape>0u) {
+        limit=shape_reach(shape,x,direction);
+        if (limit<=-1.0) { return dark_ray(); }
+    }
+    return LightRay(x,direction,limit,strength*phase,k==0u);
+}
+fn sprite_ray(k: u32, x: vec3f, d: vec3f, n: vec3f, thick: f32, state: ptr<function,u32>, u: vec4f) -> LightRay {
+    var direction=vec3f(0.0,0.0,1.0);
+    var strength=vec3f(0.0);
+    var limit=1e19;
+    var pdf=0.0;
+    var shape=0u;
+    if (k==0u) {
+        if (frame.sun_color.w<=0.0) { return dark_ray(); }
+        direction=normalize(frame.sun_dir.xyz);
+        if (frame.sun_dir.w<1.0) {
+            let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
+            let radius=sqrt(max(0.0,1.0-height*height));
+            let phi=2.0*PI*rnd(state,u.y);
+            direction=normalize(basis(direction)*vec3f(radius*cos(phi),radius*sin(phi),height));
+        }
+        strength=frame.sun_color.xyz*frame.sun_color.w;
+    } else if (k==1u) {
+        if (sky_cdf.width==0u) { return dark_ray(); }
+        let light=sky_sample(vec2f(rnd(state,u.x),rnd(state,u.y)));
+        direction=light.direction;
+        strength=sky_surface_radiance(direction);
+        pdf=light.pdf;
+        if (!(pdf>0.0)) { return dark_ray(); }
     } else {
         let transform=basis(n);
         volume_vertex=true;
         let picked=direct_light(k-2u,transform,x,x,n,state,u);
         volume_vertex=false;
-        if (picked.limit<0.0) { return vec3f(0.0); }
+        if (picked.limit<0.0) { return dark_ray(); }
         direction=normalize(transform*picked.wi);
         strength=picked.scale;
         pdf=picked.pdf;
@@ -2177,30 +1975,32 @@ fn sprite_lit(k: u32, x: vec3f, d: vec3f, n: vec3f, thick: f32, state: ptr<funct
     }
     let origin=spawn_point(x,direction,x,0.0);
     if (shape>0u) {
-        let i=shape-1u;
-        var t=1e20;
-        if (u32(shapes[i].a.w)==5u) { t=union_hit(i,origin,direction,1e20); } else { t=primitive_hit(i,origin,direction,1e20); }
-        if (t<=0.0001 || t>=1e19) { return vec3f(0.0); }
-        limit=t*0.9999-0.0002;
+        limit=shape_reach(shape,origin,direction);
+        if (limit<=-1.0) { return dark_ray(); }
     }
-    var seen=vec3f(1.0);
-    if (limit>0.0) {
-        sprites_hidden=true;
-        if (TRANSMISSIVE_SHADOWS) { seen=shadow_passed(origin,direction,limit); } else if (occluded(origin,direction,limit)) { seen=vec3f(0.0); }
-        sprites_hidden=false;
-        if (TRACE_FOG) { seen*=fog_transmit(origin,direction,limit); }
-    }
-    if (k==0u && TRACE_FOG) { seen=mix(vec3f(1.0),seen,frame.fog_light.x); }
-    return strength*lobe*seen;
+    return LightRay(origin,direction,limit,strength*lobe,k==0u);
 }
-fn sprite_direct(x: vec3f, d: vec3f, n: vec3f, thick: f32, state: ptr<function,u32>) -> vec3f {
-    var total=vec3f(0.0);
-    for (var k=0u;k<2u+light_slots();k++) {
-        total+=sprite_lit(k,x,d,n,thick,state,sobol(light_dim(k)));
-    }
-    return total;
+const STAGE_PATH: u32 = 0u;
+const STAGE_FOG: u32 = 1u;
+const STAGE_SCATTER: u32 = 2u;
+const STAGE_HIT: u32 = 3u;
+const STAGE_SPRITE: u32 = 4u;
+const STAGE_SPRITE_LIGHT: u32 = 5u;
+const STAGE_SPRITE_TAIL: u32 = 6u;
+const STAGE_CATCHER: u32 = 7u;
+const STAGE_SURFACE: u32 = 8u;
+const STAGE_LIGHT: u32 = 9u;
+const STAGE_BOUNCE: u32 = 10u;
+const STAGE_NEXT: u32 = 11u;
+const STAGE_END: u32 = 12u;
+const STAGE_STEAM: u32 = 13u;
+const STAGE_DONE: u32 = 14u;
+fn path_query(o: vec3f, d: vec3f, bounce: u32, passes: u32) -> Query {
+    if (SOBOL) { rng.z=16u*(bounce+1u); }
+    trace_count(select(COUNT_BOUNCE,COUNT_PRIMARY,bounce==0u && passes==0u));
+    return Query(o,d,1e20,QUERY_CLOSEST,false);
 }
-fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<function,vec4f>, first_normal: ptr<function,vec4f>) -> vec3f {
+fn path(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<function,vec4f>, first_normal: ptr<function,vec4f>, steamed: bool) -> vec3f {
     var o=o0;
     var d=d0;
     var throughput=vec3f(1.0);
@@ -2216,90 +2016,225 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
     var medium=false;
     var scatters=0u;
     var passes=0u;
-    for (var bounce=0u;bounce<=TOTAL_BOUNCES+1u;bounce++) {
-        if (SOBOL) { rng.z=16u*(bounce+1u); }
-        trace_count(select(COUNT_BOUNCE,COUNT_PRIMARY,bounce==0u && passes==0u));
-        let hit=scene(o,d,1e20,false);
-        let seen=TRANSMISSIVE_SHADOWS && through;
-        var reach=hit.t;
-        var scatter=-1.0;
-        var ends=false;
-        if (TRACE_FOG) {
-            let span=fog_span(o,d,hit.t);
-            if (span.y>span.x) {
-                let transmit=exp(-fog_depth(o,d,span.x,span.y));
-                let attenuation=1.0-transmit;
-                if (bounce==0u) { fog_albedo=frame.fog_tint.xyz*attenuation; }
-                if (last) {
-                    throughput*=transmit;
-                } else if (attenuation>0.0) {
-                    ends=scatters+1u>=u32(frame.fog_light.y);
-                    let keep=min(attenuation/FOG_LIGHT_FLOOR,1.0);
-                    if (keep>=1.0 || rnd(state,sobol(FOG_DIM).z)<keep) {
-                        result+=indirect_capped(throughput*fog_direct(o,d,span,attenuation,!ends,state),bounce>0u)/keep;
-                    }
-                    let r=rnd(state,sobol(FOG_DIM).x);
-                    if (r<attenuation) {
-                        scatter=fog_distance(o,d,span.x,span.y,-log(max(1.0-r,1e-30)));
-                        reach=scatter;
+    var bounce=0u;
+    var advance=1u;
+    var hit=empty_hit(1e20);
+    var depth=1e20;
+    var seen=false;
+    var reach=1e20;
+    var scatter=-1.0;
+    var ends=false;
+    var span=vec2f(0.0);
+    var attenuation=0.0;
+    var fog_keep=1.0;
+    var gathered=vec3f(0.0);
+    var step=0u;
+    var origin_point=o0;
+    var p=o0;
+    var n=vec3f(0.0,0.0,1.0);
+    var geometric=n;
+    var transform=basis(n);
+    var wo=n;
+    var origin=o0;
+    var entering=false;
+    var s: Shaded;
+    var k=0u;
+    var light=dark_ray();
+    var gain=vec3f(0.0);
+    var pending=false;
+    var sprite_keep=1.0;
+    var thick=0.0;
+    var sn=n;
+    var sprite_shown=false;
+    var catcher_open=0.0;
+    var catcher_seen=0.0;
+    var transmittance=1.0;
+    var scattered=vec3f(0.0);
+    var steam_enter=0.0;
+    var steam_dt=0.0;
+    var extinction=1.0;
+    var stage=STAGE_PATH;
+    var query=path_query(o,d,0u,0u);
+    loop {
+        var traced=Traced(empty_hit(query.limit),vec3f(1.0));
+        if (query.mode!=QUERY_NONE) {
+            sprites_hidden=query.hidden;
+            traced=traverse(query.o,query.d,query.limit,query.mode);
+            sprites_hidden=false;
+        }
+        query=no_query();
+        if (stage==STAGE_PATH) {
+            hit=traced.hit;
+            if (bounce==0u && passes==0u) { depth=hit.t; }
+            seen=TRANSMISSIVE_SHADOWS && through;
+            reach=hit.t;
+            scatter=-1.0;
+            ends=false;
+            stage=STAGE_HIT;
+            if (TRACE_FOG) {
+                span=fog_span(o,d,hit.t);
+                if (span.y>span.x) {
+                    let transmit=exp(-fog_depth(o,d,span.x,span.y));
+                    attenuation=1.0-transmit;
+                    if (bounce==0u) { fog_albedo=frame.fog_tint.xyz*attenuation; }
+                    if (last) {
+                        throughput*=transmit;
+                    } else if (attenuation>0.0) {
+                        ends=scatters+1u>=u32(frame.fog_light.y);
+                        fog_keep=min(attenuation/FOG_LIGHT_FLOOR,1.0);
+                        stage=STAGE_SCATTER;
+                        if (fog_keep>=1.0 || rnd(state,sobol(FOG_DIM).z)<fog_keep) {
+                            gathered=vec3f(0.0);
+                            step=0u;
+                            pending=false;
+                            stage=STAGE_FOG;
+                        }
                     }
                 }
             }
         }
-        let origin_point=select(spawn_point(o,-d,o,0.0),o,medium);
-        if (!seen) { result+=indirect_capped(throughput*light_hits(o,d,reach,origin_point,previous_pdf),bounce>1u); }
-        if (scatter>=0.0) {
-            let p=o+d*scatter;
-            if (bounce==0u) {
-                *first_albedo=vec4f(fog_albedo,1.0);
-                *first_normal=vec4f(-d,1.0);
+        if (stage==STAGE_FOG && query.mode==QUERY_NONE) {
+            if (pending) {
+                gathered+=gain*lit_seen(light,traced.passed);
+                pending=false;
             }
-            if (ends) { break; }
-            throughput*=frame.fog_tint.xyz;
-            let sample=fog_phase_sample(d,frame.fog_tint.w,vec2f(rnd(state,sobol(FOG_DIM+1u).x),rnd(state,sobol(FOG_DIM+1u).y)));
-            diffused=true;
-            lobes.x+=1u;
-            scatters+=1u;
-            last=bounce>=TOTAL_BOUNCES || lobes.x>DIFFUSE_BOUNCES || scatters>=u32(frame.fog_light.y);
-            through=false;
-            lit_vertex=true;
-            medium=true;
-            d=sample.xyz;
-            previous_pdf=sample.w;
-            o=p;
-            if (bounce>=3u) {
-                let keep=clamp(max(throughput.r,max(throughput.g,throughput.b)),0.05,0.95);
-                if (rnd(state,sobol(0u).x)>keep) { break; }
-                throughput/=keep;
+            loop {
+                if (step>=2u) {
+                    result+=indirect_capped(throughput*gathered,bounce>0u)/fog_keep;
+                    stage=STAGE_SCATTER;
+                    break;
+                }
+                let albedo=frame.fog_tint.xyz;
+                var lit=false;
+                var kind=2u;
+                var index=0u;
+                var x=o;
+                var u=vec4f(0.0);
+                if (step==0u) {
+                    let start=o+d*span.x;
+                    let extent=span.y-span.x;
+                    let picked=fog_pick(start,d,extent,rnd(state,sobol(FOG_DIM).y));
+                    if (picked.x>=0.0) {
+                        let pick=u32(picked.x);
+                        var chance=picked.y;
+                        var aim=vec4f(0.0);
+                        if (pick>=2u) {
+                            let local=segment_light(pick-2u,start,d,extent,picked.z);
+                            chance*=local.y;
+                            index=u32(local.x);
+                            aim=vec4f(light_position(index),1.0);
+                        }
+                        let at=fog_point(o,d,span,attenuation,aim,rnd(state,sobol(FOG_DIM+2u).x));
+                        if (chance>0.0 && at.y>0.0) {
+                            lit=true;
+                            kind=select(pick,3u,pick>=2u);
+                            x=o+d*at.x;
+                            gain=albedo*(at.y/chance);
+                            u=sobol(FOG_DIM+3u);
+                        }
+                    }
+                } else if (emitters_sampled()) {
+                    let at=fog_point(o,d,span,attenuation,vec4f(0.0),rnd(state,sobol(FOG_DIM+4u).x));
+                    if (at.y>0.0) {
+                        lit=true;
+                        x=o+d*at.x;
+                        gain=albedo*at.y;
+                        u=sobol(FOG_DIM+5u);
+                    }
+                }
+                step+=1u;
+                if (!lit) { continue; }
+                light=fog_ray(kind,index,x,d,!ends,state,u);
+                query=light_query(light,false);
+                if (query.mode!=QUERY_NONE) {
+                    pending=true;
+                    break;
+                }
+                gathered+=gain*lit_seen(light,vec3f(1.0));
             }
-            continue;
         }
-        if (hit.t>=1e19) {
-            if (TRACE_FOG && bounce==0u) { *first_albedo=vec4f(fog_albedo,0.0); }
-            if (bounce==0u && frame.forward.w>0.0) { break; }
-            if (seen && sky_cdf.width>0u) { break; }
-            let pdf=sky_pdf(d);
-            let weight=select(1.0,previous_pdf/(previous_pdf+pdf),bounce>0u && previous_pdf>0.0);
-            let environment=select(sky_seen(d,sky_radiance(d)),sky_surface_radiance(d),bounce>0u);
-            result+=indirect_capped(throughput*environment*weight,bounce>1u);
-            break;
+        if (stage==STAGE_SCATTER && query.mode==QUERY_NONE) {
+            let r=rnd(state,sobol(FOG_DIM).x);
+            if (r<attenuation) {
+                scatter=fog_distance(o,d,span.x,span.y,-log(max(1.0-r,1e-30)));
+                reach=scatter;
+            }
+            stage=STAGE_HIT;
         }
-        let p=o+d*hit.t;
-        if (TRACE_SPRITES && hit.shape==0u && (instance_surfaces[hit.record].info.x&SPRITE)!=0u) {
+        if (stage==STAGE_HIT && query.mode==QUERY_NONE) {
+            origin_point=select(spawn_point(o,-d,o,0.0),o,medium);
+            if (!seen) { result+=indirect_capped(throughput*light_hits(o,d,reach,origin_point,previous_pdf),bounce>1u); }
+            if (scatter>=0.0) {
+                let at=o+d*scatter;
+                if (bounce==0u) {
+                    *first_albedo=vec4f(fog_albedo,1.0);
+                    *first_normal=vec4f(-d,1.0);
+                }
+                stage=STAGE_END;
+                if (!ends) {
+                    throughput*=frame.fog_tint.xyz;
+                    let sample=fog_phase_sample(d,frame.fog_tint.w,vec2f(rnd(state,sobol(FOG_DIM+1u).x),rnd(state,sobol(FOG_DIM+1u).y)));
+                    diffused=true;
+                    lobes.x+=1u;
+                    scatters+=1u;
+                    last=bounce>=TOTAL_BOUNCES || lobes.x>DIFFUSE_BOUNCES || scatters>=u32(frame.fog_light.y);
+                    through=false;
+                    lit_vertex=true;
+                    medium=true;
+                    d=sample.xyz;
+                    previous_pdf=sample.w;
+                    o=at;
+                    advance=1u;
+                    stage=STAGE_NEXT;
+                }
+            } else if (hit.t>=1e19) {
+                if (TRACE_FOG && bounce==0u) { *first_albedo=vec4f(fog_albedo,0.0); }
+                stage=STAGE_END;
+                if (!(bounce==0u && frame.forward.w>0.0) && !(seen && sky_cdf.width>0u)) {
+                    let pdf=sky_pdf(d);
+                    let weight=select(1.0,previous_pdf/(previous_pdf+pdf),bounce>0u && previous_pdf>0.0);
+                    let environment=select(sky_seen(d,sky_radiance(d)),sky_surface_radiance(d),bounce>0u);
+                    result+=indirect_capped(throughput*environment*weight,bounce>1u);
+                }
+            } else {
+                p=o+d*hit.t;
+                pending=false;
+                if (TRACE_SPRITES && hit.shape==0u && (instance_surfaces[hit.record].info.x&SPRITE)!=0u) {
+                    let crop=instance_surfaces[hit.record].crop.z;
+                    sprite_keep=1.0;
+                    stage=STAGE_SPRITE;
+                    if (crop>0.0) {
+                        query=Query(p,d,crop,QUERY_CLOSEST,true);
+                        pending=true;
+                    }
+                } else {
+                    n=select(hit.n,-hit.n,dot(hit.n,d)>0.0);
+                    stage=STAGE_SURFACE;
+                    if (bounce==0u && frame.forward.w>1.5 && hit.material==u32(frame.forward.w)-2u) {
+                        transform=basis(n);
+                        origin=spawn_point(p,n,o,hit.t);
+                        catcher_open=0.0;
+                        catcher_seen=0.0;
+                        k=0u;
+                        step=0u;
+                        stage=STAGE_CATCHER;
+                    }
+                }
+            }
+        }
+        if (stage==STAGE_SPRITE && query.mode==QUERY_NONE) {
             let look=instance_surfaces[hit.record];
-            var keep=1.0;
-            if (look.crop.z>0.0) {
-                sprites_hidden=true;
-                let behind=scene(p,d,look.crop.z,false);
-                sprites_hidden=false;
-                keep=clamp(behind.t/look.crop.z,0.0,1.0);
+            if (pending) {
+                sprite_keep=clamp(traced.hit.t/look.crop.z,0.0,1.0);
+                pending=false;
             }
             let additive=look.crop.y>0.5;
-            let thick=look.transform.w*sprite_shape(hit.uv)*keep;
+            thick=look.transform.w*sprite_shape(hit.uv)*sprite_keep;
             let c=hit.uv*2.0-1.0;
-            let sn=normalize(hit.tangent*c.x+hit.bitangent*c.y-d*sqrt(max(1.0-dot(c,c),0.0)));
-            let shown=keep>=1.0 || alpha_hash(hit.surface^pcg(hit.record^0x27d4eb2du),o,d)<keep;
-            if (shown) {
+            sn=normalize(hit.tangent*c.x+hit.bitangent*c.y-d*sqrt(max(1.0-dot(c,c),0.0)));
+            sprite_shown=sprite_keep>=1.0 || alpha_hash(hit.surface^pcg(hit.record^0x27d4eb2du),o,d)<sprite_keep;
+            stage=STAGE_SPRITE_TAIL;
+            if (sprite_shown) {
                 let lit=look.crop.x>0.5;
                 if (bounce==0u && !additive) {
                     *first_albedo=vec4f(select(vec3f(0.0),look.transform.xyz,lit),1.0);
@@ -2308,249 +2243,423 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                 if (!lit) {
                     result+=indirect_capped(throughput*look.transform.xyz,bounce>1u);
                 } else if (!last) {
-                    result+=indirect_capped(throughput*look.transform.xyz*sprite_direct(p,d,sn,thick,state),bounce>0u);
+                    k=0u;
+                    gathered=vec3f(0.0);
+                    stage=STAGE_SPRITE_LIGHT;
                 }
-                if (!additive) {
-                    if (!lit || last) { break; }
+            }
+        }
+        if (stage==STAGE_SPRITE_LIGHT && query.mode==QUERY_NONE) {
+            if (pending) {
+                gathered+=lit_seen(light,traced.passed);
+                pending=false;
+            }
+            loop {
+                if (k>=2u+light_slots()) {
+                    result+=indirect_capped(throughput*instance_surfaces[hit.record].transform.xyz*gathered,bounce>0u);
+                    stage=STAGE_SPRITE_TAIL;
+                    break;
+                }
+                light=sprite_ray(k,p,d,sn,thick,state,sobol(light_dim(k)));
+                k+=1u;
+                query=light_query(light,true);
+                if (query.mode!=QUERY_NONE) {
+                    pending=true;
+                    break;
+                }
+                gathered+=lit_seen(light,vec3f(1.0));
+            }
+        }
+        if (stage==STAGE_SPRITE_TAIL && query.mode==QUERY_NONE) {
+            let look=instance_surfaces[hit.record];
+            stage=STAGE_END;
+            if (sprite_shown && !(look.crop.y>0.5)) {
+                if (look.crop.x>0.5 && !last) {
                     let u=sobol(3u);
                     let wi=sprite_sample(d,sn,thick,vec3f(rnd(state,u.x),rnd(state,u.y),rnd(state,u.z)));
                     throughput*=look.transform.xyz;
                     previous_pdf=sprite_lobe(d,sn,wi,thick);
-                    if (!(previous_pdf>0.0)) { break; }
-                    diffused=true;
-                    lobes.x+=1u;
-                    last=bounce>=TOTAL_BOUNCES || lobes.x>DIFFUSE_BOUNCES;
-                    through=false;
-                    lit_vertex=true;
-                    medium=false;
-                    d=wi;
-                    o=spawn_point(p,d,o,hit.t);
-                    if (bounce>=3u) {
-                        let keep=clamp(max(throughput.r,max(throughput.g,throughput.b)),0.05,0.95);
-                        if (rnd(state,sobol(0u).x)>keep) { break; }
-                        throughput/=keep;
-                    }
-                    continue;
-                }
-            }
-            passes+=1u;
-            if (passes>=SPRITE_PASSES) { break; }
-            o=spawn_point(p,d,o,hit.t);
-            bounce-=1u;
-            continue;
-        }
-        var n=select(hit.n,-hit.n,dot(hit.n,d)>0.0);
-        if (bounce==0u && frame.forward.w>1.5 && hit.material==u32(frame.forward.w)-2u) {
-            *first_albedo=vec4f(0.0,0.0,0.0,catcher_shadow(p,n,o,hit.t,state));
-            *first_normal=vec4f(n,1.0);
-            break;
-        }
-        let m=material_at(hit.material);
-        var s=surface(m);
-        let flags=extension_flags(m);
-        traced_thin=TRACE_THIN && (flags&EXTENSION_THIN)!=0u;
-        let layered=flags&EXTENSION_LAYERS;
-        if (layered>0u) {
-            let first=extension_layers(m);
-            for (var i=0u;i<layered;i++) {
-                let at=first+i*5u;
-                let detailed=detail_layer(s,n,materials[at],materials[at+1u],materials[at+2u],materials[at+3u],materials[at+4u],p,hit.uv);
-                s=detailed.shade;
-                n=detailed.normal;
-            }
-        }
-        traced_occlusion=1.0;
-        traced_direction=vec3f(1.0,0.0,1.0);
-        if (TRACE_MAPS && (flags&EXTENSION_MAPS)!=0u) {
-            let textured=traced_maps(s,n,material_maps(m),hit,p);
-            s=textured.shade;
-            n=textured.normal;
-        }
-        let geometric=select(hit.geometric,-hit.geometric,dot(hit.geometric,d)>0.0);
-        if (dot(n,geometric)<0.05) { n=normalize(n+geometric*0.1); }
-        var layer=content_layers[hit.material];
-        var shown=true;
-        if (hit.shape==0u) {
-            let word=instance_surfaces[hit.record].info.x;
-            layer=hit_layer(word,hit.material);
-            let face=(word>>3u)&3u;
-            let front=dot(hit.geometric,d)<0.0;
-            shown=face==0u || (face==1u && front) || (face==2u && !front);
-        }
-        let slot=i32(round(layer.layer.x));
-        if (slot>=0 && shown) {
-            let surface_data=instance_surfaces[hit.record];
-            let at=content_uv(hit.uv,surface_data.transform);
-            if (content_inside(at,surface_data.crop)) {
-                let texel=content_at(slot,at);
-                let blend=u32(round(layer.layer.y));
-                s=content_composite(s,blend,texel,layer.layer.z,layer.extra.x);
-                if (layer.layer.w!=0.0) {
-                    let info=content_info[u32(slot)];
-                    if (info.width>0u && info.height>0u) {
-                        let tangent=normalize(hit.tangent-n*dot(hit.tangent,n));
-                        let bitangent=normalize(hit.bitangent-n*dot(hit.bitangent,n));
-                        let step=vec2f(1.5/f32(info.width),1.5/f32(info.height));
-                        let gx=content_at(slot,at+vec2f(step.x,0.0)).a-content_at(slot,at-vec2f(step.x,0.0)).a;
-                        let gy=content_at(slot,at+vec2f(0.0,step.y)).a-content_at(slot,at-vec2f(0.0,step.y)).a;
-                        n=content_emboss(n,tangent,bitangent,vec2f(gx,gy),layer.layer.w);
-                        let geometric=select(hit.geometric,-hit.geometric,dot(hit.geometric,d)>0.0);
-                        if (dot(n,geometric)<0.05) { n=normalize(n+geometric*0.1); }
+                    if (previous_pdf>0.0) {
+                        diffused=true;
+                        lobes.x+=1u;
+                        last=bounce>=TOTAL_BOUNCES || lobes.x>DIFFUSE_BOUNCES;
+                        through=false;
+                        lit_vertex=true;
+                        medium=false;
+                        d=wi;
+                        o=spawn_point(p,d,o,hit.t);
+                        advance=1u;
+                        stage=STAGE_NEXT;
                     }
                 }
-            }
-        }
-        if (TRACE_WET && wet_active(m.wet)) {
-            let soaked=wet_soak(s,n,geometric,p,m.wet,0.0);
-            s=soaked.shade;
-            n=soaked.normal;
-        }
-        traced_flaked=false;
-        if (TRACE_FLAKES && (flags&EXTENSION_FLAKES)!=0u) {
-            let at=extension_flakes(m);
-            let flake=flake_normal(p,n,materials[at]);
-            if (flake.w>0.5) {
-                traced_flaked=true;
-                traced_flake=flake.xyz;
-                let tint=materials[at+1u].xyz;
-                let coat=s.clearcoat;
-                let coat_roughness=s.clearcoat_roughness;
-                s=flake_facet(s,tint);
-                s.roughness=materials[at].w;
-                s.clearcoat=coat;
-                s.clearcoat_roughness=coat_roughness;
-            }
-        }
-        s.roughness=max(s.roughness,ROUGHNESS_FLOOR);
-        s.clearcoat_roughness=max(s.clearcoat_roughness,ROUGHNESS_FLOOR);
-        if (FILTER_GLOSSY>0.0 && diffused) {
-            s.roughness=max(s.roughness,FILTER_GLOSSY);
-            s.clearcoat_roughness=max(s.clearcoat_roughness,FILTER_GLOSSY);
-        }
-        if (bounce==0u) {
-            *first_albedo=vec4f(select(s.base,s.base+fog_albedo,TRACE_FOG),1.0);
-            *first_normal=vec4f(n,1.0);
-        }
-        s.emission*=emitter_weight(hit,p,origin_point,previous_pdf);
-        if (seen && sampled_emitter(hit)) { s.emission=vec3f(0.0); }
-        result+=indirect_capped(throughput*s.emission,bounce>1u);
-        if (last) { break; }
-        let transform=basis(n);
-        if (TRACE_FLAKES && traced_flaked) { traced_flake=transpose(transform)*traced_flake; }
-        if (TRACE_LOBES) { lobes_traced(material_lobes(m),transform,hit,n); }
-        let wo=transpose(transform)*(-d);
-        let origin=spawn_point(p,n,o,hit.t);
-        let entering=dot(hit.n,d)<0.0;
-        for (var k=0u;k<2u+light_slots();k++) {
-            let u=sobol(light_dim(k));
-            var local=vec3f(0.0,0.0,1.0);
-            var direction=vec3f(0.0,0.0,1.0);
-            var strength=vec3f(0.0);
-            var limit=1e19;
-            var shape=0u;
-            var pdf=0.0;
-            var lit=s;
-            if (k==0u) {
-                if (frame.sun_color.w<=0.0) { continue; }
-                direction=normalize(frame.sun_dir.xyz);
-                if (frame.sun_dir.w<1.0) {
-                    let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
-                    let radius=sqrt(max(0.0,1.0-height*height));
-                    let phi=2.0*PI*rnd(state,u.y);
-                    let orient=basis(direction);
-                    direction=normalize(orient*vec3f(radius*cos(phi),radius*sin(phi),height));
-                }
-                local=transpose(transform)*direction;
-                if (local.z<=0.0 && local.z<=-scatter_reach()) { continue; }
-                if (local.z<=0.0) { direction=normalize(direction-n*dot(direction,n)+n*0.25); }
-                var shade=1.0;
-                if (bounce==0u && effects().base_roughness.y>0.0) { shade=canopy(p); }
-                strength=frame.sun_color.xyz*(frame.sun_color.w*shade);
-            } else if (k==1u) {
-                if (sky_cdf.width==0u) { continue; }
-                let light=sky_sample(vec2f(rnd(state,u.x),rnd(state,u.y)));
-                direction=light.direction;
-                local=transpose(transform)*direction;
-                if (local.z<=0.0) { continue; }
-                strength=sky_surface_radiance(direction)*traced_occlusion;
-                pdf=light.pdf;
-                if (!(pdf>0.0)) { continue; }
             } else {
-                let picked=direct_light(k-2u,transform,p,origin,geometric,state,u);
-                if (picked.limit<0.0) { continue; }
-                local=picked.wi;
-                direction=picked.direction;
-                strength=picked.scale;
-                pdf=picked.pdf;
-                limit=picked.limit;
-                shape=picked.shape;
-                lit.roughness=max(s.roughness,picked.roughness);
-            }
-            if (pdf>0.0) {
-                let bsdf=bsdf_pdf(s,wo,local);
-                if (k==1u) {
-                    strength/=pdf+bsdf;
-                } else {
-                    let ratio=bsdf/pdf;
-                    strength/=pdf*(1.0+ratio*ratio);
+                passes+=1u;
+                if (passes<SPRITE_PASSES) {
+                    o=spawn_point(p,d,o,hit.t);
+                    advance=0u;
+                    stage=STAGE_NEXT;
                 }
             }
-            if (shape>0u) {
-                let i=shape-1u;
-                var t=1e20;
-                if (u32(shapes[i].a.w)==5u) { t=union_hit(i,origin,direction,1e20); } else { t=primitive_hit(i,origin,direction,1e20); }
-                if (t<=0.0001 || t>=1e19) { continue; }
-                limit=t*0.9999-0.0002;
+        }
+        if (stage==STAGE_CATCHER && query.mode==QUERY_NONE) {
+            if (pending) {
+                catcher_seen+=gain.x*select(traced.passed.x,dot(traced.passed,vec3f(0.2126,0.7152,0.0722)),TRANSMISSIVE_SHADOWS);
+                pending=false;
             }
-            if (TRACE_FOG && limit>0.0) { strength*=fog_transmit(origin,direction,limit); }
-            if (limit>0.0) {
+            loop {
+                if (k>=2u+light_slots()) {
+                    var shade=0.0;
+                    if (catcher_open>0.0) { shade=clamp(1.0-catcher_seen/catcher_open,0.0,1.0); }
+                    *first_albedo=vec4f(0.0,0.0,0.0,shade);
+                    *first_normal=vec4f(n,1.0);
+                    stage=STAGE_END;
+                    break;
+                }
+                if (k==1u) {
+                    if (sky_cdf.width==0u || step>=4u) {
+                        k+=1u;
+                        continue;
+                    }
+                    step+=1u;
+                    let sky=sky_sample(vec2f(random(state),random(state)));
+                    if (!(sky.pdf>0.0)) { continue; }
+                    let part=dot(sky_surface_radiance(sky.direction),vec3f(0.2126,0.7152,0.0722))*max(dot(sky.direction,n),0.0)/sky.pdf*0.25;
+                    if (!(part>0.0)) { continue; }
+                    catcher_open+=part;
+                    gain=vec3f(part);
+                    query=Query(origin,sky.direction,1e19,shadow_mode(),false);
+                    pending=true;
+                    break;
+                }
+                let u=sobol(light_dim(k));
+                let kk=k;
+                k+=1u;
+                var direction=vec3f(0.0,0.0,1.0);
+                var strength=0.0;
+                var limit=1e19;
+                var shape=0u;
+                if (kk==0u) {
+                    if (frame.sun_color.w<=0.0) { continue; }
+                    direction=normalize(frame.sun_dir.xyz);
+                    if (frame.sun_dir.w<1.0) {
+                        let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
+                        let radius=sqrt(max(0.0,1.0-height*height));
+                        let phi=2.0*PI*rnd(state,u.y);
+                        direction=normalize(basis(direction)*vec3f(radius*cos(phi),radius*sin(phi),height));
+                    }
+                    strength=dot(frame.sun_color.xyz,vec3f(0.2126,0.7152,0.0722))*frame.sun_color.w*max(dot(direction,n),0.0);
+                } else {
+                    let picked=direct_light(kk-2u,transform,p,origin,n,state,u);
+                    if (picked.limit<0.0) { continue; }
+                    direction=picked.direction;
+                    limit=picked.limit;
+                    shape=picked.shape;
+                    strength=dot(picked.scale,vec3f(0.2126,0.7152,0.0722))*max(picked.wi.z,0.0)/select(1.0,picked.pdf,picked.pdf>0.0);
+                }
+                if (!(strength>0.0)) { continue; }
+                if (shape>0u) {
+                    limit=shape_reach(shape,origin,direction);
+                    if (limit<=-1.0) { continue; }
+                }
+                catcher_open+=strength;
+                if (limit>0.0) {
+                    gain=vec3f(strength);
+                    query=Query(origin,direction,limit,shadow_mode(),false);
+                    pending=true;
+                    break;
+                }
+                catcher_seen+=strength;
+            }
+        }
+        if (stage==STAGE_SURFACE && query.mode==QUERY_NONE) {
+            let m=material_at(hit.material);
+            s=surface(m);
+            let flags=extension_flags(m);
+            traced_thin=TRACE_THIN && (flags&EXTENSION_THIN)!=0u;
+            let layered=flags&EXTENSION_LAYERS;
+            if (layered>0u) {
+                let first=extension_layers(m);
+                for (var i=0u;i<layered;i++) {
+                    let at=first+i*5u;
+                    let detailed=detail_layer(s,n,materials[at],materials[at+1u],materials[at+2u],materials[at+3u],materials[at+4u],p,hit.uv);
+                    s=detailed.shade;
+                    n=detailed.normal;
+                }
+            }
+            traced_occlusion=1.0;
+            traced_direction=vec3f(1.0,0.0,1.0);
+            if (TRACE_MAPS && (flags&EXTENSION_MAPS)!=0u) {
+                let textured=traced_maps(s,n,material_maps(m),hit,p);
+                s=textured.shade;
+                n=textured.normal;
+            }
+            geometric=select(hit.geometric,-hit.geometric,dot(hit.geometric,d)>0.0);
+            if (dot(n,geometric)<0.05) { n=normalize(n+geometric*0.1); }
+            var layer=content_layers[hit.material];
+            var face_shown=true;
+            if (hit.shape==0u) {
+                let word=instance_surfaces[hit.record].info.x;
+                layer=hit_layer(word,hit.material);
+                let face=(word>>3u)&3u;
+                let front=dot(hit.geometric,d)<0.0;
+                face_shown=face==0u || (face==1u && front) || (face==2u && !front);
+            }
+            let slot=i32(round(layer.layer.x));
+            if (slot>=0 && face_shown) {
+                let surface_data=instance_surfaces[hit.record];
+                let at=content_uv(hit.uv,surface_data.transform);
+                if (content_inside(at,surface_data.crop)) {
+                    let texel=content_at(slot,at);
+                    let blend=u32(round(layer.layer.y));
+                    s=content_composite(s,blend,texel,layer.layer.z,layer.extra.x);
+                    if (layer.layer.w!=0.0) {
+                        let info=content_info[u32(slot)];
+                        if (info.width>0u && info.height>0u) {
+                            let tangent=normalize(hit.tangent-n*dot(hit.tangent,n));
+                            let bitangent=normalize(hit.bitangent-n*dot(hit.bitangent,n));
+                            let step=vec2f(1.5/f32(info.width),1.5/f32(info.height));
+                            let gx=content_at(slot,at+vec2f(step.x,0.0)).a-content_at(slot,at-vec2f(step.x,0.0)).a;
+                            let gy=content_at(slot,at+vec2f(0.0,step.y)).a-content_at(slot,at-vec2f(0.0,step.y)).a;
+                            n=content_emboss(n,tangent,bitangent,vec2f(gx,gy),layer.layer.w);
+                            let geometric=select(hit.geometric,-hit.geometric,dot(hit.geometric,d)>0.0);
+                            if (dot(n,geometric)<0.05) { n=normalize(n+geometric*0.1); }
+                        }
+                    }
+                }
+            }
+            if (TRACE_WET && wet_active(m.wet)) {
+                let soaked=wet_soak(s,n,geometric,p,m.wet,0.0);
+                s=soaked.shade;
+                n=soaked.normal;
+            }
+            traced_flaked=false;
+            if (TRACE_FLAKES && (flags&EXTENSION_FLAKES)!=0u) {
+                let at=extension_flakes(m);
+                let flake=flake_normal(p,n,materials[at]);
+                if (flake.w>0.5) {
+                    traced_flaked=true;
+                    traced_flake=flake.xyz;
+                    let tint=materials[at+1u].xyz;
+                    let coat=s.clearcoat;
+                    let coat_roughness=s.clearcoat_roughness;
+                    s=flake_facet(s,tint);
+                    s.roughness=materials[at].w;
+                    s.clearcoat=coat;
+                    s.clearcoat_roughness=coat_roughness;
+                }
+            }
+            s.roughness=max(s.roughness,ROUGHNESS_FLOOR);
+            s.clearcoat_roughness=max(s.clearcoat_roughness,ROUGHNESS_FLOOR);
+            if (FILTER_GLOSSY>0.0 && diffused) {
+                s.roughness=max(s.roughness,FILTER_GLOSSY);
+                s.clearcoat_roughness=max(s.clearcoat_roughness,FILTER_GLOSSY);
+            }
+            if (bounce==0u) {
+                *first_albedo=vec4f(select(s.base,s.base+fog_albedo,TRACE_FOG),1.0);
+                *first_normal=vec4f(n,1.0);
+            }
+            s.emission*=emitter_weight(hit,p,origin_point,previous_pdf);
+            if (seen && sampled_emitter(hit)) { s.emission=vec3f(0.0); }
+            result+=indirect_capped(throughput*s.emission,bounce>1u);
+            stage=STAGE_END;
+            if (!last) {
+                transform=basis(n);
+                if (TRACE_FLAKES && traced_flaked) { traced_flake=transpose(transform)*traced_flake; }
+                if (TRACE_LOBES) { lobes_traced(material_lobes(m),transform,hit,n); }
+                wo=transpose(transform)*(-d);
+                origin=spawn_point(p,n,o,hit.t);
+                entering=dot(hit.n,d)<0.0;
+                k=0u;
+                stage=STAGE_LIGHT;
+            }
+        }
+        if (stage==STAGE_LIGHT && query.mode==QUERY_NONE) {
+            if (pending) {
                 if (TRANSMISSIVE_SHADOWS) {
-                    var unshadowed=throughput*traced_eval(lit,wo,local)*select(1.0,glossy_share(s),pdf>0.0)*local.z*strength;
-                    let reach=throughput*strength;
-                    let keep=clamp(16.0*PI*max(unshadowed.r,max(unshadowed.g,unshadowed.b))/max(max(reach.r,max(reach.g,reach.b)),1e-30),0.0,1.0);
-                    if (keep<1.0) {
-                        if (rnd(state,u.w)>=keep) { continue; }
-                        unshadowed/=keep;
+                    result+=indirect_capped(gain*traced.passed,bounce>0u);
+                } else if (traced.passed.x>0.0) {
+                    result+=indirect_capped(gain,bounce>0u);
+                }
+                pending=false;
+            }
+            loop {
+                if (k>=2u+light_slots()) {
+                    stage=STAGE_BOUNCE;
+                    break;
+                }
+                let u=sobol(light_dim(k));
+                let kk=k;
+                k+=1u;
+                var local=vec3f(0.0,0.0,1.0);
+                var direction=vec3f(0.0,0.0,1.0);
+                var strength=vec3f(0.0);
+                var limit=1e19;
+                var shape=0u;
+                var pdf=0.0;
+                var lit=s;
+                if (kk==0u) {
+                    if (frame.sun_color.w<=0.0) { continue; }
+                    direction=normalize(frame.sun_dir.xyz);
+                    if (frame.sun_dir.w<1.0) {
+                        let height=1.0-rnd(state,u.x)*(1.0-frame.sun_dir.w);
+                        let radius=sqrt(max(0.0,1.0-height*height));
+                        let phi=2.0*PI*rnd(state,u.y);
+                        let orient=basis(direction);
+                        direction=normalize(orient*vec3f(radius*cos(phi),radius*sin(phi),height));
+                    }
+                    local=transpose(transform)*direction;
+                    if (local.z<=0.0 && local.z<=-scatter_reach()) { continue; }
+                    if (local.z<=0.0) { direction=normalize(direction-n*dot(direction,n)+n*0.25); }
+                    var shade=1.0;
+                    if (bounce==0u && effects().base_roughness.y>0.0) { shade=canopy(p); }
+                    strength=frame.sun_color.xyz*(frame.sun_color.w*shade);
+                } else if (kk==1u) {
+                    if (sky_cdf.width==0u) { continue; }
+                    let light=sky_sample(vec2f(rnd(state,u.x),rnd(state,u.y)));
+                    direction=light.direction;
+                    local=transpose(transform)*direction;
+                    if (local.z<=0.0) { continue; }
+                    strength=sky_surface_radiance(direction)*traced_occlusion;
+                    pdf=light.pdf;
+                    if (!(pdf>0.0)) { continue; }
+                } else {
+                    let picked=direct_light(kk-2u,transform,p,origin,geometric,state,u);
+                    if (picked.limit<0.0) { continue; }
+                    local=picked.wi;
+                    direction=picked.direction;
+                    strength=picked.scale;
+                    pdf=picked.pdf;
+                    limit=picked.limit;
+                    shape=picked.shape;
+                    lit.roughness=max(s.roughness,picked.roughness);
+                }
+                if (pdf>0.0) {
+                    let bsdf=bsdf_pdf(s,wo,local);
+                    if (kk==1u) {
+                        strength/=pdf+bsdf;
+                    } else {
+                        let ratio=bsdf/pdf;
+                        strength/=pdf*(1.0+ratio*ratio);
+                    }
+                }
+                if (shape>0u) {
+                    limit=shape_reach(shape,origin,direction);
+                    if (limit<=-1.0) { continue; }
+                }
+                if (TRACE_FOG && limit>0.0) { strength*=fog_transmit(origin,direction,limit); }
+                var value=throughput*traced_eval(lit,wo,local)*select(1.0,glossy_share(s),pdf>0.0)*local.z*strength;
+                if (limit>0.0) {
+                    if (TRANSMISSIVE_SHADOWS) {
+                        let bound=throughput*strength;
+                        let chance=clamp(16.0*PI*max(value.r,max(value.g,value.b))/max(max(bound.r,max(bound.g,bound.b)),1e-30),0.0,1.0);
+                        if (chance<1.0) {
+                            if (rnd(state,u.w)>=chance) { continue; }
+                            value/=chance;
+                        }
                     }
                     trace_count(COUNT_SURFACE_SHADOW);
-                    result+=indirect_capped(unshadowed*shadow_passed(origin,direction,limit),bounce>0u);
-                    continue;
+                    gain=value;
+                    query=Query(origin,direction,limit,shadow_mode(),false);
+                    pending=true;
+                    break;
                 }
-                trace_count(COUNT_SURFACE_SHADOW);
-                if (occluded(origin,direction,limit)) { continue; }
+                result+=indirect_capped(value,bounce>0u);
             }
-            result+=indirect_capped(throughput*traced_eval(lit,wo,local)*select(1.0,glossy_share(s),pdf>0.0)*local.z*strength,bounce>0u);
         }
-        let sample=sample_bsdf(s,wo,entering,carried,state,sobol(3u));
-        let wi=sample.dir;
-        diffused=diffused || sample.lobe==0u;
-        lobes+=vec3u(select(0u,1u,sample.lobe==0u),select(0u,1u,sample.lobe==1u),select(0u,1u,sample.lobe==2u));
-        last=bounce>=TOTAL_BOUNCES || any(lobes>vec3u(DIFFUSE_BOUNCES,GLOSSY_BOUNCES,TRANSMISSION_BOUNCES));
-        through=sample.pdf< -1.5 && lit_vertex;
-        lit_vertex=sample.pdf>0.0 || through;
-        if (sample.pdf<0.0) {
-            throughput*=sample.weight;
-            carried=sample.channel;
-            if (sample.pdf< -1.5) {
-                throughput*=sqrt(clamp(s.base,vec3f(0.0),vec3f(1.0)))*beer(s.thickness,s.subsurface_tint,s.absorption);
+        if (stage==STAGE_BOUNCE && query.mode==QUERY_NONE) {
+            let sample=sample_bsdf(s,wo,entering,carried,state,sobol(3u));
+            let wi=sample.dir;
+            diffused=diffused || sample.lobe==0u;
+            lobes+=vec3u(select(0u,1u,sample.lobe==0u),select(0u,1u,sample.lobe==1u),select(0u,1u,sample.lobe==2u));
+            last=bounce>=TOTAL_BOUNCES || any(lobes>vec3u(DIFFUSE_BOUNCES,GLOSSY_BOUNCES,TRANSMISSION_BOUNCES));
+            through=sample.pdf< -1.5 && lit_vertex;
+            lit_vertex=sample.pdf>0.0 || through;
+            stage=STAGE_NEXT;
+            advance=1u;
+            if (sample.pdf<0.0) {
+                throughput*=sample.weight;
+                carried=sample.channel;
+                if (sample.pdf< -1.5) {
+                    throughput*=sqrt(clamp(s.base,vec3f(0.0),vec3f(1.0)))*beer(s.thickness,s.subsurface_tint,s.absorption);
+                }
+                d=normalize(transform*wi);
+                previous_pdf=0.0;
+            } else if (wi.z<=0.0 || sample.pdf<=0.0) {
+                stage=STAGE_END;
+            } else {
+                throughput*=eval_bounce(s,wo,wi)*glossy_share(s)*wi.z/sample.pdf*traced_occlusion;
+                d=normalize(transform*wi);
+                previous_pdf=sample.pdf;
             }
-            d=normalize(transform*wi);
-            previous_pdf=0.0;
-        } else {
-            if (wi.z<=0.0 || sample.pdf<=0.0) { break; }
-            throughput*=eval_bounce(s,wo,wi)*glossy_share(s)*wi.z/sample.pdf*traced_occlusion;
-            d=normalize(transform*wi);
-            previous_pdf=sample.pdf;
+            if (stage==STAGE_NEXT) {
+                o=spawn_point(p,d,o,hit.t);
+                medium=false;
+            }
         }
-        o=spawn_point(p,d,o,hit.t);
-        medium=false;
-        if (bounce>=3u) {
-            let keep=clamp(max(throughput.r,max(throughput.g,throughput.b)),0.05,0.95);
-            if (rnd(state,sobol(0u).x)>keep) { break; }
-            throughput/=keep;
+        if (stage==STAGE_NEXT && query.mode==QUERY_NONE) {
+            stage=STAGE_END;
+            var alive=true;
+            if (advance==1u && bounce>=3u) {
+                let chance=clamp(max(throughput.r,max(throughput.g,throughput.b)),0.05,0.95);
+                if (rnd(state,sobol(0u).x)>chance) { alive=false; } else { throughput/=chance; }
+            }
+            if (alive && bounce+advance<=TOTAL_BOUNCES+1u) {
+                bounce+=advance;
+                query=path_query(o,d,bounce,passes);
+                stage=STAGE_PATH;
+            }
         }
+        if (stage==STAGE_END && query.mode==QUERY_NONE) {
+            stage=STAGE_DONE;
+            if (steamed && effects().thick_sub_film.w>0.0) {
+                let inv=1.0/select(d0,sign(d0)*vec3f(1e-8),abs(d0)<vec3f(1e-8));
+                let t0=(effects().thick_sub_film.xyz-o0)*inv;
+                let t1=(effects().tint_absorption.xyz-o0)*inv;
+                steam_enter=max(max(min(t0.x,t1.x),min(t0.y,t1.y)),max(min(t0.z,t1.z),0.0));
+                let leave=min(min(max(t0.x,t1.x),max(t0.y,t1.y)),min(max(t0.z,t1.z),depth));
+                if (steam_enter<leave) {
+                    steam_dt=(leave-steam_enter)/20.0;
+                    transmittance=1.0;
+                    scattered=vec3f(0.0);
+                    k=0u;
+                    pending=false;
+                    stage=STAGE_STEAM;
+                }
+            }
+        }
+        if (stage==STAGE_STEAM && query.mode==QUERY_NONE) {
+            let sun=normalize(frame.sun_dir.xyz);
+            if (pending) {
+                let g=effects().metal_spec_coat.w;
+                let phase=(1.0-g*g)/pow(1.0+g*g-2.0*g*dot(d0,sun),1.5);
+                let lit=frame.sun_color.xyz*frame.sun_color.w*traced.passed.x*phase;
+                scattered+=transmittance*(lit+vec3f(effects().tint_absorption.w))*(1.0-extinction)*0.85;
+                transmittance*=extinction;
+                pending=false;
+            }
+            loop {
+                if (k>=20u) {
+                    result=scattered+transmittance*result;
+                    stage=STAGE_DONE;
+                    break;
+                }
+                let at=o0+d0*(steam_enter+(f32(k)+0.5)*steam_dt);
+                k+=1u;
+                let density=steam_density(at);
+                if (density>1e-4) {
+                    extinction=exp(-density*90.0*steam_dt);
+                    query=Query(spawn_point(at,sun,at,0.0),sun,1e19,QUERY_OCCLUDED,false);
+                    pending=true;
+                    break;
+                }
+            }
+        }
+        if (stage==STAGE_DONE) { break; }
     }
     return result;
+}
+fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<function,vec4f>, first_normal: ptr<function,vec4f>) -> vec3f {
+    return path(o0,d0,state,first_albedo,first_normal,false);
 }
 @compute @workgroup_size(8,8)
 fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_id) local: vec3u) {
@@ -2612,12 +2721,7 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_id) local
             origin+=normalize(cam_right)*(radius*cos(phi))+normalize(cam_up)*(radius*sin(phi));
             direction=normalize(focus-origin);
         }
-        let traced=radiance(origin,direction,&state,&first_albedo,&first_normal);
-        var value=traced;
-        if (effects().thick_sub_film.w>0.0) {
-            let depth=scene(origin,direction,1e20,false).t;
-            value=steam_composite(origin,direction,depth,traced);
-        }
+        let value=path(origin,direction,&state,&first_albedo,&first_normal,true);
         sum.color=vec4f(sum.color.xyz+value,sum.color.w);
         sum.albedo+=first_albedo;
         sum.normal+=first_normal;

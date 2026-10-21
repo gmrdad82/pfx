@@ -25,7 +25,7 @@ fn probe(@builtin(global_invocation_id) gid: vec3u) {
         let local=vec3f(sin(theta)*sin(phi),cos(theta),-sin(theta)*cos(phi));
         direction=normalize(normalize(frame.right.xyz)*local.x+normalize(frame.up.xyz)*local.y-normalize(frame.forward.xyz)*local.z);
     }
-    let hit=scene(origin,direction,1e20,false);
+    let hit=traverse(origin,direction,1e20,QUERY_CLOSEST).hit;
     if (hit.t>=1e19) {
         textureStore(probe_depth,vec2i(gid.xy),vec4f(0.0));
         textureStore(probe_normal,vec2i(gid.xy),vec4f(0.0));
