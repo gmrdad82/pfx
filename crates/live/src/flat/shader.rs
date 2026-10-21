@@ -1086,7 +1086,6 @@ fn flat_blur_image(v: FlatVaryings, kind: u32, p: vec2f, inverse: mat2x2f) -> ve
     let screen = axes * v.material.xy;
     let span = max(length(screen), 1e-6);
     let along = inverse * (screen / span);
-    let unit = max(length(along), 1e-12);
     let reach = flat_blur_reach(v, kind) * abs(v.icon.zw);
     let inset = min(vec2f(0.5) / vec2f(textureDimensions(flat_sprites, 0)), reach);
     let low = v.icon.xy - reach + inset;
@@ -1096,7 +1095,7 @@ fn flat_blur_image(v: FlatVaryings, kind: u32, p: vec2f, inverse: mat2x2f) -> ve
     var weight = 0.0;
     for (var tap = 0u; tap < count; tap += 1u) {
         let q = p + along * (((f32(tap) + 0.5) / f32(count) - 0.5) * span);
-        let w = clamp(0.5 - flat_field(v, kind, q).x / unit, 0.0, 1.0);
+        let w = flat_coverage(flat_field(v, kind, q), inverse);
         total += flat_blur_texel(v, q, low, high) * w;
         weight += w;
     }

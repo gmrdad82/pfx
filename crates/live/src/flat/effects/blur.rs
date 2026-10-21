@@ -299,9 +299,7 @@ fn reach(instance: &Instance) -> [f32; 2] {
 
 pub fn image(instance: &Instance, sprites: Option<&SpriteImage>, p: [f32; 2]) -> [f32; 4] {
     let (span, along, _) = travel(instance);
-    let unit = (along[0] * along[0] + along[1] * along[1])
-        .sqrt()
-        .max(1e-12);
+    let inverse = instance.inverse();
     let uv = instance.icon;
     let reach = reach(instance);
     let size = sprites.map_or([1.0; 2], |sprites| {
@@ -328,7 +326,7 @@ pub fn image(instance: &Instance, sprites: Option<&SpriteImage>, p: [f32; 2]) ->
     for tap in 0..count {
         let x = ((tap as f32 + 0.5) / count as f32 - 0.5) * span;
         let q = [p[0] + along[0] * x, p[1] + along[1] * x];
-        let w = (0.5 - cpu::field(instance, None, q)[0] / unit).clamp(0.0, 1.0);
+        let w = sdf::coverage(cpu::field(instance, None, q), inverse);
         let colour = texel(q);
         for k in 0..4 {
             total[k] += colour[k] * w;
