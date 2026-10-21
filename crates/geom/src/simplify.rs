@@ -58,11 +58,12 @@ pub fn simplify(
     let mut result = input.indices.to_vec();
     let n = input.positions.len();
     let stride = input.weights.len();
-    let valid = result.len() % 3 == 0
+    let valid = result.len().is_multiple_of(3)
         && result.iter().all(|&i| (i as usize) < n)
         && input.attributes.len() == n * stride
         && (input.locks.is_empty() || input.locks.len() == n)
-        && n < NONE as usize;
+        && n < NONE as usize
+        && result.len() <= u32::MAX as usize;
     if !valid {
         return Simplified {
             indices: result,

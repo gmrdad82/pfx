@@ -6,7 +6,7 @@ pub mod mark;
 mod math;
 pub mod mesh;
 pub mod shapes;
-pub mod simplify;
+mod simplify;
 pub mod strip;
 pub mod svg;
 pub mod tree;
