@@ -31,7 +31,7 @@ fn sample_points(mesh: &Mesh) -> Vec<[f32; 3]> {
     out
 }
 
-fn shapes() -> Vec<Shape> {
+pub(crate) fn shapes() -> Vec<Shape> {
     vec![
         Shape::RoundBox {
             half: [1.0, 0.6, 0.3],

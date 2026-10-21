@@ -1,6 +1,6 @@
 use std::path::Path;
 
-const PORTS: [(&str, &str); 32] = [
+const PORTS: [(&str, &str); 33] = [
     ("crates/load/src/uri.rs", "cgltf"),
     ("crates/load/src/obj.rs", "tobj"),
     ("crates/load/src/obj.rs", "tinyobjloader"),
@@ -10,6 +10,7 @@ const PORTS: [(&str, &str); 32] = [
     ("crates/materials/src/brdf.rs", "pbrt-v4"),
     ("crates/motion/src/route.rs", "Godot Engine"),
     ("crates/mesh/src/simplify.rs", "meshoptimizer"),
+    ("crates/geom/src/simplify.rs", "meshoptimizer"),
     ("crates/mesh/src/tangents.rs", "MikkTSpace"),
     ("crates/build/src/builtin/loft.rs", "curvo"),
     ("crates/build/src/builtin/loft.rs", "OpenSubdiv"),

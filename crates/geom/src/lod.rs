@@ -1,5 +1,5 @@
 use crate::mesh::Mesh;
-use meshopt::{SimplifyOptions, VertexDataAdapter, simplify_with_attributes_and_locks};
+use crate::simplify::{Input, Options, simplify};
 
 pub const NORMAL_WEIGHT: f32 = 0.5;
 pub const UV_WEIGHT: f32 = 1.0;
@@ -20,14 +20,6 @@ pub fn chain(mesh: &Mesh) -> Vec<Level> {
     if mesh.indices.is_empty() {
         return levels;
     }
-    let positions: Vec<u8> = mesh
-        .positions
-        .iter()
-        .flat_map(|p| p.iter().flat_map(|v| v.to_le_bytes()))
-        .collect();
-    let Ok(adapter) = VertexDataAdapter::new(&positions, 12, 0) else {
-        return levels;
-    };
     let attributes: Vec<f32> = mesh
         .normals
         .iter()
@@ -41,23 +33,22 @@ pub fn chain(mesh: &Mesh) -> Vec<Level> {
         UV_WEIGHT,
         UV_WEIGHT,
     ];
-    let locks = vec![false; mesh.positions.len()];
+    let input = Input {
+        indices: &mesh.indices,
+        positions: &mesh.positions,
+        attributes: &attributes,
+        weights: &weights,
+        locks: &[],
+    };
+    let options = Options {
+        lock_border: true,
+        error_absolute: true,
+    };
     let mut previous = mesh.triangle_count();
     let mut target = previous / 2;
     while levels.len() < MAX_LEVELS && target >= MIN_TRIANGLES {
-        let mut error = 0.0f32;
-        let indices = simplify_with_attributes_and_locks(
-            &mesh.indices,
-            &adapter,
-            &attributes,
-            &weights,
-            5 * std::mem::size_of::<f32>(),
-            &locks,
-            target * 3,
-            f32::MAX,
-            SimplifyOptions::ErrorAbsolute | SimplifyOptions::LockBorder,
-            Some(&mut error),
-        );
+        let simplified = simplify(&input, target * 3, f32::MAX, options);
+        let (indices, error) = (simplified.indices, simplified.error);
         let triangles = indices.len() / 3;
         if triangles == 0 || triangles * 10 > previous * 9 {
             break;

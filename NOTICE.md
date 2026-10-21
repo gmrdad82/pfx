@@ -541,7 +541,7 @@ The route spline's arc-length table in `crates/motion/src/route.rs` (in the pack
 
 ## meshoptimizer, under the MIT licence
 
-`crates/mesh/src/simplify.rs` (in the package `pfx-mesh`) is a port of the edge-collapse simplifier of meshoptimizer 0.25 (https://github.com/zeux/meshoptimizer, `src/simplifier.cpp`, tag `v0.25`, commit `6daea4695c48338363b08022d2fb15deaef6ac09`, the version the meshopt 0.6.2 crate vendors), altered (among the changes, a collapse is also refused when it turns a triangle over in TEXCOORD_0, the walk of `hasTriangleFlips` with a signed area in UV space), under the MIT licence, as its `LICENSE.md` at that tag reads:
+`crates/mesh/src/simplify.rs` (in the package `pfx-mesh`) is a port of the edge-collapse simplifier of meshoptimizer 0.25 (https://github.com/zeux/meshoptimizer, `src/simplifier.cpp`, tag `v0.25`, commit `6daea4695c48338363b08022d2fb15deaef6ac09`, the version the meshopt 0.6.2 crate vendors), altered (among the changes, a collapse is also refused when it turns a triangle over in TEXCOORD_0, the walk of `hasTriangleFlips` with a signed area in UV space), and `crates/geom/src/simplify.rs` (in the package `pfx-geom`) is a port of the same simplifier at the same tag, `meshopt_simplifyWithAttributes` with its vertex locks, `meshopt_SimplifyLockBorder` and `meshopt_SimplifyErrorAbsolute`, kept equal to the original, under the MIT licence, as its `LICENSE.md` at that tag reads:
 
 > MIT License
 >
