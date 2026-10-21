@@ -8,7 +8,7 @@ It depends on `pfx-core`, `pfx-gpu`, `pfx-live`, `pfx-post`, `pfx-sound`, `pfx-t
 
 - **The timeline:** scenes with lengths, cut or joined by a dissolve, push or whip, keys eased between (any pfx ease by name, or `step` to hold), speed ramps and freeze frames (`speed`), and a shake through pfx-core's `Shake`.
 - **The camera:** focus, zoom, roll, follow and shake as a flat `View` matrix, kept inside the film's layout in any output aspect, with `Camera::lens` for an app's 3D camera and `safe` margins for a platform's interface.
-- **The looks:** grade, desaturation and tint, contrast, dim, vignette, grain, split, bloom, letterbox, flashes and dips to black, as pfx-live look passes: one look for the app's picture (`game_look`), one over the overlay (`over_look`).
+- **The looks:** grade, desaturation and tint, contrast, a split tone, dim, vignette, grain, split, scanlines, curvature, bloom, letterbox, flashes and dips to black, as pfx-live look passes: one look for the app's picture (`game_look`), one over the overlay (`over_look`).
 - **Captions:** text with named styles, outlines, slams, slides, growth and letter spacing that spreads, set letter by letter on the app's sheet.
 - **Art:** rules, bands, glows, shades, spots and SVG marks with a label and a check badge; the app adds its own kinds.
 - **The score:** recipes of tones and noise with envelopes, bends, filter sweeps and drive on pfx-sound's mixer, cued from the script and mixed under the app's audio, which follows the speed ramps (pitched and muffled when slowed).
@@ -125,6 +125,40 @@ let reeled = shoot(&script, rig, crew)?;
 ## The layout
 
 Every place in a script (a caption's `place`, a key's `focus`, an art's `place`) is a point in the film's layout, 1920x1080 unless `[film] layout = [width, height]` says otherwise (each side in [16, 16384]). The camera keeps its view inside that layout in any output aspect; a rig whose shape differs from the layout's (a portrait rig under a wide layout, or the other way) turns the layout for the overlay, so captions and bands fit the frame; a layout already the rig's shape stays as it is. `WIDE` is the default, and `Camera::wide` carries the layout to `picture_in`, `view`, `lens` and the looks.
+
+## The finish
+
+A film can give the app's picture a screen's finish: scanlines, a curved glass, luminance-weighted grain, a glow that takes only bright accents, and a split tone. They are `[film]` keys, the same for the whole film, built on the flat look's own passes (pfx-live `Crt`, `Grain`, `Bloom` and `Grade`); none is on by default, and a film that leaves them out renders the same bytes as one without them.
+
+```toml
+[film]
+grain = 0.3
+glow = 0.4
+scanlines = 0.06
+scanline_period = 2.25
+curvature = 0.02
+grain_response = 0.7
+glow_threshold = 0.55
+tone = 0.35
+tone_shadow = "#4a6fd0"
+tone_highlight = "#ffc489"
+tone_range = [0.15, 0.85]
+```
+
+| Key | Range | Default | What it does |
+|---|---|---|---|
+| `scanlines` | [0, 1] | 0 (none) | the scanlines' strength on the picture: a row's light is scaled by `1 - strength * (0.5 + 0.5 * cos(2π y / period))`, so the darkest row of each period loses `strength` of its light and the row half a period on keeps all of it; 0.03 to 0.10 reads as a soft screen |
+| `scanline_period` | [1, 64] | 3 | the lines' period in layout px; a rig turned against the layout scales it as it does grain, so the lines keep their size on the frame; 2.25 gives a fine weave, a whole number of output pixels gives even lines (a period of exactly 2 output pixels samples every row at the same phase and reads as a flat dim) |
+| `curvature` | [0, 0.25] | 0 (flat) | bends the picture like a curved screen; what falls outside the glass is black; 0 to 0.035 is a gentle tube |
+| `grain_response` | [0, 1] | 0.5 | weights the film's `grain` by luminance: a pixel of luminance `l` takes `1 - grain_response * l` of the grain, so dark ink and dim regions keep the full grain and bright regions lose `grain_response` of it; at 1 a white pixel takes none; 0.6 to 0.75 keeps highlights clean while the shadows stay grainy |
+| `glow_threshold` | [0, 1] | 0 (all) | the luminance the `glow` starts above: each glowing draw's light is scaled by `max(l - threshold, 0) / l` before it is blurred, so only bright accents bloom and a draw at or under it adds nothing |
+| `tone` | [0, 1] | 0 (none) | the split tone's amount |
+| `tone_shadow`, `tone_highlight` | `#rrggbb` | `#ffffff` | the tints shadows and highlights lean to |
+| `tone_range` | low < high, in [0, 1] | [0, 1] | the luminances where the tone is all shadow tint (at or under low) and all highlight tint (at or over high) |
+
+The split tone is the flat Grade's `SplitTone`, the same curve as the 3D chain's luma-curve Warmth: `t = smoothstep(low, high, l)` on the pixel's luminance, and each channel is scaled by `mix(shadow, highlight, t)`, where a tint's multiplier is `1 - tone + tone * tint` brought into the picture's space as the key `tint` is. A pixel at the middle of the range takes the mean of the two multipliers, so a midtone moves by at most the larger of the two multipliers' distances from 1, and with tints balanced about neutral (as in the example) it stays close to neutral. It runs after the desaturation and contrast and before `dim`, the vignette and the grain.
+
+Bad values are refused in one line that names the key, for example `[film] scanlines is a strength in [0, 1], 0 for none` or `[film] tone_shadow: "blue" is not a #rrggbb colour`.
 
 ## Marks and the check badge
 
@@ -404,7 +438,7 @@ A scene's `from` is where in its footage it starts, in seconds. Paths may also b
 
 When a clip's or a folder's rate differs from the film's, each film frame shows the source frame at or before its time and nothing is blended: a 30 fps clip in a 60 fps film shows every frame twice, a 120 fps folder every other frame. The audio is never retimed; it plays at its own rate. A speed ramp (`speed` in a key) moves through the footage at that speed, and the film pitches its audio as it does a game's.
 
-Each frame is drawn on the GPU through pfx-live's flat renderer: the footage frame as a sprite under the camera's view and the game look (grade, desaturation, contrast, dim, vignette, grain, split), then the overlay (captions, marks, art) under the over look (glow, flashes, dips to black, letterbox), read back as RGBA8. Text is set with `pfx-text` in MSDF glyphs at the output's density, so captions stay crisp at 4K.
+Each frame is drawn on the GPU through pfx-live's flat renderer: the footage frame as a sprite under the camera's view and the game look (grade, desaturation, contrast, split tone, dim, vignette, grain, split, scanlines, curvature), then the overlay (captions, marks, art) under the over look (glow, flashes, dips to black, letterbox), read back as RGBA8. Text is set with `pfx-text` in MSDF glyphs at the output's density, so captions stay crisp at 4K.
 
 **Cost:** a 3-second vertical film at 2160x3840 and 60 fps (2 s of a 4K H.264 screen recording zoomed by the camera with a desaturation key, grain and a vignette, a caption with a 4-unit outline, then a 1 s card with a caption, a mark and a check badge, and a score cue), `pfx film` built in release under `pgpu run --class bench` with the card to itself, took 19.6 s for 180 frames: 109 ms a frame from decode to PNG on disk, the GPU 30% busy on average (an AMD Radeon RX 9060 XT on Mesa radeonsi). The work per frame is the decode and YUV to RGBA conversion on pito-codecs, the 33 MB sprite upload when the picture changes, two flat passes with their looks, one RGBA16 readback and the PNG writes on every core.
 

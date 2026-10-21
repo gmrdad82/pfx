@@ -30,7 +30,7 @@ pub use bed::Bed;
 pub use camera::{Camera, Picture, WIDE, layout, layout_in, picture, picture_in};
 pub use cut::{Cast, Cut, Director, Posed};
 pub use duck::Duck;
-pub use grade::Grade;
+pub use grade::{Finish, Grade, Toning};
 pub use marks::{Badge, Check, Marks};
 pub use overlay::Overlay;
 pub use pieces::Piece;

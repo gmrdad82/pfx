@@ -2,7 +2,9 @@ use crate::art::Art;
 use crate::beat::{self, Grid, TempoPart};
 use crate::bed::{Bed, BedPart};
 use crate::camera::WIDE;
+use crate::colour::colour;
 use crate::duck::{self, Duck, DuckPart, Side};
+use crate::grade::{Finish, GRAIN_RESPONSE, SCANLINE_PERIOD, Toning};
 use crate::input::Touch;
 use crate::layers::{Flash, Shake, Sound, Style, Text};
 use crate::track::Key;
@@ -77,6 +79,7 @@ pub struct Film<K: Kinds> {
     pub grain: f32,
     pub vignette: f32,
     pub glow: f32,
+    pub finish: Finish,
     pub seed: u64,
     pub theme: Option<Scheme>,
     pub safe: [f32; 2],
@@ -117,6 +120,15 @@ struct FilmPart {
     grain: f32,
     vignette: f32,
     glow: f32,
+    scanlines: f32,
+    scanline_period: f32,
+    curvature: f32,
+    grain_response: f32,
+    glow_threshold: f32,
+    tone: f32,
+    tone_shadow: Option<String>,
+    tone_highlight: Option<String>,
+    tone_range: [f32; 2],
     seed: u64,
     theme: Option<Scheme>,
     safe: [f32; 2],
@@ -143,6 +155,15 @@ impl Default for FilmPart {
             grain: 0.0,
             vignette: 0.0,
             glow: 0.0,
+            scanlines: 0.0,
+            scanline_period: SCANLINE_PERIOD,
+            curvature: 0.0,
+            grain_response: GRAIN_RESPONSE,
+            glow_threshold: 0.0,
+            tone: 0.0,
+            tone_shadow: None,
+            tone_highlight: None,
+            tone_range: [0.0, 1.0],
             seed: 1,
             theme: None,
             safe: [0.0; 2],
@@ -166,13 +187,22 @@ pub const CEILING: f32 = 0.89;
 pub const LIMIT: f32 = 0.72;
 pub const TRUE_PEAK: f32 = -1.0;
 
-const FILM_KEYS: [&str; 21] = [
+const FILM_KEYS: [&str; 30] = [
     "frames",
     "audio",
     "bars",
     "grain",
     "vignette",
     "glow",
+    "scanlines",
+    "scanline_period",
+    "curvature",
+    "grain_response",
+    "glow_threshold",
+    "tone",
+    "tone_shadow",
+    "tone_highlight",
+    "tone_range",
     "seed",
     "theme",
     "safe",
@@ -287,6 +317,12 @@ pub fn cuts(starts: &[f64], fps: Rate) -> Vec<u64> {
     out
 }
 
+fn tint(key: &str, text: Option<&str>) -> Result<[f32; 3], String> {
+    text.map_or(Ok([1.0; 3]), |t| {
+        colour(t).map_err(|e| format!("[film] {key}: {e}"))
+    })
+}
+
 pub fn plain(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
@@ -338,6 +374,19 @@ impl<K: Kinds> Film<K> {
             grain: f.grain,
             vignette: f.vignette,
             glow: f.glow,
+            finish: Finish {
+                scanlines: f.scanlines,
+                scanline_period: f.scanline_period,
+                curvature: f.curvature,
+                grain_response: f.grain_response,
+                glow_threshold: f.glow_threshold,
+                tone: Toning {
+                    amount: f.tone,
+                    shadow: tint("tone_shadow", f.tone_shadow.as_deref())?,
+                    highlight: tint("tone_highlight", f.tone_highlight.as_deref())?,
+                    range: f.tone_range,
+                },
+            },
             seed: f.seed,
             theme: f.theme,
             safe: f.safe,
@@ -351,6 +400,36 @@ impl<K: Kinds> Film<K> {
         })
     }
 
+    fn finish_check(&self) -> Result<(), String> {
+        let f = &self.finish;
+        let within = |v: f32, low: f32, high: f32| v.is_finite() && (low..=high).contains(&v);
+        if !within(f.scanlines, 0.0, 1.0) {
+            return Err("[film] scanlines is a strength in [0, 1], 0 for none".into());
+        }
+        if !within(f.scanline_period, 1.0, 64.0) {
+            return Err("[film] scanline_period is in layout px, in [1, 64]".into());
+        }
+        if !within(f.curvature, 0.0, 0.25) {
+            return Err("[film] curvature is in [0, 0.25], 0 for a flat screen".into());
+        }
+        if !within(f.grain_response, 0.0, 1.0) {
+            return Err("[film] grain_response is in [0, 1]".into());
+        }
+        if !within(f.glow_threshold, 0.0, 1.0) {
+            return Err("[film] glow_threshold is a luminance in [0, 1], 0 for none".into());
+        }
+        if !within(f.tone.amount, 0.0, 1.0) {
+            return Err("[film] tone is in [0, 1], 0 for none".into());
+        }
+        let [low, high] = f.tone.range;
+        if !(within(low, 0.0, 1.0) && within(high, 0.0, 1.0) && low < high) {
+            return Err(
+                "[film] tone_range is a low and a high luminance in [0, 1], low under high".into(),
+            );
+        }
+        Ok(())
+    }
+
     fn check(&self) -> Result<(), String> {
         let ok = |v: f32, high: f32| v.is_finite() && (0.0..=high).contains(&v);
         if !ok(self.bars, 4.0) {
@@ -359,6 +438,7 @@ impl<K: Kinds> Film<K> {
         if !(ok(self.grain, 2.0) && ok(self.vignette, 2.0) && ok(self.glow, 2.0)) {
             return Err("[film] grain, vignette and glow are in [0, 2]".into());
         }
+        self.finish_check()?;
         if !(self.safe.iter().all(|v| ok(*v, 0.4)) && self.safe[0] + self.safe[1] < 0.6) {
             return Err("[film] safe is the top and bottom in [0, 0.4], under 0.6 together".into());
         }

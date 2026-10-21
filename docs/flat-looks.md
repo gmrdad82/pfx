@@ -151,12 +151,13 @@ As a fill, `Fill::Gradient(gradient)` paints a shape in its own local units, so 
 
 ### Grade
 
-`Grade { saturation, contrast, brightness, tint }`, `Grade::new()` the identity, runs on the encoded premultiplied colour like the other passes:
+`Grade { saturation, contrast, brightness, tint, split }`, `Grade::new()` the identity, runs on the encoded premultiplied colour like the other passes:
 1. `saturation` mixes with the Rec. 709 luma: 0 is grey, 1 unchanged, above 1 more vivid;
 2. `contrast` scales around middle grey, 0.5: 1 unchanged;
 3. `brightness` is added: 0 unchanged;
 4. `tint` multiplies by `1 − a + rgb · a`, its alpha the strength, so a warm tint after `saturation(0.0)` is a sepia;
-5. the result is kept at zero or more.
+5. the result is kept at zero or more;
+6. `split` (`Grade::split(SplitTone::new(shadow, highlight).range(low, high))`, off while both tints' alphas are 0) is a split tone, the luma-curve Warmth of `pfx_post`'s 3D chain with a tint at each end: `t = smoothstep(low, high, l)` on the straight (unpremultiplied) luma of the graded colour, and each channel is scaled by the mix of the two tints' multipliers `1 − a + rgb · a` at `t`, so shadows lean to `shadow`, highlights to `highlight`, and the middle of the range takes the two multipliers' mean. `SplitTone::default()` (range [0, 1]) keeps every bit; `Look::validate` wants its alphas in 0..=1 and its range rising. The CPU twin is `Grade::image`; `a_split_tone_is_the_warmth_luma_curve_with_a_tint_per_end` holds it to Warmth within 1e-5.
 
 ### Letterbox
 
@@ -175,10 +176,11 @@ As a fill, `Fill::Gradient(gradient)` paints a shape in its own local units, so 
 
 ### Bloom of a layer
 
-`Draw::bloom()` puts a draw in the bloom layer, and `LookPass::Bloom(Bloom { radius, strength, tint })` lights around that layer only:
+`Draw::bloom()` puts a draw in the bloom layer, and `LookPass::Bloom(Bloom { radius, strength, tint, threshold })` lights around that layer only:
 1. the layer's draws (the scene's own copy, so token swaps apply) render on transparent at the current size divided by the glow's factor (the power of two up to 4 that keeps σ at about 2 pixels), the layout fitted into it;
-2. the glow's separable Gaussian blurs it, σ = `radius` layout units;
-3. the blurred layer is added over the frame times `tint · strength` (the tint's alpha scales it), sampled by layout position, so it lines up at any size and after an upscale.
+2. with a `threshold` above 0 (`Bloom::threshold`, 0 by default), the glow's bright pass keeps only the layer's light above that luminance, each pixel scaled by `max(l − threshold, 0) / l` (`Bloom::bright` is its twin), so a draw at or under it adds nothing and leaves the frame's bytes as they were;
+3. the glow's separable Gaussian blurs it, σ = `radius` layout units;
+4. the blurred layer is added over the frame times `tint · strength` (the tint's alpha scales it), sampled by layout position, so it lines up at any size and after an upscale.
 
 The other draws neither feed it nor hide it: a card over a lit draw takes its light as well. A look without a `Bloom`, a bloom at zero strength and a scene with no draw in the layer cost nothing and keep their bytes. `bloom_lights_only_around_its_layer` flags one disc of the test board, finds every pixel beyond its reach byte for byte the plain frame and the ring around it lit, and finds a scene with no flagged draw unchanged. Like `Glow`, it has no CPU twin.
 

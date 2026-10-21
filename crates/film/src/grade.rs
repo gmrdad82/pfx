@@ -1,13 +1,59 @@
 use crate::camera::Camera;
 use pfx_live::flat::look::{
-    Aberration, Bloom, Crt, Fade, Grade as Tone, Grain, Letterbox, Look, LookPass, Vignette,
+    Aberration, Bloom, Crt, Curvature, Fade, Grade as Tone, Grain, Letterbox, Look, LookPass,
+    Scanlines, SplitTone, Vignette,
 };
 
 pub const GLOW_RADIUS: f32 = 12.0;
 pub const VIGNETTE: [f32; 2] = [430.0, 1260.0];
+pub const SCANLINE_PERIOD: f32 = 3.0;
+pub const GRAIN_RESPONSE: f32 = 0.5;
+pub const CURVE_CORNER: f32 = 0.01;
 const GAMMA: f32 = 1.0 / 2.2;
 const GRAIN_SIZE: f32 = 1.0;
 const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Toning {
+    pub amount: f32,
+    pub shadow: [f32; 3],
+    pub highlight: [f32; 3],
+    pub range: [f32; 2],
+}
+
+impl Default for Toning {
+    fn default() -> Toning {
+        Toning {
+            amount: 0.0,
+            shadow: [1.0; 3],
+            highlight: [1.0; 3],
+            range: [0.0, 1.0],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Finish {
+    pub scanlines: f32,
+    pub scanline_period: f32,
+    pub curvature: f32,
+    pub grain_response: f32,
+    pub glow_threshold: f32,
+    pub tone: Toning,
+}
+
+impl Default for Finish {
+    fn default() -> Finish {
+        Finish {
+            scanlines: 0.0,
+            scanline_period: SCANLINE_PERIOD,
+            curvature: 0.0,
+            grain_response: GRAIN_RESPONSE,
+            glow_threshold: 0.0,
+            tone: Toning::default(),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grade {
@@ -24,6 +70,7 @@ pub struct Grade {
     pub grain: f32,
     pub glow: f32,
     pub split: f32,
+    pub finish: Finish,
 }
 
 impl Default for Grade {
@@ -42,6 +89,7 @@ impl Default for Grade {
             grain: 0.0,
             glow: 0.0,
             split: 0.0,
+            finish: Finish::default(),
         }
     }
 }
@@ -61,10 +109,25 @@ fn short_side(wide: [f32; 2], out: [u32; 2]) -> f32 {
     (size[0].min(size[1]) / s / wide[1]).max(1.0)
 }
 
+impl Toning {
+    pub fn split(&self) -> Option<SplitTone> {
+        let amount = self.amount.clamp(0.0, 1.0);
+        (amount > 0.0).then(|| {
+            let tint = |c: [f32; 3]| {
+                let [r, g, b] = c.map(|v| encoded(v, amount));
+                [r, g, b, amount]
+            };
+            SplitTone::new(tint(self.shadow), tint(self.highlight))
+                .range(self.range[0], self.range[1])
+        })
+    }
+}
+
 impl Grade {
     pub fn game_look(&self, out: [u32; 2]) -> Look {
         let wide = self.camera.wide;
         let k = short_side(wide, out);
+        let finish = &self.finish;
         let mut look = Look::new();
         let desat = self.desat.clamp(0.0, 1.0);
         if desat > 0.0 {
@@ -80,6 +143,9 @@ impl Grade {
                 contrast: (1.0 + self.contrast).max(0.0),
                 ..Tone::new()
             }));
+        }
+        if let Some(split) = finish.tone.split() {
+            look = look.with(LookPass::Grade(Tone::new().split(split)));
         }
         if self.dim > 0.0 {
             look = look.with(LookPass::Grade(Tone {
@@ -97,18 +163,27 @@ impl Grade {
             }));
         }
         if self.grain > 0.0 {
-            look = look.with(LookPass::Grain(Grain::new(
-                self.grain / 3.0,
-                GRAIN_SIZE * k,
-            )));
+            look = look.with(LookPass::Grain(
+                Grain::new(self.grain / 3.0, GRAIN_SIZE * k).response(finish.grain_response),
+            ));
         }
-        if self.split > 0.0 {
-            look = look.with(LookPass::Crt(Crt {
-                aberration: Some(Aberration {
-                    shift: self.split * k,
-                }),
-                ..Crt::default()
-            }));
+        let crt = Crt {
+            scanlines: (finish.scanlines > 0.0).then(|| Scanlines {
+                period: finish.scanline_period * k,
+                strength: finish.scanlines,
+            }),
+            curvature: (finish.curvature > 0.0).then_some(Curvature {
+                amount: finish.curvature,
+                corner: CURVE_CORNER,
+                bezel: BLACK,
+            }),
+            aberration: (self.split > 0.0).then(|| Aberration {
+                shift: self.split * k,
+            }),
+            glow: None,
+        };
+        if !crt.is_empty() {
+            look = look.with(LookPass::Crt(crt));
         }
         look
     }
@@ -116,11 +191,9 @@ impl Grade {
     pub fn over_look(&self, out: [u32; 2]) -> Look {
         let mut look = Look::new();
         if self.glow > 0.0 {
-            look = look.with(LookPass::Bloom(Bloom {
-                radius: GLOW_RADIUS,
-                strength: self.glow,
-                tint: [1.0; 4],
-            }));
+            look = look.with(LookPass::Bloom(
+                Bloom::new(GLOW_RADIUS, self.glow).threshold(self.finish.glow_threshold),
+            ));
         }
         let [r, g, b, a] = self.flash;
         if a > 0.0 {

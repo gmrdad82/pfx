@@ -295,8 +295,26 @@ fn look_grade(@builtin(position) position: vec4f) -> @location(0) vec4f {
     var v = c.rgb * grade.x + vec3f(l * (1.0 - grade.x));
     v = v * grade.y + vec3f(0.5 * c.a * (1.0 - grade.y));
     v = v + vec3f(grade.z * c.a);
-    v = v * (vec3f(1.0 - tint.a) + tint.rgb * tint.a);
-    return vec4f(max(v, vec3f(0.0)), c.a);
+    v = max(v * (vec3f(1.0 - tint.a) + tint.rgb * tint.a), vec3f(0.0));
+    let split = look.p[4];
+    if (split.z > 0.5) {
+        let shadow = look.p[2];
+        let highlight = look.p[3];
+        var l2 = 0.0;
+        if (c.a > 0.0) {
+            l2 = dot(v, vec3f(0.2126, 0.7152, 0.0722)) / c.a;
+        }
+        let span = split.y - split.x;
+        var t = select(0.0, 1.0, clamp(l2, 0.0, 1.0) >= split.x);
+        if (abs(span) >= 1e-8) {
+            let e = clamp((clamp(l2, 0.0, 1.0) - split.x) / span, 0.0, 1.0);
+            t = e * e * (3.0 - 2.0 * e);
+        }
+        let low = vec3f(1.0 - shadow.a) + shadow.rgb * shadow.a;
+        let high = vec3f(1.0 - highlight.a) + highlight.rgb * highlight.a;
+        v = max(v * mix(low, high, t), vec3f(0.0));
+    }
+    return vec4f(v, c.a);
 }
 
 @fragment

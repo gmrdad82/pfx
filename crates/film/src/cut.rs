@@ -1,7 +1,7 @@
 use crate::art::{Art, Shape, What};
 use crate::camera::Camera;
 use crate::colour::{colour, srgba};
-use crate::grade::Grade;
+use crate::grade::{Finish, Grade};
 use crate::layers::{Style, Text};
 use crate::marks::{Badge, LABEL};
 use crate::motion::{merged, motion};
@@ -68,6 +68,7 @@ struct Base {
     grain: f32,
     vignette: f32,
     glow: f32,
+    finish: Finish,
     safe: [f32; 2],
     wide: [f32; 2],
 }
@@ -93,6 +94,7 @@ impl<'a, K: Kinds> Director<'a, K> {
                 grain: f.grain,
                 vignette: f.vignette,
                 glow: f.glow,
+                finish: f.finish,
                 safe: f.safe,
                 wide: f.layout,
             },
@@ -336,6 +338,7 @@ impl<'a, K: Kinds> Director<'a, K> {
             grain: l.grain,
             glow: l.glow,
             split: l.split,
+            finish: self.film.finish,
         };
         let mut pieces: Vec<Piece<K::Drawn>> = Vec::new();
         pieces.extend(scene.art.iter().filter_map(|a| self.art(a, scene, s)));

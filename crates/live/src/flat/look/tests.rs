@@ -1813,3 +1813,55 @@ fn the_look_set_counts_its_pipelines_exactly() {
         .unwrap();
     assert_eq!(runtime.pipelines_made(), own + 2 * slot);
 }
+
+#[test]
+fn split_tones_and_bloom_thresholds_validate_and_tween() {
+    let cool = [0.7, 0.85, 1.0, 1.0];
+    let warm = [1.0, 0.85, 0.7, 1.0];
+    let toned = Look::new()
+        .with(LookPass::Grade(
+            Grade::new().split(SplitTone::new(cool, warm).range(0.2, 0.8)),
+        ))
+        .with(LookPass::Bloom(Bloom::new(10.0, 0.8).threshold(0.6)));
+    assert!(toned.validate().is_ok());
+    let bad = [
+        LookPass::Grade(Grade::new().split(SplitTone::new([1.0, 1.0, 1.0, 1.5], warm))),
+        LookPass::Grade(Grade::new().split(SplitTone::new(cool, [1.0, 1.0, 1.0, -0.1]))),
+        LookPass::Grade(Grade::new().split(SplitTone::new([f32::NAN, 1.0, 1.0, 1.0], warm))),
+        LookPass::Grade(Grade::new().split(SplitTone::new(cool, warm).range(0.8, 0.2))),
+        LookPass::Grade(Grade::new().split(SplitTone::new(cool, warm).range(0.5, 0.5))),
+        LookPass::Grade(Grade::new().split(SplitTone::new(cool, warm).range(f32::NAN, 1.0))),
+        LookPass::Bloom(Bloom::new(10.0, 1.0).threshold(-0.1)),
+        LookPass::Bloom(Bloom::new(10.0, 1.0).threshold(f32::INFINITY)),
+    ];
+    for pass in bad {
+        let refused = Look::new().with(pass.clone()).validate();
+        assert!(refused.is_err(), "{pass:?}");
+        assert!(!refused.unwrap_err().contains('\n'));
+    }
+    let half = Look::new().tween(&toned, 0.5).unwrap();
+    match &half.passes[0] {
+        LookPass::Grade(grade) => {
+            assert!((grade.split.shadow[3] - 0.5).abs() < 1e-6);
+            assert!((grade.split.highlight[0] - 1.0).abs() < 1e-6);
+            assert!((grade.split.shadow[0] - 0.85).abs() < 1e-6);
+            assert!((grade.split.range[0] - 0.1).abs() < 1e-6);
+            assert!((grade.split.range[1] - 0.9).abs() < 1e-6);
+        }
+        other => panic!("{other:?}"),
+    }
+    match &half.passes[1] {
+        LookPass::Bloom(bloom) => {
+            assert!((bloom.strength - 0.4).abs() < 1e-6);
+            assert!((bloom.threshold - 0.6).abs() < 1e-6);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(half.validate().is_ok());
+    let start = Look::new().tween(&toned, 0.0).unwrap();
+    match &start.passes[0] {
+        LookPass::Grade(grade) => assert!(grade.is_identity()),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(toned.tween(&toned, 0.3).unwrap().passes, toned.passes);
+}

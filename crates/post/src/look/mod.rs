@@ -851,11 +851,68 @@ impl Grain {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SplitTone {
+    pub shadow: [f32; 4],
+    pub highlight: [f32; 4],
+    pub range: [f32; 2],
+}
+
+impl Default for SplitTone {
+    fn default() -> Self {
+        Self {
+            shadow: [1.0, 1.0, 1.0, 0.0],
+            highlight: [1.0, 1.0, 1.0, 0.0],
+            range: [0.0, 1.0],
+        }
+    }
+}
+
+impl SplitTone {
+    pub fn new(shadow: [f32; 4], highlight: [f32; 4]) -> Self {
+        Self {
+            shadow,
+            highlight,
+            ..Self::default()
+        }
+    }
+
+    pub fn range(mut self, low: f32, high: f32) -> Self {
+        self.range = [low, high];
+        self
+    }
+
+    pub fn is_identity(&self) -> bool {
+        self.shadow[3] == 0.0 && self.highlight[3] == 0.0
+    }
+
+    pub fn scale(&self, luma: f32) -> [f32; 3] {
+        let t = crate::color::smoothstep(self.range[0], self.range[1], luma.clamp(0.0, 1.0));
+        let factor = |tint: [f32; 4]| -> [f32; 3] {
+            std::array::from_fn(|i| 1.0 - tint[3] + tint[i] * tint[3])
+        };
+        crate::color::lerp3(factor(self.shadow), factor(self.highlight), t)
+    }
+
+    pub fn pixel(&self, c: [f32; 4]) -> [f32; 4] {
+        let a = c[3];
+        let l = if a > 0.0 { luma(c) / a } else { 0.0 };
+        let scale = self.scale(l);
+        [
+            (c[0] * scale[0]).max(0.0),
+            (c[1] * scale[1]).max(0.0),
+            (c[2] * scale[2]).max(0.0),
+            a,
+        ]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Grade {
     pub saturation: f32,
     pub contrast: f32,
     pub brightness: f32,
     pub tint: [f32; 4],
+    pub split: SplitTone,
 }
 
 impl Default for Grade {
@@ -865,6 +922,7 @@ impl Default for Grade {
             contrast: 1.0,
             brightness: 0.0,
             tint: [1.0, 1.0, 1.0, 0.0],
+            split: SplitTone::default(),
         }
     }
 }
@@ -894,11 +952,17 @@ impl Grade {
         self
     }
 
+    pub fn split(mut self, split: SplitTone) -> Self {
+        self.split = split;
+        self
+    }
+
     pub fn is_identity(&self) -> bool {
         self.saturation == 1.0
             && self.contrast == 1.0
             && self.brightness == 0.0
             && self.tint[3] == 0.0
+            && self.split.is_identity()
     }
 
     pub fn pixel(&self, c: [f32; 4]) -> [f32; 4] {
@@ -906,7 +970,7 @@ impl Grade {
         let l = luma(c);
         let (s, k, t) = (self.saturation, self.contrast, self.tint[3]);
         let pivot = 0.5 * a;
-        std::array::from_fn(|i| {
+        let graded = std::array::from_fn(|i| {
             if i == 3 {
                 return a;
             }
@@ -914,7 +978,11 @@ impl Grade {
             let v = v * k + pivot * (1.0 - k);
             let v = v + self.brightness * a;
             (v * ((1.0 - t) + self.tint[i] * t)).max(0.0)
-        })
+        });
+        if self.split.is_identity() {
+            return graded;
+        }
+        self.split.pixel(graded)
     }
 
     pub fn image(&self, pixels: &[[f32; 4]]) -> Vec<[f32; 4]> {
@@ -1069,6 +1137,7 @@ pub struct Bloom {
     pub radius: f32,
     pub strength: f32,
     pub tint: [f32; 4],
+    pub threshold: f32,
 }
 
 impl Bloom {
@@ -1077,12 +1146,27 @@ impl Bloom {
             radius,
             strength,
             tint: [1.0; 4],
+            threshold: 0.0,
         }
     }
 
     pub fn tint(mut self, tint: [f32; 4]) -> Self {
         self.tint = tint;
         self
+    }
+
+    pub fn threshold(mut self, threshold: f32) -> Self {
+        self.threshold = threshold;
+        self
+    }
+
+    pub fn bright(&self, c: [f32; 4]) -> [f32; 4] {
+        if self.threshold <= 0.0 {
+            return c;
+        }
+        let l = luma(c);
+        let k = (l - self.threshold).max(0.0) / l.max(1e-4);
+        c.map(|v| v * k)
     }
 
     pub fn light(&self) -> [f32; 3] {

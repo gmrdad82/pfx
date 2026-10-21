@@ -641,9 +641,14 @@ impl LookGpu {
     }
 
     pub fn grade(&mut self, source: Surface<'_>, target: Surface<'_>, grade: &Grade) {
+        let split = &grade.split;
+        let on = f32::from(u8::from(!split.is_identity()));
         let p = [
             [grade.saturation, grade.contrast, grade.brightness, 0.0],
             grade.tint,
+            split.shadow,
+            split.highlight,
+            [split.range[0], split.range[1], on, 0.0],
         ];
         let place = unplaced(target.size);
         self.simple(Kind::Grade, "look grade", source, target, &place, &p);
@@ -681,6 +686,24 @@ impl LookGpu {
     ) {
         let sigma = bloom.radius * layer_place.scale;
         let reach = (3.0 * sigma).ceil().max(1.0);
+        let (layer, spare) = if bloom.threshold > 0.0 {
+            let bright = self.push_uniform(
+                header(layer.size, &unplaced(layer.size), layer.size),
+                &[[1.0, bloom.threshold, 0.0, 0.0]],
+            );
+            self.job(
+                Kind::Bright,
+                "look bloom",
+                bright,
+                None,
+                layer.view,
+                None,
+                spare.view,
+            );
+            (spare, layer)
+        } else {
+            (layer, spare)
+        };
         for (direction, from, to) in [([1.0, 0.0], &layer, &spare), ([0.0, 1.0], &spare, &layer)] {
             let uniform = self.push_uniform(
                 header(layer.size, &unplaced(layer.size), layer.size),

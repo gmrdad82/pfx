@@ -8,7 +8,7 @@ use pfx_gpu::{GpuProfiler, wgpu};
 pub use pfx_post::look::{
     Aberration, Backdrop, BarSize, Blend, Bloom, Crt, Curvature, Dither, Fade, FadeMode, Glow,
     Grade, Gradient, GradientShape, Grain, Grid, Interpolation, Letterbox, Major, Palette, Place,
-    Quantise, Scanlines, Upscale, UpscaleMap, Vignette,
+    Quantise, Scanlines, SplitTone, Upscale, UpscaleMap, Vignette,
 };
 use pfx_post::look::{LookGpu, gpu::Surface, gpu::glow_factor, mix_oklab};
 use std::collections::BTreeMap;
@@ -329,6 +329,14 @@ impl LookPass {
                 contrast: f(a.contrast, b.contrast),
                 brightness: f(a.brightness, b.brightness),
                 tint: c(a.tint, b.tint),
+                split: SplitTone {
+                    shadow: c(a.split.shadow, b.split.shadow),
+                    highlight: c(a.split.highlight, b.split.highlight),
+                    range: [
+                        f(a.split.range[0], b.split.range[0]),
+                        f(a.split.range[1], b.split.range[1]),
+                    ],
+                },
             }),
             (LookPass::Letterbox(a), LookPass::Letterbox(b)) => LookPass::Letterbox(Letterbox {
                 size: match (a.size, b.size) {
@@ -348,6 +356,7 @@ impl LookPass {
                 radius: f(a.radius, b.radius),
                 strength: f(a.strength, b.strength),
                 tint: c(a.tint, b.tint),
+                threshold: f(a.threshold, b.threshold),
             }),
             _ => return None,
         })
@@ -365,8 +374,14 @@ impl LookPass {
                 finite(&[grade.saturation, grade.contrast, grade.brightness])
                     && finite(&grade.tint)
                     && grade.saturation >= 0.0
-                    && grade.contrast >= 0.0,
-                "a grade is finite, its saturation and contrast zero or more",
+                    && grade.contrast >= 0.0
+                    && finite(&grade.split.shadow)
+                    && finite(&grade.split.highlight)
+                    && finite(&grade.split.range)
+                    && (0.0..=1.0).contains(&grade.split.shadow[3])
+                    && (0.0..=1.0).contains(&grade.split.highlight[3])
+                    && grade.split.range[0] < grade.split.range[1],
+                "a grade is finite, its saturation and contrast zero or more, its split tone's amounts in 0..=1 and its range rising",
             ),
             LookPass::Letterbox(letterbox) => (
                 match letterbox.size {
@@ -385,8 +400,10 @@ impl LookPass {
                     && bloom.radius.is_finite()
                     && bloom.radius > 0.0
                     && bloom.strength.is_finite()
-                    && bloom.strength >= 0.0,
-                "a bloom's radius is more than zero and its strength zero or more",
+                    && bloom.strength >= 0.0
+                    && bloom.threshold.is_finite()
+                    && bloom.threshold >= 0.0,
+                "a bloom's radius is more than zero, its strength and threshold zero or more",
             ),
             _ => (true, ""),
         };

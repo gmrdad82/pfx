@@ -822,3 +822,349 @@ fn the_gpu_grain_grade_letterbox_and_fade_match_their_twins() {
         );
     }
 }
+
+const COOL: [f32; 4] = [0.7, 0.85, 1.0, 1.0];
+const WARM: [f32; 4] = [1.0, 0.85, 0.7, 1.0];
+
+fn close(a: [f32; 4], b: [f32; 4], tolerance: f32) -> bool {
+    (0..4).all(|i| (a[i] - b[i]).abs() <= tolerance)
+}
+
+#[test]
+fn a_split_tone_is_the_warmth_luma_curve_with_a_tint_per_end() {
+    let image = crate::image::Image::from_fn(16, 16, |x, y| {
+        let v = (x + 16 * y) as f32 / 255.0;
+        [v, v * 0.8 + 0.1, 1.0 - v, 1.0]
+    });
+    for (amount, low, high, shadow, highlight) in [
+        (1.0, [0.8, 1.2], [1.2, 0.8], 0.1, 0.9),
+        (0.4, [0.9, 1.1], [1.15, 0.7], 0.25, 0.6),
+        (0.75, [1.3, 0.6], [0.7, 1.25], 0.0, 1.0),
+    ] {
+        let warmth = crate::grade::Warmth::luma_curve(amount, low, high, shadow, highlight);
+        let want = crate::grade::warmth(&image, &warmth);
+        let split = SplitTone::new(
+            [low[0], 1.0, low[1], amount],
+            [high[0], 1.0, high[1], amount],
+        )
+        .range(shadow, highlight);
+        let got = Grade::new().split(split).image(&image.pixels);
+        assert!(
+            worst(&got, &want.pixels) < 1e-5,
+            "{amount} {low:?} {high:?}: {}",
+            worst(&got, &want.pixels)
+        );
+    }
+}
+
+#[test]
+fn a_split_tone_tints_shadows_and_highlights_and_keeps_midtones_at_the_tints_mean() {
+    let grade = Grade::new().split(SplitTone::new(COOL, WARM).range(0.2, 0.8));
+    assert!(!grade.is_identity());
+    let shadow = grade.pixel(grey(0.1));
+    assert!(close(shadow, [0.07, 0.085, 0.1, 1.0], 1e-6), "{shadow:?}");
+    assert!(shadow[2] > shadow[0], "shadows lean to the shadow tint");
+    let highlight = grade.pixel(grey(0.9));
+    assert!(
+        close(highlight, [0.9, 0.765, 0.63, 1.0], 1e-6),
+        "{highlight:?}"
+    );
+    assert!(
+        highlight[0] > highlight[2],
+        "highlights lean to the highlight tint"
+    );
+    let mid = grade.pixel(grey(0.5));
+    assert!(close(mid, [0.425, 0.425, 0.425, 1.0], 1e-5), "{mid:?}");
+    let bound = 0.5 * 0.15;
+    assert!(mid[..3].iter().all(|v| (v - 0.5).abs() <= bound + 1e-6));
+    let premultiplied = grade.pixel([0.05, 0.05, 0.05, 0.5]);
+    assert!(
+        close(premultiplied, [0.035, 0.0425, 0.05, 0.5], 1e-6),
+        "{premultiplied:?}"
+    );
+    assert_eq!(grade.pixel([0.0; 4]), [0.0; 4]);
+    let half = Grade::new().split(SplitTone::new(
+        [COOL[0], COOL[1], COOL[2], 0.5],
+        [WARM[0], WARM[1], WARM[2], 0.5],
+    ));
+    let low = half.pixel(grey(0.0));
+    assert_eq!(low, [0.0, 0.0, 0.0, 1.0]);
+    let dark = half.split.scale(0.0);
+    assert!((dark[0] - 0.85).abs() < 1e-6 && (dark[2] - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn a_split_tone_at_rest_keeps_every_bit() {
+    let size = [64u32, 40u32];
+    let pixels = test_image(size);
+    let rest = Grade::new().split(SplitTone::default());
+    assert!(rest.is_identity());
+    assert!(rest.image(&pixels) == pixels);
+    let silent = Grade::new().split(SplitTone::new(
+        [COOL[0], COOL[1], COOL[2], 0.0],
+        [WARM[0], WARM[1], WARM[2], 0.0],
+    ));
+    assert!(silent.is_identity());
+    assert!(silent.image(&pixels) == pixels);
+    let graded = Grade::new().saturation(0.4).tint([1.0, 0.9, 0.75, 0.5]);
+    let with_rest = graded.split(SplitTone::default());
+    assert!(graded.image(&pixels) == with_rest.image(&pixels));
+}
+
+#[test]
+fn scanlines_darken_every_period_th_row_by_their_strength() {
+    let size = [8u32, 16u32];
+    let place = Place {
+        layout: [8.0, 16.0],
+        scale: 1.0,
+        offset: [0.0, 0.5],
+    };
+    let pixels = vec![grey(0.8); 8 * 16];
+    let crt = Crt {
+        scanlines: Some(Scanlines {
+            period: 4.0,
+            strength: 0.25,
+        }),
+        ..Crt::default()
+    };
+    let out = crt.scanlines_image(&pixels, size, &place);
+    for row in 0..16usize {
+        let v = out[row * 8][0];
+        match row % 4 {
+            0 => assert!((v - 0.6).abs() < 1e-6, "row {row}: {v}"),
+            2 => assert!((v - 0.8).abs() < 1e-6, "row {row}: {v}"),
+            _ => assert!(v > 0.6 && v < 0.8, "row {row}: {v}"),
+        }
+        assert!(out[row * 8..row * 8 + 8].iter().all(|p| *p == out[row * 8]));
+    }
+}
+
+#[test]
+fn a_bloom_threshold_keeps_only_light_above_it() {
+    let open = Bloom::new(12.0, 1.0);
+    assert_eq!(open.threshold, 0.0);
+    for v in [0.0, 0.3, 1.0] {
+        assert_eq!(open.bright(grey(v)), grey(v));
+    }
+    let bloom = open.threshold(0.6);
+    assert_eq!(bloom.bright(grey(0.5)), [0.0; 4]);
+    assert_eq!(bloom.bright(grey(0.6)), [0.0; 4]);
+    let bright = bloom.bright(grey(0.9));
+    let k = (luma(grey(0.9)) - 0.6) / luma(grey(0.9));
+    assert!(close(bright, grey(0.9).map(|v| v * k), 1e-6), "{bright:?}");
+    assert!((bright[0] - 0.3).abs() < 1e-5);
+}
+
+#[test]
+fn grain_response_scales_grain_by_one_less_its_share_of_luminance() {
+    let size = [48u32, 32u32];
+    let place = Place {
+        layout: [48.0, 32.0],
+        scale: 1.0,
+        offset: [0.0, 0.0],
+    };
+    let image = |v: f32| vec![grey(v); (size[0] * size[1]) as usize];
+    let (white, mid, ink) = (image(1.0), image(0.5), image(0.0));
+    for response in [0.0f32, 0.5, 0.6, 0.75, 1.0] {
+        let grain = Grain::new(0.2, 1.5).response(response);
+        let on_white = grain.image(&white, size, &place, 2, 9);
+        let on_mid = grain.image(&mid, size, &place, 2, 9);
+        let on_ink = grain.image(&ink, size, &place, 2, 9);
+        let mut moved = 0;
+        for i in 0..on_mid.len() {
+            let d_mid = on_mid[i][0] - 0.5;
+            let d_white = on_white[i][0] - 1.0;
+            assert!(d_mid.abs() <= 0.2 * (1.0 - 0.5 * response) + 1e-6);
+            assert!(d_white.abs() <= 0.2 * (1.0 - response) + 1e-6);
+            let want = d_mid * (1.0 - response) / (1.0 - 0.5 * response);
+            assert!((d_white - want).abs() < 1e-5, "{response} at {i}");
+            assert!(on_ink[i][0] >= 0.0 && on_ink[i][0] <= 0.2 + 1e-6);
+            assert_eq!(on_mid[i][3], 1.0);
+            moved += usize::from(d_mid.abs() > 1e-3);
+        }
+        assert!(
+            moved * 2 > on_mid.len(),
+            "{response}: grain moves most pixels"
+        );
+    }
+    let off = Grain::new(0.2, 1.5)
+        .response(1.0)
+        .image(&white, size, &place, 2, 9);
+    assert!(
+        worst(&off, &white) < 1e-6,
+        "a response of 1 keeps white clean"
+    );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn the_gpu_split_tone_scanlines_grain_response_and_bloom_threshold_keep_their_rules() {
+    let gpu = device();
+    let mut look = LookGpu::new(&gpu.device, &gpu.queue);
+    let size = [320u32, 200u32];
+    let count = (size[0] * size[1]) as usize;
+    let place = Place {
+        layout: [320.0, 200.0],
+        scale: 1.0,
+        offset: [0.0, 0.5],
+    };
+    fn surface(t: &OffscreenTarget) -> Surface<'_> {
+        Surface {
+            view: &t.view,
+            size: [320, 200],
+        }
+    }
+    let target = gpu
+        .offscreen(size[0], size[1], wgpu::TextureFormat::Rgba16Float)
+        .unwrap();
+    let pixels = f16(&test_image(size));
+    let source = upload(&gpu, size, &pixels);
+    let grade = Grade::new()
+        .saturation(0.6)
+        .split(SplitTone::new(COOL, WARM).range(0.15, 0.85));
+    let mut renders = Vec::new();
+    for _ in 0..2 {
+        renders.push(
+            run(
+                &gpu,
+                &mut look,
+                |look| look.grade(surface(&source), surface(&target), &grade),
+                &[&target],
+            )
+            .remove(0),
+        );
+    }
+    assert!(renders[0] == renders[1], "two split-tone renders are equal");
+    let twin = grade.image(&pixels);
+    assert!(
+        worst(&renders[0], &twin) < 1.5 / 255.0,
+        "split tone {}",
+        worst(&renders[0], &twin) * 255.0
+    );
+    let ramp: Vec<[f32; 4]> = f16(&(0..count)
+        .map(|i| grey((i as u32 % size[0]) as f32 / (size[0] - 1) as f32))
+        .collect::<Vec<_>>());
+    let ramp_source = upload(&gpu, size, &ramp);
+    let toned = run(
+        &gpu,
+        &mut look,
+        |look| look.grade(surface(&ramp_source), surface(&target), &grade),
+        &[&target],
+    )
+    .remove(0);
+    for x in [16usize, 32] {
+        let p = toned[x];
+        let v = ramp[x][0];
+        assert!(
+            close(p, [v * 0.7, v * 0.85, v, 1.0], 2e-3),
+            "shadow {x}: {p:?}"
+        );
+    }
+    for x in [288usize, 300] {
+        let p = toned[x];
+        let v = ramp[x][0];
+        assert!(
+            close(p, [v, v * 0.85, v * 0.7, 1.0], 2e-3),
+            "highlight {x}: {p:?}"
+        );
+    }
+    let mid = toned[160];
+    let v = ramp[160][0];
+    assert!(
+        mid[..3].iter().all(|c| (c - v).abs() <= v * 0.15 + 2e-3),
+        "mid {mid:?}"
+    );
+    assert!(
+        (mid[0] - mid[2]).abs() < 4e-3,
+        "midtones stay neutral: {mid:?}"
+    );
+    let flat = upload(&gpu, size, &f16(&vec![grey(0.8); count]));
+    let crt = Crt {
+        scanlines: Some(Scanlines {
+            period: 4.0,
+            strength: 0.25,
+        }),
+        ..Crt::default()
+    };
+    let lined = run(
+        &gpu,
+        &mut look,
+        |look| look.crt(&gpu.device, surface(&flat), surface(&target), &crt, &place),
+        &[&target],
+    )
+    .remove(0);
+    for row in 0..size[1] as usize {
+        let v = lined[row * size[0] as usize][0];
+        match row % 4 {
+            0 => assert!((v - 0.6).abs() < 2e-3, "row {row}: {v}"),
+            2 => assert!((v - 0.8).abs() < 2e-3, "row {row}: {v}"),
+            _ => {}
+        }
+    }
+    let white = upload(&gpu, size, &vec![grey(1.0); count]);
+    let mid_grey = upload(&gpu, size, &vec![grey(0.5); count]);
+    let clean = Grain::new(0.2, 1.5).response(1.0);
+    let out = run(
+        &gpu,
+        &mut look,
+        |look| look.grain(surface(&white), surface(&target), &clean, &place, 2, 9),
+        &[&target],
+    )
+    .remove(0);
+    assert!(
+        worst(&out, &vec![grey(1.0); count]) < 1e-3,
+        "white takes no grain"
+    );
+    let out = run(
+        &gpu,
+        &mut look,
+        |look| look.grain(surface(&mid_grey), surface(&target), &clean, &place, 2, 9),
+        &[&target],
+    )
+    .remove(0);
+    assert!(out.iter().all(|p| (p[0] - 0.5).abs() <= 0.1 + 2e-3));
+    assert!(out.iter().filter(|p| (p[0] - 0.5).abs() > 5e-3).count() * 2 > count);
+    let mut bright = vec![grey(0.5); count];
+    for y in 90..110 {
+        for x in 150..170 {
+            bright[y * size[0] as usize + x] = grey(1.0);
+        }
+    }
+    let spare = gpu
+        .offscreen(size[0], size[1], wgpu::TextureFormat::Rgba16Float)
+        .unwrap();
+    let mut bloomed = |layer_pixels: &[[f32; 4]], bloom: &Bloom| {
+        let layer = upload(&gpu, size, layer_pixels);
+        run(
+            &gpu,
+            &mut look,
+            |look| {
+                look.bloom(
+                    surface(&layer),
+                    surface(&spare),
+                    surface(&source),
+                    surface(&target),
+                    bloom,
+                    &place,
+                    &place,
+                )
+            },
+            &[&target],
+        )
+        .remove(0)
+    };
+    let dim = vec![grey(0.5); count];
+    let above = Bloom::new(3.0, 1.0).threshold(0.6);
+    assert!(
+        bloomed(&dim, &above) == pixels,
+        "light under the threshold leaves every pixel untouched"
+    );
+    assert!(bloomed(&dim, &Bloom::new(3.0, 1.0)) != pixels);
+    let accent = bloomed(&bright, &above);
+    let centre = 100 * size[0] as usize + 160;
+    assert!(accent[centre][0] > pixels[centre][0] + 0.05);
+    assert_eq!(
+        accent[10 * size[0] as usize + 10],
+        pixels[10 * size[0] as usize + 10]
+    );
+}
