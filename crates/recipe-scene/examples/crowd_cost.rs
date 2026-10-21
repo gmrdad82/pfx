@@ -137,6 +137,7 @@ struct Cost {
     copies: usize,
     keyed: usize,
     instances: usize,
+    packed: usize,
     draws: u32,
     pose_ms: f64,
     wall_ms: f64,
@@ -194,6 +195,7 @@ fn measure(
             .count(),
         keyed,
         instances: stage.instance_count(),
+        packed: stage.packed_records(),
         draws: stage.draw_count(),
         pose_ms: median(pose_ms),
         wall_ms: median(wall_ms),
@@ -206,15 +208,16 @@ fn main() -> Result<(), String> {
     let gpu = headless().map_err(|e| e.0)?;
     let mut turns = TurnState::default();
     let mut costs = Vec::new();
-    println!("copies\tkeyed\tinstances\tdraws\tpose_ms\twall_ms\tgpu_ms");
+    println!("copies\tkeyed\tinstances\tpacked\tdraws\tpose_ms\twall_ms\tgpu_ms");
     for &keyed in &args.keyed {
         for &copies in &args.copies {
             let cost = measure(&gpu, &args, copies, keyed, &mut turns)?;
             println!(
-                "{}\t{}\t{}\t{}\t{:.3}\t{:.2}\t{:.2}",
+                "{}\t{}\t{}\t{}\t{}\t{:.3}\t{:.2}\t{:.2}",
                 cost.copies,
                 cost.keyed,
                 cost.instances,
+                cost.packed,
                 cost.draws,
                 cost.pose_ms,
                 cost.wall_ms,
@@ -230,20 +233,27 @@ fn main() -> Result<(), String> {
             let Some(first) = row.first() else { continue };
             for cost in &row {
                 let chunks = cost.copies.div_ceil(pfx_live::crowd::CHUNK) as u32;
-                if cost.instances != first.instances || cost.draws > first.draws + chunks {
+                if cost.instances != first.instances
+                    || cost.packed != first.packed
+                    || cost.draws > first.draws + chunks
+                {
                     return Err(format!(
-                        "{} copies drew {} instances in {} draws, {} copies {} in {}: the frame's work grew with the copies",
+                        "{} copies drew {} instances, packed {} records in {} draws, {} copies {}, {} in {}: the frame's work grew with the copies",
                         cost.copies,
                         cost.instances,
+                        cost.packed,
                         cost.draws,
                         first.copies,
                         first.instances,
+                        first.packed,
                         first.draws
                     ));
                 }
             }
         }
-        println!("flat: instances do not grow with the copies and draws only by chunks");
+        println!(
+            "flat: instances and packed records do not grow with the copies and draws only by chunks"
+        );
     }
     Ok(())
 }

@@ -62,6 +62,23 @@ material = "ground"
 at = [1.5, 0.7, -1.0]
 keys = { rotate = [[0.0, [0.0, 0.0, 0.0]], [2.0, [0.0, 0.0, 30.0]]] }
 
+[[object]]
+name = "ramp"
+kind = "box"
+size = [3.0, 0.2, 2.0]
+material = "ground"
+at = [2.5, 0.4, 1.5]
+rotate = [0.0, 0.0, 20.0]
+
+[[scatter]]
+name = "pebbles"
+object = "leaf"
+on = "ramp"
+seed = 4
+density = 8.0
+align = true
+rotate_max = [0.0, 360.0, 0.0]
+
 [[camera]]
 name = "main"
 position = [0.0, 3.5, -6.0]
@@ -173,6 +190,16 @@ fn a_crowd_draws_what_its_baked_copies_drew_and_repeats_to_the_byte() {
     assert!(
         close > 40.0,
         "the crowd drew {close:.1} dB from its baked copies"
+    );
+    let apart = a
+        .chunks_exact(4)
+        .zip(b.chunks_exact(4))
+        .filter(|(x, y)| x.iter().zip(*y).any(|(p, q)| p.abs_diff(*q) > 4))
+        .count();
+    let pixels = a.len() / 4;
+    assert!(
+        apart * 200 <= pixels,
+        "{apart} of {pixels} pixels differ by more than 4/255 from the baked copies"
     );
     let mut again = Shot::new(&gpu, &recipe, &built.parts);
     let mut c = Vec::new();

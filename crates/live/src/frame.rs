@@ -1127,9 +1127,9 @@ pub struct Frame {
     shadow_sample: [u8; SAMPLE_UNIFORM_BYTES],
     instance_features: Vec<OpaqueFeatures>,
     crowds: crate::crowd::Crowds,
-    crowd_samples: Vec<GpuInstance>,
     crowd_features: Vec<OpaqueFeatures>,
     instance_scratch: Vec<GpuInstance>,
+    packed_records: usize,
     uploaded_instances: Vec<GpuInstance>,
     uploaded_materials: Vec<PackedMaterial>,
     uploaded_map_materials: Vec<GpuMapMaterial>,
@@ -2327,9 +2327,9 @@ impl Frame {
             shadow_sample: fallback_sample,
             instance_features: Vec::new(),
             crowds: crate::crowd::Crowds::default(),
-            crowd_samples: Vec::new(),
             crowd_features: Vec::new(),
             instance_scratch: Vec::new(),
+            packed_records: 0,
             uploaded_instances: Vec::new(),
             uploaded_materials: Vec::new(),
             uploaded_map_materials: Vec::new(),
@@ -2727,6 +2727,7 @@ impl Frame {
             },
         );
         self.crowd_batches(scene, &mut batches);
+        let crowd_features = self.crowd_features_of(scene.materials, &map_materials)?;
         let sample = shadows.map_or(self.shadow_sample, |(shadows, fit)| {
             shadows.sample_uniform(fit)
         });
@@ -2734,6 +2735,7 @@ impl Frame {
             &batches,
             self.scene_features_from(&sample),
             &instance_features,
+            &crowd_features,
         );
         let lit = self.lights.will_extend();
         let mut keys: Vec<OpaqueKey> = Vec::new();
@@ -2781,7 +2783,12 @@ impl Frame {
     }
 
     pub fn opaque_features(&self, batches: &[Batch]) -> Vec<OpaqueFeatures> {
-        self.batch_features(batches, self.scene_features(), &self.instance_features)
+        self.batch_features(
+            batches,
+            self.scene_features(),
+            &self.instance_features,
+            &self.crowd_features,
+        )
     }
 
     fn batch_features(
@@ -2789,13 +2796,13 @@ impl Frame {
         batches: &[Batch],
         scene: OpaqueFeatures,
         instance_features: &[OpaqueFeatures],
+        crowd_features: &[OpaqueFeatures],
     ) -> Vec<OpaqueFeatures> {
         batches
             .iter()
             .map(|batch| {
                 let used = match batch.crowd {
-                    Some(crowd) => self
-                        .crowd_features
+                    Some(crowd) => crowd_features
                         .get(crowd.crowd as usize)
                         .map_or(scene, |features| scene.union(*features)),
                     None => batch
@@ -3874,10 +3881,38 @@ impl Frame {
         })
     }
 
+    fn crowd_features_of(
+        &self,
+        materials: &[Material],
+        map_materials: &[GpuMapMaterial],
+    ) -> Result<Vec<OpaqueFeatures>, String> {
+        let surface = InstanceSurface::default();
+        self.crowds
+            .staged
+            .iter()
+            .map(|staged| {
+                let index = staged.material as usize;
+                let (Some(material), Some(map)) = (materials.get(index), map_materials.get(index))
+                else {
+                    return Err("a crowd references an unknown material".into());
+                };
+                let Some(&model) = staged.models.first() else {
+                    return Ok(OpaqueFeatures::NONE);
+                };
+                let sample = self.crowd_record(staged, model, &surface)?;
+                Ok(opaque_instance_features(
+                    &sample,
+                    map,
+                    material.thin_film_amount > 0.0,
+                    !material.flakes.off(),
+                ))
+            })
+            .collect()
+    }
+
     fn write_crowds(&mut self, materials: usize) -> Result<(), String> {
         let surface = InstanceSurface::default();
         let mut records = Vec::with_capacity(self.crowds.copies());
-        let mut samples = Vec::with_capacity(self.crowds.staged.len());
         let base = self.crowds.base as usize;
         for staged in &self.crowds.staged {
             if staged.material as usize >= materials {
@@ -3886,14 +3921,12 @@ impl Frame {
             for model in &staged.models {
                 records.push(self.crowd_record(staged, *model, &surface)?);
             }
-            samples.push(records[staged.start as usize]);
         }
         self.gpu.queue.write_buffer(
             &self.instances,
             (base * std::mem::size_of::<GpuInstance>()) as u64,
             bytemuck::cast_slice(&records),
         );
-        self.crowd_samples = samples;
         self.crowds.dirty = false;
         Ok(())
     }
@@ -3984,28 +4017,16 @@ impl Frame {
             self.uploaded_materials.clear();
             self.uploaded_map_materials.clear();
         }
+        self.packed_records = packed_instances.len();
         if self.crowds.dirty && !self.crowds.is_empty() {
             self.write_crowds(scene.materials.len())?;
+            self.packed_records += self.crowds.copies();
         }
-        self.crowd_features = self
-            .crowds
-            .staged
-            .iter()
-            .zip(&self.crowd_samples)
-            .map(|(staged, sample)| {
-                let index = staged.material as usize;
-                let material = scene
-                    .materials
-                    .get(index)
-                    .ok_or("a crowd references an unknown material")?;
-                Ok(opaque_instance_features(
-                    sample,
-                    &map_materials[index],
-                    material.thin_film_amount > 0.0,
-                    !material.flakes.off(),
-                ))
-            })
-            .collect::<Result<_, String>>()?;
+        if self.crowds.is_empty() {
+            self.crowd_features.clear();
+        } else {
+            self.crowd_features = self.crowd_features_of(scene.materials, &map_materials)?;
+        }
         if self
             .lights
             .prepare(&self.gpu.device, &self.gpu.queue, scene.materials.len())
@@ -4817,6 +4838,10 @@ impl Frame {
         &self.cull_stats
     }
 
+    pub fn packed_records(&self) -> usize {
+        self.packed_records
+    }
+
     fn draw_casters(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -4851,11 +4876,12 @@ impl Frame {
             .as_ref()
             .ok_or("frame lighting is not prepared")?;
         let occlusion = self.occlusion.as_ref().filter(|_| occluding);
-        let late: Vec<Run> = runs
-            .iter()
-            .filter(|run| batches[run.batch].crowd.is_none())
-            .cloned()
-            .collect();
+        let late: Option<Vec<Run>> = (occlusion.is_some() && !self.crowds.is_empty()).then(|| {
+            runs.iter()
+                .filter(|run| batches[run.batch].crowd.is_none())
+                .cloned()
+                .collect()
+        });
         if let Some(occlusion) = occlusion {
             occlusion.encode_early(encoder, profiler.as_deref_mut());
         }
@@ -4922,7 +4948,10 @@ impl Frame {
             self.draw_with(
                 &mut pass,
                 batches,
-                if phase > 0 { &late } else { runs },
+                match &late {
+                    Some(late) if phase > 0 => late,
+                    _ => runs,
+                },
                 commands,
                 lighting,
                 |index, two_sided| {

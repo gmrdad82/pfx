@@ -1647,6 +1647,10 @@ impl Renderer {
         self.frame.cull_stats()
     }
 
+    pub fn packed_records(&self) -> usize {
+        self.frame.packed_records()
+    }
+
     pub fn last_jitter(&self) -> [f32; 2] {
         self.frame.jitter()
     }

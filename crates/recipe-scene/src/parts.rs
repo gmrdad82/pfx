@@ -9,7 +9,7 @@ use pfx_mesh::{Mesh, Slot};
 use pfx_recipe::{Recipe, Setting, Settings, Shadow};
 use std::collections::{BTreeMap, BTreeSet};
 
-const DEFAULT_MATERIAL: &str = "default";
+pub const DEFAULT_MATERIAL: &str = "default";
 const DEGENERATE: f32 = 1e-14;
 
 pub struct Piece {

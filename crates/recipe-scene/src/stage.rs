@@ -146,7 +146,7 @@ impl Prepared {
     }
 
     pub fn kept(recipe: &Recipe, parts: &[Part], memory: &Memory) -> Result<Prepared, Error> {
-        let mut baked = BTreeSet::new();
+        let mut baked = refused_crowds(recipe, parts)?;
         loop {
             let prepared = Prepared::split(recipe, parts, memory, &baked)?;
             let refused: BTreeSet<(u32, u32)> = prepared
@@ -244,6 +244,43 @@ impl Prepared {
     }
 }
 
+fn refused_crowds(recipe: &Recipe, parts: &[Part]) -> Result<BTreeSet<(u32, u32)>, Error> {
+    let mut refused = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    for part in parts.iter().filter(|part| !part.hidden) {
+        let Some(copy) = part.scattered else {
+            continue;
+        };
+        let key = (copy.scatter, copy.piece);
+        if !seen.insert(key) {
+            continue;
+        }
+        let card = recipe
+            .objects
+            .get(part.object)
+            .is_some_and(|object| matches!(object.kind, pfx_recipe::Kind::Card { .. }));
+        let clipped = pfx_live::frame::InstanceSurface {
+            clip: cards::clips(recipe, part.object),
+            ..Default::default()
+        }
+        .clipped();
+        let mut glass = false;
+        let named: Vec<&str> = match part.node.mesh.slots.as_slice() {
+            [] => vec![parts::DEFAULT_MATERIAL],
+            slots => slots.iter().map(|slot| slot.material.as_str()).collect(),
+        };
+        for name in named {
+            if let Some(material) = parts::material(recipe, name)? {
+                glass |= parts::glassy(&material);
+            }
+        }
+        if card || clipped || glass {
+            refused.insert(key);
+        }
+    }
+    Ok(refused)
+}
+
 struct Uploaded {
     mark: Mark,
     handle: MeshHandle,
@@ -301,6 +338,8 @@ pub struct Stage {
     eye: Option<[f32; 3]>,
     cubed: bool,
     crowd_meshes: Vec<Uploaded>,
+    crowd_at: Vec<usize>,
+    crowd_models: Vec<Vec<Matrix>>,
     crowd_key: u64,
     crowd_copies: usize,
     keyed_names: Vec<String>,
@@ -406,6 +445,8 @@ impl Stage {
             eye: None,
             cubed: false,
             crowd_meshes: Vec::new(),
+            crowd_at: Vec::new(),
+            crowd_models: Vec::new(),
             crowd_key: 0,
             crowd_copies: 0,
             keyed_names: Vec::new(),
@@ -647,6 +688,7 @@ impl Stage {
                 .map_err(|e| Error(format!("the live renderer: {e}")))?;
             self.crowd_key = key;
             self.crowd_copies = models.iter().map(Vec::len).sum();
+            self.crowd_models = models;
         }
         for old in spare {
             self.renderer
@@ -654,6 +696,7 @@ impl Stage {
                 .map_err(|e| Error(format!("object {}: {e}", old.mark.key.name)))?;
             change.released += 1;
         }
+        self.crowd_at = made.iter().map(|(at, _, _)| *at).collect();
         self.crowd_meshes = made.into_iter().map(|(_, _, uploaded)| uploaded).collect();
         Ok(())
     }
@@ -730,6 +773,10 @@ impl Stage {
 
     pub fn draw_count(&self) -> u32 {
         self.renderer.cull_stats().camera.draws
+    }
+
+    pub fn packed_records(&self) -> usize {
+        self.renderer.packed_records()
     }
 
     pub fn bind_keys(&mut self, names: &[String]) {
@@ -845,7 +892,23 @@ impl Stage {
             .filter_map(|((&at, surface), glassed)| {
                 outline(at, glassed.mark.hash, surface.model, surface.id)
             });
-        opaque.chain(glass).collect()
+        let crowds = self
+            .crowd_at
+            .iter()
+            .zip(&self.crowd_meshes)
+            .zip(&self.crowd_models)
+            .filter(|&((&at, _), _)| {
+                self.pieces
+                    .get(at)
+                    .is_some_and(|piece| piece.shadow != Shadow::Only)
+            })
+            .flat_map(|((&at, uploaded), models)| {
+                let id = self.pieces[at].object as u32 + 1;
+                models
+                    .iter()
+                    .filter_map(move |&model| outline(at, uploaded.mark.hash, model, id))
+            });
+        opaque.chain(glass).chain(crowds).collect()
     }
 
     pub fn preview(&mut self, object: usize, motion: Matrix) -> Result<(), Error> {
