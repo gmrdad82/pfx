@@ -195,6 +195,11 @@ pub(super) struct Args {
         help = "Save the trace's samples this often, in minutes or as samples like 64spp, so a stopped render resumes where it was"
     )]
     checkpoint: Option<super::checkpoint::Every>,
+    #[arg(
+        long,
+        help = "Count the tracer's rays by kind and the candidates its queries hand back, and report them when it ends"
+    )]
+    counters: bool,
     #[command(flatten)]
     pick: super::Picks,
     #[command(flatten)]
@@ -437,6 +442,7 @@ impl Watch {
     }
 
     fn done(&self, out: &Path, rendered: &Rendered, at: Duration) -> Option<String> {
+        let [counts, rays, candidates, movers, walks] = counts_json(rendered.paced.counts.as_ref());
         (self.progress == Progress::Json).then(|| {
             json_line(
                 "done",
@@ -481,6 +487,11 @@ impl Watch {
                         pfx_core::memory::limit()
                             .map_or(serde_json::Value::Null, |b| rounded(gigabytes(b), 2)),
                     ),
+                    counts,
+                    rays,
+                    candidates,
+                    movers,
+                    walks,
                 ],
             )
         })
@@ -503,6 +514,59 @@ pub(super) fn path_json(path: &TracePath) -> serde_json::Value {
 pub(super) fn rounded(value: f64, places: i32) -> serde_json::Value {
     let scale = 10f64.powi(places);
     serde_json::json!((value * scale).round() / scale)
+}
+
+pub(super) fn counts_json(
+    counts: Option<&pfx_still::Counts>,
+) -> [(&'static str, serde_json::Value); 5] {
+    let Some(counts) = counts else {
+        return [
+            ("counts", serde_json::Value::Null),
+            ("rays_per_path", serde_json::Value::Null),
+            ("candidates_per_ray", serde_json::Value::Null),
+            ("mover_queries", serde_json::Value::Null),
+            ("mover_walks", serde_json::Value::Null),
+        ];
+    };
+    let rays = counts.rays_per_path();
+    let candidates = counts.candidates_per_ray();
+    [
+        (
+            "counts",
+            serde_json::json!({
+                "paths": counts.paths,
+                "primary": counts.primary,
+                "bounce": counts.bounce,
+                "closest": counts.closest,
+                "shadow": counts.shadow,
+                "surface_shadow": counts.surface_shadow,
+                "closest_candidates": counts.closest_candidates,
+                "shadow_candidates": counts.shadow_candidates,
+                "mover_queries": counts.mover_queries,
+                "mover_walks": counts.mover_walks,
+            }),
+        ),
+        (
+            "rays_per_path",
+            serde_json::json!({
+                "primary": rounded(rays.primary, 3),
+                "bounce": rounded(rays.bounce, 3),
+                "other_closest": rounded(rays.other_closest, 3),
+                "surface_shadow": rounded(rays.surface_shadow, 3),
+                "other_shadow": rounded(rays.other_shadow, 3),
+                "total": rounded(rays.total, 3),
+            }),
+        ),
+        (
+            "candidates_per_ray",
+            serde_json::json!({
+                "closest": rounded(candidates.closest, 3),
+                "shadow": rounded(candidates.shadow, 3),
+            }),
+        ),
+        ("mover_queries", rounded(counts.mover_queries_per_path(), 3)),
+        ("mover_walks", rounded(counts.mover_walks_per_path(), 3)),
+    ]
 }
 
 pub(super) fn json_line<const N: usize>(
@@ -565,6 +629,7 @@ fn traced(
         denoise: args.denoising(),
         time: args.time,
         transparent: args.transparent(),
+        counters: args.counters,
     };
     let key = super::checkpoint::key(
         &format!(
@@ -572,6 +637,7 @@ fn traced(
             Args {
                 progress: Progress::Plain,
                 checkpoint: None,
+                counters: false,
                 ..args.clone()
             }
         ),
@@ -628,6 +694,10 @@ fn traced(
         paced.gpu_ms,
         memory_line(&paced)
     );
+    let summary = match &paced.counts {
+        Some(counts) => format!("{summary}; {}", counts.line()),
+        None => summary,
+    };
     Ok((rendered, summary))
 }
 
@@ -790,7 +860,7 @@ mod tests {
     #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
-            "table.toml --camera main --spp 64 --threshold 0.02 --min-samples 16 --seed 9 --size 320x200 --ortho --crop 10,20,30,40 --variant bare --set sky.intensity=0.4 --set object.a.params.b=/x/y --time 1.5 --denoise off --out tmp/a.exr --master tmp/a.master.png --progress json --checkpoint 64spp --memory-limit 12.5 --background transparent",
+            "table.toml --camera main --spp 64 --threshold 0.02 --min-samples 16 --seed 9 --size 320x200 --ortho --crop 10,20,30,40 --variant bare --set sky.intensity=0.4 --set object.a.params.b=/x/y --time 1.5 --denoise off --out tmp/a.exr --master tmp/a.master.png --progress json --checkpoint 64spp --counters --memory-limit 12.5 --background transparent",
         ))
         .unwrap();
         assert_eq!(
@@ -817,6 +887,7 @@ mod tests {
                 background: super::super::Background::Transparent,
                 progress: Progress::Json,
                 checkpoint: Some(super::super::checkpoint::Every::Samples(64)),
+                counters: true,
                 pick: Default::default(),
                 memory: crate::recipe::Memory {
                     limit: Some(25 << 29),
@@ -967,6 +1038,61 @@ mod tests {
 
     fn fields(line: &str) -> serde_json::Value {
         serde_json::from_str(line).unwrap()
+    }
+
+    #[test]
+    fn the_counted_fields_keep_their_names_and_ratios() {
+        let counts = pfx_still::Counts {
+            paths: 200,
+            primary: 200,
+            bounce: 240,
+            closest: 450,
+            shadow: 800,
+            surface_shadow: 80,
+            closest_candidates: 225,
+            shadow_candidates: 512,
+            mover_queries: 100,
+            mover_walks: 4,
+        };
+        let line = json_line("done", 1.0, counts_json(Some(&counts)));
+        let read = fields(&line);
+        assert_eq!(read["counts"]["paths"], 200);
+        assert_eq!(read["counts"]["mover_walks"], 4);
+        assert_eq!(
+            read["rays_per_path"],
+            serde_json::json!({
+                "primary": 1.0,
+                "bounce": 1.2,
+                "other_closest": 0.05,
+                "surface_shadow": 0.4,
+                "other_shadow": 3.6,
+                "total": 6.25,
+            })
+        );
+        assert_eq!(
+            read["candidates_per_ray"],
+            serde_json::json!({"closest": 0.5, "shadow": 0.64})
+        );
+        assert_eq!(read["mover_queries"], 0.5);
+        assert_eq!(read["mover_walks"], 0.02);
+        let none = fields(&json_line(
+            "done",
+            1.0,
+            counts_json(Some(&pfx_still::Counts::default())),
+        ));
+        assert_eq!(none["rays_per_path"]["total"], 0.0);
+        assert_eq!(none["candidates_per_ray"]["shadow"], 0.0);
+        assert_eq!(none["mover_walks"], 0.0);
+        let off = fields(&json_line("done", 1.0, counts_json(None)));
+        for name in [
+            "counts",
+            "rays_per_path",
+            "candidates_per_ray",
+            "mover_queries",
+            "mover_walks",
+        ] {
+            assert!(off[name].is_null(), "{name}");
+        }
     }
 
     #[test]

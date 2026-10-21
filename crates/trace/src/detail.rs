@@ -395,6 +395,7 @@ pub struct Detail {
     pub motion: Option<crate::motion::Motion>,
     pub fog: Option<crate::fog::Fog>,
     pub sprite_room: usize,
+    pub counters: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
