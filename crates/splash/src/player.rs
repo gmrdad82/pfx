@@ -85,6 +85,20 @@ impl Player {
         from(&clip, at)
     }
 
+    fn show(&mut self, gpu: &Gpu, job: Composing) -> Result<(), String> {
+        let composition = job
+            .join()
+            .map_err(|_| "the splash stopped while it was composed".to_string())??;
+        self.shown = Some(Shown {
+            icons: FlatIcons::new(&gpu.device, &gpu.queue, composition.icons().clone()),
+            sprites: composition
+                .sprites()
+                .map(|sprites| FlatSprites::new(&gpu.device, &gpu.queue, sprites.clone())),
+            composition,
+        });
+        Ok(())
+    }
+
     pub fn settle(&mut self, gpu: &Gpu, size: [u32; 2]) -> Result<(), String> {
         if self
             .composing
@@ -92,16 +106,7 @@ impl Player {
             .is_some_and(|(_, job)| job.is_finished())
             && let Some((_, job)) = self.composing.take()
         {
-            let composition = job
-                .join()
-                .map_err(|_| "the splash stopped while it was composed".to_string())??;
-            self.shown = Some(Shown {
-                icons: FlatIcons::new(&gpu.device, &gpu.queue, composition.icons().clone()),
-                sprites: composition
-                    .sprites()
-                    .map(|sprites| FlatSprites::new(&gpu.device, &gpu.queue, sprites.clone())),
-                composition,
-            });
+            self.show(gpu, job)?;
         }
         let wanted = self
             .composing
@@ -112,6 +117,41 @@ impl Player {
             self.composing = Some((size, compose(&self.settings, size)));
         }
         Ok(())
+    }
+
+    pub fn warm(
+        &mut self,
+        gpu: &Gpu,
+        format: wgpu::TextureFormat,
+        size: [u32; 2],
+    ) -> Result<(), String> {
+        if size[0] == 0 || size[1] == 0 {
+            return Ok(());
+        }
+        if let Some((_, job)) = self.composing.take() {
+            self.show(gpu, job)?;
+        }
+        self.settle(gpu, size)?;
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pfx splash warm"),
+            size: wgpu::Extent3d {
+                width: size[0],
+                height: size[1],
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let phase = Phase::Showing {
+            at: LENGTH * 0.5,
+            opacity: 1.0,
+        };
+        self.draw(gpu, &view, format, size, phase)
     }
 
     pub fn draw(
@@ -316,5 +356,85 @@ mod tests {
         let (at, clip) = &handed[0];
         assert_eq!(*at, stalled);
         rises_from_silence(clip, &whole, *at);
+    }
+
+    fn always(size: [u32; 2]) -> Player {
+        let settings = Settings {
+            show: crate::Show::Always,
+            ..Settings::default()
+        };
+        Player::start(&settings, None, size, false).unwrap()
+    }
+
+    fn gpu() -> Gpu {
+        pollster::block_on(Gpu::headless()).unwrap()
+    }
+
+    const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn a_warmed_splash_makes_nothing_on_its_first_frame_and_draws_the_lockup_on_its_ground() {
+        let gpu = gpu();
+        let size = [320, 180];
+        let mut player = always(size);
+        player.warm(&gpu, FORMAT, size).unwrap();
+        assert!(player.ready());
+        assert!(player.composing.is_none());
+        let made = player.pass.as_ref().unwrap().pipelines_made();
+        assert!(made > 0);
+        assert_eq!(
+            player.phase(0, true),
+            Phase::Showing {
+                at: 0.0,
+                opacity: 0.0
+            }
+        );
+        let phase = player.phase(1_000_000_000, true);
+        assert_eq!(
+            phase,
+            Phase::Showing {
+                at: 1.0,
+                opacity: 1.0
+            }
+        );
+        let target = gpu.offscreen(size[0], size[1], FORMAT).unwrap();
+        player
+            .draw(&gpu, &target.view, FORMAT, size, phase)
+            .unwrap();
+        assert_eq!(player.pass.as_ref().unwrap().pipelines_made(), made);
+        let pixels = gpu.readback_rgba8(&target).unwrap();
+        let [r, g, b] = Settings::default().background.0;
+        let ground = |pixel: &[u8]| {
+            pixel[0].abs_diff(r) <= 1 && pixel[1].abs_diff(g) <= 1 && pixel[2].abs_diff(b) <= 1
+        };
+        assert!(
+            ground(&pixels[..4]),
+            "the corner is the ground: {:?}",
+            &pixels[..4]
+        );
+        let inked = pixels
+            .chunks_exact(4)
+            .filter(|pixel| !ground(pixel))
+            .count();
+        assert!(inked > 200, "the lockup drew {inked} pixels");
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn warming_at_no_size_does_nothing_and_at_a_new_size_recomposes_for_it() {
+        let gpu = gpu();
+        let mut player = always([320, 180]);
+        player.warm(&gpu, FORMAT, [0, 180]).unwrap();
+        assert!(player.pass.is_none());
+        assert!(!player.ready());
+        player.warm(&gpu, FORMAT, [640, 360]).unwrap();
+        assert!(player.ready());
+        assert_eq!(
+            player.shown.as_ref().unwrap().composition.size(),
+            [320, 180]
+        );
+        assert_eq!(player.composing.as_ref().unwrap().0, [640, 360]);
+        assert!(player.pass.is_some());
     }
 }

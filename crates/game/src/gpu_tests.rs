@@ -6,7 +6,8 @@ use pfx_gpu::screens::{Budget, Device};
 use pfx_gpu::window::Size;
 use pfx_input::Input;
 use pfx_live::flat::{Draw, Srgba};
-use pfx_play::{Game, Label, Settings, Ui, UiFrame, World};
+use pfx_live::stats::FrameStats;
+use pfx_play::{Game, GameError, Label, Settings, Ui, UiFrame, Warm, Warming, World};
 
 use crate::tests::{capped, world};
 use crate::{Config, Count, Event, Headless};
@@ -757,4 +758,123 @@ fn an_idle_game_draws_nothing_until_something_changes() {
     let (mut always, _) = start(crate::Redraw::Always);
     let (drawn, frames) = composed(&mut always);
     assert_eq!(drawn, frames, "redraw always draws every frame");
+}
+
+fn stats_lines(path: &Path) -> Vec<serde_json::Value> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn every_drawn_frame_writes_one_stats_line_with_its_source() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tmp")
+        .join(format!("game-stats-sources-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let window = Size {
+        width: 320,
+        height: 180,
+    };
+    let path = dir.join("scene.jsonl");
+    let asks = std::rc::Rc::new(std::cell::RefCell::new(Asks {
+        text: "idle",
+        ..Asks::default()
+    }));
+    let config = Config::new("idle", "0.0.0", world())
+        .device(Device::Desktop)
+        .font(FONT)
+        .exposure(crate::Exposure::Fixed(1.0));
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let game = Idle {
+        asks: std::rc::Rc::clone(&asks),
+        settings: capped(),
+    };
+    let mut run = Headless::with_gpu(game, config, gpu, window).unwrap();
+    run.on_demand = true;
+    run.painter_mut()
+        .unwrap()
+        .renderer_mut()
+        .set_frame_stats(FrameStats::to_file(&path).unwrap());
+    run.run_for(1.0).unwrap();
+    let still = run.composed;
+    asks.borrow_mut().text = "changed";
+    run.run_for(1.0).unwrap();
+    assert_eq!(run.composed, still + 1);
+    run.painter().unwrap().renderer().frame_stats().finish();
+    let lines = stats_lines(&path);
+    let (end, frames) = lines.split_last().unwrap();
+    assert_eq!(end["end"], true);
+    assert_eq!(end["frames"], run.composed);
+    assert_eq!(frames.len() as u64, run.composed);
+    for (tick, line) in frames.iter().enumerate() {
+        assert_eq!(line["tick"], tick as u64);
+        assert_eq!(line["size"], serde_json::json!([320, 180]));
+    }
+    assert_eq!(frames[0]["source"], "game");
+    assert_eq!(frames[0]["kind"], "full");
+    assert_eq!(frames.last().unwrap()["source"], "ui");
+
+    let path = dir.join("flat.jsonl");
+    let config = Config::flat("flat", "0.0.0")
+        .device(Device::Desktop)
+        .font(FONT);
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let mut run = Headless::with_gpu(Board { settings: capped() }, config, gpu, window).unwrap();
+    run.painter_mut()
+        .unwrap()
+        .renderer_mut()
+        .set_frame_stats(FrameStats::to_file(&path).unwrap());
+    let count = run.run_for(0.25).unwrap();
+    run.painter().unwrap().renderer().frame_stats().finish();
+    let lines = stats_lines(&path);
+    let (end, frames) = lines.split_last().unwrap();
+    assert_eq!(end["frames"], count.frames);
+    assert_eq!(frames.len() as u64, count.frames);
+    assert!(frames.iter().all(|line| line["source"] == "ui"));
+    assert!(frames.iter().all(|line| line["kind"] == "full"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+struct Sized {
+    sizes: std::rc::Rc<std::cell::RefCell<Vec<Option<[u32; 2]>>>>,
+}
+
+impl Game for Sized {
+    fn start(&mut self, _world: &mut World) {}
+
+    fn tick(&mut self, _world: &mut World, _tick: &Tick, _input: &Input) {}
+
+    fn warm(&mut self, warm: &mut Warm<'_>) -> Result<Warming, GameError> {
+        self.sizes.borrow_mut().push(warm.size());
+        Ok(Warming::Done)
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn warm_gives_the_windows_inner_size_after_a_resize() {
+    let sizes = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let mut run = Headless::with_gpu(
+        Sized {
+            sizes: std::rc::Rc::clone(&sizes),
+        },
+        Config::flat("sized", "0.0.0").device(Device::Desktop),
+        gpu,
+        Size {
+            width: 640,
+            height: 360,
+        },
+    )
+    .unwrap();
+    run.feed(Event::Resized(Size {
+        width: 2560,
+        height: 1440,
+    }));
+    run.warm().unwrap();
+    assert_eq!(*sizes.borrow(), [Some([2560, 1440])]);
 }

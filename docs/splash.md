@@ -15,6 +15,7 @@ It overlaps the game's loading and never adds a wait:
 - the window shows the splash's ground colour from its first frame;
 - the splash is composed on a worker thread while the GPU and the renderer start, so drawing it costs no start-up time;
 - while it plays, each frame runs one step of the game's own warm-up (its pipelines, glyphs and looks) and then draws the splash;
+- the splash's own pass and pipelines are built before its first frame (`Player::warm`), so that frame costs the game's first warm-up step and a draw. That step runs on the splash's first frame, before it is presented: a game that starts its own loading threads there (a second renderer compiling its pipelines, bakes, tables) shares the CPU and the GPU device with that frame, so it starts them from pass 1 (`Warming::More` from pass 0), once the first frame is on screen;
 - when loading finishes first, the splash still completes its 2 s;
 - when loading takes longer, the ground colour holds after the fade and the game's first frame comes the moment loading is done.
 
@@ -105,6 +106,9 @@ An app that opens its own window instead of running through pfx-game shows the s
 use pfx_splash::{Phase, Player};
 
 let mut splash = Player::start(&settings, Some(BUILD_DATE), [width, height], sound_on);
+if let Some(player) = &mut splash {
+    player.warm(&gpu, format, [width, height])?;
+}
 
 if let Some(player) = &mut splash {
     let phase = player.phase(now_ns, loaded);
@@ -142,6 +146,7 @@ if let Some(player) = &mut splash {
 - `Player::start(settings, build_date, size, sound)` starts composing at the window's pixel size, and making the chime when `sound` is true, each on its own thread, and returns at once. It returns `None` when a verified Pro key hides the splash, which happens only under `show = "auto"`; then the app starts as if the splash had played. `build_date` is the app's own `YYYY-MM-DD` build date, as in [Hiding it](#hiding-it).
 - `phase(now_ns, loaded)` reads the app's clock in nanoseconds; the splash's 2 s start at the first call after the composition is ready (`ready()` says when). `loaded` is whether the app has finished its own loading: `Phase::Waiting` holds the ground after the fade until it has, and `Phase::Done` is the app's cue to start its own intro.
 - `settle(gpu, size)` takes the finished composition onto the GPU and recomposes on the worker thread when the window's size changes; call it each frame before `draw`.
+- `warm(gpu, format, size)` waits for the composition (the splash would wait for it before its first frame anyway), takes it onto the GPU, recomposes when the size differs from the one `start` was given, and draws one frame of the splash into a scratch texture of the surface's format and size, so the pass, its pipelines, its targets and the composition's uploads are made before the first frame is presented, not on it. pfx-game calls it once its renderer is built, before the first splash frame; an app calls it after `start` and before its first `draw`.
 - `draw(gpu, view, format, size, phase)` clears the view to the ground and draws the frame for that phase in one flat pass, and submits it. The ground is `settings.background.srgba()`, a `pfx_splash::Srgba`, for clearing the window's first frames before the composition is ready.
 - `chime(at)` hands over the chime once, on the first frame the rule shows (`at` past 0.45 s) and when it is ready, cut to start at `at` seconds into the splash so it never drifts, with a 4 ms ramp from silence at the cut: a `pfx_sound::Clip` of 48 kHz stereo samples for the app's own mixer. The app plays it at its master volume, and not at all when muted.
 - A resize during the splash shows the previous composition scaled to the new size until the worker thread has recomposed it, 140–240 ms later.
@@ -150,6 +155,10 @@ if let Some(player) = &mut splash {
 ## Speed
 
 The art is compiled in (the lockup's and the site's SVGs, `include_str!`), so nothing is read from disk. Composing it at the window's pixel size (reading the SVGs, painting the mark's glow and blur at that size and baking the shapes' distance fields) takes 140–240 ms on a Ryzen 9 9950X, on the worker thread. Each frame then rebuilds a few dozen draws and runs one flat pass: under 0.1 ms of CPU, and 3.5 ms median, 7.0 ms p99 for the whole frame at 3840x2160 on a Radeon RX 9060 XT (built, submitted and waited for, before present), inside the 8.33 ms frame of the 120 fps budget every GUI holds, with 1.3 ms to spare at p99.
+
+The first frame no longer builds the splash: `Player::warm` makes its pass, pipelines, targets and uploads while the window shows its ground. Measured with pfx-game's `boot` example (`crates/game/examples/boot`: the splash, an ident and an animated title, `PFX_FRAME_STATS` on) in a private headless compositor at 2560x1440 and 120 Hz, release build under `pgpu run --class bench`, the machine at a load average of about 12, two runs each: the splash's first frame, from its start to its present and including the game's first warm-up step, took 91 and 94 ms before and 29 and 32 ms after; with the game building a second renderer on another thread from that warm-up step, 90 and 93 ms before and 37 and 59 ms after. The longest frame inside the splash went from 9.7–10.2 ms to 8.6–9.3 ms.
+
+Tests: `crates/splash/src/player.rs` (GPU, ignored) warms a splash, then checks its first drawn frame makes no pipeline, keeps the ground in the corner and draws the lockup; a warm at no size does nothing, and a warm at a new size recomposes for it.
 
 ## Making the pictures
 

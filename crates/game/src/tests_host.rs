@@ -552,3 +552,28 @@ fn a_surface_configure_that_fails_is_retried_until_its_bound_then_errors() {
     let error = error.unwrap_err();
     assert!(error.contains("refused 1 of them"), "{error}");
 }
+
+#[test]
+fn every_frame_the_window_presents_is_a_splash_or_a_ui_frame_until_the_renderer_draws() {
+    use pfx_live::stats::Source;
+    assert_eq!(crate::host::frame_source(true), Source::Splash);
+    assert_eq!(crate::host::frame_source(false), Source::Ui);
+}
+
+#[cfg(feature = "splash")]
+#[test]
+fn the_warm_up_runs_again_under_the_splash_only_when_the_window_changed_size_after_it() {
+    use crate::host::rewarm;
+    let small = Size {
+        width: 1280,
+        height: 720,
+    };
+    let large = Size {
+        width: 2560,
+        height: 1440,
+    };
+    assert!(rewarm(false, Some(small), large));
+    assert!(!rewarm(false, Some(large), large));
+    assert!(!rewarm(true, Some(small), large));
+    assert!(!rewarm(false, None, large));
+}

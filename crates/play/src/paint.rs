@@ -40,6 +40,10 @@ pub trait Warmer {
     fn format(&self) -> Option<wgpu::TextureFormat> {
         None
     }
+
+    fn size(&self) -> Option<[u32; 2]> {
+        None
+    }
 }
 
 pub struct Warm<'a> {
@@ -81,6 +85,10 @@ impl<'a> Warm<'a> {
         self.warmer.format()
     }
 
+    pub fn size(&self) -> Option<[u32; 2]> {
+        self.warmer.size()
+    }
+
     pub fn pass(&self) -> u32 {
         self.pass
     }
@@ -117,5 +125,50 @@ impl Warmer for NoWarmer {
 
     fn renderer(&mut self) -> Option<&mut Renderer> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Sized(Option<[u32; 2]>);
+
+    impl Warmer for Sized {
+        fn glyphs(
+            &mut self,
+            _family: &str,
+            _weight: u16,
+            _sizes: &[f32],
+            _chars: &str,
+        ) -> Result<usize, String> {
+            Ok(0)
+        }
+
+        fn looks(&mut self, _looks: &[Look]) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn renderer(&mut self) -> Option<&mut Renderer> {
+            None
+        }
+
+        fn size(&self) -> Option<[u32; 2]> {
+            self.0
+        }
+    }
+
+    #[test]
+    fn warm_hands_the_game_its_warmers_size_and_none_without_one() {
+        let mut sized = Sized(Some([2560, 1440]));
+        let warm = Warm::new(&mut sized, 0, 0.0, 2.0);
+        assert_eq!(warm.size(), Some([2560, 1440]));
+        assert_eq!(warm.format(), None);
+        let mut bare = Sized(None);
+        assert_eq!(Warm::new(&mut bare, 1, 0.5, 2.0).size(), None);
+        let mut none = NoWarmer;
+        let warm = Warm::new(&mut none, 0, 0.0, 2.0);
+        assert_eq!(warm.size(), None);
+        assert_eq!(warm.format(), None);
     }
 }

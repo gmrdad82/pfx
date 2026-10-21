@@ -389,6 +389,7 @@ impl Game for Warmed {
         self.steps.borrow_mut().push(Step::Warm(warm.pass()));
         assert!(warm.renderer().is_some());
         assert_eq!(warm.format(), Some(crate::headless::TARGET_FORMAT));
+        assert_eq!(warm.size(), Some([640, 360]));
         if warm.pass() == 0 {
             *self.made.borrow_mut() = warm.glyphs("DM Sans", 400, &[64.0], "0123456789")?;
             return Ok(Warming::More);

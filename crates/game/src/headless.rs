@@ -6,6 +6,7 @@ use pfx_gpu::window::{
     Point, PresentPreference, Size, WindowOps,
 };
 use pfx_gpu::{Gpu, OffscreenTarget, wgpu};
+use pfx_live::stats::Source;
 use pfx_play::{Game, NoWarmer, Warming};
 
 use crate::config::{Config, Crash, Pads, report};
@@ -276,7 +277,9 @@ impl Headless {
             let view = &gpu.target.view;
             let on_demand = self.on_demand;
             let mut result = Ok(None);
+            let stats = painter.renderer().frame_stats();
             gpu.pace.frame(|| {
+                stats.present_begin(Source::Ui);
                 result = match on_demand {
                     false => painter.draw(driver, view, TARGET_FORMAT),
                     true => match painter.prepare(driver, false) {
@@ -285,6 +288,10 @@ impl Headless {
                         Err(error) => Err(error),
                     },
                 };
+                match &result {
+                    Ok(Some(drawn)) => stats.presented(drawn.output),
+                    _ => stats.present_abandon(),
+                }
             });
             let drawn = result?;
             self.composed += u64::from(drawn.is_some());

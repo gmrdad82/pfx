@@ -1185,3 +1185,33 @@ fn a_game_plays_a_scene_embedded_as_pitofx_bytes() {
         assert!(seen.iter().any(|seen| seen == name), "{name}: {seen:?}");
     }
 }
+
+#[test]
+fn the_rest_after_a_skipped_frame_ends_when_the_next_tick_is_due() {
+    let (mut run, _, _) = headless(Settings::default());
+    let near = |found: Option<u64>, ns: u64| {
+        let found = found.unwrap();
+        assert!(found.abs_diff(ns) <= 2_000, "{found} against {ns}");
+    };
+    assert_eq!(run.driver.next_tick_ns(), None);
+    let ms = 1_000_000;
+    run.driver.update(0);
+    near(run.driver.next_tick_ns(), 16_666_667);
+    run.driver.update(10 * ms);
+    near(run.driver.next_tick_ns(), 16_666_667);
+    run.driver.update(20 * ms);
+    near(run.driver.next_tick_ns(), 33_333_333);
+    run.driver.session_mut().world_mut().set_speed(0.5);
+    run.driver.update(25 * ms);
+    near(run.driver.next_tick_ns(), 41_666_667);
+    run.driver.session_mut().world_mut().set_speed(2.0);
+    run.driver.update(30 * ms);
+    near(run.driver.next_tick_ns(), 30_416_667);
+    run.driver.session_mut().pause();
+    run.driver.update(40 * ms);
+    near(run.driver.next_tick_ns(), 56_666_667);
+    run.driver.session_mut().resume();
+    run.driver.session_mut().world_mut().set_speed(1.0);
+    run.driver.update(50 * ms);
+    near(run.driver.next_tick_ns(), 57_500_000);
+}

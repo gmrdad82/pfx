@@ -36,6 +36,24 @@ impl FrameKind {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Source {
+    #[default]
+    Game,
+    Ui,
+    Splash,
+}
+
+impl Source {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Game => "game",
+            Self::Ui => "ui",
+            Self::Splash => "splash",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Sample {
     pub tick: u64,
@@ -52,6 +70,7 @@ pub struct Sample {
     pub kind: FrameKind,
     pub size: [u32; 2],
     pub hud_ms: Option<f64>,
+    pub source: Source,
 }
 
 struct Line {
@@ -123,7 +142,7 @@ impl Line {
         }
         out.push_str(",\"hud_ms\":");
         optional(&mut out, sample.hud_ms);
-        out.push('}');
+        let _ = write!(out, ",\"source\":\"{}\"}}", sample.source.name());
         out
     }
 }
@@ -179,6 +198,25 @@ struct Open {
     queue_ms: f64,
 }
 
+struct Presenting {
+    begin: Instant,
+    source: Source,
+    drew: Option<FrameKind>,
+    poll_ms: f64,
+    queue_ms: f64,
+    hud_ms: Option<f64>,
+    wait_ms: Option<f64>,
+}
+
+fn rank(kind: FrameKind) -> u8 {
+    match kind {
+        FrameKind::Idle => 0,
+        FrameKind::Reproject => 1,
+        FrameKind::Partial => 2,
+        FrameKind::Full => 3,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Span {
     Poll,
@@ -191,6 +229,7 @@ struct State {
     thread: Option<JoinHandle<()>>,
     epoch: Option<Instant>,
     open: Option<Open>,
+    presenting: Option<Presenting>,
     sim_start: Option<Instant>,
     sim_total: Option<f64>,
     last_submit: Option<Instant>,
@@ -229,6 +268,29 @@ impl Shared {
                 self.dropped.fetch_add(1, Ordering::Relaxed);
             }
         }
+    }
+
+    fn line(&self, state: &mut State, mut sample: Sample, begin: Instant, now: Instant) {
+        if let Some(line) = state.pending.take() {
+            self.emit(state, line);
+        }
+        let epoch = state.epoch.unwrap_or(begin);
+        state.frames += 1;
+        sample.t_ms = millis(epoch, begin);
+        sample.interval_ms = state.last_submit.map(|last| millis(last, now));
+        state.last_submit = Some(now);
+        sample.sim_ms = state.sim_total.take();
+        if state.keep > 0 {
+            state.recent.push_back(sample);
+            while state.recent.len() > state.keep {
+                state.recent.pop_front();
+            }
+        }
+        state.pending = Some(Line {
+            sample,
+            gpu: None,
+            device: state.device,
+        });
     }
 
     fn finish(&self) {
@@ -330,6 +392,7 @@ impl FrameStats {
                     thread,
                     epoch: None,
                     open: None,
+                    presenting: None,
                     sim_start: None,
                     sim_total: None,
                     last_submit: None,
@@ -403,6 +466,10 @@ impl FrameStats {
             return;
         };
         let span = millis(start, now);
+        if let Some(presenting) = state.presenting.as_mut() {
+            presenting.hud_ms = Some(presenting.hud_ms.unwrap_or(0.0) + span);
+            return;
+        }
         let Some(line) = state.pending.as_mut() else {
             return;
         };
@@ -522,6 +589,10 @@ impl FrameStats {
                 }
             }
             Span::Wait => {
+                if let Some(presenting) = state.presenting.as_mut() {
+                    presenting.wait_ms = Some(presenting.wait_ms.unwrap_or(0.0) + ms);
+                    return;
+                }
                 let Some(line) = state.pending.as_mut() else {
                     return;
                 };
@@ -555,25 +626,26 @@ impl FrameStats {
         let Some(open) = state.open.take() else {
             return;
         };
-        if let Some(line) = state.pending.take() {
-            shared.emit(&mut state, line);
-        }
-        let epoch = state.epoch.unwrap_or(open.begin);
         let tick = state.frames;
-        state.frames += 1;
-        let interval_ms = state.last_submit.map(|last| millis(last, now));
-        state.last_submit = Some(now);
-        let sim_ms = state.sim_total.take();
         state.ticks.push_back((frame, tick));
         while state.ticks.len() > KEPT_FRAMES {
             state.ticks.pop_front();
+        }
+        if let Some(presenting) = state.presenting.as_mut() {
+            presenting.poll_ms += open.poll_ms;
+            presenting.queue_ms += open.queue_ms;
+            presenting.drew = Some(match presenting.drew {
+                Some(kind) if rank(kind) >= rank(open.kind) => kind,
+                _ => open.kind,
+            });
+            return;
         }
         let submit_ms = millis(open.begin, now);
         let prepare_ms = open.prepared.map(|prepared| millis(open.begin, prepared));
         let sample = Sample {
             tick,
-            t_ms: millis(epoch, open.begin),
-            sim_ms,
+            t_ms: 0.0,
+            sim_ms: None,
             submit_ms,
             prepare_ms,
             encode_ms: (submit_ms - prepare_ms.unwrap_or(0.0) - open.poll_ms - open.queue_ms)
@@ -582,22 +654,102 @@ impl FrameStats {
             queue_ms: open.queue_ms,
             wait_ms: None,
             gpu_ms: None,
-            interval_ms,
+            interval_ms: None,
             kind: open.kind,
             size,
             hud_ms: None,
+            source: Source::Game,
         };
-        if state.keep > 0 {
-            state.recent.push_back(sample);
-            while state.recent.len() > state.keep {
-                state.recent.pop_front();
-            }
+        shared.line(&mut state, sample, open.begin, now);
+    }
+
+    pub fn present_begin(&self, source: Source) {
+        if self.shared.is_some() {
+            self.present_begin_at(source, Instant::now());
         }
-        state.pending = Some(Line {
-            sample,
-            gpu: None,
-            device: state.device,
-        });
+    }
+
+    pub fn present_begin_at(&self, source: Source, now: Instant) {
+        if let Some(shared) = &self.shared {
+            let mut state = shared.lock();
+            state.epoch.get_or_insert(now);
+            state.open = None;
+            if state.presenting.is_some() {
+                let tick = state.frames;
+                state.ticks.retain(|(_, kept)| *kept != tick);
+            }
+            state.presenting = Some(Presenting {
+                begin: now,
+                source,
+                drew: None,
+                poll_ms: 0.0,
+                queue_ms: 0.0,
+                hud_ms: None,
+                wait_ms: None,
+            });
+        }
+    }
+
+    pub fn presenting(&self) -> bool {
+        self.shared
+            .as_ref()
+            .is_some_and(|shared| shared.lock().presenting.is_some())
+    }
+
+    pub fn present_abandon(&self) {
+        let Some(shared) = &self.shared else {
+            return;
+        };
+        let mut state = shared.lock();
+        state.open = None;
+        if state.presenting.take().is_some() {
+            let tick = state.frames;
+            state.ticks.retain(|(_, kept)| *kept != tick);
+        }
+    }
+
+    pub fn presented(&self, size: [u32; 2]) {
+        if self.shared.is_some() {
+            self.presented_at(size, Instant::now());
+        }
+    }
+
+    pub fn presented_at(&self, size: [u32; 2], now: Instant) {
+        let Some(shared) = &self.shared else {
+            return;
+        };
+        let mut state = shared.lock();
+        state.open = None;
+        let Some(presenting) = state.presenting.take() else {
+            return;
+        };
+        let submit_ms = millis(presenting.begin, now);
+        let source = match (presenting.drew, presenting.source) {
+            (Some(_), Source::Ui) => Source::Game,
+            (_, source) => source,
+        };
+        let sample = Sample {
+            tick: state.frames,
+            t_ms: 0.0,
+            sim_ms: None,
+            submit_ms,
+            prepare_ms: None,
+            encode_ms: (submit_ms
+                - presenting.poll_ms
+                - presenting.queue_ms
+                - presenting.wait_ms.unwrap_or(0.0))
+            .max(0.0),
+            poll_ms: presenting.poll_ms,
+            queue_ms: presenting.queue_ms,
+            wait_ms: presenting.wait_ms,
+            gpu_ms: None,
+            interval_ms: None,
+            kind: presenting.drew.unwrap_or(FrameKind::Full),
+            size,
+            hud_ms: presenting.hud_ms,
+            source,
+        };
+        shared.line(&mut state, sample, presenting.begin, now);
     }
 
     pub fn gpu(&self, frame: u64, milliseconds: f64) {
@@ -865,6 +1017,161 @@ mod tests {
     }
 
     #[test]
+    fn every_presented_frame_has_one_line_with_its_source_and_the_renderer_frames_fold_in() {
+        let sink = Sink::default();
+        let stats = FrameStats::to_writer(Box::new(sink.clone()), 16);
+        let base = Instant::now();
+        let size = [2560, 1440];
+        stats.present_begin_at(Source::Splash, ms(base, 0));
+        assert!(stats.presenting());
+        stats.presented_at(size, ms(base, 3));
+        assert!(!stats.presenting());
+        stats.sim_begin_at(ms(base, 5));
+        stats.sim_end_at(ms(base, 6));
+        stats.present_begin_at(Source::Ui, ms(base, 8));
+        stats.hud_begin_at(ms(base, 9));
+        stats.hud_end_at(ms(base, 10));
+        stats.presented_at(size, ms(base, 10));
+        stats.present_begin_at(Source::Ui, ms(base, 16));
+        stats.begin_at(FrameKind::Partial, ms(base, 17));
+        stats.span_at(Span::Poll, ms(base, 17), ms(base, 18));
+        stats.submitted_at(7, [1280, 720], ms(base, 19));
+        stats.begin_at(FrameKind::Full, ms(base, 20));
+        stats.span_at(Span::Queue, ms(base, 20), ms(base, 22));
+        stats.submitted_at(8, [1280, 720], ms(base, 22));
+        stats.begin_at(FrameKind::Idle, ms(base, 22));
+        stats.discard();
+        stats.span_at(Span::Wait, ms(base, 23), ms(base, 24));
+        stats.presented_at(size, ms(base, 24));
+        stats.gpu(7, 2.5);
+        stats.present_begin_at(Source::Ui, ms(base, 30));
+        stats.begin_at(FrameKind::Full, ms(base, 31));
+        stats.submitted_at(9, [1280, 720], ms(base, 32));
+        stats.present_abandon();
+        stats.presented_at(size, ms(base, 33));
+        stats.present_begin_at(Source::Ui, ms(base, 40));
+        stats.presented_at(size, ms(base, 41));
+        stats.gpu(9, 1.0);
+        frame(&stats, base, 10, 50, FrameKind::Reproject);
+        stats.finish();
+        let lines = sink.lines();
+        assert_eq!(lines.len(), 6);
+        let column = |key: &str| -> Vec<serde_json::Value> {
+            lines[..5].iter().map(|line| line[key].clone()).collect()
+        };
+        assert_eq!(column("tick"), [0, 1, 2, 3, 4]);
+        assert_eq!(column("source"), ["splash", "ui", "game", "ui", "game"]);
+        assert_eq!(
+            column("kind"),
+            ["full", "full", "full", "full", "reproject"]
+        );
+        assert_eq!(column("t_ms"), [0.0, 8.0, 16.0, 40.0, 50.0]);
+        assert_eq!(column("submit_ms"), [3.0, 2.0, 8.0, 1.0, 2.0]);
+        assert_eq!(column("poll_ms"), [0.0, 0.0, 1.0, 0.0, 0.0]);
+        assert_eq!(column("queue_ms"), [0.0, 0.0, 2.0, 0.0, 0.0]);
+        assert_eq!(column("encode_ms"), [3.0, 2.0, 4.0, 1.0, 2.0]);
+        assert!(lines[1]["wait_ms"].is_null());
+        assert_eq!(lines[2]["wait_ms"], 1.0);
+        assert_eq!(column("size")[0], serde_json::json!([2560, 1440]));
+        assert_eq!(column("size")[4], serde_json::json!([1280, 800]));
+        assert!(lines[0]["present_interval_ms"].is_null());
+        assert_eq!(column("present_interval_ms")[1..], [7.0, 14.0, 17.0, 11.0]);
+        assert!(lines[0]["sim_ms"].is_null());
+        assert_eq!(lines[1]["sim_ms"], 1.0);
+        assert!(lines[2]["prepare_ms"].is_null());
+        assert!(lines[0]["hud_ms"].is_null());
+        assert_eq!(lines[1]["hud_ms"], 1.0);
+        assert!(lines[2]["hud_ms"].is_null());
+        assert_eq!(lines[2]["gpu_ms"], 2.5);
+        assert_eq!(lines[2]["gpu_tick"], 2);
+        assert!(lines[3]["gpu_ms"].is_null());
+        assert!(lines[4]["gpu_ms"].is_null());
+        assert_eq!(
+            lines[5],
+            serde_json::json!({"schema_version": 2, "end": true, "frames": 5, "dropped": 0})
+        );
+        let text = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+        let first = text.lines().next().unwrap();
+        assert!(
+            first.starts_with("{\"schema_version\":2,\"tick\":0,")
+                && first.ends_with(",\"kind\":\"full\",\"size\":[2560,1440],\"device\":null,\"hud_ms\":null,\"source\":\"splash\"}"),
+            "{first}"
+        );
+    }
+
+    #[test]
+    fn presented_frames_that_never_opened_or_opened_twice_write_only_what_was_shown() {
+        let sink = Sink::default();
+        let stats = FrameStats::to_writer(Box::new(sink.clone()), 16);
+        let base = Instant::now();
+        stats.presented_at([8, 8], ms(base, 1));
+        stats.present_abandon();
+        assert_eq!(stats.frames(), 0);
+        stats.present_begin_at(Source::Ui, ms(base, 2));
+        stats.begin_at(FrameKind::Full, ms(base, 3));
+        stats.submitted_at(1, [8, 8], ms(base, 4));
+        stats.present_begin_at(Source::Splash, ms(base, 10));
+        stats.begin_at(FrameKind::Idle, ms(base, 11));
+        stats.submitted_at(2, [8, 8], ms(base, 11));
+        stats.begin_at(FrameKind::Reproject, ms(base, 12));
+        stats.submitted_at(3, [8, 8], ms(base, 12));
+        stats.presented_at([8, 8], ms(base, 14));
+        stats.gpu(1, 9.0);
+        stats.present_begin_at(Source::Ui, ms(base, 20));
+        stats.begin_at(FrameKind::Partial, ms(base, 21));
+        stats.submitted_at(4, [8, 8], ms(base, 21));
+        stats.begin_at(FrameKind::Idle, ms(base, 22));
+        stats.submitted_at(5, [8, 8], ms(base, 22));
+        stats.presented_at([8, 8], ms(base, 23));
+        stats.presented_at([8, 8], ms(base, 24));
+        stats.finish();
+        let lines = sink.lines();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0]["tick"], 0);
+        assert_eq!(lines[0]["t_ms"], 8.0);
+        assert_eq!(lines[0]["submit_ms"], 4.0);
+        assert_eq!(lines[0]["source"], "splash");
+        assert_eq!(lines[0]["kind"], "reproject");
+        assert!(lines[0]["gpu_ms"].is_null());
+        assert!(lines[1]["gpu_ms"].is_null());
+        assert_eq!(lines[1]["source"], "game");
+        assert_eq!(lines[1]["kind"], "partial");
+        assert_eq!(lines[2]["frames"], 2);
+    }
+
+    #[test]
+    fn an_off_handle_presents_nothing_and_sources_name_themselves() {
+        let stats = FrameStats::off();
+        let base = Instant::now();
+        stats.present_begin_at(Source::Splash, base);
+        assert!(!stats.presenting());
+        stats.presented_at([8, 8], ms(base, 1));
+        stats.present_begin(Source::Ui);
+        stats.present_abandon();
+        stats.presented([8, 8]);
+        assert_eq!(stats.frames(), 0);
+        assert!(stats.recent().is_empty());
+        assert_eq!(Source::default(), Source::Game);
+        let names = [Source::Splash, Source::Ui, Source::Game].map(Source::name);
+        assert_eq!(names, ["splash", "ui", "game"]);
+    }
+
+    #[test]
+    fn a_measuring_handle_keeps_the_source_of_presented_frames() {
+        let stats = FrameStats::measure();
+        stats.keep_recent(4);
+        let base = Instant::now();
+        stats.present_begin_at(Source::Splash, ms(base, 0));
+        stats.presented_at([64, 64], ms(base, 1));
+        stats.present_begin_at(Source::Ui, ms(base, 8));
+        stats.presented_at([64, 64], ms(base, 9));
+        frame(&stats, base, 0, 16, FrameKind::Full);
+        let sources: Vec<Source> = stats.recent().iter().map(|sample| sample.source).collect();
+        assert_eq!(sources, [Source::Splash, Source::Ui, Source::Game]);
+        assert_eq!(stats.frames(), 3);
+    }
+
+    #[test]
     fn hud_time_lands_on_the_frame_it_drew_over_and_is_null_otherwise() {
         let sink = Sink::default();
         let stats = FrameStats::to_writer(Box::new(sink.clone()), 16);
@@ -885,7 +1192,7 @@ mod tests {
         let text = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
         let first = text.lines().next().unwrap();
         assert!(
-            first.ends_with(",\"device\":null,\"hud_ms\":1.000}"),
+            first.ends_with(",\"device\":null,\"hud_ms\":1.000,\"source\":\"game\"}"),
             "{first}"
         );
     }

@@ -25,10 +25,28 @@ A frame is one submission that puts an image on the output:
 
 `Need::None` submits nothing, so it has no line (a product that wants an idle line per vsync calls `present_last`). `wake` is not a frame and has none.
 
+### Presented frames
+
+A product that presents frames the renderer does not draw (a splash, a frame drawn only from its UI) opens a presented frame around each present, so every frame on the screen has exactly one line:
+
+```rust
+let stats = renderer.frame_stats();
+stats.present_begin(Source::Ui);
+// the frame's work: the game's update, renderer submissions, the UI, the acquire
+stats.presented([width, height]);
+```
+
+- `present_begin(source)` opens the frame; `presented(size)` closes it and writes its line, right after the present call; `present_abandon()` drops it when nothing was presented (the surface was lost, nothing changed), and no line is written; a second `present_begin` before `presented` drops the open frame the same way, and `presented` with no frame open writes nothing.
+- Renderer frames submitted while it is open write no line of their own: they fold into the presented frame's line. Its `kind` is the strongest of them (`full` over `partial` over `reproject` over `idle`), or `full` when the renderer drew nothing, since the product drew the whole output; its `poll_ms` and `queue_ms` are theirs, summed; a GPU time they resolve is joined to the presented frame's `tick`.
+- Its `submit_ms` runs from `present_begin` to `presented`, so it holds all the product's work on the frame (the game's update, the renderer, the UI and the present); `wait_ms` is the time blocked inside it, waiting for the GPU or for the surface's next image (pfx-game reports its acquire as a wait); `encode_ms` is the rest, `submit_ms` minus `poll_ms`, `queue_ms` and `wait_ms`; `prepare_ms` is `null`; `hud_ms` is the dev HUD's draw inside it; `size` is the output's size, the window's.
+- `source` says what drew it: `splash`, `ui` when the renderer drew nothing in it, and `game` when the renderer drew in a frame opened as `ui`. A line outside a presented frame (a game with its own loop, `pfx bench`) is `game`.
+
+pfx-game does this in a game's window and in `Headless` with the GPU, so a game splits its boot by `source`: the splash's frames, then the UI's (an ident, a title), then the game's. The window's two ground presents while the game is built come before the renderer, and its stats, exist, and have no line.
+
 ## The line
 
 ```json
-{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
+{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
 ```
 
 Every key is always present, in this order. Times are milliseconds as JSON numbers with three decimals, never negative.
@@ -52,6 +70,7 @@ Every key is always present, in this order. Times are milliseconds as JSON numbe
 | `size` | `[w, h]` | the renderer's drawn size in pixels |
 | `device` | string or null | the device the game runs on: `steam-deck-lcd`, `steam-deck-oled` or `desktop` (`docs/screens.md`). Detected once when the stats open a file (the variable, or `FrameStats::to_file`), with `PFX_DEVICE` as an override; `null` for stats made with `to_writer` and no `set_device` |
 | `hud_ms` | number or null | the dev HUD's own draw cost over this frame, from the start of its draw to the end of its `queue.submit` (see [Dev HUD](#dev-hud)); `null` when the HUD did not draw over the frame: hidden, or built without the `dev-hud` feature |
+| `source` | string | what drew the frame: `splash`, `ui` or `game` ([Presented frames](#presented-frames)). Added within schema version 2, as the last key: a reader that finds no `source` (a file written before it) reads `game`, and a reader that ignores it reads every other key as before |
 
 ### `gpu_ms` and its tick
 
@@ -83,16 +102,16 @@ On a clean exit (the renderer, and every handle to its stats, dropped, or `Frame
 The first three frames of a measured run of `crates/game/examples/flat` at 2560×1440 (one `render_flat` per frame, the renderer waiting for each frame: `FLAT_IN_FLIGHT=0`):
 
 ```json
-{"schema_version":2,"tick":0,"t_ms":0.000,"sim_ms":0.001,"submit_ms":201.512,"prepare_ms":198.993,"encode_ms":2.312,"poll_ms":0.035,"queue_ms":0.172,"wait_ms":5.379,"gpu_ms":4.880,"gpu_tick":0,"present_interval_ms":null,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
-{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
-{"schema_version":2,"tick":2,"t_ms":214.727,"sim_ms":0.001,"submit_ms":1.629,"prepare_ms":0.412,"encode_ms":1.128,"poll_ms":0.012,"queue_ms":0.079,"wait_ms":5.015,"gpu_ms":4.855,"gpu_tick":2,"present_interval_ms":7.445,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
+{"schema_version":2,"tick":0,"t_ms":0.000,"sim_ms":0.001,"submit_ms":201.512,"prepare_ms":198.993,"encode_ms":2.312,"poll_ms":0.035,"queue_ms":0.172,"wait_ms":5.379,"gpu_ms":4.880,"gpu_tick":0,"present_interval_ms":null,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
+{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
+{"schema_version":2,"tick":2,"t_ms":214.727,"sim_ms":0.001,"submit_ms":1.629,"prepare_ms":0.412,"encode_ms":1.128,"poll_ms":0.012,"queue_ms":0.079,"wait_ms":5.015,"gpu_ms":4.855,"gpu_tick":2,"present_interval_ms":7.445,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
 ```
 
 (The first frame's 199 ms of `prepare_ms` is pipeline creation; a target report skips frames until the interval settles.) Every frame of that run blocks about 5 ms in `wait_ms`. The same game with two frames in flight (`FLAT_IN_FLIGHT=2`, the default) waits for nothing, and its GPU time arrives a frame later, joined by `gpu_tick`:
 
 ```json
-{"schema_version":2,"tick":999,"t_ms":3656.506,"sim_ms":0.000,"submit_ms":1.355,"prepare_ms":0.419,"encode_ms":0.883,"poll_ms":0.001,"queue_ms":0.051,"wait_ms":null,"gpu_ms":2.846,"gpu_tick":998,"present_interval_ms":3.640,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
-{"schema_version":2,"tick":1000,"t_ms":3659.224,"sim_ms":0.001,"submit_ms":1.327,"prepare_ms":0.391,"encode_ms":0.900,"poll_ms":0.001,"queue_ms":0.036,"wait_ms":null,"gpu_ms":2.847,"gpu_tick":999,"present_interval_ms":2.691,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
+{"schema_version":2,"tick":999,"t_ms":3656.506,"sim_ms":0.000,"submit_ms":1.355,"prepare_ms":0.419,"encode_ms":0.883,"poll_ms":0.001,"queue_ms":0.051,"wait_ms":null,"gpu_ms":2.846,"gpu_tick":998,"present_interval_ms":3.640,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
+{"schema_version":2,"tick":1000,"t_ms":3659.224,"sim_ms":0.001,"submit_ms":1.327,"prepare_ms":0.391,"encode_ms":0.900,"poll_ms":0.001,"queue_ms":0.036,"wait_ms":null,"gpu_ms":2.847,"gpu_tick":999,"present_interval_ms":2.691,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"source":"game"}
 ```
 
 A clean exit then closes the file with its end line, as above.
@@ -232,6 +251,8 @@ Every refusal comes before the GPU opens and before the stats file is created, w
 
 - `crates/live/src/stats.rs` (unit): lines parse and keep their order, the end line, sim time landing on the next frame, GPU time carried once against its tick, a full channel dropping and counting lines (`frames - dropped` lines before the end line), nothing written or counted when unset, the variable's value opening a file and appending.
 - `crates/live/src/stats.rs` (unit, continued): `hud_ms` landing on the frame the HUD drew over and `null` otherwise, last in the line; a measuring handle keeping recent frames with their GPU and HUD times and writing nothing.
+- `crates/live/src/stats.rs` (unit, presented frames): one line per presented frame with its `source`, renderer frames folding into it with the strongest kind, their poll and queue time and their GPU time on its tick, a wait and the HUD inside it landing on it, an abandoned frame writing nothing and its GPU time ignored, a line outside one being `game`, the key's place last in the line; a measuring handle keeping the source. Also: `presented` with nothing open, a second `present_begin` dropping the first frame and its GPU time, a splash frame staying `splash` when the renderer drew in it, and an off handle presenting nothing.
+- `crates/game/src/gpu_tests.rs` (GPU, ignored): `every_drawn_frame_writes_one_stats_line_with_its_source` runs a scene game on demand and a flat game headless and checks one line per drawn frame, `game` where the renderer drew and `ui` where it did not.
 - `crates/live/src/hud.rs` (unit, `--features dev-hud`): F3 toggling once per press, the readout taking the newest numbers and four seconds of frames, the panel's layout in pfx's theme and its place top right.
 - `crates/live/tests/dev_hud_off.rs`: `cargo tree -p pfx-live -e features` has no egui without the feature, and has it with.
 - `crates/play/src/tests.rs`: a session's `advance` reports `sim_ms`.

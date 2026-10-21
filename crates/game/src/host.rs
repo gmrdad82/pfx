@@ -8,6 +8,7 @@ use pfx_gpu::window::{self, Attention, Pace, Size, SystemClock};
 use pfx_gpu::{Gpu, WindowTarget, wgpu};
 use pfx_input::{Backend, InputEvent, LayoutSource, SteamPrecedence};
 use pfx_live::flat::Srgba;
+use pfx_live::stats::{Source, Span};
 use pfx_load::scene::Scene;
 use pfx_play::{Configuring, Cursor, Game, Scheme};
 use pfx_sound::{ChannelId, Level, Output, PcmSender};
@@ -43,6 +44,10 @@ struct Live {
     sound: Option<Sound>,
     minimized: bool,
     warming: Option<Warmup>,
+    #[cfg(feature = "splash")]
+    warmed: Option<Size>,
+    #[cfg(feature = "splash")]
+    warm_budget: f64,
     pointer: Pointer,
     locked: bool,
     at: [f32; 2],
@@ -151,6 +156,15 @@ fn sound(config: &Config) -> Option<Sound> {
     Some(Sound { output, sender })
 }
 
+pub(crate) fn frame_source(splash: bool) -> Source {
+    if splash { Source::Splash } else { Source::Ui }
+}
+
+#[cfg(feature = "splash")]
+pub(crate) fn rewarm(warming: bool, warmed: Option<Size>, window: Size) -> bool {
+    !warming && warmed.is_some_and(|size| size != window)
+}
+
 fn size_of(window: &Window) -> Size {
     let size = window.inner_size();
     Size {
@@ -242,7 +256,7 @@ fn open(
     );
     apply_display(&window, &display).map_err(|error| format!("the display mode: {error}"))?;
     #[cfg(feature = "splash")]
-    let splash = {
+    let mut splash = {
         let size = size_of(&window);
         Player::start(
             &config.splash,
@@ -272,6 +286,18 @@ fn open(
     let grounded = present_ground(&gpu, &target, &window, ground);
     let size = size_of(&window);
     let painter = Painter::live(gpu, scene, &config, size)?;
+    #[cfg(feature = "splash")]
+    {
+        let surface = &target.config;
+        let gpu = painter.renderer().gpu();
+        let warmed = splash
+            .as_mut()
+            .map(|player| player.warm(gpu, surface.format, [surface.width, surface.height]));
+        if let Some(Err(error)) = warmed {
+            eprintln!("the splash is left out: {error}");
+            splash = None;
+        }
+    }
     let sound = sound(&config);
     let audio = sound.as_ref().map_or((48_000, 2), |sound| {
         (sound.sender.rate(), sound.sender.channels())
@@ -319,6 +345,10 @@ fn open(
         sound,
         minimized: false,
         warming: Some(Warmup::new(config.warm_budget)),
+        #[cfg(feature = "splash")]
+        warmed: None,
+        #[cfg(feature = "splash")]
+        warm_budget: config.warm_budget,
         pointer,
         locked: false,
         at: [0.0; 2],
@@ -364,6 +394,10 @@ impl Live {
             self.grounded = present_ground(gpu, &self.target, &self.window, self.ground);
         }
         let format = self.target.config.format;
+        #[cfg(feature = "splash")]
+        {
+            self.warmed = Some(self.driver.window());
+        }
         if warmup.pass(&mut self.painter, &mut self.driver, format, now_ns)? {
             self.warming = None;
         }
@@ -371,6 +405,23 @@ impl Live {
     }
 
     fn frame(&mut self, now_ns: u64, exposed: bool) -> Result<bool, String> {
+        #[cfg(feature = "splash")]
+        let splash = self.splash.is_some();
+        #[cfg(not(feature = "splash"))]
+        let splash = false;
+        let stats = self.painter.renderer().frame_stats();
+        stats.present_begin(frame_source(splash));
+        let presented = self.draw(now_ns, exposed);
+        if matches!(presented, Ok(true)) {
+            let config = &self.target.config;
+            stats.presented([config.width, config.height]);
+        } else {
+            stats.present_abandon();
+        }
+        presented
+    }
+
+    fn draw(&mut self, now_ns: u64, exposed: bool) -> Result<bool, String> {
         self.rested = false;
         if let Some(size) = self.resize.take() {
             let max = self
@@ -461,6 +512,10 @@ impl Live {
         let acquired = self.target.surface.get_current_texture();
         self.pacing
             .acquired(u64::try_from(asking.elapsed().as_nanos()).unwrap_or(u64::MAX));
+        self.painter
+            .renderer()
+            .frame_stats()
+            .span(Span::Wait, Some(asking));
         let texture = match acquired {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
@@ -522,8 +577,10 @@ impl Live {
         Ok(configured)
     }
 
-    fn tick_ns(&self) -> u64 {
-        (self.driver.session().world().clock().tick_dt() * 1e9) as u64
+    fn rest_until(&self, at: u64) -> u64 {
+        self.driver.next_tick_ns().unwrap_or_else(|| {
+            at.saturating_add((self.driver.session().world().clock().tick_dt() * 1e9) as u64)
+        })
     }
 
     fn audio(&mut self) {
@@ -537,6 +594,9 @@ impl Live {
 
     #[cfg(feature = "splash")]
     fn splash_frame(&mut self, now_ns: u64) -> Result<bool, String> {
+        if rewarm(self.warming.is_some(), self.warmed, self.driver.window()) {
+            self.warming = Some(Warmup::new(self.warm_budget));
+        }
         if self.warming.is_some() {
             self.grounded = true;
             self.warm(now_ns)?;
@@ -570,7 +630,13 @@ impl Live {
             self.splash = None;
             return Ok(false);
         }
-        let texture = match self.target.surface.get_current_texture() {
+        let asking = Instant::now();
+        let acquired = self.target.surface.get_current_texture();
+        self.painter
+            .renderer()
+            .frame_stats()
+            .span(Span::Wait, Some(asking));
+        let texture = match acquired {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
                 self.stale = true;
@@ -762,7 +828,7 @@ impl ApplicationHandler for App {
                             live.rest_ns = None;
                         } else if live.rested {
                             live.pacing.idle();
-                            live.rest_ns = Some(at.saturating_add(live.tick_ns()));
+                            live.rest_ns = Some(live.rest_until(at));
                         }
                         if live.driver.exit().is_some() {
                             event_loop.exit();

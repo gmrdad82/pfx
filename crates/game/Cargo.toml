@@ -63,3 +63,8 @@ path = "examples/flat/main.rs"
 name = "marker"
 path = "examples/marker/main.rs"
 required-features = ["modules"]
+
+[[example]]
+name = "boot"
+path = "examples/boot/main.rs"
+required-features = ["splash"]

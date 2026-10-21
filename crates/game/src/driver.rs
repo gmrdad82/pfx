@@ -126,6 +126,19 @@ impl Driver {
         self.last_ns = Some(now_ns);
     }
 
+    pub fn next_tick_ns(&self) -> Option<u64> {
+        let last = self.last_ns?;
+        let clock = self.session.world().clock();
+        let tick = clock.tick_dt();
+        let scale = f64::from(clock.scale());
+        let left = if scale > 0.0 {
+            ((1.0 - f64::from(clock.alpha())) * tick / scale).min(tick)
+        } else {
+            tick
+        };
+        Some(last.saturating_add((left * 1e9).round() as u64))
+    }
+
     pub fn update(&mut self, now_ns: u64) -> Tick {
         if let Some(pads) = &mut self.pads {
             pads.poll(&mut self.scratch);

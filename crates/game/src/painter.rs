@@ -863,6 +863,10 @@ impl Warmer for PainterWarmer<'_> {
     fn format(&self) -> Option<wgpu::TextureFormat> {
         Some(self.format)
     }
+
+    fn size(&self) -> Option<[u32; 2]> {
+        Some(self.size)
+    }
 }
 
 pub fn resolution(quality: Option<pfx_settings::Quality>, game: Option<Budget>) -> Option<Budget> {
