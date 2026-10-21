@@ -54,6 +54,7 @@ use crate::vec3::{cross, dot, sub};
 pub use anim::{Animation, Posed, SPRITE_CLIP, Sprite, content_key, palettes, surface};
 pub use bind::{bind, bound, filled};
 pub use build::project_root;
+pub use census::Resident;
 pub use diff::{Changes, SceneDiff};
 pub use draws::{Draw, Draws};
 pub use edit::{EditError, Kind, Patch, PatchGroup, SceneEdit, Target, Value};
@@ -274,6 +275,8 @@ pub struct Object {
     pub alpha_cutoff: f32,
     pub face_camera: bool,
     pub dynamic: Option<bool>,
+    pub tint: [f32; 3],
+    pub recolor: BTreeMap<String, pfx_materials::Tint>,
 }
 
 pub const ALPHA_CUTOFF: f32 = 0.5;
@@ -751,6 +754,10 @@ impl Scene {
 
     pub fn census(&self) -> pfx_core::memory::Census {
         census::census(self)
+    }
+
+    pub fn resident(&self) -> Resident {
+        census::resident(self)
     }
 
     pub fn diff(&self, newer: &Scene) -> SceneDiff {

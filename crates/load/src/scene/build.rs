@@ -78,6 +78,7 @@ pub(super) struct Places<'a> {
     texts: RefCell<BTreeMap<PathBuf, Option<String>>>,
     overlay: &'a BTreeMap<PathBuf, String>,
     pub(super) mount: Option<&'a Project>,
+    pub(super) images: crate::Pool,
 }
 
 fn descend<'t, 'i>(
@@ -115,6 +116,7 @@ impl<'a> Places<'a> {
             texts: RefCell::new(BTreeMap::new()),
             overlay,
             mount: None,
+            images: crate::Pool::new(),
         }
     }
 
@@ -288,8 +290,29 @@ pub(super) fn build_with(
     overlay: &BTreeMap<PathBuf, String>,
     mount: Option<&Project>,
 ) -> Result<Scene, SceneError> {
+    build_pooled(
+        path,
+        root,
+        resolved,
+        hour,
+        overlay,
+        mount,
+        crate::Pool::new(),
+    )
+}
+
+pub(super) fn build_pooled(
+    path: &Path,
+    root: &Path,
+    resolved: &pfx_scene::Scene,
+    hour: Option<f64>,
+    overlay: &BTreeMap<PathBuf, String>,
+    mount: Option<&Project>,
+    images: crate::Pool,
+) -> Result<Scene, SceneError> {
     let mut places = Places::new(root, overlay);
     places.mount = mount;
+    places.images = images;
     let mut reader = Reader {
         files: BTreeMap::new(),
         root,
@@ -606,10 +629,14 @@ fn build_mesh(
     let bytes = reader.read(&file).map_err(error)?;
     let directory = file.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
     let buffers = RefCell::new(&mut *reader);
-    let parsed = Mesh::parse_with(&bytes, |uri| {
-        let path = directory.join(crate::source::normalize(uri)?);
-        buffers.borrow_mut().read(&path)
-    })
+    let parsed = Mesh::parse_pooled(
+        &bytes,
+        |uri| {
+            let path = directory.join(crate::source::normalize(uri)?);
+            buffers.borrow_mut().read(&path)
+        },
+        &places.images,
+    )
     .map_err(|message| SceneError::new(&file, None, message))?;
     let roots: Vec<(u32, bool)> = match &mesh.node {
         Some(node) => {
@@ -1108,6 +1135,27 @@ fn build_objects(
             alpha_cutoff: value.alpha_cutoff.unwrap_or(ALPHA_CUTOFF),
             face_camera: value.face_camera,
             dynamic: value.dynamic,
+            tint: value
+                .tint
+                .as_ref()
+                .and_then(file::Color::rgb)
+                .unwrap_or([1.0; 3]),
+            recolor: value
+                .recolor
+                .iter()
+                .map(|(material, recolor)| {
+                    let base = recolor.base.as_ref().and_then(file::Color::rgb);
+                    (
+                        material.clone(),
+                        pfx_materials::Tint {
+                            base: base.unwrap_or([1.0; 3]),
+                            replace: base.is_some(),
+                            roughness: recolor.roughness,
+                            metalness: recolor.metalness,
+                        },
+                    )
+                })
+                .collect(),
         });
     }
     let index: BTreeMap<String, usize> = objects

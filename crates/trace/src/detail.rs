@@ -97,6 +97,7 @@ pub struct InstanceSurface {
     pub casts_shadow: bool,
     pub alpha_cutoff: f32,
     pub sprite: Option<SpriteLook>,
+    pub tint: pfx_materials::Tint,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -133,6 +134,7 @@ impl Default for InstanceSurface {
             casts_shadow: true,
             alpha_cutoff: 0.5,
             sprite: None,
+            tint: pfx_materials::Tint::NONE,
         }
     }
 }
@@ -153,6 +155,12 @@ impl InstanceSurface {
             .all(|value| value.is_finite())
             && (0.0..=1.0).contains(&self.alpha_cutoff)
             && self.sprite.is_none_or(|sprite| sprite.valid())
+            && self
+                .tint
+                .gpu()
+                .iter()
+                .flatten()
+                .all(|value| value.is_finite())
     }
 
     pub fn cuts(&self, point: [f32; 3]) -> bool {
@@ -714,6 +722,44 @@ mod tests {
         let transformed = instance.transformed().unwrap();
         assert_eq!(transformed[0].vertices[0], [3.0, 4.0, 5.0]);
         assert!((transformed[0].normals[0][0] - 0.4472136).abs() < 1e-6);
+    }
+
+    #[test]
+    fn an_instance_tint_must_be_finite() {
+        let tint = pfx_materials::Tint {
+            base: [0.2, 0.4, 0.6],
+            replace: true,
+            roughness: Some(0.3),
+            metalness: None,
+        };
+        let surface = InstanceSurface {
+            tint,
+            ..InstanceSurface::default()
+        };
+        assert!(surface.valid());
+        for broken in [
+            pfx_materials::Tint {
+                base: [f32::NAN, 1.0, 1.0],
+                ..tint
+            },
+            pfx_materials::Tint {
+                roughness: Some(f32::INFINITY),
+                ..tint
+            },
+            pfx_materials::Tint {
+                metalness: Some(f32::NAN),
+                ..tint
+            },
+        ] {
+            assert!(
+                !InstanceSurface {
+                    tint: broken,
+                    ..surface
+                }
+                .valid(),
+                "{broken:?}"
+            );
+        }
     }
 
     #[test]

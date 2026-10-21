@@ -15,9 +15,9 @@ use crate::rules::{self, Issues};
 use crate::scene::{Entry, Scene};
 use crate::spans::{KeyPath, Part};
 use crate::types::{
-    Camera, Content, Emitter, File, FileKind, Finish, FinishKeys, Flare, Haze, Light, LiveSettings,
-    LutKey, Material, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates, Play, Proxy,
-    Rig, Shadows, Sky, Sound, Sun, Text, Tiles, Trace,
+    Camera, Color, Content, Emitter, File, FileKind, Finish, FinishKeys, Flare, Haze, Light,
+    LiveSettings, LutKey, Material, Mesh, MotionBlur, Mover, Object, Particles, Physics, Plates,
+    Play, Proxy, Recolor, Rig, Shadows, Sky, Sound, Sun, Text, Tiles, Trace,
 };
 use crate::{Diagnostic, EditError, FORMAT, Id, Patch, PatchGroup, Severity};
 
@@ -916,6 +916,29 @@ struct Prefix {
     key: String,
     id: Option<String>,
     hidden: bool,
+    tint: Option<[f32; 3]>,
+    recolor: BTreeMap<String, Recolor>,
+}
+
+fn tinted(outer: Option<[f32; 3]>, own: Option<&Color>) -> Option<[f32; 3]> {
+    let own = own.and_then(Color::rgb);
+    match (outer, own) {
+        (Some(outer), Some(own)) => Some(std::array::from_fn(|c| outer[c] * own[c])),
+        (outer, own) => outer.or(own),
+    }
+}
+
+fn recolored(
+    own: &BTreeMap<String, Recolor>,
+    outer: &BTreeMap<String, Recolor>,
+) -> BTreeMap<String, Recolor> {
+    let mut out = own.clone();
+    out.extend(
+        outer
+            .iter()
+            .map(|(name, recolor)| (name.clone(), recolor.clone())),
+    );
+    out
 }
 
 #[derive(Clone, Debug)]
@@ -2384,6 +2407,11 @@ impl<'p> Checker<'p> {
                 key: name_key(prefix, &item.name),
                 id: full_id(prefix, item.id),
                 hidden: item.value.hidden || prefix.is_some_and(|p| p.hidden),
+                tint: tinted(prefix.and_then(|p| p.tint), item.value.tint.as_ref()),
+                recolor: recolored(
+                    &item.value.recolor,
+                    prefix.map_or(&BTreeMap::new(), |p| &p.recolor),
+                ),
             };
             frame.placing = at;
             chain.push(Step::new(&path));
@@ -2575,6 +2603,10 @@ impl<'p> Checker<'p> {
             }
             if let Some(prefix) = prefix {
                 value.hidden |= prefix.hidden;
+                if prefix.tint.is_some() {
+                    value.tint = tinted(prefix.tint, value.tint.as_ref()).map(Color::Rgb);
+                }
+                value.recolor = recolored(&value.recolor, &prefix.recolor);
             }
             if value.is_placement() {
                 value.set.clear();

@@ -37,6 +37,18 @@ pub struct Node {
     pub two_sided: Option<bool>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Recolor {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<Color>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roughness: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metalness: Option<f32>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
@@ -88,6 +100,10 @@ pub struct Object {
     pub material: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub materials: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint: Option<Color>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub recolor: BTreeMap<String, Recolor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shadow: Option<Shadow>,
     #[serde(default, skip_serializing_if = "is_false")]

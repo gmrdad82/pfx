@@ -1,6 +1,7 @@
 mod ball;
 mod container;
 mod head;
+mod kit;
 mod lod;
 mod timeline;
 
@@ -10,6 +11,7 @@ pub use head::{
     HEAD_KEYS, HEAD_RINGS, HEAD_SEGMENTS, HEAD_TARGETS, HEAD_TIMES, HEAD_VERTICES, HEAD_WEIGHTS,
     head,
 };
+pub use kit::{KitMaps, kit_quad};
 pub use lod::{
     GROUP_BEARD_ERROR, GROUP_BEARD_RINGS, GROUP_HEAD_RINGS, LOD_RADIUS, LOD_RINGS, LOD_SLIDE,
     LOD_TARGETS, lod_error, lod_glb, lod_group_glb, lod_morph_glb, lod_sphere, lod_targets,

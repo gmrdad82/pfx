@@ -2017,6 +2017,12 @@
         "prefab": {
           "type": "string"
         },
+        "recolor": {
+          "additionalProperties": {
+            "$ref": "#/$defs/Recolor"
+          },
+          "type": "object"
+        },
         "rotate": {
           "items": {
             "format": "float",
@@ -2035,6 +2041,9 @@
         },
         "shadow": {
           "$ref": "#/$defs/Shadow"
+        },
+        "tint": {
+          "$ref": "#/$defs/Color"
         },
         "trigger": {
           "$ref": "#/$defs/Trigger"
@@ -2431,6 +2440,23 @@
         "orthographic"
       ],
       "type": "string"
+    },
+    "Recolor": {
+      "additionalProperties": false,
+      "properties": {
+        "base": {
+          "$ref": "#/$defs/Color"
+        },
+        "metalness": {
+          "format": "float",
+          "type": "number"
+        },
+        "roughness": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
     },
     "Repeat": {
       "enum": [

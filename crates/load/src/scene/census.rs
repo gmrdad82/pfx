@@ -55,3 +55,40 @@ pub fn census(scene: &Scene) -> Census {
     }
     out
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Resident {
+    pub images: usize,
+    pub bytes: u64,
+}
+
+pub fn resident(scene: &Scene) -> Resident {
+    let mut seen = BTreeSet::new();
+    let mut out = Resident::default();
+    for part in scene.meshes.values().flat_map(|mesh| &mesh.parts) {
+        let levels = part
+            .geometry
+            .levels
+            .iter()
+            .filter_map(|level| level.surface.as_ref());
+        for surface in part.surface.iter().chain(levels) {
+            let maps = &surface.maps;
+            for image in [
+                &maps.base,
+                &maps.normal,
+                &maps.orm,
+                &maps.detail,
+                &maps.anisotropy,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if seen.insert(Arc::as_ptr(image) as usize) {
+                    out.images += 1;
+                    out.bytes += crate::pool::image_bytes(image);
+                }
+            }
+        }
+    }
+    out
+}

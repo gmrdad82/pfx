@@ -80,7 +80,7 @@ parent = "desk"
 "bulb.intensity" = 3.0
 ```
 
-- A placement takes only `id`, `name`, `prefab`, `set`, `at`, `rotate`, `scale`, `parent`, `hidden`, `dynamic` and `authoring`; any other key is refused (`placement-key`). An object without `prefab` needs `mesh`.
+- A placement takes only `id`, `name`, `prefab`, `set`, `at`, `rotate`, `scale`, `parent`, `hidden`, `dynamic`, `tint`, `recolor` and `authoring`; any other key is refused (`placement-key`). An object without `prefab` needs `mesh`.
 - A placement is a group with no mesh. Its transform is the parent of every root object in the prefab: the prefab's root objects take the placement as their parent. Its `hidden` applies to every object it places. Its `dynamic`, like any object's, reaches the objects under it that don't set their own.
 - A placement carries no body, character, trigger or animation of its own. A body or a character in a prefab is placed with it and starts at its world transform, the placements' transforms times its own (`[object.body]` and `[object.character]`, under `[[object]]`).
 - `[object.set]` overrides any key of any entry in the prefab: its keys are `"<entry>.<key path>"`, and its values replace the prefab's. `<entry>` is the inner entry's id, or its name when that name is unique in the prefab and holds no `.`; an inner entry of a nested placement is written `"<placement id>/<inner id>"`. The key path is the entry's keys joined by `.`, where a number picks an entry of a list, counting from 0 (`"lamp.layers.1.frequency"`), as the writer's key paths do. An override may set a key the entry takes but does not hold yet. An override that names no entry, names a key that entry doesn't take, or gives a value of the wrong type is refused (`bad-override`).
@@ -280,6 +280,8 @@ The loader computes missing normals (smooth, area weighted); missing tangents ar
 | `parent` | reference | none | an object: the model is the parent's model times this one. A cycle is refused (`parent-cycle`). |
 | `material` | reference | none | a material for every part of the mesh. |
 | `materials` | table of node name = reference | none | `{ "<node name>" = "<material>", … }`: per node, over `material`. |
+| `tint` | `"#rrggbb"` or `[r, g, b]`, each ≥ 0 | none | multiplies the base colour of every part the object draws, per instance: the mesh, its material and its maps stay shared. A hex colour is sRGB, three numbers are linear. On a placement it multiplies the tint of every object the placement places. |
+| `recolor` | table of material name = `{ base, roughness, metalness }` | none | `[object.recolor.<material>]`: the parts that draw that material (by its library name or its glTF material name) take `base` (a colour as `tint` takes it) in place of the material's base colour, and `roughness` and `metalness` (0 to 1) in place of its own when given; at least one key. Per instance, like `tint`, which multiplies a recoloured base too. A placement's entries win over those of the objects it places. |
 | `shadow` | `"cast"`, `"only"` or `"none"` | `"cast"` | `"only"` casts and is never drawn; `"none"` is drawn and casts none. |
 | `two_sided` | bool | `false` | |
 | `hidden` | bool | `false` | not drawn; its parts are not uploaded. |
@@ -294,6 +296,30 @@ The loader computes missing normals (smooth, area weighted); missing tangents ar
 | `trigger` | table | none | `[object.trigger]`: a volume that senses what enters it. |
 | `animation` | table | none | `[object.animation]`: the clips of its glTF, or a sprite, played on it. |
 | `authoring` | any | none | |
+
+Ten varied houses from one facade prefab: each placement keeps the kit's meshes and textures shared and draws them as instances, with its own colour.
+
+```toml
+[[object]]
+id = "hm5e000001"
+name = "house 1"
+prefab = "kit/facade.prefab.toml"
+at = [0.0, 0.0, 0.0]
+tint = "#f2d8c0"
+
+[[object]]
+id = "hm5e000002"
+name = "house 2"
+prefab = "kit/facade.prefab.toml"
+at = [8.0, 0.0, 0.0]
+
+[object.recolor.brick]
+base = [0.32, 0.12, 0.08]
+roughness = 0.8
+
+[object.recolor.trim]
+base = "#e8e4dc"
+```
 
 `[object.body]` makes the object a rigid body in play mode. Every object above it is a prefab placement (or it has no parent), and no mover moves it or any of those placements; it does not face the camera. It starts at its world transform, the placements' transforms times its own, and from then on the simulation moves it; its children ride with it. A body placed under an ordinary object or under a placement a mover moves is refused (`bad-value`), at the key that puts it there: the body when it is in the file being checked, else the `parent` or the mover's `objects` that does, or the `[object.set]` key when an override does (`bad-override`). The finding names the body and the placement or object in its related locations.
 

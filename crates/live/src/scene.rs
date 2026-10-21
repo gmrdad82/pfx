@@ -585,7 +585,7 @@ impl Staged {
                 base_glass.push(glass::Surface {
                     mesh: self.glass_meshes[&draw.geometry.hash],
                     model: draw.model,
-                    material: draws.materials[draw.material as usize],
+                    material: draw.tint.apply(draws.materials[draw.material as usize]),
                     liquid: false,
                     fluid_height: 0.0,
                     ripple_height: 0.0,
@@ -600,6 +600,7 @@ impl Staged {
                 slots.push(Slot::Opaque(base.len()));
                 base.push(Instance {
                     shadow_only: !draw.shadow.drawn(),
+                    tint: draw.tint,
                     casts_shadow: draw.shadow.casts(),
                     two_sided: draw.two_sided,
                     alpha_cutoff: draw.alpha_cutoff,
@@ -686,7 +687,9 @@ impl Staged {
             let draw = &self.draws.items[index];
             let shown = self.overrides.get(&draw.object).copied();
             let mut material = draw.material;
+            let mut tint = draw.tint;
             if let Some(change) = shown.filter(Override::tints) {
+                tint = pfx_materials::Tint::NONE;
                 let key = (draw.object.clone(), draw.material);
                 material = match tinted.get(&key) {
                     Some(&made) => made,
@@ -707,6 +710,7 @@ impl Staged {
                     instance.model = change.moved(self.models[index]);
                     instance.previous_model = change.moved(self.previous[index]);
                     instance.material = material;
+                    instance.tint = tint;
                     if hidden {
                         instance.shadow_only = true;
                         instance.casts_shadow = false;
@@ -719,7 +723,7 @@ impl Staged {
                     }
                     self.glass.push(glass::Surface {
                         model: change.moved(self.models[index]),
-                        material: self.materials[material as usize],
+                        material: tint.apply(self.materials[material as usize]),
                         ..self.base_glass[at]
                     });
                 }

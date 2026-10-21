@@ -35,6 +35,8 @@ struct GpuSurface {
     info: [u32; 4],
     forward: [[f32; 4]; 3],
     inverse: [[f32; 4]; 3],
+    tint: [f32; 4],
+    finish: [f32; 4],
 }
 
 pub const NO_MATERIAL: u32 = u32::MAX;
@@ -51,6 +53,7 @@ impl GpuSurface {
         forward: [f32; 12],
         inverse: [f32; 12],
     ) -> Self {
+        let [tint, finish] = surface.tint.gpu();
         let mut packed = Self {
             clip0: surface.clip[0],
             clip1: surface.clip[1],
@@ -64,6 +67,8 @@ impl GpuSurface {
             info,
             forward: rows3(forward),
             inverse: rows3(inverse),
+            tint,
+            finish,
         };
         if let Some(sprite) = surface.sprite {
             let [r, g, b] = sprite.colour;
@@ -3248,6 +3253,30 @@ impl Trace {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_surface_record_carries_its_instance_tint() {
+        let tint = pfx_materials::Tint {
+            base: [0.2, 0.4, 0.6],
+            replace: true,
+            roughness: Some(0.3),
+            metalness: None,
+        };
+        let record = GpuSurface::of(
+            InstanceSurface {
+                tint,
+                ..InstanceSurface::default()
+            },
+            [0; 4],
+            IDENTITY_ROWS,
+            IDENTITY_ROWS,
+        );
+        assert_eq!(record.tint, [0.2, 0.4, 0.6, 1.0]);
+        assert_eq!(record.finish, [0.3, -1.0, 0.0, 0.0]);
+        let plain = GpuSurface::world();
+        assert_eq!(plain.tint, [1.0, 1.0, 1.0, 0.0]);
+        assert_eq!(plain.finish, [-1.0, -1.0, 0.0, 0.0]);
+    }
+
     use super::*;
     use crate::detail::TriangleDetail;
     use crate::sobol::Sampler;
@@ -4730,7 +4759,7 @@ mod tests {
         let records: &[GpuSurface] = bytemuck::cast_slice(&buffers.surfaces);
         assert_eq!(buffers.triangles.len(), std::mem::size_of::<GpuTriangle>());
         assert_eq!(buffers.triangle_count, 1);
-        assert_eq!(std::mem::size_of::<GpuSurface>(), 176);
+        assert_eq!(std::mem::size_of::<GpuSurface>(), 208);
         assert_eq!(records.len(), 5);
         assert_eq!(
             records

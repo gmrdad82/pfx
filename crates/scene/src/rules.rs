@@ -122,7 +122,7 @@ pub(crate) fn object(object: &Object) -> Issues {
             issues.at(
                 &[key],
                 format!(
-                    "object {name} places a prefab, which takes id, name, prefab, set, at, rotate, scale, parent, hidden, dynamic and authoring, not {key}"
+                    "object {name} places a prefab, which takes id, name, prefab, set, at, rotate, scale, parent, hidden, dynamic, tint, recolor and authoring, not {key}"
                 ),
             );
         }
@@ -179,6 +179,54 @@ pub(crate) fn object(object: &Object) -> Issues {
             &["alpha_cutoff"],
             format!("object {name} alpha_cutoff = {cutoff} is outside 0 to 1"),
         );
+    }
+    if let Some(tint) = &object.tint
+        && !tint
+            .rgb()
+            .is_some_and(|rgb| rgb.iter().all(|value| value.is_finite() && *value >= 0.0))
+    {
+        issues.at(
+            &["tint"],
+            format!("object {name} tint is not \"#rrggbb\" or three numbers of 0 or more"),
+        );
+    }
+    for (material, recolor) in &object.recolor {
+        let at = |key: &'static str| ["recolor".to_string(), material.clone(), key.to_string()];
+        if recolor.base.is_none() && recolor.roughness.is_none() && recolor.metalness.is_none() {
+            issues.at(
+                &["recolor", material.as_str()],
+                format!(
+                    "object {name} recolors material {material} with nothing; give it base, roughness or metalness"
+                ),
+            );
+        }
+        if let Some(base) = &recolor.base
+            && !base
+                .rgb()
+                .is_some_and(|rgb| rgb.iter().all(|value| value.is_finite() && *value >= 0.0))
+        {
+            let path = at("base");
+            issues.at(
+                &path.each_ref().map(String::as_str),
+                format!(
+                    "object {name} recolor.{material}.base is not \"#rrggbb\" or three numbers of 0 or more"
+                ),
+            );
+        }
+        for (key, value) in [
+            ("roughness", recolor.roughness),
+            ("metalness", recolor.metalness),
+        ] {
+            if let Some(value) = value
+                && !(0.0..=1.0).contains(&value)
+            {
+                let path = at(key);
+                issues.at(
+                    &path.each_ref().map(String::as_str),
+                    format!("object {name} recolor.{material}.{key} = {value} is outside 0 to 1"),
+                );
+            }
+        }
     }
     if let Some(body) = &object.body {
         issues.nested(&["body".to_string()], self::body(name, body));

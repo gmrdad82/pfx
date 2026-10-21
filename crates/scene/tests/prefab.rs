@@ -457,3 +457,71 @@ fn a_relation_an_override_breaks_is_reported_at_the_override() {
         assert!(errors[0].message.contains(needle), "{name}: {}", errors[0]);
     }
 }
+
+#[test]
+fn a_placements_tint_and_recolor_reach_every_object_it_places() {
+    let folder = placed(
+        "prefab-tint",
+        "\n[[object]]\nid = \"t1nted0001\"\nname = \"tinted lamp\"\nprefab = \"props/lamp.prefab.toml\"\ntint = [1.0, 0.5, 0.25]\n\n[object.recolor.clay]\nroughness = 0.2\n",
+    );
+    let diagnostics = folder.check();
+    assert!(diagnostics.is_empty(), "{}", show(&diagnostics));
+    let scene = resolve(&folder);
+    for key in ["tinted lamp/shade", "tinted lamp/stem"] {
+        let object = &scene.object(key).unwrap().value;
+        assert_eq!(
+            object.tint.as_ref().and_then(|tint| tint.rgb()),
+            Some([1.0, 0.5, 0.25]),
+            "{key}"
+        );
+        assert_eq!(object.recolor["clay"].roughness, Some(0.2), "{key}");
+    }
+    let untinted = &scene.object("left lamp/shade").unwrap().value;
+    assert!(untinted.tint.is_none() && untinted.recolor.is_empty());
+}
+
+#[test]
+fn a_bad_tint_or_recolor_is_refused_at_its_key() {
+    for (name, extra, needle) in [
+        ("tint-negative", "tint = [1.0, -0.5, 0.0]\n", "tint is not"),
+        ("tint-hex", "tint = \"#12345\"\n", "tint is not"),
+        (
+            "recolor-empty",
+            "\n[object.recolor.clay]\n",
+            "recolors material clay with nothing",
+        ),
+        (
+            "recolor-roughness",
+            "\n[object.recolor.clay]\nroughness = 1.5\n",
+            "recolor.clay.roughness = 1.5 is outside 0 to 1",
+        ),
+        (
+            "recolor-metalness",
+            "\n[object.recolor.clay]\nmetalness = -0.1\n",
+            "recolor.clay.metalness = -0.1 is outside 0 to 1",
+        ),
+        (
+            "recolor-base",
+            "\n[object.recolor.clay]\nbase = \"#ff00\"\n",
+            "recolor.clay.base is not",
+        ),
+        (
+            "recolor-base-negative",
+            "\n[object.recolor.clay]\nbase = [0.5, -0.5, 0.5]\n",
+            "recolor.clay.base is not",
+        ),
+    ] {
+        let folder = placed(
+            name,
+            &format!(
+                "\n[[object]]\nid = \"b4dt1nt001\"\nname = \"bad\"\nmesh = \"block\"\n{extra}"
+            ),
+        );
+        let diagnostics = folder.check();
+        assert!(
+            diagnostics.iter().any(|d| d.message.contains(needle)),
+            "{name}: {}",
+            show(&diagnostics)
+        );
+    }
+}

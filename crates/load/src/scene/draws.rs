@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, LazyLock};
 
-use pfx_materials::Material;
+use pfx_materials::{Material, Tint};
 
 use crate::surface::Surface;
 
@@ -32,6 +32,7 @@ pub struct Draw {
     pub owner: Option<usize>,
     pub part: Matrix,
     pub levels: Vec<u32>,
+    pub tint: Tint,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -181,6 +182,19 @@ pub(super) fn draws(scene: &Scene) -> Draws {
     let mut picked = Vec::new();
     let mut surfaces = BTreeMap::new();
     let mut soaked: BTreeMap<String, Arc<Surface>> = BTreeMap::new();
+    let mut canonical: Vec<(Arc<Surface>, String)> = Vec::new();
+    let mut alias = |name: String, surface: &Arc<Surface>| -> String {
+        match canonical
+            .iter()
+            .find(|(seen, _)| Arc::ptr_eq(seen, surface) || **seen == **surface)
+        {
+            Some((_, known)) => known.clone(),
+            None => {
+                canonical.push((surface.clone(), name.clone()));
+                name
+            }
+        }
+    };
     for (owner, object) in scene.objects.iter().enumerate() {
         let Some(mesh) = scene.meshes.get(&object.mesh) else {
             continue;
@@ -189,11 +203,13 @@ pub(super) fn draws(scene: &Scene) -> Draws {
             if object.hidden || part.overrides.hidden {
                 continue;
             }
-            let name = pick(scene, object, part).into_owned();
-            if let Some(surface) = &part.surface
-                && !scene.library.contains(&name)
-                && name == super::textures::surface_name(&object.mesh, surface)
-            {
+            let mut name = pick(scene, object, part).into_owned();
+            let own_surface = part.surface.as_ref().filter(|surface| {
+                !scene.library.contains(&name)
+                    && name == super::textures::surface_name(&object.mesh, surface)
+            });
+            if let Some(surface) = own_surface {
+                name = alias(name, surface);
                 surfaces.insert(name.clone(), surface.clone());
             }
             if let Some(surface) = &part.surface
@@ -209,8 +225,7 @@ pub(super) fn draws(scene: &Scene) -> Draws {
                     .or_insert_with(|| surface.clone());
             }
             let mut levels = Vec::new();
-            if let Some(surface) = &part.surface
-                && name == super::textures::surface_name(&object.mesh, surface)
+            if own_surface.is_some()
                 && part
                     .geometry
                     .levels
@@ -220,8 +235,9 @@ pub(super) fn draws(scene: &Scene) -> Draws {
                 for level in &part.geometry.levels {
                     let own = match &level.surface {
                         Some(surface) => {
-                            let own = super::textures::surface_name(&object.mesh, surface);
+                            let mut own = super::textures::surface_name(&object.mesh, surface);
                             if !scene.library.contains(&own) {
+                                own = alias(own, surface);
                                 surfaces.insert(own.clone(), surface.clone());
                             }
                             used.insert(own.clone());
@@ -299,6 +315,7 @@ pub(super) fn draws(scene: &Scene) -> Draws {
             owner: Some(owner),
             part: part.transform,
             levels: levels.iter().map(|level| index(level)).collect(),
+            tint: tint(object, part, &name),
         });
     }
     let first_id = scene
@@ -336,6 +353,7 @@ pub(super) fn draws(scene: &Scene) -> Draws {
             owner: None,
             part: IDENTITY,
             levels: Vec::new(),
+            tint: Tint::NONE,
         });
     }
     Draws {
@@ -343,5 +361,27 @@ pub(super) fn draws(scene: &Scene) -> Draws {
         materials,
         items,
         textures,
+    }
+}
+
+fn tint(object: &Object, part: &Part, name: &str) -> Tint {
+    let recolor = &object.recolor;
+    let own = recolor
+        .get(name)
+        .or_else(|| {
+            part.material
+                .as_deref()
+                .and_then(|found| recolor.get(found))
+        })
+        .or_else(|| {
+            part.surface
+                .as_ref()
+                .and_then(|surface| recolor.get(&surface.name))
+        })
+        .copied()
+        .unwrap_or(Tint::NONE);
+    Tint {
+        base: std::array::from_fn(|c| own.base[c] * object.tint[c]),
+        ..own
     }
 }

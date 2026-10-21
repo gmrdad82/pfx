@@ -149,3 +149,32 @@ fn a_thin_film_library_reads_and_writes_as_before_and_takes_a_film_ramp() {
     let text = toml::to_string(&ramped).unwrap();
     assert!(text.contains("kind = \"film_ramp\""), "{text}");
 }
+
+#[test]
+fn an_objects_tint_and_recolor_round_trip_through_toml() {
+    use pfx_scene::types::{Color, Object, Recolor};
+    let text = "name = \"house\"\nprefab = \"facade.prefab.toml\"\ntint = \"#c08060\"\n\n[recolor.brick]\nbase = [0.5, 0.2, 0.1]\nroughness = 0.7\nmetalness = 0.0\n\n[recolor.trim]\nbase = \"#ffffff\"\n";
+    let object: Object = toml::from_str(text).unwrap();
+    assert_eq!(object.tint, Some(Color::Hex("#c08060".into())));
+    assert_eq!(
+        object.recolor["brick"],
+        Recolor {
+            base: Some(Color::Rgb([0.5, 0.2, 0.1])),
+            roughness: Some(0.7),
+            metalness: Some(0.0),
+        }
+    );
+    assert_eq!(
+        object.recolor["trim"].base.as_ref().unwrap().rgb(),
+        Some([1.0; 3])
+    );
+    let again: Object = toml::from_str(&toml::to_string(&object).unwrap()).unwrap();
+    assert_eq!(again, object);
+    let plain: Object = toml::from_str("name = \"plain\"\nmesh = \"m\"\n").unwrap();
+    let written = toml::to_string(&plain).unwrap();
+    assert!(
+        !written.contains("tint") && !written.contains("recolor"),
+        "{written}"
+    );
+    assert!(toml::from_str::<Recolor>("colour = [1.0, 0.0, 0.0]\n").is_err());
+}

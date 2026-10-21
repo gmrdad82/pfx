@@ -32,7 +32,7 @@ use pfx_core::daylight::{Daylight, REFERENCE_HOUR};
 use pfx_core::sky::SUN_RADIUS;
 use pfx_geom::tree::{SwayVertex, TREE_SWAY_WGSL, Tree};
 use pfx_gpu::{Gpu, GpuProfiler, OffscreenTarget, PassTiming};
-use pfx_materials::{BRDF, Material, PackedMaterial};
+use pfx_materials::{BRDF, Material, PackedMaterial, Tint};
 use pfx_physics::BEND_WGSL;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -142,6 +142,7 @@ pub struct Instance {
     pub casts_shadow: bool,
     pub two_sided: bool,
     pub max_distance: f32,
+    pub tint: Tint,
 }
 
 impl Instance {
@@ -161,6 +162,7 @@ impl Instance {
             casts_shadow: true,
             two_sided: false,
             max_distance: f32::INFINITY,
+            tint: Tint::NONE,
         }
     }
 }
@@ -477,6 +479,7 @@ struct GpuInstance {
     content_face: [u32; 4],
     skin: [u32; 4],
     morph: [u32; 4],
+    tint: [[f32; 4]; 2],
 }
 
 #[repr(C)]
@@ -3766,6 +3769,7 @@ impl Frame {
                 ],
                 skin,
                 morph,
+                tint: instance.tint.gpu(),
             });
         }
         Ok(())
@@ -5013,6 +5017,8 @@ struct InstanceData {
     content_face: vec4u,
     skin: vec4u,
     morph: vec4u,
+    tint: vec4f,
+    finish: vec4f,
 }
 struct SwayData {
     pivot_level: vec4f,
@@ -5488,7 +5494,11 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     if (!front) {
         geometric = -geometric;
     }
-    var mapped = map_evaluate_with(material.base_roughness.xyz, material.base_roughness.w, material.metal_spec_coat.x, material.metal_spec_coat.w, material.thick_sub_film.z, geometric, input.tangent, input.uv_alpha.xy, vec2f(input.uv_alpha.w, input.normal.w), input.object_position, 0.0, input.settings.z, frame.time_size.x, input.material);
+    let placed = instances[input.instance];
+    let tinted_base = select(material.base_roughness.xyz * placed.tint.xyz, placed.tint.xyz, placed.tint.w > 0.5);
+    let tinted_roughness = select(material.base_roughness.w, placed.finish.x, placed.finish.x >= 0.0);
+    let tinted_metalness = select(material.metal_spec_coat.x, placed.finish.y, placed.finish.y >= 0.0);
+    var mapped = map_evaluate_with(tinted_base, tinted_roughness, tinted_metalness, material.metal_spec_coat.w, material.thick_sub_film.z, geometric, input.tangent, input.uv_alpha.xy, vec2f(input.uv_alpha.w, input.normal.w), input.object_position, 0.0, input.settings.z, frame.time_size.x, input.material);
     if (textured_on(material)) {
         mapped = textured_maps(mapped, material, input.tangent, input.uv_alpha.xy, uv1, uv_dx, uv_dy, uv1_dx, uv1_dy);
     }
@@ -5498,7 +5508,6 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     surface.metalness = mapped.metalness;
     surface.clearcoat_roughness = mapped.coat_roughness;
     surface.thin_film = mapped.thin_film;
-    let placed = instances[input.instance];
     let face = placed.content_face.x;
     let shown = face == 0u || (face == 1u && front) || (face == 2u && !front);
     let content_crop = select(vec4f(2.0, 2.0, -1.0, -1.0), placed.content_crop, shown);
@@ -5922,7 +5931,7 @@ mod tests {
     #[test]
     fn gpu_layouts_and_shader_entry_points() {
         assert_eq!(std::mem::size_of::<Vertex>(), 64);
-        assert_eq!(std::mem::size_of::<GpuInstance>(), 320);
+        assert_eq!(std::mem::size_of::<GpuInstance>(), 352);
         assert_eq!(std::mem::size_of::<Uniforms>(), 384);
         assert_eq!(std::mem::size_of::<SkyLight>(), 160);
         assert_eq!(std::mem::size_of::<GpuSway>(), 32);

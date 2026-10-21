@@ -4,6 +4,7 @@ use pfx_materials::{ALPHA_CUTOFF, AlphaMode, Material, UvTransform};
 use serde_json::Value;
 
 use crate::image::{ColorSpace, Image, Pixels};
+use crate::pool::Pool;
 
 pub const SHEEN: &str = "KHR_materials_sheen";
 pub const ANISOTROPY: &str = "KHR_materials_anisotropy";
@@ -47,32 +48,35 @@ pub struct Surface {
     pub declared: bool,
 }
 
+struct Fetched {
+    key: [u8; 32],
+    bytes: Vec<u8>,
+    mime: Option<String>,
+    label: String,
+}
+
 struct Images<'a, F> {
     gltf: &'a gltf::Gltf,
     buffers: &'a [Vec<u8>],
     read: &'a F,
-    decoded: Vec<Option<Option<Image>>>,
+    pool: &'a Pool,
+    fetched: Vec<Option<Option<Arc<Fetched>>>>,
 }
 
 impl<F> Images<'_, F>
 where
     F: Fn(&str) -> Result<Vec<u8>, String>,
 {
-    fn image(&mut self, texture: usize) -> Result<Option<Image>, String> {
-        let Some(source) = self
+    fn fetch(&mut self, texture: usize) -> Option<Arc<Fetched>> {
+        let source = self
             .gltf
             .textures()
             .nth(texture)
-            .map(|texture| texture.source().index())
-        else {
-            return Ok(None);
-        };
-        if let Some(Some(found)) = self.decoded.get(source) {
-            return Ok(found.clone());
+            .map(|texture| texture.source().index())?;
+        if let Some(Some(found)) = self.fetched.get(source) {
+            return found.clone();
         }
-        let Some(image) = self.gltf.images().nth(source) else {
-            return Ok(None);
-        };
+        let image = self.gltf.images().nth(source)?;
         let (bytes, mime, label) = match image.source() {
             gltf::image::Source::View { view, mime_type } => {
                 let bytes = self
@@ -92,20 +96,22 @@ where
                 uri.to_string(),
             ),
         };
-        let Some(bytes) = bytes else {
-            return Ok(None);
-        };
-        let decoded = if bytes.starts_with(b"\x89PNG") {
-            Image::png(&bytes).ok()
-        } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) || mime == Some("image/jpeg") {
-            Some(Image::jpeg(&bytes).map_err(|e| format!("{label}: {e}"))?)
-        } else {
-            None
-        };
-        if let Some(slot) = self.decoded.get_mut(source) {
-            *slot = Some(decoded.clone());
+        let found = bytes.map(|bytes| {
+            Arc::new(Fetched {
+                key: crate::pool::key(&bytes),
+                bytes,
+                mime: mime.map(str::to_string),
+                label,
+            })
+        });
+        if let Some(slot) = self.fetched.get_mut(source) {
+            *slot = Some(found.clone());
         }
-        Ok(decoded)
+        found
+    }
+
+    fn key(&mut self, texture: Option<usize>) -> Option<[u8; 32]> {
+        self.fetch(texture?).map(|found| found.key)
     }
 
     fn map(
@@ -113,14 +119,23 @@ where
         texture: Option<usize>,
         space: ColorSpace,
     ) -> Result<Option<Arc<Image>>, String> {
-        let Some(texture) = texture else {
+        let Some(found) = texture.and_then(|texture| self.fetch(texture)) else {
             return Ok(None);
         };
-        Ok(self.image(texture)?.map(|mut image| {
-            image.space = space;
-            Arc::new(image)
-        }))
+        self.pool.image(found.key, space, || decode(&found))
     }
+}
+
+fn decode(found: &Fetched) -> Result<Option<Image>, String> {
+    let bytes = &found.bytes;
+    Ok(if bytes.starts_with(b"\x89PNG") {
+        Image::png(bytes).ok()
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) || found.mime.as_deref() == Some("image/jpeg")
+    {
+        Some(Image::jpeg(bytes).map_err(|e| format!("{}: {e}", found.label))?)
+    } else {
+        None
+    })
 }
 
 fn number(value: Option<&Value>, fallback: f32) -> f32 {
@@ -197,6 +212,7 @@ pub(crate) fn surfaces<F>(
     gltf: &gltf::Gltf,
     buffers: &[Vec<u8>],
     read: &F,
+    pool: &Pool,
 ) -> Result<Vec<Surface>, String>
 where
     F: Fn(&str) -> Result<Vec<u8>, String>,
@@ -205,7 +221,8 @@ where
         gltf,
         buffers,
         read,
-        decoded: vec![None; gltf.images().len()],
+        pool,
+        fetched: (0..gltf.images().len()).map(|_| None).collect(),
     };
     gltf.materials()
         .enumerate()
@@ -314,7 +331,22 @@ where
         (Some(info), true) => info.strength(),
         _ => 0.0,
     };
-    maps.orm = orm(rough_image.as_deref(), occlusion_image.as_deref()).map(Arc::new);
+    maps.orm = match (&rough_image, &occlusion_image) {
+        (None, None) => None,
+        (Some(rough), None) => Some(rough.clone()),
+        _ => {
+            let key = crate::pool::derived(
+                "orm",
+                &[
+                    images.key(rough),
+                    images.key((!packed).then_some(occlusion_index).flatten()),
+                ],
+            );
+            images.pool.image(key, ColorSpace::Linear, || {
+                Ok(orm(rough_image.as_deref(), occlusion_image.as_deref()))
+            })?
+        }
+    };
     let mut extended = false;
     if let Some(sheen) = material.extension_value(SHEEN) {
         extended = true;

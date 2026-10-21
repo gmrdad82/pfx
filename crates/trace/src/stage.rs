@@ -166,6 +166,7 @@ pub struct Placement<'a> {
     pub alpha_cutoff: f32,
     pub two_sided: bool,
     pub motion: Option<PlacementMotion<'a>>,
+    pub tint: pfx_materials::Tint,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -187,6 +188,7 @@ impl Placement<'_> {
             alpha_cutoff: ALPHA_CUTOFF,
             two_sided: true,
             motion: None,
+            tint: pfx_materials::Tint::NONE,
         }
     }
 }
@@ -252,6 +254,7 @@ impl<E> Stage<'_, E> {
                 casts_shadow: placement.casts_shadow,
                 clip: placement.clip,
                 alpha_cutoff: placement.alpha_cutoff,
+                tint: placement.tint,
                 ..InstanceSurface::default()
             };
             if let Some(content) = placement.content {
@@ -568,6 +571,7 @@ pub fn scene_posed(
             clip: draw.clip,
             content,
             alpha_cutoff: draw.alpha_cutoff,
+            tint: draw.tint,
             ..Placement::new(mesh, *model, draw.material)
         });
     }

@@ -1,6 +1,6 @@
 const MAX_EDGE: u32 = 16384;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ColorSpace {
     Srgb,
     Linear,

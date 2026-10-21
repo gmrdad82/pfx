@@ -298,6 +298,7 @@ fn template(
     prefab: &str,
     overlay: &BTreeMap<PathBuf, String>,
     mount: Option<&pfx_scene::Project>,
+    images: &crate::Pool,
     refuse: &dyn Fn(String) -> SceneError,
 ) -> Result<Template, SceneError> {
     let named = |message: String| refuse(format!("tile prefab {prefab}: {message}"));
@@ -316,7 +317,15 @@ fn template(
     let resolved = project
         .scene_with(&root.join(prefab), absolute)
         .map_err(|found| named(build::refused(root, &found).message))?;
-    let built = build::build_with(&root.join(prefab), root, &resolved, None, overlay, mount)?;
+    let built = build::build_pooled(
+        &root.join(prefab),
+        root,
+        &resolved,
+        None,
+        overlay,
+        mount,
+        images.clone(),
+    )?;
     if let Some((name, _)) = built
         .animations
         .iter()
@@ -402,7 +411,15 @@ pub(super) fn expand(
                 Step::Key(key),
             ];
             let refuse = |message: String| places.refusal(&entry.file, &steps, message);
-            let made = template(scene, root, prefab, overlay, places.mount, &refuse)?;
+            let made = template(
+                scene,
+                root,
+                prefab,
+                overlay,
+                places.mount,
+                &places.images,
+                &refuse,
+            )?;
             templates.insert(prefab.clone(), made);
         }
     }

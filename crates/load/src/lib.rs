@@ -20,11 +20,14 @@ mod pfx;
 mod pfx_scene_tests;
 #[cfg(test)]
 mod pfx_tests;
+pub mod pool;
 mod rig;
 #[cfg(test)]
 mod rig_tests;
 mod room;
 pub mod scene;
+#[cfg(test)]
+mod share_tests;
 mod sky;
 mod source;
 pub mod surface;
@@ -41,6 +44,7 @@ pub use mesh::{
     WeightsChannel,
 };
 pub use pfx::{MESH_SUFFIXES, is_mesh_file, is_pfx, open_gltf};
+pub use pool::{Held, Pool};
 pub use rig::SkinRig;
 pub use room::{RoomLamp, RoomSky};
 pub use sky::{Distribution, Sky};

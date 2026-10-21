@@ -13,6 +13,7 @@ mod material;
 mod math;
 mod noise;
 mod pavement;
+mod tint;
 mod wet;
 mod wgsl;
 
@@ -57,6 +58,7 @@ pub use noise::{
     value_noise2_signed, value_noise3, value_noise3_gradient,
 };
 pub use pavement::{crack, plane, track, voronoi_edge2};
+pub use tint::Tint;
 pub use wet::{
     PORE_SPAN, PORE_START, PUDDLE_EDGE, PUDDLE_FLAT, PUDDLE_MEDIAN, PUDDLE_OCTAVES,
     PUDDLE_SCALE_MIN, PUDDLE_SPREAD, Soaked, WATER_ROUGHNESS, WET_DARKEST, Wet, puddle, soak,
@@ -67,5 +69,7 @@ pub use wgsl::{AGEING, BRDF, CONTENT, FILM, LOBES, NOISE, WET, library};
 mod library_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tint_tests;
 #[cfg(test)]
 mod wet_tests;

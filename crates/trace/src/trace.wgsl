@@ -78,7 +78,7 @@ struct MaterialMaps { textures: vec4f, scales: vec4f, extra: vec4f, transform: v
 struct MaterialLobes { sheen: vec4f, lobes: vec4f, scatter: vec4f }
 struct Hit { t: f32, n: vec3f, geometric: vec3f, material: u32, uv: vec2f, tangent: vec3f, bitangent: vec3f, surface: u32, shape: u32, record: u32 }
 struct ContentInfo { offset: u32, width: u32, height: u32, kind: u32 }
-struct InstanceSurface { clip0: vec4f, clip1: vec4f, transform: vec4f, crop: vec4f, info: vec4u, forward0: vec4f, forward1: vec4f, forward2: vec4f, inverse0: vec4f, inverse1: vec4f, inverse2: vec4f }
+struct InstanceSurface { clip0: vec4f, clip1: vec4f, transform: vec4f, crop: vec4f, info: vec4u, forward0: vec4f, forward1: vec4f, forward2: vec4f, inverse0: vec4f, inverse1: vec4f, inverse2: vec4f, tint: vec4f, finish: vec4f }
 struct ContentLayer { layer: vec4f, extra: vec4f }
 struct LightSample { dir: vec3f, pdf: f32, channel: u32, weight: vec3f, lobe: u32 }
 struct Accum { color: vec4f, albedo: vec4f, normal: vec4f }
@@ -2296,6 +2296,12 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         }
         let m=material_at(hit.material);
         var s=surface(m);
+        if (hit.shape==0u) {
+            let painted=instance_surfaces[hit.record];
+            s.base=select(s.base*painted.tint.xyz,painted.tint.xyz,painted.tint.w>0.5);
+            if (painted.finish.x>=0.0) { s.roughness=painted.finish.x; }
+            if (painted.finish.y>=0.0) { s.metalness=painted.finish.y; }
+        }
         let flags=extension_flags(m);
         traced_thin=TRACE_THIN && (flags&EXTENSION_THIN)!=0u;
         let layered=flags&EXTENSION_LAYERS;

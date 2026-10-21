@@ -197,16 +197,27 @@ impl Mesh {
     where
         F: Fn(&str) -> Result<Vec<u8>, String>,
     {
+        Self::parse_pooled(bytes, read, &crate::Pool::new())
+    }
+
+    pub fn parse_pooled<F>(bytes: &[u8], read: F, pool: &crate::Pool) -> Result<Self, String>
+    where
+        F: Fn(&str) -> Result<Vec<u8>, String>,
+    {
         if crate::pfx::is_pfx(bytes) {
             let container = crate::pfx::reader(bytes)?;
             let gltf = crate::pfx::document(&container)?;
-            return Self::from_gltf(gltf, |uri| match crate::pfx::file(&container, uri)? {
-                Some(data) => Ok(data),
-                None => read(uri),
-            });
+            return Self::read_gltf(
+                gltf,
+                |uri| match crate::pfx::file(&container, uri)? {
+                    Some(data) => Ok(data),
+                    None => read(uri),
+                },
+                Some(pool),
+            );
         }
         let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| format!("mesh: {e}"))?;
-        Self::from_gltf(gltf, read)
+        Self::read_gltf(gltf, read, Some(pool))
     }
 
     pub fn rigging_with<F>(bytes: &[u8], read: F) -> Result<Self, String>
@@ -214,17 +225,14 @@ impl Mesh {
         F: Fn(&str) -> Result<Vec<u8>, String>,
     {
         let gltf = gltf::Gltf::from_slice(bytes).map_err(|e| format!("mesh: {e}"))?;
-        Self::read_gltf(gltf, read, false)
+        Self::read_gltf(gltf, read, None)
     }
 
-    fn from_gltf<F>(gltf: gltf::Gltf, read: F) -> Result<Self, String>
-    where
-        F: Fn(&str) -> Result<Vec<u8>, String>,
-    {
-        Self::read_gltf(gltf, read, true)
-    }
-
-    fn read_gltf<F>(mut gltf: gltf::Gltf, read: F, looks: bool) -> Result<Self, String>
+    fn read_gltf<F>(
+        mut gltf: gltf::Gltf,
+        read: F,
+        looks: Option<&crate::Pool>,
+    ) -> Result<Self, String>
     where
         F: Fn(&str) -> Result<Vec<u8>, String>,
     {
@@ -232,13 +240,12 @@ impl Mesh {
         let buffers = buffers(&gltf, blob, &read)?;
         let nodes = nodes(&gltf)?;
         let mut groups = groups(&gltf, &buffers)?;
-        let (materials, surfaces) = if looks {
-            (
+        let (materials, surfaces) = match looks {
+            Some(pool) => (
                 materials(&gltf)?,
-                crate::surface::surfaces(&gltf, &buffers, &read)?,
-            )
-        } else {
-            (Vec::new(), Vec::new())
+                crate::surface::surfaces(&gltf, &buffers, &read, pool)?,
+            ),
+            None => (Vec::new(), Vec::new()),
         };
         fill_tangents(&mut groups, &surfaces);
         let skins = skins(&gltf, &buffers)?;
@@ -250,7 +257,7 @@ impl Mesh {
                 return Err("mesh: a node names a missing mesh".into());
             }
         }
-        for group in groups.iter().filter(|_| looks) {
+        for group in groups.iter().filter(|_| looks.is_some()) {
             for primitive in &group.primitives {
                 if let Some(material) = primitive.material
                     && materials.get(material as usize).is_none()
