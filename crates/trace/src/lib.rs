@@ -1,6 +1,7 @@
 pub mod adaptive;
 pub mod bvh;
 pub mod checkpoint;
+pub mod counters;
 pub mod denoise;
 pub mod detail;
 pub mod film;

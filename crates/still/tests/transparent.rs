@@ -59,6 +59,7 @@ fn traced(recipe: &Path, transparent: bool, denoise: bool) -> pfx_still::Rendere
         denoise,
         time: None,
         transparent,
+        counters: false,
     };
     pfx_still::render(&request, &Registry::new(), &mut |_| {}).unwrap()
 }

@@ -157,6 +157,7 @@ pub struct Request<'a> {
     pub denoise: bool,
     pub time: Option<f64>,
     pub transparent: bool,
+    pub counters: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -323,6 +324,7 @@ pub struct Paced {
     pub gpu_resident: Option<u64>,
     pub planned: [u64; 2],
     pub builds: Builds,
+    pub counts: Option<pfx_trace::counters::Counts>,
 }
 
 impl Paced {
@@ -487,6 +489,7 @@ pub fn render_kept(
         samples: request.samples,
     };
     staged.detail.fit_textures = Some(request.size);
+    staged.detail.counters = request.counters;
     turn(Report::default());
     let adaptive = request
         .noise
@@ -580,6 +583,7 @@ pub struct Reel {
     pub motion_steps: u32,
     pub denoise: bool,
     pub guides: bool,
+    pub counters: bool,
     base: Recipe,
     built: Built,
     staging: Staging,
@@ -655,6 +659,7 @@ impl Reel {
             motion_steps: MOTION_STEPS,
             denoise: true,
             guides: false,
+            counters: false,
             built,
             staging,
             gpu,
@@ -893,6 +898,7 @@ impl Reel {
                 if kept.size == size
                     && kept.samples == samples
                     && kept.trace.moving() == moves
+                    && kept.trace.counting() == self.counters
                     && kept.trace.sprite_quad().is_some() == spray.shown().next().is_some()
                     && kept.trace.sky_halvings()
                         == pfx_trace::gpu::sky_halvings(
@@ -1068,6 +1074,7 @@ impl Reel {
         }
         staged.spray(spray).map_err(Fault::Failed)?;
         staged.detail.sprite_room = self.sprite_room;
+        staged.detail.counters = self.counters;
         staged.detail.sampler = Sampler::Sobol { samples };
         staged.detail.fit_textures = Some(size);
         Ok(Kept {
@@ -1170,6 +1177,7 @@ fn traced(
         }
         trace.restore(gpu, &saved).map_err(failed)?;
     }
+    trace.clear_counts(gpu);
     let from = trace.samples();
     let trace = RefCell::new(trace);
     let mut paced = sampled(
@@ -1194,6 +1202,7 @@ fn traced(
     )?;
     let trace = trace.into_inner();
     paced.trace_bytes = trace.gpu_bytes();
+    paced.counts = counted(gpu, trace)?;
     let film = developed(gpu, trace, size, samples, denoiser)?;
     paced.gpu_resident = pfx_core::memory::peak().gpu;
     turns.now();
@@ -1254,6 +1263,7 @@ fn adapted(
     };
     turns.now();
     tell(&mut watch.borrow_mut());
+    trace.clear_counts(gpu);
     let converged = trace
         .sample_adaptive_kept(
             gpu,
@@ -1280,6 +1290,7 @@ fn adapted(
         ..Paced::default()
     };
     paced.add(&converged.stats);
+    paced.counts = counted(gpu, trace)?;
     turns.now();
     let film = developed(gpu, trace, size, cap, denoiser)?;
     paced.gpu_resident = pfx_core::memory::peak().gpu;
@@ -1290,6 +1301,12 @@ fn adapted(
         converged.mean_samples(),
         converged.max_samples(),
     ))
+}
+
+fn counted(gpu: &Gpu, trace: &Trace) -> Result<Option<pfx_trace::counters::Counts>, Fault> {
+    trace
+        .take_counts(gpu)
+        .map_err(|e| Fault::Failed(format!("the tracer's counters: {e}")))
 }
 
 fn denoiser(gpu: &Gpu) -> Result<Denoiser, Fault> {
@@ -1662,6 +1679,7 @@ mod tests {
             denoise: false,
             time: None,
             transparent: false,
+            counters: false,
         };
         assert!(render(&request, &Registry::new(), &mut |s| steps.push(s)).is_err());
         assert!(steps.is_empty());

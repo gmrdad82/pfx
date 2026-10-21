@@ -155,6 +155,12 @@ pub(super) struct Args {
     passes: Option<PathBuf>,
     #[arg(
         long,
+        requires = "trace",
+        help = "Count the tracer's rays by kind and the candidates its queries hand back, and report them for each frame"
+    )]
+    counters: bool,
+    #[arg(
+        long,
         help = "Progress on stderr as JSON lines: the frame, of how many, its samples and an ETA"
     )]
     json: bool,
@@ -602,6 +608,10 @@ impl Renderer {
                     paced.builds.top,
                     super::render::memory_line(&paced)
                 );
+                if let Some(counts) = &paced.counts {
+                    summary.push_str("; ");
+                    summary.push_str(&counts.line());
+                }
                 if let Some(restaged) = &rendered.restaged {
                     summary.push_str("; ");
                     summary.push_str(restaged);
@@ -646,6 +656,7 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
             )
             .map_err(|e| e.to_string())?;
             reel.denoise = args.denoised();
+            reel.counters = args.counters;
             let recipe = reel.recipe.clone();
             let noise = noise(args, &recipe.trace, samples);
             (
@@ -792,6 +803,8 @@ impl Told {
             None => self.line("frame", fields),
             Some(paced) => {
                 let [a, b, c, d, e] = fields;
+                let [counts, rays, candidates, movers, walks] =
+                    super::render::counts_json(paced.counts.as_ref());
                 self.line(
                     "frame",
                     [
@@ -805,6 +818,11 @@ impl Told {
                         ("gpu_ms", super::render::rounded(paced.gpu_ms, 0)),
                         ("bottom_builds", paced.builds.bottom.into()),
                         ("top_builds", paced.builds.top.into()),
+                        counts,
+                        rays,
+                        candidates,
+                        movers,
+                        walks,
                     ],
                 )
             }
@@ -1446,7 +1464,7 @@ mod tests {
     #[test]
     fn every_flag_is_read() {
         let args = parse(&strings(
-            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --checkpoint 30 --dump-scene tmp/c-scene.jsonl --json --rerender-from 3 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16 --memory-limit 6 --denoise off --passes tmp/p",
+            "table.toml --camera main --frames 24 --fps 30 --spin body --turns -0.5 --size 320x200 --out tmp/c --trace --spp 16 --threshold 0.02 --checkpoint 30 --dump-scene tmp/c-scene.jsonl --counters --json --rerender-from 3 --variant bare --set sky.intensity=0.4 --video tmp/c.webm --format png16 --memory-limit 6 --denoise off --passes tmp/p",
         ))
         .unwrap();
         assert_eq!(
@@ -1469,6 +1487,7 @@ mod tests {
                 denoise: Some(false),
                 passes: Some("tmp/p".into()),
                 dump_scene: Some("tmp/c-scene.jsonl".into()),
+                counters: true,
                 json: true,
                 rerender_from: Some(3),
                 variant: Some("bare".into()),
@@ -2044,6 +2063,7 @@ mod tests {
             denoise: true,
             time: None,
             transparent: false,
+            counters: false,
         };
         let rendered = pfx_still::render(&request, &Registry::new(), &mut |_| {}).unwrap();
         let pixels =
@@ -2119,6 +2139,7 @@ mod tests {
             denoise: false,
             time: None,
             transparent: false,
+            counters: false,
         };
         let rendered = pfx_still::render(&request, &Registry::new(), &mut |_| {}).unwrap();
         let pixels =

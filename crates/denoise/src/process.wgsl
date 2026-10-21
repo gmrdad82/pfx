@@ -97,6 +97,85 @@ fn output(@builtin(global_invocation_id) gid: vec3u) {
     image_out[at] = vec4f(v, color[at].w);
 }
 
+fn srgb_forward(y: f32) -> f32 {
+    if (y <= 0.0031308) {
+        return 12.92 * y;
+    }
+    return 1.055 * pow(y, 1.0 / 2.4) + -0.055;
+}
+
+fn srgb_inverse(x: f32) -> f32 {
+    if (x <= 0.04045) {
+        return x / 12.92;
+    }
+    return pow((x - -0.055) / 1.055, 1.0 / (1.0 / 2.4));
+}
+
+fn tile_source(gid: vec3u) -> i32 {
+    let x = i32(gid.x) - job.dst.x;
+    let y = i32(gid.y) - job.dst.y;
+    if (x >= 0 && x < job.size.x && y >= 0 && y < job.size.y) {
+        return i32(u32(y + job.src.y) * job.stride + u32(x + job.src.x));
+    }
+    return -1;
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn input_albedo(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= job.dims.x || gid.y >= job.dims.y) {
+        return;
+    }
+    var v = vec3f(0.0);
+    let at = tile_source(gid);
+    if (at >= 0) {
+        let a = clamp(nan_to_zero(color[at].xyz), vec3f(0.0), vec3f(1.0));
+        v = vec3f(srgb_forward(a.x), srgb_forward(a.y), srgb_forward(a.z));
+    }
+    tensor_out[gid.y * job.dims.x + gid.x] = vec4f(v, 0.0);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn input_normal(@builtin(global_invocation_id) gid: vec3u) {
+    if (gid.x >= job.dims.x || gid.y >= job.dims.y) {
+        return;
+    }
+    var v = vec3f(0.0);
+    let at = tile_source(gid);
+    if (at >= 0) {
+        v = clamp(nan_to_zero(color[at].xyz), vec3f(-1.0), vec3f(1.0)) * 0.5 + 0.5;
+    }
+    tensor_out[gid.y * job.dims.x + gid.x] = vec4f(v, 0.0);
+}
+
+fn tile_output(gid: vec3u) -> vec4u {
+    let sx = u32(i32(gid.x) + job.out_src.x);
+    let sy = u32(i32(gid.y) + job.out_src.y);
+    let dx = u32(i32(gid.x) + job.out_dst.x);
+    let dy = u32(i32(gid.y) + job.out_dst.y);
+    return vec4u(sy * job.dims.x + sx, dy * job.stride + dx, 0u, 0u);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn output_albedo(@builtin(global_invocation_id) gid: vec3u) {
+    if (i32(gid.x) >= job.out_size.x || i32(gid.y) >= job.out_size.y) {
+        return;
+    }
+    let at = tile_output(gid);
+    let x = clamp(nan_to_zero(tensor_in[at.x].xyz), vec3f(0.0), vec3f(FLT_MAX));
+    let v = vec3f(srgb_inverse(x.x), srgb_inverse(x.y), srgb_inverse(x.z));
+    image_out[at.y] = vec4f(min(v, vec3f(1.0)), 1.0);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn output_normal(@builtin(global_invocation_id) gid: vec3u) {
+    if (i32(gid.x) >= job.out_size.x || i32(gid.y) >= job.out_size.y) {
+        return;
+    }
+    let at = tile_output(gid);
+    let x = clamp(nan_to_zero(tensor_in[at.x].xyz), vec3f(0.0), vec3f(FLT_MAX));
+    image_out[at.y] = vec4f(min(max(x * 2.0 - 1.0, vec3f(-1.0)), vec3f(1.0)), 0.0);
+}
+
 fn luminance(c: vec3f) -> f32 {
     return 0.212671 * c.x + 0.715160 * c.y + 0.072169 * c.z;
 }

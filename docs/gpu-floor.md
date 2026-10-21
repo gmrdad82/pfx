@@ -42,8 +42,9 @@ Timestamp queries are never part of the floor. Without `TIMESTAMP_QUERY` the ren
 | `TIMESTAMP_QUERY` | optional | `GpuProfiler` pass timings across every pass; `pace` frame timing; `Pacer::run_passes` slice timing from the first pass's start to the last pass's end where encoder timestamps are missing (Apple GPUs). Absent means profiling off. |
 | `TIMESTAMP_QUERY_INSIDE_ENCODERS` | optional | `GpuProfiler` marks between passes; `Pacer` slice timing around the whole encoder. Absent, a `Pacer::run` slice is timed by its fence, which counts the submission's own CPU cost. |
 | `FLOAT32_FILTERABLE` | optional | Nothing in the live renderer: every R32Float and Rgba32Float binding is `filterable: false` and read with `textureLoad`. Glass declares its fluid and ripple inputs filterable; callers pass R16Float or Rgba16Float there, so an R32Float input would need this feature. The tracer requires it (below). |
+| `SUBGROUP` | optional | The counted trace kernel (`Detail::counters`) adds each kind of count across a subgroup before one lane adds it to the counters buffer. Absent means every lane adds its own counts, to the same totals. |
 
-The floor requires no wgpu feature. No pass uses push constants, binding arrays, multisampling, indirect draws, occlusion queries, polygon modes, conservative raster, unclipped depth, subgroups or read-write storage textures.
+The floor requires no wgpu feature. No pass uses push constants, binding arrays, multisampling, indirect draws, occlusion queries, polygon modes, conservative raster, unclipped depth or read-write storage textures, and only the counted trace kernel uses subgroups.
 
 ## Downlevel capabilities
 
