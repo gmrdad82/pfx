@@ -4,7 +4,8 @@ use std::process::ExitCode;
 use clap::builder::{PossibleValuesParser, TypedValueParser};
 use pfx_build::Registry;
 use pfx_core::rate::Rate;
-use pfx_workbench::{Fixture, Follow, Mode, Shell, Viewer, Workbench};
+use pfx_workbench::shutter::{self, Position, SUBFRAMES};
+use pfx_workbench::{Fixture, Follow, Mode, Shell, Shutter, Viewer, Workbench};
 
 use super::size;
 
@@ -64,6 +65,30 @@ pub(super) struct Args {
         help = "Frames per second, from 1 to 240: a whole number, num/den such as 24000/1001, or 23.976 (23.98), 29.97, 47.952 (47.95), 59.94, 119.88 [default: 30]"
     )]
     pub(super) fps: Option<Rate>,
+    #[arg(
+        long,
+        value_name = "S",
+        requires = "offscreen",
+        value_parser = shutter::fraction,
+        help = "Blur motion as a film camera does: the shutter stays open this share of each frame, above 0 to 1, as 0.5 or 1/2 (0.5 is a 180-degree shutter); each frame is the mean in linear light of --subframes draws of the window at times spread inside the open shutter, made and averaged on the GPU, none written to disk [default: off, every frame drawn once]"
+    )]
+    pub(super) shutter: Option<[u32; 2]>,
+    #[arg(
+        long = "shutter-position",
+        value_name = "where",
+        requires = "shutter",
+        value_parser = shutter::position,
+        help = "Where the shutter sits against the frame's time: start opens it at the frame, centre centres it on the frame, end closes it at the frame [default: centre]"
+    )]
+    pub(super) shutter_position: Option<Position>,
+    #[arg(
+        long,
+        value_name = "N",
+        requires = "shutter",
+        value_parser = shutter::subframes,
+        help = "Draws averaged into each frame under --shutter, from 1 to 64 [default: 8]"
+    )]
+    pub(super) subframes: Option<u32>,
     #[arg(
         long,
         value_name = "when",
@@ -194,6 +219,25 @@ fn blend(text: &str) -> Result<f32, String> {
         Ok(value) if (0.0..=1.0).contains(&value) => Ok(value),
         _ => Err(format!("{text} is not an amount from 0 to 1")),
     }
+}
+
+pub(super) fn shutter_of(args: &Args) -> Result<Option<Shutter>, String> {
+    args.shutter
+        .map(|open| {
+            Shutter::new(
+                open,
+                args.shutter_position.unwrap_or_default(),
+                args.subframes.unwrap_or(SUBFRAMES),
+            )
+        })
+        .transpose()
+}
+
+pub(super) fn shutter_params(shutter: &Shutter, params: &mut serde_json::Value) {
+    params["shutter"] = shutter.fraction().into();
+    params["shutter_position"] = shutter.position().word().into();
+    params["subframes"] = shutter.subframes().into();
+    params["subframe_steps"] = shutter.ticks().into();
 }
 
 pub(super) fn shade(args: &Args, shell: &mut Shell) -> Result<(), String> {

@@ -1,9 +1,11 @@
 pub mod focus;
+pub mod mean;
 mod offscreen;
 pub mod paint;
 pub mod pgpu;
 pub mod profile;
 mod script;
+pub mod shutter;
 mod window;
 pub mod worker;
 
@@ -16,7 +18,9 @@ use egui_wgpu::Renderer;
 use pfx_editor_style::theme;
 use pfx_gpu::Gpu;
 
-pub use offscreen::{MAX_SIDE, check, drive, encode_png, pixels};
+pub use mean::Mean;
+pub use offscreen::{MAX_SIDE, check, drive, encode_png, pixels, pixels_shuttered};
+pub use shutter::Shutter;
 pub use pfx_editor_style::Theme;
 pub use pfx_gpu::stats::{FrameStatsSnapshot, Percentiles};
 pub use pfx_gpu::window::{FrameRate, Present};
@@ -192,6 +196,16 @@ pub fn context(theme: &Theme) -> Context {
 
 pub fn shot(app: &mut impl App, size: [u32; 2], script: &Script) -> Result<Vec<u8>, Error> {
     let rgba = pixels(app, size, script)?;
+    encode_png(size, &rgba)
+}
+
+pub fn shot_shuttered(
+    app: &mut impl App,
+    size: [u32; 2],
+    script: &Script,
+    shutter: &Shutter,
+) -> Result<Vec<u8>, Error> {
+    let rgba = pixels_shuttered(app, size, script, shutter)?;
     encode_png(size, &rgba)
 }
 

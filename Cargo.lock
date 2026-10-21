@@ -3461,6 +3461,7 @@ dependencies = [
  "egui-winit",
  "pfx-editor-style",
  "pfx-gpu",
+ "pfx-post",
  "png 0.18.1",
  "serde_json",
 ]

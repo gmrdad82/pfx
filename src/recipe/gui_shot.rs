@@ -2,7 +2,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use pfx_build::Registry;
-use pfx_workbench::{Fixture, Follow, Mode, Script, Shell, Viewer, Workbench};
+use pfx_workbench::{Error, Fixture, Follow, Mode, Script, Shell, Shutter, Viewer, Workbench};
 
 use super::gui::Args;
 
@@ -48,7 +48,24 @@ fn options(args: &Args) -> Result<Options, String> {
     Ok(options)
 }
 
+fn take(
+    app: &mut Workbench<'_>,
+    size: [u32; 2],
+    script: &Script,
+    shutter: Option<&Shutter>,
+) -> Result<Vec<u8>, Error> {
+    match shutter {
+        Some(shutter) => pfx_workbench::shot_shuttered(app, size, script, shutter),
+        None => pfx_workbench::shot(app, size, script),
+    }
+}
+
 pub fn run(args: &Args, registry: &Registry) -> ExitCode {
+    let shutter = match super::gui::shutter_of(args) {
+        Ok(shutter) => shutter,
+        Err(error) => return super::refuse("gui --shot", &error),
+    };
+    let shutter = shutter.as_ref();
     let shade = |shell: &mut Shell| {
         if let Some(module) = &args.play {
             shell.choose_module(module.clone());
@@ -94,7 +111,7 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
         if let Err(error) = shade(&mut shell) {
             return super::refuse("edit --shot", &error);
         }
-        pfx_workbench::shot(&mut Workbench::new(&mut shell, None), size, &script)
+        take(&mut Workbench::new(&mut shell, None), size, &script, shutter)
             .map(|png| (png, size))
     } else if let Some(place) =
         options
@@ -122,7 +139,7 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
                 if let Err(error) = shade(&mut shell) {
                     return super::refuse("edit --shot", &error);
                 }
-                pfx_workbench::shot(&mut Workbench::new(&mut shell, None), size, &script)
+                take(&mut Workbench::new(&mut shell, None), size, &script, shutter)
                     .map(|png| (png, size))
             }
             Err(error) => return super::refuse("gui --shot", &error),
@@ -152,19 +169,19 @@ pub fn run(args: &Args, registry: &Registry) -> ExitCode {
                     return super::refuse("edit --shot", &error);
                 }
                 let size = options.size.unwrap_or(SIZE);
-                pfx_workbench::shot(&mut Workbench::lent(&mut shell, &mut viewer), size, &script)
+                take(&mut Workbench::lent(&mut shell, &mut viewer), size, &script, shutter)
                     .map(|png| (png, size))
             }
             (None, Some(fixture)) => {
                 let size = options.size.unwrap_or(fixture.size());
                 let mut shell = Shell::fixture(fixture).without_recent();
-                pfx_workbench::shot(&mut Workbench::new(&mut shell, None), size, &script)
+                take(&mut Workbench::new(&mut shell, None), size, &script, shutter)
                     .map(|png| (png, size))
             }
             (None, None) => {
                 let size = options.size.unwrap_or(SIZE);
                 let mut shell = Shell::new().without_recent();
-                pfx_workbench::shot(&mut Workbench::new(&mut shell, None), size, &script)
+                take(&mut Workbench::new(&mut shell, None), size, &script, shutter)
                     .map(|png| (png, size))
             }
         }
@@ -303,5 +320,66 @@ mod tests {
             let refused = args(&format!("{} --shot tmp/a.png {extra}", folder.display()));
             assert!(refused.is_err(), "{extra}: {refused:?}");
         }
+    }
+
+    fn parsed(text: &str) -> Args {
+        let words: Vec<&str> = std::iter::once("gui")
+            .chain(text.split_whitespace())
+            .collect();
+        match super::super::parsed(&words).unwrap() {
+            super::super::Verb::Gui(args) => *args,
+            _ => panic!("not gui"),
+        }
+    }
+
+    #[test]
+    fn a_shot_whose_shutter_cannot_split_its_frame_is_refused_and_writes_nothing() {
+        let dir = scratch("refused-shutter");
+        let out = dir.join("never.png");
+        let _ = std::fs::remove_file(&out);
+        let args = parsed(&format!(
+            "--shot {} --fixture keycap --shutter 0.333",
+            out.display()
+        ));
+        assert_eq!(run(&args, &Registry::new()), ExitCode::FAILURE);
+        assert!(!out.exists());
+    }
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class interactive --as pfx -- cargo test -- --ignored"]
+    fn a_shuttered_shot_of_a_still_widget_writes_the_sharp_shots_picture() {
+        let dir = scratch("shutter");
+        let decoded = |path: &Path| {
+            let mut reader = png::Decoder::new(std::io::BufReader::new(
+                std::fs::File::open(path).unwrap(),
+            ))
+            .read_info()
+            .unwrap();
+            let mut rgba = vec![0; reader.output_buffer_size().unwrap()];
+            reader.next_frame(&mut rgba).unwrap();
+            (reader.info().width, reader.info().height, rgba)
+        };
+        let sharp = dir.join("sharp.png");
+        let blurred = dir.join("blurred.png");
+        let again = dir.join("again.png");
+        assert_eq!(
+            run(&parsed(&format!("--shot {} --fixture keycap", sharp.display())), &Registry::new()),
+            ExitCode::SUCCESS
+        );
+        for out in [&blurred, &again] {
+            let line = format!(
+                "--shot {} --fixture keycap --shutter 0.5 --shutter-position start --subframes 3",
+                out.display()
+            );
+            assert_eq!(run(&parsed(&line), &Registry::new()), ExitCode::SUCCESS);
+        }
+        let (width, height, sharp) = decoded(&sharp);
+        let (blurred_width, blurred_height, blurred) = decoded(&blurred);
+        assert_eq!((blurred_width, blurred_height), (width, height));
+        assert!(
+            blurred.iter().zip(&sharp).all(|(a, b)| a.abs_diff(*b) <= 1),
+            "a still widget is the same picture under a shutter"
+        );
+        assert_eq!(decoded(&again).2, blurred, "a shuttered shot repeats its bytes");
     }
 }

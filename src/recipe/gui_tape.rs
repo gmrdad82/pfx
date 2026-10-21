@@ -530,6 +530,7 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
     let size = args.size.unwrap_or(SIZE);
     let rate = args.fps.unwrap_or(FPS);
     let poster = args.poster.unwrap_or(Poster::First);
+    let shutter = super::gui::shutter_of(args)?;
     let layout = Layout {
         size,
         scale: args.scale.unwrap_or(1.0),
@@ -604,11 +605,11 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
     let writers = png_writers(partial_folder.clone(), size, frames_out);
     let mut idle = Idle::new();
     let mut kept = None;
-    let played = pfx_workbench::play(
+    let played = pfx_workbench::play_shuttered(
         &mut Workbench::new(&mut shell, viewer),
         &tape,
-        layout,
-        rate,
+        (layout, rate),
+        shutter.as_ref(),
         |index, rgba| {
             if index == poster_frame && !args.frames {
                 kept = Some(rgba.to_vec());
@@ -678,6 +679,9 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
     });
     if rate.whole_fps().is_none() {
         params["frame_rate"] = rate.to_string().into();
+    }
+    if let Some(shutter) = &shutter {
+        super::gui::shutter_params(shutter, &mut params);
     }
     let target = if args.start {
         Some("start".to_string())
@@ -975,6 +979,50 @@ mod tests {
     }
 
     #[test]
+    fn a_shutter_takes_its_share_position_and_subframes_on_a_clip_or_a_shot() {
+        let parsed = args(
+            "--clip tmp/c --tape t.tape --fps 24000/1001 --shutter 0.5 --shutter-position end --subframes 4",
+        )
+        .unwrap();
+        let shutter = super::super::gui::shutter_of(&parsed).unwrap().unwrap();
+        assert_eq!(
+            (shutter.open(), shutter.position(), shutter.subframes(), shutter.ticks()),
+            ([1, 2], pfx_workbench::shutter::Position::End, 4, 16)
+        );
+        let mut params = json!({});
+        super::super::gui::shutter_params(&shutter, &mut params);
+        assert_eq!(
+            params,
+            json!({"shutter": 0.5, "shutter_position": "end", "subframes": 4, "subframe_steps": 16})
+        );
+        let plain = args("--clip tmp/c --tape t.tape --shutter 1/3").unwrap();
+        let shutter = super::super::gui::shutter_of(&plain).unwrap().unwrap();
+        assert_eq!(
+            (shutter.position(), shutter.subframes(), shutter.ticks()),
+            (pfx_workbench::shutter::Position::Centre, 8, 48)
+        );
+        assert!(args("--shot a.png --shutter 0.5").unwrap().shutter.is_some());
+        assert_eq!(
+            super::super::gui::shutter_of(&args("--clip tmp/c --tape t.tape").unwrap()),
+            Ok(None)
+        );
+        let fine = args("--clip tmp/c --tape t.tape --shutter 0.333").unwrap();
+        assert!(super::super::gui::shutter_of(&fine).is_err());
+        for text in [
+            "--shutter 0.5",
+            "--clip tmp/c --tape t.tape --subframes 4",
+            "--clip tmp/c --tape t.tape --shutter-position end",
+            "--clip tmp/c --tape t.tape --shutter 1.5",
+            "--clip tmp/c --tape t.tape --shutter 0",
+            "--clip tmp/c --tape t.tape --shutter 0.5 --subframes 0",
+            "--clip tmp/c --tape t.tape --shutter 0.5 --subframes 65",
+            "--clip tmp/c --tape t.tape --shutter 0.5 --shutter-position middle",
+        ] {
+            assert!(args(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
     #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
     fn a_short_tape_writes_its_frames_and_a_manifest_the_same_twice() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/tape-tests/frames");
@@ -1011,5 +1059,112 @@ mod tests {
         assert_eq!(manifest["tape_sha256"].as_str().unwrap().len(), 64);
         assert!(!dir.join("out/still-320x200-30fps/frame-00005.png").exists());
         assert!(read() == first, "the same tape drew different frames");
+    }
+
+    #[test]
+    fn a_shutter_that_cannot_split_its_frames_is_refused_before_anything_is_drawn() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/tape-tests/refused-shutter");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let tape = dir.join("move.tape");
+        std::fs::write(&tape, "move 10 10 0.5\n").unwrap();
+        let out = dir.join("out");
+        let line = format!(
+            "--clip {} --tape {} --frames --shutter 0.333 --subframes 8",
+            out.display(),
+            tape.display()
+        );
+        let refused = film(&args(&line).unwrap(), &[], &Registry::new()).unwrap_err();
+        assert!(refused.contains("past 1024"), "{refused}");
+        assert!(!out.exists(), "a refused clip writes nothing");
+        let long = dir.join("long.tape");
+        std::fs::write(&long, "wait 600\nwait 600\nwait 600\nwait 600\n").unwrap();
+        let line = format!(
+            "--clip {} --tape {} --frames --shutter 0.5",
+            out.display(),
+            long.display()
+        );
+        let refused = film(&args(&line).unwrap(), &[], &Registry::new()).unwrap_err();
+        assert!(refused.contains("runs past"), "{refused}");
+        assert!(!out.exists());
+    }
+
+    fn filmed_frames(dir: &Path, extra: &str) -> (Vec<Vec<u8>>, serde_json::Value) {
+        let out = dir.join("out");
+        let _ = std::fs::remove_dir_all(&out);
+        let line = format!(
+            "--clip {} --tape {} --frames --size 320x200 --fps 24000/1001 {extra}",
+            out.display(),
+            dir.join("glide.tape").display()
+        );
+        film(&args(&line).unwrap(), &[], &Registry::new()).unwrap();
+        let stem = "glide-320x200-23.976fps";
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(out.join(format!("{stem}.json"))).unwrap(),
+        )
+        .unwrap();
+        let count = manifest["frames"]["count"].as_u64().unwrap() as usize;
+        let frames = (0..count)
+            .map(|frame| std::fs::read(out.join(stem).join(frame_name(frame))).unwrap())
+            .collect();
+        (frames, manifest)
+    }
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+    fn a_shuttered_clip_keeps_its_frames_and_clock_blurs_what_moves_and_repeats_its_bytes() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/tape-tests/shutter");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("glide.tape"),
+            "move 20 100 0.1\nmove 300 100 0.5 linear\nwait 0.1\n",
+        )
+        .unwrap();
+        let (plain, plain_manifest) = filmed_frames(&dir, "");
+        let (blurred, manifest) = filmed_frames(&dir, "--shutter 1/2 --subframes 6");
+        let (again, _) = filmed_frames(&dir, "--shutter 1/2 --subframes 6");
+        let (closing, _) = filmed_frames(&dir, "--shutter 1 --shutter-position end --subframes 4");
+        assert_eq!(blurred.len(), plain.len(), "a shutter keeps the clip's frame count");
+        assert_eq!(closing.len(), plain.len());
+        assert!(blurred == again, "a shuttered clip repeats its bytes");
+        assert_eq!(manifest["params"]["shutter"], json!(0.5));
+        assert_eq!(manifest["params"]["shutter_position"], "centre");
+        assert_eq!(manifest["params"]["subframes"], 6);
+        assert_eq!(manifest["params"]["subframe_steps"], 24);
+        assert_eq!(manifest["params"]["frame_rate"], "24000/1001");
+        for key in ["shutter", "shutter_position", "subframes", "subframe_steps"] {
+            assert!(plain_manifest["params"].get(key).is_none(), "{key}");
+        }
+        let files = |value: &serde_json::Value| -> Vec<serde_json::Value> {
+            value["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|file| json!([file["file"], file["frame"], file["step"], file["line"]]))
+                .collect()
+        };
+        assert_eq!(files(&manifest), files(&plain_manifest), "the same frames, steps and lines");
+        let moving = blurred.iter().zip(&plain).filter(|(a, b)| a != b).count();
+        assert!(moving >= 8, "{moving} frames differ from the sharp clip");
+        let decoded = |png_bytes: &[u8]| {
+            let mut reader = png::Decoder::new(std::io::Cursor::new(png_bytes))
+                .read_info()
+                .unwrap();
+            let mut rgb = vec![0; reader.output_buffer_size().unwrap()];
+            reader.next_frame(&mut rgb).unwrap();
+            rgb
+        };
+        let (still, sharp) = (decoded(blurred.last().unwrap()), decoded(plain.last().unwrap()));
+        assert!(
+            still.iter().zip(&sharp).all(|(a, b)| a.abs_diff(*b) <= 1),
+            "once nothing moves the shuttered frame is the sharp one"
+        );
+        assert_ne!(closing, blurred, "a closing full shutter is another blur");
+        for frame in &blurred {
+            let decoder = png::Decoder::new(std::io::Cursor::new(frame.as_slice()));
+            let info = decoder.read_info().unwrap();
+            assert_eq!((info.info().width, info.info().height), (320, 200));
+        }
     }
 }

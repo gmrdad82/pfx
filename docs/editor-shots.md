@@ -138,6 +138,21 @@ pfx gui samples/workshop.pitofx --clip film --tape tweak.tape --frames --size 21
 pfx gui samples/chase.pitofx --clip film --tape chase.tape --bare --size 2160x3840 --scale 2 --fps 60
 ```
 
+### Motion blur: a film camera's shutter
+
+`--shutter <S>` blurs whatever moves in the window as a film camera does: the shutter stays open `S` of each frame, above 0 to 1, written `0.5` or `1/2` (0.5 is a 180-degree shutter). Each frame is then the mean of `--subframes` draws of the window (8 by default, 1 to 64) at times spread evenly inside the open shutter, each at the middle of its share of it: the pointer, orbits, dollies, fades, scrolls, egui's own animations and a playing timeline (at its own frame steps) all move between them. `--shutter-position` places the shutter against the frame's time as the scene's `[motion_blur] position` does (`docs/scenes.md`): `centre` (the default) centres it on the frame, `start` opens it at the frame, `end` closes it at the frame; a centred or closing shutter holds the first frame's state where it reaches before the clip starts.
+
+```sh
+pfx gui samples/workshop.pitofx --clip film --tape move.tape --fps 24000/1001 --shutter 0.5 --frames
+```
+
+- **No subframe touches the disk.** Each subframe is painted on the GPU and added to a 32-bit float sum in linear light (the sRGB frame decoded as it is read, its premultiplied alpha averaged with it); the frame is divided once, encoded back to sRGB and read back once, and only then written, as a PNG or into the master.
+- **Time stays exact.** The tape is planned at `subframe steps` a frame, the smallest whole number that puts every subframe on a step (32 for `0.5` and 8 subframes, 48 for `1/3`, at most 1024: a shutter such as `0.333` that would need more is refused in one line with rounder ones to take). Step `k` of frame `n` is at `(n × steps + k) × den / (num × steps)` seconds, one division of whole numbers, so at `24000/1001` frame 1's first subframe is at exactly `1001/30720` s, frame `n` itself stays at `n × 1001 / 24000` s, and every key, click and step of the tape lands on the frame it lands on without `--shutter`. Nothing reads the wall clock: the same tape gives the same bytes, run after run, on the same GPU and driver.
+- **Steps nothing changes are skipped** and steps that only move the pointer, orbit, dolly or fit run in one pass up to the next subframe, so a frame costs about its `--subframes` draws.
+- The manifest's `params` gain `shutter` (the open share), `shutter_position`, `subframes` and `subframe_steps`. Without `--shutter` nothing changes: every frame is drawn once, byte for byte as before, and the manifest has none of these keys.
+
+`--shot` takes `--shutter` too: the frame is drawn after the script settles, one sixtieth of a second (the offscreen driver's step) after its last pass, as the mean of its subframes around that time.
+
 To make a GIF of it, [pcod](https://github.com/gmrdad82/pito-codecs) converts the master:
 
 ```sh

@@ -46,12 +46,13 @@ pub use curves::{Change, CurveEdit, TRACKS as CURVE_TRACKS};
 pub use fixture::Fixture;
 pub use follow::{Follow, Mode, Shape};
 pub use game::{EDIT_USAGE, Offscreen, Out, copy_project, edit_project, offscreen};
-pub use pfx_editor_shell::{Error, Pulse, Script, shot, window};
+pub use pfx_editor_shell::{Error, Pulse, Script, Shutter, shot, shot_shuttered, shutter, window};
 pub use scenes::{is_project, is_scene};
 pub use shell::{PLAY_DIR, Shell, recipe_scene};
 pub use start::{start_recipe, start_recipe_here};
 pub use tape::{
-    Act, Layout, MAX_FRAMES, Tape, View, frame_png, play, poster_png, steps as tape_steps,
+    Act, Layout, MAX_FRAMES, Tape, View, frame_png, play, play_shuttered, poster_png,
+    steps as tape_steps,
 };
 pub use viewer::Viewer;
 pub use wire::Look;

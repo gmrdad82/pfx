@@ -5,7 +5,9 @@ use egui::{
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
 use pfx_gpu::{Gpu, wgpu};
 
+use crate::mean::Mean;
 use crate::paint::Painter;
+use crate::shutter::{self, Shutter};
 use crate::{App, Error, Mods, Script, Step, Theme, block_on, context};
 
 pub const MAX_SIDE: u32 = 8192;
@@ -14,6 +16,7 @@ const DRAG_STEPS: u32 = 4;
 const SETTLE: usize = 2;
 const SETTLE_MOST: usize = 64;
 const CLOCK: &str = "pfx-editor-shell/drive-passes";
+const RATE: [u32; 2] = [60, 1];
 
 struct Driver<'a> {
     ctx: &'a Context,
@@ -25,14 +28,25 @@ struct Driver<'a> {
 
 impl Driver<'_> {
     fn pass(&mut self, events: Vec<Event>, ui: &mut impl FnMut(&mut Ui)) -> FullOutput {
+        let time = self.passes as f64 * f64::from(DT);
+        self.pass_at(time, DT, events, ui)
+    }
+
+    fn pass_at(
+        &mut self,
+        time: f64,
+        dt: f32,
+        events: Vec<Event>,
+        ui: &mut impl FnMut(&mut Ui),
+    ) -> FullOutput {
         let events: Vec<Event> = std::iter::once(Event::ModifiersChanged(self.modifiers))
             .chain(events)
             .collect();
         let mut input = RawInput {
             screen_rect: Some(self.screen),
             max_texture_side: Some(MAX_SIDE as usize),
-            time: Some(self.passes as f64 * f64::from(DT)),
-            predicted_dt: DT,
+            time: Some(time),
+            predicted_dt: dt,
             focused: true,
             events,
             ..RawInput::default()
@@ -236,6 +250,24 @@ pub fn check(size: [u32; 2]) -> Result<(), Error> {
 }
 
 pub fn pixels(app: &mut impl App, size: [u32; 2], script: &Script) -> Result<Vec<u8>, Error> {
+    shoot(app, size, script, None)
+}
+
+pub fn pixels_shuttered(
+    app: &mut impl App,
+    size: [u32; 2],
+    script: &Script,
+    shutter: &Shutter,
+) -> Result<Vec<u8>, Error> {
+    shoot(app, size, script, Some(shutter))
+}
+
+fn shoot(
+    app: &mut impl App,
+    size: [u32; 2],
+    script: &Script,
+    shutter: Option<&Shutter>,
+) -> Result<Vec<u8>, Error> {
     check(size)?;
     let theme = app.theme();
     let gpu = block_on(Gpu::headless()).map_err(Error)?;
@@ -243,10 +275,9 @@ pub fn pixels(app: &mut impl App, size: [u32; 2], script: &Script) -> Result<Vec
     let mut painter = Painter::new(&gpu, format, RendererOptions::PREDICTABLE);
     if !app.viewport() {
         return finish(
-            &gpu,
-            &mut painter,
+            (&gpu, &mut painter),
             size,
-            script,
+            (script, shutter),
             &theme,
             |ui, _| app.ui(ui),
             || false,
@@ -259,10 +290,9 @@ pub fn pixels(app: &mut impl App, size: [u32; 2], script: &Script) -> Result<Vec
         .extend(std::iter::repeat_n(Step::Frame, SETTLE));
     let settling = std::cell::Cell::new(false);
     finish(
-        &gpu,
-        &mut painter,
+        (&gpu, &mut painter),
         size,
-        &settled,
+        (&settled, shutter),
         &theme,
         |ui, painter| {
             app.ui(ui);
@@ -278,10 +308,9 @@ pub fn pixels(app: &mut impl App, size: [u32; 2], script: &Script) -> Result<Vec
 }
 
 fn finish(
-    gpu: &Gpu,
-    painter: &mut Painter,
+    (gpu, painter): (&Gpu, &mut Painter),
     size: [u32; 2],
-    script: &Script,
+    (script, shutter): (&Script, Option<&Shutter>),
     app_theme: &Theme,
     mut ui: impl FnMut(&mut Ui, &mut Painter),
     settling: impl Fn() -> bool,
@@ -289,26 +318,72 @@ fn finish(
     let ctx = context(app_theme);
     let mut output = {
         let painter = &mut *painter;
-        drive_painted(&ctx, size, script, |root| ui(root, painter), settling)
+        drive_painted(&ctx, size, script, |root| ui(root, painter), &settling)
     };
-    let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
     let target = gpu
         .offscreen(size[0], size[1], wgpu::TextureFormat::Rgba8UnormSrgb)
         .map_err(Error)?;
-    let screen = ScreenDescriptor {
-        size_in_pixels: size,
-        pixels_per_point: output.pixels_per_point,
+    let Some(shutter) = shutter else {
+        let primitives = ctx.tessellate(output.shapes, output.pixels_per_point);
+        let screen = ScreenDescriptor {
+            size_in_pixels: size,
+            pixels_per_point: output.pixels_per_point,
+        };
+        painter.paint(
+            gpu,
+            &target.view,
+            &screen,
+            &output.textures_delta,
+            &primitives,
+            app_theme.bg,
+        );
+        output.textures_delta.clear();
+        return gpu.readback_rgba8(&target).map_err(Error);
     };
-    painter.paint(
-        gpu,
-        &target.view,
-        &screen,
-        &output.textures_delta,
-        &primitives,
-        app_theme.bg,
-    );
-    output.textures_delta.clear();
-    gpu.readback_rgba8(&target).map_err(Error)
+    let mut mean = Mean::new(gpu, size)?;
+    let mut driver = Driver {
+        ctx: &ctx,
+        screen: Rect::from_min_size(Pos2::ZERO, Vec2::new(size[0] as f32, size[1] as f32)),
+        passes: ctx.data(|data| data.get_temp(Id::new(CLOCK))).unwrap_or(0),
+        modifiers: Modifiers::NONE,
+        textures: std::mem::take(&mut output.textures_delta),
+    };
+    let frame = driver.passes;
+    let ticks = shutter.ticks();
+    let dt = (1.0 / (f64::from(RATE[0]) * f64::from(ticks))) as f32;
+    for offset in shutter.offsets() {
+        let tick = (frame * u64::from(ticks)).saturating_add_signed(offset);
+        let time = shutter::seconds(shutter::tick_time(RATE, ticks, tick));
+        let mut last = {
+            let painter = &mut *painter;
+            let mut each = |root: &mut Ui| ui(root, painter);
+            let mut last = driver.pass_at(time, dt, Vec::new(), &mut each);
+            let mut extra = 0;
+            while extra < SETTLE_MOST && settling() {
+                last = driver.pass_at(time, dt, Vec::new(), &mut each);
+                extra += 1;
+            }
+            last
+        };
+        let primitives = ctx.tessellate(std::mem::take(&mut last.shapes), last.pixels_per_point);
+        let screen = ScreenDescriptor {
+            size_in_pixels: size,
+            pixels_per_point: last.pixels_per_point,
+        };
+        let mut textures = std::mem::take(&mut driver.textures);
+        painter.paint(
+            gpu,
+            &target.view,
+            &screen,
+            &textures,
+            &primitives,
+            app_theme.bg,
+        );
+        textures.clear();
+        mean.add(gpu, &target.view, 1);
+    }
+    ctx.data_mut(|data| data.insert_temp(Id::new(CLOCK), frame + 1));
+    mean.resolve(gpu)
 }
 
 pub fn encode_png(size: [u32; 2], rgba: &[u8]) -> Result<Vec<u8>, Error> {
@@ -402,6 +477,116 @@ mod tests {
         let ground = fixture::theme().bg;
         let base = [ground.r(), ground.g(), ground.b(), 255];
         assert!(rgba.chunks_exact(4).all(|pixel| pixel == base));
+        crate::gpu_turn(since);
+    }
+
+    struct Sweep {
+        at: Option<f64>,
+        times: Vec<f64>,
+    }
+
+    impl App for Sweep {
+        fn ui(&mut self, ui: &mut Ui) {
+            let time = self.at.unwrap_or_else(|| ui.input(|input| input.time));
+            self.times.push(time);
+            let x = 10.0 + time as f32 * 1200.0;
+            ui.painter().rect_filled(
+                Rect::from_min_size(Pos2::new(x, 4.0), Vec2::new(8.0, 8.0)),
+                0.0,
+                egui::Color32::WHITE,
+            );
+        }
+
+        fn theme(&self) -> Theme {
+            fixture::theme()
+        }
+    }
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class interactive --as pfx -- cargo test -p pfx-editor-shell -- --ignored"]
+    fn a_shuttered_shot_is_the_mean_of_its_subframes_at_their_exact_times() {
+        let since = std::time::Instant::now();
+        let size = [96, 16];
+        let shutter = Shutter::new([1, 2], crate::shutter::Position::Centre, 8).unwrap();
+        let mut sweep = Sweep {
+            at: None,
+            times: Vec::new(),
+        };
+        let blurred = pixels_shuttered(&mut sweep, size, &Script::default(), &shutter).unwrap();
+        assert_eq!(sweep.times.len(), 2 + 8, "{:?}", sweep.times);
+        let expected: Vec<f64> = shutter
+            .offsets()
+            .iter()
+            .map(|offset| {
+                crate::shutter::seconds(crate::shutter::tick_time(
+                    RATE,
+                    shutter.ticks(),
+                    (2 * 32 + offset) as u64,
+                ))
+            })
+            .collect();
+        assert_eq!(&sweep.times[2..], expected.as_slice());
+        assert!(expected.iter().all(|time| *time > sweep.times[1]));
+        let again = pixels_shuttered(
+            &mut Sweep {
+                at: None,
+                times: Vec::new(),
+            },
+            size,
+            &Script::default(),
+            &shutter,
+        )
+        .unwrap();
+        assert_eq!(blurred, again, "a shuttered shot repeats its bytes");
+        let apart: Vec<Vec<u8>> = expected
+            .iter()
+            .map(|time| {
+                let mut fixed = Sweep {
+                    at: Some(*time),
+                    times: Vec::new(),
+                };
+                pixels(&mut fixed, size, &Script::default()).unwrap()
+            })
+            .collect();
+        let parts: Vec<(&[u8], u32)> = apart.iter().map(|rgba| (rgba.as_slice(), 1)).collect();
+        let mean = crate::mean::mean_of(&parts);
+        let worst = blurred
+            .iter()
+            .zip(&mean)
+            .map(|(got, want)| (f64::from(*got) - want).abs())
+            .fold(0.0, f64::max);
+        assert!(worst <= 1.0, "{worst:.3} codes from the mean of the subframes");
+        let row: Vec<u8> = blurred[(8 * 96) * 4..(9 * 96) * 4].chunks(4).map(|pixel| pixel[0]).collect();
+        let ground = fixture::theme().bg.r();
+        let between = row.iter().filter(|value| **value != ground && **value != 255).count();
+        assert!(between >= 6, "the moving square smears: {row:?}");
+        let plain = pixels(
+            &mut Sweep {
+                at: None,
+                times: Vec::new(),
+            },
+            size,
+            &Script::default(),
+        )
+        .unwrap();
+        assert_ne!(plain, blurred);
+        crate::gpu_turn(since);
+    }
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class interactive --as pfx -- cargo test -p pfx-editor-shell -- --ignored"]
+    fn a_shuttered_shot_of_a_still_window_is_the_unshuttered_shot() {
+        let since = std::time::Instant::now();
+        let size = [48, 30];
+        let shutter = Shutter::new([1, 1], crate::shutter::Position::End, 5).unwrap();
+        let still = pixels_shuttered(&mut Blank, size, &Script::default(), &shutter).unwrap();
+        let plain = pixels(&mut Blank, size, &Script::default()).unwrap();
+        assert!(
+            still.iter().zip(&plain).all(|(a, b)| a.abs_diff(*b) <= 1),
+            "nothing moves, so the mean is the frame"
+        );
+        assert!(check([0, 1]).is_err());
+        assert!(pixels_shuttered(&mut Blank, [0, 1], &Script::default(), &shutter).is_err());
         crate::gpu_turn(since);
     }
 }

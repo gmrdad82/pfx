@@ -10,7 +10,8 @@ use egui::{
 use egui_wgpu::{RendererOptions, ScreenDescriptor};
 use pfx_core::rate::Rate;
 use pfx_editor_shell::paint::Painter;
-use pfx_editor_shell::{App, Error, MAX_SIDE, Mods, Script, Step, block_on, check, context};
+use pfx_editor_shell::shutter::{self, Shutter};
+use pfx_editor_shell::{App, Error, MAX_SIDE, Mean, Mods, Script, Step, block_on, check, context};
 use pfx_gpu::pace::Turns;
 use pfx_gpu::{Gpu, wgpu};
 
@@ -611,6 +612,7 @@ fn even(t: f32) -> f32 {
 
 struct Plan {
     rate: Rate,
+    sub: usize,
     home: Pos2,
     frames: Vec<Frame>,
     pointer: Option<Pos2>,
@@ -623,10 +625,37 @@ struct Plan {
 
 impl Plan {
     fn full(&self) -> bool {
-        self.frames.len() > MAX_FRAMES
+        self.frames.len() > MAX_FRAMES * self.sub
+    }
+
+    fn hold(&mut self) {
+        for _ in 1..self.sub {
+            if self.full() {
+                return;
+            }
+            let quiet = match self.frames.last() {
+                Some(last) => Frame {
+                    step: self.step,
+                    modifiers: last.modifiers,
+                    pointer: last.pointer,
+                    down: last.down,
+                    ..Frame::default()
+                },
+                None => Frame {
+                    step: self.step,
+                    ..Frame::default()
+                },
+            };
+            self.frames.push(quiet);
+        }
     }
 
     fn push(&mut self, events: Vec<Event>, modifiers: Modifiers) {
+        self.hold();
+        self.tick(events, modifiers);
+    }
+
+    fn tick(&mut self, events: Vec<Event>, modifiers: Modifiers) {
         if self.full() {
             return;
         }
@@ -654,20 +683,27 @@ impl Plan {
         }
     }
 
+    fn act_tick(&mut self, act: Act) {
+        self.tick(Vec::new(), self.held);
+        if let Some(last) = self.frames.last_mut() {
+            last.acts.push(act);
+        }
+    }
+
     fn timed(
         &mut self,
         seconds: f32,
         curve: fn(f32) -> f32,
         mut make: impl FnMut(f64, f64) -> Act,
     ) {
-        let frames = self.count(seconds).clamp(1, MAX_FRAMES + 1);
+        let frames = self.count(seconds).clamp(1, MAX_FRAMES + 1) * self.sub;
         for step in 1..=frames {
             if self.full() {
                 return;
             }
             let before = f64::from(curve((step - 1) as f32 / frames as f32));
             let now = f64::from(curve(step as f32 / frames as f32));
-            self.act(make(before, now));
+            self.act_tick(make(before, now));
         }
     }
 
@@ -681,8 +717,12 @@ impl Plan {
         }
     }
 
-    fn shade(&mut self, wire: Option<f32>, xray: Option<bool>) {
-        self.frame(Vec::new());
+    fn shade(&mut self, wire: Option<f32>, xray: Option<bool>, held: bool) {
+        if held {
+            self.frame(Vec::new());
+        } else {
+            self.tick(Vec::new(), self.held);
+        }
         if let Some(last) = self.frames.last_mut() {
             last.wire = wire;
             last.xray = xray;
@@ -696,8 +736,12 @@ impl Plan {
         }
     }
 
-    fn mould(&mut self, clay: f32, wire: f32) {
-        self.frame(Vec::new());
+    fn mould(&mut self, clay: f32, wire: f32, held: bool) {
+        if held {
+            self.frame(Vec::new());
+        } else {
+            self.tick(Vec::new(), self.held);
+        }
         if let Some(last) = self.frames.last_mut() {
             last.clay = Some(clay);
             last.wire = Some(wire);
@@ -716,13 +760,14 @@ impl Plan {
     }
 
     fn travel(&mut self, from: Pos2, to: Pos2, frames: usize, curve: fn(f32) -> f32) {
+        let frames = frames * self.sub;
         for step in 1..=frames {
             if self.full() {
                 return;
             }
             let at = from.lerp(to, curve(step as f32 / frames as f32));
             self.pointer = Some(at);
-            self.frame(vec![Event::PointerMoved(at)]);
+            self.tick(vec![Event::PointerMoved(at)], self.held);
         }
     }
 
@@ -763,13 +808,18 @@ impl Plan {
         self.release();
     }
 
-    fn wheel(&mut self, lines: f32) {
-        self.frame(vec![Event::MouseWheel {
+    fn wheel(&mut self, lines: f32, held: bool) {
+        let event = Event::MouseWheel {
             unit: MouseWheelUnit::Line,
             delta: Vec2::new(0.0, lines),
             modifiers: self.held,
             phase: egui::TouchPhase::Move,
-        }]);
+        };
+        if held {
+            self.frame(vec![event]);
+        } else {
+            self.tick(vec![event], self.held);
+        }
     }
 
     fn timed_step(&mut self, step: &Step, seconds: f32, linear: bool) {
@@ -783,13 +833,14 @@ impl Plan {
             Step::Drag { .. } => self.drag(step, Some(frames), curve),
             Step::Scroll { at, lines } => {
                 self.glide(Pos2::new(at[0], at[1]));
+                let frames = frames * self.sub;
                 for step in 1..=frames {
                     if self.full() {
                         return;
                     }
                     let before = curve((step - 1) as f32 / frames as f32);
                     let now = curve(step as f32 / frames as f32);
-                    self.wheel(lines * (now - before));
+                    self.wheel(lines * (now - before), false);
                 }
             }
             step => self.step(step),
@@ -858,7 +909,7 @@ impl Plan {
             Step::Drag { .. } => self.drag(step, None, ease),
             Step::Scroll { at, lines } => {
                 self.glide(Pos2::new(at[0], at[1]));
-                self.wheel(*lines);
+                self.wheel(*lines, true);
             }
             Step::Frame => self.frame(Vec::new()),
         }
@@ -866,7 +917,7 @@ impl Plan {
 }
 
 fn plan(tape: &Tape, rate: Rate, points: [f32; 2]) -> Result<Vec<Frame>, Error> {
-    plan_from(tape, rate, points, crate::wire::Look::default())
+    plan_from(tape, rate, points, crate::wire::Look::default(), 1)
 }
 
 fn plan_from(
@@ -874,11 +925,14 @@ fn plan_from(
     rate: Rate,
     points: [f32; 2],
     start: crate::wire::Look,
+    sub: usize,
 ) -> Result<Vec<Frame>, Error> {
+    let sub = sub.max(1);
     let mut plan = Plan {
         rate,
+        sub,
         home: Pos2::new(points[0] / 2.0, points[1] / 2.0),
-        frames: vec![Frame::default()],
+        frames: vec![Frame::default(); sub],
         pointer: None,
         down: None,
         held: Modifiers::NONE,
@@ -896,13 +950,13 @@ fn plan_from(
                 }
             }
             Beat::Fade { to, seconds } => {
-                let frames = plan.count(*seconds).min(MAX_FRAMES + 1);
+                let frames = plan.count(*seconds).min(MAX_FRAMES + 1) * plan.sub;
                 for amount in crate::wire::fade(plan.wire, *to, frames) {
-                    plan.shade(Some(amount), None);
+                    plan.shade(Some(amount), None, frames == 0);
                 }
                 plan.wire = *to;
             }
-            Beat::Xray(on) => plan.shade(None, Some(*on)),
+            Beat::Xray(on) => plan.shade(None, Some(*on), true),
             Beat::Curve(curve) => plan.curve(curve),
             Beat::Act(act) => plan.act(act.clone()),
             Beat::Orbit { degrees, seconds } => {
@@ -935,9 +989,9 @@ fn plan_from(
                 },
             ),
             Beat::Shade { to, seconds } => {
-                let frames = plan.count(*seconds).min(MAX_FRAMES + 1);
+                let frames = plan.count(*seconds).min(MAX_FRAMES + 1) * plan.sub;
                 for (clay, wire) in crate::clay::fade(plan.clay, plan.wire, *to, frames) {
-                    plan.mould(clay, wire);
+                    plan.mould(clay, wire, frames == 0);
                 }
                 (plan.clay, plan.wire) = to.amounts();
             }
@@ -1031,7 +1085,7 @@ struct Player<'p, 'a> {
     target: pfx_gpu::OffscreenTarget,
     theme: Theme,
     layout: Layout,
-    rate: Rate,
+    dt: f32,
     textures: TexturesDelta,
     watching: Watching,
     turns: Turns,
@@ -1048,7 +1102,7 @@ impl Player<'_, '_> {
             )),
             max_texture_side: Some(MAX_SIDE as usize),
             time: Some(time),
-            predicted_dt: 1.0 / self.rate.fps() as f32,
+            predicted_dt: self.dt,
             focused: true,
             events: std::iter::once(Event::ModifiersChanged(frame.modifiers))
                 .chain(frame.events.iter().cloned())
@@ -1208,6 +1262,50 @@ impl Player<'_, '_> {
         rgba.map(|rgba| centred(layout.size, layout.drawn(), ground, rgba))
             .map_err(Error)
     }
+
+    fn lay(&mut self, output: FullOutput, mean: &mut Mean, weight: u32) {
+        let primitives = self.ctx.tessellate(output.shapes, output.pixels_per_point);
+        let screen = ScreenDescriptor {
+            size_in_pixels: self.layout.drawn(),
+            pixels_per_point: output.pixels_per_point,
+        };
+        let mut textures = std::mem::take(&mut self.textures);
+        let Player {
+            gpu,
+            painter,
+            target,
+            theme,
+            turns,
+            ..
+        } = self;
+        turns.time(|| {
+            painter.paint(gpu, &target.view, &screen, &textures, &primitives, theme.bg);
+            mean.add(gpu, &target.view, weight);
+        });
+        textures.clear();
+    }
+
+    fn step(&mut self, frame: &Frame, time: f64, draw: bool) -> Result<(FullOutput, bool), Error> {
+        let line = frame
+            .step
+            .and_then(|step| self.lines.get(step).copied())
+            .unwrap_or(0);
+        if let Some(curve) = &frame.curve {
+            self.app
+                .curve_key(&curve.camera, &curve.track, curve.key, curve.at)
+                .map_err(|why| Error(format!("line {line}: {why}")))?;
+        }
+        if let Some(to) = &frame.seek {
+            self.app
+                .seek_to(to)
+                .map_err(|why| Error(format!("line {line}: {why}")))?;
+        }
+        let first = self.pass(frame, time, draw);
+        if let Some(why) = self.refused.take() {
+            return Err(Error(why));
+        }
+        Ok(first)
+    }
 }
 
 impl Drop for Player<'_, '_> {
@@ -1226,6 +1324,21 @@ pub fn play(
     play_seen(app, tape, layout, rate, |_, index, rgba| sink(index, rgba))
 }
 
+pub fn play_shuttered(
+    app: &mut Workbench<'_>,
+    tape: &Tape,
+    (layout, rate): (Layout, Rate),
+    shutter: Option<&Shutter>,
+    mut sink: impl FnMut(usize, &[u8]) -> Result<(), String>,
+) -> Result<usize, Error> {
+    match shutter {
+        None => play(app, tape, layout, rate, sink),
+        Some(shutter) => blurred(app, tape, (layout, rate), shutter, None, |_, index, rgba| {
+            sink(index, rgba)
+        }),
+    }
+}
+
 pub fn play_seen(
     app: &mut Workbench<'_>,
     tape: &Tape,
@@ -1233,11 +1346,28 @@ pub fn play_seen(
     rate: Rate,
     mut sink: impl FnMut(&Workbench<'_>, usize, &[u8]) -> Result<(), String>,
 ) -> Result<usize, Error> {
+    let (mut player, frames) = start(app, tape, (layout, rate), 1)?;
+    for (index, frame) in frames.iter().enumerate() {
+        let time = rate.time(index as u64);
+        let first = player.step(frame, time, true)?;
+        let output = player.settle(frame, time, first)?;
+        let rgba = player.paint(output)?;
+        sink(player.app, index, &rgba).map_err(Error)?;
+    }
+    Ok(frames.len())
+}
+
+fn start<'p, 'a>(
+    app: &'p mut Workbench<'a>,
+    tape: &Tape,
+    (layout, rate): (Layout, Rate),
+    sub: usize,
+) -> Result<(Player<'p, 'a>, Vec<Frame>), Error> {
     let mut turns = Turns::default();
     turns.turn();
     check(layout.size)?;
     check(layout.drawn())?;
-    let frames = plan_from(tape, rate, layout.points(), app.wireframe())?;
+    let frames = plan_from(tape, rate, layout.points(), app.wireframe(), sub)?;
     let theme = app.theme();
     let gpu = block_on(Gpu::headless()).map_err(Error)?;
     turns.turn();
@@ -1252,7 +1382,7 @@ pub fn play_seen(
     app.forget();
     app.waker(Arc::new(|| {}));
     let watching = Watching::of(app.watched().files);
-    let mut player = Player {
+    let player = Player {
         app,
         ctx,
         gpu,
@@ -1260,37 +1390,161 @@ pub fn play_seen(
         target,
         theme,
         layout,
-        rate,
+        dt: 1.0 / (rate.fps() as f32 * sub as f32),
         textures: TexturesDelta::default(),
         watching,
         turns,
         lines: tape.lines.clone(),
         refused: None,
     };
-    for (index, frame) in frames.iter().enumerate() {
-        let time = rate.time(index as u64);
-        if let Some(curve) = &frame.curve {
-            let line = frame.step.and_then(|step| tape.line(step)).unwrap_or(0);
-            player
-                .app
-                .curve_key(&curve.camera, &curve.track, curve.key, curve.at)
-                .map_err(|why| Error(format!("line {line}: {why}")))?;
+    Ok((player, frames))
+}
+
+fn subticks(shutter: &Shutter, index: usize) -> Vec<(usize, u32)> {
+    let sub = shutter.ticks() as usize;
+    let mut ticks: Vec<(usize, u32)> = Vec::new();
+    for offset in shutter.offsets() {
+        let tick = (index * sub + sub - 1)
+            .saturating_add_signed(offset as isize)
+            .max(sub - 1);
+        match ticks.last_mut() {
+            Some((last, weight)) if *last == tick => *weight += 1,
+            _ => ticks.push((tick, 1)),
         }
-        if let Some(to) = &frame.seek {
-            player.app.seek_to(to).map_err(|why| {
-                let line = frame.step.and_then(|step| tape.line(step)).unwrap_or(0);
-                Error(format!("line {line}: {why}"))
-            })?;
+    }
+    ticks
+}
+
+fn tick_seconds(rate: Rate, sub: usize, tick: usize) -> f64 {
+    let since = (tick + 1).saturating_sub(sub) as u64;
+    shutter::seconds(shutter::tick_time([rate.num(), rate.den()], sub as u32, since))
+}
+
+fn held(frames: &[Frame], tick: usize) -> Frame {
+    match frames.get(tick) {
+        Some(frame) => frame.clone(),
+        None => frames.last().map_or_else(Frame::default, |last| Frame {
+            step: last.step,
+            modifiers: last.modifiers,
+            pointer: last.pointer,
+            down: last.down,
+            ..Frame::default()
+        }),
+    }
+}
+
+fn quiet(frame: &Frame, before: &Frame) -> bool {
+    frame.events.is_empty()
+        && frame.acts.is_empty()
+        && frame.wire.is_none()
+        && frame.xray.is_none()
+        && frame.clay.is_none()
+        && frame.curve.is_none()
+        && frame.seek.is_none()
+        && frame.file.is_none()
+        && frame.dropped.is_none()
+        && frame.pointer == before.pointer
+        && frame.down == before.down
+        && frame.modifiers == before.modifiers
+}
+
+fn smooth(frame: &Frame) -> bool {
+    frame
+        .events
+        .iter()
+        .all(|event| matches!(event, Event::PointerMoved(_) | Event::MouseWheel { .. }))
+        && frame
+            .acts
+            .iter()
+            .all(|act| matches!(act, Act::Orbit(_) | Act::Dolly(_) | Act::Fit { .. }))
+        && frame.xray.is_none()
+        && frame.curve.is_none()
+        && frame.seek.is_none()
+        && frame.file.is_none()
+        && frame.dropped.is_none()
+}
+
+fn merged(into: &mut Frame, frame: Frame) -> bool {
+    if !(smooth(into) && smooth(&frame))
+        || into.down != frame.down
+        || into.modifiers != frame.modifiers
+    {
+        return false;
+    }
+    into.step = frame.step;
+    into.events.extend(frame.events);
+    into.acts.extend(frame.acts);
+    into.pointer = frame.pointer;
+    into.wire = frame.wire.or(into.wire);
+    into.clay = frame.clay.or(into.clay);
+    true
+}
+
+fn blurred(
+    app: &mut Workbench<'_>,
+    tape: &Tape,
+    (layout, rate): (Layout, Rate),
+    shutter: &Shutter,
+    mut each: Option<&mut dyn FnMut(&[u8])>,
+    mut sink: impl FnMut(&Workbench<'_>, usize, &[u8]) -> Result<(), String>,
+) -> Result<usize, Error> {
+    let sub = shutter.ticks() as usize;
+    let (mut player, frames) = start(app, tape, (layout, rate), sub)?;
+    let mut mean = Mean::new(&player.gpu, layout.drawn())?;
+    let count = frames.len() / sub;
+    let mut next = sub - 1;
+    let mut last = held(&frames, next);
+    for index in 0..count {
+        for (tick, weight) in subticks(shutter, index) {
+            let tick = tick.max(next);
+            let mut pending: Option<(Frame, usize)> = None;
+            while next < tick {
+                let frame = held(&frames, next);
+                if quiet(&frame, &last) {
+                    next += 1;
+                    continue;
+                }
+                last = frame.clone();
+                let joined = match pending.as_mut() {
+                    Some((into, at)) => {
+                        let joined = merged(into, frame.clone());
+                        if joined {
+                            *at = next;
+                        }
+                        joined
+                    }
+                    None => false,
+                };
+                let ready = if joined {
+                    None
+                } else {
+                    pending.replace((frame, next))
+                };
+                if let Some((frame, at)) = ready {
+                    player.step(&frame, tick_seconds(rate, sub, at), false)?;
+                }
+                next += 1;
+            }
+            if let Some((frame, at)) = pending {
+                player.step(&frame, tick_seconds(rate, sub, at), false)?;
+            }
+            let frame = held(&frames, tick);
+            last = frame.clone();
+            let time = tick_seconds(rate, sub, tick);
+            let first = player.step(&frame, time, true)?;
+            let output = player.settle(&frame, time, first)?;
+            player.lay(output, &mut mean, weight);
+            if let Some(each) = each.as_mut() {
+                let rgba = player.gpu.readback_rgba8(&player.target).map_err(Error)?;
+                each(&rgba);
+            }
+            next = tick + 1;
         }
-        let first = player.pass(frame, time, true);
-        if let Some(why) = player.refused.take() {
-            return Err(Error(why));
-        }
-        let output = player.settle(frame, time, first)?;
-        let rgba = player.paint(output)?;
+        let rgba = player.turns.time(|| mean.resolve(&player.gpu))?;
+        let rgba = centred(layout.size, layout.drawn(), player.theme.bg, rgba);
         sink(player.app, index, &rgba).map_err(Error)?;
     }
-    Ok(frames.len())
+    Ok(count)
 }
 
 pub fn poster_png(size: [u32; 2], rgba: &[u8]) -> Result<Vec<u8>, Error> {
@@ -1597,6 +1851,7 @@ mod tests {
                 amount: 0.5,
                 ..crate::wire::Look::default()
             },
+            1,
         )
         .unwrap();
         assert_eq!(faded.len(), 61);
@@ -1790,6 +2045,7 @@ mod tests {
             Rate::whole(60),
             [200.0, 100.0],
             crate::wire::Look::default(),
+            1,
         )
         .unwrap();
         assert_eq!(faded.len(), 61);
@@ -1887,5 +2143,205 @@ mod tests {
         assert_eq!(&frame[..4], &[1, 2, 3, 255]);
         assert_eq!(&frame[20..28], &[9; 8]);
         assert_eq!(&frame[28..32], &[1, 2, 3, 255]);
+    }
+
+    fn orbited(frames: &[Frame]) -> f64 {
+        frames
+            .iter()
+            .flat_map(|frame| &frame.acts)
+            .map(|act| match act {
+                Act::Orbit(degrees) => *degrees,
+                _ => 0.0,
+            })
+            .sum()
+    }
+
+    #[test]
+    fn a_shuttered_plan_lands_each_frame_on_the_plain_plans_frame() {
+        let tape = Tape::parse(
+            "move 40 30 0.2\nwait 0.1\nclick 100 50\nkey a\norbit 90 0.25\nwireframe 1 0.1\ndrag 10 10 150 80 0.3 linear\nscroll 20 20 -3 0.2\ntext ab\nshade clay 1\nwait 0.05\n",
+        )
+        .unwrap();
+        let rate = Rate::new(24000, 1001).unwrap();
+        let plain = plan_from(&tape, rate, [320.0, 200.0], crate::wire::Look::default(), 1).unwrap();
+        for sub in [2, 32, 48] {
+            let fine =
+                plan_from(&tape, rate, [320.0, 200.0], crate::wire::Look::default(), sub).unwrap();
+            assert_eq!(fine.len(), plain.len() * sub, "{sub}");
+            for (index, frame) in plain.iter().enumerate() {
+                let at = &fine[index * sub + sub - 1];
+                assert_eq!(
+                    (at.step, at.pointer, at.down, at.modifiers, at.clay, at.xray),
+                    (
+                        frame.step,
+                        frame.pointer,
+                        frame.down,
+                        frame.modifiers,
+                        frame.clay,
+                        frame.xray
+                    ),
+                    "sub {sub}, frame {index}"
+                );
+                assert_eq!(at.wire.is_some(), frame.wire.is_some(), "sub {sub}, frame {index}");
+                if let (Some(fine), Some(plain)) = (at.wire, frame.wire) {
+                    assert!((fine - plain).abs() < 1e-6, "sub {sub}, frame {index}");
+                }
+                let wheel = frame
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, Event::MouseWheel { .. }));
+                if !wheel {
+                    assert_eq!(at.events, frame.events, "sub {sub}, frame {index}");
+                }
+                let before = &fine[index * sub..index * sub + sub - 1];
+                for quiet in before.iter().filter(|tick| tick.events.is_empty()) {
+                    assert!(quiet.acts.is_empty() || !frame.acts.is_empty());
+                }
+            }
+            assert!((orbited(&fine) - orbited(&plain)).abs() < 1e-9, "sub {sub}");
+            assert!((orbited(&plain) - 90.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn a_shuttered_frames_subframes_sit_at_the_shutters_exact_times() {
+        let rate = Rate::new(24000, 1001).unwrap();
+        let shutter = Shutter::new([1, 2], shutter::Position::Centre, 8).unwrap();
+        assert_eq!(
+            subticks(&shutter, 0),
+            vec![(31, 4), (32, 1), (34, 1), (36, 1), (38, 1)]
+        );
+        assert_eq!(tick_seconds(rate, 32, 31), 0.0);
+        for index in [1_usize, 7, 1000, 86_400] {
+            let ticks = subticks(&shutter, index);
+            let times = shutter.times([24000, 1001], index as u64);
+            assert_eq!(ticks.len(), 8);
+            for ((tick, weight), time) in ticks.iter().zip(&times) {
+                assert_eq!(*weight, 1);
+                assert_eq!(
+                    tick_seconds(rate, 32, *tick).to_bits(),
+                    shutter::seconds(*time).to_bits(),
+                    "frame {index}, tick {tick}"
+                );
+            }
+            assert_eq!(
+                tick_seconds(rate, 32, index * 32 + 31).to_bits(),
+                rate.time(index as u64).to_bits()
+            );
+        }
+        let start = Shutter::new([1, 2], shutter::Position::Start, 4).unwrap();
+        assert_eq!(
+            subticks(&start, 2),
+            vec![(48, 1), (50, 1), (52, 1), (54, 1)]
+        );
+    }
+
+    #[test]
+    fn quiet_ticks_are_skipped_and_smooth_ticks_merge_into_one_pass() {
+        let moved = |x: f32| Frame {
+            events: vec![Event::PointerMoved(Pos2::new(x, 1.0))],
+            pointer: Some(Pos2::new(x, 1.0)),
+            acts: vec![Act::Orbit(1.0)],
+            ..Frame::default()
+        };
+        let before = moved(1.0);
+        let still = Frame {
+            pointer: before.pointer,
+            ..Frame::default()
+        };
+        assert!(quiet(&still, &before));
+        assert!(!quiet(&moved(2.0), &before));
+        let mut into = moved(2.0);
+        assert!(merged(&mut into, moved(3.0)));
+        assert_eq!((into.events.len(), into.acts.len()), (2, 2));
+        assert_eq!(into.pointer, Some(Pos2::new(3.0, 1.0)));
+        let click = Frame {
+            events: vec![Event::Text("a".into())],
+            ..Frame::default()
+        };
+        assert!(!merged(&mut into, click));
+        let held = held(&[moved(4.0)], 5);
+        assert!(held.events.is_empty() && held.acts.is_empty());
+        assert_eq!(held.pointer, Some(Pos2::new(4.0, 1.0)));
+    }
+
+    fn widget() -> Tape {
+        Tape::parse("move 20 60 0.1\nmove 300 60 0.5 linear\nwait 0.1\n").unwrap()
+    }
+
+    fn filmed(shutter: Option<&Shutter>, each: Option<&mut dyn FnMut(&[u8])>) -> Vec<Vec<u8>> {
+        let mut shell = crate::Shell::new().without_recent();
+        let mut frames = Vec::new();
+        let layout = Layout::plain([320, 120]);
+        let rate = Rate::new(24000, 1001).unwrap();
+        let sink = |_: &Workbench<'_>, _: usize, rgba: &[u8]| {
+            frames.push(rgba.to_vec());
+            Ok(())
+        };
+        let mut app = Workbench::new(&mut shell, None);
+        match shutter {
+            Some(shutter) => blurred(&mut app, &widget(), (layout, rate), shutter, each, sink),
+            None => play_seen(&mut app, &widget(), layout, rate, sink),
+        }
+        .unwrap();
+        frames
+    }
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+    fn a_shuttered_capture_is_the_linear_mean_of_its_subframes_and_repeats_its_bytes() {
+        let since = Instant::now();
+        let shutter = Shutter::new([1, 2], shutter::Position::Centre, 8).unwrap();
+        let mut subframes: Vec<Vec<u8>> = Vec::new();
+        let mut keep = |rgba: &[u8]| subframes.push(rgba.to_vec());
+        let shuttered = filmed(Some(&shutter), Some(&mut keep));
+        let again = filmed(Some(&shutter), None);
+        let plain = filmed(None, None);
+        let unblurred = {
+            let mut shell = crate::Shell::new().without_recent();
+            let mut frames = Vec::new();
+            play_shuttered(
+                &mut Workbench::new(&mut shell, None),
+                &widget(),
+                (Layout::plain([320, 120]), Rate::new(24000, 1001).unwrap()),
+                None,
+                |_, rgba| {
+                    frames.push(rgba.to_vec());
+                    Ok(())
+                },
+            )
+            .unwrap();
+            frames
+        };
+        crate::gpu_turn(since);
+        assert!(shuttered == again, "two shuttered captures drew different bytes");
+        assert!(unblurred == plain, "a capture without a shutter changed");
+        assert_eq!(shuttered.len(), plain.len());
+        let mut at = 0;
+        let mut worst = 0.0_f64;
+        let mut blurred_frames = 0;
+        for (index, frame) in shuttered.iter().enumerate() {
+            let parts: Vec<(&[u8], u32)> = subticks(&shutter, index)
+                .iter()
+                .map(|(_, weight)| {
+                    at += 1;
+                    (subframes[at - 1].as_slice(), *weight)
+                })
+                .collect();
+            let mean = pfx_editor_shell::mean::mean_of(&parts);
+            for (got, want) in frame.iter().zip(&mean) {
+                worst = worst.max((f64::from(*got) - want).abs());
+            }
+            if parts.windows(2).any(|pair| pair[0].0 != pair[1].0) {
+                blurred_frames += 1;
+                assert!(frame != &plain[index], "frame {index} moved but did not blur");
+            }
+        }
+        assert_eq!(at, subframes.len());
+        assert!(blurred_frames >= 10, "{blurred_frames} frames blurred");
+        assert!(
+            worst <= 1.0,
+            "a shuttered frame is {worst:.3} codes from the linear mean of its subframes"
+        );
     }
 }
