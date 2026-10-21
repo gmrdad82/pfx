@@ -242,11 +242,71 @@ fn empty_ray(x: f32, y: f32) -> [f32; 3] {
     unit([ndc[0] * EMPTY_TAN * aspect, -ndc[1] * EMPTY_TAN, -1.0])
 }
 
-fn integral(fog: &Fog, lamp: &pfx_trace::lights::LocalLight, sun: f32, d: [f32; 3]) -> f32 {
+fn sub3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|axis| a[axis] - b[axis])
+}
+
+fn lamp_light(
+    lamp: &pfx_trace::lights::LocalLight,
+    p: [f32; 3],
+    d: [f32; 3],
+    phase: f32,
+    extinction: f32,
+) -> f32 {
+    use pfx_trace::lights::LightShape;
+    let seen = |to: [f32; 3]| {
+        let r = dot(to, to).sqrt();
+        (
+            r,
+            henyey_greenstein(dot(d, to.map(|v| v / r)), phase) * (-extinction * r).exp(),
+        )
+    };
+    match lamp.shape {
+        LightShape::Rect { half_u, half_v, .. } => {
+            let cells = 4;
+            let normal = unit([
+                half_u[1] * half_v[2] - half_u[2] * half_v[1],
+                half_u[2] * half_v[0] - half_u[0] * half_v[2],
+                half_u[0] * half_v[1] - half_u[1] * half_v[0],
+            ]);
+            let radiance = lamp.intensity / lamp.area();
+            let cell = lamp.area() / (cells * cells) as f32;
+            let mut total = 0.0;
+            for i in 0..cells {
+                for j in 0..cells {
+                    let a = 2.0 * (i as f32 + 0.5) / cells as f32 - 1.0;
+                    let b = 2.0 * (j as f32 + 0.5) / cells as f32 - 1.0;
+                    let x: [f32; 3] = std::array::from_fn(|axis| {
+                        lamp.position[axis] + half_u[axis] * a + half_v[axis] * b
+                    });
+                    let to = sub3(x, p);
+                    let (r, lit) = seen(to);
+                    let facing = -dot(normal, to) / r;
+                    if facing > 0.0 {
+                        total += radiance * facing * cell / (r * r) * lit;
+                    }
+                }
+            }
+            total
+        }
+        _ => {
+            let to = sub3(lamp.position, p);
+            let (r, lit) = seen(to);
+            lamp.falloff(r) * lamp.cone(to.map(|v| -v)) * lit
+        }
+    }
+}
+
+fn integral(
+    fog: &Fog,
+    lamps: &[pfx_trace::lights::LocalLight],
+    sun: f32,
+    steps: usize,
+    d: [f32; 3],
+) -> f32 {
     let extinction = fog.extinction();
     let scattering = fog.albedo()[0] * extinction;
     let s = unit(EMPTY_SUN);
-    let steps = 2000;
     let dt = EMPTY_REACH / steps as f32;
     let mut total = 0.0;
     for k in 0..steps {
@@ -255,33 +315,52 @@ fn integral(fog: &Fog, lamp: &pfx_trace::lights::LocalLight, sun: f32, d: [f32; 
         let b = dot(p, s);
         let exit = -b + (b * b - (t * t - EMPTY_REACH * EMPTY_REACH)).sqrt();
         let lit_sun = sun * henyey_greenstein(dot(d, s), fog.phase) * (-extinction * exit).exp();
-        let to: [f32; 3] = std::array::from_fn(|axis| EMPTY_LAMP[axis] - p[axis]);
-        let r = dot(to, to).sqrt();
-        let lit_lamp = lamp.falloff(r)
-            * henyey_greenstein(dot(d, to.map(|v| v / r)), fog.phase)
-            * (-extinction * r).exp();
-        total += (-extinction * t).exp() * scattering * (lit_sun + lit_lamp) * dt;
+        let lit_lamps: f32 = lamps
+            .iter()
+            .map(|lamp| lamp_light(lamp, p, d, fog.phase, extinction))
+            .sum();
+        total += (-extinction * t).exp() * scattering * (lit_sun + lit_lamps) * dt;
     }
     total
 }
 
-#[test]
-#[ignore = "needs a GPU; run under pgpu"]
-fn the_fog_scatters_the_sun_and_a_lamp_as_their_integral_says() {
-    use pfx_trace::lights::LocalLight;
-    let gpu = pollster::block_on(Gpu::headless()).unwrap();
-    let fog = Fog {
-        height: 0.0,
-        falloff: 0.0,
-        density: 0.05,
-        reach: EMPTY_REACH,
-        shafts: 1.0,
-        color: [0.2; 3],
-        phase: 0.5,
-        bounces: 0,
-    };
-    let lamp = LocalLight::point(EMPTY_LAMP, [1.0; 3], 20.0, 1.0e4);
-    let sun = 3.0;
+fn integrals(
+    fog: &Fog,
+    lamps: &[pfx_trace::lights::LocalLight],
+    sun: f32,
+    steps: usize,
+) -> Vec<f32> {
+    let width = EMPTY_SIZE[0] as usize;
+    let mut wanted = vec![0.0; width * EMPTY_SIZE[1] as usize];
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let rows = (EMPTY_SIZE[1] as usize).div_ceil(threads);
+    std::thread::scope(|scope| {
+        for (band, chunk) in wanted.chunks_mut(rows * width).enumerate() {
+            scope.spawn(move || {
+                for (i, value) in chunk.iter_mut().enumerate() {
+                    let (x, y) = (i % width, band * rows + i / width);
+                    *value = integral(
+                        fog,
+                        lamps,
+                        sun,
+                        steps,
+                        empty_ray(x as f32 + 0.5, y as f32 + 0.5),
+                    );
+                }
+            });
+        }
+    });
+    wanted
+}
+
+fn empty_fog(
+    gpu: &Gpu,
+    fog: Fog,
+    lamps: Vec<pfx_trace::lights::LocalLight>,
+    sun: f32,
+    sky: f32,
+    samples: u32,
+) -> Vec<[f32; 4]> {
     let aspect = EMPTY_SIZE[0] as f32 / EMPTY_SIZE[1] as f32;
     let scene = pfx_trace::Scene {
         triangles: vec![pfx_trace::bvh::Triangle {
@@ -301,7 +380,7 @@ fn the_fog_scatters_the_sun_and_a_lamp_as_their_integral_says() {
         sky: pfx_load::Sky {
             width: 1,
             height: 1,
-            texels: vec![[0.0; 4]],
+            texels: vec![[sky, sky, sky, 1.0]],
         },
         camera: pfx_trace::Camera {
             origin: [0.0; 3],
@@ -316,34 +395,54 @@ fn the_fog_scatters_the_sun_and_a_lamp_as_their_integral_says() {
         },
     };
     let detail = pfx_trace::detail::Detail {
-        lights: vec![lamp],
+        lights: lamps,
         fog: Some(fog),
         ..pfx_trace::detail::Detail::default()
     };
     let mut trace =
-        Trace::new_detailed(&gpu, &scene, &detail, EMPTY_SIZE[0], EMPTY_SIZE[1]).unwrap();
-    let pixels = street::pixels(&traced(&gpu, &mut trace, 512, 3).color);
+        Trace::new_detailed(gpu, &scene, &detail, EMPTY_SIZE[0], EMPTY_SIZE[1]).unwrap();
+    street::pixels(&traced(gpu, &mut trace, samples, 3).color)
+}
+
+fn block_errors(pixels: &[[f32; 4]], wanted: &[f32]) -> Vec<([u32; 2], f32)> {
+    let mut errors = Vec::new();
+    for by in 0..EMPTY_SIZE[1] / 16 {
+        for bx in 0..EMPTY_SIZE[0] / 16 {
+            let (mut found, mut sum) = (0.0, 0.0);
+            for y in by * 16..by * 16 + 16 {
+                for x in bx * 16..bx * 16 + 16 {
+                    let i = (y * EMPTY_SIZE[0] + x) as usize;
+                    found += pixels[i][0];
+                    sum += wanted[i];
+                }
+            }
+            errors.push(([bx, by], (found / sum - 1.0).abs()));
+        }
+    }
+    errors
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn the_fog_scatters_the_sun_and_a_lamp_as_their_integral_says() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let fog = empty_haze(0);
+    let lamp = lamp(EMPTY_LAMP, 20.0, 1.0e4);
+    let sun = 3.0;
+    let aspect = EMPTY_SIZE[0] as f32 / EMPTY_SIZE[1] as f32;
+    let pixels = empty_fog(&gpu, fog, vec![lamp], sun, 0.0, 512);
+    let wanted = integrals(&fog, &[lamp], sun, 2000);
     let lamp_pixel = [
         (EMPTY_LAMP[0] / -EMPTY_LAMP[2] / (EMPTY_TAN * aspect) + 1.0) * 0.5 * EMPTY_SIZE[0] as f32,
         (1.0 - EMPTY_LAMP[1] / -EMPTY_LAMP[2] / EMPTY_TAN) * 0.5 * EMPTY_SIZE[1] as f32,
     ];
     let lamp_block = [lamp_pixel[0] as u32 / 16, lamp_pixel[1] as u32 / 16];
     let (mut worst, mut beside) = (0.0_f32, 0.0_f32);
-    for by in 0..EMPTY_SIZE[1] / 16 {
-        for bx in 0..EMPTY_SIZE[0] / 16 {
-            let (mut found, mut wanted) = (0.0, 0.0);
-            for y in by * 16..by * 16 + 16 {
-                for x in bx * 16..bx * 16 + 16 {
-                    found += pixels[(y * EMPTY_SIZE[0] + x) as usize][0];
-                    wanted += integral(&fog, &lamp, sun, empty_ray(x as f32 + 0.5, y as f32 + 0.5));
-                }
-            }
-            let off = (found / wanted - 1.0).abs();
-            if [bx, by] == lamp_block {
-                beside = off;
-            } else {
-                worst = worst.max(off);
-            }
+    for (block, off) in block_errors(&pixels, &wanted) {
+        if block == lamp_block {
+            beside = off;
+        } else {
+            worst = worst.max(off);
         }
     }
     println!(
@@ -360,6 +459,153 @@ fn the_fog_scatters_the_sun_and_a_lamp_as_their_integral_says() {
         beside < 0.05,
         "the lamp's glow strays {:.2}%",
         beside * 100.0
+    );
+}
+fn empty_haze(bounces: u32) -> Fog {
+    Fog {
+        height: 0.0,
+        falloff: 0.0,
+        density: 0.05,
+        reach: EMPTY_REACH,
+        shafts: 1.0,
+        color: [0.2; 3],
+        phase: 0.5,
+        bounces,
+    }
+}
+
+fn lamp(position: [f32; 3], intensity: f32, range: f32) -> pfx_trace::lights::LocalLight {
+    pfx_trace::lights::LocalLight::point(position, [1.0; 3], intensity, range)
+}
+
+fn spot(position: [f32; 3], direction: [f32; 3], intensity: f32) -> pfx_trace::lights::LocalLight {
+    pfx_trace::lights::LocalLight {
+        shape: pfx_trace::lights::LightShape::Spot {
+            direction,
+            inner_deg: 20.0,
+            outer_deg: 35.0,
+        },
+        ..lamp(position, intensity, 1.0e4)
+    }
+}
+
+fn panel(intensity: f32) -> pfx_trace::lights::LocalLight {
+    pfx_trace::lights::LocalLight::rect(
+        [0.0, 0.0, 3.0],
+        [1.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [1.0; 3],
+        intensity,
+    )
+}
+
+fn tree_lamps() -> Vec<pfx_trace::lights::LocalLight> {
+    vec![
+        lamp([3.0, 1.0, 2.0], 15.0, 1.0e4),
+        lamp([-3.0, 0.5, 1.0], 10.0, 1.0e4),
+        lamp([0.0, 4.0, -6.0], 30.0, 1.0e4),
+        lamp([6.0, -1.0, -3.0], 20.0, 8.0),
+        lamp([-8.5, 2.0, -8.0], 25.0, 1.0e4),
+        lamp([2.0, -4.0, -5.0], 12.0, 6.0),
+        lamp([-1.0, 3.0, 4.0], 18.0, 1.0e4),
+        lamp([11.0, 1.0, -12.0], 40.0, 1.0e4),
+        lamp([-4.0, -3.0, 3.0], 8.0, 5.0),
+        lamp([0.5, 6.0, -10.0], 35.0, 3.0),
+        spot([0.0, 5.0, -4.0], [0.0, -1.0, -0.5], 40.0),
+    ]
+}
+
+fn against_integral(pixels: &[[f32; 4]], wanted: &[f32]) -> (f32, f32) {
+    let found: f32 = pixels.iter().map(|p| p[0]).sum();
+    let mean = (found / wanted.iter().sum::<f32>() - 1.0).abs();
+    let worst = block_errors(pixels, wanted)
+        .into_iter()
+        .map(|(_, off)| off)
+        .fold(0.0_f32, f32::max);
+    (mean, worst)
+}
+
+fn frame_mean(pixels: &[[f32; 4]]) -> f64 {
+    pixels.iter().map(|p| p[0] as f64).sum::<f64>() / pixels.len() as f64
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn one_light_a_fog_segment_from_a_tree_of_lamps_keeps_the_integral_at_1024_spp() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let fog = empty_haze(0);
+    let mut lamps = vec![panel(30.0)];
+    lamps.extend(tree_lamps());
+    let sun = 1.0;
+    let pixels = empty_fog(&gpu, fog, lamps.clone(), sun, 0.0, 1024);
+    let wanted = integrals(&fog, &lamps, sun, 1000);
+    let (mean, worst) = against_integral(&pixels, &wanted);
+    println!(
+        "a sun, a rect and a tree of eleven lamps: the frame's mean is {:.3}% from the integral, every 16 px block within {:.2}%",
+        mean * 100.0,
+        worst * 100.0
+    );
+    assert!(mean < 0.005, "the fog's mean strays {:.3}%", mean * 100.0);
+    assert!(worst < 0.03, "a block strays {:.2}%", worst * 100.0);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_light_tree_centred_on_the_camera_still_lights_the_fog_it_starts_in() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let fog = empty_haze(0);
+    let lamps = vec![
+        lamp([4.0, 0.0, 1.0], 20.0, 1.0e4),
+        lamp([-4.0, 0.0, -1.0], 15.0, 1.0e4),
+        spot([0.0, 3.0, 0.5], [0.0, -1.0, -1.0], 40.0),
+        lamp([0.0, -3.0, -0.5], 10.0, 1.0e4),
+        lamp([5.0, -1.0, 2.0], 25.0, 1.0e4),
+        lamp([-5.0, 1.0, -2.0], 12.0, 1.0e4),
+    ];
+    let sun = 1.0;
+    let pixels = empty_fog(&gpu, fog, lamps.clone(), sun, 0.0, 1024);
+    let wanted = integrals(&fog, &lamps, sun, 1000);
+    let (mean, worst) = against_integral(&pixels, &wanted);
+    println!(
+        "a sun and a tree of six lamps whose bounds are centred on the camera: the frame's mean is {:.3}% from the integral, every 16 px block within {:.2}%",
+        mean * 100.0,
+        worst * 100.0
+    );
+    assert!(mean < 0.005, "the fog's mean strays {:.3}%", mean * 100.0);
+    assert!(worst < 0.03, "a block strays {:.2}%", worst * 100.0);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn fog_bounces_light_a_shared_pick_as_the_sum_of_its_lights_alone() {
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let fog = empty_haze(2);
+    let (sun, sky) = (1.0, 0.05);
+    let mut everything = vec![panel(120.0)];
+    everything.extend(tree_lamps());
+    let whole = frame_mean(&empty_fog(&gpu, fog, everything, sun, sky, 1024));
+    let parts = [
+        ("the sun and the sky", Vec::new(), sun, sky),
+        ("the rect", vec![panel(120.0)], 0.0, 0.0),
+        ("the tree", tree_lamps(), 0.0, 0.0),
+    ]
+    .map(|(name, lamps, sun, sky)| {
+        (
+            name,
+            frame_mean(&empty_fog(&gpu, fog, lamps, sun, sky, 1024)),
+        )
+    });
+    let sum: f64 = parts.iter().map(|(_, mean)| mean).sum();
+    let off = (whole / sum - 1.0).abs();
+    println!(
+        "two fog bounces: every light together {whole:.6}, alone {parts:?}, summed {sum:.6}, {:.3}% apart",
+        off * 100.0
+    );
+    assert!(parts.iter().all(|(_, mean)| *mean > 0.0));
+    assert!(
+        off < 0.005,
+        "the lights together stray {:.3}% from their sum",
+        off * 100.0
     );
 }
 
