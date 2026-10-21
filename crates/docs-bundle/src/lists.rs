@@ -68,6 +68,7 @@ pub const GUIDES: &[(&str, u32, Option<&str>)] = &[
     ("asset-sources", 128, None),
     ("git", 129, None),
     ("cli-coverage", 130, None),
+    ("stories", 131, None),
     ("play", 201, None),
     (
         "input",

@@ -71,6 +71,12 @@ terminal_size = { version = "0.4", optional = true }
 libc = "0.2"
 
 [dev-dependencies]
+pfx-game = { path = "crates/game", default-features = false, features = ["splash"] }
+pfx-input = { path = "crates/input" }
+pfx-mod = { path = "crates/mod" }
+pfx-physics = { path = "crates/physics" }
+pfx-play = { path = "crates/play" }
+pfx-scene = { path = "crates/scene" }
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 base64 = "0.22"
 pito-codecs = { git = "https://github.com/gmrdad82/pito-codecs", tag = "v1.16.3", default-features = false, features = ["h264", "hevc", "vp9", "aac", "opus", "mp4", "mkv", "gpu", "filter"] }
