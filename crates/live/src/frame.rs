@@ -3630,10 +3630,11 @@ impl Frame {
         self.morphs.same(weights)
     }
 
-    pub fn reserve_weights(&mut self, weights: usize) {
-        if self.morphs.reserve_weights(&self.gpu.device, weights) {
+    pub fn reserve_weights(&mut self, weights: usize) -> Result<(), String> {
+        if self.morphs.reserve_weights(&self.gpu.device, weights)? {
             self.rebuild_scene_group();
         }
+        Ok(())
     }
 
     pub fn reserve_morph_deltas(&mut self, deltas: usize) -> Result<(), String> {
@@ -3848,9 +3849,11 @@ impl Frame {
             &mut packed_instances,
         )?;
         let skins_rebuilt = self.skins.upload(&self.gpu.device, &self.gpu.queue);
-        if self.morphs.upload(&self.gpu.device, &self.gpu.queue) || skins_rebuilt {
+        let morphs = self.morphs.upload(&self.gpu.device, &self.gpu.queue);
+        if skins_rebuilt || morphs == Ok(true) {
             self.rebuild_scene_group();
         }
+        morphs?;
         self.deformers
             .upload(&self.gpu.device, &self.gpu.queue, scene.deformers)?;
         let materials: Vec<PackedMaterial> =

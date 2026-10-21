@@ -627,7 +627,7 @@ fn a_frame_with_more_weights_than_ever_touches_only_the_weight_buffer() {
     assert!(after.weight_capacity >= 802 * 16);
     assert_eq!(after.weight_written - before.weight_written, 802 * 16);
     let reserved = frame.morph_stats();
-    frame.reserve_weights(4096);
+    frame.reserve_weights(4096).unwrap();
     frame.set_weights(&entries).unwrap();
     shoot(&mut frame, &mut shadows, &drawn);
     let grown = frame.morph_stats();
@@ -647,6 +647,31 @@ fn a_frame_with_more_weights_than_ever_touches_only_the_weight_buffer() {
         grown.weight_buffers,
         "reserved weights take a larger frame without a new buffer"
     );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn reserving_past_the_device_limit_is_refused_and_leaves_the_frame_drawing() {
+    let head = head();
+    let (mut frame, mut shadows) = setup();
+    let floor = floor(&mut frame);
+    let mesh = morphed(&mut frame, &head);
+    let set = [0.7, 0.4];
+    frame.set_weights(&[weights(0, &set)]).unwrap();
+    let drawn = [Instance::new(mesh, translation(0.0), 0, HEAD_ID), floor];
+    let reference = shoot(&mut frame, &mut shadows, &drawn);
+    let limits = frame.gpu.device.limits();
+    let bytes = u64::from(limits.max_storage_buffer_binding_size).min(limits.max_buffer_size);
+    let limit = usize::try_from(bytes / 16).unwrap_or(usize::MAX);
+    let before = frame.morph_stats();
+    for over in [limit + 1, usize::MAX] {
+        let refused = frame.reserve_weights(over).unwrap_err();
+        assert!(refused.contains("morph weights"), "{refused}");
+        let refused = frame.reserve_morph_deltas(over).unwrap_err();
+        assert!(refused.contains("morph deltas"), "{refused}");
+    }
+    assert_eq!(frame.morph_stats(), before);
+    assert_eq!(shoot(&mut frame, &mut shadows, &drawn).ids, reference.ids);
 }
 
 #[test]

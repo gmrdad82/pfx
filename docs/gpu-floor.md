@@ -100,7 +100,7 @@ A new texture in group 3 therefore turns the gate red until the floor rises with
 | `max_compute_workgroup_size_z` | 64 | 4 | Room haze field (4×4×4) |
 | `max_compute_workgroup_storage_size` | 16384 | 1024 | Exposure reduction (`array<f32, 256>`) |
 | `max_compute_workgroups_per_dimension` | 65535 | 480 | Post chain at 3840 wide (8×8 groups) |
-| `max_storage_buffers_per_shader_stage` | 8 | 6 | Shadow casters, vertex: instances, sway, skins, the deformers and their plan, light tints. Opaque shading, fragment: 6 (instances, materials, probe anchors, map materials, light tints, clustered lights) |
+| `max_storage_buffers_per_shader_stage` | 8 | **8** | Shadow casters, vertex: instances, sway, skins, morph targets, morph weights, the deformers and their plan, light tints. Opaque shading, fragment: 6 (instances, materials, probe anchors, map materials, light tints, clustered lights) |
 | `max_uniform_buffers_per_shader_stage` | 12 | **11** | Tree cards and lit text, fragment: 7 in group 3, 2 in the shadow group, 1 scene, 1 their own. One more uniform in group 3 and this limit needs raising too; the test above catches it. |
 | `max_samplers_per_shader_stage` | 16 | 7 | Tree cards and lit text, fragment (5 filtering, 2 comparison) |
 | `max_dynamic_uniform_buffers_per_pipeline_layout` | 8 | 1 | Shadow cascades (`CASTER_BYTES` 80 per caster slot) |

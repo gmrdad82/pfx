@@ -175,7 +175,7 @@ impl MorphRange {
 }
 
 pub(crate) struct MorphStore {
-    extent: Vec<()>,
+    extent: usize,
     free: FreeRanges,
     data: wgpu::Buffer,
     data_capacity: usize,
@@ -208,17 +208,27 @@ fn grown(capacity: usize, needed: usize, limit: usize) -> usize {
         return capacity;
     }
     needed
-        .next_power_of_two()
+        .checked_next_power_of_two()
+        .unwrap_or(usize::MAX)
         .max(capacity.saturating_mul(2))
         .min(limit)
         .max(needed)
 }
 
+fn fits(needed: usize, limit: usize, what: &str) -> Result<(), String> {
+    if needed <= limit {
+        return Ok(());
+    }
+    Err(format!(
+        "{needed} {what} need {} bytes, over the device's storage buffer limit of {} bytes (max_storage_buffer_binding_size and max_buffer_size)",
+        (needed as u64).saturating_mul(WORD),
+        limit as u64 * WORD
+    ))
+}
+
 fn limit_words(device: &wgpu::Device) -> usize {
     let limits = device.limits();
-    let bytes = limits
-        .max_storage_buffer_binding_size
-        .min(limits.max_buffer_size);
+    let bytes = u64::from(limits.max_storage_buffer_binding_size).min(limits.max_buffer_size);
     usize::try_from(bytes / WORD).unwrap_or(usize::MAX)
 }
 
@@ -256,7 +266,7 @@ fn layout(stored: &[StoredWeights]) -> WeightLayout {
 impl MorphStore {
     pub fn new(device: &wgpu::Device) -> Self {
         Self {
-            extent: Vec::new(),
+            extent: 0,
             free: FreeRanges::default(),
             data: morph_buffer(device, "live morphs", FIRST_DATA),
             data_capacity: FIRST_DATA,
@@ -330,13 +340,8 @@ impl MorphStore {
         queue: &wgpu::Queue,
         deltas: usize,
     ) -> Result<bool, String> {
-        if deltas > limit_words(device) {
-            return Err(format!(
-                "{deltas} morph deltas are over the device's storage buffer limit"
-            ));
-        }
-        let keep = self.extent.len();
-        self.grow_data(device, queue, deltas, keep)
+        fits(deltas, limit_words(device), "morph deltas")?;
+        self.grow_data(device, queue, deltas, self.extent)
     }
 
     pub fn allocate(
@@ -360,17 +365,13 @@ impl MorphStore {
                 }
             }
         }
-        let limit = limit_words(device);
-        let keep = self.extent.len();
+        let keep = self.extent;
         let base = self
             .free
-            .take(&mut self.extent, words.len(), (), "morphed vertices")?;
-        if self.extent.len() > limit {
-            let bytes = self.extent.len() as u64 * WORD;
-            self.extent.truncate(base as usize);
-            return Err(format!(
-                "morph targets need {bytes} bytes, over the device's storage buffer limit"
-            ));
+            .take_extent(&mut self.extent, words.len(), "morphed vertices")?;
+        if let Err(error) = fits(self.extent, limit_words(device), "morph deltas") {
+            self.extent = keep;
+            return Err(error);
         }
         let range = MorphRange {
             base,
@@ -378,11 +379,11 @@ impl MorphStore {
             targets: morph.targets.len() as u32,
             stride,
         };
-        let grew = match self.grow_data(device, queue, self.extent.len(), keep) {
+        let grew = match self.grow_data(device, queue, self.extent, keep) {
             Ok(grew) => grew,
             Err(error) => {
                 if base as usize >= keep {
-                    self.extent.truncate(keep);
+                    self.extent = keep;
                 } else {
                     self.release(range.range());
                 }
@@ -401,20 +402,27 @@ impl MorphStore {
         self.free.give(range);
     }
 
-    pub fn reserve_weights(&mut self, device: &wgpu::Device, weights: usize) -> bool {
+    pub fn reserve_weights(
+        &mut self,
+        device: &wgpu::Device,
+        weights: usize,
+    ) -> Result<bool, String> {
         if weights <= self.weight_capacity {
-            return false;
+            return Ok(false);
         }
-        self.grow_weights(device, weights);
+        self.grow_weights(device, weights)?;
         self.pending.set(true);
-        true
+        Ok(true)
     }
 
-    fn grow_weights(&mut self, device: &wgpu::Device, needed: usize) {
-        self.weight_capacity = grown(self.weight_capacity, needed, limit_words(device));
+    fn grow_weights(&mut self, device: &wgpu::Device, needed: usize) -> Result<(), String> {
+        let limit = limit_words(device);
+        fits(needed, limit, "morph weights")?;
+        self.weight_capacity = grown(self.weight_capacity, needed, limit);
         self.weight_buffer = morph_buffer(device, "live morph weights", self.weight_capacity);
         self.stats.weight_buffers += 1;
         self.stats.weight_capacity = self.weight_capacity as u64 * WORD;
+        Ok(())
     }
 
     pub fn set_weights(&self, weights: &[InstanceWeights<'_>]) -> Result<(), String> {
@@ -478,22 +486,23 @@ impl MorphStore {
         self.layout.borrow()
     }
 
-    pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> bool {
-        if !self.pending.replace(false) {
-            return false;
+    pub fn upload(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> Result<bool, String> {
+        if !self.pending.get() {
+            return Ok(false);
         }
         let needed = self.layout.get_mut().words.len();
         let grew = needed > self.weight_capacity;
         if grew {
-            self.grow_weights(device, needed);
+            self.grow_weights(device, needed)?;
         }
+        self.pending.set(false);
         let words = &self.layout.get_mut().words;
         if !words.is_empty() {
             let bytes: &[u8] = bytemuck::cast_slice(words);
             queue.write_buffer(&self.weight_buffer, 0, bytes);
             self.stats.weight_written += bytes.len() as u64;
         }
-        grew
+        Ok(grew)
     }
 }
 
@@ -573,5 +582,27 @@ mod tests {
         assert_eq!(grown(8, 9, 12), 12);
         assert_eq!(grown(8, 20, 12), 20);
         assert_eq!(grown(8, 8, 12), 8);
+    }
+
+    #[test]
+    fn a_store_past_the_device_limit_is_refused_and_growth_stays_within_it() {
+        let limit = 1 << 20;
+        assert_eq!(fits(limit, limit, "morph weights"), Ok(()));
+        let refused = fits(limit + 1, limit, "morph weights").unwrap_err();
+        assert!(refused.contains("morph weights"), "{refused}");
+        assert!(
+            refused.contains("max_storage_buffer_binding_size"),
+            "{refused}"
+        );
+        assert!(fits(usize::MAX, limit, "morph weights").is_err());
+        assert!(fits(usize::MAX, usize::MAX / 16, "morph deltas").is_err());
+        for needed in [limit / 3, limit / 2 + 1, limit - 1, limit] {
+            let capacity = grown(FIRST_WEIGHTS, needed, limit);
+            assert!(
+                capacity >= needed && capacity <= limit,
+                "{capacity} for {needed}"
+            );
+        }
+        assert_eq!(grown(4, usize::MAX, usize::MAX), usize::MAX);
     }
 }
