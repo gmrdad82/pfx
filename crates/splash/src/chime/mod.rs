@@ -11,10 +11,7 @@ use reverb::{Room, reverb};
 
 pub const RATE: u32 = 48_000;
 pub const CHANNELS: u16 = 2;
-pub const CEILING_DB: f32 = LIMIT_DB + LEVEL_DB;
-pub const LEVEL_DB: f32 = -14.0;
-
-const LIMIT_DB: f32 = -1.5;
+pub const CEILING_DB: f32 = -1.5;
 
 const GAIN: f32 = 0.978;
 const FADE_FROM: f64 = 1.55;
@@ -98,11 +95,7 @@ pub fn chime() -> Clip {
         samples.push((d[0] + w[0]) * fade * GAIN);
         samples.push((d[1] + w[1]) * fade * GAIN);
     }
-    Limiter::new(LIMIT_DB).master(&mut samples, usize::from(CHANNELS), RATE);
-    let level = pow(10.0, f64::from(LEVEL_DB) / 20.0) as f32;
-    for sample in &mut samples {
-        *sample *= level;
-    }
+    Limiter::new(CEILING_DB).master(&mut samples, usize::from(CHANNELS), RATE);
     Clip {
         rate: RATE,
         channels: CHANNELS,
@@ -226,11 +219,14 @@ mod tests {
             meter.add_frames_f32(block).unwrap();
             short = short.max(meter.loudness_shortterm().unwrap());
         }
-        assert!((short + 30.0).abs() < 0.5, "short-term {short:.2} LUFS");
+        assert!((short + 16.0).abs() < 0.5, "short-term {short:.2} LUFS");
         let peak = (0..u32::from(CHANNELS))
             .map(|c| meter.true_peak(c).unwrap())
             .fold(0.0f64, f64::max);
         let peak_db = 20.0 * peak.log10();
-        assert!(peak_db < -15.0, "true peak {peak_db:.2} dBTP");
+        assert!(
+            peak_db < -1.0 && peak_db > f64::from(CEILING_DB) - 0.5,
+            "true peak {peak_db:.2} dBTP"
+        );
     }
 }

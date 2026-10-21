@@ -40,12 +40,7 @@ impl Player {
         !crate::hidden(settings, crate::PUBLIC_KEY, built.as_deref())
     }
 
-    pub fn start(
-        settings: &Settings,
-        build_date: Option<&str>,
-        size: [u32; 2],
-        sound: bool,
-    ) -> Option<Player> {
+    pub fn start(settings: &Settings, build_date: Option<&str>, size: [u32; 2]) -> Option<Player> {
         Self::wanted(settings, build_date).then(|| Player {
             settings: settings.clone(),
             shown: None,
@@ -54,7 +49,7 @@ impl Player {
             timeline: Timeline,
             start_ns: None,
             curve: ShadowCurve::none(),
-            chime: sound.then(|| std::thread::spawn(crate::chime)),
+            chime: Some(std::thread::spawn(crate::chime)),
         })
     }
 
@@ -211,7 +206,7 @@ mod tests {
 
     const BLOCK: usize = 512;
 
-    fn started(chime: bool) -> Player {
+    fn started() -> Player {
         let player = Player {
             settings: Settings::default(),
             shown: None,
@@ -220,7 +215,7 @@ mod tests {
             timeline: Timeline,
             start_ns: Some(0),
             curve: ShadowCurve::none(),
-            chime: chime.then(|| std::thread::spawn(crate::chime)),
+            chime: Some(std::thread::spawn(crate::chime)),
         };
         while player.chime.as_ref().is_some_and(|job| !job.is_finished()) {
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -235,7 +230,7 @@ mod tests {
 
     #[test]
     fn the_chime_is_handed_over_on_the_frame_the_line_appears_and_sounds_with_it() {
-        let mut player = started(true);
+        let mut player = started();
         let fps = 120.0;
         let mut handed = Vec::new();
         for n in 0..(LENGTH * fps) as u32 {
@@ -253,6 +248,12 @@ mod tests {
         let onset = at + first_sound(clip) as f64 / f64::from(clip.rate);
         let block = BLOCK as f64 / f64::from(clip.rate);
         assert!((onset - RULE_FROM).abs() <= block, "sounds at {onset}");
+        let peak = clip.samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let peak_db = 20.0 * peak.log10();
+        assert!(
+            (peak_db - crate::CEILING_DB).abs() <= 0.5,
+            "handed at {peak_db:.2} dBFS"
+        );
         let whole = crate::chime();
         let onset = first_sound(&whole) as f64 / f64::from(whole.rate);
         assert!(
@@ -262,14 +263,12 @@ mod tests {
     }
 
     #[test]
-    fn a_chime_ready_late_starts_at_the_matching_point_and_a_silent_splash_hands_nothing() {
-        let mut player = started(true);
+    fn a_chime_ready_late_starts_at_the_matching_point() {
+        let mut player = started();
         let clip = player.chime(1.0).unwrap();
         let rate = f64::from(clip.rate);
         assert_eq!(clip.frames(), ((LENGTH - 1.0) * rate).round() as u64);
         assert!(player.chime(1.1).is_none());
-        let mut silent = started(false);
-        assert!((0..240).all(|n| silent.chime(f64::from(n) / 120.0).is_none()));
     }
 
     fn rises_from_silence(clip: &Clip, whole: &Clip, at: f64) {
@@ -300,11 +299,11 @@ mod tests {
     fn a_late_frame_starts_the_chime_with_a_ramp_and_no_step() {
         let whole = crate::chime();
         for at in [0.5, 0.55] {
-            let mut player = started(true);
+            let mut player = started();
             let clip = player.chime(at).unwrap();
             rises_from_silence(&clip, &whole, at);
         }
-        let mut player = started(true);
+        let mut player = started();
         let mut clock: Vec<f64> = (0..27).map(|n| f64::from(n) / 60.0 + 0.003).collect();
         let stalled = clock[26] + 0.08;
         clock.extend((0..90).map(|n| stalled + f64::from(n) / 60.0));

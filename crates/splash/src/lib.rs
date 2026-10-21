@@ -11,7 +11,7 @@ mod unlock;
 #[cfg(test)]
 mod tests;
 
-pub use chime::{CEILING_DB, CHANNELS, LEVEL_DB, RATE, chime};
+pub use chime::{CEILING_DB, CHANNELS, RATE, chime};
 pub use compose::{Composition, Frame};
 pub use licence::{
     Claims, Group, KeyError, PUBLIC_KEY, build_date, built, covers, hidden, token, verify,

@@ -32,7 +32,15 @@ pub const AUDIO_SECONDS: f32 = 0.25;
 
 struct Sound {
     output: Output,
-    sender: PcmSender,
+    sender: Option<PcmSender>,
+}
+
+#[cfg(feature = "splash")]
+const CHIME: ChannelId = ChannelId::custom(u32::MAX);
+
+#[cfg(feature = "splash")]
+pub(crate) fn chime_voice() -> (ChannelId, Level) {
+    (CHIME, Level::default())
 }
 
 struct Live {
@@ -137,17 +145,20 @@ fn layout(config: &mut Config) -> Option<Box<dyn LayoutSource>> {
     config.layout.take()
 }
 
-fn sound(config: &Config) -> Option<Sound> {
-    if !config.sound {
+fn sound(config: &Config, chime: bool) -> Option<Sound> {
+    if !config.sound && !chime {
         return None;
     }
     let output = Output::open().ok()?;
-    let (_, sender) = output.pcm_stream(
-        ChannelId::EFFECTS,
-        output.channels(),
-        AUDIO_SECONDS,
-        Level::default(),
-    );
+    let sender = config.sound.then(|| {
+        let (_, sender) = output.pcm_stream(
+            ChannelId::EFFECTS,
+            output.channels(),
+            AUDIO_SECONDS,
+            Level::default(),
+        );
+        sender
+    });
     Some(Sound { output, sender })
 }
 
@@ -248,7 +259,6 @@ fn open(
             &config.splash,
             config.build_date.as_deref(),
             [size.width, size.height],
-            config.sound,
         )
     };
     let preference = window::present_preference(&window, settings.pacing.present());
@@ -272,10 +282,15 @@ fn open(
     let grounded = present_ground(&gpu, &target, &window, ground);
     let size = size_of(&window);
     let painter = Painter::live(gpu, scene, &config, size)?;
-    let sound = sound(&config);
-    let audio = sound.as_ref().map_or((48_000, 2), |sound| {
-        (sound.sender.rate(), sound.sender.channels())
-    });
+    #[cfg(feature = "splash")]
+    let chime = splash.is_some();
+    #[cfg(not(feature = "splash"))]
+    let chime = false;
+    let sound = sound(&config, chime);
+    let audio = sound
+        .as_ref()
+        .and_then(|sound| sound.sender.as_ref())
+        .map_or((48_000, 2), |sender| (sender.rate(), sender.channels()));
     let pads = pads(&mut config);
     let mut driver = start::driver(
         scene,
@@ -529,8 +544,8 @@ impl Live {
     fn audio(&mut self) {
         let sound = &self.sound;
         self.driver.drain_audio(|audio| {
-            if let Some(sound) = sound {
-                sound.sender.push(audio);
+            if let Some(sender) = sound.as_ref().and_then(|sound| sound.sender.as_ref()) {
+                sender.push(audio);
             }
         });
     }
@@ -549,14 +564,8 @@ impl Live {
         if let (pfx_splash::Phase::Showing { at, .. }, Some(sound)) = (phase, &self.sound)
             && let Some(clip) = splash.chime(at)
         {
-            let audio = &self.driver.settings().audio;
-            if !audio.muted {
-                let level = Level {
-                    volume: audio.master,
-                    ..Level::default()
-                };
-                sound.output.play_on(ChannelId::EFFECTS, &clip, level);
-            }
+            let (channel, level) = chime_voice();
+            sound.output.play_on(channel, &clip, level);
         }
         if phase == pfx_splash::Phase::Done {
             self.splash = None;

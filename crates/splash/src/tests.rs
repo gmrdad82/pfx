@@ -468,7 +468,7 @@ fn the_player_draws_the_same_bytes_as_its_composition_through_a_flat_pass() {
     use pfx_gpu::wgpu::TextureFormat;
     let gpu = pollster::block_on(pfx_gpu::Gpu::headless()).unwrap();
     let size = [320, 180];
-    let mut player = crate::Player::start(&Settings::default(), None, size, false).unwrap();
+    let mut player = crate::Player::start(&Settings::default(), None, size).unwrap();
     for _ in 0..2500 {
         if player.ready() {
             break;
