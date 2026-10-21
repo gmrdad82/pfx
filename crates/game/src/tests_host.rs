@@ -552,34 +552,3 @@ fn a_surface_configure_that_fails_is_retried_until_its_bound_then_errors() {
     let error = error.unwrap_err();
     assert!(error.contains("refused 1 of them"), "{error}");
 }
-
-#[cfg(feature = "splash")]
-#[test]
-fn the_splash_chime_plays_at_full_level_whatever_the_games_volume_and_mute() {
-    use pfx_sound::{Mixer, Prepared};
-    use pfx_splash::{CEILING_DB, CHANNELS, RATE};
-    let mut audio = Settings::default().audio;
-    audio.master = 0.0;
-    audio.muted = true;
-    audio.music = 0.0;
-    audio.effects = 0.0;
-    audio.dialog = 0.0;
-    audio.custom.insert(0, 0.0);
-    let chime = pfx_splash::chime();
-    let mut host = Mixer::new(RATE, CHANNELS);
-    for (channel, volume) in audio.channels() {
-        host.set_channel_volume(channel, volume);
-    }
-    let (channel, level) = crate::host::chime_voice();
-    assert!(audio.channels().iter().all(|(named, _)| *named != channel));
-    host.play_prepared(channel, &Prepared::new(&chime, RATE), level);
-    let heard = host.render(chime.frames() as usize);
-    let first = |samples: &[f32]| samples.iter().position(|s| *s != 0.0);
-    assert_eq!(first(&heard), first(&chime.samples));
-    let peak = heard.iter().fold(0.0f32, |m, s| m.max(s.abs()));
-    let peak_db = 20.0 * peak.log10();
-    assert!(
-        (peak_db - CEILING_DB).abs() <= 0.5,
-        "the chime peaks at {peak_db:.2} dBFS"
-    );
-}

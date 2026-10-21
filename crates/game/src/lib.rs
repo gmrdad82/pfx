@@ -18,6 +18,8 @@ pub mod modules {
 mod painter;
 pub mod prompt;
 mod scheme;
+#[cfg(feature = "splash")]
+mod splash;
 mod start;
 #[cfg(feature = "steam")]
 pub mod steam;

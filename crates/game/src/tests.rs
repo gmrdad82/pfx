@@ -232,12 +232,12 @@ fn tone() -> Clip {
     }
 }
 
-struct Folder {
+pub(crate) struct Folder {
     root: PathBuf,
 }
 
 impl Folder {
-    fn new(name: &str, extra: &str) -> Self {
+    pub(crate) fn new(name: &str, extra: &str) -> Self {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tmp/game-tests")
             .join(name);
@@ -251,7 +251,7 @@ impl Folder {
         Self { root }
     }
 
-    fn scene(&self) -> PathBuf {
+    pub(crate) fn scene(&self) -> PathBuf {
         self.root.join("empty.scene.toml")
     }
 }

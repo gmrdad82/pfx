@@ -25,6 +25,8 @@ use crate::cursor::{Pointer, nudge};
 use crate::driver::{Driver, Event};
 use crate::painter::{Painter, Warmup};
 use crate::scheme::{self, FROM_WINDOW, of_theme, system_scheme};
+#[cfg(feature = "splash")]
+use crate::splash::Speaker;
 use crate::start;
 use crate::surface::{Attempt, Retry};
 
@@ -33,14 +35,6 @@ pub const AUDIO_SECONDS: f32 = 0.25;
 struct Sound {
     output: Output,
     sender: Option<PcmSender>,
-}
-
-#[cfg(feature = "splash")]
-const CHIME: ChannelId = ChannelId::custom(u32::MAX);
-
-#[cfg(feature = "splash")]
-pub(crate) fn chime_voice() -> (ChannelId, Level) {
-    (CHIME, Level::default())
 }
 
 struct Live {
@@ -560,25 +554,32 @@ impl Live {
         let Some(splash) = &mut self.splash else {
             return Ok(false);
         };
-        let phase = splash.phase(now_ns, loaded);
-        if let (pfx_splash::Phase::Showing { at, .. }, Some(sound)) = (phase, &self.sound)
-            && let Some(clip) = splash.chime(at)
-        {
-            let (channel, level) = chime_voice();
-            sound.output.play_on(channel, &clip, level);
-        }
-        if phase == pfx_splash::Phase::Done {
-            self.splash = None;
-            return Ok(false);
-        }
         let gpu = self.painter.renderer().gpu();
         let config = &self.target.config;
         let size = [config.width, config.height];
-        if let Err(error) = splash.settle(gpu, size) {
-            eprintln!("the splash is left out: {error}");
-            self.splash = None;
-            return Ok(false);
-        }
+        let speaker = self
+            .sound
+            .as_mut()
+            .map(|sound| &mut sound.output as &mut dyn Speaker);
+        let phase = match crate::splash::step(splash, now_ns, loaded, gpu, size, speaker) {
+            Ok(Some(phase)) => phase,
+            Ok(None) => {
+                self.splash = None;
+                if self
+                    .sound
+                    .as_ref()
+                    .is_some_and(|sound| sound.sender.is_none())
+                {
+                    self.sound = None;
+                }
+                return Ok(false);
+            }
+            Err(error) => {
+                eprintln!("the splash is left out: {error}");
+                self.splash = None;
+                return Ok(false);
+            }
+        };
         let texture = match self.target.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {

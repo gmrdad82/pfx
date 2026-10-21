@@ -29,14 +29,14 @@ The splash has its own sound, a short sonic logo timed to the rule:
 - at 0.85 s, as the rule reaches full width, the sweep cuts and a clean D6 tone with a short FM glint and a soft D3 body resolves it;
 - the tail rings in a small room and fades out with an ease to silence at 2.0 s.
 
-It is 48 kHz stereo at -16 LUFS short-term (BS.1770, the loudest 3 s window), with its true peak under -1 dBTP: a true-peak limiter holds it at -1.5 dBTP (`pfx_splash::CEILING_DB`). The level is set in pfx and is the same in every app and game. The chime always plays in full: it cannot be skipped, and no app or game setting lowers or silences it, neither a master, music or effects volume, nor an in-app mute, nor sound off. Only the operating system, its mute or its volume, quiets it. There is no sample on disk. `pfx_splash::chime()` synthesises it from code in about 20 ms, with fixed seeds and pfx's deterministic math, so every build makes the same samples. The room is ported from Freeverb (public domain; NOTICE.md).
+It is 48 kHz stereo at -16 LUFS short-term (BS.1770, the loudest 3 s window), with its true peak under -1 dBTP: a true-peak limiter holds it at -1.5 dBTP (`pfx_splash::CEILING_DB`). The level is set in pfx and is the same in every app and game. The chime always plays in full: it cannot be skipped, and in pfx-game no game setting lowers or silences it, neither a master, music or effects volume, nor a mute, nor sound off. Only the operating system, its mute or its volume, quiets it. An app that plays the splash in its own window owes it the same ([below](#showing-the-splash-in-your-own-window)). There is no sample on disk. `pfx_splash::chime()` synthesises it from code in about 20 ms, with fixed seeds and pfx's deterministic math, so every build makes the same samples. The room is ported from Freeverb (public domain; NOTICE.md).
 
 pfx-game plays it through the game's audio output:
 
 - it is made on its own thread while the splash composes;
 - it is handed to the mixer on the frame the rule appears, the first frame drawn after 0.45 s on the splash's clock, cut to that frame's time, so its first sound lands with that frame and its sweep follows the rule's growth. When that frame is late and the cut falls inside the sweep, the clip opens with a 4 ms ramp from silence, so it never clicks. If it is ready late, it starts at the matching point in the sound, so it never drifts and never delays the splash;
-- it plays on a voice of its own straight to the audio output, outside the game's mix, so the game's master volume, its buses and its mute never scale it;
-- it plays with sound off too (`Config::sound(false)` turns off only the game's own sound); with no output device it is silent and the splash plays the same;
+- it plays on a voice of its own straight to the audio output, outside the game's mix: the game's master volume, its buses and its mute scale the game's own mix before it reaches the output, and the output itself never takes a volume, mute, ducking or limiter, so none of them scale the chime;
+- it plays with sound off too (`Config::sound(false)` turns off only the game's own sound, and the output opened for the chime closes when the splash is done); with no output device it is silent and the splash plays the same;
 - a Pro key that hides the splash hides the chime too.
 
 ## Settings
@@ -102,7 +102,10 @@ The rule, a Pro key of an allowed group, sits in one place, `Group::may_hide_spl
 An app that opens its own window instead of running through pfx-game shows the same splash with `pfx_splash::Player`, the player pfx-game itself runs: the same composition on a worker thread, the same timeline, look and chime, and the same build-date and Pro-key rules. Add the crate `pfx-splash` and drive the player from the window's frame loop until it says it is done:
 
 ```rust
+use pfx_sound::{ChannelId, Level};
 use pfx_splash::{Phase, Player};
+
+const CHIME_BUS: ChannelId = ChannelId::custom(u32::MAX);
 
 let mut splash = Player::start(&settings, Some(BUILD_DATE), [width, height]);
 
@@ -142,7 +145,8 @@ if let Some(player) = &mut splash {
 - `phase(now_ns, loaded)` reads the app's clock in nanoseconds; the splash's 2 s start at the first call after the composition is ready (`ready()` says when). `loaded` is whether the app has finished its own loading: `Phase::Waiting` holds the ground after the fade until it has, and `Phase::Done` is the app's cue to start its own intro.
 - `settle(gpu, size)` takes the finished composition onto the GPU and recomposes on the worker thread when the window's size changes; call it each frame before `draw`.
 - `draw(gpu, view, format, size, phase)` clears the view to the ground and draws the frame for that phase in one flat pass, and submits it. The ground is `settings.background.srgba()`, a `pfx_splash::Srgba`, for clearing the window's first frames before the composition is ready.
-- `chime(at)` hands over the chime once, on the first frame the rule shows (`at` past 0.45 s) and when it is ready, cut to start at `at` seconds into the splash so it never drifts, with a 4 ms ramp from silence at the cut: a `pfx_sound::Clip` of 48 kHz stereo samples for the app's own mixer. The app plays it in full at unity (`Level::default()`), on a bus of its own (`CHIME_BUS` above, a `pfx_sound::ChannelId` the app never sets a volume on) of an output whose master the app never lowers or mutes, so none of its volumes, buses or mute scale it, sound off included; only the operating system may quiet it.
+- `chime_ready()` says the chime has been made (or already handed over); an app never needs to wait on it, since a chime made late starts at the matching point.
+- `chime(at)` hands over the chime once, on the first frame the rule shows (`at` past 0.45 s) and when it is ready, cut to start at `at` seconds into the splash so it never drifts, with a 4 ms ramp from silence at the cut: a `pfx_sound::Clip` of 48 kHz stereo samples for the app's own mixer. The app plays it in full, at unity (`Level::default()`), with nothing of its own between it and the device: no master volume, bus volume, mute, ducking or limiter of the app's, and with the app's sound off too; only the operating system may quiet it. With `pfx_sound::Output`, whose master gain scales every bus, that means either an `Output` the app leaves at unity, with its own volumes on its buses and the chime on a bus it never sets (`CHIME_BUS` above), or a second `Output::open()` of its own for the chime, which the app drops once the splash is done.
 - A resize during the splash shows the previous composition scaled to the new size until the worker thread has recomposed it, 140–240 ms later.
 - A splash that fails to compose or draw is dropped and the app goes on; it never stops an app.
 

@@ -758,3 +758,118 @@ fn an_idle_game_draws_nothing_until_something_changes() {
     let (drawn, frames) = composed(&mut always);
     assert_eq!(drawn, frames, "redraw always draws every frame");
 }
+
+#[cfg(feature = "splash")]
+struct Hum {
+    settings: Settings,
+}
+
+#[cfg(feature = "splash")]
+impl Game for Hum {
+    fn start(&mut self, world: &mut World) {
+        world.play_sound("hum");
+    }
+
+    fn tick(&mut self, _world: &mut World, _tick: &Tick, _input: &Input) {}
+
+    fn ui(&mut self, _world: &World, _frame: &UiFrame) -> Ui {
+        Ui::new()
+    }
+
+    fn settings(&self) -> Option<&Settings> {
+        Some(&self.settings)
+    }
+}
+
+#[cfg(feature = "splash")]
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn the_splash_chime_plays_at_full_level_on_the_appear_frame_with_the_game_muted_at_master_zero() {
+    use pfx_sound::Mixer;
+    use pfx_splash::{CEILING_DB, Phase};
+    let folder = crate::tests::Folder::new(
+        "splash-chime",
+        "\n[sound.hum]\nfile = \"tone.wav\"\nloop = true\n",
+    );
+    let mut settings = capped();
+    settings.audio.master = 0.0;
+    settings.audio.muted = true;
+    settings.audio.music = 0.0;
+    settings.audio.effects = 0.0;
+    settings.audio.dialog = 0.0;
+    let window = Size {
+        width: 640,
+        height: 360,
+    };
+    for rate in [48_000, 44_100] {
+        let config = Config::new("hum", "0.0.0", folder.scene())
+            .device(Device::Desktop)
+            .font(FONT);
+        let gpu = pollster::block_on(Gpu::headless()).unwrap();
+        let game = Hum {
+            settings: settings.clone(),
+        };
+        let mut run = Headless::with_splash(game, config, gpu, window).unwrap();
+        run.speaker = Mixer::new(rate, 2);
+        run.frame_cost_ns = 8_333_333;
+        assert!(run.splash().unwrap() > 0, "the splash plays");
+        let ats: Vec<(u64, f64)> = run
+            .splash_frames
+            .iter()
+            .filter_map(|(now, phase)| match phase {
+                Phase::Showing { at, .. } => Some((*now, *at)),
+                _ => None,
+            })
+            .collect();
+        let shown = ats.iter().position(|(_, at)| *at > 0.45).unwrap();
+        assert!(shown > 0 && ats[shown - 1].1 <= 0.45);
+        let due = (u128::from(ats[shown].0) * u128::from(rate) / 1_000_000_000) as usize;
+        let ramp = (rate as usize).div_ceil(250);
+        let onset = run
+            .heard
+            .chunks(2)
+            .position(|frame| frame.iter().any(|s| *s != 0.0))
+            .unwrap();
+        assert!(
+            (due..=due + ramp).contains(&onset),
+            "at {rate} Hz the chime starts at frame {onset}, the appear frame is at {due}"
+        );
+        let whole = pfx_splash::chime();
+        let skip = (ats[shown].1 * 48_000.0).round() as usize;
+        let heard_db = 20.0 * crate::tests::rms(&run.heard[due * 2..]).log10();
+        let made_db = 20.0 * crate::tests::rms(&whole.samples[skip * 2..]).log10();
+        assert!(
+            (heard_db - made_db).abs() <= 0.5,
+            "at {rate} Hz the chime plays at {heard_db:.2} dB RMS, made at {made_db:.2}"
+        );
+        if rate == 48_000 {
+            let after = (ramp..48_000)
+                .flat_map(|n| {
+                    [(due + n) * 2, (due + n) * 2 + 1].map(|i| (i, i - due * 2 + skip * 2))
+                })
+                .fold(0.0f32, |m, (heard, made)| {
+                    m.max((run.heard[heard] - whole.samples[made]).abs())
+                });
+            assert!(
+                after < 1e-3,
+                "past the ramp the output is the chime from the appear frame at unity, off by {after}"
+            );
+            let peak = run.heard.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+            let peak_db = 20.0 * peak.log10();
+            assert!(
+                (peak_db - CEILING_DB).abs() <= 0.5,
+                "the chime peaks at {peak_db:.2} dBFS"
+            );
+        }
+
+        run.run_for(0.5).unwrap();
+        let audio = &run.driver.settings().audio;
+        assert!(audio.muted && audio.master == 0.0);
+        assert!(!run.audio.is_empty());
+        assert_eq!(
+            crate::tests::rms(&run.audio),
+            0.0,
+            "the game itself is muted"
+        );
+    }
+}

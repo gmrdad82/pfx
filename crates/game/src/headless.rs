@@ -7,6 +7,10 @@ use pfx_gpu::window::{
 };
 use pfx_gpu::{Gpu, OffscreenTarget, wgpu};
 use pfx_play::{Game, NoWarmer, Warming};
+#[cfg(feature = "splash")]
+use pfx_sound::Mixer;
+#[cfg(feature = "splash")]
+use pfx_splash::{Phase, Player};
 
 use crate::config::{Config, Crash, Pads, report};
 use crate::driver::{Driver, Event, present_preference};
@@ -100,6 +104,14 @@ pub struct Headless {
     pub warm_budget: f64,
     warmed: bool,
     gpu: Option<Box<Gpued>>,
+    #[cfg(feature = "splash")]
+    splash: Option<Player>,
+    #[cfg(feature = "splash")]
+    pub speaker: Mixer,
+    #[cfg(feature = "splash")]
+    pub heard: Vec<f32>,
+    #[cfg(feature = "splash")]
+    pub splash_frames: Vec<(u64, Phase)>,
     name: String,
     crash: Option<Crash>,
 }
@@ -125,6 +137,75 @@ impl Headless {
         window: Size,
     ) -> Result<Self, String> {
         Self::build(Box::new(game), config, Some(gpu), window)
+    }
+
+    #[cfg(feature = "splash")]
+    pub fn with_splash<G: Game + 'static>(
+        game: G,
+        config: Config,
+        gpu: Gpu,
+        window: Size,
+    ) -> Result<Self, String> {
+        let splash = Player::start(
+            &config.splash,
+            config.build_date.as_deref(),
+            [window.width, window.height],
+        );
+        let mut headless = Self::build(Box::new(game), config, Some(gpu), window)?;
+        headless.splash = splash;
+        Ok(headless)
+    }
+
+    #[cfg(feature = "splash")]
+    pub fn splash(&mut self) -> Result<u64, String> {
+        let Some(mut player) = self.splash.take() else {
+            return Ok(0);
+        };
+        self.warm()?;
+        let Some(gpued) = &mut self.gpu else {
+            return Ok(0);
+        };
+        let Gpued {
+            painter,
+            target,
+            pace,
+        } = &mut **gpued;
+        let gpu = painter.renderer().gpu();
+        let size = [target.width, target.height];
+        while !(player.ready() && player.chime_ready()) {
+            if let Err(error) = player.settle(gpu, size) {
+                eprintln!("the splash is left out: {error}");
+                return Ok(0);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let mut frames = 0;
+        loop {
+            let now_ns = self.clock.now_ns;
+            let speaker: &mut dyn crate::splash::Speaker = &mut self.speaker;
+            let phase =
+                match crate::splash::step(&mut player, now_ns, true, gpu, size, Some(speaker)) {
+                    Ok(Some(phase)) => phase,
+                    Ok(None) => break,
+                    Err(error) => {
+                        eprintln!("the splash is left out: {error}");
+                        break;
+                    }
+                };
+            self.splash_frames.push((now_ns, phase));
+            let mut drawn = Ok(());
+            pace.frame(|| {
+                drawn = player.draw(gpu, &target.view, TARGET_FORMAT, size, phase);
+            });
+            if let Err(error) = drawn {
+                eprintln!("the splash is left out: {error}");
+                break;
+            }
+            frames += 1;
+            self.clock.now_ns = now_ns.saturating_add(self.frame_cost_ns);
+            listen(&mut self.speaker, &mut self.heard, self.clock.now_ns);
+        }
+        Ok(frames)
     }
 
     fn build(
@@ -176,6 +257,14 @@ impl Headless {
             warm_budget: config.warm_budget,
             warmed: false,
             gpu,
+            #[cfg(feature = "splash")]
+            splash: None,
+            #[cfg(feature = "splash")]
+            speaker: Mixer::new(48_000, 2),
+            #[cfg(feature = "splash")]
+            heard: Vec::new(),
+            #[cfg(feature = "splash")]
+            splash_frames: Vec::new(),
             crash: config.crash.take(),
             name: config.name,
         };
@@ -246,6 +335,8 @@ impl Headless {
         if self.exited() {
             return Ok(None);
         }
+        #[cfg(feature = "splash")]
+        self.splash()?;
         self.warm()?;
         loop {
             match self.driver.poll(&self.clock) {
@@ -331,6 +422,15 @@ impl Headless {
     pub fn readback(&self) -> Result<Vec<u8>, String> {
         let gpu = self.gpu.as_ref().ok_or("this run has no GPU")?;
         gpu.painter.renderer().gpu().readback_rgba8(&gpu.target)
+    }
+}
+
+#[cfg(feature = "splash")]
+fn listen(speaker: &mut Mixer, heard: &mut Vec<f32>, now_ns: u64) {
+    let due = (u128::from(now_ns) * u128::from(speaker.rate()) / 1_000_000_000) as u64;
+    let frames = due.saturating_sub(speaker.clock());
+    if frames > 0 {
+        heard.extend(speaker.render(frames as usize));
     }
 }
 

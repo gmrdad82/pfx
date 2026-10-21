@@ -69,6 +69,10 @@ impl Player {
             .phase(now_ns.saturating_sub(start) as f64 / 1e9, loaded)
     }
 
+    pub fn chime_ready(&self) -> bool {
+        self.chime.as_ref().is_none_or(|job| job.is_finished())
+    }
+
     pub fn chime(&mut self, at: f64) -> Option<Clip> {
         if self.start_ns.is_none()
             || at <= RULE_FROM
