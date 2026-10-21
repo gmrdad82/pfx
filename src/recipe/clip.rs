@@ -11,6 +11,7 @@ use pfx_still::{NOISE, Noise, Step};
 use super::checkpoint::{self, Checkpoint, Every};
 use super::ledger::{Ledger, Verified};
 use super::process::on_path;
+use super::times;
 use super::{pair, refuse, size};
 
 const SAMPLES: u32 = 64;
@@ -52,8 +53,8 @@ pub(super) struct Args {
         long,
         value_name = "N",
         value_parser = clap::value_parser!(u32).range(1..),
-        required_unless_present = "timeline",
-        conflicts_with = "timeline",
+        required_unless_present_any = ["timeline", "times"],
+        conflicts_with_all = ["timeline", "times"],
         help = "How many frames"
     )]
     frames: Option<u32>,
@@ -61,20 +62,37 @@ pub(super) struct Args {
         long,
         value_name = "F",
         value_parser = rate,
-        required_unless_present = "timeline",
+        required_unless_present_any = ["timeline", "times"],
         conflicts_with = "timeline",
-        help = "Frames per second, from 1 to 240: a whole number, num/den such as 24000/1001, or 23.976 (23.98), 29.97, 47.952 (47.95), 59.94, 119.88"
+        help = "Frames per second, from 1 to 240: a whole number, num/den such as 24000/1001, or 23.976 (23.98), 29.97, 47.952 (47.95), 59.94, 119.88; with --times, the [timeline]'s when absent"
     )]
     fps: Option<Rate>,
     #[arg(
         long,
-        help = "Film the recipe's [timeline], frames 0 to its last at its fps, the camera from its rig when it has one"
+        help = "Film the recipe's [timeline], frames 0 to its last at its fps, the camera from its rig when it has one; a [timeline.map] gives each frame's source time"
     )]
     timeline: bool,
     #[arg(
         long,
-        value_name = "object",
+        value_name = "file",
         conflicts_with = "timeline",
+        help = "Film the recipe's [timeline] at these source times: one time in seconds a line, frame i at the i-th, or a CSV with a header and a time column"
+    )]
+    times: Option<PathBuf>,
+    #[arg(
+        long,
+        value_name = "name",
+        requires = "times",
+        conflicts_with_all = ["timeline", "frames"],
+        help = "The CSV column of --times that holds the seconds [default: time]"
+    )]
+    column: Option<String>,
+    #[arg(skip)]
+    map: Option<times::Map>,
+    #[arg(
+        long,
+        value_name = "object",
+        conflicts_with_all = ["timeline", "times"],
         help = "Turn this object and everything parented to it about the world Y axis through its origin, the camera and lights held still"
     )]
     spin: Option<String>,
@@ -215,6 +233,17 @@ impl Args {
         self.turns.unwrap_or(1.0)
     }
 
+    fn timed(&self) -> bool {
+        self.timeline || self.times.is_some()
+    }
+
+    fn time(&self, frame: u32) -> f64 {
+        match &self.map {
+            Some(map) => map.at(frame),
+            None => self.rate().time(u64::from(frame)),
+        }
+    }
+
     fn span(&self) -> Result<[u32; 2], String> {
         let count = self.count();
         match self.range {
@@ -278,7 +307,7 @@ fn narrow(matrix: DMat4) -> Matrix {
 }
 
 fn held(args: &Args, camera: &Camera) -> Result<(), String> {
-    if args.timeline {
+    if args.timed() {
         return Ok(());
     }
     match (&args.spin, &camera.path) {
@@ -292,16 +321,27 @@ fn held(args: &Args, camera: &Camera) -> Result<(), String> {
 }
 
 fn resolved(args: &Args) -> Result<Args, String> {
-    if !args.timeline {
+    if !args.timed() {
         return Ok(args.clone());
     }
     let file = args.recipe.display().to_string();
-    let timeline = chosen(args)?.timeline.ok_or_else(|| {
-        format!("{file}: --timeline films the recipe's [timeline], and the recipe has none (docs/recipe-format.md, Timeline)")
+    let recipe = chosen(args)?;
+    let timeline = recipe.timeline.ok_or_else(|| match &args.times {
+        Some(_) => format!("{file}: --times poses the recipe's [timeline] at each time, and the recipe has none (docs/recipe-format.md, Timeline)"),
+        None => format!("{file}: --timeline films the recipe's [timeline], and the recipe has none (docs/recipe-format.md, Timeline)"),
     })?;
+    let map = match (&args.times, &recipe.time_map) {
+        (Some(path), _) => Some(times::read(path, args.column.as_deref(), &timeline)?),
+        (None, Some(map)) => Some(times::of_map(map, &timeline)),
+        (None, None) => None,
+    };
     Ok(Args {
-        frames: Some(timeline.frames + 1),
-        fps: Some(timeline.fps),
+        frames: Some(
+            map.as_ref()
+                .map_or(timeline.frames + 1, |map| map.times.len() as u32),
+        ),
+        fps: Some(args.fps.unwrap_or(timeline.fps)),
+        map,
         ..args.clone()
     })
 }
@@ -327,6 +367,9 @@ fn manifest(args: &Args) -> String {
     );
     if args.timeline {
         text.push_str("timeline\n");
+    }
+    if let Some(map) = &args.map {
+        text.push_str(&format!("{} at {} fps\n", map.line, args.rate()));
     }
     if let Some(object) = &args.spin {
         text.push_str(&format!("spin {object}, {} turns\n", args.spun()));
@@ -455,7 +498,12 @@ impl Renderer {
         }
     }
 
-    fn pose(&mut self, time: f64, before: Option<f64>, name: &str) -> Result<Camera, String> {
+    fn pose(
+        &mut self,
+        time: f64,
+        (before, over): (Option<f64>, Option<f64>),
+        name: &str,
+    ) -> Result<Camera, String> {
         match self {
             Renderer::Live(reel, base) => {
                 let (recipe, built) = (&base.0, &base.1);
@@ -479,7 +527,11 @@ impl Renderer {
                     .cloned()
                     .map_err(|e| e.0)
             }
-            Renderer::Traced(reel, ..) => reel.pose_moving(time, name).map_err(|e| e.to_string()),
+            Renderer::Traced(reel, ..) => match over {
+                Some(seconds) => reel.pose_moving_over(time, name, seconds),
+                None => reel.pose_moving(time, name),
+            }
+            .map_err(|e| e.to_string()),
         }
     }
 
@@ -1054,7 +1106,7 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
         Some(name) => Some(spun(renderer.recipe(), name)?),
         None => None,
     };
-    let path = if args.timeline || spin.is_some() {
+    let path = if args.timed() || spin.is_some() {
         None
     } else {
         Some(path_of(&camera)?)
@@ -1079,9 +1131,15 @@ fn frames(args: &Args, registry: &Registry, progress: &mut dyn FnMut(u32)) -> Re
             }
             (None, Some(path)) => camera.at(path.time(frame, count)),
             (None, None) => {
-                let at = |frame: u32| args.rate().time(u64::from(frame));
-                let before = frame.checked_sub(1).filter(|_| renderer.blurs()).map(at);
-                renderer.pose(at(frame), before, &args.camera)?
+                let before = frame
+                    .checked_sub(1)
+                    .filter(|_| renderer.blurs())
+                    .map(|frame| args.time(frame));
+                let over = args
+                    .map
+                    .as_ref()
+                    .map(|map| map.frame_seconds(frame, args.rate()));
+                renderer.pose(args.time(frame), (before, over), &args.camera)?
             }
         })
     };
@@ -1457,6 +1515,9 @@ mod tests {
                 frames: Some(24),
                 fps: Some(Rate::whole(30)),
                 timeline: false,
+                times: None,
+                column: None,
+                map: None,
                 spin: Some("body".into()),
                 turns: Some(-0.5),
                 range: None,
@@ -2368,5 +2429,207 @@ keys = { at = [[0.0, [0.0, 0.5, 0.0]], [0.5, [1.5, 0.5, 0.0]]] }
         assert!(list[1]["squash"].as_f64().unwrap() < 0.2);
         assert_eq!(list[2]["traced"], false);
         assert_eq!(list[3]["tlas_in_place"], false);
+    }
+
+    fn ntsc(dir: &Path, more: &str) -> PathBuf {
+        let recipe = dir.join("ntsc.toml");
+        std::fs::write(&recipe, format!("{NTSC}{more}")).unwrap();
+        recipe
+    }
+
+    fn timed(recipe: &Path, rest: &str) -> Result<Args, String> {
+        resolved(&parse(&strings(&format!(
+            "{} --camera main --size 96x48 --out d {rest}",
+            recipe.display()
+        )))?)
+    }
+
+    fn written(dir: &Path, file: &str, times: &[f64]) -> PathBuf {
+        let path = dir.join(file);
+        let text: String = times.iter().map(|time| format!("{time}\n")).collect();
+        std::fs::write(&path, text).unwrap();
+        path
+    }
+
+    fn shutter(args: &Args, frame: u32) -> u64 {
+        match &args.map {
+            Some(map) => map.frame_seconds(frame, args.rate()).to_bits(),
+            None => args.rate().step().to_bits(),
+        }
+    }
+
+    fn same_frames(a: &Args, b: &Args, frames: std::ops::Range<u32>) {
+        for frame in frames {
+            assert_eq!(
+                a.time(frame).to_bits(),
+                b.time(frame).to_bits(),
+                "frame {frame}"
+            );
+            assert_eq!(shutter(a, frame), shutter(b, frame), "frame {frame}");
+            assert_eq!(name(frame, a.count()), name(frame, b.count()));
+        }
+    }
+
+    #[test]
+    fn a_times_file_of_the_timelines_own_times_films_its_frames_shutters_and_seeds() {
+        let dir = scratch("times-own");
+        let recipe = ntsc(&dir, "");
+        let whole = timed(&recipe, "--timeline").unwrap();
+        assert_eq!(whole.map, None);
+        let own: Vec<f64> = (0..whole.count()).map(|frame| whole.time(frame)).collect();
+        let file = written(&dir, "own.txt", &own);
+        let times = timed(&recipe, &format!("--times {}", file.display())).unwrap();
+        assert_eq!((times.count(), times.rate()), (whole.count(), whole.rate()));
+        same_frames(&times, &whole, 0..whole.count());
+        let seed = |args: &Args| pfx_recipe_scene::seed(&chosen(args).unwrap());
+        assert_eq!(seed(&times), seed(&whole));
+        let faster = timed(&recipe, &format!("--times {} --fps 48", file.display())).unwrap();
+        assert_eq!(faster.rate(), Rate::whole(48));
+        assert_eq!(faster.map.as_ref().unwrap().slope(4, faster.rate()), 2.002);
+        assert!(manifest(&faster) != manifest(&times));
+    }
+
+    #[test]
+    fn parts_of_a_times_file_join_in_one_folder_as_one_run() {
+        let dir = scratch("times-parts");
+        let recipe = ntsc(&dir, "");
+        let fps = Rate::new(24000, 1001).unwrap();
+        let slow: Vec<f64> = (0..13).map(|frame| 0.55 * fps.time(frame)).collect();
+        let file = written(&dir, "slow.txt", &slow);
+        let line = format!("--times {}", file.display());
+        let whole = timed(&recipe, &line).unwrap();
+        let first = timed(&recipe, &format!("{line} --range 0..4")).unwrap();
+        let rest = timed(&recipe, &format!("{line} --range 5..12")).unwrap();
+        assert_eq!((first.span(), rest.span()), (Ok([0, 4]), Ok([5, 12])));
+        assert_eq!(manifest(&first), manifest(&whole));
+        assert_eq!(manifest(&rest), manifest(&whole));
+        same_frames(&first, &whole, 0..5);
+        same_frames(&rest, &whole, 5..13);
+        let map = whole.map.as_ref().unwrap();
+        assert!((0..13).all(|frame| map.slope(frame, fps) == 0.55));
+        assert_eq!(
+            map.frame_seconds(5, fps).to_bits(),
+            (0.55 * fps.step()).to_bits()
+        );
+        let copy = dir.join("copy.txt");
+        std::fs::copy(&file, &copy).unwrap();
+        let copied = timed(&recipe, &format!("--times {}", copy.display())).unwrap();
+        assert_eq!(manifest(&copied), manifest(&whole));
+        let mut edited = slow.clone();
+        edited[7] = 0.2;
+        let edited = written(&dir, "edited.txt", &edited);
+        let other = timed(&recipe, &format!("--times {}", edited.display())).unwrap();
+        assert!(manifest(&other) != manifest(&whole));
+        assert!(manifest(&whole).contains(", 13 times at 24000/1001 fps\n"));
+    }
+
+    #[test]
+    fn a_timeline_map_films_the_times_pfx_timeline_prints() {
+        let dir = scratch("times-map");
+        let recipe = ntsc(
+            &dir,
+            "\n[timeline.map]\nkeys = [[0.0, 0.0], [0.5, 0.1], [1.5, 0.5]]\n",
+        );
+        let mapped = timed(&recipe, "--timeline").unwrap();
+        assert_eq!(mapped.count(), 37);
+        let map = mapped.map.clone().unwrap();
+        assert!(manifest(&mapped).contains(
+            "timeline\ntime map smooth: 0 -> 0, 0.5 -> 0.1, 1.5 -> 0.5 at 24000/1001 fps\n"
+        ));
+        let words = ["timeline", recipe.to_str().unwrap(), "--times"];
+        let super::super::Verb::Timeline(report) = super::super::parsed(&words).unwrap() else {
+            panic!("not timeline");
+        };
+        let mut printed = Vec::new();
+        super::super::timeline::report(&report, &Registry::new(), &mut printed).unwrap();
+        let file = dir.join("printed.txt");
+        std::fs::write(&file, &printed).unwrap();
+        let times = timed(&recipe, &format!("--times {}", file.display())).unwrap();
+        assert_eq!(
+            (times.count(), times.rate()),
+            (mapped.count(), mapped.rate())
+        );
+        assert_eq!(times.map.as_ref().unwrap().times, map.times);
+        same_frames(&times, &mapped, 0..mapped.count());
+        let step = mapped.rate().step();
+        assert!(map.frame_seconds(0, mapped.rate()) < 0.1 * step);
+        assert!(map.frame_seconds(30, mapped.rate()) > 0.1 * step);
+        assert!(map.frame_seconds(30, mapped.rate()) < 0.6 * step);
+    }
+
+    #[test]
+    fn times_are_refused_without_a_timeline_outside_it_or_beside_a_count() {
+        let dir = scratch("times-refused");
+        let recipe = ntsc(&dir, "");
+        let file = written(&dir, "t.txt", &[0.0, 0.25]);
+        let line = format!("--times {}", file.display());
+        for bad in ["--frames 2", "--timeline", "--spin block"] {
+            assert!(timed(&recipe, &format!("{line} {bad}")).is_err(), "{bad}");
+        }
+        assert!(timed(&recipe, "--timeline --column time").is_err());
+        assert!(
+            parse(&strings(
+                "a.toml --camera main --frames 3 --fps 24 --size 8x8 --out d --column time"
+            ))
+            .is_err()
+        );
+        let past = written(&dir, "past.txt", &[0.0, 0.6]);
+        let error = timed(&recipe, &format!("--times {}", past.display())).unwrap_err();
+        assert!(
+            error.contains("line 2: 0.6 s is outside the timeline"),
+            "{error}"
+        );
+        let bare = dir.join("bare.toml");
+        std::fs::write(
+            &bare,
+            NTSC.replace("[timeline]\nfps = \"24000/1001\"\nframes = 12\n", "")
+                .replace("keys = {", "#"),
+        )
+        .unwrap();
+        let error = timed(&bare, &line).unwrap_err();
+        assert!(
+            error.contains("--times poses the recipe's [timeline]"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    #[ignore = "GPU: pgpu run --class clip --as pfx -- cargo test -- --ignored"]
+    fn a_traced_part_of_a_times_file_is_the_bytes_of_the_timeline_range() {
+        let dir = scratch("times-traced");
+        let recipe = ntsc(&dir, "");
+        let made = |rest: &str, out: &str| {
+            let out = dir.join(out);
+            let args = resolved(
+                &parse(&strings(&format!(
+                    "{} --camera main --size 96x48 --out {} --trace --spp 2 {rest}",
+                    recipe.display(),
+                    out.display()
+                )))
+                .unwrap(),
+            )
+            .unwrap();
+            frames(&args, &Registry::new(), &mut |_| {}).unwrap();
+            (args, out)
+        };
+        let (ranged, ranged_out) = made("--timeline --range 3..5", "ranged");
+        let own: Vec<f64> = (0..ranged.count())
+            .map(|frame| ranged.time(frame))
+            .collect();
+        let file = written(&dir, "own.txt", &own);
+        let (timed, timed_out) = made(&format!("--times {} --range 3..5", file.display()), "timed");
+        assert_eq!(timed.count(), 13);
+        let read = |dir: &Path, frame: u32| {
+            pfx_recipe_scene::read_png(&dir.join(name(frame, 13)))
+                .unwrap()
+                .1
+        };
+        for frame in 3..=5 {
+            assert!(
+                read(&timed_out, frame) == read(&ranged_out, frame),
+                "frame {frame} filmed from --times differs from the --timeline range"
+            );
+        }
+        assert!(!timed_out.join(name(2, 13)).exists());
     }
 }

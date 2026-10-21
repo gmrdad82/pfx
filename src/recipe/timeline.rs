@@ -17,6 +17,12 @@ pub(super) struct Args {
     pub(super) recipe: String,
     #[arg(long, help = "Print one JSON object")]
     json: bool,
+    #[arg(
+        long,
+        conflicts_with = "json",
+        help = "Print each frame's source time in seconds, one a line: the [timeline.map]'s, or the timeline's own; the --times file pfx clip films the same frames from"
+    )]
+    times: bool,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -148,7 +154,7 @@ pub(super) fn base(file: &str) -> &Path {
         .unwrap_or(Path::new("."))
 }
 
-fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), String> {
+pub(super) fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), String> {
     let file = args.recipe.as_str();
     let recipe = chosen(file)?;
     let timeline = recipe.timeline.ok_or_else(|| {
@@ -157,6 +163,18 @@ fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), S
             pfx_recipe::files::shown(file)
         )
     })?;
+    if args.times {
+        let times = match &recipe.time_map {
+            Some(map) => map.times(timeline.fps, timeline.seconds()),
+            None => (0..=u64::from(timeline.frames))
+                .map(|frame| timeline.fps.time(frame))
+                .collect(),
+        };
+        for time in times {
+            let _ = writeln!(out, "{time}");
+        }
+        return Ok(());
+    }
     let built = build_with(&recipe, base(file), registry)
         .map_err(|e| format!("{}: {e}", pfx_recipe::files::shown(file)))?;
     let glb = built
@@ -208,6 +226,11 @@ fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), S
             "keyed": nodes,
             "follow": follows,
             "markers": markers,
+            "time_map": recipe.time_map.as_ref().map(|map| json!({
+                "keys": map.keys.iter().map(|&(output, source)| [output, source]).collect::<Vec<_>>(),
+                "interp": map.interp.name(),
+                "frames": u64::from(map.last_frame(timeline.fps)) + 1,
+            })),
         });
         let _ = writeln!(out, "{line}");
         return Ok(());
@@ -223,6 +246,15 @@ fn report(args: &Args, registry: &Registry, out: &mut dyn Write) -> Result<(), S
         timeline.size[0],
         timeline.size[1]
     );
+    if let Some(map) = &recipe.time_map {
+        let _ = writeln!(
+            out,
+            "{}, {} frames (0 to {})",
+            map.line(),
+            u64::from(map.last_frame(timeline.fps)) + 1,
+            map.last_frame(timeline.fps)
+        );
+    }
     let _ = writeln!(out, "camera: {}", camera.as_deref().unwrap_or("none keyed"));
     let _ = writeln!(out, "keyed: {} nodes", facts.nodes.len());
     for (name, keyed) in &facts.nodes {
@@ -271,13 +303,21 @@ mod tests {
     #[test]
     fn timeline_takes_a_recipe_and_json() {
         let parsed = |words: &[&str]| match super::super::parsed(&[&["timeline"], words].concat()) {
-            Ok(super::super::Verb::Timeline(args)) => Ok((args.recipe, args.json)),
+            Ok(super::super::Verb::Timeline(args)) => Ok((args.recipe, args.json, args.times)),
             Ok(_) => Err("not timeline".to_string()),
             Err(error) => Err(error),
         };
-        assert_eq!(parsed(&["a.toml", "--json"]), Ok(("a.toml".into(), true)));
-        assert_eq!(parsed(&["a.toml"]), Ok(("a.toml".into(), false)));
+        assert_eq!(
+            parsed(&["a.toml", "--json"]),
+            Ok(("a.toml".into(), true, false))
+        );
+        assert_eq!(parsed(&["a.toml"]), Ok(("a.toml".into(), false, false)));
         assert!(parsed(&[]).is_err());
         assert!(parsed(&["a.toml", "--frames", "3"]).is_err());
+        assert_eq!(
+            parsed(&["a.toml", "--times"]),
+            Ok(("a.toml".into(), false, true))
+        );
+        assert!(parsed(&["a.toml", "--times", "--json"]).is_err());
     }
 }

@@ -132,6 +132,27 @@ pfx clip chase.pitofx --camera chase --timeline --size 1080x1920 --out chase
 
 A recipe with a `[timeline]` (the recipe guide's "Timeline") films with `--timeline` in place of `--frames` and `--fps`: frames 0 to the timeline's last at its `fps`, each the scene posed at exactly `n × den / num` seconds, so a resumed folder's frames match a full run's byte for byte, through `--camera`, which the timeline moves when it keys that camera. `--video` encodes at the timeline's `fps`.
 
+## Play time at another speed
+
+```toml
+[timeline.map]
+keys = [[0.0, 0.0], [2.0, 2.0], [4.0, 3.1], [6.0, 4.2]]
+```
+
+```sh
+pfx clip chase.pitofx --camera chase --timeline --trace --size 1080x1920 --out ramp
+pfx timeline chase.pitofx --times > ramp.txt
+pfx clip chase.pitofx --camera chase --times ramp.txt --trace --size 1080x1920 --out ramp --range 0..71
+```
+
+A time map films each output frame at a source time of its own, so a speed ramp or slow motion renders new in-between poses instead of repeating source frames.
+
+- **`--times <file>`** films the recipe's `[timeline]` at the times in the file: one time in seconds a line, output frame `i` at the `i`-th, or a CSV whose first line is a header and whose `time` column holds the seconds (`--column <name>` takes another). Every time lies within the timeline, 0 to its length; blank lines end the file and are refused inside it. The clip has as many frames as the file has times, at `--fps`, the timeline's `fps` when absent. The camera, rig and keys pose as `--timeline` poses them.
+- **`[timeline.map]`** (the recipe guide's "Timeline") gives `--timeline` its times: output frame `n` is at output time `n × den / num` of the timeline's `fps`, and its source time is the map's curve there, from frame 0 to the last output key. `pfx timeline <x.pitofx> --times` prints those times, one a line, as the `--times` file that films the same frames.
+- **Numbered, seeded and resumed as `--range`:** output frame `i` is `frame-<i>.png` whatever its source time, `--range A..B` makes lines A to B of the same file into the same folder, and the checkpoints, the ledger and the frame-before check work as they do for any clip, so parts rendered apart join with no gap or renumbering. A traced frame's seed is the recipe's seed, the same for every frame (as in every clip), so a time-mapped frame samples exactly as the frame of the same index in a `--range`, and a `--times` file of the timeline's own times (what `pfx timeline --times` prints for a timeline without a map) makes `--timeline`'s frames byte for byte. What the timeline animates from its `seed` (drift, shake) follows the source time.
+- **The manifest** (`clip.txt`) records the map: `time map smooth: 0 -> 0, 2 -> 2, …` for `[timeline.map]`, or `times sha256 <hex>, <n> times` (and the CSV column) for a file, with the fps. Parts join only from the same keys or the same bytes, wherever the file sits; another map into that folder is refused, as any other line is.
+- **Motion blur follows the slope.** The slope at frame `i` is the source seconds per output second, `(t[i+1] − t[i−1]) / 2` frames apart (one-sided at the first and last frame, 1 for a single time), rounded to a millionth, so a steady map has a slope of exactly 1. A traced frame's shutter in source time is `[motion_blur] shutter × slope / fps`, placed by `position` as always: 0.55x slow motion blurs 0.55x as far, a freeze (slope 0) is traced sharp, and reverse (a negative slope) keeps the shutter's length and runs it backwards from the frame, so `position = "start"` streaks ahead along the reversed motion, as it does forward. A slope of 1 at the timeline's `fps` is `--timeline`'s own shutter, bit for bit. The live renderer's blur is the motion since the previous output frame, which already scales with the map: a freeze has none and reverse streaks the other way.
+
 ## List what a traced frame holds
 
 `--dump-scene <file.jsonl>` (with `--trace`) writes every instance each traced frame holds, so an object that is missing from a frame can be named: dropped in staging, placed wrong, hidden in the hardware top level, or held and never hit. It reads the trace after the frame is written and changes no pixel.

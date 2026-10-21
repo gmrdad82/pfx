@@ -783,19 +783,31 @@ impl Reel {
     }
 
     pub fn pose_moving(&mut self, time: f64, camera: &str) -> Result<Camera, Fault> {
-        let blur = self.staging.motion_blur.filter(|_| self.motion_steps > 0);
+        let step = self.base.timeline.map_or(1.0, |t| t.step());
+        self.pose_moving_over(time, camera, step)
+    }
+
+    pub fn pose_moving_over(
+        &mut self,
+        time: f64,
+        camera: &str,
+        frame_seconds: f64,
+    ) -> Result<Camera, Fault> {
+        let blur = self
+            .staging
+            .motion_blur
+            .filter(|_| self.motion_steps > 0 && frame_seconds != 0.0);
         let Some(blur) = blur else {
             self.pose(time)?;
             return Ok(pfx_recipe_scene::camera(&self.recipe, camera)?.clone());
         };
-        let step = self.base.timeline.map_or(1.0, |t| t.step());
-        let shutter =
-            pfx_trace::motion::Shutter::around(time, step, f64::from(blur.shutter), blur.position);
-        let steps = pfx_trace::motion::steps_of(self.motion_steps);
-        let times = match self.base.timeline {
-            Some(timeline) => shutter.times_held(steps, 0.0, timeline.seconds()),
-            None => shutter.times(steps),
-        };
+        let times = shutter_times(
+            time,
+            frame_seconds,
+            &blur,
+            self.motion_steps,
+            self.base.timeline,
+        );
         let mut posed = Vec::with_capacity(times.len());
         let mut cameras = Vec::with_capacity(times.len());
         let mut shapes: Vec<(usize, Vec<pfx_recipe_scene::Piece>)> = Vec::new();
@@ -1399,12 +1411,72 @@ fn floats(bytes: &[u8]) -> Result<Vec<[f32; 4]>, String> {
     Ok(out)
 }
 
+pub fn shutter_times(
+    time: f64,
+    frame_seconds: f64,
+    blur: &pfx_post::MotionBlur,
+    motion_steps: u32,
+    timeline: Option<pfx_recipe::Timeline>,
+) -> Vec<f64> {
+    let shutter = pfx_trace::motion::Shutter::around(
+        time,
+        frame_seconds,
+        f64::from(blur.shutter),
+        blur.position,
+    );
+    let steps = pfx_trace::motion::steps_of(motion_steps);
+    match timeline {
+        Some(timeline) => shutter.times_held(steps, 0.0, timeline.seconds()),
+        None => shutter.times(steps),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pfx_gpu::pace::Timing;
     use std::cell::RefCell;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn the_shutter_follows_the_slope_of_the_time_map() {
+        let blur = |position| pfx_post::MotionBlur {
+            shutter: 0.5,
+            position,
+            ..pfx_post::MotionBlur::default()
+        };
+        let timeline = pfx_recipe::Timeline {
+            fps: pfx_recipe::Rate::whole(24),
+            frames: 48,
+            size: [64, 64],
+            seed: 0,
+        };
+        let step = timeline.fps.step();
+        let span = |times: &[f64]| times[times.len() - 1] - times[0];
+        let start = blur(pfx_post::ShutterPosition::Start);
+        let whole = shutter_times(1.0, step, &start, 2, Some(timeline));
+        assert_eq!(whole.len(), 5);
+        assert_eq!(whole[0], 1.0);
+        assert!((span(&whole) - 0.5 * step).abs() < 1e-12);
+        let slow = shutter_times(1.0, 0.55 * step, &start, 2, Some(timeline));
+        assert!((span(&slow) - 0.55 * span(&whole)).abs() < 1e-12);
+        let frozen = shutter_times(1.0, 0.0, &start, 2, Some(timeline));
+        assert!(frozen.iter().all(|&t| t == 1.0));
+        let back = shutter_times(1.0, -step, &start, 2, Some(timeline));
+        assert_eq!(back[0], 1.0);
+        assert!((span(&back) + span(&whole)).abs() < 1e-12);
+        assert!(back.windows(2).all(|w| w[1] < w[0]));
+        let centre = blur(pfx_post::ShutterPosition::Centre);
+        let ahead = shutter_times(1.0, step, &centre, 2, Some(timeline));
+        let behind = shutter_times(1.0, -step, &centre, 2, Some(timeline));
+        let reversed: Vec<f64> = behind.iter().rev().copied().collect();
+        assert!(
+            ahead
+                .iter()
+                .zip(&reversed)
+                .all(|(a, b)| (a - b).abs() < 1e-12)
+        );
+    }
 
     #[derive(Clone, Debug, PartialEq)]
     enum Event {

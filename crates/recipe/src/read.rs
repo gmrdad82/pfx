@@ -2,7 +2,7 @@ use pfx_mesh::math::Real;
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use pfx_motion::Rate;
+use pfx_motion::{Interp, Rate};
 use toml_edit::{Document, DocumentMut, Item, Table, TableLike, Value};
 
 use crate::include::{self, Assembly, Edit, File, Files, Role, Sources};
@@ -22,7 +22,7 @@ use crate::{
     REFERENCE_HOUR, RELEASE_EASE, RIG_LOOK, RIG_OFFSET, Recipe, Reference, Rig, RigFocus, RigFrame,
     RigShake, RigTracks, Room, RootMotion, RouteSpec, SCHEMA, Scatter, Shadow, ShadowLook,
     ShadowQuality, Sky, SkyAmbient, SkyKind, SkyLight, Span, Spring, Stage, Sun, TEXTURE_KEYS,
-    TextSpace, Textures, Timeline, Trace, Use, Uv, Variant, VariantOutput, View, Volume,
+    TextSpace, Textures, TimeMap, Timeline, Trace, Use, Uv, Variant, VariantOutput, View, Volume,
 };
 
 pub(crate) struct Source {
@@ -3511,9 +3511,90 @@ fn read_trace(cx: &mut Cx, root: &mut Tab<'_>) -> Result<Trace, Error> {
     })
 }
 
-fn read_timeline(cx: &mut Cx, root: &mut Tab<'_>, seed: u64) -> Result<Option<Timeline>, Error> {
-    let Some(mut tab) = root.sub(cx, "timeline")? else {
+fn read_time_map(cx: &mut Cx, tab: &mut Tab<'_>, seconds: f64) -> Result<Option<TimeMap>, Error> {
+    let Some(mut map) = tab.sub(cx, "map")? else {
         return Ok(None);
+    };
+    let path = map.kpath("keys");
+    let Some(item) = map.peek(cx, "keys") else {
+        return Err(map.missing("keys", "[[output, source], ...] seconds"));
+    };
+    let shape = "an array of [output, source] keys in seconds";
+    let Some(list) = item.as_array() else {
+        return Err(bad_item(cx, &path, item, shape));
+    };
+    let mut keys: Vec<(f64, f64)> = Vec::with_capacity(list.len());
+    for (i, pair) in list.iter().enumerate() {
+        let here = format!("{path}[{i}]");
+        let two = pair.as_array().filter(|a| a.len() == 2);
+        let (Some(output), Some(source)) = (
+            two.and_then(|a| a.iter().next()),
+            two.and_then(|a| a.get(1)),
+        ) else {
+            return Err(bad_value(cx, &here, pair, "an [output, source] key"));
+        };
+        let output = num_value(cx, &format!("{here}[0]"), output)?;
+        let source = num_value(cx, &format!("{here}[1]"), source)?;
+        let line = Some(cx.value_line(pair));
+        if output < 0.0 {
+            return Err(Error::new(
+                here,
+                line,
+                format!("the output time is seconds of at least 0, found {output}"),
+            ));
+        }
+        if let Some((before, _)) = keys.last()
+            && output <= *before
+        {
+            return Err(Error::new(
+                here,
+                line,
+                format!("the output times rise strictly, found {output} after {before}"),
+            ));
+        }
+        if !(0.0..=seconds).contains(&source) {
+            return Err(Error::new(
+                here,
+                line,
+                format!(
+                    "the source time is seconds of the timeline, from 0 to its length {seconds}, found {source}"
+                ),
+            ));
+        }
+        keys.push((output, source));
+    }
+    if keys.len() < 2 {
+        return Err(Error::new(
+            path,
+            Some(cx.item_line(item)),
+            "expected at least two [output, source] keys",
+        ));
+    }
+    let interp = match map.peek(cx, "interp") {
+        Some(item) => match item.as_str().and_then(Interp::of) {
+            Some(interp) => interp,
+            None => {
+                return Err(bad_item(
+                    cx,
+                    &map.kpath("interp"),
+                    item,
+                    "\"smooth\", \"linear\" or \"step\"",
+                ));
+            }
+        },
+        None => TimeMap::INTERP,
+    };
+    map.finish(cx)?;
+    Ok(Some(TimeMap { keys, interp }))
+}
+
+fn read_timeline(
+    cx: &mut Cx,
+    root: &mut Tab<'_>,
+    seed: u64,
+) -> Result<(Option<Timeline>, Option<TimeMap>), Error> {
+    let Some(mut tab) = root.sub(cx, "timeline")? else {
+        return Ok((None, None));
     };
     let at = |cx: &Cx, tab: &Tab<'_>, key: &str| {
         cx.lines.get(&tab.kipath(key)).copied().or(Some(tab.line))
@@ -3594,13 +3675,16 @@ fn read_timeline(cx: &mut Cx, root: &mut Tab<'_>, seed: u64) -> Result<Option<Ti
         Some(item) => as_u64(cx, &tab.kpath("seed"), item)?,
         None => seed,
     };
+    let length = fps.time(frames as u64);
+    let map = read_time_map(cx, &mut tab, length)?;
     tab.finish(cx)?;
-    Ok(Some(Timeline {
+    let timeline = Timeline {
         fps,
         frames: frames as u32,
         size,
         seed,
-    }))
+    };
+    Ok((Some(timeline), map))
 }
 
 fn read_bake(cx: &mut Cx, root: &mut Tab<'_>) -> Result<Option<Bake>, Error> {
@@ -3988,7 +4072,7 @@ fn read_root(
     let (look, shadows) = read_look(cx, &mut root)?;
     let trace = read_trace(cx, &mut root)?;
     let bake = read_bake(cx, &mut root)?;
-    let timeline = read_timeline(cx, &mut root, seed)?;
+    let (timeline, time_map) = read_timeline(cx, &mut root, seed)?;
 
     let mut wet = BTreeMap::new();
     let mut textures = BTreeMap::new();
@@ -4075,6 +4159,7 @@ fn read_root(
         trace,
         bake,
         timeline,
+        time_map,
         materials,
         effects,
         textures,

@@ -21,5 +21,6 @@ pub use staging::{Eyepiece, IDENTITY, Shared, Staging, Steps, View, eyepiece};
 pub use text::{Letter, Lettering, Overlay, Way};
 pub use trace::{
     Crop, DRAFT, EQUIRECT_SIZE, Fault, NOISE, Noise, Paced, Plan, Reel, Region, Rendered, Request,
-    SAMPLES, SIZE, Seed, Shot, Step, Take, TracedPiece, converge, render, render_kept, trace,
+    SAMPLES, SIZE, Seed, Shot, Step, Take, TracedPiece, converge, render, render_kept,
+    shutter_times, trace,
 };

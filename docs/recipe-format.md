@@ -1160,6 +1160,7 @@ seed = 7
 - `seconds` or `frames`: the length, one of them. `seconds` is above 0 and rounds to the nearest whole frame at `fps`; `frames` is a whole number from 1 up. Both are an error, and so is neither. The frames run from 0 to the last, so `seconds = 6.0` at 60 fps keys 361 frames, at 0 to 6 seconds; a million frames at most.
 - `size`: `[width, height]` in pixels, each side from 1 to 16384; `[1080, 1920]`, 9:16, when absent. It is the aspect of the timeline's cameras.
 - `seed`: the seed of what the timeline animates (drift, shake); the recipe's own `seed` when absent.
+- `[timeline.map]`: a time map for `pfx clip --timeline`, `keys = [[output, source], …]` in seconds, the output times at least 0 and strictly rising, each source time within the timeline (0 to its length), at least two keys. Output frame `n` at `n × den / num` films the scene at the map's source time there, from frame 0 to the last output key, so `keys = [[0, 0], [2, 1.1]]` plays the first 1.1 s over 2 s. Between keys the map blends as `interp` says, `"smooth"` when absent (the keys' Catmull-Rom curve, flat at the first and last key, so a map eases out of its start and into its end), `"linear"` or `"step"` (a freeze on each key) only when it says so. `pfx timeline --times` prints each frame's source time; the recipe clips guide, "Play time at another speed", has the rest.
 
 Every key takes `--set` and a variant's `set`, as `--set timeline.fps=30`. A recipe without `[timeline]` has no animation, and builds the same bytes it always did.
 

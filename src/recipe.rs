@@ -33,6 +33,7 @@ mod set;
 mod shoot;
 mod still;
 mod timeline;
+mod times;
 
 use std::io::Write;
 use std::path::Path;

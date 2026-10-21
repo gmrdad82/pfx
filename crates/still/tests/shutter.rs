@@ -151,3 +151,47 @@ fn a_timeline_traces_every_frame_with_its_shutter_held_to_the_timeline_and_place
         );
     }
 }
+
+fn over(reel: &mut Reel, time: f64, frame_seconds: f64) -> Vec<u8> {
+    let camera = reel.pose_moving_over(time, "main", frame_seconds).unwrap();
+    let take = Take {
+        size: SIZE,
+        samples: 8,
+        noise: None,
+        seed: Seed::Locked,
+    };
+    let rendered = reel.frame(&camera, take, &mut |_: Step| {}).unwrap();
+    looked_with(&rendered.film, (&rendered.finish, &rendered.overlay), false).unwrap()
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_time_maps_slope_scales_the_shutter_a_freeze_is_sharp_and_reverse_streaks_back() {
+    let mut reel = Reel::open(&recipe("start"), None, &[], None, &Registry::new()).unwrap();
+    let (time, step) = (1.0 / 60.0, 1.0 / 60.0);
+    let sharp = shoot(&mut reel, false, time);
+    let whole = shoot(&mut reel, true, time);
+    assert!(
+        over(&mut reel, time, step) == whole,
+        "a slope of 1 is the timeline's own shutter"
+    );
+    let half = over(&mut reel, time, 0.5 * step);
+    let frozen = over(&mut reel, time, 0.0);
+    let back = over(&mut reel, time, -step);
+    let measured = [&whole, &half, &back].map(|image| sides(&sharp, image));
+    println!("(behind, ahead) at slopes 1, 0.5 and -1: {measured:?}");
+    assert!(frozen == sharp, "a freeze has no blur");
+    let [
+        (_, whole_ahead),
+        (half_behind, half_ahead),
+        (back_behind, back_ahead),
+    ] = measured;
+    assert!(
+        half_behind < 50.0 && half_ahead > 100.0 && half_ahead < 0.75 * whole_ahead,
+        "half the slope streaks about half as far: {measured:?}"
+    );
+    assert!(
+        back_behind > 200.0 && back_ahead < 50.0,
+        "a reverse shutter runs back from the frame: {measured:?}"
+    );
+}

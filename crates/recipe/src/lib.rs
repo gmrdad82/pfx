@@ -18,6 +18,7 @@ mod route;
 mod set;
 mod stage;
 mod text;
+mod timemap;
 mod validate;
 mod variant;
 
@@ -43,6 +44,7 @@ pub use route::{PointEdit, route_patch};
 pub use set::{Change, apply_set, json_of, set_values, set_values_with, tidy, value_of};
 pub use stage::{Pick, apply_only, apply_stage, stage_index};
 pub use text::{ANCHORS, MONO, anchor_names, anchor_point, default_anchor};
+pub use timemap::TimeMap;
 pub use validate::{bake_product, missing_material_text, slug, validate};
 pub use variant::apply_variant;
 
@@ -95,6 +97,7 @@ pub struct Recipe {
     pub trace: Trace,
     pub bake: Option<Bake>,
     pub timeline: Option<Timeline>,
+    pub time_map: Option<TimeMap>,
     pub materials: BTreeMap<String, serde_json::Value>,
     pub effects: Effects,
     pub textures: BTreeMap<String, Textures>,
