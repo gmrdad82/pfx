@@ -1,16 +1,25 @@
 # pfx compose
 
-`pfx compose` writes original music in a style kept inside a `.pitofx`. A style is data: tempo and key ranges, a harmony table, melody steps, the instrument roles with their rhythms and synthesised patches, the form, one-shot cues and the master. From a style, a seed and a length, the composer writes a score, every note of it, into the same document, and renders the score to a 48 kHz stereo master at the style's loudness and under its true-peak ceiling. The same style, seed, length and hits give the same notes and the same audio bytes, on every run and every machine.
+`pfx compose` writes original music in a style a `.pitofx` keeps or links. A style is data: tempo and key ranges, a harmony table, melody steps, the instrument roles with their rhythms and synthesised patches, the form, one-shot cues and the master. From a style, a seed and a length, the composer writes a score, every note of it, into the same document, and renders the score to a 48 kHz stereo master at the style's loudness and under its true-peak ceiling. The same style, seed, length and hits give the same notes and the same audio bytes, on every run and every machine.
 
 The library is the crate `pfx-compose`; the command is `pfx compose`.
 
+pfx ships no style of its own. The composer knows only the format below; every style is data its game or film brings, kept in the game's own `.pitofx` or in a style file beside it ([Bring your own style](#bring-your-own-style)).
+
 ## Try it
 
-`samples/chase.pitofx` carries a public style, `[compose.style.build_drop]`: a through-composed build and drop for a film cue at 118 to 124 bpm, 18 roles on synthesised patches only, four sections (`rounds`, `tension`, `drop` and `card`), mastered to -16 LUFS short-term with a -1 dBTP ceiling. Compose 30 seconds with the drop and the end card on hits at 18 s and 26 s:
+`samples/mustang/` is the public example of a style a project brings: `mustang.style.toml` holds `[compose.style.mustang]`, a through-composed build and drop for a film cue at 118 to 124 bpm, 18 roles on synthesised patches only, four sections (`rounds`, `tension`, `drop` and `card`), mastered to -16 LUFS short-term with a -1 dBTP ceiling. `samples/chase.pitofx` links it:
+
+```toml
+[compose.link]
+mustang = "mustang/mustang.style.toml"
+```
+
+Copy both, so the link still finds the file, and compose 30 seconds with the drop and the end card on hits at 18 s and 26 s:
 
 ```
-cp samples/chase.pitofx tmp/chase.pitofx
-pfx compose tmp/chase.pitofx --style build_drop --seed 11 --seconds 30 --hits 18,26 --name title --wav tmp/title.wav --json
+cp -r samples/chase.pitofx samples/mustang tmp/
+pfx compose tmp/chase.pitofx --style mustang --seed 11 --seconds 30 --hits 18,26 --name title --wav tmp/title.wav --json
 ```
 
 It prints one JSON line (A minor at 120 bpm, 413 notes in 19 stems, -16.00 LUFS short-term max, -19.98 LUFS integrated, -1.18 dBTP) and writes `tmp/title.wav`. Then:
@@ -25,7 +34,7 @@ pfx compose render tmp/chase.pitofx --score title --wav tmp/title-again.wav
 
 ## A style: `[compose.style.<name>]`
 
-A style sits under `[compose.style.<name>]` in a document's scene or recipe text. Every table refuses keys it does not know, and an error names the table, the key and the line.
+A style sits under `[compose.style.<name>]` in a document's scene or recipe text, or in a style file the document links. Every table refuses keys it does not know, and an error names the table, the key and the line.
 
 ```toml
 [compose.style.small]
@@ -195,13 +204,29 @@ A cue renders at the score's base tempo and key wherever it fires.
 | `sidechain` | `{ keys, beds, depth, release_ms }`: the key roles' peaks duck the bed roles |
 | `fade` | the end fade, in seconds |
 
+## Bring your own style
+
+A game or a film supplies its own style in one of two places:
+
+- **In its own document:** `[compose.style.<name>]` in the `.pitofx` it composes into, as above.
+- **In a style file beside it:** a `.pitofx`, or a plain `.toml` holding only `[compose]` text, with `[compose.style.<name>]` in it, linked from the document by name:
+
+```toml
+[compose.link]
+<name> = "<folder>/<file>"
+```
+
+The path is relative to the document's folder and stays in it or below it: no absolute path, no `..`, no backslash or drive, no part that is empty or ends in a dot or a space, no device name. The file holds the style under the same name, and a name is either linked or kept, never both. `pfx compose <doc> --style <name>` reads the style from the file and writes the score into the document with `style = { file = "<folder>/<file>", name = "<name>" }`, so `render`, `print --style` and a game's `game::music` find it there too, and `list` names it with its file (`links` in `--json`). A style's sample oscillators read their chunks from the file that holds the style, so a style that plays samples lives in a `.pitofx`; a `.toml` holds none. Ship the style file with the document wherever it goes.
+
+`samples/mustang/` is such a file, linked from `samples/chase.pitofx`.
+
 ## A score: `[compose.score.<name>]`
 
 `pfx compose` writes the score under `[compose.score.<name>]` (the style's name unless `--name` says otherwise): the style it came from, the seed, the length, the hits, the tempo, the key, the chords, the placed sections with their start seconds, every role's notes and lowpass automation, the cues and where they fire. Notes are compact rows, `[beat, midi, beats, velocity]`, with a bend and a fade added when a note has them.
 
 ```toml
 [compose.score.title]
-style = "build_drop"
+style = { file = "mustang/mustang.style.toml", name = "mustang" }
 seed = 11
 seconds = 30.0
 hits = [18.0, 26.0]
@@ -232,7 +257,7 @@ The render runs each role's patch into its own stem on pfx-sound's offline note 
 5. one gain to the style's maximum short-term loudness, from one loudness measurement;
 6. the true-peak limiter at the ceiling, its 4x oversampled peak scan cut into time slices that run in parallel and read the same peaks as one pass.
 
-`pfx compose` and `pfx compose render` keep the master in pfx's machine cache as the `compose` kind ([cache.md](cache.md)): one entry holding the master WAV and its measured levels, with everything that cache promises. `PFX_CACHE_DIR=off` reads and writes nothing, a relative `PFX_CACHE_DIR` or a folder other users can write in turns the cache off with one line on stderr, and the entry counts toward `PFX_CACHE_CAP`, where the entries used longest ago go first, and shows in `pfx cache info` and `pfx cache clean --kind compose`. The key is a SHA-256 of the recipe (the style, the score and the SHA-256 of each sample chunk the style reads), the render's own pinned output hashes, pfx's version and the entry's format version. So an edit renders again, and an unchanged score is read back in milliseconds. The pinned hashes are three renders' outputs (a test style with its game stems and cues, the `build_drop` sample and a sample oscillator), held by the render's tests: a change to what the render plays fails those tests until the hashes are pinned again, and pinning them moves every key, so a released build never reads another build's master. Between a change to the render and that pin, `--fresh` renders past the cache and replaces the entry. An entry that fails its checksum is removed and rendered again; with the cache off or out of reach the master is rendered each run, and a master the cache can't keep (over the cap, a full disk) says so on stderr and the run goes on. `--wav` writes the master out, and refuses a path that doesn't end in `.wav` or that names the document. A 30 second master takes about 11.5 MB of the cache.
+`pfx compose` and `pfx compose render` keep the master in pfx's machine cache as the `compose` kind ([cache.md](cache.md)): one entry holding the master WAV and its measured levels, with everything that cache promises. `PFX_CACHE_DIR=off` reads and writes nothing, a relative `PFX_CACHE_DIR` or a folder other users can write in turns the cache off with one line on stderr, and the entry counts toward `PFX_CACHE_CAP`, where the entries used longest ago go first, and shows in `pfx cache info` and `pfx cache clean --kind compose`. The key is a SHA-256 of the recipe (the style, the score and the SHA-256 of each sample chunk the style reads), the render's own pinned output hashes, pfx's version and the entry's format version. So an edit renders again, and an unchanged score is read back in milliseconds. The pinned hashes are three renders' outputs (a test style with its game stems and cues, a 30 second test style that plays every kind of role, and a sample oscillator), held by the render's tests: a change to what the render plays fails those tests until the hashes are pinned again, and pinning them moves every key, so a released build never reads another build's master. Between a change to the render and that pin, `--fresh` renders past the cache and replaces the entry. An entry that fails its checksum is removed and rendered again; with the cache off or out of reach the master is rendered each run, and a master the cache can't keep (over the cap, a full disk) says so on stderr and the run goes on. `--wav` writes the master out, and refuses a path that doesn't end in `.wav` or that names the document. A 30 second master takes about 11.5 MB of the cache.
 
 ## Loudness and true peak
 
@@ -251,8 +276,8 @@ pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
 |---|---|
 | `pfx compose` | composes a score, writes it into the document, renders it and reports it |
 | `render` | renders a score already in the document, after a hand edit or on another machine |
-| `list` | the document's styles and scores, and whether each score's master is in the cache |
-| `print` | the `[compose]` TOML, or one style or score, as TOML or JSON |
+| `list` | the document's styles, kept and linked, and scores, and whether each score's master is in the cache |
+| `print` | the `[compose]` TOML, or one style or score, as TOML or JSON; `--style` prints a linked style from its file |
 | `--hits` | rising seconds inside `--seconds`; a section with `hit = n` starts on the bar nearest the n-th |
 | `--bpm`, `--key` | pin the tempo (20 to 400) or the key instead of drawing them |
 | `--plan` | composes the form from the sections in that plan (`plans`) in place of the sections in none, and records the plan in the score |
@@ -273,7 +298,7 @@ The game's stems are mastered on their own: the same gain and limiter as the mas
 
 ## Measured
 
-`build_drop`, seed 11, 30 seconds, hits at 18 and 26 seconds, 413 notes in 19 stems, release build on a Ryzen 9 9950X, medians of 5 with other jobs keeping the load average at 5 to 7:
+`samples/mustang/`'s style, seed 11, 30 seconds, hits at 18 and 26 seconds, 413 notes in 19 stems, release build on a Ryzen 9 9950X, medians of 5 with other jobs keeping the load average at 5 to 7:
 
 | | |
 |---|---|

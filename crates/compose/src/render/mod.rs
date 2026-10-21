@@ -20,7 +20,7 @@ pub const RATE: u32 = 48_000;
 pub const CUES: &str = "cue";
 pub const RENDER: [&str; 3] = [
     "c9c4cafb6f2b31af0a70255f38790851d52556de0618cf85a88ae4466c7f3ace",
-    "2e46f71af93204172c1d1c234535649b42e44ebdee0669e0ea480c8748f16bb6",
+    "4f10194170c95e5defe05b0953a50e9fe949ef303d651ce8233c2e0da3057cd4",
     "8a8fb1cac4d60fef7aa54ccb370cf49f16ed492ae3236966ac1e359dfc36cb96",
 ];
 
@@ -669,14 +669,293 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
         assert!(!music_table(style, &plain, "kept").contains_key("tempo"));
     }
 
+    const FULL_STYLE: &str = r#"
+[compose.style.full]
+bpm = [118, 124]
+swing = 0.05
+humanize_ms = 3
+tonics = [["A", 2], ["E", 1]]
+modes = [["minor", 2], ["dorian", 1]]
+
+[compose.style.full.harmony]
+beats = 4
+sevenths = true
+start = ["i"]
+phrase = 4
+turn = ["V"]
+cadence = ["iv", "V7", "i"]
+secondary = 0.3
+land = true
+markov = { i = [["iv", 2], ["VI", 2], ["bVII", 1]], iv = [["V", 2], ["i", 1]], VI = [["III", 2], ["iv", 1]], III = [["VII", 1]], VII = [["i", 1]], bVII = [["i", 1]], V = [["i", 1]], V7 = [["i", 1]] }
+
+[compose.style.full.melody]
+range = [62, 84]
+chord_tones = true
+steps = [[1, 3], [-1, 3], [2, 2], [-2, 2], [3, 1]]
+rhythm = [[0.5, 4], [1.0, 2], [0.25, 1]]
+rest = 0.15
+motif_bars = 2
+develop = ["state", "repeat", "sequence", "invert", "vary", "return"]
+passing = 0.5
+
+[[compose.style.full.role]]
+name = "kick"
+patch = "kick"
+plays = "hit"
+patterns = ["x...x...x...x...", "x...x...x..xx..."]
+gain = 0.5
+
+[[compose.style.full.role]]
+name = "hat"
+patch = "noise"
+plays = "hit"
+patterns = ["..x...x...x...x.", "x.xxx.xxx.xxx.xx"]
+gain = 0.15
+
+[[compose.style.full.role]]
+name = "pad"
+patch = "pad"
+plays = "chord"
+octave = -1
+ramp = 0.3
+gain = 0.08
+
+[[compose.style.full.role]]
+name = "keys"
+patch = "keys"
+plays = "chord"
+voicing = "top"
+patterns = ["x...x...x...x...", "x.x.x.x.x.x.x.x."]
+hold = 0.5
+gain = 0.08
+
+[[compose.style.full.role]]
+name = "bass"
+patch = "bass"
+plays = "bass"
+euclid = [[3, 8], [5, 8]]
+rotate = [0, 1]
+semis = [0, 0, 7]
+octave = -2
+walk = 0.4
+gain = 0.3
+
+[[compose.style.full.role]]
+name = "arp"
+patch = "pluck"
+plays = "arp"
+patterns = ["x.x.x.x.x.x.x.x."]
+tones = [0, 1, 2, 3]
+octave = 1
+accent = 0.3
+gain = 0.1
+
+[[compose.style.full.role]]
+name = "lead"
+patch = "lead"
+plays = "melody"
+octave = 1
+gain = 0.12
+
+[[compose.style.full.role]]
+name = "under"
+patch = "keys"
+plays = "counter"
+follows = "lead"
+patterns = ["x.x.x.x."]
+range = [48, 62]
+gain = 0.08
+
+[[compose.style.full.role]]
+name = "echo"
+patch = "pluck"
+plays = "answer"
+follows = "lead"
+delay = 2.5
+interval = -2
+octave = -1
+range = [70, 86]
+gain = 0.06
+
+[[compose.style.full.role]]
+name = "riser"
+patch = "riser"
+plays = "riser"
+gain = 0.2
+
+[[compose.style.full.role]]
+name = "swell"
+patch = "swell"
+plays = "reverse"
+gain = 0.2
+
+[[compose.style.full.role]]
+name = "roll"
+patch = "snare"
+plays = "roll"
+gain = 0.3
+
+[[compose.style.full.role]]
+name = "impact"
+patch = "boom"
+plays = "impact"
+gain = 0.6
+
+[compose.style.full.patch.kick]
+osc = [{ wave = "sine", hz = 150, to_hz = 45, glide_ms = 50 }, { wave = "white", gain = 0.2, env = [1, 5, 0.0, 0] }]
+env = [1, 350, 0.0, 0]
+drive = ["tanh", 3.0, 0.3]
+
+[compose.style.full.patch.snare]
+osc = [{ wave = "pink" }, { wave = "triangle", hz = 190, gain = 0.4 }, { wave = "white", at_ms = 15, gain = 0.5, env = [1, 40, 0.0, 0] }]
+env = [1, 120, 0.0, 0]
+highpass = 400
+drive = ["hard", 1.5, 0.2]
+
+[compose.style.full.patch.noise]
+osc = [{ wave = "white" }]
+env = [1, 60, 0.0, 0]
+highpass = 3000
+send = 0.2
+
+[compose.style.full.patch.riser]
+osc = [{ wave = "white" }, { wave = "saw", gain = 0.4, pan = -0.3 }, { wave = "saw", cents = 700, gain = 0.3, pan = 0.3 }]
+env = [3000, 0, 1.0, 30]
+linear = true
+sweep = [500, 10000]
+
+[compose.style.full.patch.swell]
+osc = [{ wave = "pink" }]
+env = [900, 0, 1.0, 10]
+linear = true
+sweep = [400, 8000]
+sweep_ms = 900
+
+[compose.style.full.patch.boom]
+osc = [{ wave = "sine", hz = 80, bend = -12, glide_ms = 1200 }, { wave = "pink", gain = 0.4, env = [2, 500, 0.0, 0] }]
+env = [2, 2000, 0.0, 0]
+sweep = [4000, 300]
+sweep_ms = 1200
+drive = ["tanh", 5.0, 0.4]
+
+[compose.style.full.patch.pad]
+osc = [{ wave = "saw", cents = -7, pan = -0.4 }, { wave = "triangle", cents = 7, pan = 0.4 }]
+env = [40, 0, 0.8, 300]
+lowpass = [800, 4000]
+send = 0.3
+
+[compose.style.full.patch.keys]
+osc = [{ wave = "square", gain = 0.5 }, { wave = "sine", octave = 1, gain = 0.3 }]
+env = [5, 400, 0.3, 200]
+lowpass = [1200, 3600]
+send = 0.15
+
+[compose.style.full.patch.bass]
+osc = [{ wave = "pulse", width = 0.3 }, { wave = "sine", octave = -1, gain = 0.5 }]
+env = [2, 200, 0.0, 0]
+sweep = [3000, 400]
+drive = ["soft", 2.0, 0.3]
+
+[compose.style.full.patch.pluck]
+osc = [{ wave = "saw" }, { wave = "pulse", width = 0.2, cents = 5, gain = 0.5 }]
+env = [1, 180, 0.0, 0]
+sweep = [6000, 900]
+sweep_ms = 150
+send = 0.2
+
+[compose.style.full.patch.lead]
+osc = [{ wave = "pulse", width = 0.3 }, { wave = "saw", cents = 6, gain = 0.6 }]
+env = [3, 250, 0.4, 120]
+lowpass = [2400, 5200]
+send = 0.15
+
+[[compose.style.full.section]]
+name = "rounds"
+bars = [3, 5]
+roles = ["pad", "kick", "hat", "bass", "keys"]
+intensity = [0.0, 0.5]
+round_bars = 1
+start_roles = 1
+
+[[compose.style.full.section]]
+name = "lift"
+bars = [2, 4]
+roles = ["*"]
+intensity = [0.5, 0.9]
+lift = 2
+riser = 4
+roll = 2
+tempo = 1.05
+pitch = 1.06
+gain_db = -2
+
+[[compose.style.full.section]]
+name = "peak"
+bars = [2, 6]
+roles = ["kick", "hat", "pad", "keys", "bass", "arp", "lead", "under", "echo", "impact"]
+intensity = [1.0, 1.0]
+impact = true
+stutter = 3
+hit = 0
+cue = "hit"
+
+[[compose.style.full.section]]
+name = "out"
+bars = [1, 2]
+roles = ["pad", "lead"]
+intensity = [0.3, 0.0]
+tail = 3
+hit = 1
+cue = "end"
+
+[[compose.style.full.cue]]
+name = "hit"
+
+[[compose.style.full.cue.voice]]
+patch = "pad"
+plays = "chord"
+numeral = "i"
+octave = 1
+beats = 2
+
+[[compose.style.full.cue.voice]]
+patch = "kick"
+plays = "hit"
+midi = 36
+beats = 2
+
+[[compose.style.full.cue]]
+name = "end"
+event = "done"
+
+[[compose.style.full.cue.voice]]
+patch = "lead"
+plays = "glide"
+hz = [1200, 4200]
+beats = 2
+fade = 0.5
+
+[[compose.style.full.cue.voice]]
+patch = "snare"
+plays = "burst"
+at = 0.5
+count = 10
+every = 0.125
+vels = [1.0, 0.15, 1.0]
+
+[compose.style.full.master]
+lufs = -16
+true_peak = -1.0
+room = [0.7, 0.4, 0.2]
+fade = 1.0
+sidechain = { keys = ["kick", "impact"], beds = ["pad", "keys", "bass"], depth = 0.5, release_ms = 150 }
+"#;
+
     #[test]
-    fn the_sample_build_drop_style_renders_its_pinned_bytes() {
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/chase.pitofx");
-        let doc = store::Document::open(&path).unwrap();
-        let score = scored(&doc.text, "build_drop", 11, 30.0, &[18.0, 26.0]);
-        assert_eq!(score.bpm, 120);
-        let out = rendered(&doc.text, "build_drop", &score, Target::Film);
+    fn a_style_with_every_role_kind_renders_its_pinned_bytes() {
+        let score = scored(FULL_STYLE, "full", 11, 30.0, &[18.0, 26.0]);
+        assert_eq!(score, scored(FULL_STYLE, "full", 11, 30.0, &[18.0, 26.0]));
+        let out = rendered(FULL_STYLE, "full", &score, Target::Film);
         assert!(
             (out.master.short_term_max + 16.0).abs() < 0.5,
             "{}",
@@ -684,6 +963,31 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
         );
         assert!(out.master.true_peak_db <= -1.0 + 1e-3);
         assert_eq!(hash(&out, None), RENDER[1]);
+    }
+
+    #[test]
+    fn the_chase_sample_links_its_style_and_renders_the_bytes_it_rendered_kept_inside() {
+        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
+        let doc = store::Document::open(&folder.join("chase.pitofx")).unwrap();
+        let parsed = crate::Compose::parse(&doc.text).unwrap();
+        assert!(parsed.styles.is_empty());
+        let [(name, file)] = parsed.links.iter().collect::<Vec<_>>()[..] else {
+            panic!("{:?}", parsed.links);
+        };
+        let linked = store::linked(&folder, file).unwrap();
+        let score = scored(&linked.text, name, 11, 30.0, &[18.0, 26.0]);
+        assert_eq!(score.bpm, 120);
+        let out = rendered(&linked.text, name, &score, Target::Film);
+        assert!(
+            (out.master.short_term_max + 16.0).abs() < 0.5,
+            "{}",
+            out.master.short_term_max
+        );
+        assert!(out.master.true_peak_db <= -1.0 + 1e-3);
+        assert_eq!(
+            hash(&out, None),
+            "2e46f71af93204172c1d1c234535649b42e44ebdee0669e0ea480c8748f16bb6"
+        );
     }
 
     fn kick_style() -> String {

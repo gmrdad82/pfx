@@ -15,6 +15,7 @@ pub struct Document {
     pub text: String,
     tag: Tag,
     name: String,
+    packed: bool,
 }
 
 fn has_compose(text: &str) -> bool {
@@ -26,6 +27,23 @@ impl Document {
     pub fn open(path: &Path) -> Result<Document, String> {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         Document::from_bytes(path, bytes)
+    }
+
+    pub fn style_file(path: &Path) -> Result<Document, String> {
+        if path.extension().is_none_or(|e| e != "toml") {
+            return Document::open(path);
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let text = String::from_utf8(bytes)
+            .map_err(|_| format!("{}: the file is not UTF-8", path.display()))?;
+        Ok(Document {
+            path: path.to_path_buf(),
+            bytes: Vec::new(),
+            text,
+            tag: pfx_file::SCNE,
+            name: String::new(),
+            packed: false,
+        })
     }
 
     pub fn from_bytes(path: &Path, bytes: Vec<u8>) -> Result<Document, String> {
@@ -54,6 +72,7 @@ impl Document {
             text,
             tag,
             name,
+            packed: true,
         })
     }
 
@@ -66,6 +85,9 @@ impl Document {
     }
 
     pub fn file_within(&self, name: &str, most: u64) -> Result<Option<Vec<u8>>, String> {
+        if !self.packed {
+            return Ok(None);
+        }
         let shown = self.path.display();
         let reader = Reader::from_bytes(&self.bytes).map_err(|e| format!("{shown}: {e}"))?;
         if let Some(index) = reader.find_named(pfx_file::FILE, name) {
@@ -118,6 +140,10 @@ impl Document {
             .write(&self.path)
             .map_err(|e| format!("{shown}: {e}"))
     }
+}
+
+pub fn linked(folder: &Path, file: &str) -> Result<Document, String> {
+    Document::style_file(&beside(folder, file)?)
 }
 
 pub fn beside(folder: &Path, file: &str) -> Result<PathBuf, String> {

@@ -656,9 +656,23 @@ fn run_compose(command: &Compose) -> Result<(), String> {
     let shown = command.doc.display().to_string();
     let doc = Document::open(&command.doc)?;
     let parsed = Composed::parse(&doc.text).map_err(|e| format!("{shown}: {e}"))?;
-    let style = parsed
+    let link = parsed.links.get(&command.style);
+    let home = match link {
+        Some(file) => Cow::Owned(linked(&doc, file)?),
+        None => Cow::Borrowed(&doc),
+    };
+    let other;
+    let held = match &home {
+        Cow::Borrowed(_) => &parsed,
+        Cow::Owned(found) => {
+            other = Composed::parse(&found.text)
+                .map_err(|e| format!("{}: {e}", found.path.display()))?;
+            &other
+        }
+    };
+    let style = held
         .style(&command.style)
-        .map_err(|e| format!("{shown}: {e}"))?;
+        .map_err(|e| format!("{}: {e}", home.path.display()))?;
     let name = command
         .name
         .clone()
@@ -672,8 +686,14 @@ fn run_compose(command: &Compose) -> Result<(), String> {
         plan: command.plan.clone(),
     };
     let before = now();
-    let score = pfx_compose::compose(&command.style, style, &request)
+    let mut score = pfx_compose::compose(&command.style, style, &request)
         .map_err(|e| format!("{shown}: {e}"))?;
+    if let Some(file) = link {
+        score.style = StyleRef::File {
+            file: file.clone(),
+            name: command.style.clone(),
+        };
+    }
     let compose_ms = (now() - before) * 1000.0;
     let text =
         pfx_compose::write_score(&doc.text, &name, &score).map_err(|e| format!("{shown}: {e}"))?;
@@ -683,7 +703,7 @@ fn run_compose(command: &Compose) -> Result<(), String> {
         .map_err(|e| format!("{shown}: {e}"))?
         .clone();
     refuse_wav(&command.doc, command.wav.as_deref())?;
-    let samples = |file: &str| doc.sample(file);
+    let samples = |file: &str| home.sample(file);
     let done = produce(
         Job {
             style,
@@ -722,13 +742,13 @@ fn run_compose(command: &Compose) -> Result<(), String> {
 fn styled<'a>(doc: &'a Document, score: &Score) -> Result<Cow<'a, Document>, String> {
     match &score.style {
         StyleRef::Name(_) => Ok(Cow::Borrowed(doc)),
-        StyleRef::File { file, .. } => {
-            let folder = doc.path.parent().unwrap_or(Path::new(""));
-            let path =
-                store::beside(folder, file).map_err(|e| format!("{}: {e}", doc.path.display()))?;
-            Document::open(&path).map(Cow::Owned)
-        }
+        StyleRef::File { file, .. } => linked(doc, file).map(Cow::Owned),
     }
+}
+
+fn linked(doc: &Document, file: &str) -> Result<Document, String> {
+    let folder = doc.path.parent().unwrap_or(Path::new(""));
+    store::linked(folder, file).map_err(|e| format!("{}: {e}", doc.path.display()))
 }
 
 fn run_render(command: &Render) -> Result<(), String> {
@@ -809,7 +829,9 @@ fn run_list(command: &List) -> Result<(), String> {
     let table = compose_table(&doc.text).map_err(|e| format!("{shown}: {e}"))?;
     let parsed = Composed::parse(&doc.text).map_err(|e| format!("{shown}: {e}"))?;
     let store = pfx_cache::shared();
-    let styles = names(&table, "style");
+    let mut styles = names(&table, "style");
+    styles.extend(parsed.links.keys().cloned());
+    styles.sort();
     let mut scores = Vec::new();
     for score in names(&table, "score") {
         let state = is_cached(&doc, &parsed, &score, store);
@@ -823,11 +845,17 @@ fn run_list(command: &List) -> Result<(), String> {
                 Err(e) => json!({ "name": name, "cached": false, "error": e }),
             })
             .collect();
-        println!("{}", json!({ "styles": styles, "scores": scores }));
+        println!(
+            "{}",
+            json!({ "styles": styles, "links": parsed.links, "scores": scores })
+        );
         return Ok(());
     }
     for style in &styles {
-        println!("style[{style}]");
+        match parsed.links.get(style) {
+            Some(file) => println!("style[{style}]  in {file}"),
+            None => println!("style[{style}]"),
+        }
     }
     for (score, state) in &scores {
         match state {
@@ -843,6 +871,22 @@ fn run_print(command: &Print) -> Result<(), String> {
     let shown = command.doc.display().to_string();
     let doc = Document::open(&command.doc)?;
     let table = compose_table(&doc.text).map_err(|e| format!("{shown}: {e}"))?;
+    let link = match &command.pick {
+        Pick::Style(name) => table
+            .get("link")
+            .and_then(|l| l.get(name))
+            .and_then(toml::Value::as_str),
+        _ => None,
+    };
+    let (shown, table) = match link {
+        Some(file) => {
+            let found = linked(&doc, file)?;
+            let shown = found.path.display().to_string();
+            let table = compose_table(&found.text).map_err(|e| format!("{shown}: {e}"))?;
+            (shown, table)
+        }
+        None => (shown, table),
+    };
     let picked = match &command.pick {
         Pick::All => table,
         Pick::Style(name) | Pick::Score(name) => {

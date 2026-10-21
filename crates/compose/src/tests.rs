@@ -1388,3 +1388,44 @@ fn level_keys_are_bounded() {
         assert!(e.contains(says), "{to}: {e}");
     }
 }
+
+#[test]
+fn a_link_names_a_file_in_the_folder_or_below_and_never_a_kept_style() {
+    let linked = |file: &str| format!("[compose.link]\nother = '{file}'\n");
+    let parsed = Compose::parse(&linked("styles/other.style.toml")).unwrap();
+    assert_eq!(parsed.links["other"], "styles/other.style.toml");
+    assert!(parsed.styles.is_empty() && !parsed.is_empty());
+    let e = parsed.style("other").unwrap_err();
+    assert!(
+        e.contains("keeps `other` in `styles/other.style.toml`"),
+        "{e}"
+    );
+    for file in [
+        "../other.toml",
+        "styles/../../other.toml",
+        "/etc/other.toml",
+        "styles//other.toml",
+        "./other.toml",
+        "styles\\other.toml",
+        "c:other.toml",
+        "styles/con.toml",
+        "other.toml.",
+        "",
+    ] {
+        let e = Compose::parse(&linked(file)).unwrap_err();
+        assert!(e.contains("[compose.link] `other`"), "{file}: {e}");
+    }
+    let both = format!(
+        "{}{}",
+        linked("other.toml"),
+        STYLE.replace("style.test", "style.other")
+    );
+    let e = Compose::parse(&both).unwrap_err();
+    assert!(e.contains("a style is linked or kept, not both"), "{e}");
+    let mut score = composed(3);
+    score.style = StyleRef::File {
+        file: "styles/other.style.toml".into(),
+        name: "test".into(),
+    };
+    assert!(write_score(&doc(), "cue", &score).is_ok());
+}

@@ -304,18 +304,21 @@ impl StyleRef {
         let StyleRef::File { file, .. } = self else {
             return Ok(());
         };
-        let plain = !file.is_empty()
-            && !file.ends_with(['.', ' '])
-            && !file.contains(['/', '\\', ':', '\0'])
-            && !device(file);
-        if plain {
+        if beside(file) {
             Ok(())
         } else {
             Err(format!(
-                "`style.file` is `{file}`; it wants a file name in the document's own folder"
+                "`style.file` is `{file}`; it wants a file in the document's folder or below it"
             ))
         }
     }
+}
+
+pub(crate) fn beside(file: &str) -> bool {
+    !file.contains(['\\', ':', '\0'])
+        && file
+            .split('/')
+            .all(|part| !part.is_empty() && !part.ends_with(['.', ' ']) && !device(part))
 }
 
 impl Score {

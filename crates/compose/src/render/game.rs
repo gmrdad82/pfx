@@ -37,7 +37,7 @@ fn rendered(
             let folder = beside.ok_or_else(|| {
                 format!("its style is in `{file}`, and the document was read with no folder")
             })?;
-            let other = Document::open(&store::beside(folder, file)?)?;
+            let other = store::linked(folder, file)?;
             let parsed = Compose::parse(&other.text)
                 .map_err(|e| format!("{}: {e}", other.path.display()))?;
             super::render(

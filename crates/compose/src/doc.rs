@@ -10,6 +10,7 @@ use crate::style::Style;
 pub struct Compose {
     pub styles: BTreeMap<String, Style>,
     pub scores: BTreeMap<String, Score>,
+    pub links: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -24,6 +25,8 @@ struct Raw {
     style: BTreeMap<String, Style>,
     #[serde(default)]
     score: BTreeMap<String, Score>,
+    #[serde(default)]
+    link: BTreeMap<String, String>,
 }
 
 fn header(line: &str) -> Option<&str> {
@@ -71,6 +74,18 @@ impl Compose {
                 .check()
                 .map_err(|e| format!("[compose.style.{name}] {e}"))?;
         }
+        for (name, file) in &raw.link {
+            if !crate::score::beside(file) {
+                return Err(format!(
+                    "[compose.link] `{name}` is `{file}`; it wants a file in the document's folder or below it"
+                ));
+            }
+            if raw.style.contains_key(name) {
+                return Err(format!(
+                    "[compose.link] `{name}` is also a [compose.style.{name}]; a style is linked or kept, not both"
+                ));
+            }
+        }
         for (name, score) in &raw.score {
             let at = format!("[compose.score.{name}]");
             score.check().map_err(|e| format!("{at} {e}"))?;
@@ -84,15 +99,19 @@ impl Compose {
         Ok(Compose {
             styles: raw.style,
             scores: raw.score,
+            links: raw.link,
         })
     }
 
     pub fn is_empty(&self) -> bool {
-        self.styles.is_empty() && self.scores.is_empty()
+        self.styles.is_empty() && self.scores.is_empty() && self.links.is_empty()
     }
 
     pub fn style(&self, name: &str) -> Result<&Style, String> {
         self.styles.get(name).ok_or_else(|| {
+            if let Some(file) = self.links.get(name) {
+                return format!("[compose.link] keeps `{name}` in `{file}`, not in this document");
+            }
             let known: Vec<&str> = self.styles.keys().map(String::as_str).collect();
             if known.is_empty() {
                 format!("no [compose.style.{name}]; the document has no styles")

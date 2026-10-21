@@ -51,14 +51,14 @@ pgpu run --class clip --as pfx -- pfx shot samples/chase.pitofx --seconds 10 --f
 
 ## 4. Score it
 
-`samples/chase.pitofx` carries its music style beside the recipe, `[compose.style.build_drop]`: a through-composed build and drop for a film cue, rounds that add a layer each, a lift of a tone with a riser and a roll, the drop on a hit and out on a second one, all on pfx's synthesised patches. `pfx compose` writes an original cue in that style into a copy of the document as its recipe, `[compose.score.title]`: the seed, the sections and every note, a few KB. The audio is rendered from it, the same bytes for the same recipe, and the master is kept in pfx's machine cache; `--wav` writes it out. With `--music` the document also gets a `[music]` table naming each role's stem, its sections and its stingers, and a game loads it with `pfx_compose::render::game::music`, which renders the stems on load (on a worker thread, before the first play). A style whose sections change tempo gets a tempo list in `[music]`, so each section loops on its own downbeats. `--hits` puts the drop and the end card on bar lines at 18 s and 26 s. [docs/compose.md](../../docs/compose.md) describes the style and score format.
+pfx ships no music style; the film brings its own, `[compose.style.mustang]` in `samples/mustang/mustang.style.toml`, which `samples/chase.pitofx` links with `[compose.link]`. It is a through-composed build and drop for a film cue, rounds that add a layer each, a lift of a tone with a riser and a roll, the drop on a hit and out on a second one, all on pfx's synthesised patches. `pfx compose` reads the style from the linked file and writes an original cue in it into a copy of the document as its recipe, `[compose.score.title]`: the seed, the sections and every note, a few KB. The audio is rendered from it, the same bytes for the same recipe, and the master is kept in pfx's machine cache; `--wav` writes it out. With `--music` the document also gets a `[music]` table naming each role's stem, its sections and its stingers, and a game loads it with `pfx_compose::render::game::music`, which renders the stems on load (on a worker thread, before the first play). A style whose sections change tempo gets a tempo list in `[music]`, so each section loops on its own downbeats. `--hits` puts the drop and the end card on bar lines at 18 s and 26 s. [docs/compose.md](../../docs/compose.md) describes the style and score format.
 
 ```
-cp samples/chase.pitofx "$FILM/chase.pitofx"
-pfx compose "$FILM/chase.pitofx" --style build_drop --seed 11 --seconds 30 --hits 18,26 --name title --music --wav "$FILM/title.wav" --json
+cp -r samples/chase.pitofx samples/mustang "$FILM/"
+pfx compose "$FILM/chase.pitofx" --style mustang --seed 11 --seconds 30 --hits 18,26 --name title --music --wav "$FILM/title.wav" --json
 ```
 
-The score goes into a copy, so the tracked sample stays as it is. `pfx compose list "$FILM/chase.pitofx"` names its styles and scores, `pfx compose print "$FILM/chase.pitofx" --score title` prints the notes, and after a hand edit `pfx compose render "$FILM/chase.pitofx" --score title` renders them again.
+The score goes into a copy, so the tracked sample stays as it is; the style folder goes with it, so the link finds its file. `pfx compose list "$FILM/chase.pitofx"` names its styles and scores, `pfx compose print "$FILM/chase.pitofx" --score title` prints the notes, and after a hand edit `pfx compose render "$FILM/chase.pitofx" --score title` renders them again.
 
 ## 5. Record the Claude Code part
 

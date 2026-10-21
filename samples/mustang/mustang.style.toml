@@ -1,0 +1,298 @@
+[compose.style.mustang]
+bpm = [118, 124]
+tonics = [["E", 3], ["D", 1], ["A", 1]]
+modes = [["minor", 1]]
+
+[compose.style.mustang.harmony]
+beats = 4
+start = ["i"]
+cadence = ["VI", "i"]
+markov = { i = [["VI", 4], ["iv", 2]], VI = [["III", 4], ["V", 2]], III = [["VII", 4]], VII = [["i", 4]], iv = [["VI", 2]], V = [["i", 2]] }
+
+[compose.style.mustang.melody]
+range = [64, 81]
+steps = [[1, 4], [-1, 4], [2, 4], [-2, 4], [4, 1], [-4, 1]]
+rhythm = [[0.5, 5], [1.0, 3]]
+rest = 0.15
+motif_bars = 2
+repeat = 0.6
+
+[[compose.style.mustang.role]]
+name = "pulse"
+patch = "kick_soft"
+plays = "hit"
+patterns = ["x.......x......."]
+gain = 0.45
+
+[[compose.style.mustang.role]]
+name = "pad"
+patch = "pad"
+plays = "chord"
+octave = -1
+gain = 0.035
+
+[[compose.style.mustang.role]]
+name = "bass_long"
+patch = "bass_long"
+plays = "bass"
+patterns = ["x..............."]
+octave = -2
+hold = 3.8
+gain = 0.2
+
+[[compose.style.mustang.role]]
+name = "bass"
+patch = "bass"
+plays = "bass"
+patterns = ["x.......x.......", "x..x..x.x.x...x."]
+octaves = [0, 0, 1]
+octave = -2
+gain = 0.26
+
+[[compose.style.mustang.role]]
+name = "hat"
+patch = "hat"
+plays = "hit"
+patterns = ["..x...x...x...x."]
+gain = 0.1
+
+[[compose.style.mustang.role]]
+name = "kick"
+patch = "kick"
+plays = "hit"
+patterns = ["x...x...x...x..."]
+gain = 0.5
+
+[[compose.style.mustang.role]]
+name = "ghost"
+patch = "hat"
+plays = "hit"
+patterns = [".x.....x.x.....x"]
+gain = 0.03
+
+[[compose.style.mustang.role]]
+name = "clap"
+patch = "clap"
+plays = "hit"
+patterns = ["....x.......x..."]
+gain = 0.3
+
+[[compose.style.mustang.role]]
+name = "pluck"
+patch = "pluck"
+plays = "arp"
+patterns = ["x.x.x.x.x.x.x.x.", "xxxxxxxxxxxxxxxx"]
+tones = [0, 2, 2, 1]
+octave = 2
+gain = 0.05
+
+[[compose.style.mustang.role]]
+name = "lead"
+patch = "lead"
+plays = "melody"
+octave = 2
+gain = 0.06
+
+[[compose.style.mustang.role]]
+name = "ohat"
+patch = "ohat"
+plays = "hit"
+patterns = ["..............x."]
+gain = 0.08
+
+[[compose.style.mustang.role]]
+name = "stab"
+patch = "stab"
+plays = "chord"
+patterns = ["x..............."]
+hold = 0.8
+octave = 0
+gain = 0.05
+
+[[compose.style.mustang.role]]
+name = "riser"
+patch = "riser"
+plays = "riser"
+gain = 0.14
+
+[[compose.style.mustang.role]]
+name = "reverse"
+patch = "reverse"
+plays = "reverse"
+gain = 0.2
+
+[[compose.style.mustang.role]]
+name = "roll"
+patch = "roll"
+plays = "roll"
+gain = 0.22
+
+[[compose.style.mustang.role]]
+name = "impact"
+patch = "impact"
+plays = "impact"
+gain = 0.28
+
+[[compose.style.mustang.role]]
+name = "crash"
+patch = "crash"
+plays = "impact"
+gain = 0.07
+
+[[compose.style.mustang.role]]
+name = "sub"
+patch = "sub"
+plays = "impact"
+gain = 0.22
+
+[compose.style.mustang.patch.kick_soft]
+osc = [{ wave = "sine", hz = 150, to_hz = 59.5, glide_ms = 50 }]
+env = [2, 360, 0.0, 0]
+lowpass = [260, 260]
+
+[compose.style.mustang.patch.kick]
+osc = [{ wave = "sine", hz = 165, to_hz = 58.3, glide_ms = 45 }, { wave = "white", gain = 0.22, env = [1, 6, 0.0, 0] }]
+env = [1, 400, 0.0, 0]
+drive = ["tanh", 4.0, 0.35]
+
+[compose.style.mustang.patch.clap]
+osc = [{ wave = "white", env = [1, 12, 0.0, 0] }, { wave = "white", at_ms = 11, env = [1, 12, 0.0, 0] }, { wave = "white", at_ms = 23, gain = 1.1, env = [1, 70, 0.0, 0] }, { wave = "white", at_ms = 30, gain = 0.23, env = [20, 520, 0.0, 0] }]
+env = [1, 12, 0.0, 0]
+highpass = 800
+sweep = [9000, 2500]
+sweep_ms = 650
+
+[compose.style.mustang.patch.hat]
+osc = [{ wave = "white" }]
+env = [1, 32, 0.0, 0]
+highpass = 8000
+
+[compose.style.mustang.patch.ohat]
+osc = [{ wave = "white" }]
+env = [2, 420, 0.0, 0]
+highpass = 7000
+
+[compose.style.mustang.patch.bass]
+osc = [{ wave = "saw" }, { wave = "sine", gain = 0.8 }, { wave = "square", octave = 1, cents = 7, gain = 0.2, env = [2, 150, 0.0, 0] }]
+env = [2, 220, 0.0, 0]
+sweep = [2000, 320]
+sweep_ms = 200
+drive = ["tanh", 3.0, 0.3]
+
+[compose.style.mustang.patch.bass_long]
+osc = [{ wave = "saw", gain = 0.7 }, { wave = "sine" }]
+env = [30, 0, 0.85, 400]
+sweep = [700, 260]
+sweep_ms = 1900
+
+[compose.style.mustang.patch.pad]
+osc = [{ wave = "saw", cents = -9, pan = -0.5 }, { wave = "saw", cents = 9, pan = 0.5 }]
+env = [40, 0, 0.85, 300]
+lowpass = [1500, 2800]
+highpass = 150
+send = 0.2
+
+[compose.style.mustang.patch.pluck]
+osc = [{ wave = "square", pan = -0.15 }, { wave = "saw", cents = 6, gain = 0.75, pan = 0.15 }, { wave = "sine", octave = -1, gain = 0.5 }]
+env = [2, 200, 0.0, 0]
+sweep = [3800, 900]
+sweep_ms = 200
+highpass = 140
+send = 0.08
+
+[compose.style.mustang.patch.lead]
+osc = [{ wave = "saw", cents = -7, pan = -0.2 }, { wave = "saw", cents = 7, pan = 0.2 }, { wave = "square", octave = -1, gain = 0.43, env = [3, 300, 0.0, 0] }]
+env = [3, 400, 0.0, 0]
+sweep = [6500, 1300]
+sweep_ms = 420
+drive = ["tanh", 2.5, 0.25]
+send = 0.1
+
+[compose.style.mustang.patch.stab]
+osc = [{ wave = "saw", cents = -6, pan = -0.4 }, { wave = "saw", cents = 5, pan = 0.4 }]
+env = [2, 380, 0.0, 0]
+sweep = [5200, 900]
+sweep_ms = 420
+drive = ["tanh", 3.0, 0.3]
+
+[compose.style.mustang.patch.riser]
+osc = [{ wave = "white" }, { wave = "saw", gain = 0.43, pan = -0.3 }, { wave = "saw", cents = 707, gain = 0.36, pan = 0.3 }]
+env = [3950, 0, 1.0, 20]
+linear = true
+sweep = [400, 12000]
+
+[compose.style.mustang.patch.reverse]
+osc = [{ wave = "pink" }]
+env = [980, 0, 1.0, 10]
+linear = true
+sweep = [300, 9000]
+sweep_ms = 1000
+
+[compose.style.mustang.patch.roll]
+osc = [{ wave = "white" }, { wave = "sine", hz = 210, gain = 0.46, env = [1, 50, 0.0, 0] }]
+env = [1, 70, 0.0, 0]
+highpass = 400
+
+[compose.style.mustang.patch.impact]
+osc = [{ wave = "sine", hz = 92, bend = -10, glide_ms = 1400 }, { wave = "pink", gain = 0.47, env = [2, 600, 0.0, 0] }]
+env = [2, 2400, 0.0, 0]
+sweep = [5000, 280]
+sweep_ms = 1500
+drive = ["tanh", 6.0, 0.4]
+
+[compose.style.mustang.patch.crash]
+osc = [{ wave = "white" }]
+env = [1, 2500, 0.0, 0]
+highpass = 4000
+
+[compose.style.mustang.patch.sub]
+osc = [{ wave = "sine", octave = -2 }]
+env = [4, 1900, 0.0, 0]
+lowpass = [160, 160]
+
+[[compose.style.mustang.section]]
+name = "rounds"
+gain_db = -2
+bars = [5, 6]
+roles = ["pulse", "pad", "bass_long", "bass", "hat", "kick"]
+intensity = [0.0, 0.5]
+round_bars = 1
+start_roles = 2
+
+[[compose.style.mustang.section]]
+name = "tension"
+gain_db = -3.5
+bars = [3, 4]
+roles = ["pad", "bass_long", "bass", "hat", "kick", "ghost", "clap", "pluck", "lead"]
+intensity = [0.55, 0.85]
+round_bars = 1
+start_roles = 7
+lift = 2
+riser = 8
+roll = 4
+
+[[compose.style.mustang.section]]
+name = "drop"
+bars = [3, 6]
+roles = ["pad", "bass_long", "bass", "hat", "kick", "ghost", "clap", "pluck", "lead", "ohat", "stab"]
+intensity = [1.0, 1.0]
+impact = true
+lift = 2
+hit = 0
+
+[[compose.style.mustang.section]]
+name = "card"
+bars = [1, 3]
+roles = ["pad", "pluck"]
+intensity = [0.4, 0.1]
+impact = true
+lift = 2
+tail = 6
+hit = 1
+
+[compose.style.mustang.master]
+lufs = -16
+true_peak = -1.0
+room = [0.75, 0.4, 0.18]
+fade = 1.2
+sidechain = { keys = ["kick", "impact"], beds = ["bass", "bass_long", "pad", "lead", "pluck", "stab", "sub"], depth = 0.5, release_ms = 200 }
