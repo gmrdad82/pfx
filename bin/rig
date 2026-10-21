@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 APP=pfx
+DEFAULT_APP=pfx
 NEUTRAL=crates/editor/tests/scenes/room.scene.toml
 
 die() {
@@ -48,8 +49,14 @@ in_rig() {
   grep -zFxq "RIG=$rig" "/proc/$pid/environ" 2>/dev/null
 }
 
+app_of() {
+  local rig=$1 name=$DEFAULT_APP
+  [[ -f $rig/app ]] && read -r name < "$rig/app"
+  printf "%s\n" "$name"
+}
+
 pid_is_rig_app() {
-  pid_is "$1" "$APP" && in_rig "$1" "$2"
+  pid_is "$1" "$(app_of "$2")" && in_rig "$1" "$2"
 }
 
 compositor_of() {
@@ -77,6 +84,8 @@ find_rig_pid() {
 
 read_socket() {
   local rig=$1 app_pid shell_socket socket
+  local APP
+  APP=$(app_of "$rig")
   app_pid=$(read_pid "$rig/app.pid" "$APP") || die "missing $APP pid at $rig/app.pid"
   pid_is_rig_app "$app_pid" "$rig" || die "$APP pid $app_pid is not running"
   [[ -f $rig/wayland ]] || die "missing Wayland socket record at $rig/wayland"
@@ -117,6 +126,8 @@ wait_for_compositor_slot() {
 
 stop_recorded() {
   local rig=$1 app_pid="" comp_pid="" launcher_pid="" attempt
+  local APP
+  APP=$(app_of "$rig")
   app_pid=$(read_pid "$rig/app.pid" "$APP" 2>/dev/null || true)
   comp_pid=$(read_pid "$rig/compositor.pid" compositor 2>/dev/null || true)
   launcher_pid=$(read_pid "$rig/launcher.pid" launcher 2>/dev/null || true)
@@ -164,14 +175,43 @@ check_binary() {
 up() {
   local scene=${1-}
   local name=${2:?usage: bin/rig up <scene.pitofx|neutral> <name>}
-  local binary="$PWD/target/release/$APP"
-  local compositor=${RIG_COMPOSITOR:-cage}
-  local app_pid="" socket="" comp_pid="" launcher_pid="" attempt rig live
+  local binary="$PWD/target/release/$APP" rig
 
   rig=$(rig_path "$name")
   check_binary "$binary"
   scene=$(check_scene "$scene" "$rig" "$binary")
+  launch "$rig" "$name" "$binary" "$APP" "$scene" gui
+}
+
+game() {
+  local example=${1:?usage: bin/rig game <example> <name> [args...]}
+  local name=${2:?usage: bin/rig game <example> <name> [args...]}
+  local binary rig newer
+  shift 2
+  [[ $example =~ ^[A-Za-z0-9][A-Za-z0-9_-]*$ ]] || die "invalid example name [$example]"
+  binary="$PWD/target/release/examples/$example"
+  [[ -x $binary ]] || die "build first; missing $binary: build-step example tmp/example.log -- 'cargo build --release -p <crate> --example $example'"
+  newer=$(find src crates -type f -newer "$binary" -not -path '*/tmp/*' -print -quit)
+  [[ -z $newer ]] || die "$binary is older than $newer; build it first"
+  rig=$(rig_path "$name")
+  launch "$rig" "$name" "$binary" "${example:0:15}" "" "$@"
+}
+
+launch() {
+  local rig=$1 name=$2 binary=$3 APP=$4 scene=$5
+  local compositor=${RIG_COMPOSITOR:-cage}
+  local app_pid="" socket="" comp_pid="" launcher_pid="" attempt live
+  shift 5
   [[ $compositor == cage || $compositor == labwc ]] || die "RIG_COMPOSITOR must be cage or labwc, got [$compositor]"
+  local x11=${RIG_X11:-0} unset_display=DISPLAY xwayland=/nonexistent namespaces=-Urm
+  [[ $x11 == 0 || $x11 == 1 ]] || die "RIG_X11 must be 0 or 1, got [$x11]"
+  [[ $x11 == 0 || $compositor == cage ]] || die "RIG_X11=1 needs cage"
+  if [[ $x11 == 1 ]]; then
+    unset_display="WAYLAND_DISPLAY RIG_WAYLAND_DISPLAY=\$WAYLAND_DISPLAY"
+    xwayland=
+    namespaces=-Urmn
+  fi
+  export RIG_XWAYLAND=$xwayland
 
   if [[ -f $rig/app.pid ]]; then
     live=$(read_pid "$rig/app.pid" "$APP" 2>/dev/null || true)
@@ -183,19 +223,27 @@ up() {
   export RIG=$rig
   mkdir -p "$RIG/tmp" "$RIG/config" "$RIG/cache" "$RIG/state" "$RIG/data"
   rm -rf "$RIG/scene"
-  cp -r "$(dirname "$scene")" "$RIG/scene"
   rm -f "$RIG/app.pid" "$RIG/compositor.pid" "$RIG/launcher.pid" "$RIG/wayland"
   : > "$RIG/asound-empty.conf"
   printf '%s\n' "${WAYLAND_DISPLAY:-}" > "$RIG/shell-wayland"
   printf '%s\n' "$compositor" > "$RIG/compositor"
-  printf '%s\n' "$scene" > "$RIG/source"
-  SCENE="$RIG/scene/$(basename "$scene")"
-  export APP_BINARY=$binary SCENE
+  printf '%s\n' "$APP" > "$RIG/app"
+  SCENE=""
+  if [[ -n $scene ]]; then
+    cp -r "$(dirname "$scene")" "$RIG/scene"
+    printf '%s\n' "$scene" > "$RIG/source"
+    SCENE="$RIG/scene/$(basename "$scene")"
+    set -- "$@" "$SCENE"
+  else
+    printf '%s\n' "$binary" > "$RIG/source"
+  fi
 
-  cat > "$RIG/app.sh" <<'EOS'
-#!/bin/sh
-exec env -u DISPLAY TMPDIR=/tmp PFX_EDIT_PGPU=off PIPEWIRE_RUNTIME_DIR=/nonexistent PULSE_SERVER=/nonexistent ALSA_CONFIG_PATH="$RIG/asound-empty.conf" XDG_CONFIG_HOME="$RIG/config" XDG_CACHE_HOME="$RIG/cache" XDG_STATE_HOME="$RIG/state" XDG_DATA_HOME="$RIG/data" "$APP_BINARY" gui "$SCENE"
-EOS
+  {
+    printf '#!/bin/sh\n'
+    printf 'exec env -u %s TMPDIR=/tmp PFX_EDIT_PGPU=off PIPEWIRE_RUNTIME_DIR=/nonexistent PULSE_SERVER=/nonexistent ALSA_CONFIG_PATH="$RIG/asound-empty.conf" XDG_CONFIG_HOME="$RIG/config" XDG_CACHE_HOME="$RIG/cache" XDG_STATE_HOME="$RIG/state" XDG_DATA_HOME="$RIG/data"' "$unset_display"
+    printf ' %q' "$binary" "$@"
+    printf '\n'
+  } > "$RIG/app.sh"
   chmod +x "$RIG/app.sh"
 
   if [[ $compositor == labwc ]]; then
@@ -212,7 +260,7 @@ EOS
 
   # shellcheck disable=SC2016 # The isolated inner shell expands the exported rig inputs.
   if [[ $compositor == cage ]]; then
-    unshare -Urm sh -c 'case "$RIG" in "$PWD"/tmp/?*) ;; *) echo "rig: RIG must sit under the tree tmp/, got [$RIG]" >&2; exit 2;; esac; echo "$RIG" >"$RIG/tmp/.rig" && mount --bind "$RIG/tmp" /tmp && [ "$(cat /tmp/.rig)" = "$RIG" ] || { echo "rig: /tmp is not $RIG/tmp" >&2; exit 2; }; exec env WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_XWAYLAND=/nonexistent cage -- "$RIG/app.sh"' >"$RIG/rig.log" 2>&1 &
+    unshare "$namespaces" sh -c 'case "$RIG" in "$PWD"/tmp/?*) ;; *) echo "rig: RIG must sit under the tree tmp/, got [$RIG]" >&2; exit 2;; esac; echo "$RIG" >"$RIG/tmp/.rig" && mount --bind "$RIG/tmp" /tmp && [ "$(cat /tmp/.rig)" = "$RIG" ] || { echo "rig: /tmp is not $RIG/tmp" >&2; exit 2; }; exec env WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 ${RIG_XWAYLAND:+WLR_XWAYLAND=$RIG_XWAYLAND} cage -- "$RIG/app.sh"' >"$RIG/rig.log" 2>&1 &
   else
     unshare -Urm sh -c 'case "$RIG" in "$PWD"/tmp/?*) ;; *) echo "rig: RIG must sit under the tree tmp/, got [$RIG]" >&2; exit 2;; esac; echo "$RIG" >"$RIG/tmp/.rig" && mount --bind "$RIG/tmp" /tmp && [ "$(cat /tmp/.rig)" = "$RIG" ] || { echo "rig: /tmp is not $RIG/tmp" >&2; exit 2; }; exec env WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_XWAYLAND=/nonexistent labwc -C "$RIG/labwc" -S "$RIG/app.sh"' >"$RIG/rig.log" 2>&1 &
   fi
@@ -252,7 +300,29 @@ EOS
   fi
 
   printf '%s\n' "$socket" > "$RIG/wayland"
-  printf '%s pid=%s\n%s pid=%s\nwayland=%s\nscene=%s\nrig=%s\n' "$compositor" "$comp_pid" "$APP" "$app_pid" "$socket" "$SCENE" "$RIG"
+  printf '%s pid=%s\n%s pid=%s\nwayland=%s\nscene=%s\nrig=%s\n' "$compositor" "$comp_pid" "$APP" "$app_pid" "$socket" "${SCENE:-none}" "$RIG"
+}
+
+black() {
+  local name=${1:?usage: bin/rig black <name> <count>}
+  local count=${2:?usage: bin/rig black <name> <count>}
+  local rig socket frame magic width height max lit index dark=0 list=""
+  [[ $count =~ ^[1-9][0-9]*$ ]] || die "the count must be a positive integer, got [$count]"
+  rig=$(existing_rig "$name")
+  socket=$(read_socket "$rig")
+  frame="$rig/tmp/black.ppm"
+  for ((index = 0; index < count; index++)); do
+    WAYLAND_DISPLAY=$socket grim -t ppm "$frame"
+    { read -r magic; read -r width height; read -r max; } < "$frame"
+    [[ $magic == P6 && $max == 255 ]] || die "grim wrote no binary PPM: [$magic $max]"
+    lit=$(tail -c $((width * height * 3)) "$frame" | tr -d '\000' | wc -c)
+    if (( lit == 0 )); then
+      dark=$((dark + 1))
+      list+=" $index"
+    fi
+  done
+  rm -f "$frame"
+  printf 'black %d of %d%s\n' "$dark" "$count" "${list:+ at$list}"
 }
 
 shot() {
@@ -295,6 +365,8 @@ down() {
   local rig app_pid="" comp_pid="" launcher_pid="" live=0
   rig=$(existing_rig "$name")
   stop_recorded "$rig"
+  local APP
+  APP=$(app_of "$rig")
 
   app_pid=$(read_pid "$rig/app.pid" "$APP" 2>/dev/null || true)
   comp_pid=$(read_pid "$rig/compositor.pid" compositor 2>/dev/null || true)
@@ -321,6 +393,7 @@ ls_rigs() {
     [[ -d $rig ]] || continue
     rig=${rig%/}
     [[ -f $rig/app.pid ]] || continue
+    APP=$(app_of "$rig")
     app_pid=$(read_pid "$rig/app.pid" "$APP" 2>/dev/null || true)
     [[ -n $app_pid ]] || continue
     pid_is_rig_app "$app_pid" "$rig" || continue
@@ -334,10 +407,12 @@ ls_rigs() {
 
 case ${1-} in
   up) shift; up "$@" ;;
+  game) shift; game "$@" ;;
+  black) shift; black "$@" ;;
   shot) shift; shot "$@" ;;
   keys) shift; keys "$@" ;;
   pointer) shift; pointer "$@" ;;
   down) shift; down "$@" ;;
   ls) ls_rigs ;;
-  *) die "usage: bin/rig {up <scene.pitofx|neutral> <name>|shot <name> <file>|keys <name> <wtype args>|pointer <name> <wlrctl pointer args>|down <name>|ls}" ;;
+  *) die "usage: bin/rig {up <scene.pitofx|neutral> <name>|game <example> <name> [args]|black <name> <count>|shot <name> <file>|keys <name> <wtype args>|pointer <name> <wlrctl pointer args>|down <name>|ls}" ;;
 esac

@@ -168,19 +168,27 @@ fn decode(c: f32) -> f64 {
     }
 }
 
-fn present_ground(gpu: &Gpu, target: &WindowTarget, window: &Window, ground: Srgba) -> bool {
+fn present_ground(gpu: &Gpu, target: &mut WindowTarget, window: &Window, ground: Srgba) -> bool {
     if !target.configured() {
         return false;
     }
-    let texture = match target.surface.get_current_texture() {
+    let texture = match target.acquire() {
         wgpu::CurrentSurfaceTexture::Success(texture)
         | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
         _ => return false,
     };
     let view = texture.texture.create_view(&Default::default());
+    clear(gpu, &view, target.config.format, ground);
+    target.drawn();
+    window.pre_present_notify();
+    target.present(&gpu.queue, texture, None);
+    true
+}
+
+fn clear(gpu: &Gpu, view: &wgpu::TextureView, format: wgpu::TextureFormat, ground: Srgba) {
     let [r, g, b, _] = ground.0;
     let channel = |c: f32| {
-        if target.config.format.is_srgb() {
+        if format.is_srgb() {
             decode(c)
         } else {
             f64::from(c)
@@ -195,7 +203,7 @@ fn present_ground(gpu: &Gpu, target: &WindowTarget, window: &Window, ground: Srg
         multiview_mask: None,
         label: Some("pfx game ground"),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: &view,
+            view,
             resolve_target: None,
             depth_slice: None,
             ops: wgpu::Operations {
@@ -213,9 +221,6 @@ fn present_ground(gpu: &Gpu, target: &WindowTarget, window: &Window, ground: Srg
         occlusion_query_set: None,
     });
     gpu.queue.submit([encoder.finish()]);
-    window.pre_present_notify();
-    gpu.queue.present(texture);
-    true
 }
 
 fn open(
@@ -267,9 +272,9 @@ fn open(
     } else {
         ground
     };
-    present_ground(&gpu, &target, &window, ground);
+    present_ground(&gpu, &mut target, &window, ground);
     window.set_visible(true);
-    let grounded = present_ground(&gpu, &target, &window, ground);
+    let grounded = present_ground(&gpu, &mut target, &window, ground);
     let size = size_of(&window);
     let painter = Painter::live(gpu, scene, &config, size)?;
     let sound = sound(&config);
@@ -361,7 +366,7 @@ impl Live {
         };
         if !self.grounded {
             let gpu = self.painter.renderer().gpu();
-            self.grounded = present_ground(gpu, &self.target, &self.window, self.ground);
+            self.grounded = present_ground(gpu, &mut self.target, &self.window, self.ground);
         }
         let format = self.target.config.format;
         if warmup.pass(&mut self.painter, &mut self.driver, format, now_ns)? {
@@ -458,7 +463,7 @@ impl Live {
         }
         self.dirty = true;
         let asking = Instant::now();
-        let acquired = self.target.surface.get_current_texture();
+        let acquired = self.target.acquire();
         self.pacing
             .acquired(u64::try_from(asking.elapsed().as_nanos()).unwrap_or(u64::MAX));
         let texture = match acquired {
@@ -481,6 +486,7 @@ impl Live {
         let view = texture.texture.create_view(&Default::default());
         self.painter
             .compose(&mut self.driver, &view, self.target.config.format)?;
+        self.target.drawn();
         self.window.pre_present_notify();
         self.target.present(
             &self.painter.renderer().gpu().queue,
@@ -570,7 +576,7 @@ impl Live {
             self.splash = None;
             return Ok(false);
         }
-        let texture = match self.target.surface.get_current_texture() {
+        let texture = match self.target.acquire() {
             wgpu::CurrentSurfaceTexture::Success(texture) => texture,
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
                 self.stale = true;
@@ -588,12 +594,17 @@ impl Live {
             }
         };
         let view = texture.texture.create_view(&Default::default());
-        if let Err(error) = splash.draw(gpu, &view, self.target.config.format, size, phase) {
-            eprintln!("the splash is left out: {error}");
-            self.splash = None;
+        match splash.draw(gpu, &view, self.target.config.format, size, phase) {
+            Ok(()) => self.target.drawn(),
+            Err(error) => {
+                eprintln!("the splash is left out: {error}");
+                self.splash = None;
+                clear(gpu, &view, self.target.config.format, self.ground);
+                self.target.drawn();
+            }
         }
         self.window.pre_present_notify();
-        gpu.queue.present(texture);
+        self.target.present(&gpu.queue, texture, None);
         Ok(true)
     }
 

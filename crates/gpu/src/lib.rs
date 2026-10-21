@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod floor;
 #[cfg(feature = "window")]
 mod hint;
@@ -71,6 +72,7 @@ pub struct WindowTarget {
     vrr: bool,
     settle: bool,
     configured: bool,
+    audit: Option<audit::Audit>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -610,8 +612,13 @@ impl Gpu {
             gpu.device.limits().max_texture_dimension_2d,
         );
         let present = window::overridden(window::choose_present(preference, &caps.present_modes));
+        let audited = audit::Audit::wanted() && caps.usages.contains(wgpu::TextureUsages::COPY_SRC);
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: if audited {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC
+            } else {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+            },
             format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width,
@@ -622,6 +629,9 @@ impl Gpu {
             view_formats: vec![],
         };
         let configured = configure(&surface, &gpu.device, &config);
+        let audit = audited
+            .then(|| audit::Audit::from_env(&gpu.device, format))
+            .flatten();
         Ok((
             gpu,
             WindowTarget {
@@ -633,6 +643,7 @@ impl Gpu {
                 vrr: false,
                 settle: false,
                 configured,
+                audit,
             },
         ))
     }
@@ -851,7 +862,15 @@ impl WindowTarget {
         }
         self.config.width = width;
         self.config.height = height;
+        self.configure(gpu);
+    }
+
+    fn configure(&mut self, gpu: &Gpu) -> bool {
+        if let Some(audit) = &mut self.audit {
+            audit.ledger.reconfigured();
+        }
         self.configured = configure(&self.surface, &gpu.device, &self.config);
+        self.configured
     }
 
     pub fn configured(&self) -> bool {
@@ -859,13 +878,12 @@ impl WindowTarget {
     }
 
     pub fn reconfigure(&mut self, gpu: &Gpu) -> bool {
-        self.configured = configure(&self.surface, &gpu.device, &self.config);
-        self.configured
+        self.configure(gpu)
     }
 
     pub fn retry(&mut self, gpu: &Gpu) -> bool {
         if !self.configured {
-            self.configured = configure(&self.surface, &gpu.device, &self.config);
+            self.configure(gpu);
         }
         self.configured
     }
@@ -883,7 +901,7 @@ impl WindowTarget {
         self.config.desired_maximum_frame_latency = choice.desired_maximum_frame_latency;
         self.present = choice.clone();
         if !same || !self.configured {
-            self.configured = configure(&self.surface, &gpu.device, &self.config);
+            self.configure(gpu);
         }
         choice
     }
@@ -930,13 +948,43 @@ impl WindowTarget {
         )
     }
 
-    pub fn present(&self, queue: &wgpu::Queue, frame: wgpu::SurfaceTexture, tag: Option<u64>) {
+    pub fn acquire(&mut self) -> wgpu::CurrentSurfaceTexture {
+        let acquired = self.surface.get_current_texture();
+        if let Some(audit) = &mut self.audit
+            && matches!(
+                acquired,
+                wgpu::CurrentSurfaceTexture::Success(_)
+                    | wgpu::CurrentSurfaceTexture::Suboptimal(_)
+            )
+        {
+            audit.ledger.acquired();
+        }
+        acquired
+    }
+
+    pub fn drawn(&mut self) {
+        if let Some(audit) = &mut self.audit {
+            audit.ledger.drawn();
+        }
+    }
+
+    pub fn audit(&self) -> Option<&audit::Audit> {
+        self.audit.as_ref()
+    }
+
+    pub fn present(&mut self, queue: &wgpu::Queue, frame: wgpu::SurfaceTexture, tag: Option<u64>) {
         match tag {
             Some(tag) => self.hint.request(tag),
             None if self.vrr => self.hint.request(u64::MAX),
             None => {}
         }
+        if let Some(audit) = &mut self.audit {
+            audit.presenting(queue, &frame.texture);
+        }
         queue.present(frame);
+        if let Some(audit) = &mut self.audit {
+            audit.presented();
+        }
     }
 
     pub fn shown(&mut self) -> Vec<presents::Shown> {

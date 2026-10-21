@@ -481,7 +481,7 @@ impl<A: App> Host<A> {
             live.wanted = true;
         }
         let asking = clock.now_ns();
-        let acquired = live.target.surface.get_current_texture();
+        let acquired = live.target.acquire();
         pacing.acquired(clock.now_ns().saturating_sub(asking));
         let frame = match acquired {
             wgpu::CurrentSurfaceTexture::Success(frame)
@@ -517,6 +517,7 @@ impl<A: App> Host<A> {
             &primitives,
             Theme::of(ctx).bg,
         );
+        live.target.drawn();
         pacing.paint(clock.now_ns().saturating_sub(painting));
         output.textures_delta.clear();
         profile.span(Phase::Paint);
