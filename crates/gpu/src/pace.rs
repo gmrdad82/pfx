@@ -825,7 +825,7 @@ impl Pacer {
             device,
             queue,
             work,
-            false,
+            Stamping::of(device.features(), false),
             |encoder, slice, _| encode(encoder, slice),
             between,
         )
@@ -840,7 +840,15 @@ impl Pacer {
         encode: impl FnMut(&mut wgpu::CommandEncoder, Slice, &Stamps<'_>),
         between: impl FnMut(f64) -> T,
     ) -> Result<Stats, String> {
-        self.run_stamped(label, device, queue, work, true, encode, between)
+        self.run_stamped(
+            label,
+            device,
+            queue,
+            work,
+            Stamping::of(device.features(), true),
+            encode,
+            between,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -850,11 +858,10 @@ impl Pacer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         work: Work,
-        passes: bool,
+        stamping: Stamping,
         encode: impl FnMut(&mut wgpu::CommandEncoder, Slice, &Stamps<'_>),
         between: impl FnMut(f64) -> T,
     ) -> Result<Stats, String> {
-        let stamping = Stamping::of(device.features(), passes);
         let timestamps = (stamping != Stamping::None).then(|| Timestamp::new(device, queue));
         let mut lane = GpuLane {
             label,
@@ -2290,6 +2297,239 @@ mod tests {
             stats.median_ms(),
             stats.longest_ms()
         );
+    }
+
+    const METAL: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY;
+    const VULKAN: wgpu::Features = METAL.union(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS);
+
+    #[test]
+    fn each_backend_times_its_slices_on_the_gpu_where_it_can() {
+        assert_eq!(Stamping::of(VULKAN, false), Stamping::Encoder);
+        assert_eq!(Stamping::of(VULKAN, true), Stamping::Encoder);
+        assert_eq!(Stamping::of(METAL, true), Stamping::Passes);
+        assert_eq!(Stamping::of(METAL, false), Stamping::None);
+        assert_eq!(Stamping::of(wgpu::Features::empty(), true), Stamping::None);
+        let encoder_stamped = Stamps {
+            queries: None,
+            written: std::cell::Cell::new(0),
+        };
+        assert!(encoder_stamped.pass(true, true).is_none());
+        assert!(encoder_stamped.pass(true, false).is_none());
+        assert!(!encoder_stamped.whole());
+    }
+
+    #[test]
+    fn pass_stamped_slices_size_like_encoder_stamped_ones() {
+        const STRIPS: u32 = 480;
+        const STRIP_MS: f64 = 0.4;
+        const FENCE_MS: f64 = 1.75;
+        let sizes = |features: wgpu::Features, passes: bool| {
+            let fenced = Stamping::of(features, passes) == Stamping::None;
+            let timing = if fenced { Timing::Cpu } else { Timing::Gpu };
+            let mut lane = Synthetic::new(timing, move |_, _, weight: f64| {
+                weight * STRIP_MS + if fenced { FENCE_MS } else { 0.0 }
+            });
+            let mut pacer = Pacer::default();
+            pacer.set_target_ms(10.0);
+            pacer.set_ceiling_ms(12.0);
+            pacer
+                .drive(
+                    "strips",
+                    &mut lane,
+                    Work::Dispatches { count: STRIPS },
+                    |_| {},
+                )
+                .unwrap();
+            assert_eq!(
+                lane.trace.iter().map(|(units, _)| units).sum::<u32>(),
+                STRIPS
+            );
+            lane.trace
+        };
+        let vulkan = sizes(VULKAN, true);
+        let metal = sizes(METAL, true);
+        let fenced = sizes(METAL, false);
+        assert_eq!(metal, vulkan);
+        assert_eq!(sizes(METAL, true), metal);
+        assert_eq!(fenced, sizes(wgpu::Features::empty(), true));
+        assert!(metal.iter().all(|(_, ms)| *ms <= 12.0));
+        let widest = |trace: &[(u32, f64)]| trace.iter().map(|(units, _)| *units).max().unwrap();
+        assert!(widest(&metal) > widest(&fenced), "{metal:?} {fenced:?}");
+        assert!(metal.len() < fenced.len(), "{metal:?} {fenced:?}");
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn pass_stamps_time_slices_on_the_gpu_and_leave_the_bytes_alone() {
+        #[derive(Clone, Copy, Debug)]
+        enum Stamp {
+            Both,
+            First,
+            Last,
+            Neither,
+        }
+        const GROUPS: u32 = 400;
+        const ROUNDS: u32 = 1000;
+        let gpu = pollster::block_on(crate::Gpu::headless()).unwrap();
+        let device = &gpu.device;
+        if !device.features().contains(VULKAN) {
+            println!("pass stamps: the adapter has no timestamps, skipped");
+            return;
+        }
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("pass stamps"),
+            source: wgpu::ShaderSource::Wgsl(
+                format!(
+                    "@group(0) @binding(0) var<storage, read_write> out: array<u32>;
+                     @group(0) @binding(1) var<uniform> start: vec4<u32>;
+                     @compute @workgroup_size(64)
+                     fn seed(@builtin(global_invocation_id) id: vec3<u32>) {{
+                         let index = start.x * 64u + id.x;
+                         var a = index;
+                         for (var i = 0u; i < {ROUNDS}u; i = i + 1u) {{
+                             a = a * 1664525u + 1013904223u;
+                         }}
+                         out[index] = a;
+                     }}
+                     @compute @workgroup_size(64)
+                     fn step(@builtin(global_invocation_id) id: vec3<u32>) {{
+                         let index = start.x * 64u + id.x;
+                         out[index] = out[index] ^ 0x9e3779b9u;
+                     }}
+                     @compute @workgroup_size(64)
+                     fn bump(@builtin(global_invocation_id) id: vec3<u32>) {{
+                         let index = start.x * 64u + id.x;
+                         out[index] = out[index] + 1u;
+                     }}"
+                )
+                .into(),
+            ),
+        });
+        let pipelines = ["seed", "step", "bump"].map(|entry| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(entry),
+                layout: None,
+                module: &shader,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        });
+        let bytes = u64::from(GROUPS) * 64 * 4;
+        let expected: Vec<u32> = (0..GROUPS * 64)
+            .map(|index| {
+                let mut a = index;
+                for _ in 0..ROUNDS {
+                    a = a.wrapping_mul(1664525).wrapping_add(1013904223);
+                }
+                (a ^ 0x9e37_79b9).wrapping_add(1)
+            })
+            .collect();
+        for (stamping, stamp, timing) in [
+            (Stamping::Encoder, Stamp::Both, TimingSource::Gpu),
+            (Stamping::Passes, Stamp::Both, TimingSource::Gpu),
+            (Stamping::Passes, Stamp::First, TimingSource::Cpu),
+            (Stamping::Passes, Stamp::Last, TimingSource::Cpu),
+            (Stamping::Passes, Stamp::Neither, TimingSource::Cpu),
+        ] {
+            let out = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("out"),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let read = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("read"),
+                size: bytes,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let stats = Pacer::default()
+                .run_stamped(
+                    "pass stamps",
+                    device,
+                    &gpu.queue,
+                    Work::Dispatches { count: GROUPS },
+                    stamping,
+                    |encoder, slice, stamps| {
+                        let Slice::Dispatches { start, count } = slice else {
+                            unreachable!()
+                        };
+                        let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("start"),
+                            size: 16,
+                            usage: wgpu::BufferUsages::UNIFORM,
+                            mapped_at_creation: true,
+                        });
+                        uniform
+                            .slice(..)
+                            .get_mapped_range_mut()
+                            .expect("a mapped range")
+                            .slice(0..4)
+                            .copy_from_slice(&start.to_le_bytes());
+                        uniform.unmap();
+                        for (at, pipeline) in pipelines.iter().enumerate() {
+                            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: None,
+                                layout: &pipeline.get_bind_group_layout(0),
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: out.as_entire_binding(),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: uniform.as_entire_binding(),
+                                    },
+                                ],
+                            });
+                            let (first, last) = (at == 0, at == pipelines.len() - 1);
+                            let timestamp_writes = match stamp {
+                                Stamp::Both => stamps.pass(first, last),
+                                Stamp::First => stamps.pass(first, false),
+                                Stamp::Last => stamps.pass(false, last),
+                                Stamp::Neither => None,
+                            };
+                            if stamping == Stamping::Passes && !first && !last {
+                                assert!(timestamp_writes.is_none());
+                            }
+                            let mut pass =
+                                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                                    label: None,
+                                    timestamp_writes,
+                                });
+                            pass.set_pipeline(pipeline);
+                            pass.set_bind_group(0, &group, &[]);
+                            pass.dispatch_workgroups(count, 1, 1);
+                        }
+                    },
+                    |_| {},
+                )
+                .unwrap();
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(&out, 0, &read, 0, bytes);
+            gpu.queue.submit(Some(encoder.finish()));
+            read.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let data = read.slice(..).get_mapped_range().expect("a mapped range");
+            let words: Vec<u32> = data
+                .chunks_exact(4)
+                .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+                .collect();
+            assert!(words == expected, "{stamping:?} stamped {stamp:?}");
+            assert_eq!(stats.source(), timing, "{stamping:?} stamped {stamp:?}");
+            assert!(
+                stats
+                    .milliseconds
+                    .iter()
+                    .all(|ms| ms.is_finite() && *ms >= 0.0)
+            );
+            println!(
+                "pass stamps: {stamping:?} stamped {stamp:?}, {} slices, median {:.3} ms",
+                stats.count(),
+                stats.median_ms()
+            );
+        }
     }
 
     fn pixel_slices(
