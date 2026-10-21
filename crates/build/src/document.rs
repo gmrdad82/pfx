@@ -611,6 +611,10 @@ impl Placed {
         out
     }
 
+    fn top(&self) -> PathBuf {
+        self.path(Path::new(""))
+    }
+
     fn name(&self, path: &Path) -> Option<PathBuf> {
         let mut out = self.dir.clone();
         for part in path_between(&self.folder, path).split('/') {
@@ -689,7 +693,7 @@ impl Document {
         let built =
             build_with(&loaded.recipe, &base, registry).map_err(|e| format!("{shown}: {e}"))?;
         let mut doc = Document::default();
-        doc.fill(&built, &loaded.recipe, &base)?;
+        let filled = doc.fill(&built, &loaded.recipe, &base, &base);
         let variants: Vec<Recipe> = loaded
             .recipe
             .variants
@@ -741,6 +745,11 @@ impl Document {
                 "{shown}: its files share no folder below the file system's root, expected them beside the recipe or in folders near it"
             ));
         }
+        if root == folder {
+            filled?;
+        } else {
+            doc.fill(&built, &loaded.recipe, &base, &root)?;
+        }
         doc.recipe_name = relative(&root, &main)
             .map(|p| name_of(&p))
             .unwrap_or_default();
@@ -755,15 +764,9 @@ impl Document {
             let bytes = files::read(&file).map_err(|e| format!("{}: {e}", file.display()))?;
             doc.files.insert(name, bytes);
         }
-        let outputs = std::mem::take(&mut doc.outputs);
-        let scene_dir = Path::new(&doc.recipe_name)
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default();
-        doc.outputs = outputs.into_iter().map(|p| scene_dir.join(p)).collect();
         let beside = std::mem::take(&mut doc.foreign);
         for (_, name, bytes) in beside {
-            doc.files.entry(scene_dir.join(&name)).or_insert(bytes);
+            doc.files.entry(PathBuf::from(name)).or_insert(bytes);
         }
         doc.built_from = Some(doc.hash());
         doc.notes.clone_from(&built.notes);
@@ -771,13 +774,19 @@ impl Document {
         Ok(doc)
     }
 
-    fn fill(&mut self, built: &Built, recipe: &Recipe, base: &Path) -> Result<(), String> {
+    fn fill(
+        &mut self,
+        built: &Built,
+        recipe: &Recipe,
+        base: &Path,
+        top: &Path,
+    ) -> Result<(), String> {
         let glb = built.try_glb().map_err(|e| e.to_string())?;
         let (json, bin) = split_glb(&glb)?;
         self.nodes = node_map(&json)?;
         self.gltf = json;
         self.gbin = bin;
-        let scene_file = base.join(ENTRY);
+        let scene_file = top.join(ENTRY);
         let glb_file = glb_path(recipe, base, None);
         self.scene.clear();
         self.outputs.clear();
@@ -791,7 +800,7 @@ impl Document {
             Ok(written) => {
                 self.scene
                     .push((ENTRY.to_string(), written.text.into_bytes()));
-                let folder = files::clean(base);
+                let folder = files::clean(top);
                 if let Some((path, text)) = written.library
                     && let Some(name) = relative(&folder, &files::clean(&path))
                 {
@@ -1143,19 +1152,12 @@ impl Document {
         for name in outputs {
             self.files.remove(&name);
         }
-        self.fill(&built, &loaded.recipe, &base)?;
-        let scene_dir = Path::new(&self.recipe_name)
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default();
-        self.outputs = std::mem::take(&mut self.outputs)
-            .into_iter()
-            .map(|p| scene_dir.join(p))
-            .collect();
+        let top = Placed::of(pfx, &self.recipe_name)?.top();
+        self.fill(&built, &loaded.recipe, &base, &top)?;
         let beside = std::mem::take(&mut self.foreign);
         for (tag, name, bytes) in beside {
             if tag == pfx_file::FILE {
-                self.files.entry(scene_dir.join(&name)).or_insert(bytes);
+                self.files.entry(PathBuf::from(name)).or_insert(bytes);
             } else {
                 self.foreign.push((tag, name, bytes));
             }

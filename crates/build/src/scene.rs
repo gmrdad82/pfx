@@ -46,6 +46,7 @@ const STILL: [f64; 2] = [1586.0, 992.0];
 const LIFT: f64 = 0.0005;
 const BOLD_FROM: u32 = 501;
 const ASSETS: &str = "assets";
+const IMAGES: &str = "images";
 const REGULAR_FONT: &str = "JetBrainsMonoNerdFont-Regular.ttf";
 const BOLD_FONT: &str = "JetBrainsMonoNerdFont-Bold.ttf";
 const VIGNETTE: [f64; 3] = [2.4, 0.8, 1.28];
@@ -1310,7 +1311,9 @@ fn objects(
         s.put("name", &string(name));
         s.put("mesh", &string(name));
         s.put(pick, &(part.object + 1).to_string());
-        if part.node.keep_transform {
+        if built.copied(at) {
+            copy_placement(&mut s, recipe, name, part.node.transform)?;
+        } else if part.node.keep_transform {
             placement(&mut s, recipe, part.object, part.node.transform)?;
         } else if let Some((at, rotate, scale)) = shared[at].and_then(decompose) {
             s.list("at", &at)?;
@@ -1488,6 +1491,28 @@ fn placement(
     s.list("scale", &scale)
 }
 
+fn copy_placement(
+    s: &mut Section<'_>,
+    recipe: &Recipe,
+    name: &str,
+    matrix: DMat4,
+) -> Result<(), Error> {
+    let scatter = recipe
+        .scatters
+        .iter()
+        .find(|scatter| name.starts_with(&format!("{}.", scatter.name)))
+        .map_or(name, |scatter| scatter.name.as_str());
+    let (at, rotate, scale) = decompose(matrix).ok_or_else(|| {
+        Error::new(
+            format!("scatter[{scatter}].object"),
+            "the copy's turn and the object's uneven scale compose to a shear, which the scene's at, rotate and scale cannot hold",
+        )
+    })?;
+    s.list("at", &at)?;
+    s.list("rotate", &rotate)?;
+    s.list("scale", &scale)
+}
+
 pub(crate) fn decompose(matrix: DMat4) -> Option<([f64; 3], [f64; 3], [f64; 3])> {
     let (parts, rebuilt) = trs(matrix)?;
     close(rebuilt, matrix, 1e-9).then_some(parts)
@@ -1553,7 +1578,7 @@ fn contents(
         let at = format!("object[{name}].image");
         let file = recipe.asset(base, image).map_err(|e| Error::new(&at, e))?;
         let mut s = Section::new(out, &format!("[content.{}]", key(name)), &at);
-        s.put("image", &string(&paths.relative(&file, &at)?));
+        s.put("image", &string(&paths.image(&file, &at)?));
     }
     Ok(())
 }
@@ -1775,6 +1800,37 @@ impl Paths {
             .join(at.to_string())
             .join(inside);
         self.copies.borrow_mut().insert(kept.clone(), file);
+        relative(&self.folder, &kept, key)
+    }
+
+    fn image(&self, file: &Path, key: &str) -> Result<String, Error> {
+        let file = absolute(file, key)?;
+        let outside = relative(&self.root, &file, key)?.split('/').next() == Some("..");
+        if !outside || self.sources.iter().any(|source| file.starts_with(source)) {
+            return self.relative(&file, key);
+        }
+        let images = self
+            .scene
+            .parent()
+            .unwrap_or(&self.root)
+            .join(ASSETS)
+            .join(IMAGES);
+        let mut copies = self.copies.borrow_mut();
+        let kept = match copies.iter().find(|(_, source)| **source == file) {
+            Some((kept, _)) => kept.clone(),
+            None => {
+                let n = copies
+                    .keys()
+                    .filter(|kept| kept.starts_with(&images))
+                    .count();
+                let name = file
+                    .file_name()
+                    .ok_or_else(|| Error::new(key, "expected a file name"))?;
+                images.join(n.to_string()).join(name)
+            }
+        };
+        copies.insert(kept.clone(), file);
+        drop(copies);
         relative(&self.folder, &kept, key)
     }
 
@@ -2123,6 +2179,102 @@ mod tests {
             super::MAX_LIGHTS,
             pfx_live::lights::MAX_LIGHTS + pfx_live::lights::MAX_CLUSTERED
         );
+    }
+
+    fn at(path: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join("pfx-scene-paths").join(path)
+    }
+
+    fn paths(root: &str, sources: &[&str]) -> super::Paths {
+        let root = at(root);
+        super::Paths {
+            folder: root.join("scenes"),
+            root: root.clone(),
+            provenance: root.clone(),
+            scene: root.join("scenes/street.scene.toml"),
+            sources: sources.iter().map(|source| at(source)).collect(),
+            copies: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+        }
+    }
+
+    fn copies(paths: &super::Paths) -> Vec<(std::path::PathBuf, std::path::PathBuf)> {
+        paths
+            .copies
+            .borrow()
+            .iter()
+            .map(|(kept, source)| (kept.clone(), source.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_card_image_inside_the_root_is_named_where_it_is_and_never_copied() {
+        let paths = paths("p", &[]);
+        let image = at("p/art/badge.png");
+        assert_eq!(paths.image(&image, "k").unwrap(), "../art/badge.png");
+        assert!(copies(&paths).is_empty());
+    }
+
+    #[test]
+    fn a_card_image_outside_the_root_is_copied_beside_the_scene_once_per_file() {
+        let paths = paths("p", &[]);
+        let a = at("elsewhere/a/badge.png");
+        let b = at("elsewhere/b/badge.png");
+        assert_eq!(paths.image(&a, "k").unwrap(), "assets/images/0/badge.png");
+        assert_eq!(paths.image(&b, "k").unwrap(), "assets/images/1/badge.png");
+        assert_eq!(paths.image(&a, "k").unwrap(), "assets/images/0/badge.png");
+        let kept = at("p/scenes/assets/images");
+        assert_eq!(
+            copies(&paths),
+            [
+                (kept.join("0/badge.png"), a.clone()),
+                (kept.join("1/badge.png"), b.clone()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_card_image_in_an_asset_root_keeps_that_roots_folder() {
+        let paths = paths("p", &["shared"]);
+        let image = at("shared/art/badge.png");
+        assert_eq!(paths.image(&image, "k").unwrap(), "assets/0/art/badge.png");
+    }
+
+    #[test]
+    fn any_other_path_outside_the_root_is_still_refused() {
+        let paths = paths("p", &[]);
+        let lut = at("elsewhere/look.cube");
+        let error = paths.relative(&lut, "look.lut").unwrap_err();
+        assert_eq!(error.path, "look.lut");
+        assert!(
+            error.text.contains("outside the project root"),
+            "{}",
+            error.text
+        );
+        assert!(copies(&paths).is_empty());
+    }
+
+    #[test]
+    fn a_sheared_copy_is_refused_at_its_scatter() {
+        let recipe = pfx_recipe::parse(
+            "recipe = 1\nname = \"f\"\n\n[[object]]\nname = \"g\"\nkind = \"plane\"\nsize = [1.0, 1.0]\n\n[[object]]\nname = \"s\"\nkind = \"box\"\nsize = [0.1, 0.1, 0.1]\n\n[[scatter]]\nname = \"rocks\"\nobject = \"s\"\non = \"g\"\ndensity = 1.0\n",
+        )
+        .unwrap();
+        let sheared = glam::DMat4::from_rotation_y(0.7)
+            * glam::DMat4::from_scale(glam::DVec3::new(2.0, 1.0, 1.0))
+            * glam::DMat4::from_rotation_z(0.4);
+        let mut out = String::new();
+        let mut s = crate::bake::Section::new(&mut out, "[[object]]", "object[rocks.0]");
+        let error = super::copy_placement(&mut s, &recipe, "rocks.0", sheared).unwrap_err();
+        assert_eq!(error.path, "scatter[rocks].object");
+        let mut s = crate::bake::Section::new(&mut out, "[[object]]", "object[rocks.1]");
+        super::copy_placement(
+            &mut s,
+            &recipe,
+            "rocks.1",
+            glam::DMat4::from_translation(glam::DVec3::new(1.0, 0.0, 2.0)),
+        )
+        .unwrap();
+        assert!(out.contains("at = [1.0, 0.0, 2.0]"), "{out}");
     }
 }
 

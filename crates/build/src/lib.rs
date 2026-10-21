@@ -311,6 +311,7 @@ pub struct Built {
     layers: BTreeMap<usize, Vec<layers::Baked>>,
     level_layers: BTreeMap<usize, Vec<layers::Baked>>,
     level_materials: BTreeMap<usize, layers::Baked>,
+    copies: std::ops::Range<usize>,
 }
 
 impl Built {
@@ -381,6 +382,10 @@ impl Built {
 
     pub fn object_provenance(&self) -> &serde_json::Map<String, serde_json::Value> {
         &self.provenance_by_object
+    }
+
+    pub(crate) fn copied(&self, at: usize) -> bool {
+        self.copies.contains(&at)
     }
 
     pub(crate) fn baked(&self, at: usize, material: &str) -> bool {
@@ -1860,6 +1865,7 @@ fn assemble(
         layers,
         level_layers,
         level_materials,
+        copies: parts.len() - scattered..parts.len(),
         timeline: recipe.timeline,
         markers: recipe
             .markers
