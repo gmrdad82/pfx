@@ -50,6 +50,7 @@ fn empty_hit(limit: f32) -> Hit {
     return Hit(limit,vec3f(0.0),vec3f(0.0),0u,vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,0u,0u);
 }
 fn mover_walk(s: u32, o: vec3f, d: vec3f, limit: f32, mode: u32, shadow_ray: bool, hit: ptr<function,Hit>) -> vec3f {
+    trace_count(COUNT_MOVER_WALKS);
     let m=mover_enter(s,o,d);
     let at=slot_at(s);
     let base=motion_word(at).w;
@@ -111,6 +112,7 @@ fn mover_mine(c: RayIntersection, s: u32) -> bool {
     return c.kind==RAY_QUERY_INTERSECTION_TRIANGLE && c.instance_custom_data==s+1u;
 }
 fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
+    trace_count(COUNT_CLOSEST);
     var hit=Hit(limit,vec3f(0.0),vec3f(0.0),0u,vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,0u,0u);
     if (!rt_valid(o,d,limit)) { return hit; }
     var rq: ray_query;
@@ -123,6 +125,7 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
     var waiting=0u;
     while (rayQueryProceed(&rq)) {
         let c=rayQueryGetCandidateIntersection(&rq);
+        trace_count(COUNT_CLOSEST_CANDIDATES);
         if (c.kind==RAY_QUERY_INTERSECTION_TRIANGLE) {
             var probe=hit;
             probe.t=best;
@@ -185,6 +188,7 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
             var count=0u;
             var seen=0u;
             var more=false;
+            trace_count(COUNT_MOVER_QUERIES);
             rayQueryInitialize(&rq,rt_movers,RayDesc(RAY_FLAG_NONE,RT_BOX_MASK,0.0001,fixed,o,d));
             while (rayQueryProceed(&rq)) {
                 let c=rayQueryGetCandidateIntersection(&rq);
@@ -206,6 +210,7 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
                 let r=mover_ray(s,o,d,reach);
                 if (r.hardware) {
                     var far=reach;
+                    trace_count(COUNT_MOVER_QUERIES);
                     rayQueryInitialize(&rq,rt_movers,mover_desc(r,far));
                     while (rayQueryProceed(&rq)) {
                         let c=rayQueryGetCandidateIntersection(&rq);
@@ -249,6 +254,7 @@ fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
     return world_hit(hit);
 }
 fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
+    trace_count(COUNT_SHADOW);
     if (!rt_valid(o,d,limit)) { return true; }
     var rq: ray_query;
     rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT,rt_mask(),0.0001,limit,o,d));
@@ -257,6 +263,7 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
     var waiting=0u;
     while (rayQueryProceed(&rq)) {
         let c=rayQueryGetCandidateIntersection(&rq);
+        trace_count(COUNT_SHADOW_CANDIDATES);
         if (c.kind==RAY_QUERY_INTERSECTION_TRIANGLE) {
             let record=rt_record(c);
             let info=instance_surfaces[record].info;
@@ -295,6 +302,7 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
             var count=0u;
             var seen=0u;
             var more=false;
+            trace_count(COUNT_MOVER_QUERIES);
             rayQueryInitialize(&rq,rt_movers,RayDesc(RAY_FLAG_NONE,RT_BOX_MASK,0.0001,limit,o,d));
             while (rayQueryProceed(&rq)) {
                 let c=rayQueryGetCandidateIntersection(&rq);
@@ -316,6 +324,7 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
                 let r=mover_ray(s,o,d,limit);
                 if (r.hardware) {
                     var blocks=false;
+                    trace_count(COUNT_MOVER_QUERIES);
                     rayQueryInitialize(&rq,rt_movers,mover_desc(r,limit));
                     while (rayQueryProceed(&rq)) {
                         let c=rayQueryGetCandidateIntersection(&rq);
@@ -342,6 +351,7 @@ fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
     return false;
 }
 fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
+    trace_count(COUNT_SHADOW);
     if (!rt_valid(o,d,limit)) { return vec3f(0.0); }
     var passed=vec3f(1.0);
     var rq: ray_query;
@@ -350,6 +360,7 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
     rayQueryInitialize(&rq,rt_world,RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT,rt_mask(),0.0001,limit,o,d));
     while (rayQueryProceed(&rq)) {
         let c=rayQueryGetCandidateIntersection(&rq);
+        trace_count(COUNT_SHADOW_CANDIDATES);
         if (c.kind==RAY_QUERY_INTERSECTION_TRIANGLE) {
             let record=rt_record(c);
             let info=instance_surfaces[record].info;
@@ -385,6 +396,7 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
             var count=0u;
             var seen=0u;
             var more=false;
+            trace_count(COUNT_MOVER_QUERIES);
             rayQueryInitialize(&rq,rt_movers,RayDesc(RAY_FLAG_NONE,RT_BOX_MASK,0.0001,limit,o,d));
             while (rayQueryProceed(&rq)) {
                 let c=rayQueryGetCandidateIntersection(&rq);
@@ -405,6 +417,7 @@ fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
                 let s=batch[k];
                 let r=mover_ray(s,o,d,limit);
                 if (r.hardware) {
+                    trace_count(COUNT_MOVER_QUERIES);
                     rayQueryInitialize(&rq,rt_movers,mover_desc(r,limit));
                     while (rayQueryProceed(&rq)) {
                         let c=rayQueryGetCandidateIntersection(&rq);

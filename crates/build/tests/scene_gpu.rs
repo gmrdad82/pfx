@@ -115,6 +115,7 @@ fn pfx_traced(case: &Case, recipe: &Path) -> Vec<u8> {
             crop: None,
             denoise: false,
             time: None,
+            counters: false,
         },
         &Registry::new(),
         &mut |_| {},

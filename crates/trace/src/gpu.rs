@@ -339,6 +339,7 @@ pub struct Trace {
     moving: Option<MovingState>,
     fogged: bool,
     sprites: Option<SpriteRoom>,
+    counters: Option<crate::counters::Counters>,
 }
 
 struct MovingState {
@@ -1511,9 +1512,16 @@ pub fn shader_rt(lit: bool) -> String {
 }
 
 fn shader_source(lit: bool, rt: bool) -> String {
-    let (head, rest) = include_str!("trace.wgsl")
-        .split_once("fn trace_sobol_start() {}\n")
-        .unwrap();
+    counted_source(lit, rt, None)
+}
+
+pub(crate) fn counted_source(
+    lit: bool,
+    rt: bool,
+    counting: Option<crate::counters::Reduce>,
+) -> String {
+    let traced = crate::counters::spliced(include_str!("trace.wgsl").to_string(), counting);
+    let (head, rest) = traced.split_once("fn trace_sobol_start() {}\n").unwrap();
     let (_, tail) = rest.split_once("fn trace_sobol_end() {}\n").unwrap();
     let source = format!("{head}{}{tail}", include_str!("sobol.wgsl"));
     let (start, rest) = source.split_once("fn trace_noise_start() {}\n").unwrap();
@@ -2080,11 +2088,25 @@ impl Trace {
             gpu_bytes += rt.bytes;
         }
         buffers.rt = crate::rt::RtGeometry::default();
+        if detail.counters {
+            crate::counters::room(gpu, lit)?;
+        }
+        let counters = detail.counters.then(|| crate::counters::Counters::new(gpu));
+        if counters.is_some() {
+            gpu_bytes += crate::counters::BYTES;
+        }
         let module = gpu
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("trace shader"),
-                source: wgpu::ShaderSource::Wgsl(shader_source(lit, rt.is_some()).into()),
+                source: wgpu::ShaderSource::Wgsl(
+                    counted_source(
+                        lit,
+                        rt.is_some(),
+                        counters.as_ref().map(|counters| counters.reduce),
+                    )
+                    .into(),
+                ),
             });
         let pipeline = gpu
             .device
@@ -2201,6 +2223,9 @@ impl Trace {
                 },
             ]);
         }
+        if let Some(counters) = &counters {
+            entries.push(counters.entry());
+        }
         let binding = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("trace bindings"),
             layout: &pipeline.get_bind_group_layout(0),
@@ -2289,11 +2314,29 @@ impl Trace {
             moving,
             fogged: detail.fog.is_some(),
             sprites: buffers.sprites.take(),
+            counters,
         })
     }
 
     pub fn builds(&self) -> Builds {
         self.builds
+    }
+
+    pub fn counting(&self) -> bool {
+        self.counters.is_some()
+    }
+
+    pub fn clear_counts(&self, gpu: &Gpu) {
+        if let Some(counters) = &self.counters {
+            counters.clear(gpu);
+        }
+    }
+
+    pub fn take_counts(&self, gpu: &Gpu) -> Result<Option<crate::counters::Counts>, String> {
+        self.counters
+            .as_ref()
+            .map(|counters| counters.take(gpu))
+            .transpose()
     }
 
     pub fn gpu_bytes(&self) -> u64 {

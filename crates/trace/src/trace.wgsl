@@ -113,6 +113,22 @@ var<private> volume_vertex: bool = false;
 var<private> sprites_hidden: bool = false;
 const SPRITE: u32 = 16777216u;
 const SPRITE_PASSES: u32 = 256u;
+const COUNT_PATHS: u32 = 0u;
+const COUNT_PRIMARY: u32 = 1u;
+const COUNT_BOUNCE: u32 = 2u;
+const COUNT_CLOSEST: u32 = 3u;
+const COUNT_SHADOW: u32 = 4u;
+const COUNT_SURFACE_SHADOW: u32 = 5u;
+const COUNT_CLOSEST_CANDIDATES: u32 = 6u;
+const COUNT_SHADOW_CANDIDATES: u32 = 7u;
+const COUNT_MOVER_QUERIES: u32 = 8u;
+const COUNT_MOVER_WALKS: u32 = 9u;
+const COUNT_KINDS: u32 = 10u;
+fn trace_counters_start() {}
+fn trace_count(kind: u32) {}
+fn trace_count_by(kind: u32, n: u32) {}
+fn trace_count_flush() {}
+fn trace_counters_end() {}
 fn record_at(at: u32) -> Material {
     return Material(materials[at],materials[at+1u],materials[at+2u],materials[at+3u],
         materials[at+4u],materials[at+5u],materials[at+6u],materials[at+7u]);
@@ -997,6 +1013,7 @@ fn union_hit(i: u32, o: vec3f, d: vec3f, limit: f32) -> f32 {
     return limit;
 }
 fn scene(o: vec3f, d: vec3f, limit: f32, shadow_ray: bool) -> Hit {
+    trace_count(COUNT_CLOSEST);
     var hit=Hit(limit,vec3f(0.0),vec3f(0.0),0u,vec2f(0.0),vec3f(1.0,0.0,0.0),vec3f(0.0,1.0,0.0),0u,0u,0u);
     if (frame.counts.x>0u) {
         var stack: array<u32,64>;
@@ -1094,6 +1111,7 @@ fn tri_blocks(i: u32, record: u32, word: u32, inv_det: f32, o: vec3f, d: vec3f, 
     return !cut_out(i,record,u,v,wo,wd);
 }
 fn occluded(o: vec3f, d: vec3f, limit: f32) -> bool {
+    trace_count(COUNT_SHADOW);
     if (frame.counts.x>0u) {
         var stack: array<u32,64>;
         var top=1u;
@@ -1180,6 +1198,7 @@ fn tri_passes(i: u32, record: u32, word: u32, inv_det: f32, o: vec3f, d: vec3f, 
     return sqrt(cast_tint(record_material(instance_surfaces[record].info,triangles[i])));
 }
 fn shadow_passed(o: vec3f, d: vec3f, limit: f32) -> vec3f {
+    trace_count(COUNT_SHADOW);
     var passed=vec3f(1.0);
     if (frame.counts.x>0u) {
         var stack: array<u32,64>;
@@ -2199,6 +2218,7 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
     var passes=0u;
     for (var bounce=0u;bounce<=TOTAL_BOUNCES+1u;bounce++) {
         if (SOBOL) { rng.z=16u*(bounce+1u); }
+        trace_count(select(COUNT_BOUNCE,COUNT_PRIMARY,bounce==0u && passes==0u));
         let hit=scene(o,d,1e20,false);
         let seen=TRANSMISSIVE_SHADOWS && through;
         var reach=hit.t;
@@ -2492,9 +2512,12 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                         if (rnd(state,u.w)>=keep) { continue; }
                         unshadowed/=keep;
                     }
+                    trace_count(COUNT_SURFACE_SHADOW);
                     result+=indirect_capped(unshadowed*shadow_passed(origin,direction,limit),bounce>0u);
                     continue;
-                } else if (occluded(origin,direction,limit)) { continue; }
+                }
+                trace_count(COUNT_SURFACE_SHADOW);
+                if (occluded(origin,direction,limit)) { continue; }
             }
             result+=indirect_capped(throughput*traced_eval(lit,wo,local)*select(1.0,glossy_share(s),pdf>0.0)*local.z*strength,bounce>0u);
         }
@@ -2544,6 +2567,7 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_id) local
     var sum=Accum(vec4f(0.0),vec4f(0.0),vec4f(0.0));
     if (frame.size.z>0u) { sum=accum[index]; }
     if (sum.color.w<0.0) { return; }
+    trace_count_by(COUNT_PATHS,frame.size.w);
     for (var sample=0u;sample<frame.size.w;sample++) {
         var first_albedo=vec4f(0.0);
         var first_normal=vec4f(0.0);
@@ -2605,4 +2629,5 @@ fn main(@builtin(workgroup_id) group: vec3u, @builtin(local_invocation_id) local
     textureStore(output,vec2i(gid.xy),vec4f(sum.color.xyz/count,select(1.0,sum.albedo.w/count,frame.forward.w>0.0)));
     textureStore(albedo,vec2i(gid.xy),sum.albedo/count);
     textureStore(normal,vec2i(gid.xy),vec4f(select(vec3f(0.0),normalize(n),length(n)>1e-6),sum.normal.w/count));
+    trace_count_flush();
 }
