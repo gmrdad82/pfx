@@ -5,8 +5,8 @@ use pfx_live::flat::{Draw, Fill, FlatScene, Icons, Light, ShadowCurve, SpriteIma
 
 use crate::licence::{civil_day, date};
 use crate::{
-    Colour, Composition, FADE_IN, KeyError, LENGTH, Lockup, Phase, Settings, Show, Timeline,
-    build_date, built, covers, hidden, verify,
+    Badge, Colour, Composition, FADE_IN, Group, KeyError, LENGTH, Lockup, Phase, Settings, Show,
+    Tier, Timeline, build_date, built, covers, hidden, unlock, verify,
 };
 
 fn pair() -> (SigningKey, String) {
@@ -117,6 +117,160 @@ fn an_armoured_key_with_line_breaks_verifies() {
     armoured.push_str("------ END PITO MD LICENSE ------\n");
     let claims = verify(&public, &armoured).unwrap();
     assert!(covers(&claims, Some("2026-10-19")));
+}
+
+fn grouped(group: &str, through: &str, grace: u32) -> String {
+    claims("pro", Some((through, grace)))
+        .replace(r#""v":2,"#, &format!(r#""v":2,"group":"{group}","#))
+}
+
+const BUILT: Option<&str> = Some("2026-10-20");
+
+fn hides(key: Option<&str>, public: &str) -> [bool; 3] {
+    let key = key.map(str::to_string);
+    let default = Settings {
+        key: key.clone(),
+        ..Settings::default()
+    };
+    let asked = Settings {
+        hide: true,
+        show: Show::Auto,
+        key: key.clone(),
+        ..Settings::default()
+    };
+    let always = Settings {
+        hide: true,
+        show: Show::Always,
+        key,
+        ..Settings::default()
+    };
+    [default, asked, always].map(|settings| hidden(&settings, Some(public), BUILT))
+}
+
+#[test]
+fn no_key_never_hides_the_splash() {
+    let (_, public) = pair();
+    assert_eq!(hides(None, &public), [false, false, false]);
+}
+
+#[test]
+fn an_indie_key_never_hides_the_splash() {
+    let (signing, public) = pair();
+    let indie = mint(&signing, &claims("indie", Some(("2026-12-31", 14))));
+    assert_eq!(hides(Some(&indie), &public), [false, false, false]);
+}
+
+#[test]
+fn a_customer_pro_key_hides_the_splash_only_when_asked_under_auto() {
+    let (signing, public) = pair();
+    let unnamed = mint(&signing, &claims("pro", Some(("2026-12-31", 14))));
+    let customer = mint(&signing, &grouped("customer", "2026-12-31", 14));
+    let null = mint(
+        &signing,
+        &claims("pro", Some(("2026-12-31", 14))).replace(r#""v":2,"#, r#""v":2,"group":null,"#),
+    );
+    for key in [&unnamed, &customer, &null] {
+        assert_eq!(verify(&public, key).unwrap().group, Group::Customer);
+        assert_eq!(hides(Some(key), &public), [false, true, false]);
+        assert!(!hidden(
+            &settings(key.clone()),
+            Some(&public),
+            Some("2027-01-15")
+        ));
+    }
+}
+
+#[test]
+fn a_friends_family_key_never_hides_the_splash() {
+    let (signing, public) = pair();
+    for grace in [0, 14] {
+        let key = mint(&signing, &grouped("friends-family", "9999-12-31", grace));
+        let claims = verify(&public, &key).unwrap();
+        assert_eq!(
+            (claims.tier.as_str(), claims.group),
+            ("pro", Group::FriendsFamily)
+        );
+        assert!(claims.covers_build("2026-10-20"));
+        assert_eq!(hides(Some(&key), &public), [false, false, false]);
+    }
+}
+
+#[test]
+fn an_owner_key_hides_the_splash_only_when_asked_under_auto() {
+    let (signing, public) = pair();
+    for grace in [0, 14] {
+        let key = mint(&signing, &grouped("owner", "9999-12-31", grace));
+        assert_eq!(verify(&public, &key).unwrap().group, Group::Owner);
+        assert_eq!(hides(Some(&key), &public), [false, true, false]);
+        assert!(hidden(
+            &settings(key.clone()),
+            Some(&public),
+            Some("9999-12-31")
+        ));
+    }
+    let indie = mint(
+        &signing,
+        &grouped("owner", "9999-12-31", 0).replace(r#""tier":"pro""#, r#""tier":"indie""#),
+    );
+    assert_eq!(verify(&public, &indie).unwrap().group, Group::Owner);
+    assert_eq!(hides(Some(&indie), &public), [false, false, false]);
+}
+
+#[test]
+fn an_education_nonprofit_or_unknown_group_never_hides_the_splash() {
+    let (signing, public) = pair();
+    for group in ["education", "nonprofit", "staff"] {
+        let key = mint(&signing, &grouped(group, "2026-12-31", 14));
+        assert_eq!(hides(Some(&key), &public), [false, false, false], "{group}");
+    }
+    let numbered = mint(
+        &signing,
+        &claims("pro", Some(("2026-12-31", 14))).replace(r#""v":2,"#, r#""v":2,"group":1,"#),
+    );
+    assert_eq!(verify(&public, &numbered), Err(KeyError::Payload));
+}
+
+#[test]
+fn the_badge_reads_the_keys_group_then_its_tier() {
+    let (signing, public) = pair();
+    let built = Some("2026-10-20");
+    let badge = |payload: &str| {
+        let licence = unlock(&public, &mint(&signing, payload), built).ok();
+        Badge::of(licence.as_ref())
+    };
+    assert_eq!(Badge::of(None), Badge::Free);
+    assert_eq!(
+        badge(&claims("indie", Some(("2026-12-31", 14)))),
+        Badge::Indie
+    );
+    assert_eq!(badge(&claims("pro", Some(("2026-12-31", 14)))), Badge::Pro);
+    assert_eq!(badge(&claims("pro", Some(("2026-01-31", 14)))), Badge::Free);
+    assert_eq!(badge(&grouped("owner", "9999-12-31", 14)), Badge::Owner);
+    assert_eq!(
+        badge(&grouped("friends-family", "9999-12-31", 0)),
+        Badge::FriendsFamily
+    );
+    assert_eq!(badge(&grouped("education", "2026-12-31", 14)), Badge::Pro);
+    let owner = unlock(
+        &public,
+        &mint(&signing, &grouped("owner", "9999-12-31", 14)),
+        built,
+    )
+    .unwrap();
+    assert_eq!(owner.covered_through, "9999-12-31");
+    assert_eq!(owner.tier, Tier::Pro);
+    assert!(owner.may_hide_splash());
+    let family = unlock(
+        &public,
+        &mint(&signing, &grouped("friends-family", "9999-12-31", 14)),
+        built,
+    )
+    .unwrap();
+    assert!(!family.may_hide_splash());
+    assert_eq!(
+        Badge::ALL.map(Badge::label),
+        ["Free", "Indie", "Pro", "Owner", "F&F"]
+    );
 }
 
 #[test]

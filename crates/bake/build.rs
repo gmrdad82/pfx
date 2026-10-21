@@ -43,7 +43,12 @@ fn value(text: &str, key: &str) -> Option<String> {
 
 fn dependency(dir: &Path, manifest: &Path, name: &str, spec: &str, out: &mut Vec<PathBuf>) {
     if let Some(path) = value(spec, "path") {
-        out.push(dir.join(path));
+        let vendored = dir.parent().map(|parent| parent.join(name));
+        out.extend(
+            std::iter::once(dir.join(path))
+                .chain(vendored)
+                .find(|candidate| candidate.join("Cargo.toml").is_file()),
+        );
         return;
     }
     let pinned = spec.trim_start().starts_with(['"', '\''])

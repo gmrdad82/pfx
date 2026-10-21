@@ -83,11 +83,11 @@ const MODULE_AGENTS: &str = include_str!("templates/AGENTS.module.md.in");
 const FILES: [(&str, &[u8]); 5] = [
     (
         "content/credit/powered-by-128.png",
-        include_bytes!("../../../assets/marks/powered-by-128.png"),
+        include_bytes!("../assets/powered-by-128.png"),
     ),
     (
         "content/credit/powered-by-light-128.png",
-        include_bytes!("../../../assets/marks/powered-by-light-128.png"),
+        include_bytes!("../assets/powered-by-light-128.png"),
     ),
     (
         "content/meshes/grid.glb",

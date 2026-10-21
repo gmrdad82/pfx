@@ -4,7 +4,7 @@ use egui::{
     Rect, Response, RichText, Sense, Shape, Stroke, StrokeKind, TextEdit, Ui, Vec2,
 };
 use pfx_settings::{Effect, Key as Setting, Preferences, Section, Store};
-use pfx_splash::{Licence, Refusal, Tier};
+use pfx_splash::{Badge, Group, Licence, Refusal, Tier};
 
 use crate::shell::{code, small};
 use crate::theme::*;
@@ -19,6 +19,8 @@ const LABEL: f32 = 190.0;
 const UNLOCK_WIDTH: f32 = 560.0;
 const FADE: f64 = 0.18;
 const RISE: f32 = 10.0;
+const BADGE_EASE: f64 = 0.24;
+const BADGE_RISE: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Page {
@@ -51,6 +53,7 @@ impl Page {
 pub enum Change {
     Preferences(Preferences),
     Licence(Option<String>),
+    HideSplash(bool),
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +73,7 @@ pub struct Prefs {
     public_key: Option<String>,
     build_date: Option<String>,
     licence: Option<Licence>,
+    hide_splash: bool,
     shed: Vec<Effect>,
     scale: String,
 }
@@ -97,6 +101,7 @@ impl Prefs {
             public_key,
             build_date,
             licence: None,
+            hide_splash: true,
             shed: Vec::new(),
             scale: String::new(),
         }
@@ -110,6 +115,7 @@ impl Prefs {
 
     pub fn read_licence(&mut self, store: &Store) {
         let key = store.licence_key();
+        self.hide_splash = store.splash_hidden();
         self.licence = status(
             self.public_key.as_deref(),
             key.as_deref(),
@@ -205,10 +211,7 @@ impl Prefs {
                             change = match self.page {
                                 Page::Display => display(ui, preferences),
                                 Page::Quality => quality(ui, preferences, &self.shed, &self.scale),
-                                Page::Licence => {
-                                    self.licence_page(ui);
-                                    None
-                                }
+                                Page::Licence => self.licence_page(ui),
                             };
                         });
                     });
@@ -261,12 +264,19 @@ impl Prefs {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let shown = badge(ui, self.licence.as_ref(), true);
                 shown.on_hover_text(match &self.licence {
-                    Some(licence) => format!(
-                        "{} licence for {}, covering builds through {}",
-                        licence.tier.label(),
-                        licence.licensee,
-                        licence.covered_through
-                    ),
+                    Some(licence) => match licence.badge() {
+                        Badge::Owner | Badge::FriendsFamily => format!(
+                            "{} licence for {}",
+                            licence.badge().label(),
+                            licence.licensee
+                        ),
+                        badge => format!(
+                            "{} licence for {}, covering builds through {}",
+                            badge.label(),
+                            licence.licensee,
+                            licence.covered_through
+                        ),
+                    },
                     None => "no key: pfx runs under the AGPL-3.0".to_string(),
                 });
             });
@@ -324,7 +334,7 @@ impl Prefs {
         ui.add_space(SECTION_GAP);
     }
 
-    fn licence_page(&mut self, ui: &mut Ui) {
+    fn licence_page(&mut self, ui: &mut Ui) -> Option<Change> {
         let palette = Palette::of(ui.ctx());
         page_title(ui, Page::Licence);
         ui.add_space(4.0);
@@ -332,27 +342,27 @@ impl Prefs {
         ui.add_space(4.0);
         match &self.licence {
             Some(licence) => {
-                for (label, shown) in [
+                let always = matches!(licence.badge(), Badge::Owner | Badge::FriendsFamily);
+                let mut facts = vec![
                     ("Tier", licence.tier.label().to_string()),
                     ("Licensed to", licence.licensee.clone()),
-                    ("Paid through", licence.paid_through.clone()),
-                    (
+                ];
+                if always {
+                    facts.push(("Group", licence.badge().label().to_string()));
+                } else {
+                    facts.push(("Paid through", licence.paid_through.clone()));
+                    facts.push((
                         "Covered through",
                         format!(
                             "{} ({} days' grace)",
                             licence.covered_through, licence.grace_days
                         ),
-                    ),
-                    ("Key", licence.id.clone()),
-                ] {
+                    ));
+                }
+                facts.push(("Key", licence.id.clone()));
+                for (label, shown) in facts {
                     fact(ui, label, &shown);
                 }
-                ui.add_space(4.0);
-                ui.label(small(
-                    ui,
-                    "a game built while the key is paid keeps it: a Pro key hides the splash in builds made through the covered date",
-                    palette.text_muted,
-                ));
             }
             None => {
                 fact(ui, "Tier", "Free");
@@ -363,6 +373,7 @@ impl Prefs {
                 ));
             }
         }
+        let change = self.splash_row(ui);
         if let Some(built) = &self.build_date {
             fact(ui, "This pfx built", built);
         }
@@ -382,6 +393,52 @@ impl Prefs {
                 ui.hyperlink_to(small(ui, "Buy a licence", palette.info), BUY);
             }
         });
+        change
+    }
+
+    fn splash_row(&mut self, ui: &mut Ui) -> Option<Change> {
+        let palette = Palette::of(ui.ctx());
+        let allowed = self.licence.as_ref().is_some_and(Licence::may_hide_splash);
+        let mut change = None;
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let response = ui
+                .add_enabled_ui(allowed, |ui| switch(ui, allowed && self.hide_splash))
+                .inner;
+            mark(ui, "hide_splash", response.rect);
+            let ink = if allowed {
+                palette.text_primary
+            } else {
+                palette.text_dim
+            };
+            ui.label(code(ui, "Hide the Powered by pfx splash", ink));
+            if response.clicked() {
+                self.hide_splash = !self.hide_splash;
+                change = Some(Change::HideSplash(self.hide_splash));
+            }
+        });
+        ui.label(small(
+            ui,
+            splash_note(self.licence.as_ref()),
+            palette.text_muted,
+        ));
+        change
+    }
+}
+
+fn splash_note(licence: Option<&Licence>) -> &'static str {
+    match licence {
+        Some(licence) if licence.may_hide_splash() && licence.group == Group::Owner => {
+            "on, games built with an Owner key hide the Powered by pfx splash"
+        }
+        Some(licence) if licence.may_hide_splash() => {
+            "a game built while the key is paid keeps it: on, a Pro key hides the splash in builds made through the covered date"
+        }
+        Some(licence) if licence.group == Group::FriendsFamily => {
+            "F&F keys always show the Powered by pfx splash"
+        }
+        Some(licence) if licence.tier == Tier::Pro => "Hiding the splash needs a paid pfx Pro key",
+        _ => "Hiding the splash needs pfx Pro",
     }
 }
 
@@ -741,62 +798,56 @@ fn footer(ui: &mut Ui, page: Page) -> (bool, bool) {
 pub fn badge(ui: &mut Ui, licence: Option<&Licence>, compact: bool) -> Response {
     let palette = Palette::of(ui.ctx());
     let theme = Theme::of(ui.ctx());
-    let tier = licence.map_or(Tier::Free, |licence| licence.tier);
-    let (fill, ink, edge) = match tier {
-        Tier::Free => (palette.bg_chip, palette.text_secondary, palette.line_border),
-        Tier::Indie => (palette.bg_hover, palette.info, palette.info),
-        Tier::Pro => (palette.accent, palette.accent_text, palette.accent),
-    };
-    let mark = theme.labels.text(tier.label()).into_owned();
-    let mark_font = theme.bold_font(SIZE_CODE);
-    let detail = licence.map(|licence| {
-        if compact {
-            format!("{} · through {}", licence.licensee, licence.covered_through)
-        } else {
-            format!(
-                "{}  ·  paid through {}",
-                licence.licensee, licence.paid_through
-            )
+    let state = Badge::of(licence);
+    let art = crate::badge::themed(state, &theme);
+    let now = ui.input(|input| input.time);
+    let id = ui.make_persistent_id(("licence badge", compact));
+    let since = ui.ctx().data_mut(|data| {
+        let seen = data.get_temp_mut_or_insert_with(id, || (state, now));
+        if seen.0 != state {
+            *seen = (state, now);
         }
+        seen.1
     });
-    let mark_galley = ui.painter().layout_no_wrap(mark, mark_font, ink);
+    let shown = pfx_core::motion::cubic_out(((now - since) / BADGE_EASE) as f32);
+    if shown < 1.0 {
+        ui.ctx().request_repaint();
+    }
+    let word = ui.painter().layout_job(crate::badge::CAPS.job(
+        state.label(),
+        theme.label_font(crate::badge::TYPE),
+        art.ink,
+    ));
+    let detail = licence.map(|licence| match (state, compact) {
+        (Badge::Owner | Badge::FriendsFamily, _) => licence.licensee.clone(),
+        (_, true) => format!("{} · through {}", licence.licensee, licence.covered_through),
+        (_, false) => format!(
+            "{}  ·  paid through {}",
+            licence.licensee, licence.paid_through
+        ),
+    });
     let detail_galley = detail.map(|detail| {
         ui.painter()
             .layout_no_wrap(detail, theme.font(SIZE_CODE), palette.text_secondary)
     });
+    let height = crate::badge::HEIGHT;
     let pad = 8.0;
-    let mark_width = mark_galley.size().x + 2.0 * pad;
+    let pill_width = crate::badge::layout(state, word.size().x).width;
     let detail_width = detail_galley
         .as_ref()
-        .map_or(0.0, |galley| galley.size().x + 2.0 * pad);
-    let height = ROW_HEIGHT + 3.0;
+        .map_or(0.0, |galley| galley.size().x + pad);
     let (rect, response) =
-        ui.allocate_exact_size(Vec2::new(mark_width + detail_width, height), Sense::click());
-    let painter = ui.painter();
-    let back = painter.add(Shape::Noop);
-    painter.set(
-        back,
-        RectShape::new(
-            rect,
-            CornerRadius::same(RADIUS),
-            palette.bg_deep,
-            Stroke::new(STROKE, edge),
-            StrokeKind::Inside,
-        ),
-    );
-    let mark_rect = Rect::from_min_size(rect.min, Vec2::new(mark_width, height));
-    painter.rect_filled(mark_rect, CornerRadius::same(RADIUS), fill);
-    painter.galley(
-        mark_rect.center() - mark_galley.size() / 2.0,
-        mark_galley,
-        ink,
-    );
+        ui.allocate_exact_size(Vec2::new(pill_width + detail_width, height), Sense::click());
+    let mut painter = ui.painter().clone();
+    painter.multiply_opacity(shown);
+    let rise = Vec2::new(0.0, BADGE_RISE * (1.0 - shown));
+    crate::badge::paint(&painter, rect.min + rise, 1.0, state, art, word);
     if let Some(galley) = detail_galley {
         painter.galley(
             Pos2::new(
-                mark_rect.right() + pad,
+                rect.left() + pill_width + pad,
                 rect.center().y - galley.size().y / 2.0,
-            ),
+            ) + rise,
             galley,
             palette.text_secondary,
         );
@@ -903,12 +954,17 @@ fn unlock_dialog(
                             });
                             ui.label(small(
                                 ui,
-                                format!(
-                                    "{} · {} · covers builds through {}",
-                                    licence.tier.label(),
-                                    licence.licensee,
-                                    licence.covered_through
-                                ),
+                                match licence.badge() {
+                                    badge @ (Badge::Owner | Badge::FriendsFamily) => {
+                                        format!("{} · {}", badge.label(), licence.licensee)
+                                    }
+                                    badge => format!(
+                                        "{} · {} · covers builds through {}",
+                                        badge.label(),
+                                        licence.licensee,
+                                        licence.covered_through
+                                    ),
+                                },
                                 palette.text_secondary,
                             ));
                         }
@@ -966,6 +1022,7 @@ mod tests {
 
     use super::*;
     use crate::{Script, Shell, Workbench};
+    use pfx_splash::Tier;
 
     const SIZE: [u32; 2] = [1600, 1000];
     const BUILT: &str = "2026-10-20";
@@ -1128,6 +1185,104 @@ mod tests {
         assert_eq!(licence.covered_through, "2027-01-14");
     }
 
+    fn grouped(signing: &SigningKey, group: &str) -> String {
+        let payload = format!(
+            r#"{{"v":2,"group":"{group}","id":"k-7","email":"hello@example.com","licensee":"Example Games","app":"pfx","tier":"pro","major":3,"issued":"2026-10-01","type":"timed","paid_through":"9999-12-31","grace_days":14}}"#
+        );
+        let signed = format!("PITO1.{}", URL_SAFE_NO_PAD.encode(payload.as_bytes()));
+        let signature = signing.sign(signed.as_bytes());
+        format!("{signed}.{}", URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+    }
+
+    fn light() -> Theme {
+        let rgb = |hex: u32| Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8);
+        Theme {
+            bg: rgb(0xF2F2EF),
+            surface: rgb(0xE4E4E0),
+            card: rgb(0xFAFAF8),
+            card_line: rgb(0xC4C4BE),
+            stripe: rgb(0xEAEAE6),
+            selected: rgb(0xE3EDC4),
+            well: rgb(0xFAFAF8),
+            line: rgb(0xD6D6D0),
+            grid: rgb(0xD6D6D0),
+            rule: rgb(0x3C3C3C),
+            title: rgb(0x0D0E0E),
+            text: rgb(0x1A1B1B),
+            text2: rgb(0x3A3A3A),
+            muted: rgb(0x55554F),
+            dim: rgb(0x7A7A74),
+            code: rgb(0x1A1B1B),
+            accent_deep: rgb(0xE6E0F5),
+            ..crate::theme::workbench()
+        }
+    }
+
+    struct Sheet {
+        prefs: Prefs,
+        preferences: Preferences,
+        theme: Theme,
+    }
+
+    impl pfx_editor_shell::App for Sheet {
+        fn ui(&mut self, ui: &mut Ui) {
+            let palette = Palette::of(ui.ctx());
+            ui.painter()
+                .rect_filled(ui.ctx().content_rect(), CornerRadius::ZERO, palette.bg_base);
+            ui.add_space(16.0);
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                badge(ui, self.prefs.licence.as_ref(), true);
+            });
+            self.prefs.draw(ui.ctx(), &self.preferences);
+        }
+
+        fn theme(&self) -> Theme {
+            self.theme.clone()
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a GPU; run under pgpu"]
+    fn every_licence_badge_draws_offscreen_on_dark_and_light() {
+        let since = std::time::Instant::now();
+        let (signing, public) = pair();
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp/badges");
+        std::fs::create_dir_all(&dir).unwrap();
+        let keys = [
+            (Badge::Free, None, "free"),
+            (
+                Badge::Indie,
+                Some(mint(&signing, "indie", "2026-12-31")),
+                "indie",
+            ),
+            (Badge::Pro, Some(mint(&signing, "pro", "2026-12-31")), "pro"),
+            (Badge::Owner, Some(grouped(&signing, "owner")), "owner"),
+            (
+                Badge::FriendsFamily,
+                Some(grouped(&signing, "friends-family")),
+                "friends-family",
+            ),
+        ];
+        for (state, key, name) in keys {
+            for (theme, shade) in [(crate::theme::workbench(), "dark"), (light(), "light")] {
+                let mut prefs = Prefs::new(Some(public.clone()), Some(BUILT.to_string()));
+                prefs.licence = status(Some(&public), key.as_deref(), Some(BUILT));
+                assert_eq!(Badge::of(prefs.licence()), state, "{name}");
+                prefs.open(Page::Licence);
+                let mut preferences = Preferences::default();
+                preferences.measure(11.0);
+                let mut sheet = Sheet {
+                    prefs,
+                    preferences,
+                    theme,
+                };
+                let png = crate::shot(&mut sheet, [1100, 720], &frames(24)).unwrap();
+                std::fs::write(dir.join(format!("badge-{name}-{shade}.png")), png).unwrap();
+            }
+        }
+        crate::gpu_turn(since);
+    }
     #[test]
     #[ignore = "needs a GPU; run under pgpu"]
     fn the_settings_panel_and_the_unlock_dialog_draw_offscreen() {

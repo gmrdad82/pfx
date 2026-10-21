@@ -566,6 +566,7 @@ mod scaffold {
             ".ui(frame, &self.settings, &pfx_game::MenuLook::new(FONT))",
             "fn settings(&self) -> Option<&pfx_game::Settings> {",
             "if let Some(key) = option_env!(\"PFX_LICENCE_KEY\")",
+            "hide: option_env!(\"PFX_SPLASH_SHOWN\").is_none(),",
             "if let Some(graphics) = project.graphics()",
         ] {
             assert!(lib.contains(line), "{line}");
@@ -574,6 +575,8 @@ mod scaffold {
             "pfx_settings::Store::machine()",
             "cargo:rerun-if-env-changed=PFX_LICENCE_KEY",
             "cargo:rustc-env=PFX_LICENCE_KEY={token}",
+            "if !store.splash_hidden()",
+            "cargo:rustc-env=PFX_SPLASH_SHOWN=1",
         ] {
             assert!(build.contains(line), "{line}");
         }

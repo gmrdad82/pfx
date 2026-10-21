@@ -1,5 +1,6 @@
 mod app;
 mod backdrop;
+pub mod badge;
 mod cameras;
 mod clay;
 mod clipboard;

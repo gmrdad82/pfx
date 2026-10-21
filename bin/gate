@@ -32,6 +32,7 @@ lint() {
   step game-clippy cargo clippy -p pfx-game --all-targets --features tools,steam,dev-hud,modules -- -D warnings
   step core-serde-clippy cargo clippy -p pfx-core --all-targets --features serde -- -D warnings
   step agnostic cargo test -q --test agnostic
+  step self-contained cargo test -q --test self_contained
   step brand cargo test -q --test brand
   step licences cargo test -q --test licences
   step charts cargo test -q --test charts
@@ -85,11 +86,37 @@ fast() {
   fi
   step game-tests cargo test -p pfx-game --lib --features tools,steam
   step agnostic cargo test -q --test agnostic
+  step self-contained cargo test -q --test self_contained
   step brand cargo test -q --test brand
   step licences cargo test -q --test licences
   step charts cargo test -q --test charts
   step steam-alone steam_alone
   step report-alone report_alone
+}
+
+vendored() {
+  local dir=tmp/vendored rev manifest name
+  rev=$(git rev-parse HEAD) || return 1
+  if ! git diff --quiet HEAD -- crates; then
+    echo "gate: vendored builds the crates as committed at $rev, without the working tree's changes"
+  fi
+  rm -rf "$dir/vendor" "$dir/.cargo"
+  mkdir -p "$dir/src" "$dir/.cargo"
+  {
+    printf '[package]\nname = "vendored"\nversion = "0.0.0"\nedition = "2024"\npublish = false\n\n[workspace]\n\n[dependencies]\n'
+    for manifest in crates/*/Cargo.toml; do
+      [ -f "${manifest%Cargo.toml}src/lib.rs" ] || continue
+      name=$(sed -n 's/^name = "\(.*\)"$/\1/p' "$manifest" | head -n 1)
+      printf '%s = { git = "file://%s", rev = "%s" }\n' "$name" "$PWD" "$rev"
+    done
+  } > "$dir/Cargo.toml"
+  : > "$dir/src/lib.rs"
+  cp Cargo.lock "$dir/Cargo.lock"
+  (
+    cd "$dir" && export CARGO_NET_GIT_FETCH_WITH_CLI=true &&
+      cargo vendor vendor > .cargo/config.toml &&
+      cargo check --offline --lib
+  )
 }
 
 release() {
@@ -137,11 +164,12 @@ macos() {
 }
 
 case ${1:-} in
-  "") lint; tests ;;
+  "") lint; tests; step vendored vendored ;;
   --fast | fast) fast ;;
+  vendored) step vendored vendored ;;
   lint | tests | release | windows | windows-lint | macos | macos-lint) "$1" ;;
   *)
-    echo "gate: unknown phase $1 (--fast, lint, tests, release, windows, windows-lint, macos or macos-lint)" >&2
+    echo "gate: unknown phase $1 (--fast, lint, tests, vendored, release, windows, windows-lint, macos or macos-lint)" >&2
     exit 2
     ;;
 esac

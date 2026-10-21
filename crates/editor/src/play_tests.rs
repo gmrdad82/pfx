@@ -8,7 +8,10 @@ use crate::editor::Editor;
 use crate::play::Play;
 use crate::tests::scene_copy;
 
-const MARKER: &str = include_str!("../../game/examples/marker/marker.wat");
+fn marker() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../game/examples/marker/marker.wat");
+    fs::read_to_string(&path).unwrap()
+}
 const STEP: f32 = 1.0 / 60.0;
 
 fn module(wat: &str) -> Vec<u8> {
@@ -46,7 +49,7 @@ fn at(play: &Play) -> [f32; 3] {
 
 #[test]
 fn the_example_module_plays_the_open_scene_and_stop_restores_it() {
-    let scene = marked("play-module", &module(MARKER));
+    let scene = marked("play-module", &module(&marker()));
     let root = scene.parent().unwrap().to_path_buf();
     let editor = Editor::open(&scene).unwrap();
     assert_eq!(

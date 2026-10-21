@@ -1109,12 +1109,17 @@ mod tests {
         assert!(error.0.starts_with("sky.path: nowhere.hdr"), "{error}");
     }
 
-    const TABLE: &str = include_str!("../../../tests/golden/table/table.toml");
+    fn table_text() -> String {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/golden/table/table.toml");
+        std::fs::read_to_string(&path).unwrap()
+    }
     const SIZE: [u32; 2] = [800, 500];
 
     fn table(sky: &str, look: &str) -> Recipe {
-        let cut = TABLE.find("[sky]").unwrap();
-        parse(&format!("{}{sky}\n{look}", &TABLE[..cut])).unwrap()
+        let table = table_text();
+        let cut = table.find("[sky]").unwrap();
+        parse(&format!("{}{sky}\n{look}", &table[..cut])).unwrap()
     }
 
     fn window_hdr() -> PathBuf {

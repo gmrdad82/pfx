@@ -4,6 +4,7 @@ use pfx_gpu::{Gpu, wgpu};
 use pfx_live::flat::{FlatIcons, FlatPass, FlatScene, FlatSprites, Light, ShadowCurve};
 use pfx_sound::Clip;
 
+use crate::compose::RULE_FROM;
 use crate::{Composition, LENGTH, Phase, Settings, Timeline};
 
 struct Shown {
@@ -14,6 +15,8 @@ struct Shown {
 
 type Composing = JoinHandle<Result<Composition, String>>;
 type Chiming = JoinHandle<Clip>;
+
+const RAMP: f64 = 0.004;
 
 pub struct Player {
     settings: Settings,
@@ -72,7 +75,10 @@ impl Player {
     }
 
     pub fn chime(&mut self, at: f64) -> Option<Clip> {
-        if self.start_ns.is_none() || !self.chime.as_ref().is_some_and(|job| job.is_finished()) {
+        if self.start_ns.is_none()
+            || at <= RULE_FROM
+            || !self.chime.as_ref().is_some_and(|job| job.is_finished())
+        {
             return None;
         }
         let clip = self.chime.take()?.join().ok()?;
@@ -174,9 +180,141 @@ impl Player {
 fn from(clip: &Clip, at: f64) -> Option<Clip> {
     let channels = usize::from(clip.channels);
     let skip = (at.max(0.0) * f64::from(clip.rate)).round() as usize * channels;
-    (skip < clip.samples.len()).then(|| Clip {
+    if skip >= clip.samples.len() {
+        return None;
+    }
+    let mut samples = clip.samples[skip..].to_vec();
+    if skip > 0 {
+        let ramp = ramp(clip.rate);
+        for (n, frame) in samples.chunks_mut(channels).take(ramp).enumerate() {
+            let x = n as f32 / ramp as f32;
+            let gain = x * x * (3.0 - 2.0 * x);
+            for sample in frame {
+                *sample *= gain;
+            }
+        }
+    }
+    Some(Clip {
         rate: clip.rate,
         channels: clip.channels,
-        samples: clip.samples[skip..].to_vec(),
+        samples,
     })
+}
+
+fn ramp(rate: u32) -> usize {
+    (RAMP * f64::from(rate)).round() as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BLOCK: usize = 512;
+
+    fn started(chime: bool) -> Player {
+        let player = Player {
+            settings: Settings::default(),
+            shown: None,
+            composing: None,
+            pass: None,
+            timeline: Timeline,
+            start_ns: Some(0),
+            curve: ShadowCurve::none(),
+            chime: chime.then(|| std::thread::spawn(crate::chime)),
+        };
+        while player.chime.as_ref().is_some_and(|job| !job.is_finished()) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        player
+    }
+
+    fn first_sound(clip: &Clip) -> usize {
+        let channels = usize::from(clip.channels);
+        clip.samples.iter().position(|s| *s != 0.0).unwrap() / channels
+    }
+
+    #[test]
+    fn the_chime_is_handed_over_on_the_frame_the_line_appears_and_sounds_with_it() {
+        let mut player = started(true);
+        let fps = 120.0;
+        let mut handed = Vec::new();
+        for n in 0..(LENGTH * fps) as u32 {
+            let at = f64::from(n) / fps;
+            if let Some(clip) = player.chime(at) {
+                handed.push((at, clip));
+            }
+        }
+        assert_eq!(handed.len(), 1);
+        let (at, clip) = &handed[0];
+        assert!(
+            *at > RULE_FROM && *at - 1.0 / fps <= RULE_FROM,
+            "handed at {at}"
+        );
+        let onset = at + first_sound(clip) as f64 / f64::from(clip.rate);
+        let block = BLOCK as f64 / f64::from(clip.rate);
+        assert!((onset - RULE_FROM).abs() <= block, "sounds at {onset}");
+        let whole = crate::chime();
+        let onset = first_sound(&whole) as f64 / f64::from(whole.rate);
+        assert!(
+            onset >= RULE_FROM && onset - RULE_FROM <= block,
+            "rings at {onset}"
+        );
+    }
+
+    #[test]
+    fn a_chime_ready_late_starts_at_the_matching_point_and_a_silent_splash_hands_nothing() {
+        let mut player = started(true);
+        let clip = player.chime(1.0).unwrap();
+        let rate = f64::from(clip.rate);
+        assert_eq!(clip.frames(), ((LENGTH - 1.0) * rate).round() as u64);
+        assert!(player.chime(1.1).is_none());
+        let mut silent = started(false);
+        assert!((0..240).all(|n| silent.chime(f64::from(n) / 120.0).is_none()));
+    }
+
+    fn rises_from_silence(clip: &Clip, whole: &Clip, at: f64) {
+        let channels = usize::from(clip.channels);
+        let ramp = ramp(clip.rate);
+        let skip = (at * f64::from(whole.rate)).round() as usize * channels;
+        let window = &whole.samples[skip..skip + (ramp + 1) * channels];
+        let peak = window.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 1e-4, "the cut at {at} lands in silence");
+        let natural = window
+            .windows(channels + 1)
+            .fold(0.0f32, |m, w| m.max((w[channels] - w[0]).abs()));
+        let slope = natural + 1.5 / ramp as f32 * peak + 1e-6;
+        assert!(clip.samples[..channels].iter().all(|s| s.abs() < 1e-4));
+        let head = &clip.samples[..(ramp + 1) * channels];
+        for (n, w) in head.windows(channels + 1).enumerate() {
+            let step = (w[channels] - w[0]).abs();
+            assert!(step <= slope, "a step of {step} at {n} after a cut at {at}");
+        }
+        assert_eq!(
+            clip.samples[ramp * channels..],
+            whole.samples[skip + ramp * channels..],
+            "the chime after the ramp is not the whole chime from the cut at {at}"
+        );
+    }
+
+    #[test]
+    fn a_late_frame_starts_the_chime_with_a_ramp_and_no_step() {
+        let whole = crate::chime();
+        for at in [0.5, 0.55] {
+            let mut player = started(true);
+            let clip = player.chime(at).unwrap();
+            rises_from_silence(&clip, &whole, at);
+        }
+        let mut player = started(true);
+        let mut clock: Vec<f64> = (0..27).map(|n| f64::from(n) / 60.0 + 0.003).collect();
+        let stalled = clock[26] + 0.08;
+        clock.extend((0..90).map(|n| stalled + f64::from(n) / 60.0));
+        let handed: Vec<(f64, Clip)> = clock
+            .iter()
+            .filter_map(|at| player.chime(*at).map(|clip| (*at, clip)))
+            .collect();
+        assert_eq!(handed.len(), 1);
+        let (at, clip) = &handed[0];
+        assert_eq!(*at, stalled);
+        rises_from_silence(clip, &whole, *at);
+    }
 }

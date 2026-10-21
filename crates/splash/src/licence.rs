@@ -45,6 +45,38 @@ pub struct Claims {
     pub grace_days: Option<u32>,
     #[serde(default)]
     pub licensee: Option<String>,
+    #[serde(default, deserialize_with = "group_or_customer")]
+    pub group: Group,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Group {
+    Owner,
+    FriendsFamily,
+    #[default]
+    Customer,
+    Education,
+    Nonprofit,
+    #[serde(other)]
+    Other,
+}
+
+impl Group {
+    pub fn name(self) -> &'static str {
+        match self {
+            Group::Owner => "owner",
+            Group::FriendsFamily => "friends-family",
+            Group::Customer => "customer",
+            Group::Education => "education",
+            Group::Nonprofit => "nonprofit",
+            Group::Other => "other",
+        }
+    }
+
+    pub fn may_hide_splash(self, tier: &str) -> bool {
+        tier == PRO && matches!(self, Group::Customer | Group::Owner)
+    }
 }
 
 #[derive(Deserialize)]
@@ -54,6 +86,10 @@ struct Version {
 
 fn one() -> u32 {
     1
+}
+
+fn group_or_customer<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Group, D::Error> {
+    Option::<Group>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
 
 impl Claims {
@@ -91,7 +127,7 @@ pub fn verify(public_key: &str, key: &str) -> Result<Claims, KeyError> {
 
 pub fn covers(claims: &Claims, build_date: Option<&str>) -> bool {
     claims.app == APP
-        && claims.tier == PRO
+        && claims.group.may_hide_splash(&claims.tier)
         && claims.is_timed()
         && build_date.is_some_and(|date| claims.covers_build(date))
 }

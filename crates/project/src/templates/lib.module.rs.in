@@ -111,7 +111,7 @@ pub fn config(project: &pfx_project::Project) -> Result<pfx_game::Config, String
         .font(include_bytes!("../content/fonts/IBMPlexMono-Regular.ttf").as_slice());
     if let Some(key) = option_env!("PFX_LICENCE_KEY") {
         config = config.splash(pfx_game::SplashSettings {
-            hide: true,
+            hide: option_env!("PFX_SPLASH_SHOWN").is_none(),
             key: Some(key.to_string()),
             ..Default::default()
         });

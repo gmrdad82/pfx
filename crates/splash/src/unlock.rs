@@ -1,6 +1,7 @@
-use crate::licence::{Claims, KeyError, civil_day, date, verify};
+use crate::licence::{Claims, Group, KeyError, civil_day, date, verify};
 
 const APP: &str = "pfx";
+const LAST_DAY: &str = "9999-12-31";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Tier {
@@ -44,6 +45,70 @@ pub struct Licence {
     pub grace_days: u32,
     pub covered_through: String,
     pub id: String,
+    pub group: Group,
+}
+
+impl Licence {
+    pub fn may_hide_splash(&self) -> bool {
+        self.group.may_hide_splash(self.tier.name())
+    }
+
+    pub fn badge(&self) -> Badge {
+        match self.group {
+            Group::Owner => Badge::Owner,
+            Group::FriendsFamily => Badge::FriendsFamily,
+            Group::Customer | Group::Education | Group::Nonprofit | Group::Other => match self.tier
+            {
+                Tier::Free => Badge::Free,
+                Tier::Indie => Badge::Indie,
+                Tier::Pro => Badge::Pro,
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Badge {
+    #[default]
+    Free,
+    Indie,
+    Pro,
+    Owner,
+    FriendsFamily,
+}
+
+impl Badge {
+    pub const ALL: [Badge; 5] = [
+        Badge::Free,
+        Badge::Indie,
+        Badge::Pro,
+        Badge::Owner,
+        Badge::FriendsFamily,
+    ];
+
+    pub fn of(licence: Option<&Licence>) -> Badge {
+        licence.map_or(Badge::Free, Licence::badge)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Badge::Free => "free",
+            Badge::Indie => "indie",
+            Badge::Pro => "pro",
+            Badge::Owner => "owner",
+            Badge::FriendsFamily => "friends-family",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Badge::Free => "Free",
+            Badge::Indie => "Indie",
+            Badge::Pro => "Pro",
+            Badge::Owner => "Owner",
+            Badge::FriendsFamily => "F&F",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,7 +183,9 @@ pub fn licence(claims: &Claims, build_date: Option<&str>) -> Result<Licence, Ref
     };
     let grace_days = claims.grace_days.unwrap_or(0);
     let covered_through = civil_day(&paid_through)
-        .and_then(|day| date((day + i64::from(grace_days)) * 86_400))
+        .map(|day| {
+            date((day + i64::from(grace_days)) * 86_400).unwrap_or_else(|| LAST_DAY.to_string())
+        })
         .ok_or(Refusal::Key(KeyError::Payload))?;
     if let Some(built) = build_date.filter(|built| civil_day(built).is_some())
         && !claims.covers_build(built)
@@ -139,5 +206,6 @@ pub fn licence(claims: &Claims, build_date: Option<&str>) -> Result<Licence, Ref
         grace_days,
         covered_through,
         id: claims.id.clone(),
+        group: claims.group,
     })
 }

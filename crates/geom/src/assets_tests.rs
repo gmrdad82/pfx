@@ -413,6 +413,23 @@ fn a_ground_rect_is_the_ground_not_a_solid() {
 }
 
 #[test]
+fn a_thin_diagonal_band_keeps_its_faces() {
+    let letter = svg(
+        r##"<path d="M39.68 43.65L39.68 55.77L41.82 55.77L41.82 48.39L50.13 56.36L50.13 44.24L47.99 44.24L47.99 51.62Z" fill="#808080"/>"##,
+    );
+    let form = Form {
+        depth: 0.026,
+        bevel: 0.004,
+        segments: 6,
+        ..Form::default()
+    };
+    let mark = Mark::build(&letter, &form).unwrap();
+    let mesh = &mark.solids[0].mesh;
+    closed(mesh).unwrap();
+    assert_eq!(facing(mesh), 1.0);
+}
+
+#[test]
 fn a_stroke_becomes_a_round_tube() {
     let ring =
         svg(r##"<circle cx="50" cy="50" r="30" fill="none" stroke="#808080" stroke-width="8"/>"##);

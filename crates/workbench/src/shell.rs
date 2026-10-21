@@ -1200,6 +1200,11 @@ impl Shell {
                         self.file_note = Some((format!("the key wasn't saved: {error}"), true));
                     }
                 }
+                crate::prefs::Change::HideSplash(hidden) => {
+                    if let Err(error) = self.book.store().keep_splash_hidden(hidden) {
+                        self.file_note = Some((format!("the switch wasn't saved: {error}"), true));
+                    }
+                }
             }
             ctx.request_repaint();
         }

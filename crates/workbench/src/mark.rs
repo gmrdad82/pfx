@@ -5,7 +5,7 @@ use egui::{
     Color32, ColorImage, Context, Id, Rgba, TextureHandle, TextureId, TextureOptions, Vec2,
 };
 
-pub static PFX: &[u8] = include_bytes!("../../../assets/marks/pfx-icon.png");
+pub static PFX: &[u8] = include_bytes!("../assets/pfx-icon.png");
 
 const GROUND_SLACK: u8 = 2;
 

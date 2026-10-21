@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use pfx_settings::{Effect, Key, LICENCE, Preferences, Store, Value as Setting};
-use pfx_splash::Licence;
+use pfx_splash::{Badge, Licence};
 use serde_json::{Map, Value, json};
 
 #[derive(Parser)]
@@ -254,12 +254,17 @@ fn lines(preferences: &Preferences, licence: Option<&Licence>) -> String {
 
 fn licence_line(licence: Option<&Licence>) -> String {
     match licence {
-        Some(licence) => format!(
-            "pfx {} · {} · covers builds through {}",
-            licence.tier.label(),
-            licence.licensee,
-            licence.covered_through
-        ),
+        Some(licence) => match licence.badge() {
+            badge @ (Badge::Owner | Badge::FriendsFamily) => {
+                format!("pfx {} · {}", badge.label(), licence.licensee)
+            }
+            badge => format!(
+                "pfx {} · {} · covers builds through {}",
+                badge.label(),
+                licence.licensee,
+                licence.covered_through
+            ),
+        },
         None => "pfx Free".into(),
     }
 }
@@ -268,13 +273,15 @@ fn licence_json(licence: Option<&Licence>) -> Value {
     match licence {
         Some(licence) => json!({
             "tier": licence.tier.name(),
+            "group": licence.group.name(),
+            "badge": licence.badge().name(),
             "licensee": licence.licensee,
             "paid_through": licence.paid_through,
             "grace_days": licence.grace_days,
             "covered_through": licence.covered_through,
             "id": licence.id,
         }),
-        None => json!({"tier": "free"}),
+        None => json!({"tier": "free", "badge": Badge::Free.name()}),
     }
 }
 
@@ -381,6 +388,48 @@ mod tests {
         assert!(fail("settings get effects.chrome").starts_with("no setting is named"));
         assert!(fail("settings unlock tmp/settings-cli/none.key").starts_with("cannot read"));
         assert_eq!(store.preferences(), Preferences::default());
+    }
+
+    #[test]
+    fn the_licence_json_carries_the_keys_group_and_badge() {
+        let store = store("groups");
+        let (signing, checker) = checker();
+        let shown = |store: &Store| -> Value {
+            serde_json::from_str(&ran("settings get licence --json", store, &checker, "").unwrap())
+                .unwrap()
+        };
+        assert_eq!(shown(&store), json!({"tier": "free", "badge": "free"}));
+        let pro = mint(&signing, "pro", TIMED);
+        ran("settings unlock -", &store, &checker, &pro).unwrap();
+        let customer = shown(&store);
+        assert_eq!(
+            (&customer["tier"], &customer["group"], &customer["badge"]),
+            (&json!("pro"), &json!("customer"), &json!("pro"))
+        );
+        let forever = r#","type":"timed","paid_through":"9999-12-31","grace_days":14"#;
+        for (group, badge, label) in [
+            ("owner", "owner", "Owner"),
+            ("friends-family", "friends-family", "F&F"),
+        ] {
+            let key = mint(&signing, "pro", &format!(r#","group":"{group}"{forever}"#));
+            let unlocked: Value = serde_json::from_str(
+                &ran("settings unlock - --json", &store, &checker, &key).unwrap(),
+            )
+            .unwrap();
+            let json = shown(&store);
+            assert_eq!(json["tier"], json!("pro"), "{group}");
+            assert_eq!(json["group"], json!(group));
+            assert_eq!(json["badge"], json!(badge));
+            assert_eq!(json["licensee"], json!("Example Games"));
+            assert_eq!(json["paid_through"], json!("9999-12-31"));
+            assert_eq!(json["covered_through"], json!("9999-12-31"));
+            assert_eq!(unlocked["badge"], json!(badge), "{unlocked}");
+            assert!(unlocked["path"].is_string(), "{unlocked}");
+            assert_eq!(
+                ran("settings get licence", &store, &checker, "").unwrap(),
+                format!("pfx {label} · Example Games")
+            );
+        }
     }
 
     #[test]
