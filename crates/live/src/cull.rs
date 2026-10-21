@@ -19,10 +19,18 @@ pub struct PassCounts {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CullStats {
     pub instances: u32,
+    pub drawable: u32,
     pub camera: PassCounts,
     pub occlusion_tested: bool,
+    pub occluded: Option<u32>,
     pub cascades: Vec<PassCounts>,
     pub light_faces: PassCounts,
+}
+
+impl CullStats {
+    pub fn culled(&self) -> u32 {
+        self.drawable.saturating_sub(self.camera.instances)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -175,6 +183,87 @@ pub fn world_sphere(local: [f32; 4], model: Matrix) -> [f32; 4] {
     } else {
         UNBOUNDED
     }
+}
+
+pub type Extent = [[f32; 3]; 2];
+
+pub fn local_box(positions: &[[f32; 3]]) -> Option<Extent> {
+    let mut low = [f32::INFINITY; 3];
+    let mut high = [f32::NEG_INFINITY; 3];
+    for position in positions {
+        for axis in 0..3 {
+            low[axis] = low[axis].min(position[axis]);
+            high[axis] = high[axis].max(position[axis]);
+        }
+    }
+    (!positions.is_empty() && positions.iter().flatten().all(|value| value.is_finite()))
+        .then_some([low, high])
+}
+
+pub fn world_box(local: Extent, model: Matrix) -> Option<Extent> {
+    if model[0][3] != 0.0 || model[1][3] != 0.0 || model[2][3] != 0.0 || model[3][3] != 1.0 {
+        return None;
+    }
+    let mut low = [f64::INFINITY; 3];
+    let mut high = [f64::NEG_INFINITY; 3];
+    for corner in 0..8 {
+        let point: [f64; 3] =
+            std::array::from_fn(|axis| f64::from(local[(corner >> axis) & 1][axis]));
+        for row in 0..3 {
+            let value = (0..3)
+                .map(|column| f64::from(model[column][row]) * point[column])
+                .sum::<f64>()
+                + f64::from(model[3][row]);
+            low[row] = low[row].min(value);
+            high[row] = high[row].max(value);
+        }
+    }
+    let pad = |value: f64, toward: f64| (value + toward * (value.abs() * 1e-6 + 1e-5)) as f32;
+    let extent = [
+        low.map(|value| pad(value, -1.0)),
+        high.map(|value| pad(value, 1.0)),
+    ];
+    extent
+        .iter()
+        .flatten()
+        .all(|value| value.is_finite())
+        .then_some(extent)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Group {
+    pub batch: usize,
+    pub start: u32,
+    pub count: u32,
+}
+
+pub fn groups<K: Eq + std::hash::Hash>(
+    runs: &[Run],
+    key: impl Fn(usize) -> K,
+    longest: u32,
+) -> (Vec<Group>, Vec<u32>) {
+    let mut found: std::collections::HashMap<K, usize> = std::collections::HashMap::new();
+    let mut gathered: Vec<(usize, Vec<u32>)> = Vec::new();
+    for run in runs {
+        let at = *found.entry(key(run.batch)).or_insert_with(|| {
+            gathered.push((run.batch, Vec::new()));
+            gathered.len() - 1
+        });
+        gathered[at].1.extend(run.range.clone());
+    }
+    let mut out = Vec::new();
+    let mut members = Vec::new();
+    for (batch, list) in gathered {
+        for piece in list.chunks(longest.max(1) as usize) {
+            out.push(Group {
+                batch,
+                start: members.len() as u32,
+                count: piece.len() as u32,
+            });
+            members.extend_from_slice(piece);
+        }
+    }
+    (out, members)
 }
 
 pub const FADE_BAND: f32 = 0.1;
@@ -352,6 +441,215 @@ mod tests {
         let near = distance_fade([91.0, 0.0, 0.0], eye, 100.0);
         let far = distance_fade([99.0, 0.0, 0.0], eye, 100.0);
         assert!(near > mid && mid > far && far > 0.0);
+    }
+
+    #[test]
+    fn a_local_box_spans_the_positions_and_refuses_none_or_non_finite() {
+        assert_eq!(
+            local_box(&[[1.0, -2.0, 3.0], [-1.0, 4.0, 0.5], [0.0, 0.0, 0.0]]),
+            Some([[-1.0, -2.0, 0.0], [1.0, 4.0, 3.0]])
+        );
+        assert_eq!(local_box(&[[2.0; 3]]), Some([[2.0; 3], [2.0; 3]]));
+        assert_eq!(local_box(&[]), None);
+        assert_eq!(local_box(&[[0.0; 3], [f32::NAN, 0.0, 0.0]]), None);
+        assert_eq!(local_box(&[[0.0; 3], [0.0, f32::INFINITY, 0.0]]), None);
+    }
+
+    fn turned(degrees: f32, scale: f32, at: [f32; 3]) -> Matrix {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        [
+            [cos * scale, 0.0, -sin * scale, 0.0],
+            [0.0, scale, 0.0, 0.0],
+            [sin * scale, 0.0, cos * scale, 0.0],
+            [at[0], at[1], at[2], 1.0],
+        ]
+    }
+
+    fn apply(model: Matrix, point: [f32; 3]) -> [f32; 3] {
+        std::array::from_fn(|row| {
+            (0..3)
+                .map(|column| model[column][row] * point[column])
+                .sum::<f32>()
+                + model[3][row]
+        })
+    }
+
+    #[test]
+    fn a_world_box_holds_every_turned_corner_strictly_inside_its_padding() {
+        let local = [[-0.5, 0.0, -1.0], [0.5, 2.0, 1.0]];
+        for (degrees, scale, at) in [
+            (0.0, 1.0, [0.0; 3]),
+            (37.0, 2.5, [3.0, -1.0, 9.0]),
+            (90.0, 0.25, [-400.0, 0.0, 1200.0]),
+            (-135.0, 1.0, [1.0e5, 2.0, -1.0e5]),
+        ] {
+            let model = turned(degrees, scale, at);
+            let [low, high] = world_box(local, model).unwrap();
+            for corner in 0..8 {
+                let point: [f32; 3] = std::array::from_fn(|axis| local[(corner >> axis) & 1][axis]);
+                let world = apply(model, point);
+                for axis in 0..3 {
+                    assert!(
+                        low[axis] < world[axis] && world[axis] < high[axis],
+                        "{degrees}° corner {corner} axis {axis}: {} not in {}..{}",
+                        world[axis],
+                        low[axis],
+                        high[axis]
+                    );
+                }
+            }
+            let centre = apply(model, [0.0, 1.0, 0.0]);
+            let reach = 2.5 * scale;
+            for axis in 0..3 {
+                assert!(high[axis] - low[axis] <= 2.0 * reach + 1e-3 * (1.0 + centre[axis].abs()));
+            }
+        }
+    }
+
+    #[test]
+    fn a_world_box_refuses_a_projective_model_and_a_non_finite_result() {
+        let local = [[-1.0; 3], [1.0; 3]];
+        let mut projective = identity();
+        projective[2][3] = -1.0;
+        assert_eq!(world_box(local, projective), None);
+        let mut weighted = identity();
+        weighted[3][3] = 2.0;
+        assert_eq!(world_box(local, weighted), None);
+        let mut huge = identity();
+        huge[0][0] = f32::MAX;
+        assert_eq!(world_box(local, huge), None);
+        let mut lost = identity();
+        lost[3][0] = f32::NAN;
+        assert_eq!(world_box(local, lost), None);
+    }
+
+    #[test]
+    fn groups_split_long_runs_take_a_zero_limit_as_one_and_keep_nothing_from_nothing() {
+        let runs = [Run {
+            batch: 0,
+            range: 0..5,
+        }];
+        let (found, members) = groups(&runs, |_| 0, 0);
+        assert_eq!(members, vec![0, 1, 2, 3, 4]);
+        assert_eq!(found.len(), 5);
+        assert!(
+            found
+                .iter()
+                .enumerate()
+                .all(|(at, group)| group.start == at as u32
+                    && group.count == 1
+                    && group.batch == 0)
+        );
+        let (found, members) = groups(&runs, |_| 0, 256);
+        assert_eq!(
+            found,
+            vec![Group {
+                batch: 0,
+                start: 0,
+                count: 5
+            }]
+        );
+        assert_eq!(members.len(), 5);
+        let (found, members) = groups(&[], |_: usize| 0, 256);
+        assert!(found.is_empty() && members.is_empty());
+    }
+
+    #[test]
+    fn groups_cover_every_kept_instance_once_and_never_mix_kinds() {
+        let runs: Vec<Run> = (0..40)
+            .map(|batch| Run {
+                batch,
+                range: (batch as u32 * 3)..(batch as u32 * 3 + 1 + batch as u32 % 3),
+            })
+            .collect();
+        let kind = |batch: usize| batch % 4;
+        let (found, members) = groups(&runs, kind, 5);
+        let mut seen: Vec<u32> = members.clone();
+        seen.sort_unstable();
+        let mut expected: Vec<u32> = runs.iter().flat_map(|run| run.range.clone()).collect();
+        expected.sort_unstable();
+        assert_eq!(seen, expected);
+        let mut next = 0;
+        for group in &found {
+            assert_eq!(group.start, next);
+            assert!(group.count >= 1 && group.count <= 5);
+            next += group.count;
+            for member in &members[group.start as usize..(group.start + group.count) as usize] {
+                let owner = runs.iter().find(|run| run.range.contains(member)).unwrap();
+                assert_eq!(kind(owner.batch), kind(group.batch));
+            }
+        }
+        assert_eq!(next as usize, members.len());
+    }
+
+    #[test]
+    fn culled_counts_what_the_camera_dropped_and_never_goes_below_zero() {
+        let stats = CullStats {
+            drawable: 10,
+            camera: PassCounts {
+                draws: 2,
+                instances: 7,
+                triangles: 70,
+            },
+            ..CullStats::default()
+        };
+        assert_eq!(stats.culled(), 3);
+        let odd = CullStats {
+            drawable: 1,
+            camera: PassCounts {
+                instances: 4,
+                ..PassCounts::default()
+            },
+            ..CullStats::default()
+        };
+        assert_eq!(odd.culled(), 0);
+        assert_eq!(CullStats::default().culled(), 0);
+        assert_eq!(CullStats::default().occluded, None);
+    }
+
+    #[test]
+    fn groups_gather_runs_of_one_kind_in_first_seen_order_and_keep_instance_order() {
+        let runs = [
+            Run {
+                batch: 0,
+                range: 0..1,
+            },
+            Run {
+                batch: 1,
+                range: 1..4,
+            },
+            Run {
+                batch: 2,
+                range: 4..5,
+            },
+            Run {
+                batch: 3,
+                range: 5..7,
+            },
+        ];
+        let kinds = [7, 9, 7, 9];
+        let (found, members) = groups(&runs, |batch| kinds[batch], 3);
+        assert_eq!(members, vec![0, 4, 1, 2, 3, 5, 6]);
+        assert_eq!(
+            found,
+            vec![
+                Group {
+                    batch: 0,
+                    start: 0,
+                    count: 2
+                },
+                Group {
+                    batch: 1,
+                    start: 2,
+                    count: 3
+                },
+                Group {
+                    batch: 1,
+                    start: 5,
+                    count: 2
+                },
+            ]
+        );
     }
 
     #[test]

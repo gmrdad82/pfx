@@ -109,6 +109,7 @@ pub(crate) fn object(object: &Object) -> Issues {
             ("pick", object.pick.is_some()),
             ("alpha_cutoff", object.alpha_cutoff.is_some()),
             ("face_camera", object.face_camera),
+            ("max_distance", object.max_distance.is_some()),
             ("body", object.body.is_some()),
             ("character", object.character.is_some()),
             ("trigger", object.trigger.is_some()),
@@ -179,6 +180,17 @@ pub(crate) fn object(object: &Object) -> Issues {
             &["alpha_cutoff"],
             format!("object {name} alpha_cutoff = {cutoff} is outside 0 to 1"),
         );
+    }
+    if let Some(distance) = object.max_distance {
+        let [low, high] = Object::MAX_DISTANCE;
+        if !(distance.is_finite() && distance > low && distance <= high) {
+            issues.at(
+                &["max_distance"],
+                format!(
+                    "object {name} max_distance = {distance} is outside {low} (excluded) to {high}"
+                ),
+            );
+        }
     }
     if let Some(body) = &object.body {
         issues.nested(&["body".to_string()], self::body(name, body));

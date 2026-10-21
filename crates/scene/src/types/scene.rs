@@ -105,6 +105,8 @@ pub struct Object {
     #[serde(default, skip_serializing_if = "is_false")]
     pub face_camera: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_distance: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dynamic: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Body>,
@@ -127,6 +129,7 @@ pub struct Object {
 
 impl Object {
     pub const ALPHA_CUTOFF: f32 = 0.5;
+    pub const MAX_DISTANCE: [f32; 2] = [0.0, 1_000_000.0];
 
     pub fn is_placement(&self) -> bool {
         self.prefab.is_some()

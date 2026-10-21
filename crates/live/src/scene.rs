@@ -603,6 +603,7 @@ impl Staged {
                     casts_shadow: draw.shadow.casts(),
                     two_sided: draw.two_sided,
                     alpha_cutoff: draw.alpha_cutoff,
+                    max_distance: draw.max_distance,
                     ..Instance::new(
                         self.meshes[&draw.geometry.hash],
                         draw.model,

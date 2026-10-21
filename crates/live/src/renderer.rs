@@ -3445,6 +3445,12 @@ impl Renderer {
                 Ok(())
             },
         )?;
+        let cull = self.frame.cull_stats();
+        self.stats.culled(crate::stats::Culled {
+            instances: cull.drawable,
+            culled: cull.culled(),
+            occluded: cull.occluded,
+        });
         if self.frame.has_tree() {
             self.pass_log.push("canopy cookie");
         }
@@ -4535,6 +4541,7 @@ impl Renderer {
         if matches!(self.exposure_mode, Exposure::Auto { .. }) {
             self.exposure.submitted();
         }
+        self.frame.occlusion_submitted();
         if let Some((buffer, x, y)) = pick_readback {
             let (sender, receiver) = std::sync::mpsc::channel();
             buffer

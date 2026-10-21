@@ -793,6 +793,7 @@ mod tests {
             kind: FrameKind::Full,
             size: [320, 180],
             hud_ms: None,
+            culled: None,
         }
     }
 

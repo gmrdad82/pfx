@@ -12,7 +12,7 @@ use std::time::Instant;
 
 use pfx_gpu::screens::{Device, SystemSource, detect};
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 pub const ENV: &str = "PFX_FRAME_STATS";
 pub const CHANNEL: usize = 256;
 const KEPT_FRAMES: usize = 16;
@@ -52,6 +52,14 @@ pub struct Sample {
     pub kind: FrameKind,
     pub size: [u32; 2],
     pub hud_ms: Option<f64>,
+    pub culled: Option<Culled>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Culled {
+    pub instances: u32,
+    pub culled: u32,
+    pub occluded: Option<u32>,
 }
 
 struct Line {
@@ -123,6 +131,19 @@ impl Line {
         }
         out.push_str(",\"hud_ms\":");
         optional(&mut out, sample.hud_ms);
+        let count = |out: &mut String, value: Option<u32>| match value {
+            Some(value) => {
+                let _ = write!(out, "{value}");
+            }
+            None => out.push_str("null"),
+        };
+        let culled = sample.culled;
+        out.push_str(",\"instances\":");
+        count(&mut out, culled.map(|culled| culled.instances));
+        out.push_str(",\"culled\":");
+        count(&mut out, culled.map(|culled| culled.culled));
+        out.push_str(",\"occluded\":");
+        count(&mut out, culled.and_then(|culled| culled.occluded));
         out.push('}');
         out
     }
@@ -177,6 +198,7 @@ struct Open {
     prepared: Option<Instant>,
     poll_ms: f64,
     queue_ms: f64,
+    culled: Option<Culled>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -476,12 +498,21 @@ impl FrameStats {
                 prepared: None,
                 poll_ms: 0.0,
                 queue_ms: 0.0,
+                culled: None,
             });
         }
     }
 
     pub fn now(&self) -> Option<Instant> {
         self.shared.as_ref().map(|_| Instant::now())
+    }
+
+    pub fn culled(&self, culled: Culled) {
+        if let Some(shared) = &self.shared
+            && let Some(open) = shared.lock().open.as_mut()
+        {
+            open.culled = Some(culled);
+        }
     }
 
     pub fn prepared(&self) {
@@ -586,6 +617,7 @@ impl FrameStats {
             kind: open.kind,
             size,
             hud_ms: None,
+            culled: open.culled,
         };
         if state.keep > 0 {
             state.recent.push_back(sample);
@@ -704,7 +736,7 @@ mod tests {
         let lines = sink.lines();
         assert_eq!(lines.len(), 5);
         for (index, line) in lines[..4].iter().enumerate() {
-            assert_eq!(line["schema_version"], 2);
+            assert_eq!(line["schema_version"], 3);
             assert_eq!(line["tick"], index as u64);
             assert_eq!(line["size"], serde_json::json!([1280, 800]));
             assert!(line["device"].is_null());
@@ -726,7 +758,45 @@ mod tests {
         assert_eq!(lines[3]["present_interval_ms"], 17.0);
         assert_eq!(
             lines[4],
-            serde_json::json!({"schema_version": 2, "end": true, "frames": 4, "dropped": 0})
+            serde_json::json!({"schema_version": 3, "end": true, "frames": 4, "dropped": 0})
+        );
+    }
+
+    #[test]
+    fn a_frame_carries_its_culled_counts_after_the_hud_and_others_carry_nulls() {
+        let sink = Sink::default();
+        let stats = FrameStats::to_writer(Box::new(sink.clone()), 16);
+        let base = Instant::now();
+        stats.begin_at(FrameKind::Full, ms(base, 0));
+        stats.culled(Culled {
+            instances: 40,
+            culled: 12,
+            occluded: Some(9),
+        });
+        stats.submitted_at(0, [1280, 800], ms(base, 2));
+        stats.begin_at(FrameKind::Full, ms(base, 17));
+        stats.culled(Culled {
+            instances: 40,
+            culled: 0,
+            occluded: None,
+        });
+        stats.submitted_at(1, [1280, 800], ms(base, 19));
+        frame(&stats, base, 2, 33, FrameKind::Idle);
+        stats.finish();
+        let lines = sink.lines();
+        assert_eq!(lines[0]["instances"], 40);
+        assert_eq!(lines[0]["culled"], 12);
+        assert_eq!(lines[0]["occluded"], 9);
+        assert_eq!(lines[1]["culled"], 0);
+        assert!(lines[1]["occluded"].is_null());
+        for key in ["instances", "culled", "occluded"] {
+            assert!(lines[2][key].is_null(), "{key}");
+        }
+        let text = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+        let first = text.lines().next().unwrap();
+        assert!(
+            first.ends_with(",\"hud_ms\":null,\"instances\":40,\"culled\":12,\"occluded\":9}"),
+            "{first}"
         );
     }
 
@@ -885,7 +955,7 @@ mod tests {
         let text = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
         let first = text.lines().next().unwrap();
         assert!(
-            first.ends_with(",\"device\":null,\"hud_ms\":1.000}"),
+            first.ends_with(",\"device\":null,\"hud_ms\":1.000,\"instances\":null,\"culled\":null,\"occluded\":null}"),
             "{first}"
         );
     }

@@ -273,6 +273,7 @@ pub struct Object {
     pub id: u32,
     pub alpha_cutoff: f32,
     pub face_camera: bool,
+    pub max_distance: f32,
     pub dynamic: Option<bool>,
 }
 

@@ -7,11 +7,17 @@ pub const COMMAND_BYTES: u64 = 20;
 
 const CULL_WGSL: &str = r#"
 struct CullInput {
-    sphere: vec4f,
+    low: vec4f,
+    high: vec4f,
     index_count: u32,
     testable: u32,
     pad0: u32,
     pad1: u32,
+}
+
+struct Run {
+    start: u32,
+    count: u32,
 }
 
 struct Command {
@@ -25,50 +31,72 @@ struct Command {
 struct Params {
     view_projection: mat4x4f,
     viewport: vec4u,
+    options: vec4u,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read> inputs: array<CullInput>;
 @group(0) @binding(2) var<storage, read_write> visible: array<u32>;
-@group(0) @binding(3) var<storage, read_write> early: array<Command>;
-@group(0) @binding(4) var<storage, read_write> late: array<Command>;
-@group(0) @binding(5) var<storage, read_write> last: array<Command>;
-@group(0) @binding(6) var pyramid: texture_2d<f32>;
+@group(0) @binding(3) var<storage, read_write> fresh: array<u32>;
+@group(0) @binding(4) var<storage, read> runs: array<Run>;
+@group(0) @binding(5) var<storage, read_write> early: array<Command>;
+@group(0) @binding(6) var<storage, read_write> late: array<Command>;
+@group(0) @binding(7) var<storage, read_write> last: array<Command>;
+@group(0) @binding(8) var<storage, read_write> counts: array<u32>;
+@group(0) @binding(9) var pyramid: texture_2d<f32>;
+@group(0) @binding(10) var<storage, read> members: array<u32>;
+@group(0) @binding(11) var<storage, read_write> tally: atomic<u32>;
 
 fn command(index: u32, count: u32) -> Command {
     return Command(inputs[index].index_count, count, 0u, 0, index);
 }
 
-@compute @workgroup_size(64)
-fn early_commands(@builtin(global_invocation_id) id: vec3u) {
-    let index = id.x;
-    if (index >= params.viewport.w) {
-        return;
-    }
-    let shown = select(min(visible[index], 1u), 1u, inputs[index].testable == 0u);
-    early[index] = command(index, shown);
+fn was_visible(index: u32) -> bool {
+    return inputs[index].testable == 0u || visible[index] != 0u;
 }
 
-fn unoccluded(sphere: vec4f) -> bool {
-    var low = vec2f(1e30);
-    var high = vec2f(-1e30);
+@compute @workgroup_size(64)
+fn early_commands(@builtin(global_invocation_id) id: vec3u) {
+    let slot = id.x;
+    if (slot == 0u) {
+        atomicStore(&tally, 0u);
+    }
+    if (slot >= params.viewport.z) {
+        return;
+    }
+    let run = runs[slot];
+    var kept = 0u;
+    for (var k = 0u; k < run.count; k++) {
+        let index = members[run.start + k];
+        if (was_visible(index)) {
+            early[run.start + kept] = command(index, 1u);
+            kept += 1u;
+        }
+    }
+    if (params.options.x != 0u) {
+        for (var k = kept; k < run.count; k++) {
+            early[run.start + k] = command(members[run.start], 0u);
+        }
+    }
+    counts[slot] = kept;
+}
+
+fn unoccluded(low: vec3f, high: vec3f) -> bool {
+    var least = vec2f(1e30);
+    var most = vec2f(-1e30);
     var nearest = -1e30;
     for (var corner = 0u; corner < 8u; corner++) {
-        let side = vec3f(
-            select(-1.0, 1.0, (corner & 1u) != 0u),
-            select(-1.0, 1.0, (corner & 2u) != 0u),
-            select(-1.0, 1.0, (corner & 4u) != 0u),
-        );
-        let clip = params.view_projection * vec4f(sphere.xyz + sphere.w * side, 1.0);
+        let pick = vec3<bool>((corner & 1u) != 0u, (corner & 2u) != 0u, (corner & 4u) != 0u);
+        let clip = params.view_projection * vec4f(select(low, high, pick), 1.0);
         if (clip.w <= 1e-6) {
             return true;
         }
         let ndc = clip.xyz / clip.w;
-        low = min(low, ndc.xy);
-        high = max(high, ndc.xy);
+        least = min(least, ndc.xy);
+        most = max(most, ndc.xy);
         nearest = max(nearest, ndc.z);
     }
-    if (any(high < vec2f(-1.0)) || any(low > vec2f(1.0)) || nearest < 0.0) {
+    if (any(most < vec2f(-1.0)) || any(least > vec2f(1.0)) || nearest < 0.0) {
         return false;
     }
     if (nearest >= 1.0) {
@@ -76,8 +104,8 @@ fn unoccluded(sphere: vec4f) -> bool {
     }
     let size = vec2f(params.viewport.xy);
     let edge = size - 1.0;
-    let first = vec2u(clamp(floor((vec2f(low.x, -high.y) * 0.5 + 0.5) * size), vec2f(0.0), edge));
-    let final_ = vec2u(clamp(floor((vec2f(high.x, -low.y) * 0.5 + 0.5) * size), vec2f(0.0), edge));
+    let first = vec2u(clamp(floor((vec2f(least.x, -most.y) * 0.5 + 0.5) * size), vec2f(0.0), edge));
+    let final_ = vec2u(clamp(floor((vec2f(most.x, -least.y) * 0.5 + 0.5) * size), vec2f(0.0), edge));
     let extent = max(final_.x - first.x, final_.y - first.y) + 1u;
     let levels = textureNumLevels(pyramid);
     var level = 0u;
@@ -96,22 +124,48 @@ fn unoccluded(sphere: vec4f) -> bool {
 }
 
 @compute @workgroup_size(64)
-fn late_commands(@builtin(global_invocation_id) id: vec3u) {
+fn test_instances(@builtin(global_invocation_id) id: vec3u) {
     let index = id.x;
     if (index >= params.viewport.w) {
         return;
     }
     let input = inputs[index];
-    if (input.testable == 0u) {
-        late[index] = command(index, 0u);
-        last[index] = command(index, 1u);
-        visible[index] = 1u;
+    fresh[index] = select(u32(unoccluded(input.low.xyz, input.high.xyz)), 1u, input.testable == 0u);
+}
+
+@compute @workgroup_size(64)
+fn late_commands(@builtin(global_invocation_id) id: vec3u) {
+    let slot = id.x;
+    if (slot >= params.viewport.z) {
         return;
     }
-    let now = u32(unoccluded(input.sphere));
-    late[index] = command(index, now * (1u - min(visible[index], 1u)));
-    last[index] = command(index, now);
-    visible[index] = now;
+    let run = runs[slot];
+    var newly = 0u;
+    var kept = 0u;
+    for (var k = 0u; k < run.count; k++) {
+        let index = members[run.start + k];
+        let now = fresh[index] != 0u;
+        if (now && !was_visible(index)) {
+            late[run.start + newly] = command(index, 1u);
+            newly += 1u;
+        }
+        if (now) {
+            last[run.start + kept] = command(index, 1u);
+            kept += 1u;
+        }
+        visible[index] = u32(now);
+    }
+    if (params.options.x != 0u) {
+        for (var k = newly; k < run.count; k++) {
+            late[run.start + k] = command(members[run.start], 0u);
+        }
+        for (var k = kept; k < run.count; k++) {
+            last[run.start + k] = command(members[run.start], 0u);
+        }
+    }
+    counts[params.viewport.z + slot] = newly;
+    counts[2u * params.viewport.z + slot] = kept;
+    atomicAdd(&tally, kept);
 }
 "#;
 
@@ -138,7 +192,8 @@ fn reduce(@builtin(global_invocation_id) id: vec3u) {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable, PartialEq)]
 pub struct CullInput {
-    pub sphere: [f32; 4],
+    pub low: [f32; 4],
+    pub high: [f32; 4],
     pub index_count: u32,
     pub testable: u32,
     pub pad: [u32; 2],
@@ -149,6 +204,23 @@ pub struct CullInput {
 struct Params {
     view_projection: Matrix,
     viewport: [u32; 4],
+    options: [u32; 4],
+}
+
+enum Tally {
+    Idle,
+    Copied(u32),
+    Mapping(
+        u32,
+        std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    ),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Early,
+    Late,
+    Last,
 }
 
 struct Level {
@@ -165,18 +237,32 @@ struct Pyramid {
 pub struct Occlusion {
     capacity: usize,
     count: u32,
+    run_capacity: usize,
+    run_count: u32,
+    count_draws: bool,
     inputs: wgpu::Buffer,
     visible: wgpu::Buffer,
-    pub early: wgpu::Buffer,
-    pub late: wgpu::Buffer,
-    pub last: wgpu::Buffer,
+    fresh: wgpu::Buffer,
+    runs: wgpu::Buffer,
+    members: wgpu::Buffer,
+    early: wgpu::Buffer,
+    late: wgpu::Buffer,
+    last: wgpu::Buffer,
+    counts: wgpu::Buffer,
+    tally: wgpu::Buffer,
+    tally_read: wgpu::Buffer,
+    tally_state: std::cell::RefCell<Tally>,
+    occluded: Option<u32>,
     params: wgpu::Buffer,
     uploaded: Vec<CullInput>,
+    uploaded_runs: Vec<[u32; 2]>,
+    uploaded_members: Vec<u32>,
     pyramid: Option<Pyramid>,
     cull_layout: wgpu::BindGroupLayout,
     first_layout: wgpu::BindGroupLayout,
     reduce_layout: wgpu::BindGroupLayout,
     early_pipeline: wgpu::ComputePipeline,
+    test_pipeline: wgpu::ComputePipeline,
     late_pipeline: wgpu::ComputePipeline,
     first_pipeline: wgpu::ComputePipeline,
     reduce_pipeline: wgpu::ComputePipeline,
@@ -298,9 +384,14 @@ impl Occlusion {
                 storage_entry(1, true),
                 storage_entry(2, false),
                 storage_entry(3, false),
-                storage_entry(4, false),
+                storage_entry(4, true),
                 storage_entry(5, false),
-                texture_entry(6, wgpu::TextureSampleType::Float { filterable: false }),
+                storage_entry(6, false),
+                storage_entry(7, false),
+                storage_entry(8, false),
+                texture_entry(9, wgpu::TextureSampleType::Float { filterable: false }),
+                storage_entry(10, true),
+                storage_entry(11, false),
             ],
         });
         let first_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -332,6 +423,13 @@ impl Occlusion {
             "early_commands",
             "occlusion early",
         );
+        let test_pipeline = compute(
+            device,
+            &cull_layout,
+            CULL_WGSL,
+            "test_instances",
+            "occlusion test",
+        );
         let late_pipeline = compute(
             device,
             &cull_layout,
@@ -359,27 +457,55 @@ impl Occlusion {
             std::mem::size_of::<Params>() as u64,
             wgpu::BufferUsages::UNIFORM,
         );
+        let empty = |label| buffer(device, label, 16, wgpu::BufferUsages::STORAGE);
         let mut occlusion = Self {
             capacity: 0,
             count: 0,
-            inputs: buffer(device, "occlusion inputs", 16, wgpu::BufferUsages::STORAGE),
-            visible: buffer(device, "occlusion visible", 16, wgpu::BufferUsages::STORAGE),
-            early: buffer(device, "occlusion early", 16, wgpu::BufferUsages::STORAGE),
-            late: buffer(device, "occlusion late", 16, wgpu::BufferUsages::STORAGE),
-            last: buffer(device, "occlusion last", 16, wgpu::BufferUsages::STORAGE),
+            run_capacity: 0,
+            run_count: 0,
+            count_draws: device
+                .features()
+                .contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT),
+            inputs: empty("occlusion inputs"),
+            visible: empty("occlusion visible"),
+            fresh: empty("occlusion fresh"),
+            runs: empty("occlusion runs"),
+            members: empty("occlusion members"),
+            early: empty("occlusion early"),
+            late: empty("occlusion late"),
+            last: empty("occlusion last"),
+            counts: empty("occlusion counts"),
+            tally: buffer(
+                device,
+                "occlusion tally",
+                4,
+                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            ),
+            tally_read: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("occlusion tally readback"),
+                size: 4,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            }),
+            tally_state: std::cell::RefCell::new(Tally::Idle),
+            occluded: None,
             params,
             uploaded: Vec::new(),
+            uploaded_runs: Vec::new(),
+            uploaded_members: Vec::new(),
             pyramid: None,
             cull_layout,
             first_layout,
             reduce_layout,
             early_pipeline,
+            test_pipeline,
             late_pipeline,
             first_pipeline,
             reduce_pipeline,
             cull_group: None,
         };
         occlusion.grow(device, 64);
+        occlusion.grow_runs(device, 64);
         occlusion
     }
 
@@ -398,11 +524,43 @@ impl Occlusion {
             count * 4,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         );
+        self.fresh = buffer(
+            device,
+            "occlusion fresh",
+            count * 4,
+            wgpu::BufferUsages::STORAGE,
+        );
+        self.members = buffer(
+            device,
+            "occlusion members",
+            count * 4,
+            wgpu::BufferUsages::STORAGE,
+        );
+        self.uploaded_members.clear();
         self.early = buffer(device, "occlusion early", count * COMMAND_BYTES, commands);
         self.late = buffer(device, "occlusion late", count * COMMAND_BYTES, commands);
         self.last = buffer(device, "occlusion last", count * COMMAND_BYTES, commands);
         self.capacity = capacity;
         self.uploaded.clear();
+        self.cull_group = None;
+    }
+
+    fn grow_runs(&mut self, device: &wgpu::Device, capacity: usize) {
+        let count = capacity as u64;
+        self.runs = buffer(
+            device,
+            "occlusion runs",
+            count * 8,
+            wgpu::BufferUsages::STORAGE,
+        );
+        self.counts = buffer(
+            device,
+            "occlusion counts",
+            count * 12,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::INDIRECT,
+        );
+        self.run_capacity = capacity;
+        self.uploaded_runs.clear();
         self.cull_group = None;
     }
 
@@ -497,25 +655,17 @@ impl Occlusion {
         self.cull_group = None;
     }
 
-    pub fn prepare(
+    pub fn set_inputs(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         inputs: &[CullInput],
-        view_projection: Matrix,
-        depth: &wgpu::Texture,
-        viewport: [u32; 2],
-    ) {
-        if inputs.len() > self.capacity {
+    ) -> bool {
+        let grown = inputs.len() > self.capacity;
+        if grown {
             self.grow(device, inputs.len().next_power_of_two());
         }
-        self.ensure_pyramid(device, depth, viewport);
         self.count = inputs.len() as u32;
-        let params = Params {
-            view_projection,
-            viewport: [viewport[0], viewport[1], 0, self.count],
-        };
-        queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
         let changed = |index: &usize| {
             self.uploaded
                 .get(*index)
@@ -531,6 +681,47 @@ impl Occlusion {
         }
         self.uploaded.clear();
         self.uploaded.extend_from_slice(inputs);
+        grown
+    }
+
+    pub fn set_runs(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        members: &[u32],
+        runs: &[[u32; 2]],
+    ) {
+        if runs.len() > self.run_capacity {
+            self.grow_runs(device, runs.len().next_power_of_two());
+        }
+        self.run_count = runs.len() as u32;
+        if self.uploaded_members.as_slice() != members {
+            queue.write_buffer(&self.members, 0, bytemuck::cast_slice(members));
+            self.uploaded_members.clear();
+            self.uploaded_members.extend_from_slice(members);
+        }
+        if self.uploaded_runs.as_slice() != runs {
+            queue.write_buffer(&self.runs, 0, bytemuck::cast_slice(runs));
+            self.uploaded_runs.clear();
+            self.uploaded_runs.extend_from_slice(runs);
+        }
+    }
+
+    pub fn prepare(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        view_projection: Matrix,
+        depth: &wgpu::Texture,
+        viewport: [u32; 2],
+    ) {
+        self.ensure_pyramid(device, depth, viewport);
+        let params = Params {
+            view_projection,
+            viewport: [viewport[0], viewport[1], self.run_count, self.count],
+            options: [u32::from(!self.count_draws), 0, 0, 0],
+        };
+        queue.write_buffer(&self.params, 0, bytemuck::bytes_of(&params));
         if self.cull_group.is_none()
             && let Some(pyramid) = &self.pyramid
         {
@@ -539,9 +730,12 @@ impl Occlusion {
                 &self.params,
                 &self.inputs,
                 &self.visible,
+                &self.fresh,
+                &self.runs,
                 &self.early,
                 &self.late,
                 &self.last,
+                &self.counts,
             ];
             let mut bound: Vec<wgpu::BindGroupEntry<'_>> = entries
                 .iter()
@@ -552,8 +746,16 @@ impl Occlusion {
                 })
                 .collect();
             bound.push(wgpu::BindGroupEntry {
-                binding: 6,
+                binding: 9,
                 resource: wgpu::BindingResource::TextureView(&view),
+            });
+            bound.push(wgpu::BindGroupEntry {
+                binding: 10,
+                resource: self.members.as_entire_binding(),
+            });
+            bound.push(wgpu::BindGroupEntry {
+                binding: 11,
+                resource: self.tally.as_entire_binding(),
             });
             self.cull_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("occlusion cull"),
@@ -590,8 +792,79 @@ impl Occlusion {
         visible
     }
 
-    fn workgroups(&self) -> u32 {
-        self.count.div_ceil(64)
+    pub fn submitted(&self) {
+        let mut state = self.tally_state.borrow_mut();
+        if let Tally::Copied(members) = *state {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            self.tally_read
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    let _ = sender.send(result);
+                });
+            *state = Tally::Mapping(members, receiver);
+        }
+    }
+
+    pub fn gather(&mut self) {
+        let state = self.tally_state.get_mut();
+        let Tally::Mapping(members, receiver) = state else {
+            return;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(())) => {
+                let members = *members;
+                let kept = self
+                    .tally_read
+                    .slice(..)
+                    .get_mapped_range()
+                    .ok()
+                    .map(|bytes| u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]));
+                self.tally_read.unmap();
+                self.occluded = kept.map(|kept| members.saturating_sub(kept));
+                *state = Tally::Idle;
+            }
+            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                *state = Tally::Idle;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    pub fn occluded(&self) -> Option<u32> {
+        self.occluded
+    }
+
+    fn workgroups(count: u32) -> u32 {
+        count.div_ceil(64)
+    }
+
+    pub fn set_count_draws(&mut self, device: &wgpu::Device, on: bool) {
+        self.count_draws = on
+            && device
+                .features()
+                .contains(wgpu::Features::MULTI_DRAW_INDIRECT_COUNT);
+    }
+
+    pub fn draw(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        phase: Phase,
+        slot: usize,
+        start: u32,
+        len: u32,
+    ) {
+        let (commands, section) = match phase {
+            Phase::Early => (&self.early, 0),
+            Phase::Late => (&self.late, 1),
+            Phase::Last => (&self.last, 2),
+        };
+        let offset = u64::from(start) * COMMAND_BYTES;
+        if self.count_draws {
+            let at = (u64::from(section * self.run_count) + slot as u64) * 4;
+            pass.multi_draw_indexed_indirect_count(commands, offset, &self.counts, at, len);
+        } else {
+            pass.multi_draw_indexed_indirect(commands, offset, len);
+        }
     }
 
     pub fn encode_early(
@@ -612,7 +885,7 @@ impl Occlusion {
         });
         pass.set_pipeline(&self.early_pipeline);
         pass.set_bind_group(0, group, &[]);
-        pass.dispatch_workgroups(self.workgroups(), 1, 1);
+        pass.dispatch_workgroups(Self::workgroups(self.run_count), 1, 1);
     }
 
     pub fn encode_late(
@@ -641,9 +914,17 @@ impl Occlusion {
             pass.set_bind_group(0, &level.group, &[]);
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
         }
-        pass.set_pipeline(&self.late_pipeline);
         pass.set_bind_group(0, group, &[]);
-        pass.dispatch_workgroups(self.workgroups(), 1, 1);
+        pass.set_pipeline(&self.test_pipeline);
+        pass.dispatch_workgroups(Self::workgroups(self.count), 1, 1);
+        pass.set_pipeline(&self.late_pipeline);
+        pass.dispatch_workgroups(Self::workgroups(self.run_count), 1, 1);
+        drop(pass);
+        let mut state = self.tally_state.borrow_mut();
+        if matches!(*state, Tally::Idle) {
+            encoder.copy_buffer_to_buffer(&self.tally, 0, &self.tally_read, 0, 4);
+            *state = Tally::Copied(self.uploaded_members.len() as u32);
+        }
     }
 }
 

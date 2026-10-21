@@ -10,6 +10,7 @@ use crate::maps::{
 use crate::morph::{
     InstanceWeights, MORPH_BINDING, MORPH_WGSL, MorphData, MorphRange, MorphStore, NO_MORPH,
 };
+use crate::occlusion::Phase;
 use crate::pipeline_cache::{CacheLoad, PipelineCache};
 use crate::probes::{
     Ambient, ContactDesc, ContactField, ContactUniform, PROBE_WGSL, ProbeLighting,
@@ -48,6 +49,7 @@ pub type Matrix = [[f32; 4]; 4];
 
 pub const NO_SWAY: u32 = u32::MAX;
 pub const SKY_EDGE: u32 = 128;
+const OCCLUSION_RUN: u32 = 256;
 pub const CONTACT_BINDING: u32 = CONTENT_BINDING + CONTENT_SLOTS as u32 + 1;
 pub const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
@@ -339,6 +341,7 @@ struct Mesh {
     skin_joints: u32,
     morph: MorphRange,
     sphere: [f32; 4],
+    extent: Option<cull::Extent>,
 }
 
 struct MeshSlot {
@@ -1143,8 +1146,50 @@ pub struct Frame {
     cull_stats: CullStats,
     occlusion: Option<crate::occlusion::Occlusion>,
     occlusion_on: bool,
+    occlusion_counts: bool,
+    occlusion_cache: OcclusionCache,
+    bounds_epoch: u64,
     cull_inputs: Vec<crate::occlusion::CullInput>,
     fades: Vec<f32>,
+}
+
+#[derive(Default)]
+struct OcclusionCache {
+    bounds_epoch: Option<u64>,
+    runs: Vec<Run>,
+    keys: Vec<(MeshHandle, bool, bool, OpaqueFeatures)>,
+    groups: Vec<cull::Group>,
+    members: Vec<u32>,
+    spans: Vec<[u32; 2]>,
+}
+
+#[derive(Clone, Copy)]
+enum Draws<'a> {
+    Runs(&'a [Run]),
+    Groups(&'a [cull::Group], Phase),
+}
+
+impl<'a> Draws<'a> {
+    fn of(runs: &'a [Run], groups: Option<&'a [cull::Group]>, phase: Option<Phase>) -> Self {
+        match (groups, phase) {
+            (Some(groups), Some(phase)) => Draws::Groups(groups, phase),
+            _ => Draws::Runs(runs),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Draws::Runs(runs) => runs.len(),
+            Draws::Groups(groups, _) => groups.len(),
+        }
+    }
+
+    fn batch(&self, slot: usize) -> usize {
+        match self {
+            Draws::Runs(runs) => runs[slot].batch,
+            Draws::Groups(groups, _) => groups[slot].batch,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1154,6 +1199,7 @@ struct CachedBound {
     deformer: DeformerId,
     epoch: u64,
     sphere: [f32; 4],
+    extent: Option<cull::Extent>,
 }
 
 pub fn multiply(a: Matrix, b: Matrix) -> Matrix {
@@ -2330,7 +2376,10 @@ impl Frame {
             culling: true,
             cull_stats: CullStats::default(),
             occlusion: None,
-            occlusion_on: false,
+            occlusion_on: true,
+            occlusion_counts: true,
+            occlusion_cache: OcclusionCache::default(),
+            bounds_epoch: 0,
             cull_inputs: Vec::new(),
             fades: Vec::new(),
             gpu,
@@ -3326,6 +3375,11 @@ impl Frame {
         } else {
             cull::local_sphere(data.positions)
         };
+        let extent = if sphere[3].is_finite() {
+            cull::local_box(data.positions)
+        } else {
+            None
+        };
         let slot = match self.free_meshes.last() {
             Some(&slot) => slot,
             None if self.meshes.len() <= MESH_SLOT_MASK as usize => self.meshes.len(),
@@ -3395,6 +3449,7 @@ impl Frame {
             skin_joints,
             morph,
             sphere,
+            extent,
         };
         if slot == self.meshes.len() {
             self.meshes.push(MeshSlot {
@@ -3524,6 +3579,7 @@ impl Frame {
         }
         mesh.count = data.indices.len() as u32;
         mesh.sphere = cull::local_sphere(data.positions);
+        mesh.extent = cull::local_box(data.positions);
         self.mesh_epoch += 1;
         Ok(())
     }
@@ -4139,11 +4195,14 @@ impl Frame {
         );
         let mut stats = CullStats {
             instances: scene.instances.len() as u32,
+            drawable: batches
+                .iter()
+                .filter(|batch| !batch.shadow_only)
+                .map(|batch| batch.range.len() as u32)
+                .sum(),
             camera: self.run_counts(&batches, &camera_runs),
             ..CullStats::default()
         };
-        let occluding = self.prepare_occlusion(scene, &camera_runs);
-        stats.occlusion_tested = occluding;
         let cut = batches.iter().any(|batch| batch.cut);
         if cut {
             self.pipelines.ensure_cut(&self.gpu.device);
@@ -4246,14 +4305,15 @@ impl Frame {
                     classic_depth: self.classic_depth,
                 }),
         );
-        self.encode_surfaces(
-            &batches,
-            &camera_runs,
-            occluding,
-            &features,
-            encoder,
-            profiler,
-        )?;
+        let occluding = self.prepare_occlusion(scene, &batches, &camera_runs, &features);
+        stats.occlusion_tested = occluding;
+        stats.occluded = self
+            .occlusion
+            .as_ref()
+            .filter(|_| occluding)
+            .and_then(|occlusion| occlusion.occluded());
+        let groups = occluding.then_some(self.occlusion_cache.groups.as_slice());
+        self.encode_surfaces(&batches, &camera_runs, groups, &features, encoder, profiler)?;
         self.cull_stats = stats;
         self.opaque_drawn = batches
             .iter()
@@ -4521,7 +4581,10 @@ impl Frame {
     }
 
     fn update_bounds(&mut self, instances: &[Instance]) {
-        self.bounds.truncate(instances.len());
+        if self.bounds.len() > instances.len() {
+            self.bounds.truncate(instances.len());
+            self.bounds_epoch += 1;
+        }
         for (index, instance) in instances.iter().enumerate() {
             if let Some(cached) = self.bounds.get(index)
                 && cached.mesh == instance.mesh
@@ -4531,11 +4594,13 @@ impl Frame {
             {
                 continue;
             }
-            let sphere = match live_mesh(&self.meshes, instance.mesh) {
-                Some(mesh) if instance.deformer == DeformerId::NONE => {
-                    cull::world_sphere(mesh.sphere, instance.model)
-                }
-                _ => UNBOUNDED,
+            let (sphere, extent) = match live_mesh(&self.meshes, instance.mesh) {
+                Some(mesh) if instance.deformer == DeformerId::NONE => (
+                    cull::world_sphere(mesh.sphere, instance.model),
+                    mesh.extent
+                        .and_then(|extent| cull::world_box(extent, instance.model)),
+                ),
+                _ => (UNBOUNDED, None),
             };
             let bound = CachedBound {
                 mesh: instance.mesh,
@@ -4543,11 +4608,13 @@ impl Frame {
                 deformer: instance.deformer,
                 epoch: self.mesh_epoch,
                 sphere,
+                extent,
             };
             match self.bounds.get_mut(index) {
                 Some(cached) => *cached = bound,
                 None => self.bounds.push(bound),
             }
+            self.bounds_epoch += 1;
         }
     }
 
@@ -4582,52 +4649,113 @@ impl Frame {
         })
     }
 
-    fn prepare_occlusion(&mut self, scene: &Scene<'_>, camera_runs: &[Run]) -> bool {
-        if !self.culling
-            || !self.occlusion_on
-            || self.classic_depth
-            || camera_runs.is_empty()
-            || self.occlusion.is_none()
-        {
+    fn prepare_occlusion(
+        &mut self,
+        scene: &Scene<'_>,
+        batches: &[Batch],
+        camera_runs: &[Run],
+        features: &[OpaqueFeatures],
+    ) -> bool {
+        if !self.culling || !self.occlusion_on || self.classic_depth || camera_runs.is_empty() {
             return false;
         }
-        let mut inputs = std::mem::take(&mut self.cull_inputs);
-        inputs.clear();
-        for (index, instance) in scene.instances.iter().enumerate() {
-            let sphere = self
-                .bounds
-                .get(index)
-                .map_or(UNBOUNDED, |bound| bound.sphere);
-            let bounded = sphere.iter().all(|value| value.is_finite());
-            inputs.push(crate::occlusion::CullInput {
-                sphere: if bounded { sphere } else { [0.0; 4] },
-                index_count: live_mesh(&self.meshes, instance.mesh).map_or(0, |mesh| mesh.count),
-                testable: u32::from(bounded),
-                pad: [0; 2],
-            });
+        if self.occlusion.is_none() {
+            if !self.occlusion_supported() {
+                return false;
+            }
+            let mut occlusion = crate::occlusion::Occlusion::new(&self.gpu.device);
+            occlusion.set_count_draws(&self.gpu.device, self.occlusion_counts);
+            self.occlusion = Some(occlusion);
+            self.occlusion_cache = OcclusionCache::default();
+        }
+        let inputs_stale = self.occlusion_cache.bounds_epoch != Some(self.bounds_epoch);
+        if inputs_stale {
+            let mut inputs = std::mem::take(&mut self.cull_inputs);
+            inputs.clear();
+            for (index, instance) in scene.instances.iter().enumerate() {
+                let extent = self.bounds.get(index).and_then(|bound| bound.extent);
+                let [low, high] = extent.unwrap_or_default();
+                inputs.push(crate::occlusion::CullInput {
+                    low: [low[0], low[1], low[2], 0.0],
+                    high: [high[0], high[1], high[2], 0.0],
+                    index_count: live_mesh(&self.meshes, instance.mesh)
+                        .map_or(0, |mesh| mesh.count),
+                    testable: u32::from(extent.is_some()),
+                    pad: [0; 2],
+                });
+            }
+            self.cull_inputs = inputs;
+            self.occlusion_cache.bounds_epoch = Some(self.bounds_epoch);
+        }
+        let key = |index: usize| {
+            let batch = &batches[index];
+            (batch.mesh, batch.two_sided, batch.cut, features[index])
+        };
+        let cache = &mut self.occlusion_cache;
+        let runs_stale = cache.runs.as_slice() != camera_runs
+            || cache.keys.len() != camera_runs.len()
+            || camera_runs
+                .iter()
+                .zip(&cache.keys)
+                .any(|(run, cached)| key(run.batch) != *cached);
+        if runs_stale {
+            let (groups, members) = cull::groups(camera_runs, key, OCCLUSION_RUN);
+            cache.spans = groups
+                .iter()
+                .map(|group| [group.start, group.count])
+                .collect();
+            cache.groups = groups;
+            cache.members = members;
+            cache.runs = camera_runs.to_vec();
+            cache.keys = camera_runs.iter().map(|run| key(run.batch)).collect();
         }
         let view_projection = reversed(multiply(
             jitter_matrix(self.jitter),
             multiply(scene.camera.projection, scene.camera.view),
         ));
         if let Some(occlusion) = self.occlusion.as_mut() {
+            occlusion.gather();
+            let mut grown = false;
+            if inputs_stale {
+                grown = occlusion.set_inputs(&self.gpu.device, &self.gpu.queue, &self.cull_inputs);
+            }
+            if runs_stale || grown {
+                occlusion.set_runs(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    &self.occlusion_cache.members,
+                    &self.occlusion_cache.spans,
+                );
+            }
             occlusion.prepare(
                 &self.gpu.device,
                 &self.gpu.queue,
-                &inputs,
                 view_projection,
                 &self.targets.depth,
                 self.viewport,
             );
         }
-        self.cull_inputs = inputs;
         true
     }
 
     pub fn set_occlusion(&mut self, on: bool) {
         self.occlusion_on = on;
-        if on && self.occlusion.is_none() && self.occlusion_supported() {
-            self.occlusion = Some(crate::occlusion::Occlusion::new(&self.gpu.device));
+    }
+
+    pub fn occlusion(&self) -> bool {
+        self.occlusion_on
+    }
+
+    pub fn set_occlusion_counts(&mut self, on: bool) {
+        self.occlusion_counts = on;
+        if let Some(occlusion) = self.occlusion.as_mut() {
+            occlusion.set_count_draws(&self.gpu.device, on);
+        }
+    }
+
+    pub fn occlusion_submitted(&self) {
+        if let Some(occlusion) = &self.occlusion {
+            occlusion.submitted();
         }
     }
 
@@ -4676,7 +4804,7 @@ impl Frame {
         &self,
         batches: &[Batch],
         runs: &[Run],
-        occluding: bool,
+        groups: Option<&[cull::Group]>,
         features: &[OpaqueFeatures],
         encoder: &mut wgpu::CommandEncoder,
         mut profiler: Option<&mut GpuProfiler>,
@@ -4686,14 +4814,14 @@ impl Frame {
             .group
             .as_ref()
             .ok_or("frame lighting is not prepared")?;
-        let occlusion = self.occlusion.as_ref().filter(|_| occluding);
+        let occlusion = self.occlusion.as_ref().filter(|_| groups.is_some());
         if let Some(occlusion) = occlusion {
             occlusion.encode_early(encoder, profiler.as_deref_mut());
         }
-        let phases: Vec<(&str, Option<&wgpu::Buffer>)> = match occlusion {
-            Some(occlusion) => vec![
-                ("depth and velocity", Some(&occlusion.early)),
-                ("depth and velocity late", Some(&occlusion.late)),
+        let phases: Vec<(&str, Option<Phase>)> = match occlusion {
+            Some(_) => vec![
+                ("depth and velocity", Some(Phase::Early)),
+                ("depth and velocity late", Some(Phase::Late)),
             ],
             None => vec![("depth and velocity", None)],
         };
@@ -4753,8 +4881,7 @@ impl Frame {
             self.draw_with(
                 &mut pass,
                 batches,
-                runs,
-                commands,
+                Draws::of(runs, groups, commands),
                 lighting,
                 |index, two_sided| {
                     let cut = batches[index].cut && self.pipelines.cut.is_some();
@@ -4824,8 +4951,7 @@ impl Frame {
             self.draw_with(
                 &mut pass,
                 batches,
-                runs,
-                occlusion.map(|occlusion| &occlusion.last),
+                Draws::of(runs, groups, occlusion.map(|_| Phase::Last)),
                 lighting,
                 |index, two_sided| {
                     let key = OpaqueKey {
@@ -4855,8 +4981,7 @@ impl Frame {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         batches: &[Batch],
-        runs: &[Run],
-        commands: Option<&wgpu::Buffer>,
+        draws: Draws<'_>,
         lighting: &wgpu::BindGroup,
         pipelines: impl Fn(usize, bool) -> &'p wgpu::RenderPipeline,
     ) {
@@ -4865,9 +4990,10 @@ impl Frame {
         pass.set_bind_group(2, &self.deformers.group, &[]);
         pass.set_bind_group(3, lighting, &[]);
         let mut current: Option<&wgpu::RenderPipeline> = None;
-        for run in runs {
-            let batch = &batches[run.batch];
-            let chosen = pipelines(run.batch, batch.two_sided);
+        for slot in 0..draws.len() {
+            let index = draws.batch(slot);
+            let batch = &batches[index];
+            let chosen = pipelines(index, batch.two_sided);
             if !current.is_some_and(|last| std::ptr::eq(last, chosen)) {
                 pass.set_pipeline(chosen);
                 current = Some(chosen);
@@ -4877,13 +5003,14 @@ impl Frame {
             };
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            match commands {
-                Some(commands) => pass.multi_draw_indexed_indirect(
-                    commands,
-                    u64::from(run.range.start) * crate::occlusion::COMMAND_BYTES,
-                    run.range.end - run.range.start,
-                ),
-                None => pass.draw_indexed(0..mesh.count, 0, run.range.clone()),
+            match (draws, &self.occlusion) {
+                (Draws::Groups(groups, phase), Some(occlusion)) => {
+                    occlusion.draw(pass, phase, slot, groups[slot].start, groups[slot].count)
+                }
+                (Draws::Runs(runs), _) => {
+                    pass.draw_indexed(0..mesh.count, 0, runs[slot].range.clone())
+                }
+                _ => {}
             }
         }
     }

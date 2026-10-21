@@ -1107,6 +1107,7 @@ fn build_objects(
             id: value.pick.unwrap_or(place as u32 + 1),
             alpha_cutoff: value.alpha_cutoff.unwrap_or(ALPHA_CUTOFF),
             face_camera: value.face_camera,
+            max_distance: value.max_distance.unwrap_or(f32::INFINITY),
             dynamic: value.dynamic,
         });
     }

@@ -128,6 +128,7 @@ struct Tally {
     passes: BTreeMap<String, Vec<f64>>,
     totals: Vec<f64>,
     stats: Option<CullStats>,
+    kept: Option<usize>,
     hash: u64,
 }
 
@@ -182,6 +183,11 @@ fn run(plan: &Plan, scene: &Scene, mode: Mode, tally: &mut Tally) {
         }
     }
     tally.stats = Some(renderer.cull_stats().clone());
+    tally.kept = renderer
+        .frame()
+        .occlusion_visible()
+        .filter(|_| mode == Mode::Occlusion)
+        .map(|visible| visible.iter().filter(|shown| **shown != 0).count());
     let pixels = renderer.gpu().readback_rgba16(&target).unwrap();
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     pixels.hash(&mut hasher);
@@ -230,6 +236,9 @@ fn main() {
         if let Some(stats) = &tally.stats {
             println!("  instances {}", stats.instances);
             println!("  occlusion tested {}", stats.occlusion_tested);
+            if let Some(kept) = tally.kept {
+                println!("  occlusion kept {kept} of {}", stats.instances);
+            }
             println!("  {}", line("camera", stats.camera));
             for (index, counts) in stats.cascades.iter().enumerate() {
                 println!("  {}", line(&format!("cascade {}", index + 1), *counts));

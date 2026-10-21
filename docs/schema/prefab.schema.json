@@ -742,6 +742,10 @@
           },
           "type": "object"
         },
+        "max_distance": {
+          "format": "float",
+          "type": "number"
+        },
         "mesh": {
           "type": "string"
         },

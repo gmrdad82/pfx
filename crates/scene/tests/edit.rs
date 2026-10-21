@@ -376,6 +376,30 @@ fn refused_edits_write_nothing_and_name_the_key_and_file() {
 }
 
 #[test]
+fn a_draw_distance_is_set_after_its_neighbours_refused_out_of_range_and_undone() {
+    let folder = Folder::room("edit-distance");
+    let mut edit = edit(&folder);
+    let before = snapshot(&folder);
+    let crate_ = Target::Object("crate".into());
+    for bad in [0.0f32, -3.0, 2.0e6, f32::INFINITY, f32::NAN] {
+        let error = edit
+            .set(&crate_, &["max_distance"], bad)
+            .expect_err("an out-of-range draw distance");
+        assert_eq!(error.key, "object crate max_distance", "{error}");
+        assert!(error.message.contains("max_distance"), "{error}");
+    }
+    assert_eq!(snapshot(&folder), before);
+    assert!(!edit.can_undo());
+    edit.set(&crate_, &["max_distance"], 25.0f32).unwrap();
+    assert_eq!(object(&edit, "crate").max_distance, Some(25.0));
+    let after = folder.read("room.scene.toml");
+    assert!(after.contains("max_distance = 25.0"), "{after}");
+    edit.undo().unwrap();
+    assert_eq!(object(&edit, "crate").max_distance, None);
+    assert_eq!(snapshot(&folder), before);
+}
+
+#[test]
 fn a_refused_edit_in_a_library_names_the_library() {
     let folder = Folder::room("edit-refused-library");
     let mut edit = edit(&folder);

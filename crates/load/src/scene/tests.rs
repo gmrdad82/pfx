@@ -1368,6 +1368,29 @@ fn a_mix_sky_is_the_weighted_sum_of_its_layers() {
 }
 
 #[test]
+fn a_draw_distance_reaches_the_draws_and_defaults_to_none() {
+    let scene = opened(
+        "distance",
+        &format!(
+            "{BLOCK}[[object]]\nname = \"far\"\nmesh = \"b\"\nmax_distance = 40.0\n\n[[object]]\nname = \"plain\"\nmesh = \"b\"\n\n[[object]]\nname = \"edge\"\nmesh = \"b\"\nmax_distance = 1000000.0\n\n[[object]]\nname = \"close\"\nmesh = \"b\"\nmax_distance = 0.001\n"
+        ),
+    );
+    let draws = scene.draws();
+    let reach = |name: &str| {
+        draws
+            .items
+            .iter()
+            .find(|draw| draw.object == name)
+            .unwrap()
+            .max_distance
+    };
+    assert_eq!(reach("far"), 40.0);
+    assert_eq!(reach("plain"), f32::INFINITY);
+    assert_eq!(reach("edge"), 1_000_000.0);
+    assert_eq!(reach("close"), 0.001);
+}
+
+#[test]
 fn alpha_cutoff_and_camera_facing_cards_reach_the_draws() {
     let scene = opened(
         "cards",

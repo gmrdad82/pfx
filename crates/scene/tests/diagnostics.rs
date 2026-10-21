@@ -744,6 +744,48 @@ fn the_engines_refusals_are_kept() {
             "outside 0 to 1",
         ),
         (
+            "max-distance-zero",
+            &format!(
+                "{BLOCK}[[object]]\nid = \"0bj0000001\"\nname = \"x\"\nmesh = \"b\"\nmax_distance = 0.0\n"
+            ),
+            "max_distance = 0 is outside 0 (excluded) to 1000000",
+        ),
+        (
+            "max-distance-negative",
+            &format!(
+                "{BLOCK}[[object]]\nid = \"0bj0000001\"\nname = \"x\"\nmesh = \"b\"\nmax_distance = -5.0\n"
+            ),
+            "max_distance = -5 is outside 0 (excluded) to 1000000",
+        ),
+        (
+            "max-distance-inf",
+            &format!(
+                "{BLOCK}[[object]]\nid = \"0bj0000001\"\nname = \"x\"\nmesh = \"b\"\nmax_distance = inf\n"
+            ),
+            "max_distance = inf is outside 0 (excluded) to 1000000",
+        ),
+        (
+            "max-distance-nan",
+            &format!(
+                "{BLOCK}[[object]]\nid = \"0bj0000001\"\nname = \"x\"\nmesh = \"b\"\nmax_distance = nan\n"
+            ),
+            "max_distance = NaN is outside 0 (excluded) to 1000000",
+        ),
+        (
+            "max-distance-far",
+            &format!(
+                "{BLOCK}[[object]]\nid = \"0bj0000001\"\nname = \"x\"\nmesh = \"b\"\nmax_distance = 2000000.0\n"
+            ),
+            "max_distance = 2000000 is outside 0 (excluded) to 1000000",
+        ),
+        (
+            "max-distance-placement",
+            &format!(
+                "{BLOCK}[[object]]\nid = \"0bj0000001\"\nname = \"x\"\nprefab = \"lamp.prefab.toml\"\nmax_distance = 10.0\n"
+            ),
+            "not max_distance",
+        ),
+        (
             "clip-three",
             &format!(
                 "{BLOCK}[[object]]\nid = \"0bj0000001\"\nname = \"x\"\nmesh = \"b\"\nclip = [[0.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]\n"

@@ -223,6 +223,7 @@ const ORDER_OBJECT: &[&str] = &[
     "pick",
     "alpha_cutoff",
     "face_camera",
+    "max_distance",
     "dynamic",
     "body",
     "character",

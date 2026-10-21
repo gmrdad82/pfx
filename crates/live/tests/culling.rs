@@ -311,7 +311,9 @@ fn culling_leaves_every_pixel_id_and_depth_as_it_was() {
             .iter()
             .all(|cascade| cascade.instances < stats.instances)
     );
-    assert!(!stats.occlusion_tested);
+    assert_eq!(stats.occlusion_tested, on.frame.occlusion_supported());
+    assert!(stats.culled() > 0);
+    assert_eq!(stats.drawable, stats.instances);
     let plain = off.frame.cull_stats();
     assert_eq!(plain.camera.instances, plain.instances);
 }
@@ -319,14 +321,16 @@ fn culling_leaves_every_pixel_id_and_depth_as_it_was() {
 #[test]
 #[ignore = "needs a GPU; run under pgpu"]
 fn an_object_that_moves_into_view_or_out_from_behind_a_wall_is_drawn_on_its_first_visible_frame() {
-    emerging(false);
-    emerging(true);
+    emerging(false, true);
+    emerging(true, true);
+    emerging(true, false);
 }
 
-fn emerging(occluded: bool) {
+fn emerging(occluded: bool, counted: bool) {
     let mut off = stage(false);
     let mut on = stage(true);
     on.frame.set_occlusion(occluded);
+    on.frame.set_occlusion_counts(counted);
     let eye = EYE;
     let still = multiply(perspective(0.1, 30.0), look_along_minus_z(eye));
     let mut drawn_on_some_frame = false;
@@ -369,4 +373,117 @@ fn emerging(occluded: bool) {
     }
     assert!(drawn_on_some_frame);
     assert!(hidden_behind_the_wall || !occluded || !on.frame.occlusion_supported());
+}
+
+fn shown(ids: &[u8], id: u32) -> usize {
+    ids.chunks_exact(4)
+        .filter(|pixel| u32::from_le_bytes((*pixel).try_into().unwrap()) == id)
+        .count()
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn occlusion_is_on_by_default_and_what_moves_is_never_stale_against_a_fresh_frame() {
+    let mut on = stage(true);
+    assert!(on.frame.occlusion());
+    let eye = EYE;
+    let still = multiply(perspective(0.1, 30.0), look_along_minus_z(eye));
+    let mut hidden_once = false;
+    let mut kept_static = false;
+    for step in 0..10 {
+        let wall_x = if step < 4 {
+            0.0
+        } else {
+            (step - 3) as f32 * 1.2
+        };
+        let jumper = if step < 6 {
+            at(0.0, 1.0, -1.5)
+        } else {
+            at(-2.5 + (step - 6) as f32 * 0.4, 1.0, -1.5)
+        };
+        let instances = [
+            sided(Instance::new(on.floor, identity(), 0, 1)),
+            sided(Instance::new(on.wall, at(wall_x, 0.0, 2.0), 0, 2)),
+            Instance::new(on.ball, jumper, 0, 3),
+            Instance::new(on.ball, at(0.6, 0.6, -2.5), 0, 4),
+            Instance::new(on.ball, at(-0.6, 0.6, -2.5), 0, 5),
+            Instance::new(on.ball, at(3.0, 0.6, -1.0), 0, 6),
+        ];
+        let mut fresh = stage(false);
+        let (reference, _) = shoot(&mut fresh, &instances, eye, still);
+        let (culled, _) = shoot(&mut on, &instances, eye, still);
+        for id in 1..=6 {
+            assert_eq!(
+                shown(&reference.ids, id),
+                shown(&culled.ids, id),
+                "instance {id} pixels at step {step}"
+            );
+        }
+        assert!(reference.ids == culled.ids, "ids differ at step {step}");
+        assert!(
+            reference.depth == culled.depth,
+            "depth differs at step {step}"
+        );
+        assert!(reference.hdr == culled.hdr, "colour differs at step {step}");
+        if let Some(visible) = on.frame.occlusion_visible() {
+            assert!(on.frame.cull_stats().occlusion_tested);
+            for (index, id) in (2..6).zip(3..=6) {
+                if shown(&culled.ids, id) > 0 {
+                    assert_eq!(
+                        visible[index], 1,
+                        "instance {id} shows but was dropped at {step}"
+                    );
+                }
+            }
+            if (1..4).contains(&step) {
+                hidden_once |= visible[2] == 0;
+                kept_static |= visible[3] == 0 && visible[4] == 0;
+            }
+        }
+    }
+    assert!(!on.frame.occlusion_supported() || (hidden_once && kept_static));
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_draw_distance_draws_inside_it_fades_across_its_last_tenth_and_culls_past_it() {
+    let mut plain = stage(true);
+    let mut far = stage(true);
+    let eye = EYE;
+    let still = multiply(perspective(0.1, 30.0), look_along_minus_z(eye));
+    let place = at(1.0, 0.5, -4.0);
+    let distance = {
+        let dx = 1.0 - eye[0];
+        let dy = 0.5 - eye[1];
+        let dz = -4.0 - eye[2];
+        (dx * dx + dy * dy + dz * dz).sqrt()
+    };
+    let floor = sided(Instance::new(plain.floor, identity(), 0, 1));
+    let ball = Instance::new(plain.ball, place, 0, 2);
+    let (whole, _) = shoot(&mut plain, &[floor, ball], eye, still);
+    let full = shown(&whole.ids, 2);
+    assert!(full > 0);
+    let mut seen = Vec::new();
+    for reach in [distance * 2.0, distance / 0.95, distance * 0.98] {
+        let limited = Instance {
+            max_distance: reach,
+            ..ball
+        };
+        let (shot, _) = shoot(&mut far, &[floor, limited], eye, still);
+        seen.push((shot, far.frame.cull_stats().culled()));
+    }
+    assert!(
+        seen[0].0 == whole,
+        "a ball well inside its distance changed"
+    );
+    assert_eq!(seen[0].1, 0);
+    let banded = shown(&seen[1].0.ids, 2);
+    assert!(
+        banded > 0 && banded < full,
+        "{banded} of {full} in the fade band"
+    );
+    assert_eq!(seen[1].1, 0);
+    assert_eq!(shown(&seen[2].0.ids, 2), 0, "a ball past its distance drew");
+    assert_eq!(seen[2].1, 1);
+    assert!(seen[2].0.hdr != whole.hdr);
 }

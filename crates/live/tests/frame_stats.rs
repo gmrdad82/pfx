@@ -172,7 +172,7 @@ fn flat_frames_in_flight_draw_the_same_bytes_wait_for_nothing_and_stay_bounded()
     assert_eq!(blocking_lines.len(), FLAT_FRAMES as usize);
     assert_eq!(pipelined_lines.len(), FLAT_FRAMES as usize);
     for line in &blocking_lines {
-        assert_eq!(line["schema_version"], 2);
+        assert_eq!(line["schema_version"], 3);
         assert!(line["wait_ms"].as_f64().is_some(), "{line}");
         assert!(line["prepare_ms"].as_f64().is_some(), "{line}");
         let parts: f64 = ["prepare_ms", "encode_ms", "poll_ms", "queue_ms"]
@@ -184,5 +184,82 @@ fn flat_frames_in_flight_draw_the_same_bytes_wait_for_nothing_and_stay_bounded()
     }
     for path in [&blocking, &pipelined] {
         let _ = std::fs::remove_file(path);
+    }
+}
+
+fn culled_lines(occlusion: bool) -> (Vec<serde_json::Value>, bool) {
+    let root = Path::new(env!("CARGO_TARGET_TMPDIR")).join("frame-stats-culled");
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join(format!("stats-{occlusion}.jsonl"));
+    let _ = std::fs::remove_file(&path);
+    let scene = Scene::open(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../load/tests/scenes/room.scene.toml"),
+    )
+    .unwrap();
+    let gpu = pollster::block_on(Gpu::headless()).unwrap();
+    let output = output(&gpu, WIDTH, HEIGHT);
+    let mut renderer = Renderer::new(gpu, WIDTH, HEIGHT).unwrap();
+    renderer.set_exposure(Exposure::Fixed(1.0)).unwrap();
+    renderer.set_occlusion(occlusion);
+    renderer.set_frame_stats(FrameStats::to_file(&path).unwrap());
+    let stats = renderer.frame_stats();
+    let supported = renderer.frame().occlusion_supported();
+    let mut staged = renderer.stage(&scene).unwrap();
+    for frame in 0..FRAMES {
+        let finish = staged.finish();
+        let drawn = staged.frame(WIDTH as f32 / HEIGHT as f32, frame as f32 / 60.0, SEED);
+        renderer
+            .submit(
+                &drawn.scene,
+                &drawn.text,
+                &drawn.effects,
+                finish,
+                &output.view,
+            )
+            .unwrap();
+        renderer.wait_frames(0).unwrap();
+    }
+    stats.finish();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let lines = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .filter(|line: &serde_json::Value| line.get("tick").is_some())
+        .collect();
+    (lines, supported)
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn frame_stats_count_what_the_camera_culled_and_what_occlusion_dropped() {
+    let (lines, supported) = culled_lines(true);
+    assert_eq!(lines.len() as u64, FRAMES);
+    let mut occluded_seen = false;
+    for line in &lines {
+        assert_eq!(line["schema_version"], 3);
+        let instances = line["instances"]
+            .as_u64()
+            .expect("a 3D frame counts its instances");
+        assert!(instances > 0, "{line}");
+        let culled = line["culled"].as_u64().unwrap();
+        assert!(culled <= instances, "{line}");
+        if let Some(occluded) = line["occluded"].as_u64() {
+            assert!(occluded <= instances - culled, "{line}");
+            occluded_seen = true;
+        } else {
+            assert!(line["occluded"].is_null());
+        }
+    }
+    assert!(
+        lines[0]["occluded"].is_null(),
+        "the first tally cannot have landed"
+    );
+    assert_eq!(occluded_seen, supported);
+    let (plain, _) = culled_lines(false);
+    for (line, other) in plain.iter().zip(&lines) {
+        assert!(line["occluded"].is_null(), "{line}");
+        assert_eq!(line["instances"], other["instances"]);
+        assert_eq!(line["culled"], other["culled"]);
     }
 }

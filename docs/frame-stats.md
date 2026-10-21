@@ -28,14 +28,14 @@ A frame is one submission that puts an image on the output:
 ## The line
 
 ```json
-{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
+{"schema_version":3,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"instances":null,"culled":null,"occluded":null}
 ```
 
 Every key is always present, in this order. Times are milliseconds as JSON numbers with three decimals, never negative.
 
 | Key | Type | Meaning |
 |---|---|---|
-| `schema_version` | integer | `2` (version 1 had no `prepare_ms`, `encode_ms`, `poll_ms`, `queue_ms` or `wait_ms`; every other key means the same) |
+| `schema_version` | integer | `3` (version 2 had no `instances`, `culled` or `occluded`; version 1 also had no `prepare_ms`, `encode_ms`, `poll_ms`, `queue_ms` or `wait_ms`; every other key means the same) |
 | `tick` | integer | the frame's index, from 0, counting the frames of this file (not the renderer's submission count, which also counts `wake`) |
 | `t_ms` | number | monotonic time from the start of the first frame to the start of this one; the first line is `0.000` |
 | `sim_ms` | number or null | the time the game's simulation took since the previous frame's submit: the sum of the `sim_begin`/`sim_end` spans completed in that interval, which `pfx-play`'s `PlaySession::advance` and `step` report when given the stats (`set_frame_stats`). `null` when no span was reported |
@@ -52,6 +52,9 @@ Every key is always present, in this order. Times are milliseconds as JSON numbe
 | `size` | `[w, h]` | the renderer's drawn size in pixels |
 | `device` | string or null | the device the game runs on: `steam-deck-lcd`, `steam-deck-oled` or `desktop` (`docs/screens.md`). Detected once when the stats open a file (the variable, or `FrameStats::to_file`), with `PFX_DEVICE` as an override; `null` for stats made with `to_writer` and no `set_device` |
 | `hud_ms` | number or null | the dev HUD's own draw cost over this frame, from the start of its draw to the end of its `queue.submit` (see [Dev HUD](#dev-hud)); `null` when the HUD did not draw over the frame: hidden, or built without the `dev-hud` feature |
+| `instances` | integer or null | the instances the 3D frame's camera passes could draw: every instance but the shadow-only ones (`CullStats::drawable`). `null` for a frame that draws no 3D scene (a flat frame, a look, an idle frame) |
+| `culled` | integer or null | how many of `instances` the camera's frustum and the instances' draw distance removed this frame (`CullStats::culled()`); `null` exactly when `instances` is |
+| `occluded` | integer or null | how many of the instances the frustum kept occlusion culling removed, from the newest GPU tally that had resolved, so a frame or two late (`CullStats::occluded`). `null` while occlusion is off or unsupported, and until the first tally resolves |
 
 ### `gpu_ms` and its tick
 
@@ -73,7 +76,7 @@ The renderer hands each line to a writer thread through a bounded channel of 256
 On a clean exit (the renderer, and every handle to its stats, dropped, or `FrameStats::finish` called) the last line is written:
 
 ```json
-{"schema_version":2,"end":true,"frames":6,"dropped":0}
+{"schema_version":3,"end":true,"frames":6,"dropped":0}
 ```
 
 `frames` is the number of frames the run presented, dropped ones included; `dropped` is how many of them have no line. So the file holds `frames - dropped` frame lines before the end line. A file without an end line came from a process that did not exit cleanly (a kill, a crash, `process::exit`): its lines are valid up to the last complete one.
@@ -83,16 +86,16 @@ On a clean exit (the renderer, and every handle to its stats, dropped, or `Frame
 The first three frames of a measured run of `crates/game/examples/flat` at 2560×1440 (one `render_flat` per frame, the renderer waiting for each frame: `FLAT_IN_FLIGHT=0`):
 
 ```json
-{"schema_version":2,"tick":0,"t_ms":0.000,"sim_ms":0.001,"submit_ms":201.512,"prepare_ms":198.993,"encode_ms":2.312,"poll_ms":0.035,"queue_ms":0.172,"wait_ms":5.379,"gpu_ms":4.880,"gpu_tick":0,"present_interval_ms":null,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
-{"schema_version":2,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
-{"schema_version":2,"tick":2,"t_ms":214.727,"sim_ms":0.001,"submit_ms":1.629,"prepare_ms":0.412,"encode_ms":1.128,"poll_ms":0.012,"queue_ms":0.079,"wait_ms":5.015,"gpu_ms":4.855,"gpu_tick":2,"present_interval_ms":7.445,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
+{"schema_version":3,"tick":0,"t_ms":0.000,"sim_ms":0.001,"submit_ms":201.512,"prepare_ms":198.993,"encode_ms":2.312,"poll_ms":0.035,"queue_ms":0.172,"wait_ms":5.379,"gpu_ms":4.880,"gpu_tick":0,"present_interval_ms":null,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"instances":null,"culled":null,"occluded":null}
+{"schema_version":3,"tick":1,"t_ms":207.486,"sim_ms":0.031,"submit_ms":1.425,"prepare_ms":0.412,"encode_ms":0.946,"poll_ms":0.009,"queue_ms":0.058,"wait_ms":5.240,"gpu_ms":4.825,"gpu_tick":1,"present_interval_ms":7.400,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"instances":null,"culled":null,"occluded":null}
+{"schema_version":3,"tick":2,"t_ms":214.727,"sim_ms":0.001,"submit_ms":1.629,"prepare_ms":0.412,"encode_ms":1.128,"poll_ms":0.012,"queue_ms":0.079,"wait_ms":5.015,"gpu_ms":4.855,"gpu_tick":2,"present_interval_ms":7.445,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"instances":null,"culled":null,"occluded":null}
 ```
 
 (The first frame's 199 ms of `prepare_ms` is pipeline creation; a target report skips frames until the interval settles.) Every frame of that run blocks about 5 ms in `wait_ms`. The same game with two frames in flight (`FLAT_IN_FLIGHT=2`, the default) waits for nothing, and its GPU time arrives a frame later, joined by `gpu_tick`:
 
 ```json
-{"schema_version":2,"tick":999,"t_ms":3656.506,"sim_ms":0.000,"submit_ms":1.355,"prepare_ms":0.419,"encode_ms":0.883,"poll_ms":0.001,"queue_ms":0.051,"wait_ms":null,"gpu_ms":2.846,"gpu_tick":998,"present_interval_ms":3.640,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
-{"schema_version":2,"tick":1000,"t_ms":3659.224,"sim_ms":0.001,"submit_ms":1.327,"prepare_ms":0.391,"encode_ms":0.900,"poll_ms":0.001,"queue_ms":0.036,"wait_ms":null,"gpu_ms":2.847,"gpu_tick":999,"present_interval_ms":2.691,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null}
+{"schema_version":3,"tick":999,"t_ms":3656.506,"sim_ms":0.000,"submit_ms":1.355,"prepare_ms":0.419,"encode_ms":0.883,"poll_ms":0.001,"queue_ms":0.051,"wait_ms":null,"gpu_ms":2.846,"gpu_tick":998,"present_interval_ms":3.640,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"instances":null,"culled":null,"occluded":null}
+{"schema_version":3,"tick":1000,"t_ms":3659.224,"sim_ms":0.001,"submit_ms":1.327,"prepare_ms":0.391,"encode_ms":0.900,"poll_ms":0.001,"queue_ms":0.036,"wait_ms":null,"gpu_ms":2.847,"gpu_tick":999,"present_interval_ms":2.691,"kind":"full","size":[2560,1440],"device":"desktop","hud_ms":null,"instances":null,"culled":null,"occluded":null}
 ```
 
 A clean exit then closes the file with its end line, as above.

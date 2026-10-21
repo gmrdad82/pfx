@@ -288,6 +288,7 @@ The loader computes missing normals (smooth, area weighted); missing tangents ar
 | `pick` | unsigned integer | its 1-based place among the objects | the pick id. Format 0 called it `id`. |
 | `alpha_cutoff` | number, 0 to 1 | `0.5` | texels of a cut-out material below this alpha are dropped. |
 | `face_camera` | bool | `false` | a card: it keeps its position and scale, and turns every frame so its local +Z faces the camera with its +Y along the camera's up (its `rotate` is ignored). |
+| `max_distance` | number, metres, over 0 up to 1,000,000 | none | the live renderer's draw distance: past it the object is culled from the camera passes, and over the last tenth before it it fades out with the stipple coverage. Its shadow keeps casting, and the tracer ignores the key. A value of 0 or less, past 1,000,000 or not finite is refused. |
 | `dynamic` | bool | derived | whether the object moves or changes at run time: a plate leaves a dynamic object out, and a live renderer draws it over the plate (`[plates]`). Without the key, an object is dynamic when a `[[mover]]` moves it, when it is a character, when it is animated, when it faces the camera, or when its parent is dynamic; every other object is static. `true` marks what a game moves itself; `false` keeps an object static, and a character or an animated object refuses it. |
 | `body` | table | none | `[object.body]`: the object's rigid body. |
 | `character` | table | none | `[object.character]`: a character controller that moves the object. Not with `body`. |
