@@ -436,7 +436,10 @@ fn path_of(camera: &Camera) -> Result<&CameraPath, String> {
 }
 
 enum Renderer {
-    Live(Box<pfx_recipe_scene::Reel>, Box<(Recipe, Built)>),
+    Live(
+        Box<pfx_recipe_scene::Reel>,
+        Box<(Recipe, Built, pfx_recipe_scene::Keyed)>,
+    ),
     Traced(Box<pfx_still::Reel>, u32, Option<Noise>, super::Picture),
 }
 
@@ -458,9 +461,8 @@ impl Renderer {
     fn pose(&mut self, time: f64, before: Option<f64>, name: &str) -> Result<Camera, String> {
         match self {
             Renderer::Live(reel, base) => {
-                let (recipe, built) = (&base.0, &base.1);
-                let fps = recipe.timeline.map_or(Rate::whole(1), |t| t.fps);
-                reel.set_poses(pfx_recipe_scene::poses(built, fps, time));
+                let (recipe, built, keyed) = &mut **base;
+                reel.set_keyed(keyed.sample(built, time));
                 if built.skinned() {
                     let now = built.skinned_parts(time);
                     match before {
@@ -624,7 +626,7 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
                 spun(&recipe, name)?;
             }
             let gpu = pfx_recipe_scene::headless().map_err(|e| e.0)?;
-            let reel = pfx_recipe_scene::Reel::with_output(
+            let mut reel = pfx_recipe_scene::Reel::with_output(
                 &gpu,
                 &recipe,
                 &built.parts,
@@ -632,7 +634,10 @@ fn open(args: &Args, registry: &Registry) -> Result<(Renderer, Camera), String> 
                 args.picture.output(0, crate::recipe::Background::Sky),
             )
             .map_err(|e| e.0)?;
-            let base = Box::new((recipe.clone(), built));
+            let fps = recipe.timeline.map_or(Rate::whole(1), |t| t.fps);
+            let keyed = pfx_recipe_scene::Keyed::of(&built, fps);
+            reel.bind_keys(keyed.names());
+            let base = Box::new((recipe.clone(), built, keyed));
             (Renderer::Live(Box::new(reel), base), recipe)
         }
         Some(samples) => {

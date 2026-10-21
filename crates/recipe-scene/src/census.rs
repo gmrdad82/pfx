@@ -41,7 +41,8 @@ pub fn census_of(parts: &[Part], sky: [u32; 2]) -> Census {
         out.placed += triangles;
         out.vertices += vertices;
         out.pieces += mesh.slots.len().max(1) as u64;
-        if !copied(parts, at, &mut leads) {
+        let copy = part.scattered.is_some_and(|scattered| scattered.copy > 0);
+        if !copy && !copied(parts, at, &mut leads) {
             out.distinct += triangles;
             out.distinct_vertices += vertices;
         }

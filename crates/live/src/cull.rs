@@ -280,6 +280,7 @@ mod tests {
             shadow_only: false,
             casts_shadow: true,
             range,
+            crowd: None,
         }
     }
 

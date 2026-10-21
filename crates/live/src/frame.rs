@@ -445,6 +445,7 @@ pub struct Batch {
     pub shadow_only: bool,
     pub casts_shadow: bool,
     pub range: Range<u32>,
+    pub crowd: Option<crate::crowd::CrowdRef>,
 }
 
 #[repr(C)]
@@ -1125,6 +1126,9 @@ pub struct Frame {
     canopy_gobo: Gobo,
     shadow_sample: [u8; SAMPLE_UNIFORM_BYTES],
     instance_features: Vec<OpaqueFeatures>,
+    crowds: crate::crowd::Crowds,
+    crowd_samples: Vec<GpuInstance>,
+    crowd_features: Vec<OpaqueFeatures>,
     instance_scratch: Vec<GpuInstance>,
     uploaded_instances: Vec<GpuInstance>,
     uploaded_materials: Vec<PackedMaterial>,
@@ -1304,6 +1308,7 @@ pub fn surface_batches(
             shadow_only: instance.shadow_only,
             casts_shadow: instance.casts_shadow,
             range: index..index + 1,
+            crowd: None,
         });
     }
     out
@@ -1392,10 +1397,13 @@ pub fn transmission_batches<'a>(
         .iter()
         .filter(|batch| {
             batch.casts_shadow
-                && batch
-                    .range
-                    .clone()
-                    .any(|index| transmissive(instances[index as usize].material))
+                && match batch.crowd {
+                    Some(crowd) => transmissive(crowd.material),
+                    None => batch
+                        .range
+                        .clone()
+                        .any(|index| transmissive(instances[index as usize].material)),
+                }
         })
         .collect()
 }
@@ -1463,6 +1471,11 @@ pub fn static_key(instances: &[Instance], batches: &[Batch], surfaces: &[Instanc
         .filter(|batch| !batch.moving)
     {
         batch.mesh.hash(&mut hasher);
+        if let Some(crowd) = batch.crowd {
+            crowd.hash(&mut hasher);
+            batch.range.hash(&mut hasher);
+            continue;
+        }
         for index in batch.range.start as usize..batch.range.end as usize {
             hasher.write(bytemuck::bytes_of(&instances[index].model));
             if batch.clipped {
@@ -2313,6 +2326,9 @@ impl Frame {
             canopy_gobo: Gobo::default(),
             shadow_sample: fallback_sample,
             instance_features: Vec::new(),
+            crowds: crate::crowd::Crowds::default(),
+            crowd_samples: Vec::new(),
+            crowd_features: Vec::new(),
             instance_scratch: Vec::new(),
             uploaded_instances: Vec::new(),
             uploaded_materials: Vec::new(),
@@ -2698,7 +2714,7 @@ impl Frame {
         let packed = self.pack_instances(scene, &surfaces, &self.skins.layout())?;
         let map_materials = self.pack_map_materials(scene);
         let instance_features = scene_instance_features(&packed, &map_materials, scene.materials);
-        let batches = surface_batches(
+        let mut batches = surface_batches(
             scene.instances,
             |mesh| self.deforms(mesh),
             |index| surfaces[index].clipped(),
@@ -2710,6 +2726,7 @@ impl Frame {
                         .is_some_and(|material| !material.alpha_mode.opaque())
             },
         );
+        self.crowd_batches(scene, &mut batches);
         let sample = shadows.map_or(self.shadow_sample, |(shadows, fit)| {
             shadows.sample_uniform(fit)
         });
@@ -2776,11 +2793,17 @@ impl Frame {
         batches
             .iter()
             .map(|batch| {
-                let used = batch
-                    .range
-                    .clone()
-                    .filter_map(|index| instance_features.get(index as usize))
-                    .fold(scene, |all, features| all.union(*features));
+                let used = match batch.crowd {
+                    Some(crowd) => self
+                        .crowd_features
+                        .get(crowd.crowd as usize)
+                        .map_or(scene, |features| scene.union(*features)),
+                    None => batch
+                        .range
+                        .clone()
+                        .filter_map(|index| instance_features.get(index as usize))
+                        .fold(scene, |all, features| all.union(*features)),
+                };
                 used.union(self.opaque_on.get())
                     .without(self.opaque_off.get())
                     .union(OpaqueFeatures {
@@ -3600,6 +3623,37 @@ impl Frame {
         })
     }
 
+    pub fn set_crowds(&mut self, crowds: &[crate::crowd::Crowd<'_>]) -> Result<(), String> {
+        if crowds
+            .iter()
+            .any(|crowd| live_mesh(&self.meshes, crowd.mesh).is_none())
+        {
+            return Err("a crowd references a released or unknown mesh".into());
+        }
+        let meshes = &self.meshes;
+        self.crowds.set(crowds, |handle| {
+            live_mesh(meshes, handle).map_or(UNBOUNDED, |mesh| mesh.sphere)
+        });
+        Ok(())
+    }
+
+    pub fn crowd_copies(&self) -> usize {
+        self.crowds.copies()
+    }
+
+    fn crowd_batches(&self, scene: &Scene<'_>, batches: &mut Vec<Batch>) {
+        self.crowds.batches(
+            batches,
+            |mesh| self.deforms(mesh),
+            |material| {
+                scene
+                    .materials
+                    .get(material as usize)
+                    .is_some_and(|material| !material.alpha_mode.opaque())
+            },
+        );
+    }
+
     pub fn set_poses(&self, poses: &[InstancePose<'_>]) -> Result<(), String> {
         self.skins.set_poses(poses)
     }
@@ -3771,6 +3825,79 @@ impl Frame {
         Ok(())
     }
 
+    fn crowd_record(
+        &self,
+        staged: &crate::crowd::Staged,
+        model: Matrix,
+        surface: &InstanceSurface,
+    ) -> Result<GpuInstance, String> {
+        let Some(mesh) = live_mesh(&self.meshes, staged.mesh) else {
+            return Err("a crowd references a released or unknown mesh".into());
+        };
+        if !(0.0..=1.0).contains(&staged.alpha_cutoff) {
+            return Err("a crowd's alpha cutoff must be a finite fraction".into());
+        }
+        Ok(GpuInstance {
+            model,
+            previous_model: model,
+            normal: normal_columns(model)?,
+            meta: [
+                staged.material,
+                staged.id,
+                1.0f32.to_bits(),
+                staged.alpha_cutoff.to_bits(),
+            ],
+            extra: [
+                DeformerId::NONE.0,
+                mesh.sway,
+                0.0f32.to_bits(),
+                1.0f32.to_bits(),
+            ],
+            clip: surface.clip,
+            content_uv: [
+                surface.uv_offset[0],
+                surface.uv_offset[1],
+                surface.uv_scale[0],
+                surface.uv_scale[1],
+            ],
+            content_crop: surface.crop,
+            content_face: [
+                surface.face.code(),
+                u32::from(mesh.sway == NO_SWAY),
+                u32::from(surface.contact)
+                    | u32::from(surface.cutout) << 2
+                    | surface.occlusion_release() << 8,
+                u32::from(surface.authored_ambient),
+            ],
+            skin: [NO_SKIN, 0, 0, 0],
+            morph: [NO_MORPH, 0, 0, 0],
+        })
+    }
+
+    fn write_crowds(&mut self, materials: usize) -> Result<(), String> {
+        let surface = InstanceSurface::default();
+        let mut records = Vec::with_capacity(self.crowds.copies());
+        let mut samples = Vec::with_capacity(self.crowds.staged.len());
+        let base = self.crowds.base as usize;
+        for staged in &self.crowds.staged {
+            if staged.material as usize >= materials {
+                return Err("a crowd references an unknown material".into());
+            }
+            for model in &staged.models {
+                records.push(self.crowd_record(staged, *model, &surface)?);
+            }
+            samples.push(records[staged.start as usize]);
+        }
+        self.gpu.queue.write_buffer(
+            &self.instances,
+            (base * std::mem::size_of::<GpuInstance>()) as u64,
+            bytemuck::cast_slice(&records),
+        );
+        self.crowd_samples = samples;
+        self.crowds.dirty = false;
+        Ok(())
+    }
+
     fn pack_map_materials(&self, scene: &Scene<'_>) -> Vec<GpuMapMaterial> {
         scene
             .materials
@@ -3826,8 +3953,10 @@ impl Frame {
         self.instance_features =
             scene_instance_features(&packed_instances, &map_materials, scene.materials);
         let mut resized = false;
-        if packed_instances.len() > self.instance_capacity {
-            self.instance_capacity = packed_instances.len().next_power_of_two();
+        let needed = self.crowds.reserve(packed_instances.len());
+        if needed > self.instance_capacity {
+            self.instance_capacity = needed.next_power_of_two();
+            self.crowds.dirty = true;
             self.instances = storage(
                 &self.gpu.device,
                 "live instances",
@@ -3855,6 +3984,28 @@ impl Frame {
             self.uploaded_materials.clear();
             self.uploaded_map_materials.clear();
         }
+        if self.crowds.dirty && !self.crowds.is_empty() {
+            self.write_crowds(scene.materials.len())?;
+        }
+        self.crowd_features = self
+            .crowds
+            .staged
+            .iter()
+            .zip(&self.crowd_samples)
+            .map(|(staged, sample)| {
+                let index = staged.material as usize;
+                let material = scene
+                    .materials
+                    .get(index)
+                    .ok_or("a crowd references an unknown material")?;
+                Ok(opaque_instance_features(
+                    sample,
+                    &map_materials[index],
+                    material.thin_film_amount > 0.0,
+                    !material.flakes.off(),
+                ))
+            })
+            .collect::<Result<_, String>>()?;
         if self
             .lights
             .prepare(&self.gpu.device, &self.gpu.queue, scene.materials.len())
@@ -3994,7 +4145,7 @@ impl Frame {
             bytemuck::bytes_of(&selection),
         );
         self.refresh_lighting_group();
-        let batches = surface_batches(
+        let mut batches = surface_batches(
             scene.instances,
             |mesh| self.deforms(mesh),
             |index| surfaces[index].clipped(),
@@ -4006,6 +4157,7 @@ impl Frame {
                         .is_some_and(|material| !material.alpha_mode.opaque())
             },
         );
+        self.crowd_batches(scene, &mut batches);
         Ok((batches, surfaces))
     }
 
@@ -4184,7 +4336,7 @@ impl Frame {
         }
         let mut key = mix_key(
             static_key(scene.instances, &batches, &surfaces),
-            self.mesh_epoch,
+            mix_key(self.mesh_epoch, self.crowds.epoch),
         );
         if batches.iter().any(|batch| batch.cut && batch.casts_shadow) {
             key = mix_key(key, self.cut_key(scene, &batches, &surfaces));
@@ -4271,6 +4423,13 @@ impl Frame {
             .iter()
             .filter(|batch| batch.cut && batch.casts_shadow)
         {
+            if let Some(crowd) = batch.crowd {
+                crowd.hash(&mut hasher);
+                if let Some(material) = scene.materials.get(crowd.material as usize) {
+                    content_row_key(material).hash(&mut hasher);
+                }
+                continue;
+            }
             for index in batch.range.clone() {
                 let index = index as usize;
                 let instance = &scene.instances[index];
@@ -4312,6 +4471,10 @@ impl Frame {
         key.hash(&mut hasher);
         for batch in &chosen {
             batch.range.hash(&mut hasher);
+            if let Some(crowd) = batch.crowd {
+                crowd.material.hash(&mut hasher);
+                continue;
+            }
             for index in batch.range.clone() {
                 instances[index as usize].material.hash(&mut hasher);
             }
@@ -4564,7 +4727,7 @@ impl Frame {
         }
         let mut out = Vec::new();
         cull::runs(
-            chosen,
+            chosen.clone().filter(|(_, batch)| batch.crowd.is_none()),
             |index| {
                 self.bounds
                     .get(index)
@@ -4573,6 +4736,7 @@ impl Frame {
             },
             &mut out,
         );
+        self.crowds.runs(chosen, Some(&frustum), &mut out);
         out
     }
 
@@ -4687,6 +4851,11 @@ impl Frame {
             .as_ref()
             .ok_or("frame lighting is not prepared")?;
         let occlusion = self.occlusion.as_ref().filter(|_| occluding);
+        let late: Vec<Run> = runs
+            .iter()
+            .filter(|run| batches[run.batch].crowd.is_none())
+            .cloned()
+            .collect();
         if let Some(occlusion) = occlusion {
             occlusion.encode_early(encoder, profiler.as_deref_mut());
         }
@@ -4753,7 +4922,7 @@ impl Frame {
             self.draw_with(
                 &mut pass,
                 batches,
-                runs,
+                if phase > 0 { &late } else { runs },
                 commands,
                 lighting,
                 |index, two_sided| {
@@ -4877,7 +5046,7 @@ impl Frame {
             };
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            match commands {
+            match commands.filter(|_| batch.crowd.is_none()) {
                 Some(commands) => pass.multi_draw_indexed_indirect(
                     commands,
                     u64::from(run.range.start) * crate::occlusion::COMMAND_BYTES,

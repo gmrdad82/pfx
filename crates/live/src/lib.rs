@@ -4,6 +4,7 @@ pub mod clusters;
 pub mod content_atlas;
 mod coverage;
 pub mod crisp;
+pub mod crowd;
 pub mod cull;
 pub mod deform;
 pub mod demand;

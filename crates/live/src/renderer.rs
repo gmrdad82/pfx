@@ -1627,6 +1627,10 @@ impl Renderer {
         self.history.invalidate();
     }
 
+    pub fn set_crowds(&mut self, crowds: &[crate::crowd::Crowd<'_>]) -> Result<(), String> {
+        self.frame.set_crowds(crowds)
+    }
+
     pub fn frame(&self) -> &Frame {
         &self.frame
     }

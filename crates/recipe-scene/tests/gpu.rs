@@ -52,6 +52,7 @@ fn part(name: &str, object: usize, mut mesh: Mesh, material: &str) -> Part {
         two_sided: false,
         hidden: false,
         looks: Default::default(),
+        scattered: None,
     }
 }
 

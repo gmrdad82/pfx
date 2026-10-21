@@ -114,6 +114,8 @@ pub struct Prepared {
     maps: Option<maps::Set>,
     shadows: Shadows,
     eye: Option<[f32; 3]>,
+    crowd_of: Vec<Option<usize>>,
+    crowds: Vec<parts::Crowd>,
 }
 
 fn shadows_of(recipe: &Recipe) -> Shadows {
@@ -144,7 +146,35 @@ impl Prepared {
     }
 
     pub fn kept(recipe: &Recipe, parts: &[Part], memory: &Memory) -> Result<Prepared, Error> {
-        let dressed = cards::dress(recipe, parts::pieces(parts), memory)?;
+        let mut baked = BTreeSet::new();
+        loop {
+            let prepared = Prepared::split(recipe, parts, memory, &baked)?;
+            let refused: BTreeSet<(u32, u32)> = prepared
+                .crowd_of
+                .iter()
+                .enumerate()
+                .filter_map(|(at, crowd)| {
+                    let crowd = (*crowd)?;
+                    let worn = &prepared.dress[at];
+                    (prepared.glass[at] || worn.card.is_some() || worn.surface.clipped())
+                        .then(|| prepared.crowds[crowd].key)
+                })
+                .collect();
+            if refused.is_empty() {
+                return Ok(prepared);
+            }
+            baked.extend(refused);
+        }
+    }
+
+    fn split(
+        recipe: &Recipe,
+        parts: &[Part],
+        memory: &Memory,
+        baked: &BTreeSet<(u32, u32)>,
+    ) -> Result<Prepared, Error> {
+        let split = parts::split(parts, baked);
+        let dressed = cards::dress(recipe, split.pieces, memory)?;
         let pieces = dressed.pieces;
         let Palette {
             names,
@@ -169,11 +199,12 @@ impl Prepared {
             .collect();
         let lighting = Lighting::kept(recipe, memory)?;
         let text = Laid::of(recipe, parts)?;
-        let bounds = match parts::bounds(&pieces, false) {
+        let bounds = match parts::placed_bounds(&pieces, &split.crowd_of, &split.crowds, false) {
             Some(bounds) => text::widen(bounds, text.bounds()),
             None => text.bounds().unwrap_or(EMPTY),
         };
-        let receiver = parts::bounds(&pieces, true).unwrap_or(bounds);
+        let receiver =
+            parts::placed_bounds(&pieces, &split.crowd_of, &split.crowds, true).unwrap_or(bounds);
         Ok(Prepared {
             marks: marks(&pieces),
             pieces,
@@ -194,6 +225,8 @@ impl Prepared {
             maps,
             shadows: shadows_of(recipe),
             eye: crate::cube::scene_eye(recipe),
+            crowd_of: split.crowd_of,
+            crowds: split.crowds,
         })
     }
 
@@ -214,6 +247,14 @@ impl Prepared {
 struct Uploaded {
     mark: Mark,
     handle: MeshHandle,
+}
+
+struct Crowds<'a> {
+    pieces: &'a [Piece],
+    slots: &'a [u32],
+    marks: &'a [Mark],
+    crowd_of: &'a [Option<usize>],
+    crowds: &'a [parts::Crowd],
 }
 
 struct Glassed {
@@ -259,6 +300,12 @@ pub struct Stage {
     swept: BTreeSet<u32>,
     eye: Option<[f32; 3]>,
     cubed: bool,
+    crowd_meshes: Vec<Uploaded>,
+    crowd_key: u64,
+    crowd_copies: usize,
+    keyed_names: Vec<String>,
+    keyed: Vec<(usize, usize)>,
+    keyed_glass: Vec<(usize, usize)>,
 }
 
 pub struct Outline<'a> {
@@ -358,6 +405,12 @@ impl Stage {
             swept: BTreeSet::new(),
             eye: None,
             cubed: false,
+            crowd_meshes: Vec::new(),
+            crowd_key: 0,
+            crowd_copies: 0,
+            keyed_names: Vec::new(),
+            keyed: Vec::new(),
+            keyed_glass: Vec::new(),
         };
         stage.apply(prepared)?;
         Ok(stage)
@@ -393,8 +446,13 @@ impl Stage {
             maps,
             shadows,
             eye,
+            crowd_of,
+            crowds,
         } = prepared;
-        let opaque = opaque_at(&glass);
+        let opaque: Vec<usize> = opaque_at(&glass)
+            .into_iter()
+            .filter(|&at| crowd_of[at].is_none())
+            .collect();
         let opaque_marks: Vec<Mark> = opaque.iter().map(|&at| marks[at].clone()).collect();
         let plan = plan(self.uploaded.iter().map(|u| &u.mark), &opaque_marks);
         let mut change = Change {
@@ -458,6 +516,16 @@ impl Stage {
                 .map_err(|e| Error(format!("object {}: {e}", self.uploaded[at].mark.key.name)))?;
             change.released += 1;
         }
+        self.stage_crowds(
+            Crowds {
+                pieces: &pieces,
+                slots: &slots,
+                marks: &marks,
+                crowd_of: &crowd_of,
+                crowds: &crowds,
+            },
+            &mut change,
+        )?;
         let dress: Vec<Dress> = opaque.iter().map(|&index| dress[index]).collect();
         self.instances = instances(&pieces, &slots, &dress, &uploaded, &opaque);
         self.restore_models(&uploaded);
@@ -467,6 +535,9 @@ impl Stage {
         self.dress = dress;
         self.faced.clear();
         self.uploaded = uploaded;
+        if !self.keyed_names.is_empty() {
+            self.rebind();
+        }
         let recapture = !self.cubed
             || change.added + change.replaced + change.released > 0
             || change.sky
@@ -519,6 +590,71 @@ impl Stage {
             self.shade(self.shown);
         }
         Ok(change)
+    }
+
+    fn stage_crowds(&mut self, given: Crowds<'_>, change: &mut Change) -> Result<(), Error> {
+        let mut spare = std::mem::take(&mut self.crowd_meshes);
+        let mut made = Vec::new();
+        let mut hasher = DefaultHasher::new();
+        for (at, crowd) in given.crowd_of.iter().enumerate() {
+            let Some(crowd) = *crowd else {
+                continue;
+            };
+            let mark = given.marks[at].clone();
+            let handle = match spare.iter().position(|old| old.mark == mark) {
+                Some(found) => {
+                    change.kept += 1;
+                    spare.remove(found).handle
+                }
+                None => {
+                    change.added += 1;
+                    upload(&mut self.renderer, &given.pieces[at])?
+                }
+            };
+            handle.hash(&mut hasher);
+            given.slots[at].hash(&mut hasher);
+            for world in &given.crowds[crowd].worlds {
+                floats(&mut hasher, &world.to_cols_array().map(|v| v as f32));
+            }
+            made.push((at, crowd, Uploaded { mark, handle }));
+        }
+        let key = hasher.finish();
+        if key != self.crowd_key {
+            let models: Vec<Vec<Matrix>> = made
+                .iter()
+                .map(|(_, crowd, _)| given.crowds[*crowd].models())
+                .collect();
+            let shown: Vec<pfx_live::crowd::Crowd<'_>> = made
+                .iter()
+                .zip(&models)
+                .map(|((at, _, uploaded), models)| {
+                    let piece = &given.pieces[*at];
+                    pfx_live::crowd::Crowd {
+                        mesh: uploaded.handle,
+                        material: given.slots[*at],
+                        id: piece.object as u32 + 1,
+                        models,
+                        casts_shadow: piece.shadow != Shadow::None,
+                        shadow_only: piece.shadow == Shadow::Only,
+                        two_sided: piece.two_sided,
+                        alpha_cutoff: Instance::new(uploaded.handle, IDENTITY, 0, 0).alpha_cutoff,
+                    }
+                })
+                .collect();
+            self.renderer
+                .set_crowds(&shown)
+                .map_err(|e| Error(format!("the live renderer: {e}")))?;
+            self.crowd_key = key;
+            self.crowd_copies = models.iter().map(Vec::len).sum();
+        }
+        for old in spare {
+            self.renderer
+                .release_mesh(old.handle)
+                .map_err(|e| Error(format!("object {}: {e}", old.mark.key.name)))?;
+            change.released += 1;
+        }
+        self.crowd_meshes = made.into_iter().map(|(_, _, uploaded)| uploaded).collect();
+        Ok(())
     }
 
     fn scene_reflections(&mut self, pieces: &[Piece], slots: &[u32]) -> Result<(), Error> {
@@ -577,6 +713,53 @@ impl Stage {
 
     pub fn instance_count(&self) -> usize {
         self.instances.len()
+    }
+
+    pub fn crowd_copies(&self) -> usize {
+        self.crowd_copies
+    }
+
+    pub fn draw_count(&self) -> u32 {
+        self.renderer.cull_stats().camera.draws
+    }
+
+    pub fn bind_keys(&mut self, names: &[String]) {
+        self.keyed_names = names.to_vec();
+        self.rebind();
+    }
+
+    fn rebind(&mut self) {
+        let slots: BTreeMap<&str, usize> = self
+            .keyed_names
+            .iter()
+            .enumerate()
+            .map(|(slot, name)| (name.as_str(), slot))
+            .collect();
+        self.keyed = self
+            .uploaded
+            .iter()
+            .enumerate()
+            .filter_map(|(at, uploaded)| Some((at, *slots.get(uploaded.mark.key.name.as_str())?)))
+            .collect();
+        self.keyed_glass = self
+            .glassed
+            .iter()
+            .enumerate()
+            .filter_map(|(at, glassed)| Some((at, *slots.get(glassed.mark.key.name.as_str())?)))
+            .collect();
+    }
+
+    pub fn set_keyed(&mut self, models: &[Matrix]) {
+        for &(at, slot) in &self.keyed {
+            if let (Some(instance), Some(model)) = (self.instances.get_mut(at), models.get(slot)) {
+                instance.model = *model;
+            }
+        }
+        for &(at, slot) in &self.keyed_glass {
+            if let (Some(surface), Some(model)) = (self.glass.get_mut(at), models.get(slot)) {
+                surface.model = *model;
+            }
+        }
     }
 
     #[cfg(test)]

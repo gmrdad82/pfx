@@ -3,9 +3,11 @@ use crate::vector::single::{cross, dot, sub, unit};
 use pfx_build::{Look, Part};
 use pfx_geom::mesh::Mesh as Geometry;
 use pfx_glb::{DMat4, Node};
+use pfx_live::frame::Matrix;
 use pfx_materials::{Blend, Family, Material, Wet};
 use pfx_mesh::{Mesh, Slot};
 use pfx_recipe::{Recipe, Setting, Settings, Shadow};
+use std::collections::{BTreeMap, BTreeSet};
 
 const DEFAULT_MATERIAL: &str = "default";
 const DEGENERATE: f32 = 1e-14;
@@ -23,71 +25,142 @@ pub struct Piece {
 pub fn pieces(parts: &[Part]) -> Vec<Piece> {
     let mut out = Vec::new();
     for part in parts.iter().filter(|part| !part.hidden) {
-        let node = &part.node;
-        let world = if node.keep_transform {
-            node.transform
-        } else {
-            DMat4::IDENTITY
-        };
-        let normals = world.inverse().transpose();
-        let flip = world.determinant() < 0.0;
-        let positions: Vec<[f32; 3]> = node
-            .mesh
-            .positions
-            .iter()
-            .map(|p| {
-                world
-                    .transform_point3([p[0], p[1], p[2]].map(f64::from).into())
-                    .to_array()
-                    .map(|v| v as f32)
-            })
-            .collect();
-        let turned: Vec<[f32; 3]> = node
-            .mesh
-            .normals
-            .iter()
-            .map(|n| {
-                let n = normals
-                    .transform_vector3([n[0], n[1], n[2]].map(f64::from).into())
-                    .normalize_or_zero();
-                n.to_array().map(|v| v as f32)
-            })
-            .collect();
-        let whole = [Slot {
-            material: DEFAULT_MATERIAL.into(),
-            start: 0,
-            count: node.mesh.indices.len() as u32,
-        }];
-        let slots = if node.mesh.slots.is_empty() {
-            &whole[..]
-        } else {
-            &node.mesh.slots[..]
-        };
-        let uvs = node.mesh.uvs.as_deref().unwrap_or_default();
-        for slot in slots {
-            let start = (slot.start as usize).min(node.mesh.indices.len());
-            let end = (start + slot.count as usize).min(node.mesh.indices.len());
-            let indices = kept(&positions, &node.mesh.indices[start..end], flip);
-            if indices.is_empty() {
-                continue;
-            }
-            let geometry = if turned.len() == positions.len() {
-                compact(&positions, &turned, uvs, &indices)
-            } else {
-                flat(&positions, uvs, &indices)
-            };
-            out.push(Piece {
-                geometry,
-                material: slot.material.clone(),
-                object: part.object,
-                name: node.name.clone(),
-                shadow: part.shadow,
-                two_sided: part.two_sided,
-                look: part.looks.get(&slot.material).cloned(),
-            });
-        }
+        push_pieces(&mut out, part, placed(part));
     }
     out
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Crowd {
+    pub key: (u32, u32),
+    pub worlds: Vec<DMat4>,
+}
+
+impl Crowd {
+    pub fn models(&self) -> Vec<Matrix> {
+        self.worlds
+            .iter()
+            .map(|world| {
+                world
+                    .to_cols_array_2d()
+                    .map(|column| column.map(|v| v as f32))
+            })
+            .collect()
+    }
+}
+
+pub struct Split {
+    pub pieces: Vec<Piece>,
+    pub crowd_of: Vec<Option<usize>>,
+    pub crowds: Vec<Crowd>,
+}
+
+pub fn split(parts: &[Part], baked: &BTreeSet<(u32, u32)>) -> Split {
+    let mut pieces = Vec::new();
+    let mut groups: BTreeMap<(u32, u32), usize> = BTreeMap::new();
+    let mut firsts: Vec<&Part> = Vec::new();
+    let mut crowds: Vec<Crowd> = Vec::new();
+    for part in parts.iter().filter(|part| !part.hidden) {
+        let world = placed(part);
+        let key = part
+            .scattered
+            .map(|copy| (copy.scatter, copy.piece))
+            .filter(|key| !baked.contains(key))
+            .filter(|_| world.determinant() > 0.0 && world.is_finite());
+        let Some(key) = key else {
+            push_pieces(&mut pieces, part, world);
+            continue;
+        };
+        let at = *groups.entry(key).or_insert_with(|| {
+            firsts.push(part);
+            crowds.push(Crowd {
+                key,
+                worlds: Vec::new(),
+            });
+            crowds.len() - 1
+        });
+        crowds[at].worlds.push(world);
+    }
+    let mut crowd_of = vec![None; pieces.len()];
+    for (at, part) in firsts.into_iter().enumerate() {
+        let before = pieces.len();
+        push_pieces(&mut pieces, part, DMat4::IDENTITY);
+        crowd_of.extend(std::iter::repeat_n(Some(at), pieces.len() - before));
+    }
+    Split {
+        pieces,
+        crowd_of,
+        crowds,
+    }
+}
+
+fn placed(part: &Part) -> DMat4 {
+    if part.node.keep_transform {
+        part.node.transform
+    } else {
+        DMat4::IDENTITY
+    }
+}
+
+fn push_pieces(out: &mut Vec<Piece>, part: &Part, world: DMat4) {
+    let node = &part.node;
+    let normals = world.inverse().transpose();
+    let flip = world.determinant() < 0.0;
+    let positions: Vec<[f32; 3]> = node
+        .mesh
+        .positions
+        .iter()
+        .map(|p| {
+            world
+                .transform_point3([p[0], p[1], p[2]].map(f64::from).into())
+                .to_array()
+                .map(|v| v as f32)
+        })
+        .collect();
+    let turned: Vec<[f32; 3]> = node
+        .mesh
+        .normals
+        .iter()
+        .map(|n| {
+            let n = normals
+                .transform_vector3([n[0], n[1], n[2]].map(f64::from).into())
+                .normalize_or_zero();
+            n.to_array().map(|v| v as f32)
+        })
+        .collect();
+    let whole = [Slot {
+        material: DEFAULT_MATERIAL.into(),
+        start: 0,
+        count: node.mesh.indices.len() as u32,
+    }];
+    let slots = if node.mesh.slots.is_empty() {
+        &whole[..]
+    } else {
+        &node.mesh.slots[..]
+    };
+    let uvs = node.mesh.uvs.as_deref().unwrap_or_default();
+    for slot in slots {
+        let start = (slot.start as usize).min(node.mesh.indices.len());
+        let end = (start + slot.count as usize).min(node.mesh.indices.len());
+        let indices = kept(&positions, &node.mesh.indices[start..end], flip);
+        if indices.is_empty() {
+            continue;
+        }
+        let geometry = if turned.len() == positions.len() {
+            compact(&positions, &turned, uvs, &indices)
+        } else {
+            flat(&positions, uvs, &indices)
+        };
+        out.push(Piece {
+            geometry,
+            material: slot.material.clone(),
+            object: part.object,
+            name: node.name.clone(),
+            shadow: part.shadow,
+            two_sided: part.two_sided,
+            look: part.looks.get(&slot.material).cloned(),
+        });
+    }
 }
 
 fn kept(positions: &[[f32; 3]], indices: &[u32], flip: bool) -> Vec<u32> {
@@ -352,6 +425,7 @@ pub fn glb_parts(bytes: &[u8]) -> Result<Vec<Part>, Error> {
                 two_sided: false,
                 hidden: false,
                 looks: Default::default(),
+                scattered: None,
             });
         }
         for &child in node.children.iter().rev() {
@@ -361,17 +435,34 @@ pub fn glb_parts(bytes: &[u8]) -> Result<Vec<Part>, Error> {
     Ok(parts)
 }
 
-pub fn bounds(pieces: &[Piece], visible: bool) -> Option<[[f64; 3]; 2]> {
+pub fn placed_bounds(
+    pieces: &[Piece],
+    crowd_of: &[Option<usize>],
+    crowds: &[Crowd],
+    visible: bool,
+) -> Option<[[f64; 3]; 2]> {
     let mut lo = [f64::INFINITY; 3];
     let mut hi = [f64::NEG_INFINITY; 3];
-    for piece in pieces {
+    let mut grow = |p: [f64; 3]| {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    };
+    for (at, piece) in pieces.iter().enumerate() {
         if visible && piece.shadow == Shadow::Only {
             continue;
         }
-        for p in &piece.geometry.positions {
-            for k in 0..3 {
-                lo[k] = lo[k].min(f64::from(p[k]));
-                hi[k] = hi[k].max(f64::from(p[k]));
+        let Some(crowd) = crowd_of.get(at).copied().flatten() else {
+            for p in &piece.geometry.positions {
+                grow(p.map(f64::from));
+            }
+            continue;
+        };
+        for world in &crowds[crowd].worlds {
+            for p in &piece.geometry.positions {
+                let placed = world.transform_point3(p.map(f64::from).into());
+                grow(placed.to_array().map(|v| f64::from(v as f32)));
             }
         }
     }
@@ -381,6 +472,7 @@ pub fn bounds(pieces: &[Piece], visible: bool) -> Option<[[f64; 3]; 2]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pfx_build::Scattered;
     use pfx_glb::{Order, write};
     use pfx_recipe::parse;
 
@@ -419,6 +511,7 @@ mod tests {
             two_sided: false,
             hidden: false,
             looks: Default::default(),
+            scattered: None,
         }
     }
 
@@ -526,5 +619,81 @@ mod tests {
         assert_eq!(out[0].geometry.positions[0], [0.0, 0.0, 1.0]);
         assert_eq!(out[1].material, "brass");
         assert!(glb_parts(b"not a glb").is_err());
+    }
+
+    fn copies(count: u32) -> Vec<Part> {
+        (0..count)
+            .map(|n| {
+                let size = 0.5 + f64::from(n % 5) * 0.25;
+                let world =
+                    DMat4::from_translation([f64::from(n) * 1.3, 0.1, -f64::from(n) * 0.4].into())
+                        * DMat4::from_rotation_y(f64::from(n) * 0.7)
+                        * DMat4::from_scale([size; 3].into());
+                let mut copy = part(&format!("leaves.{n}"), 1, quad("leaf"), world, true);
+                copy.scattered = Some(Scattered {
+                    scatter: 0,
+                    piece: 0,
+                    copy: n,
+                });
+                copy
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scattered_copies_become_one_crowd_whose_pieces_do_not_grow_with_the_copies() {
+        let ground = part("ground", 0, quad("stone"), DMat4::IDENTITY, false);
+        for count in [1, 10, 500] {
+            let mut parts = vec![ground.clone()];
+            parts.extend(copies(count));
+            let split = split(&parts, &BTreeSet::new());
+            assert_eq!(split.pieces.len(), 2);
+            assert_eq!(split.crowd_of, [None, Some(0)]);
+            assert_eq!(split.crowds.len(), 1);
+            assert_eq!(split.crowds[0].worlds.len(), count as usize);
+        }
+    }
+
+    #[test]
+    fn a_crowd_places_exactly_the_vertices_and_bounds_the_baked_copies_held() {
+        let parts = copies(20);
+        let baked = pieces(&parts);
+        let split = split(&parts, &BTreeSet::new());
+        let template = &split.pieces[0];
+        assert_eq!(baked.len(), 20);
+        for (world, piece) in split.crowds[0].worlds.iter().zip(&baked) {
+            let placed: Vec<[f32; 3]> = template
+                .geometry
+                .positions
+                .iter()
+                .map(|p| {
+                    world
+                        .transform_point3(p.map(f64::from).into())
+                        .to_array()
+                        .map(|v| v as f32)
+                })
+                .collect();
+            assert_eq!(placed, piece.geometry.positions);
+            assert_eq!(template.geometry.indices, piece.geometry.indices);
+        }
+        for visible in [false, true] {
+            assert_eq!(
+                placed_bounds(&split.pieces, &split.crowd_of, &split.crowds, visible),
+                placed_bounds(&baked, &vec![None; baked.len()], &[], visible)
+            );
+        }
+    }
+
+    #[test]
+    fn mirrored_or_refused_copies_stay_baked_pieces() {
+        let mut parts = copies(4);
+        parts[2].node.transform = DMat4::from_scale([-1.0, 1.0, 1.0].into());
+        let mixed = split(&parts, &BTreeSet::new());
+        assert_eq!(mixed.crowds[0].worlds.len(), 3);
+        assert_eq!(mixed.crowd_of, [None, Some(0)]);
+        let baked = split(&parts, &BTreeSet::from([(0, 0)]));
+        assert!(baked.crowds.is_empty());
+        assert_eq!(baked.pieces.len(), 4);
+        assert_eq!(baked.crowd_of, [None; 4]);
     }
 }
