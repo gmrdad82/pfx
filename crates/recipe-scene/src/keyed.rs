@@ -18,13 +18,28 @@ pub struct Keyed {
 
 impl Keyed {
     pub fn of(built: &Built, fps: Rate) -> Keyed {
-        let mut parts: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
-        for (at, part) in built.parts.iter().enumerate() {
-            parts.entry(part.node.name.as_str()).or_default().push(at);
-        }
+        let mut parts: BTreeMap<&str, Vec<usize>> = built
+            .tracks
+            .iter()
+            .filter(|track| track.camera.is_none() && !track.keys.is_empty())
+            .map(|track| (track.node.as_str(), Vec::new()))
+            .collect();
         let mut bound = Vec::new();
-        let mut slots: BTreeMap<&str, usize> = BTreeMap::new();
         let mut names = Vec::new();
+        if parts.is_empty() {
+            return Keyed {
+                fps,
+                bound,
+                models: Vec::new(),
+                names,
+            };
+        }
+        for (at, part) in built.parts.iter().enumerate() {
+            if let Some(found) = parts.get_mut(part.node.name.as_str()) {
+                found.push(at);
+            }
+        }
+        let mut slots: BTreeMap<&str, usize> = BTreeMap::new();
         for (at, track) in built.tracks.iter().enumerate() {
             if track.camera.is_some() {
                 continue;

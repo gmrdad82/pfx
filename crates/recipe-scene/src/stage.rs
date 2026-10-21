@@ -459,6 +459,7 @@ impl Stage {
             sky: self.sky.as_ref() != Some(&sky),
             ..Change::default()
         };
+        let crowd_key = self.crowd_key;
         let glassed = glaze(
             &mut self.renderer,
             &pieces,
@@ -526,6 +527,7 @@ impl Stage {
             },
             &mut change,
         )?;
+        let crowded = self.crowd_key != crowd_key;
         let dress: Vec<Dress> = opaque.iter().map(|&index| dress[index]).collect();
         self.instances = instances(&pieces, &slots, &dress, &uploaded, &opaque);
         self.restore_models(&uploaded);
@@ -541,6 +543,7 @@ impl Stage {
         let recapture = !self.cubed
             || change.added + change.replaced + change.released > 0
             || change.sky
+            || crowded
             || self.eye != eye
             || self.lighting.lights != lighting.lights
             || self.materials != materials;
@@ -577,7 +580,7 @@ impl Stage {
         if recapture {
             self.eye = eye;
             self.cubed = true;
-            self.scene_reflections(&pieces, &slots)?;
+            self.scene_reflections(&pieces, &slots, &crowd_of, &crowds)?;
         }
         self.pieces = pieces;
         self.generation += 1;
@@ -595,7 +598,6 @@ impl Stage {
     fn stage_crowds(&mut self, given: Crowds<'_>, change: &mut Change) -> Result<(), Error> {
         let mut spare = std::mem::take(&mut self.crowd_meshes);
         let mut made = Vec::new();
-        let mut hasher = DefaultHasher::new();
         for (at, crowd) in given.crowd_of.iter().enumerate() {
             let Some(crowd) = *crowd else {
                 continue;
@@ -611,14 +613,13 @@ impl Stage {
                     upload(&mut self.renderer, &given.pieces[at])?
                 }
             };
-            handle.hash(&mut hasher);
-            given.slots[at].hash(&mut hasher);
-            for world in &given.crowds[crowd].worlds {
-                floats(&mut hasher, &world.to_cols_array().map(|v| v as f32));
-            }
             made.push((at, crowd, Uploaded { mark, handle }));
         }
-        let key = hasher.finish();
+        let key = crowd_key(
+            &given,
+            made.iter()
+                .map(|(at, crowd, uploaded)| (*at, *crowd, uploaded.handle)),
+        );
         if key != self.crowd_key {
             let models: Vec<Vec<Matrix>> = made
                 .iter()
@@ -637,7 +638,7 @@ impl Stage {
                         casts_shadow: piece.shadow != Shadow::None,
                         shadow_only: piece.shadow == Shadow::Only,
                         two_sided: piece.two_sided,
-                        alpha_cutoff: Instance::new(uploaded.handle, IDENTITY, 0, 0).alpha_cutoff,
+                        alpha_cutoff: cutoff(uploaded.handle),
                     }
                 })
                 .collect();
@@ -657,7 +658,13 @@ impl Stage {
         Ok(())
     }
 
-    fn scene_reflections(&mut self, pieces: &[Piece], slots: &[u32]) -> Result<(), Error> {
+    fn scene_reflections(
+        &mut self,
+        pieces: &[Piece],
+        slots: &[u32],
+        crowd_of: &[Option<usize>],
+        crowds: &[parts::Crowd],
+    ) -> Result<(), Error> {
         let Some(settings) = self.renderer.scene_reflections() else {
             return Ok(());
         };
@@ -667,6 +674,8 @@ impl Stage {
                 &crate::cube::Scene {
                     pieces,
                     slots,
+                    crowd_of,
+                    crowds,
                     materials: &self.materials,
                     lighting: &self.lighting,
                     hour: self.hour,
@@ -1490,6 +1499,33 @@ fn surfaces(renderer: &Renderer, dress: &[Dress]) -> Result<(), Error> {
         .map_err(|e| Error(format!("the live renderer: {e}")))
 }
 
+fn crowd_key(given: &Crowds<'_>, made: impl Iterator<Item = (usize, usize, MeshHandle)>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for (at, crowd, handle) in made {
+        let piece = &given.pieces[at];
+        let worlds = &given.crowds[crowd].worlds;
+        (
+            handle,
+            given.slots[at],
+            piece.object,
+            piece.shadow != Shadow::None,
+            piece.shadow == Shadow::Only,
+            piece.two_sided,
+            cutoff(handle).to_bits(),
+            worlds.len(),
+        )
+            .hash(&mut hasher);
+        for world in worlds {
+            floats(&mut hasher, &world.to_cols_array().map(|v| v as f32));
+        }
+    }
+    hasher.finish()
+}
+
+fn cutoff(mesh: MeshHandle) -> f32 {
+    Instance::new(mesh, IDENTITY, 0, 0).alpha_cutoff
+}
+
 fn upload(renderer: &mut Renderer, piece: &Piece) -> Result<MeshHandle, Error> {
     renderer
         .upload_mesh(data(piece))
@@ -1713,6 +1749,51 @@ mod tests {
     const BASE: &str = "recipe = 1\nname = \"diff\"\n\n[materials.glass]\nfamily = \"glass\"\nbase = [0.9, 0.95, 1.0]\nroughness = 0.02\ntransmission = 1.0\nior = 1.5\nthickness = 0.004\n\n[materials.orange]\nfamily = \"lacquer\"\nbase = [0.73, 0.06, 0.0]\nroughness = 0.45\nclearcoat = 1.0\nclearcoat_roughness = 0.07\n\n[[camera]]\nname = \"main\"\nposition = [0.0, 1.0, 6.0]\ntarget = [0.0, 0.0, 0.0]\nfov_y_deg = 40.0\n\n[[object]]\nname = \"a\"\nkind = \"box\"\nmaterial = \"orange\"\nsize = [1.0, 1.0, 1.0]\n\n[[object]]\nname = \"b\"\nkind = \"box\"\nmaterial = \"orange\"\nsize = [0.5, 0.5, 0.5]\nat = [2.0, 0.0, 0.0]\n\n[[object]]\nname = \"c\"\nkind = \"box\"\nmaterial = \"orange\"\nsize = [0.25, 0.25, 0.25]\nat = [-2.0, 0.0, 0.0]\n";
 
     const ROOM: &str = "[sky.room]\nwidth = 64\nfloor = [0.22, 0.135, 0.068]\nwall = [0.19, 0.13, 0.07]\nceiling = [0.28, 0.23, 0.16]\n[[sky.room.lights]]\nname = \"window\"\naz = -64.0\nel = 14.0\nwidth = 37.5\nheight = 29.0\npower = 10.5\ncolor = [1.0, 0.86, 0.66]\nsoft = 0.05\nslats = 6.0\nopen = 0.7\n";
+
+    const CROWD: &str = "recipe = 1\nname = \"crowd\"\n\n[[object]]\nname = \"ground\"\nkind = \"plane\"\nsize = [4.0, 4.0]\n\nOBJECTS[[object]]\nname = \"leaf\"\nkind = \"box\"\nsize = [0.16, 0.02, 0.1]\nhidden = true\nLEAF\n[[scatter]]\nname = \"leaves\"\nobject = \"leaf\"\non = \"ground\"\nseed = 9\nspacing = 0.5\n";
+
+    fn crowd_of(objects: &str, leaf: &str) -> (Vec<Vec<[f64; 16]>>, u64) {
+        let text = CROWD.replace("OBJECTS", objects).replace("LEAF", leaf);
+        let prepared = kept(&Memory::default(), &text);
+        let given = Crowds {
+            pieces: &prepared.pieces,
+            slots: &prepared.slots,
+            marks: &prepared.marks,
+            crowd_of: &prepared.crowd_of,
+            crowds: &prepared.crowds,
+        };
+        let made = prepared
+            .crowd_of
+            .iter()
+            .enumerate()
+            .filter_map(|(at, crowd)| Some((at, (*crowd)?, MeshHandle(1))));
+        let worlds = prepared
+            .crowds
+            .iter()
+            .map(|crowd| crowd.worlds.iter().map(|w| w.to_cols_array()).collect())
+            .collect();
+        (worlds, crowd_key(&given, made))
+    }
+
+    #[test]
+    fn a_crowd_restages_when_its_shadow_sides_or_object_change() {
+        let (worlds, key) = crowd_of("", "");
+        assert!(!worlds.is_empty());
+        assert_eq!(crowd_of("", ""), (worlds.clone(), key));
+        for (objects, leaf) in [
+            ("", "shadow = \"none\"\n"),
+            ("", "shadow = \"only\"\n"),
+            ("", "two_sided = true\n"),
+            (
+                "[[object]]\nname = \"far\"\nkind = \"box\"\nsize = [0.1, 0.1, 0.1]\nat = [0.0, 50.0, 0.0]\n\n",
+                "",
+            ),
+        ] {
+            let (moved, edited) = crowd_of(objects, leaf);
+            assert_eq!(moved, worlds, "{objects}{leaf}");
+            assert_ne!(edited, key, "{objects}{leaf}");
+        }
+    }
 
     fn texels(prepared: &Prepared) -> Vec<[f32; 4]> {
         match prepared.lighting.at(None).sky {
