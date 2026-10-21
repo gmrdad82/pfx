@@ -1,11 +1,15 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, SyncSender};
+use std::thread::{self, JoinHandle};
 
 pub const PACING_VAR: &str = "PFX_PACING";
 pub const SCHEMA_VERSION: u32 = 2;
 pub const GUI_BUDGET_NS: u64 = 8_330_000;
 pub const TUI_BUDGET_NS: u64 = 8_330_000;
 pub const CAP60_BUDGET_NS: u64 = 16_670_000;
+
+pub const WRITER_THREAD: &str = "pfx-pacing";
 
 const NS_PER_SEC: u64 = 1_000_000_000;
 const BUCKET_NS: u64 = 10_000;
@@ -347,8 +351,13 @@ fn budget_for(budget_ns: u64, frame_rate: &str) -> u64 {
     }
 }
 
+type Sections = Vec<(Setting, PacingReport)>;
+type Sink = Box<dyn FnMut(&str) + Send>;
+
 pub struct Pacing {
-    path: Option<PathBuf>,
+    on: bool,
+    sender: Option<SyncSender<Sections>>,
+    writer: Option<JoinHandle<()>>,
     budget_ns: u64,
     done: Vec<(Setting, PacingReport)>,
     setting: Option<Setting>,
@@ -375,8 +384,17 @@ impl Pacing {
     }
 
     fn at(path: Option<PathBuf>, budget_ns: u64) -> Self {
+        let sink = path.map(|path| Box::new(move |lines: &str| write_file(&path, lines)) as Sink);
+        Self::with(sink, budget_ns)
+    }
+
+    fn with(sink: Option<Sink>, budget_ns: u64) -> Self {
+        let on = sink.is_some();
+        let (sender, writer) = sink.and_then(spawn_writer).unzip();
         Self {
-            path,
+            on,
+            sender,
+            writer,
             budget_ns,
             done: Vec::new(),
             setting: None,
@@ -388,7 +406,7 @@ impl Pacing {
     }
 
     pub fn on(&self) -> bool {
-        self.path.is_some()
+        self.on
     }
 
     pub fn tag(&self) -> Option<u64> {
@@ -420,7 +438,9 @@ impl Pacing {
             .is_none_or(|written| now_ns.saturating_sub(written) >= NS_PER_SEC);
         if due {
             self.written_ns = Some(now_ns);
-            self.write();
+            if let Some(sender) = &self.sender {
+                let _ = sender.try_send(self.sections());
+            }
         }
     }
 
@@ -470,74 +490,19 @@ impl Pacing {
     }
 
     pub fn lines(&self) -> String {
-        let mut out = String::new();
-        for (setting, report) in self.sections() {
-            let shown = |ms: f64| {
-                if report.shown_intervals == 0 {
-                    "null".to_string()
-                } else {
-                    format!("{ms:.3}")
-                }
-            };
-            let _ = writeln!(
-                out,
-                "{{\"schema_version\":{SCHEMA_VERSION},\"host\":\"{}\",\"present_mode\":\"{}\",\"frame_latency\":{},\"vrr\":{},\"vrr_in_effect\":{},\"frame_rate\":\"{}\",\"budget_ms\":{:.3},\"frames\":{},\"intervals\":{},\"p50_ms\":{:.3},\"p99_ms\":{:.3},\"max_ms\":{:.3},\"mean_ms\":{:.3},\"stddev_ms\":{:.3},\"late\":{},\"missed\":{},\"acquire_p50_ms\":{:.3},\"acquire_p99_ms\":{:.3},\"acquire_max_ms\":{:.3},\"acquire_mean_ms\":{:.3},\"present_call_p50_ms\":{:.3},\"present_call_p99_ms\":{:.3},\"present_call_max_ms\":{:.3},\"viewport_p50_ms\":{:.3},\"viewport_p99_ms\":{:.3},\"viewport_max_ms\":{:.3},\"paint_p50_ms\":{:.3},\"paint_p99_ms\":{:.3},\"paint_max_ms\":{:.3},\"shown_intervals\":{},\"shown_p50_ms\":{},\"shown_p99_ms\":{},\"shown_max_ms\":{},\"discarded\":{}}}",
-                setting.host,
-                setting.present_mode,
-                setting.frame_latency,
-                setting.vrr,
-                setting
-                    .vrr_in_effect
-                    .map_or("null", |on| if on { "true" } else { "false" }),
-                setting.frame_rate,
-                report.budget_ms,
-                report.frames,
-                report.intervals,
-                report.p50_ms,
-                report.p99_ms,
-                report.max_ms,
-                report.mean_ms,
-                report.stddev_ms,
-                report.late,
-                report.missed,
-                report.acquire_p50_ms,
-                report.acquire_p99_ms,
-                report.acquire_max_ms,
-                report.acquire_mean_ms,
-                report.present_call_p50_ms,
-                report.present_call_p99_ms,
-                report.present_call_max_ms,
-                report.viewport_p50_ms,
-                report.viewport_p99_ms,
-                report.viewport_max_ms,
-                report.paint_p50_ms,
-                report.paint_p99_ms,
-                report.paint_max_ms,
-                report.shown_intervals,
-                shown(report.shown_p50_ms),
-                shown(report.shown_p99_ms),
-                shown(report.shown_max_ms),
-                report.discarded,
-            );
-        }
-        out
+        render(&self.sections())
     }
 
     pub fn finish(&mut self) {
-        self.write();
-    }
-
-    fn write(&self) {
-        let Some(path) = &self.path else {
+        let Some(sender) = self.sender.take() else {
             return;
         };
-        let mut part = path.clone().into_os_string();
-        part.push(".part");
-        let part = PathBuf::from(part);
-        let written =
-            std::fs::write(&part, self.lines()).and_then(|()| std::fs::rename(&part, path));
-        if let Err(error) = written {
-            eprintln!("{PACING_VAR}: cannot write {}: {error}", path.display());
+        let _ = sender.send(self.sections());
+        drop(sender);
+        if let Some(writer) = self.writer.take()
+            && writer.join().is_err()
+        {
+            eprintln!("{PACING_VAR}: the report writer stopped before the last report");
         }
     }
 }
@@ -546,6 +511,88 @@ impl Drop for Pacing {
     fn drop(&mut self) {
         self.finish();
     }
+}
+
+fn spawn_writer(mut sink: Sink) -> Option<(SyncSender<Sections>, JoinHandle<()>)> {
+    let (sender, receiver) = mpsc::sync_channel::<Sections>(1);
+    let spawned = thread::Builder::new()
+        .name(WRITER_THREAD.to_string())
+        .spawn(move || {
+            for sections in receiver {
+                sink(&render(&sections));
+            }
+        });
+    match spawned {
+        Ok(writer) => Some((sender, writer)),
+        Err(error) => {
+            eprintln!("{PACING_VAR}: cannot start the report writer: {error}");
+            None
+        }
+    }
+}
+
+fn write_file(path: &Path, lines: &str) {
+    let mut part = path.to_path_buf().into_os_string();
+    part.push(".part");
+    let part = PathBuf::from(part);
+    let written = std::fs::write(&part, lines).and_then(|()| std::fs::rename(&part, path));
+    if let Err(error) = written {
+        eprintln!("{PACING_VAR}: cannot write {}: {error}", path.display());
+    }
+}
+
+fn render(sections: &[(Setting, PacingReport)]) -> String {
+    let mut out = String::new();
+    for (setting, report) in sections {
+        let shown = |ms: f64| {
+            if report.shown_intervals == 0 {
+                "null".to_string()
+            } else {
+                format!("{ms:.3}")
+            }
+        };
+        let _ = writeln!(
+            out,
+            "{{\"schema_version\":{SCHEMA_VERSION},\"host\":\"{}\",\"present_mode\":\"{}\",\"frame_latency\":{},\"vrr\":{},\"vrr_in_effect\":{},\"frame_rate\":\"{}\",\"budget_ms\":{:.3},\"frames\":{},\"intervals\":{},\"p50_ms\":{:.3},\"p99_ms\":{:.3},\"max_ms\":{:.3},\"mean_ms\":{:.3},\"stddev_ms\":{:.3},\"late\":{},\"missed\":{},\"acquire_p50_ms\":{:.3},\"acquire_p99_ms\":{:.3},\"acquire_max_ms\":{:.3},\"acquire_mean_ms\":{:.3},\"present_call_p50_ms\":{:.3},\"present_call_p99_ms\":{:.3},\"present_call_max_ms\":{:.3},\"viewport_p50_ms\":{:.3},\"viewport_p99_ms\":{:.3},\"viewport_max_ms\":{:.3},\"paint_p50_ms\":{:.3},\"paint_p99_ms\":{:.3},\"paint_max_ms\":{:.3},\"shown_intervals\":{},\"shown_p50_ms\":{},\"shown_p99_ms\":{},\"shown_max_ms\":{},\"discarded\":{}}}",
+            setting.host,
+            setting.present_mode,
+            setting.frame_latency,
+            setting.vrr,
+            setting
+                .vrr_in_effect
+                .map_or("null", |on| if on { "true" } else { "false" }),
+            setting.frame_rate,
+            report.budget_ms,
+            report.frames,
+            report.intervals,
+            report.p50_ms,
+            report.p99_ms,
+            report.max_ms,
+            report.mean_ms,
+            report.stddev_ms,
+            report.late,
+            report.missed,
+            report.acquire_p50_ms,
+            report.acquire_p99_ms,
+            report.acquire_max_ms,
+            report.acquire_mean_ms,
+            report.present_call_p50_ms,
+            report.present_call_p99_ms,
+            report.present_call_max_ms,
+            report.viewport_p50_ms,
+            report.viewport_p99_ms,
+            report.viewport_max_ms,
+            report.paint_p50_ms,
+            report.paint_p99_ms,
+            report.paint_max_ms,
+            report.shown_intervals,
+            shown(report.shown_p50_ms),
+            shown(report.shown_p99_ms),
+            shown(report.shown_max_ms),
+            report.discarded,
+        );
+    }
+    out
 }
 
 #[cfg(test)]
@@ -735,5 +782,259 @@ mod tests {
         pacing.set(setting("Fifo", true));
         pacing.presented(0);
         assert!(pacing.sections().is_empty());
+    }
+
+    fn run(pacing: &mut Pacing, from_ns: u64, seconds: u64) {
+        let frames = seconds * 1_000 / 4;
+        for frame in 0..frames {
+            pacing.presented(from_ns + frame * 4 * MS + (frame % 7) * 90_000);
+            pacing.acquired((frame % 5) * 30_000);
+            pacing.present_call((frame % 3) * 50_000);
+        }
+    }
+
+    fn report_path(name: &str) -> PathBuf {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tmp/gpu-tests")
+            .join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("pacing.jsonl");
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    #[test]
+    fn the_report_on_disk_after_finish_is_the_whole_run_as_the_lines_render_it() {
+        let path = report_path("finish");
+        let mut pacing = Pacing::to_file(&path, GUI_BUDGET_NS);
+        pacing.set(setting("Fifo", false));
+        run(&mut pacing, 0, 3);
+        pacing.set(setting("Mailbox", true));
+        run(&mut pacing, 3 * NS_PER_SEC, 2);
+        let lines = pacing.lines();
+        assert_eq!(lines.lines().count(), 2);
+        pacing.finish();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), lines);
+        assert!(!path.with_extension("jsonl.part").exists());
+        pacing.presented(10 * NS_PER_SEC);
+        drop(pacing);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), lines);
+    }
+
+    #[test]
+    fn a_drop_without_finish_leaves_the_whole_report() {
+        let path = report_path("drop");
+        let mut pacing = Pacing::to_file(&path, GUI_BUDGET_NS);
+        pacing.set(setting("Fifo", false));
+        run(&mut pacing, 0, 4);
+        let lines = pacing.lines();
+        drop(pacing);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), lines);
+        assert!(!path.with_extension("jsonl.part").exists());
+    }
+
+    #[test]
+    fn presented_never_waits_on_a_stalled_writer_and_drops_what_it_cannot_hold() {
+        let (entered, on_entry) = mpsc::channel();
+        let (release, on_release) = mpsc::channel::<()>();
+        let written = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = {
+            let written = written.clone();
+            let mut first = true;
+            move |lines: &str| {
+                if std::mem::take(&mut first) {
+                    entered.send(()).unwrap();
+                    on_release.recv().unwrap();
+                }
+                written.lock().unwrap().push((
+                    thread::current().name().map(str::to_string),
+                    lines.to_string(),
+                ));
+            }
+        };
+        let mut pacing = Pacing::with(Some(Box::new(sink)), GUI_BUDGET_NS);
+        pacing.set(setting("Fifo", false));
+        pacing.presented(0);
+        on_entry
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .unwrap();
+        let (done, on_done) = mpsc::channel();
+        thread::spawn(move || {
+            for second in 1..=10 {
+                pacing.presented(second * NS_PER_SEC);
+            }
+            done.send(pacing).unwrap();
+        });
+        let mut pacing = on_done
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("presented waited on the stalled writer");
+        assert_eq!(pacing.sections()[0].1.frames, 11);
+        let lines = pacing.lines();
+        release.send(()).unwrap();
+        pacing.finish();
+        let written = written.lock().unwrap();
+        let frames: Vec<&str> = written.iter().map(|(_, text)| frames_of(text)).collect();
+        assert_eq!(frames, ["1", "2", "11"]);
+        assert_eq!(written[2].1, lines);
+        assert!(
+            written
+                .iter()
+                .all(|(name, _)| name.as_deref() == Some(WRITER_THREAD))
+        );
+    }
+
+    fn frames_of(text: &str) -> &str {
+        let at = text.find("\"frames\":").unwrap() + 9;
+        &text[at..at + text[at..].find(',').unwrap()]
+    }
+
+    fn channel_sink() -> (Sink, mpsc::Receiver<String>) {
+        let (sender, receiver) = mpsc::channel();
+        let sink = move |lines: &str| {
+            let _ = sender.send(lines.to_string());
+        };
+        (Box::new(sink), receiver)
+    }
+
+    fn next(writes: &mpsc::Receiver<String>) -> String {
+        writes
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the writer never wrote")
+    }
+
+    #[test]
+    fn render_writes_one_line_per_section_with_nulls_for_what_is_unknown() {
+        assert_eq!(render(&[]), "");
+        let mut presents = Presents::new(GUI_BUDGET_NS);
+        presents.presented(0);
+        presents.presented(4 * MS);
+        let mut unknown = setting("Mailbox", true);
+        unknown.vrr_in_effect = None;
+        let text = render(&[
+            (unknown, presents.report()),
+            (setting("Fifo", false), presents.report()),
+        ]);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(text.ends_with("}\n"));
+        assert!(lines[0].starts_with("{\"schema_version\":2,\"host\":\"wayland\""));
+        assert!(lines[0].contains("\"vrr\":true,\"vrr_in_effect\":null"));
+        assert!(lines[1].contains("\"vrr\":false,\"vrr_in_effect\":false"));
+        assert!(lines.iter().all(|line| line.contains(
+            "\"shown_intervals\":0,\"shown_p50_ms\":null,\"shown_p99_ms\":null,\"shown_max_ms\":null"
+        )));
+    }
+
+    #[test]
+    fn a_report_goes_to_the_writer_at_most_once_a_second_of_present_time() {
+        let (sink, writes) = channel_sink();
+        let mut pacing = Pacing::with(Some(sink), GUI_BUDGET_NS);
+        pacing.set(setting("Fifo", false));
+        pacing.presented(0);
+        let first = next(&writes);
+        pacing.presented(500 * MS);
+        pacing.presented(999 * MS);
+        pacing.presented(1_000 * MS);
+        let second = next(&writes);
+        pacing.presented(1_500 * MS);
+        pacing.presented(2_200 * MS);
+        let third = next(&writes);
+        let lines = pacing.lines();
+        pacing.finish();
+        let last = next(&writes);
+        assert!(writes.try_recv().is_err());
+        assert_eq!(
+            [first.as_str(), second.as_str(), third.as_str()].map(frames_of),
+            ["1", "4", "6"]
+        );
+        assert_eq!(third, lines);
+        assert_eq!(last, lines);
+    }
+
+    #[test]
+    fn a_window_killed_mid_run_leaves_its_last_second_on_disk() {
+        let path = report_path("killed");
+        let (landed, on_landed) = mpsc::channel();
+        let file = path.clone();
+        let sink = move |lines: &str| {
+            write_file(&file, lines);
+            let _ = landed.send(());
+        };
+        let mut pacing = Pacing::with(Some(Box::new(sink)), GUI_BUDGET_NS);
+        pacing.set(setting("Fifo", false));
+        pacing.presented(0);
+        on_landed
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .unwrap();
+        for frame in 1..250 {
+            pacing.presented(frame * 4 * MS);
+        }
+        pacing.presented(NS_PER_SEC);
+        let last_second = pacing.lines();
+        on_landed
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .unwrap();
+        pacing.presented(NS_PER_SEC + 4 * MS);
+        pacing.presented(NS_PER_SEC + 8 * MS);
+        let on_disk = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(on_disk, last_second);
+        assert_eq!(frames_of(&on_disk), "251");
+        assert_ne!(on_disk, pacing.lines());
+        std::mem::forget(pacing);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), on_disk);
+        assert!(!path.with_extension("jsonl.part").exists());
+    }
+
+    #[test]
+    fn a_report_that_cannot_be_written_never_stops_the_window() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tmp/gpu-tests/unwritable");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("missing").join("pacing.jsonl");
+        let mut pacing = Pacing::to_file(&path, GUI_BUDGET_NS);
+        assert!(pacing.on());
+        pacing.set(setting("Fifo", false));
+        run(&mut pacing, 0, 3);
+        assert!(pacing.sections()[0].1.frames > 0);
+        pacing.finish();
+        assert!(!path.exists());
+        assert!(!path.with_extension("jsonl.part").exists());
+    }
+
+    #[test]
+    fn a_writer_that_dies_never_stops_the_window_and_finish_twice_is_harmless() {
+        let sink = |_: &str| panic!("the disk is gone");
+        let mut pacing = Pacing::with(Some(Box::new(sink)), GUI_BUDGET_NS);
+        pacing.set(setting("Fifo", false));
+        for second in 0..6 {
+            pacing.presented(second * NS_PER_SEC);
+        }
+        assert_eq!(pacing.sections()[0].1.frames, 6);
+        pacing.finish();
+        pacing.finish();
+        pacing.presented(7 * NS_PER_SEC);
+        assert_eq!(pacing.sections()[0].1.frames, 7);
+        assert!(pacing.tag().is_some());
+    }
+
+    #[test]
+    fn an_off_pacing_starts_no_writer_and_writes_no_file() {
+        let mut pacing = Pacing::off();
+        assert!(pacing.sender.is_none() && pacing.writer.is_none());
+        assert_eq!(pacing.tag(), None);
+        pacing.set(setting("Fifo", false));
+        run(&mut pacing, 0, 2);
+        pacing.finish();
+        assert_eq!(pacing.lines(), "");
+    }
+
+    #[test]
+    fn a_run_with_no_presents_finishes_with_an_empty_report() {
+        let (sink, writes) = channel_sink();
+        let mut pacing = Pacing::with(Some(sink), GUI_BUDGET_NS);
+        pacing.set(setting("Fifo", false));
+        pacing.idle();
+        drop(pacing);
+        assert_eq!(next(&writes), "");
+        assert!(writes.try_recv().is_err());
     }
 }
