@@ -489,6 +489,9 @@ fn map_evaluate(base: vec3f, roughness: f32, metalness: f32, coat_roughness: f32
     return map_evaluate_with(base, roughness, metalness, coat_roughness, thin_film, normal, tangent, uv, uv, object_position, edge, age_in, time, material_index);
 }
 fn map_evaluate_with(base: vec3f, roughness: f32, metalness: f32, coat_roughness: f32, thin_film: f32, normal: vec3f, tangent: vec4f, uv: vec2f, uv1: vec2f, object_position: vec3f, edge: f32, age_in: f32, time: f32, material_index: u32) -> MapResult {
+    return map_layers(map_evaluate_bare(base, roughness, metalness, coat_roughness, thin_film, normal, tangent, uv, uv1, object_position, edge, age_in, time, material_index), uv, object_position, time, material_index);
+}
+fn map_evaluate_bare(base: vec3f, roughness: f32, metalness: f32, coat_roughness: f32, thin_film: f32, normal: vec3f, tangent: vec4f, uv: vec2f, uv1: vec2f, object_position: vec3f, edge: f32, age_in: f32, time: f32, material_index: u32) -> MapResult {
     let material = map_materials[material_index];
     let baked = material.seeds.w != 0u;
     var atlas_uv = uv;
@@ -500,7 +503,7 @@ fn map_evaluate_with(base: vec3f, roughness: f32, metalness: f32, coat_roughness
     let tile_dx = dpdx(tiled_uv) * material.content_extra.z;
     let tile_dy = dpdy(tiled_uv) * material.content_extra.z;
     if (use_maps && material.indices.x >= 0) {
-        let sample = textureSampleGrad(map_base, map_sampler, tiled_uv, material.indices.x, tile_dx, tile_dy);
+        let sample = map_base_grad(tiled_uv, material.indices.x, tile_dx, tile_dy);
         if (baked) {
             result.base = sample.rgb;
         } else {
@@ -508,7 +511,7 @@ fn map_evaluate_with(base: vec3f, roughness: f32, metalness: f32, coat_roughness
         }
     }
     if (use_maps && material.indices.z >= 0) {
-        let sampled_roughness = textureSampleGrad(map_roughness, map_sampler, tiled_uv, material.indices.z, tile_dx, tile_dy).r;
+        let sampled_roughness = map_roughness_grad(tiled_uv, material.indices.z, tile_dx, tile_dy).r;
         if (baked) {
             result.roughness = sampled_roughness;
         } else {
@@ -519,7 +522,7 @@ fn map_evaluate_with(base: vec3f, roughness: f32, metalness: f32, coat_roughness
         result.metalness *= textureSampleGrad(map_metal, map_sampler, tiled_uv, material.indices.w, tile_dx, tile_dy).r;
     }
     if (use_maps && material.indices.y >= 0) {
-        var mapped = textureSampleGrad(map_normal, map_sampler, tiled_uv, material.indices.y, tile_dx, tile_dy).xyz * 2.0 - vec3f(1.0);
+        var mapped = map_normal_grad(tiled_uv, material.indices.y, tile_dx, tile_dy).xyz * 2.0 - vec3f(1.0);
         if (material.seeds.w == 3u) {
             mapped.z = sqrt(max(0.0, 1.0 - dot(mapped.xy, mapped.xy)));
         }
@@ -561,6 +564,11 @@ fn map_evaluate_with(base: vec3f, roughness: f32, metalness: f32, coat_roughness
             result.metalness = mix(result.metalness, 0.5, green);
         }
     }
+    return result;
+}
+fn map_layers(mapped: MapResult, uv: vec2f, object_position: vec3f, time: f32, material_index: u32) -> MapResult {
+    let material = map_materials[material_index];
+    var result = mapped;
     if (use_detail && material.seeds.w == 0u) {
         result = map_layer(result, material.layer0, material.params[0], material.params[1], material.params[2], material.params[3], uv, object_position, time, material.seeds.y != 0u, material.packed.z);
         result = map_layer(result, material.layer1, material.params[4], material.params[5], material.params[6], material.params[7], uv, object_position, time, material.seeds.y != 0u, material.packed.z);
@@ -571,22 +579,69 @@ fn map_evaluate_with(base: vec3f, roughness: f32, metalness: f32, coat_roughness
 }
 "#;
 
+pub const MAP_ARRAY_WGSL: &str = r#"
+fn map_base_grad(at: vec2f, layer: i32, dx: vec2f, dy: vec2f) -> vec4f {
+    return textureSampleGrad(map_base, map_sampler, at, layer, dx, dy);
+}
+fn map_normal_grad(at: vec2f, layer: i32, dx: vec2f, dy: vec2f) -> vec4f {
+    return textureSampleGrad(map_normal, map_sampler, at, layer, dx, dy);
+}
+fn map_roughness_grad(at: vec2f, layer: i32, dx: vec2f, dy: vec2f) -> vec4f {
+    return textureSampleGrad(map_roughness, map_sampler, at, layer, dx, dy);
+}
+fn map_base_level(at: vec2f, layer: i32, level: f32) -> vec4f {
+    return textureSampleLevel(map_base, map_sampler, at, layer, level);
+}
+"#;
+
+pub const MAP_SET_WGSL: &str = r#"
+@group(4) @binding(0) var map_base_set: binding_array<texture_2d<f32>>;
+@group(4) @binding(1) var map_normal_set: binding_array<texture_2d<f32>>;
+@group(4) @binding(2) var map_roughness_set: binding_array<texture_2d<f32>>;
+fn map_base_grad(at: vec2f, layer: i32, dx: vec2f, dy: vec2f) -> vec4f {
+    return textureSampleGrad(map_base_set[layer], map_sampler, at, dx, dy);
+}
+fn map_normal_grad(at: vec2f, layer: i32, dx: vec2f, dy: vec2f) -> vec4f {
+    return textureSampleGrad(map_normal_set[layer], map_sampler, at, dx, dy);
+}
+fn map_roughness_grad(at: vec2f, layer: i32, dx: vec2f, dy: vec2f) -> vec4f {
+    return textureSampleGrad(map_roughness_set[layer], map_sampler, at, dx, dy);
+}
+fn map_base_level(at: vec2f, layer: i32, level: f32) -> vec4f {
+    return textureSampleLevel(map_base_set[layer], map_sampler, at, level);
+}
+"#;
+
+pub fn map_enable(set: bool) -> &'static str {
+    if set {
+        "enable wgpu_binding_array;"
+    } else {
+        ""
+    }
+}
+
+pub fn map_sampling(set: bool) -> &'static str {
+    if set { MAP_SET_WGSL } else { MAP_ARRAY_WGSL }
+}
+
 pub fn shader_source() -> String {
     format!(
-        "{}\n{}\n{}",
+        "{}\n{}\n{}\n{}",
         pfx_materials::NOISE,
         pfx_materials::AGEING,
-        MAPS_WGSL
+        MAPS_WGSL,
+        MAP_ARRAY_WGSL
     )
 }
 
 pub fn content_source() -> String {
     format!(
-        "{}\n{}\n{}\n{}\n{}",
+        "{}\n{}\n{}\n{}\n{}\n{}",
         pfx_materials::BRDF,
         pfx_materials::NOISE,
         pfx_materials::AGEING,
         MAPS_WGSL,
+        MAP_ARRAY_WGSL,
         content_wgsl()
     )
 }
@@ -1217,6 +1272,7 @@ pub struct MapTextures {
     pub two_channel_normals: bool,
     pub noise: Option<u32>,
     pub coat: CoatWobble,
+    pub set: Option<MapSet>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1255,7 +1311,236 @@ pub fn sampler_descriptor() -> wgpu::SamplerDescriptor<'static> {
     }
 }
 
+pub const MAP_SLOTS: u32 = 256;
+pub const MAP_SET_GROUP: u32 = 4;
+
+pub fn set_capable(device: &wgpu::Device) -> bool {
+    let wanted = wgpu::Features::TEXTURE_BINDING_ARRAY
+        | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+    let limits = device.limits();
+    device.features().contains(wanted)
+        && limits.max_bind_groups > MAP_SET_GROUP
+        && limits.max_binding_array_elements_per_shader_stage >= 3 * MAP_SLOTS
+}
+
+pub fn set_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
+    let entry = |binding| wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: std::num::NonZeroU32::new(MAP_SLOTS),
+    };
+    vec![entry(0), entry(1), entry(2)]
+}
+
+pub fn set_layout(device: &wgpu::Device) -> Option<wgpu::BindGroupLayout> {
+    if !set_capable(device) {
+        return None;
+    }
+    Some(
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("material map set"),
+            entries: &set_entries(),
+        }),
+    )
+}
+
+pub fn texture_bytes(texture: &wgpu::Texture) -> u64 {
+    let format = texture.format();
+    let (bw, bh) = format.block_dimensions();
+    let block = u64::from(format.block_copy_size(None).unwrap_or(4));
+    let layers = u64::from(texture.depth_or_array_layers());
+    (0..texture.mip_level_count())
+        .map(|level| {
+            let w = (texture.width() >> level).max(1);
+            let h = (texture.height() >> level).max(1);
+            u64::from(w.div_ceil(bw)) * u64::from(h.div_ceil(bh)) * block * layers
+        })
+        .sum()
+}
+
+pub struct MapSet {
+    textures: Vec<wgpu::Texture>,
+    pub group: wgpu::BindGroup,
+}
+
+impl MapSet {
+    pub fn bytes(&self) -> u64 {
+        self.textures.iter().map(texture_bytes).sum()
+    }
+
+    fn single(view: &TextureArray, layer: u32) -> wgpu::TextureView {
+        view.texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2),
+            base_array_layer: layer,
+            array_layer_count: Some(1),
+            ..Default::default()
+        })
+    }
+
+    fn group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        kinds: [(Vec<wgpu::TextureView>, &TextureArray); 3],
+    ) -> wgpu::BindGroup {
+        let held: Vec<(Vec<wgpu::TextureView>, wgpu::TextureView)> = kinds
+            .into_iter()
+            .map(|(views, fallback)| (views, Self::single(fallback, 0)))
+            .collect();
+        let refs: Vec<Vec<&wgpu::TextureView>> = held
+            .iter()
+            .map(|(views, empty)| {
+                views
+                    .iter()
+                    .chain(std::iter::repeat(empty))
+                    .take(MAP_SLOTS as usize)
+                    .collect()
+            })
+            .collect();
+        let entries: Vec<wgpu::BindGroupEntry> = refs
+            .iter()
+            .enumerate()
+            .map(|(binding, views)| wgpu::BindGroupEntry {
+                binding: binding as u32,
+                resource: wgpu::BindingResource::TextureViewArray(views),
+            })
+            .collect();
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("material map set"),
+            layout,
+            entries: &entries,
+        })
+    }
+
+    fn upload(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        images: &MapImages<'_>,
+        fallbacks: [&TextureArray; 3],
+    ) -> Result<Self, String> {
+        let mut textures = Vec::new();
+        let mut kinds = Vec::with_capacity(3);
+        for ((list, kind, label), fallback) in [
+            (images.base, Kind::Base, "base maps"),
+            (images.normal, Kind::Normal, "normal maps"),
+            (images.roughness, Kind::Scalar, "roughness maps"),
+        ]
+        .into_iter()
+        .zip(fallbacks)
+        {
+            if list.len() > MAP_SLOTS as usize {
+                return Err(format!(
+                    "{label}: {} images, at most {MAP_SLOTS}",
+                    list.len()
+                ));
+            }
+            let mut views = Vec::with_capacity(list.len());
+            for image in list {
+                let one =
+                    TextureArray::upload(device, queue, std::slice::from_ref(image), kind, label)?;
+                views.push(Self::single(&one, 0));
+                textures.push(one.texture);
+            }
+            kinds.push((views, fallback));
+        }
+        let kinds: [(Vec<wgpu::TextureView>, &TextureArray); 3] = kinds
+            .try_into()
+            .map_err(|_| "a map set has three kinds".to_string())?;
+        Ok(Self {
+            group: Self::group(device, layout, kinds),
+            textures,
+        })
+    }
+
+    fn pages(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        arrays: [&TextureArray; 3],
+    ) -> Result<Self, String> {
+        let kinds = arrays.map(|array| {
+            let views = (0..array.layers)
+                .map(|layer| Self::single(array, layer))
+                .collect::<Vec<_>>();
+            (views, array)
+        });
+        if kinds
+            .iter()
+            .any(|(views, _)| views.len() > MAP_SLOTS as usize)
+        {
+            return Err(format!("detail pages: at most {MAP_SLOTS}"));
+        }
+        Ok(Self {
+            group: Self::group(device, layout, kinds),
+            textures: Vec::new(),
+        })
+    }
+}
+
 impl MapTextures {
+    pub fn new_in(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        images: &MapImages<'_>,
+        layout: Option<&wgpu::BindGroupLayout>,
+    ) -> Result<Self, String> {
+        let Some(layout) = layout else {
+            return Self::new(device, queue, images);
+        };
+        let mut maps = Self::new(
+            device,
+            queue,
+            &MapImages {
+                metal: images.metal,
+                ..MapImages::default()
+            },
+        )?;
+        maps.set = Some(MapSet::upload(
+            device,
+            queue,
+            layout,
+            images,
+            [&maps.base, &maps.normal, &maps.roughness],
+        )?);
+        Ok(maps)
+    }
+
+    pub fn detail_in(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        atlas: &Atlas,
+        layout: Option<&wgpu::BindGroupLayout>,
+    ) -> Result<Self, String> {
+        let mut maps = Self::detail(device, queue, atlas)?;
+        if let Some(layout) = layout {
+            maps.set = Some(MapSet::pages(
+                device,
+                layout,
+                [&maps.base, &maps.normal, &maps.roughness],
+            )?);
+        }
+        Ok(maps)
+    }
+
+    pub fn bytes(&self) -> u64 {
+        match &self.set {
+            Some(set) if !set.textures.is_empty() => set.bytes(),
+            _ => [&self.base, &self.normal, &self.roughness]
+                .into_iter()
+                .filter(|array| array.layers > 0)
+                .map(|array| texture_bytes(&array.texture))
+                .sum(),
+        }
+    }
+
+    pub fn set_group(&self) -> Option<&wgpu::BindGroup> {
+        self.set.as_ref().map(|set| &set.group)
+    }
+
     pub fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1285,6 +1570,7 @@ impl MapTextures {
             two_channel_normals: false,
             noise,
             coat,
+            set: None,
         })
     }
 
@@ -1329,6 +1615,7 @@ impl MapTextures {
                 .is_some_and(|page| page.format == Format::Bc5),
             noise,
             coat,
+            set: None,
         })
     }
 

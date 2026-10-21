@@ -42,8 +42,9 @@ Timestamp queries are never part of the floor. Without `TIMESTAMP_QUERY` the ren
 | `TIMESTAMP_QUERY` | optional | `GpuProfiler` pass timings across every pass; `pace` frame timing; `Pacer::run_passes` slice timing from the first pass's start to the last pass's end where encoder timestamps are missing (Apple GPUs). Absent means profiling off. |
 | `TIMESTAMP_QUERY_INSIDE_ENCODERS` | optional | `GpuProfiler` marks between passes; `Pacer` slice timing around the whole encoder. Absent, a `Pacer::run` slice is timed by its fence, which counts the submission's own CPU cost. |
 | `FLOAT32_FILTERABLE` | optional | Nothing in the live renderer: every R32Float and Rgba32Float binding is `filterable: false` and read with `textureLoad`. Glass declares its fluid and ripple inputs filterable; callers pass R16Float or Rgba16Float there, so an R32Float input would need this feature. The tracer requires it (below). |
+| `TEXTURE_BINDING_ARRAY`, `SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING` | optional | The material map set: with both, five bind groups and 768 binding-array elements a stage, live keeps each glTF material map at its own size in bind group 4 (`maps::MapSet`, three `binding_array<texture_2d<f32>>` of 256) instead of resampling each kind to its largest map into a texture array. Absent, the arrays of group 3 hold the maps as before. The openers request both features and `max_bind_groups` and `max_binding_array_elements_per_shader_stage` up to 5 and 1024 whenever the adapter offers them ([materials.md](materials.md#texture-maps-on-imported-meshes)). |
 
-The floor requires no wgpu feature. No pass uses push constants, binding arrays, multisampling, indirect draws, occlusion queries, polygon modes, conservative raster, unclipped depth, subgroups or read-write storage textures.
+The floor requires no wgpu feature. No pass needs push constants, binding arrays (the map set above is optional), multisampling, indirect draws, occlusion queries, polygon modes, conservative raster, unclipped depth, subgroups or read-write storage textures.
 
 ## Downlevel capabilities
 
@@ -93,7 +94,7 @@ A new texture in group 3 therefore turns the gate red until the floor rises with
 | Limit | Default (floor) | Most in use | Pass |
 |---|---|---|---|
 | `max_storage_textures_per_shader_stage` | 4 | **4** | TAA resolve: colour Rgba16Float, depth R32Float, id R32Uint and normal Rgba8Snorm history, all write-only |
-| `max_bind_groups` | 4 | **4** | Opaque, depth/velocity, tree cards and lit text: scene, shadow, deformers or cookie or text, lighting |
+| `max_bind_groups` | 4 | **4** | Opaque, depth/velocity, tree cards and lit text: scene, shadow, deformers or cookie or text, lighting; 5 with the optional map set, on the frame and cut shadow layouts |
 | `max_compute_invocations_per_workgroup` | 256 | **256** | Exposure reduction (256×1); depth of field tiles (16×16) |
 | `max_compute_workgroup_size_x` | 256 | 256 | Exposure reduction |
 | `max_compute_workgroup_size_y` | 256 | 16 | Depth of field tiles |

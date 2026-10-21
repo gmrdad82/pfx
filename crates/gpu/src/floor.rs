@@ -52,7 +52,9 @@ pub const OPTIONAL_FEATURES: wgpu::Features = wgpu::Features::TIMESTAMP_QUERY
     .union(wgpu::Features::TEXTURE_COMPRESSION_BC)
     .union(wgpu::Features::PIPELINE_CACHE)
     .union(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
-    .union(wgpu::Features::INDIRECT_FIRST_INSTANCE);
+    .union(wgpu::Features::INDIRECT_FIRST_INSTANCE)
+    .union(wgpu::Features::TEXTURE_BINDING_ARRAY)
+    .union(wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING);
 
 pub const SAMPLED_TEXTURES_PER_STAGE: u32 = 18;
 pub const TEXTURE_SIDE: u32 = 16_384;

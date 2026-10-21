@@ -2563,6 +2563,14 @@ impl Renderer {
         self.frame.set_transmission(tints)
     }
 
+    pub fn map_set(&self) -> bool {
+        self.frame.map_set()
+    }
+
+    pub fn map_bytes(&self) -> u64 {
+        self.frame.maps().bytes()
+    }
+
     pub fn set_maps(&mut self, images: &MapImages<'_>) -> Result<(), String> {
         self.touch();
         self.frame.set_maps(images)

@@ -442,6 +442,7 @@ pub struct Batch {
     pub moving: bool,
     pub clipped: bool,
     pub cut: bool,
+    pub blend: bool,
     pub shadow_only: bool,
     pub casts_shadow: bool,
     pub range: Range<u32>,
@@ -763,6 +764,7 @@ pub struct OpaqueKey {
     pub lit: bool,
     pub two_sided: bool,
     pub classic_depth: bool,
+    pub blend: bool,
 }
 
 impl OpaqueKey {
@@ -772,6 +774,7 @@ impl OpaqueKey {
             lit,
             two_sided,
             classic_depth: false,
+            blend: false,
         })
     }
 }
@@ -804,14 +807,22 @@ pub(crate) fn opaque_pipeline(
             layout,
             module,
             vertex: "vertex_main",
-            fragment: Some(match (key.lit, key.classic_depth) {
-                (true, false) => "opaque_lit_main",
-                (false, false) => "opaque_main",
-                (true, true) => "opaque_lit_classic",
-                (false, true) => "opaque_classic",
+            fragment: Some(match (key.lit, key.classic_depth, key.blend) {
+                (true, false, false) => "opaque_lit_main",
+                (false, false, false) => "opaque_main",
+                (true, true, false) => "opaque_lit_classic",
+                (false, true, false) => "opaque_classic",
+                (true, false, true) => "opaque_lit_blend",
+                (false, false, true) => "opaque_blend",
+                (true, true, true) => "opaque_lit_blend_classic",
+                (false, true, true) => "opaque_blend_classic",
             }),
             buffers: &buffers,
-            targets: &opaque_targets(),
+            targets: &if key.blend {
+                blend_targets()
+            } else {
+                opaque_targets()
+            },
             cull: (!key.two_sided).then_some(wgpu::Face::Back),
             write_depth: false,
             reversed: true,
@@ -1107,6 +1118,7 @@ pub struct Frame {
     local_reflections: RefCell<Option<LocalReflections>>,
     deformers: DeformerBuffer,
     maps: MapTextures,
+    map_set_layout: Option<wgpu::BindGroupLayout>,
     map_layers: [usize; 4],
     content: RefCell<ContentSlots>,
     content_epoch: Cell<u64>,
@@ -1264,7 +1276,7 @@ pub fn batches(
     swaying: impl Fn(MeshHandle) -> bool,
     clipped: impl Fn(usize) -> bool,
 ) -> Vec<Batch> {
-    surface_batches(instances, swaying, clipped, |_| false)
+    surface_batches(instances, swaying, clipped, |_| false, |_| false)
 }
 
 pub fn surface_batches(
@@ -1272,6 +1284,7 @@ pub fn surface_batches(
     swaying: impl Fn(MeshHandle) -> bool,
     clipped: impl Fn(usize) -> bool,
     cut: impl Fn(usize) -> bool,
+    blend: impl Fn(usize) -> bool,
 ) -> Vec<Batch> {
     let mut out: Vec<Batch> = Vec::new();
     for (index, instance) in instances.iter().enumerate() {
@@ -1281,6 +1294,7 @@ pub fn surface_batches(
             || swaying(instance.mesh);
         let clipped = clipped(index);
         let cut = cut(index);
+        let blend = blend(index);
         let index = index as u32;
         if let Some(last) = out.last_mut()
             && last.mesh == instance.mesh
@@ -1288,6 +1302,7 @@ pub fn surface_batches(
             && last.moving == moving
             && last.clipped == clipped
             && last.cut == cut
+            && last.blend == blend
             && last.shadow_only == instance.shadow_only
             && last.casts_shadow == instance.casts_shadow
             && last.range.end == index
@@ -1301,6 +1316,7 @@ pub fn surface_batches(
             moving,
             clipped,
             cut,
+            blend,
             shadow_only: instance.shadow_only,
             casts_shadow: instance.casts_shadow,
             range: index..index + 1,
@@ -1407,15 +1423,18 @@ fn draw_casters(
     runs: &[Run],
     statics: bool,
     deformers: &wgpu::BindGroup,
-    lighting: Option<&wgpu::BindGroup>,
+    lighting: Option<(&wgpu::BindGroup, Option<&wgpu::BindGroup>)>,
     pipelines: &Pipelines,
     meshes: &[MeshSlot],
 ) {
     pass.set_bind_group(2, deformers, &[]);
     if runs.iter().any(|run| batches[run.batch].cut)
-        && let Some(lighting) = lighting
+        && let Some((lighting, set)) = lighting
     {
         pass.set_bind_group(3, lighting, &[]);
+        if let Some(set) = set {
+            pass.set_bind_group(maps::MAP_SET_GROUP, set, &[]);
+        }
     }
     let mut current = None;
     for run in runs
@@ -1543,7 +1562,12 @@ pub fn shader_source() -> String {
 }
 
 pub fn shader_source_with(gobo: &Gobo) -> String {
+    frame_source(gobo, false)
+}
+
+pub fn frame_source(gobo: &Gobo, set: bool) -> String {
     [
+        maps::map_enable(set),
         BRDF,
         pfx_materials::LOBES,
         SHADOW_WGSL,
@@ -1556,6 +1580,7 @@ pub fn shader_source_with(gobo: &Gobo) -> String {
         pfx_materials::AGEING,
         pfx_materials::WET,
         maps::MAPS_WGSL,
+        maps::map_sampling(set),
         crate::textured::TEXTURED_WGSL,
         &maps::content_wgsl(),
         PROBE_WGSL,
@@ -1859,6 +1884,32 @@ fn prepass_targets() -> [Option<wgpu::ColorTargetState>; 2] {
             format: wgpu::TextureFormat::R32Uint,
             blend: None,
             write_mask: wgpu::ColorWrites::ALL,
+        }),
+    ]
+}
+
+fn blend_targets() -> [Option<wgpu::ColorTargetState>; 2] {
+    [
+        Some(wgpu::ColorTargetState {
+            format: wgpu::TextureFormat::Rgba16Float,
+            blend: Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::One,
+                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
+            write_mask: wgpu::ColorWrites::ALL,
+        }),
+        Some(wgpu::ColorTargetState {
+            format: NORMAL_FORMAT,
+            blend: None,
+            write_mask: wgpu::ColorWrites::empty(),
         }),
     ]
 }
@@ -2194,7 +2245,13 @@ impl Frame {
             mapped_at_creation: false,
         });
         let deformers = DeformerBuffer::new(device);
-        let maps = MapTextures::new(device, &gpu.queue, &MapImages::default())?;
+        let map_set_layout = maps::set_layout(device);
+        let maps = MapTextures::new_in(
+            device,
+            &gpu.queue,
+            &MapImages::default(),
+            map_set_layout.as_ref(),
+        )?;
         let content = ContentSlots::new(device, &gpu.queue);
         let probes = ProbeLighting::fallback(device, &gpu.queue, [-1.0; 3]);
         let mut sky = SkyPass::new(
@@ -2251,6 +2308,7 @@ impl Frame {
                 &lighting_layout,
             ],
             &cascade_layout,
+            map_set_layout.as_ref(),
         );
         let profiler = GpuProfiler::new(device, &gpu.queue);
         Ok(Self {
@@ -2295,6 +2353,7 @@ impl Frame {
             local_reflections: RefCell::new(None),
             deformers,
             maps,
+            map_set_layout,
             map_layers: [0; 4],
             content: RefCell::new(content),
             content_epoch: Cell::new(0),
@@ -2341,10 +2400,20 @@ impl Frame {
         device: &wgpu::Device,
         layouts: [&wgpu::BindGroupLayout; 4],
         cascade: &wgpu::BindGroupLayout,
+        set: Option<&wgpu::BindGroupLayout>,
     ) -> Pipelines {
+        let mut frame_groups = layouts.map(Some).to_vec();
+        frame_groups.extend(set.map(Some));
+        let mut cut_groups = vec![
+            Some(layouts[0]),
+            Some(cascade),
+            Some(layouts[2]),
+            Some(layouts[3]),
+        ];
+        cut_groups.extend(set.map(Some));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("live frame layout"),
-            bind_group_layouts: &layouts.map(Some),
+            bind_group_layouts: &frame_groups,
             immediate_size: 0,
         });
         let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -2354,17 +2423,12 @@ impl Frame {
         });
         let cut_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("live cut shadow layout"),
-            bind_group_layouts: &[
-                Some(layouts[0]),
-                Some(cascade),
-                Some(layouts[2]),
-                Some(layouts[3]),
-            ],
+            bind_group_layouts: &cut_groups,
             immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("live frame shader"),
-            source: wgpu::ShaderSource::Wgsl(shader_source().into()),
+            source: wgpu::ShaderSource::Wgsl(frame_source(&Gobo::default(), set.is_some()).into()),
         });
         let buffers = &[vertex_layout()];
         let (shadow_layout, module) = (&shadow_layout, &module);
@@ -2709,6 +2773,12 @@ impl Frame {
                         .get(scene.instances[index].material as usize)
                         .is_some_and(|material| !material.alpha_mode.opaque())
             },
+            |index| {
+                scene
+                    .materials
+                    .get(scene.instances[index].material as usize)
+                    .is_some_and(|material| material.alpha_mode == pfx_materials::AlphaMode::Blend)
+            },
         );
         let sample = shadows.map_or(self.shadow_sample, |(shadows, fit)| {
             shadows.sample_uniform(fit)
@@ -2726,6 +2796,7 @@ impl Frame {
                 lit,
                 two_sided: batch.two_sided,
                 classic_depth: self.classic_depth,
+                blend: batch.blend,
             };
             if !batch.shadow_only && !keys.contains(&key) {
                 keys.push(key);
@@ -2991,7 +3062,12 @@ impl Frame {
 
     pub fn set_maps(&mut self, images: &MapImages<'_>) -> Result<(), String> {
         let filter = self.maps.filter;
-        self.maps = MapTextures::new(&self.gpu.device, &self.gpu.queue, images)?;
+        self.maps = MapTextures::new_in(
+            &self.gpu.device,
+            &self.gpu.queue,
+            images,
+            self.map_set_layout.as_ref(),
+        )?;
         self.maps.set_filter(&self.gpu.device, filter);
         self.map_layers = [
             images.base.len(),
@@ -3004,7 +3080,12 @@ impl Frame {
 
     pub fn set_detail(&mut self, atlas: &Atlas) -> Result<(), String> {
         let filter = self.maps.filter;
-        self.maps = MapTextures::detail(&self.gpu.device, &self.gpu.queue, atlas)?;
+        self.maps = MapTextures::detail_in(
+            &self.gpu.device,
+            &self.gpu.queue,
+            atlas,
+            self.map_set_layout.as_ref(),
+        )?;
         self.maps.set_filter(&self.gpu.device, filter);
         let parts = atlas.parts.len();
         self.map_layers = [parts, parts, parts, 0];
@@ -3025,6 +3106,10 @@ impl Frame {
 
     pub fn texture_filter(&self) -> maps::TextureFilter {
         self.maps.filter
+    }
+
+    pub fn map_set(&self) -> bool {
+        self.map_set_layout.is_some()
     }
 
     pub fn maps(&self) -> &MapTextures {
@@ -3171,7 +3256,9 @@ impl Frame {
             .device
             .create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("live frame shader"),
-                source: wgpu::ShaderSource::Wgsl(shader_source_with(&gobo).into()),
+                source: wgpu::ShaderSource::Wgsl(
+                    frame_source(&gobo, self.map_set_layout.is_some()).into(),
+                ),
             });
         self.pipelines.retarget(module);
         self.canopy_gobo = gobo;
@@ -4005,6 +4092,12 @@ impl Frame {
                         .get(scene.instances[index].material as usize)
                         .is_some_and(|material| !material.alpha_mode.opaque())
             },
+            |index| {
+                scene
+                    .materials
+                    .get(scene.instances[index].material as usize)
+                    .is_some_and(|material| material.alpha_mode == pfx_materials::AlphaMode::Blend)
+            },
         );
         Ok((batches, surfaces))
     }
@@ -4244,6 +4337,7 @@ impl Frame {
                     lit,
                     two_sided: batch.two_sided,
                     classic_depth: self.classic_depth,
+                    blend: batch.blend,
                 }),
         );
         self.encode_surfaces(
@@ -4416,7 +4510,8 @@ impl Frame {
         let scene_group = &self.scene_group;
         let cascade_group = &self.cascade_group;
         let deformers = &self.deformers.group;
-        let lighting = self.lighting_group.group.as_ref();
+        let set = self.maps.set_group();
+        let lighting = self.lighting_group.group.as_ref().map(|group| (group, set));
         let pipelines = &self.pipelines;
         let meshes = &self.meshes;
         let align = self.cascade_align;
@@ -4666,7 +4761,10 @@ impl Frame {
             runs,
             statics,
             &self.deformers.group,
-            self.lighting_group.group.as_ref(),
+            self.lighting_group
+                .group
+                .as_ref()
+                .map(|group| (group, self.maps.set_group())),
             &self.pipelines,
             &self.meshes,
         );
@@ -4687,6 +4785,10 @@ impl Frame {
             .as_ref()
             .ok_or("frame lighting is not prepared")?;
         let occlusion = self.occlusion.as_ref().filter(|_| occluding);
+        let (blended, solid): (Vec<Run>, Vec<Run>) = runs
+            .iter()
+            .cloned()
+            .partition(|run| batches[run.batch].blend);
         if let Some(occlusion) = occlusion {
             occlusion.encode_early(encoder, profiler.as_deref_mut());
         }
@@ -4753,7 +4855,7 @@ impl Frame {
             self.draw_with(
                 &mut pass,
                 batches,
-                runs,
+                &solid,
                 commands,
                 lighting,
                 |index, two_sided| {
@@ -4821,29 +4923,32 @@ impl Frame {
             crate::viewport::apply(&mut pass, self.viewport);
             let lit = self.lights.extended();
             let last: Cell<Option<(OpaqueKey, &wgpu::RenderPipeline)>> = Cell::new(None);
-            self.draw_with(
-                &mut pass,
-                batches,
-                runs,
-                occlusion.map(|occlusion| &occlusion.last),
-                lighting,
-                |index, two_sided| {
-                    let key = OpaqueKey {
-                        features: features[index],
-                        lit,
-                        two_sided,
-                        classic_depth: self.classic_depth,
-                    };
-                    match last.get() {
-                        Some((seen, pipeline)) if seen == key => pipeline,
-                        _ => {
-                            let pipeline = &self.pipelines.opaque[&key];
-                            last.set(Some((key, pipeline)));
-                            pipeline
+            for drawn in [&solid, &blended] {
+                self.draw_with(
+                    &mut pass,
+                    batches,
+                    drawn,
+                    occlusion.map(|occlusion| &occlusion.last),
+                    lighting,
+                    |index, two_sided| {
+                        let key = OpaqueKey {
+                            features: features[index],
+                            lit,
+                            two_sided,
+                            classic_depth: self.classic_depth,
+                            blend: batches[index].blend,
+                        };
+                        match last.get() {
+                            Some((seen, pipeline)) if seen == key => pipeline,
+                            _ => {
+                                let pipeline = &self.pipelines.opaque[&key];
+                                last.set(Some((key, pipeline)));
+                                pipeline
+                            }
                         }
-                    }
-                },
-            );
+                    },
+                );
+            }
             if let Some(foliage) = &self.foliage {
                 self.draw_cards(&mut pass, foliage, &foliage.opaque, lighting);
             }
@@ -4864,6 +4969,9 @@ impl Frame {
         pass.set_bind_group(1, &self.shadow_group, &[]);
         pass.set_bind_group(2, &self.deformers.group, &[]);
         pass.set_bind_group(3, lighting, &[]);
+        if let Some(set) = self.maps.set_group() {
+            pass.set_bind_group(maps::MAP_SET_GROUP, set, &[]);
+        }
         let mut current: Option<&wgpu::RenderPipeline> = None;
         for run in runs {
             let batch = &batches[run.batch];
@@ -5268,19 +5376,40 @@ struct ShadowCutOutput {
         discard;
     }
 }
-fn material_cut(material_index: u32, uv0: vec2f, uv1: vec2f, pixel: vec2u, id: u32) -> bool {
+var<private> opaque_blending: bool = false;
+fn material_coverage(material_index: u32, uv0: vec2f, uv1: vec2f) -> f32 {
     let material = materials[material_index];
-    let mode = material.coverage.z;
-    if (mode < 0.5) {
-        return false;
-    }
     var alpha = material.coverage.x;
     let layer = i32(round(material.textures.x));
     if (layer >= 0) {
         let main_one = (u32(round(material.texture_scales.w)) & 1u) != 0u;
         let at = uv_place(select(uv0, uv1, main_one), material.texture_transform, material.texture_extra.z);
-        alpha *= textureSampleLevel(map_base, map_sampler, at, layer, 0.0).a;
+        alpha *= map_base_level(at, layer, 0.0).a;
     }
+    return clamp(alpha, 0.0, 1.0);
+}
+fn blend_coverage(material_index: u32, uv0: vec2f, uv1: vec2f, footprint0: vec4f, footprint1: vec4f) -> f32 {
+    let material = materials[material_index];
+    var alpha = material.coverage.x;
+    let layer = i32(round(material.textures.x));
+    if (layer >= 0) {
+        let main_one = (u32(round(material.texture_scales.w)) & 1u) != 0u;
+        let rotation = material.texture_extra.z;
+        let at = uv_place(select(uv0, uv1, main_one), material.texture_transform, rotation);
+        let footprint = select(footprint0, footprint1, main_one);
+        let dx = uv_turn(footprint.xy, rotation, material.texture_transform.zw);
+        let dy = uv_turn(footprint.zw, rotation, material.texture_transform.zw);
+        alpha *= map_base_grad(at, layer, dx, dy).a;
+    }
+    return clamp(alpha, 0.0, 1.0);
+}
+fn material_cut(material_index: u32, uv0: vec2f, uv1: vec2f, pixel: vec2u, id: u32) -> bool {
+    let mode = materials[material_index].coverage.z;
+    if (mode < 0.5 || (opaque_blending && mode >= 1.5)) {
+        return false;
+    }
+    let alpha = material_coverage(material_index, uv0, uv1);
+    let material = materials[material_index];
     if (mode < 1.5) {
         return alpha < material.coverage.y;
     }
@@ -5470,6 +5599,30 @@ struct ClassicOpaqueOutput {
     let shaded = opaque_shade(input, front, true);
     return ClassicOpaqueOutput(shaded.colour, shaded.normal_roughness, classic_depth(input.position.z));
 }
+fn opaque_blended(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
+    opaque_blending = true;
+    let uv1 = vec2f(input.uv_alpha.w, input.normal.w);
+    let footprint = vec4f(dpdx(input.uv_alpha.xy), dpdy(input.uv_alpha.xy));
+    let footprint1 = vec4f(dpdx(uv1), dpdy(uv1));
+    var shaded = opaque_shade(input, front, lit);
+    let coverage = blend_coverage(input.material, input.uv_alpha.xy, uv1, footprint, footprint1);
+    shaded.colour = vec4f(shaded.colour.rgb * coverage, coverage);
+    return shaded;
+}
+@fragment fn opaque_blend(input: VertexOutput, @builtin(front_facing) front: bool) -> OpaqueOutput {
+    return opaque_blended(input, front, false);
+}
+@fragment fn opaque_lit_blend(input: VertexOutput, @builtin(front_facing) front: bool) -> OpaqueOutput {
+    return opaque_blended(input, front, true);
+}
+@fragment fn opaque_blend_classic(input: VertexOutput, @builtin(front_facing) front: bool) -> ClassicOpaqueOutput {
+    let shaded = opaque_blended(input, front, false);
+    return ClassicOpaqueOutput(shaded.colour, shaded.normal_roughness, classic_depth(input.position.z));
+}
+@fragment fn opaque_lit_blend_classic(input: VertexOutput, @builtin(front_facing) front: bool) -> ClassicOpaqueOutput {
+    let shaded = opaque_blended(input, front, true);
+    return ClassicOpaqueOutput(shaded.colour, shaded.normal_roughness, classic_depth(input.position.z));
+}
 fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     let uv_dx = dpdx(input.uv_alpha.xy);
     let uv_dy = dpdy(input.uv_alpha.xy);
@@ -5488,10 +5641,11 @@ fn opaque_shade(input: VertexOutput, front: bool, lit: bool) -> OpaqueOutput {
     if (!front) {
         geometric = -geometric;
     }
-    var mapped = map_evaluate_with(material.base_roughness.xyz, material.base_roughness.w, material.metal_spec_coat.x, material.metal_spec_coat.w, material.thick_sub_film.z, geometric, input.tangent, input.uv_alpha.xy, vec2f(input.uv_alpha.w, input.normal.w), input.object_position, 0.0, input.settings.z, frame.time_size.x, input.material);
+    var mapped = map_evaluate_bare(material.base_roughness.xyz, material.base_roughness.w, material.metal_spec_coat.x, material.metal_spec_coat.w, material.thick_sub_film.z, geometric, input.tangent, input.uv_alpha.xy, vec2f(input.uv_alpha.w, input.normal.w), input.object_position, 0.0, input.settings.z, frame.time_size.x, input.material);
     if (textured_on(material)) {
         mapped = textured_maps(mapped, material, input.tangent, input.uv_alpha.xy, uv1, uv_dx, uv_dy, uv1_dx, uv1_dy);
     }
+    mapped = map_layers(mapped, input.uv_alpha.xy, input.object_position, frame.time_size.x, input.material);
     var surface = shaded(material, mapped.normal);
     surface.base = mapped.base;
     surface.roughness = mapped.roughness;
@@ -5967,6 +6121,13 @@ mod tests {
     }
 
     fn binding_kind(module: &naga::Module, variable: &naga::GlobalVariable) -> String {
+        if let naga::TypeInner::BindingArray { base, .. } = module.types[variable.ty].inner {
+            let element = naga::GlobalVariable {
+                ty: base,
+                ..variable.clone()
+            };
+            return format!("array {}", binding_kind(module, &element));
+        }
         match (&variable.space, &module.types[variable.ty].inner) {
             (naga::AddressSpace::Uniform, _) => "uniform".into(),
             (naga::AddressSpace::Storage { access }, _) => {
@@ -6007,6 +6168,13 @@ mod tests {
     }
 
     fn entry_kind(entry: &wgpu::BindGroupLayoutEntry) -> String {
+        match entry.count {
+            Some(_) => format!("array {}", single_kind(entry)),
+            None => single_kind(entry),
+        }
+    }
+
+    fn single_kind(entry: &wgpu::BindGroupLayoutEntry) -> String {
         match entry.ty {
             wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
@@ -6270,6 +6438,84 @@ mod tests {
         let split = batches(&unclipped, |_| false, |i| i == 1);
         assert_eq!(split.len(), 3);
         assert_eq!(split[1].range, 1..2);
+    }
+
+    #[test]
+    fn blended_instances_batch_apart_from_masked_ones_of_the_same_mesh() {
+        let instances = vec![Instance::new(MeshHandle(1), identity(), 0, 1); 4];
+        let drawn = surface_batches(&instances, |_| false, |_| false, |_| true, |i| i >= 2);
+        assert_eq!(drawn.len(), 2);
+        assert!(drawn.iter().all(|batch| batch.cut));
+        assert!(!drawn[0].blend && drawn[1].blend);
+        assert_eq!(drawn[0].range, 0..2);
+        assert_eq!(drawn[1].range, 2..4);
+        let alternating =
+            surface_batches(&instances, |_| false, |_| false, |_| true, |i| i % 2 == 1);
+        assert_eq!(alternating.len(), 4);
+        let plain = batches(&instances, |_| false, |_| false);
+        assert_eq!(plain.len(), 1);
+        assert!(!plain[0].blend && !plain[0].cut);
+    }
+
+    #[test]
+    fn blend_pipelines_add_premultiplied_colour_and_keep_the_surface_behind() {
+        let [colour, normal] = blend_targets();
+        let colour = colour.unwrap();
+        let blend = colour.blend.unwrap();
+        assert_eq!(blend.color.src_factor, wgpu::BlendFactor::One);
+        assert_eq!(blend.color.dst_factor, wgpu::BlendFactor::OneMinusSrcAlpha);
+        assert_eq!(blend.alpha.src_factor, wgpu::BlendFactor::Zero);
+        assert_eq!(blend.alpha.dst_factor, wgpu::BlendFactor::One);
+        assert_eq!(colour.format, opaque_targets()[0].as_ref().unwrap().format);
+        let normal = normal.unwrap();
+        assert_eq!(normal.write_mask, wgpu::ColorWrites::empty());
+        assert!(opaque_targets().iter().all(|target| {
+            target
+                .as_ref()
+                .is_some_and(|t| t.blend.is_none() && t.write_mask == wgpu::ColorWrites::ALL)
+        }));
+    }
+
+    #[test]
+    fn the_map_set_shader_samples_group_four_and_the_array_shader_does_not() {
+        let set = frame_source(&Gobo::default(), true);
+        let arrays = frame_source(&Gobo::default(), false);
+        assert!(set.starts_with("enable wgpu_binding_array;"));
+        assert!(!arrays.contains("enable wgpu_binding_array"));
+        assert!(set.contains("@group(4)") && !arrays.contains("@group(4)"));
+        assert_eq!(arrays, shader_source());
+        let frame_layouts = [
+            scene_entries(),
+            shadow_entries(),
+            deformer_entries(),
+            lighting_entries(),
+        ];
+        let mut with_set = frame_layouts.to_vec();
+        with_set.push(maps::set_entries());
+        let entries = [
+            "vertex_main",
+            "prepass_main",
+            "opaque_main",
+            "opaque_lit_main",
+            "opaque_blend",
+            "opaque_lit_blend",
+            "opaque_blend_classic",
+            "opaque_lit_blend_classic",
+        ];
+        let checked = check_pipeline(&set, &entries, &with_set);
+        assert!(checked >= 20, "{checked} set bindings checked");
+        check_pipeline(&arrays, &entries, &frame_layouts);
+        check_pipeline(
+            &set,
+            &["shadow_cut_vertex", "shadow_cut_fragment"],
+            &[
+                scene_entries(),
+                cascade_entries(),
+                deformer_entries(),
+                lighting_entries(),
+                maps::set_entries(),
+            ],
+        );
     }
 
     #[test]

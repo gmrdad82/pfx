@@ -301,7 +301,10 @@ fn library(built: &Built, recipe: &Recipe, base: &Path) -> Result<(Option<String
         };
         let material = serde_json::from_value::<Material>(value.clone())
             .map_err(|e| Error::new(format!("materials.{name}"), e.to_string()))?;
-        if carried && in_glb(&material) && !recipe.effects.wet.contains_key(name) {
+        if carried
+            && (in_glb(&material) || carries_layers(built.looks.get(name), &material))
+            && !recipe.effects.wet.contains_key(name)
+        {
             return Ok(true);
         }
         let (name, material) = match layer {
@@ -356,6 +359,20 @@ fn in_glb(material: &Material) -> bool {
         ..*material
     };
     rest == plain && material.emission.iter().all(|v| (0.0..=1.0).contains(v))
+}
+
+fn carries_layers(look: Option<&Look>, material: &Material) -> bool {
+    let Some(carried) = look
+        .and_then(|look| look.material.as_ref())
+        .and_then(|value| serde_json::from_value::<Material>(value.clone()).ok())
+    else {
+        return false;
+    };
+    carried.layers == material.layers
+        && in_glb(&Material {
+            layers: Material::default().layers,
+            ..*material
+        })
 }
 
 fn layered(material: &str, slot: usize) -> String {
@@ -2117,6 +2134,63 @@ fn png_header(bytes: &[u8]) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    use super::{Look, carries_layers, in_glb};
+    use pfx_materials::{Crack, Material, Track};
+
+    fn layered() -> Material {
+        let mut material = Material {
+            base: [0.2, 0.2, 0.2],
+            roughness: 0.6,
+            ..Material::default()
+        };
+        material.push_layer(Crack::SAMPLE.layer(0.8, 3));
+        material.push_layer(Track::SAMPLE.layer(0.5, 4));
+        material
+    }
+
+    fn carrying(material: &Material) -> Look {
+        Look {
+            material: Some(serde_json::to_value(material).unwrap()),
+            ..Look::default()
+        }
+    }
+
+    #[test]
+    fn a_glb_that_carries_the_same_layers_holds_a_layered_material() {
+        let material = layered();
+        assert!(!in_glb(&material));
+        assert!(carries_layers(Some(&carrying(&material)), &material));
+    }
+
+    #[test]
+    fn layers_the_glb_does_not_carry_keep_the_material_in_the_library() {
+        let material = layered();
+        assert!(!carries_layers(None, &material));
+        assert!(!carries_layers(Some(&Look::default()), &material));
+        let mut other = layered();
+        other.layers[1].amplitude = 0.9;
+        assert!(!carries_layers(Some(&carrying(&other)), &material));
+        let plain = Look {
+            material: Some(serde_json::json!({ "base": "not a colour" })),
+            ..Look::default()
+        };
+        assert!(!carries_layers(Some(&plain), &material));
+    }
+
+    #[test]
+    fn a_key_past_the_layers_still_keeps_the_material_in_the_library() {
+        let material = Material {
+            clearcoat: 0.5,
+            ..layered()
+        };
+        assert!(!carries_layers(Some(&carrying(&material)), &material));
+        let emissive = Material {
+            emission: [2.0, 0.0, 0.0],
+            ..layered()
+        };
+        assert!(!carries_layers(Some(&carrying(&emissive)), &emissive));
+    }
+
     #[test]
     fn the_scene_holds_as_many_local_lights_as_pfx_live_draws() {
         assert_eq!(

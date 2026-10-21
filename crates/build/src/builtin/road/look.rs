@@ -236,7 +236,7 @@ fn layer(layer: NoiseLayer) -> Value {
     })
 }
 
-fn noise(layers: Layers, slot: Slot, seed: u64, lane_width: f64) -> Vec<Value> {
+fn noise(layers: Layers, slot: Slot, seed: u64, lane_width: f64, map_size: f64) -> Vec<Value> {
     let mut mix = Mix(seed);
     let seeds = [
         mix.layer_seed(),
@@ -291,15 +291,18 @@ fn noise(layers: Layers, slot: Slot, seed: u64, lane_width: f64) -> Vec<Value> {
     }
     if tracks.amount > 0.0 && slot == Slot::Asphalt {
         let lw = lane_width as f32;
+        let k = (1.0 / map_size) as f32;
         out.push(layer(
             Track {
-                period: lw,
-                offset: lw * 0.5,
-                gauge: tracks.gauge as f32,
-                band: tracks.band as f32,
+                period: lw * k,
+                offset: lw * 0.5 * k,
+                gauge: tracks.gauge as f32 * k,
+                band: tracks.band as f32 * k,
+                wander: Track::SAMPLE.wander * k,
+                wander_frequency: Track::SAMPLE.wander_frequency / k,
+                streak: Track::SAMPLE.streak.map(|f| f / k),
                 tint: 1.3,
                 polish: 0.8,
-                ..Track::SAMPLE
             }
             .layer(tracks.amount as f32, seeds[3]),
         ));
@@ -388,7 +391,7 @@ pub fn surface(
             wet(value, &format!("{key}.wet"), seeded)?,
         );
     }
-    if slot != Slot::Paint && !mapped {
+    if slot != Slot::Paint {
         let defaults = preset(look, slot);
         let named = |name: &str| at(name).map(|(key, value)| (format!("{key}.{name}"), value));
         let pick = |name: &str, default: Detail| match named(name) {
@@ -404,7 +407,7 @@ pub fn surface(
                 None => defaults.tracks,
             },
         };
-        let mut list = noise(layers, slot, seed, lane_width);
+        let mut list = noise(layers, slot, seed, lane_width, map_size);
         if !list.is_empty() {
             list.resize_with(LAYER_CAP, || layer(NoiseLayer::default()));
             keys.insert("layers".to_string(), Value::Array(list));

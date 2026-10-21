@@ -408,7 +408,11 @@ pub(crate) fn resolve(
         if !lobed && !looks.get(name).is_some_and(kept) {
             continue;
         }
-        factors(looks.entry(name.clone()).or_default(), &material);
+        let look = looks.entry(name.clone()).or_default();
+        factors(look, &material);
+        if crate::layers::layered(&material) && look.has_maps() {
+            look.material = Some(value.clone());
+        }
     }
     looks.retain(|_, look| look.carried());
     Ok(looks)

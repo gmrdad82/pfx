@@ -277,6 +277,7 @@ mod tests {
             moving: false,
             clipped: false,
             cut: false,
+            blend: false,
             shadow_only: false,
             casts_shadow: true,
             range,

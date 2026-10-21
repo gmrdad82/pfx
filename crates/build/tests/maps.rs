@@ -390,3 +390,123 @@ fn a_thin_film_map_reaches_the_glb_as_khr_materials_iridescence() {
     assert_eq!(bytes(&texture, &blob), film);
     assert!(parse("recipe = 1\nname = \"t\"\n\n[materials.film]\nthin_film_min = -1.0\n").is_err());
 }
+
+#[test]
+fn a_scene_draws_a_mapped_material_with_its_noise_layers_from_the_glb() {
+    let dir = common::scratch("maps-layers");
+    head(&dir);
+    let r = parse(
+        "recipe = 1\nname = \"t\"\n\n[output]\nglb = \"t.glb\"\nscene = \"t.scene.toml\"\n\n[[object]]\nname = \"face\"\nkind = \"mesh\"\npath = \"head.glb\"\n\n[materials.skin]\nbase = [1.0, 1.0, 1.0]\nbase_map = \"tex/face.png\"\nlayers = [{ kind = \"crack\", frequency = 1.0, amplitude = 0.8, seed = 3 }, { kind = \"track\", frequency = 1.0, amplitude = 0.5, seed = 4 }]\n",
+    )
+    .unwrap();
+    let b = build(&r, &dir).unwrap();
+    pfx_build::write(&b, &r, &dir, None).unwrap();
+    let scene = pfx_load::scene::Scene::open(dir.join("t.scene.toml")).unwrap();
+    let draws = scene.draws();
+    let skin = draws
+        .items
+        .iter()
+        .map(|draw| draw.material as usize)
+        .find(|&at| draws.names[at].ends_with("skin"))
+        .unwrap_or_else(|| panic!("no skin draw in {:?}", draws.names));
+    assert!(
+        draws.names[skin].starts_with("gltf "),
+        "the skin draws {}, not the file's mapped material",
+        draws.names[skin]
+    );
+    let kinds: Vec<_> = draws.materials[skin]
+        .layers
+        .iter()
+        .map(|layer| layer.kind)
+        .filter(|kind| *kind != pfx_materials::NoiseKind::None)
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            pfx_materials::NoiseKind::Crack,
+            pfx_materials::NoiseKind::Track
+        ]
+    );
+    assert!(draws.materials[skin].textures.base >= 0);
+    assert!(!draws.textures.colour.is_empty());
+}
+
+fn skin_draw(draws: &pfx_load::scene::Draws, name: &str) -> usize {
+    draws
+        .items
+        .iter()
+        .map(|draw| draw.material as usize)
+        .find(|&at| draws.names[at].ends_with(name))
+        .unwrap_or_else(|| panic!("no {name} draw in {:?}", draws.names))
+}
+
+fn kinds(material: &pfx_materials::Material) -> Vec<pfx_materials::NoiseKind> {
+    material
+        .layers
+        .iter()
+        .map(|layer| layer.kind)
+        .filter(|kind| *kind != pfx_materials::NoiseKind::None)
+        .collect()
+}
+
+#[test]
+fn a_layered_mapped_material_with_a_key_glb_has_no_slot_for_stays_in_the_library() {
+    let dir = common::scratch("maps-layers-coat");
+    head(&dir);
+    let r = parse(
+        "recipe = 1\nname = \"t\"\n\n[output]\nglb = \"t.glb\"\nscene = \"t.scene.toml\"\n\n[[object]]\nname = \"face\"\nkind = \"mesh\"\npath = \"head.glb\"\n\n[materials.skin]\nbase = [1.0, 1.0, 1.0]\nclearcoat = 0.5\nbase_map = \"tex/face.png\"\nlayers = [{ kind = \"crack\", frequency = 1.0, amplitude = 0.8, seed = 3 }]\n",
+    )
+    .unwrap();
+    let b = build(&r, &dir).unwrap();
+    pfx_build::write(&b, &r, &dir, None).unwrap();
+    let text = std::fs::read_to_string(dir.join("t.scene.toml")).unwrap();
+    let scene = pfx_load::scene::Scene::open(dir.join("t.scene.toml")).unwrap();
+    let draws = scene.draws();
+    let skin = skin_draw(&draws, "skin");
+    assert!(
+        !draws.names[skin].starts_with("gltf "),
+        "the library's skin should win: {} in {text}",
+        draws.names[skin]
+    );
+    assert_eq!(
+        kinds(&draws.materials[skin]),
+        [pfx_materials::NoiseKind::Crack]
+    );
+    assert_eq!(draws.materials[skin].clearcoat, 0.5);
+}
+
+#[test]
+fn a_mapped_road_keeps_its_cracks_and_tracks_in_metres_through_the_scene() {
+    let dir = common::scratch("maps-road");
+    head(&dir);
+    let r = parse(
+        "recipe = 1\nname = \"t\"\n\n[output]\nglb = \"t.glb\"\nscene = \"t.scene.toml\"\n\n[[route]]\nname = \"street\"\npoints = [[0.0, 0.0, 0.0], [0.0, 0.0, 40.0]]\n\n[[object]]\nname = \"main\"\nkind = \"generator\"\ngenerator = \"pfx/road\"\nparams = { route = \"street\", look = \"asphalt-detailed\", asphalt = { base_map = \"tex/face.png\", map_size = 4.0 } }\n",
+    )
+    .unwrap();
+    let b = build(&r, &dir).unwrap();
+    pfx_build::write(&b, &r, &dir, None).unwrap();
+    let scene = pfx_load::scene::Scene::open(dir.join("t.scene.toml")).unwrap();
+    let draws = scene.draws();
+    let asphalt = (0..draws.names.len())
+        .find(|&at| draws.names[at].contains("road_asphalt"))
+        .unwrap_or_else(|| panic!("no asphalt in {:?}", draws.names));
+    assert!(
+        draws.names[asphalt].starts_with("gltf "),
+        "the mapped asphalt draws {}, not the GLB's material",
+        draws.names[asphalt]
+    );
+    let material = &draws.materials[asphalt];
+    assert_eq!(
+        kinds(material),
+        [
+            pfx_materials::NoiseKind::Value,
+            pfx_materials::NoiseKind::Grime,
+            pfx_materials::NoiseKind::Crack,
+            pfx_materials::NoiseKind::Track,
+        ]
+    );
+    assert!(material.textures.base >= 0);
+    let track = pfx_materials::Track::from_params(&material.layers[3].params);
+    assert!((track.period - 3.2 / 4.0).abs() < 1e-4, "{track:?}");
+    assert!((track.gauge - 0.8 / 4.0).abs() < 1e-4, "{track:?}");
+}

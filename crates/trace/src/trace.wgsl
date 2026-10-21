@@ -697,7 +697,11 @@ fn alpha_hash(i: u32, o: vec3f, d: vec3f) -> f32 {
     let h=pcg(a^pcg(bitcast<u32>(d.x)^pcg(bitcast<u32>(d.y)^pcg(bitcast<u32>(d.z)))));
     return f32(h>>8u)*(1.0/16777216.0);
 }
-fn alpha_cut(i: u32, u: f32, v: f32, m: Material, o: vec3f, d: vec3f) -> bool {
+var<private> path_cut: u32 = 0u;
+fn blend_hash(record: u32) -> f32 {
+    return f32(pcg(path_cut^pcg(record^0x9e3779b9u))>>8u)*(1.0/16777216.0);
+}
+fn alpha_cut(i: u32, record: u32, u: f32, v: f32, m: Material, o: vec3f, d: vec3f) -> bool {
     let coverage=materials[extension_alpha(m)];
     var alpha=coverage.x;
     if (TRACE_MAPS && (extension_flags(m)&EXTENSION_MAPS)!=0u) {
@@ -716,7 +720,7 @@ fn alpha_cut(i: u32, u: f32, v: f32, m: Material, o: vec3f, d: vec3f) -> bool {
         }
     }
     if (coverage.z<1.5) { return alpha<coverage.y; }
-    return alpha<=alpha_hash(i,o,d);
+    return alpha<=blend_hash(record);
 }
 fn sprite_shape(uv: vec2f) -> f32 {
     let c=uv*2.0-1.0;
@@ -738,7 +742,7 @@ fn cut_out(i: u32, record: u32, u: f32, v: f32, o: vec3f, d: vec3f) -> bool {
     let material=record_material(surface.info,tri);
     if (TRACE_ALPHA) {
         let m=material_at(material);
-        if ((extension_flags(m)&EXTENSION_ALPHA)!=0u) { return alpha_cut(i,u,v,m,o,d); }
+        if ((extension_flags(m)&EXTENSION_ALPHA)!=0u) { return alpha_cut(i,record,u,v,m,o,d); }
     }
     if ((surface.info.x&4u)==0u) { return false; }
     let slot=i32(round(hit_layer(surface.info.x,material).layer.x));
@@ -2151,6 +2155,7 @@ fn sprite_direct(x: vec3f, d: vec3f, n: vec3f, thick: f32, state: ptr<function,u
     return total;
 }
 fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<function,vec4f>, first_normal: ptr<function,vec4f>) -> vec3f {
+    path_cut=pcg(*state^0x68bc21ebu);
     var o=o0;
     var d=d0;
     var throughput=vec3f(1.0);
@@ -2298,6 +2303,13 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
         var s=surface(m);
         let flags=extension_flags(m);
         traced_thin=TRACE_THIN && (flags&EXTENSION_THIN)!=0u;
+        traced_occlusion=1.0;
+        traced_direction=vec3f(1.0,0.0,1.0);
+        if (TRACE_MAPS && (flags&EXTENSION_MAPS)!=0u) {
+            let textured=traced_maps(s,n,material_maps(m),hit,p);
+            s=textured.shade;
+            n=textured.normal;
+        }
         let layered=flags&EXTENSION_LAYERS;
         if (layered>0u) {
             let first=extension_layers(m);
@@ -2309,13 +2321,6 @@ fn radiance(o0: vec3f, d0: vec3f, state: ptr<function,u32>, first_albedo: ptr<fu
                 s=detailed.shade;
                 n=detailed.normal;
             }
-        }
-        traced_occlusion=1.0;
-        traced_direction=vec3f(1.0,0.0,1.0);
-        if (TRACE_MAPS && (flags&EXTENSION_MAPS)!=0u) {
-            let textured=traced_maps(s,n,material_maps(m),hit,p);
-            s=textured.shade;
-            n=textured.normal;
         }
         let geometric=select(hit.geometric,-hit.geometric,dot(hit.geometric,d)>0.0);
         if (dot(n,geometric)<0.05) { n=normalize(n+geometric*0.1); }

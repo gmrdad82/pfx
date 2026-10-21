@@ -1005,13 +1005,43 @@ mod tests {
     }
 
     #[test]
+    fn a_flat_mapped_surface_takes_only_the_layers_it_names() {
+        let flat = built(
+            r#"{ "route": "street", "asphalt": { "base_map": "tex/asphalt.png" } }"#,
+            1,
+        );
+        let (_, value) = surface(&flat, "main.asphalt");
+        assert!(kinds(&value).is_empty(), "{value}");
+        let cracked = built(
+            r#"{ "route": "street", "asphalt": { "base_map": "tex/asphalt.png", "cracks": { "amount": 0.5 }, "tracks": { "amount": 0.4 } } }"#,
+            1,
+        );
+        let (_, value) = surface(&cracked, "main.asphalt");
+        assert_eq!(kinds(&value), ["crack", "track"]);
+        let track = &value["layers"][1]["params"];
+        assert!((track[0].as_f64().unwrap() - 3.2).abs() < 1e-4, "{track}");
+        let paint = surface(&cracked, "main.markings").1;
+        assert!(kinds(&paint).is_empty());
+    }
+
+    #[test]
     fn a_surface_with_maps_names_them_and_tiles_its_uvs_in_metres() {
         let g = built(
             r#"{ "route": "street", "look": "asphalt-detailed", "asphalt": { "base_map": "tex/asphalt.png", "normal_map": "tex/asphalt-n.png", "map_size": 4.0 } }"#,
             1,
         );
         let (name, value) = surface(&g, "main.asphalt");
-        assert!(value.get("layers").is_none(), "{value}");
+        assert_eq!(kinds(&value), ["value", "grime", "crack", "track"]);
+        let plain = built(r#"{ "route": "street", "look": "asphalt-detailed" }"#, 1);
+        let track = |value: &Value| value["layers"][3]["params"].clone();
+        let (mapped, flat) = (track(&value), track(&surface(&plain, "main.asphalt").1));
+        for (at, scale) in [(0, 0.25), (1, 0.25), (2, 0.25), (3, 0.25), (5, 4.0)] {
+            let (a, b) = (mapped[at].as_f64().unwrap(), flat[at].as_f64().unwrap());
+            assert!(
+                (a - b * scale).abs() < 1e-4,
+                "track param {at}: {a} against {b}"
+            );
+        }
         let maps = &g.textures[&name];
         assert_eq!(maps.base_map.as_deref(), Some("tex/asphalt.png"));
         assert_eq!(maps.normal_map.as_deref(), Some("tex/asphalt-n.png"));

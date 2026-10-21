@@ -18,6 +18,8 @@ pub use floor::{
 pub use wgpu;
 
 pub const HEADLESS_VAR: &str = "PFX_HEADLESS";
+pub const MAP_SET_GROUPS: u32 = 5;
+pub const MAP_SET_ELEMENTS: u32 = 1024;
 
 pub fn headless_only() -> bool {
     headless_set(std::env::var_os(HEADLESS_VAR).as_deref())
@@ -228,6 +230,10 @@ fn engine_limits(supported: &wgpu::Limits) -> wgpu::Limits {
         max_tlas_instance_count: supported.max_tlas_instance_count,
         max_acceleration_structures_per_shader_stage: supported
             .max_acceleration_structures_per_shader_stage,
+        max_bind_groups: supported.max_bind_groups.min(MAP_SET_GROUPS),
+        max_binding_array_elements_per_shader_stage: supported
+            .max_binding_array_elements_per_shader_stage
+            .min(MAP_SET_ELEMENTS),
         ..wgpu::Limits::default()
     }
 }
@@ -1448,6 +1454,34 @@ mod tests {
             limits.max_bind_groups,
             wgpu::Limits::default().max_bind_groups
         );
+    }
+
+    #[test]
+    fn the_map_set_limits_are_asked_up_to_what_the_adapter_offers() {
+        let roomy = wgpu::Limits {
+            max_bind_groups: 8,
+            max_binding_array_elements_per_shader_stage: 500_000,
+            ..wgpu::Limits::default()
+        };
+        let limits = default_limits(&roomy);
+        assert_eq!(limits.max_bind_groups, MAP_SET_GROUPS);
+        assert_eq!(
+            limits.max_binding_array_elements_per_shader_stage,
+            MAP_SET_ELEMENTS
+        );
+        let tight = wgpu::Limits {
+            max_bind_groups: 4,
+            max_binding_array_elements_per_shader_stage: 0,
+            ..wgpu::Limits::default()
+        };
+        let limits = default_limits(&tight);
+        assert_eq!(limits.max_bind_groups, 4);
+        assert_eq!(limits.max_binding_array_elements_per_shader_stage, 0);
+        assert!(live_floor().limits.check_limits(&limits));
+        assert!(floor::OPTIONAL_FEATURES.contains(
+            wgpu::Features::TEXTURE_BINDING_ARRAY
+                | wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
+        ));
     }
 
     #[test]
