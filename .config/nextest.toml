@@ -9,7 +9,7 @@ bench-folder = { max-threads = 1 }
 retries = 0
 fail-fast = false
 test-threads = 6
-slow-timeout = { period = "120s" }
+slow-timeout = { period = "120s", terminate-after = 12 }
 final-status-level = "slow"
 default-filter = '''not (
     package(=pfx-gpu)
@@ -44,7 +44,7 @@ priority = 50
 retries = 0
 fail-fast = false
 test-threads = 1
-slow-timeout = { period = "120s" }
+slow-timeout = { period = "120s", terminate-after = 5 }
 final-status-level = "slow"
 default-filter = '''
     package(=pfx-gpu)
