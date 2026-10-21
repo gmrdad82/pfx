@@ -8,11 +8,11 @@ pfx ships no style of its own. The composer knows only the format below; every s
 
 ## Try it
 
-`samples/mustang/` is the public example of a style a project brings: `mustang.style.toml` holds `[compose.style.mustang]`, a through-composed build and drop for a film cue at 118 to 124 bpm, 18 roles on synthesised patches only, four sections (`rounds`, `tension`, `drop` and `card`), mastered to -16 LUFS short-term with a -1 dBTP ceiling. `samples/chase.pitofx` links it:
+`samples/mustang/` is the public example of a style a project brings: `mustang.pitofx` holds `[compose.style.mustang]`, a through-composed build and drop for a film cue at 118 to 124 bpm, 18 roles on synthesised patches only, four sections (`rounds`, `tension`, `drop` and `card`), mastered to -16 LUFS short-term with a -1 dBTP ceiling. `samples/chase.pitofx` links it:
 
 ```toml
 [compose.link]
-mustang = "mustang/mustang.style.toml"
+mustang = "mustang/mustang.pitofx"
 ```
 
 Copy both, so the link still finds the file, and compose 30 seconds with the drop and the end card on hits at 18 s and 26 s:
@@ -209,16 +209,16 @@ A cue renders at the score's base tempo and key wherever it fires.
 A game or a film supplies its own style in one of two places:
 
 - **In its own document:** `[compose.style.<name>]` in the `.pitofx` it composes into, as above.
-- **In a style file beside it:** a `.pitofx`, or a plain `.toml` holding only `[compose]` text, with `[compose.style.<name>]` in it, linked from the document by name:
+- **In a style file beside it:** another `.pitofx` with `[compose.style.<name>]` in its text, linked from the document by name:
 
 ```toml
 [compose.link]
-<name> = "<folder>/<file>"
+<name> = "<folder>/<file>.pitofx"
 ```
 
-The path is relative to the document's folder and stays in it or below it: no absolute path, no `..`, no backslash or drive, no part that is empty or ends in a dot or a space, no device name. The file holds the style under the same name, and a name is either linked or kept, never both. `pfx compose <doc> --style <name>` reads the style from the file and writes the score into the document with `style = { file = "<folder>/<file>", name = "<name>" }`, so `render`, `print --style` and a game's `game::music` find it there too, and `list` names it with its file (`links` in `--json`). A style's sample oscillators read their chunks from the file that holds the style, so a style that plays samples lives in a `.pitofx`; a `.toml` holds none. Ship the style file with the document wherever it goes.
+The path is relative to the document's folder and stays in it or below it: no absolute path, no `..`, no backslash or drive, no part that is empty or ends in a dot or a space, no device name, and no symbolic link that leads out of the folder; it names a file, not a folder or a device. The file holds the style under the same name, and a name is either linked or kept, never both. `pfx compose <doc> --style <name>` reads the style from the file and writes the score into the document with `style = { file = "<folder>/<file>.pitofx", name = "<name>" }`, so `render`, `print --style` and a game's `game::music` find it there too, and `list` names it with its file (`links` in `--json`). A style's sample oscillators read their chunks from the file that holds the style. Ship the style file with the document wherever it goes.
 
-`samples/mustang/` is such a file, linked from `samples/chase.pitofx`.
+`samples/mustang/mustang.pitofx` is such a file, linked from `samples/chase.pitofx`.
 
 ## A score: `[compose.score.<name>]`
 
@@ -226,7 +226,7 @@ The path is relative to the document's folder and stays in it or below it: no ab
 
 ```toml
 [compose.score.title]
-style = { file = "mustang/mustang.style.toml", name = "mustang" }
+style = { file = "mustang/mustang.pitofx", name = "mustang" }
 seed = 11
 seconds = 30.0
 hits = [18.0, 26.0]

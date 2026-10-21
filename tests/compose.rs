@@ -192,10 +192,10 @@ fn a_linked_style_file_composes_the_bytes_the_style_kept_inside_composes() {
     let base = base("link");
     let off = Path::new("off");
     std::fs::create_dir_all(base.join("styles")).unwrap();
-    std::fs::write(base.join("styles/small.style.toml"), STYLE).unwrap();
+    pack(&base.join("styles/small.pitofx"), STYLE);
     pack(
         &base.join("linked.pitofx"),
-        "[compose.link]\nsmall = \"styles/small.style.toml\"\n",
+        "[compose.link]\nsmall = \"styles/small.pitofx\"\n",
     );
     line(&compose_into(&base, off, "doc.pitofx", "kept.wav"));
     line(&compose_into(&base, off, "linked.pitofx", "linked.wav"));
@@ -216,7 +216,7 @@ fn a_linked_style_file_composes_the_bytes_the_style_kept_inside_composes() {
     ));
     assert_eq!(
         printed["compose"]["score"]["small"]["style"],
-        serde_json::json!({ "file": "styles/small.style.toml", "name": "small" })
+        serde_json::json!({ "file": "styles/small.pitofx", "name": "small" })
     );
     line(&pfx(
         &base,
@@ -241,7 +241,169 @@ fn a_linked_style_file_composes_the_bytes_the_style_kept_inside_composes() {
     assert_eq!(listed["styles"], serde_json::json!(["small"]));
     assert_eq!(
         listed["links"]["small"],
-        serde_json::json!("styles/small.style.toml")
+        serde_json::json!("styles/small.pitofx")
     );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn the_chase_sample_composes_in_its_linked_style_the_bytes_it_composed_keeping_it() {
+    let base = base("chase");
+    let samples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples");
+    std::fs::create_dir_all(base.join("mustang")).unwrap();
+    std::fs::copy(samples.join("chase.pitofx"), base.join("chase.pitofx")).unwrap();
+    std::fs::copy(
+        samples.join("mustang/mustang.pitofx"),
+        base.join("mustang/mustang.pitofx"),
+    )
+    .unwrap();
+    line(&pfx(
+        &base,
+        Path::new("off"),
+        &[
+            "compose",
+            &path(&base, "chase.pitofx"),
+            "--style",
+            "mustang",
+            "--seed",
+            "11",
+            "--seconds",
+            "30",
+            "--hits",
+            "18,26",
+            "--wav",
+            &path(&base, "chase.wav"),
+            "--json",
+        ],
+    ));
+    let mix = std::fs::read(base.join("chase.wav")).unwrap();
+    assert_eq!(
+        pfx_file::sha256::hex(&pfx_file::sha256::sha256(&mix)),
+        "2e46f71af93204172c1d1c234535649b42e44ebdee0669e0ea480c8748f16bb6"
+    );
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+fn refused(output: &Output) -> String {
+    assert!(
+        !output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn linking(base: &Path, doc: &str, file: &str) {
+    pack(
+        &base.join(doc),
+        &format!("[compose.link]\nsmall = \"{file}\"\n"),
+    );
+}
+
+#[test]
+fn print_shows_a_linked_style_from_its_file() {
+    let base = base("print-link");
+    std::fs::create_dir_all(base.join("styles")).unwrap();
+    pack(&base.join("styles/small.pitofx"), STYLE);
+    linking(&base, "linked.pitofx", "styles/small.pitofx");
+    let printed = line(&pfx(
+        &base,
+        Path::new("off"),
+        &[
+            "compose",
+            "print",
+            &path(&base, "linked.pitofx"),
+            "--style",
+            "small",
+            "--json",
+        ],
+    ));
+    let style = &printed["compose"]["style"]["small"];
+    assert_eq!(style["bpm"], serde_json::json!([100, 110]));
+    assert_eq!(style["role"].as_array().map(Vec::len), Some(2));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn compose_refuses_a_link_it_cannot_follow_and_leaves_the_document_as_it_was() {
+    let base = base("bad-link");
+    let off = Path::new("off");
+    std::fs::create_dir_all(base.join("styles")).unwrap();
+    std::fs::write(base.join("styles/plain.toml"), STYLE).unwrap();
+    std::fs::create_dir_all(base.join("styles/folder.pitofx")).unwrap();
+    let cases = [
+        ("styles/plain.toml", "plain.toml"),
+        ("styles/missing.pitofx", "missing.pitofx"),
+        ("styles/folder.pitofx", "is not a file"),
+        ("../small.pitofx", "[compose.link] `small`"),
+        ("styles/con.pitofx", "[compose.link] `small`"),
+        ("styles/small.pitofx.", "[compose.link] `small`"),
+    ];
+    for (file, says) in cases {
+        linking(&base, "linked.pitofx", file);
+        let before = std::fs::read(base.join("linked.pitofx")).unwrap();
+        let e = refused(&compose_into(&base, off, "linked.pitofx", "linked.wav"));
+        assert!(e.contains(says), "{file}: {e}");
+        assert!(std::fs::read(base.join("linked.pitofx")).unwrap() == before);
+        assert!(!base.join("linked.wav").exists(), "{file}");
+        let e = refused(&pfx(
+            &base,
+            off,
+            &[
+                "compose",
+                "print",
+                &path(&base, "linked.pitofx"),
+                "--style",
+                "small",
+            ],
+        ));
+        assert!(e.contains(says), "print {file}: {e}");
+    }
+    pack(
+        &base.join("both.pitofx"),
+        &format!("[compose.link]\nsmall = \"styles/plain.toml\"\n{STYLE}"),
+    );
+    let e = refused(&pfx(
+        &base,
+        off,
+        &[
+            "compose",
+            "print",
+            &path(&base, "both.pitofx"),
+            "--style",
+            "small",
+        ],
+    ));
+    assert!(e.contains("a style is linked or kept, not both"), "{e}");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[cfg(unix)]
+#[test]
+fn compose_never_follows_a_link_through_a_symlink_out_of_the_folder() {
+    use std::os::unix::fs::symlink;
+    let base = base("symlink");
+    let off = Path::new("off");
+    let away = base.join("away");
+    let home = base.join("home-doc");
+    std::fs::create_dir_all(&away).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    pack(&away.join("small.pitofx"), STYLE);
+    symlink(&away, home.join("styles")).unwrap();
+    symlink(away.join("small.pitofx"), home.join("small.pitofx")).unwrap();
+    for file in ["styles/small.pitofx", "small.pitofx"] {
+        linking(&home, "linked.pitofx", file);
+        let e = refused(&compose_into(
+            &base,
+            off,
+            "home-doc/linked.pitofx",
+            "linked.wav",
+        ));
+        assert!(
+            e.contains("must name a file in the document's folder or below it"),
+            "{file}: {e}"
+        );
+        assert!(!base.join("linked.wav").exists());
+    }
     let _ = std::fs::remove_dir_all(&base);
 }

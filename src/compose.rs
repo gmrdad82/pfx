@@ -870,12 +870,10 @@ fn run_list(command: &List) -> Result<(), String> {
 fn run_print(command: &Print) -> Result<(), String> {
     let shown = command.doc.display().to_string();
     let doc = Document::open(&command.doc)?;
+    let parsed = Composed::parse(&doc.text).map_err(|e| format!("{shown}: {e}"))?;
     let table = compose_table(&doc.text).map_err(|e| format!("{shown}: {e}"))?;
     let link = match &command.pick {
-        Pick::Style(name) => table
-            .get("link")
-            .and_then(|l| l.get(name))
-            .and_then(toml::Value::as_str),
+        Pick::Style(name) => parsed.links.get(name),
         _ => None,
     };
     let (shown, table) = match link {

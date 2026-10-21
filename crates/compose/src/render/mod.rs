@@ -965,31 +965,6 @@ sidechain = { keys = ["kick", "impact"], beds = ["pad", "keys", "bass"], depth =
         assert_eq!(hash(&out, None), RENDER[1]);
     }
 
-    #[test]
-    fn the_chase_sample_links_its_style_and_renders_the_bytes_it_rendered_kept_inside() {
-        let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
-        let doc = store::Document::open(&folder.join("chase.pitofx")).unwrap();
-        let parsed = crate::Compose::parse(&doc.text).unwrap();
-        assert!(parsed.styles.is_empty());
-        let [(name, file)] = parsed.links.iter().collect::<Vec<_>>()[..] else {
-            panic!("{:?}", parsed.links);
-        };
-        let linked = store::linked(&folder, file).unwrap();
-        let score = scored(&linked.text, name, 11, 30.0, &[18.0, 26.0]);
-        assert_eq!(score.bpm, 120);
-        let out = rendered(&linked.text, name, &score, Target::Film);
-        assert!(
-            (out.master.short_term_max + 16.0).abs() < 0.5,
-            "{}",
-            out.master.short_term_max
-        );
-        assert!(out.master.true_peak_db <= -1.0 + 1e-3);
-        assert_eq!(
-            hash(&out, None),
-            "2e46f71af93204172c1d1c234535649b42e44ebdee0669e0ea480c8748f16bb6"
-        );
-    }
-
     fn kick_style() -> String {
         TEST_STYLE.replace(
             r#"osc = [{ wave = "sine", hz = 150, to_hz = 55, glide_ms = 40 }, { wave = "white", gain = 0.2, env = [1, 5, 0.0, 0] }]"#,

@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 use pfx_file::{Codec, Reader, Tag, Writer};
 
@@ -15,7 +16,6 @@ pub struct Document {
     pub text: String,
     tag: Tag,
     name: String,
-    packed: bool,
 }
 
 fn has_compose(text: &str) -> bool {
@@ -25,25 +25,23 @@ fn has_compose(text: &str) -> bool {
 
 impl Document {
     pub fn open(path: &Path) -> Result<Document, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Document::from_bytes(path, bytes)
-    }
-
-    pub fn style_file(path: &Path) -> Result<Document, String> {
-        if path.extension().is_none_or(|e| e != "toml") {
-            return Document::open(path);
+        let shown = path.display();
+        let meta = std::fs::metadata(path).map_err(|e| format!("{shown}: {e}"))?;
+        if !meta.is_file() {
+            return Err(format!("{shown}: is not a file"));
         }
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let text = String::from_utf8(bytes)
-            .map_err(|_| format!("{}: the file is not UTF-8", path.display()))?;
-        Ok(Document {
-            path: path.to_path_buf(),
-            bytes: Vec::new(),
-            text,
-            tag: pfx_file::SCNE,
-            name: String::new(),
-            packed: false,
-        })
+        let most = super::bounds::MAX_BYTES;
+        let file = std::fs::File::open(path).map_err(|e| format!("{shown}: {e}"))?;
+        let mut bytes = Vec::new();
+        file.take(most + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| format!("{shown}: {e}"))?;
+        if bytes.len() as u64 > most {
+            return Err(format!(
+                "{shown}: holds over {most} bytes, the most a document may"
+            ));
+        }
+        Document::from_bytes(path, bytes)
     }
 
     pub fn from_bytes(path: &Path, bytes: Vec<u8>) -> Result<Document, String> {
@@ -72,7 +70,6 @@ impl Document {
             text,
             tag,
             name,
-            packed: true,
         })
     }
 
@@ -85,9 +82,6 @@ impl Document {
     }
 
     pub fn file_within(&self, name: &str, most: u64) -> Result<Option<Vec<u8>>, String> {
-        if !self.packed {
-            return Ok(None);
-        }
         let shown = self.path.display();
         let reader = Reader::from_bytes(&self.bytes).map_err(|e| format!("{shown}: {e}"))?;
         if let Some(index) = reader.find_named(pfx_file::FILE, name) {
@@ -143,21 +137,42 @@ impl Document {
 }
 
 pub fn linked(folder: &Path, file: &str) -> Result<Document, String> {
-    Document::style_file(&beside(folder, file)?)
+    Document::open(&beside(folder, file)?)
 }
 
 pub fn beside(folder: &Path, file: &str) -> Result<PathBuf, String> {
+    let outside = || format!("`{file}` must name a file in the document's folder or below it");
     let relative = Path::new(file);
-    if relative.is_absolute()
+    if !crate::score::beside(file)
+        || relative.is_absolute()
         || relative
             .components()
-            .any(|part| !matches!(part, std::path::Component::Normal(_)))
+            .any(|part| !matches!(part, Component::Normal(_)))
     {
-        return Err(format!(
-            "`{file}` must name a file in the document's folder or below it"
-        ));
+        return Err(outside());
     }
-    Ok(folder.join(relative))
+    let path = folder.join(relative);
+    if !path.try_exists().unwrap_or(false) {
+        return Ok(path);
+    }
+    let home = if folder.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        folder
+    };
+    let home = home
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", home.display()))?;
+    let real = path
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if !real.starts_with(&home) {
+        return Err(outside());
+    }
+    if !real.is_file() {
+        return Err(format!("`{file}` is not a file"));
+    }
+    Ok(real)
 }
 
 pub fn set_table(text: &str, key: &str, table: toml::Table) -> Result<String, String> {
@@ -238,6 +253,81 @@ mod tests {
         assert_eq!(
             again.file("compose/b/other.wav").unwrap().unwrap(),
             b"other"
+        );
+    }
+
+    #[test]
+    fn a_link_opens_a_pitofx_in_the_folder_and_its_samples_come_from_it() {
+        let home = folder("linked");
+        std::fs::create_dir_all(home.join("styles")).unwrap();
+        Writer::new()
+            .named(
+                pfx_file::SCNE,
+                "style.toml",
+                b"[compose.style.x]\nbpm = [100, 110]\n".as_slice(),
+                Codec::Auto,
+            )
+            .named(pfx_file::FILE, "hit.wav", b"wave".as_slice(), Codec::Auto)
+            .write(home.join("styles/x.pitofx"))
+            .unwrap();
+        let found = linked(&home, "styles/x.pitofx").unwrap();
+        assert!(found.text.contains("[compose.style.x]"), "{}", found.text);
+        assert_eq!(found.sample("hit.wav").unwrap().unwrap(), b"wave");
+        assert_eq!(found.sample("other.wav").unwrap(), None);
+        assert!(found.path.ends_with("styles/x.pitofx"));
+        std::fs::write(home.join("styles/plain.toml"), "[compose.style.x]\n").unwrap();
+        assert!(linked(&home, "styles/plain.toml").is_err());
+        let e = linked(&home, "styles/missing.pitofx").unwrap_err();
+        assert!(e.contains("missing.pitofx"), "{e}");
+        let e = Document::open(&home.join("styles")).unwrap_err();
+        assert!(e.contains("is not a file"), "{e}");
+        let e = linked(&home, "styles").unwrap_err();
+        assert!(e.contains("is not a file"), "{e}");
+        for file in [
+            "../x.pitofx",
+            "styles/../../x.pitofx",
+            "styles/con.pitofx",
+            "styles/x.pitofx.",
+        ] {
+            let e = linked(&home, file).unwrap_err();
+            assert!(
+                e.contains("must name a file in the document's folder"),
+                "{file}: {e}"
+            );
+        }
+        assert_eq!(
+            beside(Path::new(""), "missing/none.pitofx").unwrap(),
+            Path::new("missing/none.pitofx")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_never_follows_a_symlink_out_of_the_folder_or_reads_what_is_not_a_file() {
+        use std::os::unix::fs::symlink;
+        let base = folder("links");
+        let home = base.join("home");
+        let away = base.join("away");
+        std::fs::create_dir_all(home.join("styles/inner")).unwrap();
+        std::fs::create_dir_all(&away).unwrap();
+        std::fs::write(away.join("x.pitofx"), b"x").unwrap();
+        std::fs::write(home.join("styles/kept.pitofx"), b"x").unwrap();
+        symlink(&away, home.join("out")).unwrap();
+        symlink(away.join("x.pitofx"), home.join("escape.pitofx")).unwrap();
+        symlink(home.join("styles/kept.pitofx"), home.join("alias.pitofx")).unwrap();
+        symlink("/dev/zero", home.join("zero.pitofx")).unwrap();
+        for file in ["out/x.pitofx", "escape.pitofx", "zero.pitofx"] {
+            assert!(beside(&home, file).is_err(), "{file}");
+            assert!(linked(&home, file).is_err(), "{file}");
+        }
+        assert!(beside(&home, "styles/inner").is_err());
+        assert!(beside(&home, "styles/con.pitofx").is_err());
+        assert!(beside(&home, "styles/x.").is_err());
+        assert!(beside(&home, "alias.pitofx").is_ok());
+        assert!(beside(&home, "styles/kept.pitofx").is_ok());
+        assert_eq!(
+            beside(&home, "styles/missing.pitofx").unwrap(),
+            home.join("styles/missing.pitofx")
         );
     }
 }

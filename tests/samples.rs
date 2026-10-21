@@ -179,11 +179,18 @@ fn the_readme_commands_name_existing_flags() {
 
 #[test]
 fn every_sample_is_a_pfx_that_prints_its_recipe_and_holds_what_it_reads() {
-    let plain: Vec<String> = fs::read_dir(root().join("samples"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|file| file.ends_with(".toml"))
-        .collect();
+    let mut plain = Vec::new();
+    let mut folders = vec![root().join("samples")];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(&folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "toml") {
+                plain.push(path);
+            }
+        }
+    }
     assert!(plain.is_empty(), "plain TOML in samples/: {plain:?}");
     for path in recipes() {
         let doc = Document::open(&path).unwrap();

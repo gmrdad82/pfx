@@ -1392,14 +1392,11 @@ fn level_keys_are_bounded() {
 #[test]
 fn a_link_names_a_file_in_the_folder_or_below_and_never_a_kept_style() {
     let linked = |file: &str| format!("[compose.link]\nother = '{file}'\n");
-    let parsed = Compose::parse(&linked("styles/other.style.toml")).unwrap();
-    assert_eq!(parsed.links["other"], "styles/other.style.toml");
+    let parsed = Compose::parse(&linked("styles/other.pitofx")).unwrap();
+    assert_eq!(parsed.links["other"], "styles/other.pitofx");
     assert!(parsed.styles.is_empty() && !parsed.is_empty());
     let e = parsed.style("other").unwrap_err();
-    assert!(
-        e.contains("keeps `other` in `styles/other.style.toml`"),
-        "{e}"
-    );
+    assert!(e.contains("keeps `other` in `styles/other.pitofx`"), "{e}");
     for file in [
         "../other.toml",
         "styles/../../other.toml",
@@ -1409,6 +1406,12 @@ fn a_link_names_a_file_in_the_folder_or_below_and_never_a_kept_style() {
         "styles\\other.toml",
         "c:other.toml",
         "styles/con.toml",
+        "styles/COM¹.toml",
+        "lpt³",
+        "styles/lpt0.pitofx",
+        "AUX.pitofx",
+        "nul .pitofx",
+        "styles/other.pitofx ",
         "other.toml.",
         "",
     ] {
@@ -1420,11 +1423,21 @@ fn a_link_names_a_file_in_the_folder_or_below_and_never_a_kept_style() {
         linked("other.toml"),
         STYLE.replace("style.test", "style.other")
     );
+    for file in [
+        "styles/com10.pitofx",
+        "console.pitofx",
+        "a/b/c/other.pitofx",
+        "com.pitofx",
+        "lpt¹x.pitofx",
+    ] {
+        let parsed = Compose::parse(&linked(file)).unwrap_or_else(|e| panic!("{file}: {e}"));
+        assert_eq!(parsed.links["other"], file);
+    }
     let e = Compose::parse(&both).unwrap_err();
     assert!(e.contains("a style is linked or kept, not both"), "{e}");
     let mut score = composed(3);
     score.style = StyleRef::File {
-        file: "styles/other.style.toml".into(),
+        file: "styles/other.pitofx".into(),
         name: "test".into(),
     };
     assert!(write_score(&doc(), "cue", &score).is_ok());

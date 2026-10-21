@@ -289,8 +289,12 @@ fn device(file: &str) -> bool {
         .trim_end_matches(' ')
         .to_ascii_uppercase();
     let numbered = |prefix: &str| {
-        stem.strip_prefix(prefix)
-            .is_some_and(|n| n.len() == 1 && matches!(n.as_bytes()[0], b'1'..=b'9'))
+        stem.strip_prefix(prefix).is_some_and(|n| {
+            matches!(
+                n,
+                "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
     };
     matches!(
         stem.as_str(),
