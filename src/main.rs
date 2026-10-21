@@ -60,7 +60,6 @@ const USAGE: &str = "usage:
   pfx compose list <doc.pitofx> [--json]
   pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
   pfx compose analyze <doc.pitofx|script.film.toml|in.wav|stems/> --into <doc.pitofx> --name <style> [--score <name>] [--json]
-| --score <name>] [--json]
   pfx render --recipe <file.pitofx> --camera <name> --out <png|exr|hdr> [flags]
   pfx shot <file.pitofx> --still --camera <name> --size WxH --out <png> [flags]
   pfx new <out.pitofx> --from street [--seed N] [--json]

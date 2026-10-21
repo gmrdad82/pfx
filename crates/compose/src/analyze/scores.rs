@@ -15,6 +15,47 @@ fn beat_at(tempo: &Tempo, seconds: f64) -> f64 {
     m.beat + (seconds - m.at) * tempo.bpm * m.ratio / 60.0
 }
 
+fn chords(score: &Score, style: Option<&Style>, beats: f64) -> Chords {
+    let sevenths = style.is_some_and(|s| s.harmony.sevenths);
+    if score.chord_beats.len() != score.chords.len() {
+        return Chords {
+            beats: match style {
+                Some(s) => s.harmony.beats,
+                None => beats / score.chords.len() as f64,
+            },
+            numerals: score.chords.clone(),
+            applied: Vec::new(),
+            sevenths,
+        };
+    }
+    let slot = match style {
+        Some(s) => s.harmony.beats,
+        None => {
+            let plain = score.chords.iter().filter(|n| !n.contains('/')).count();
+            beats / plain.max(1) as f64
+        }
+    };
+    let on_slot = |beat: f64| {
+        let at = beat / slot;
+        slot > 0.0 && (at - at.round()).abs() < 1e-6
+    };
+    let mut numerals = Vec::new();
+    let mut applied = Vec::new();
+    for (beat, numeral) in score.chord_beats.iter().zip(&score.chords) {
+        if on_slot(*beat) {
+            numerals.push(numeral.clone());
+        } else {
+            applied.push((*beat, numeral.clone()));
+        }
+    }
+    Chords {
+        beats: slot,
+        numerals,
+        applied,
+        sevenths,
+    }
+}
+
 pub fn piece(name: &str, score: &Score, style: Option<&Style>) -> Result<Piece, String> {
     let at = format!("[compose.score.{name}]");
     score.check().map_err(|e| format!("{at} {e}"))?;
@@ -57,14 +98,7 @@ pub fn piece(name: &str, score: &Score, style: Option<&Style>) -> Result<Piece, 
         .collect();
     let tempo = score.tempo();
     let hits = score.hits.iter().map(|s| beat_at(&tempo, *s)).collect();
-    let chords = (!score.chords.is_empty()).then(|| Chords {
-        beats: match style {
-            Some(s) => s.harmony.beats,
-            None => beats / score.chords.len() as f64,
-        },
-        numerals: score.chords.clone(),
-        sevenths: style.is_some_and(|s| s.harmony.sevenths),
-    });
+    let chords = (!score.chords.is_empty()).then(|| chords(score, style, beats));
     Ok(Piece {
         origin: Origin::Score,
         name: name.to_string(),

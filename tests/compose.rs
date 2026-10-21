@@ -161,3 +161,52 @@ fn analyze_derives_a_style_from_a_composed_score_that_composes_again() {
     assert!(files(&base.join("home")).is_empty());
     let _ = std::fs::remove_dir_all(&base);
 }
+
+fn refused(output: &Output) -> String {
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    assert!(output.stdout.is_empty(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(stderr.starts_with("pfx: "), "{stderr}");
+    assert_eq!(stderr.trim_end().lines().count(), 1, "{stderr}");
+    stderr
+}
+
+#[test]
+fn analyze_refuses_a_document_with_no_scores_a_bad_name_and_an_unknown_score() {
+    let base = base("analyze-refusals");
+    let off = Path::new("off");
+    let source = base.join("chase.pitofx");
+    let into = base.join("derived.pitofx");
+    let analyze = |name: &str, extra: &[&str]| {
+        let mut args = vec![
+            "compose",
+            "analyze",
+            source.to_str().unwrap(),
+            "--into",
+            into.to_str().unwrap(),
+            "--name",
+            name,
+        ];
+        args.extend_from_slice(extra);
+        pfx(&base, off, &args)
+    };
+    let before = std::fs::read(&source).unwrap();
+    let said = refused(&analyze("derived", &[]));
+    assert!(said.contains("holds no [compose.score.*]"), "{said}");
+    assert!(!into.exists());
+    assert_eq!(std::fs::read(&source).unwrap(), before);
+
+    line(&compose(&base, off));
+    let bad = analyze("two words", &[]);
+    assert_eq!(bad.status.code(), Some(2), "{bad:?}");
+    let said = String::from_utf8_lossy(&bad.stderr);
+    assert!(
+        said.starts_with("error: invalid value 'two words' for '--name <NAME>'"),
+        "{said}"
+    );
+    assert!(said.contains("For more information, try '--help'."), "{said}");
+    let said = refused(&analyze("derived", &["--score", "nowhere"]));
+    assert!(said.contains("no [compose.score.nowhere]"), "{said}");
+    assert!(!into.exists());
+    let _ = std::fs::remove_dir_all(&base);
+}

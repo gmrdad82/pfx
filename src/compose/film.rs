@@ -312,3 +312,146 @@ impl Films for Film {
         Ok(vec![piece(&name, &parsed, &table).map_err(at)?])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    const SCORE: &str = r#"
+[recipe.kick]
+length = 200
+
+[[recipe.kick.layer]]
+wave = "white"
+volume = 0.5
+attack = 1
+decay = 150
+
+[recipe.lead]
+length = 400
+
+[[recipe.lead.layer]]
+wave = "sine"
+note = 69
+volume = 0.4
+attack = 5
+decay = 300
+"#;
+
+    const SCRIPT: &str = r#"
+[film]
+score = "score.toml"
+bpm = 120
+beats_per_bar = 4
+
+[[scene]]
+name = "intro"
+seconds = 2.0
+
+[[scene.sound]]
+at = 0.0
+sound = "kick"
+
+[[scene.sound]]
+at = 0.0
+sound = "lead"
+every = 0.5
+until = 1.5
+
+[[scene]]
+name = "drop"
+seconds = 2.0
+
+[[scene.sound]]
+at = 0.0
+sound = "kick"
+
+[[scene.sound]]
+at = 0.5
+sound = "lead"
+pitch = 3
+"#;
+
+    fn scratch(name: &str, script: &str) -> PathBuf {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tmp")
+            .join(format!("analyze-film-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("score.toml"), SCORE).unwrap();
+        let path = dir.join("cues.film.toml");
+        std::fs::write(&path, script).unwrap();
+        path
+    }
+
+    fn done(path: &Path) {
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_film_s_cues_on_its_beat_grid_become_parts_sections_and_hits() {
+        let path = scratch("happy", SCRIPT);
+        let pieces = Film.pieces(&path).unwrap();
+        assert_eq!(pieces, Film.pieces(&path).unwrap());
+        assert_eq!(pieces.len(), 1);
+        let piece = &pieces[0];
+        assert_eq!(piece.name, "cues");
+        assert_eq!(piece.origin, Origin::Film);
+        assert_eq!(piece.bpm, 120.0);
+        assert_eq!(piece.beats_per_bar, 4);
+        assert!((piece.beats - 8.0).abs() < 1e-9, "{}", piece.beats);
+        let names: Vec<&str> = piece.parts.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["kick", "lead"]);
+        let kick = &piece.parts[0];
+        assert!(!kick.pitched);
+        assert_eq!(kick.notes.len(), 2);
+        let lead = &piece.parts[1];
+        assert!(lead.pitched);
+        let beats: Vec<f64> = lead.notes.iter().map(|n| n.beat).collect();
+        assert_eq!(beats, [0.0, 1.0, 2.0, 3.0, 5.0]);
+        let midi: Vec<f64> = lead.notes.iter().map(|n| n.midi).collect();
+        assert_eq!(midi, [69.0, 69.0, 69.0, 69.0, 72.0]);
+        assert!(lead.notes.iter().all(|n| (n.beats - 0.8).abs() < 1e-9));
+        let spans: Vec<(&str, f64, f64)> = piece
+            .spans
+            .iter()
+            .map(|s| (s.name.as_str(), s.from, s.beats))
+            .collect();
+        assert_eq!(spans, [("intro", 0.0, 4.0), ("drop", 4.0, 4.0)]);
+        assert_eq!(piece.hits, [0.0, 4.0]);
+        assert_eq!(piece.spans[1].hit, Some(1));
+        assert!(piece.patches.contains_key("lead"));
+        let analysis = pfx_compose::analyze::style(&pieces).unwrap();
+        analysis.style.check().unwrap();
+        assert_eq!(analysis.style.beats_per_bar, 4);
+        assert_eq!(analysis.style.bpm, [120, 120]);
+        done(&path);
+    }
+
+    #[test]
+    fn a_film_without_bpm_is_refused_naming_the_beat_grid() {
+        let path = scratch("no-bpm", &SCRIPT.replace("bpm = 120\nbeats_per_bar = 4\n", ""));
+        let refused = Film.pieces(&path).unwrap_err();
+        assert!(refused.contains("analyze needs [film] bpm"), "{refused}");
+        assert!(refused.starts_with(&path.display().to_string()), "{refused}");
+        done(&path);
+    }
+
+    #[test]
+    fn a_film_without_a_score_is_refused_naming_the_score() {
+        let path = scratch("no-score", &SCRIPT.replace("score = \"score.toml\"\n", ""));
+        let refused = Film.pieces(&path).unwrap_err();
+        assert!(refused.contains("analyze needs [film] score"), "{refused}");
+        done(&path);
+    }
+
+    #[test]
+    fn a_film_whose_score_file_is_missing_is_refused_naming_it() {
+        let path = scratch("lost-score", &SCRIPT.replace("score.toml", "gone.toml"));
+        let refused = Film.pieces(&path).unwrap_err();
+        assert!(refused.contains("gone.toml"), "{refused}");
+        done(&path);
+    }
+}

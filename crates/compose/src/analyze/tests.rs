@@ -292,6 +292,104 @@ fn composed_scores_analyze_back_into_the_style_they_came_from() {
     assert!(back.scores.contains_key("again"));
 }
 
+const LINES: &str = r#"
+[compose.style.lines]
+bpm = [96, 96]
+tonics = [["D", 1]]
+modes = [["major", 1]]
+
+[compose.style.lines.harmony]
+beats = 4
+start = ["I"]
+cadence = ["V", "I"]
+secondary = 0.5
+markov = { I = [["vi", 1], ["IV", 1]], vi = [["ii", 1]], ii = [["V", 1]], IV = [["ii", 1]], V = [["I", 1]] }
+
+[compose.style.lines.melody]
+range = [64, 84]
+chord_tones = true
+steps = [[1, 2], [-1, 2], [2, 1]]
+rhythm = [[0.5, 2], [1.0, 2]]
+motif_bars = 2
+
+[[compose.style.lines.role]]
+name = "tune"
+patch = "tone"
+plays = "melody"
+octave = 1
+
+[[compose.style.lines.role]]
+name = "under"
+patch = "tone"
+plays = "counter"
+follows = "tune"
+patterns = ["x.x.x.x."]
+range = [48, 62]
+
+[[compose.style.lines.role]]
+name = "pad"
+patch = "tone"
+plays = "chord"
+octave = -1
+
+[compose.style.lines.patch.tone]
+osc = [{ wave = "sine" }]
+env = [0, 400, 0.0, 0]
+
+[[compose.style.lines.section]]
+name = "all"
+bars = [8, 8]
+roles = ["*"]
+
+[compose.style.lines.master]
+lufs = -18
+true_peak = -1.0
+"#;
+
+#[test]
+fn applied_dominants_and_counter_lines_analyze_back_into_a_style_that_composes_again() {
+    let source = Compose::parse(LINES).unwrap().style("lines").unwrap().clone();
+    let mut text = write_style(SCENE, "lines", &source).unwrap();
+    let mut applied = 0;
+    for seed in SEEDS {
+        let score = compose("lines", &source, &request(seed)).unwrap();
+        assert_eq!(score.chord_beats.len(), score.chords.len());
+        applied += score.chords.iter().filter(|c| c.contains('/')).count();
+        text = write_score(&text, &format!("take{seed}"), &score).unwrap();
+    }
+    assert!(applied > 0);
+
+    let pieces = scores::pieces(&Compose::parse(&text).unwrap(), None).unwrap();
+    for piece in &pieces {
+        let chords = piece.chords.as_ref().unwrap();
+        assert!(chords.numerals.iter().all(|n| !n.contains('/')));
+        assert!((chords.beats - 4.0).abs() < 1e-9);
+    }
+    let analysis = style(&pieces).unwrap();
+    let derived = &analysis.style;
+    derived.check().unwrap();
+
+    assert!((derived.harmony.beats - 4.0).abs() < 1e-9);
+    assert!(
+        derived.harmony.secondary > 0.0 && derived.harmony.secondary <= 1.0,
+        "secondary {}",
+        derived.harmony.secondary
+    );
+    assert!(derived.harmony.markov.keys().all(|n| !n.contains('/')));
+    assert!(analysis.report.numerals.iter().all(|n| !n.contains('/')));
+    assert_eq!(derived.melody.chord_tones, source.melody.chord_tones);
+    let under = derived.role("under").unwrap();
+    assert_eq!(under.plays, Plays::Counter);
+    assert_eq!(under.follows.as_deref(), Some("tune"));
+
+    let again = compose("derived", derived, &request(7)).unwrap();
+    assert!(again.tracks.iter().any(|t| t.role == "under" && !t.notes.is_empty()));
+    let doc = write_style(SCENE, "derived", derived).unwrap();
+    let doc = write_score(&doc, "again", &again).unwrap();
+    let back = Compose::parse(&doc).unwrap();
+    assert_eq!(back.style("derived").unwrap(), derived);
+}
+
 #[test]
 fn analyzing_into_a_document_keeps_every_other_chunk_and_style() {
     let dir = scratch("intact");
@@ -559,4 +657,140 @@ fn a_style_in_a_later_chunk_is_replaced_where_it_lives() {
     assert_eq!(first.compose.scores.len(), SEEDS.len());
     assert!(first.compose.styles.contains_key("source"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_document_with_no_scores_is_refused_and_nothing_is_written() {
+    let dir = scratch("unscored");
+    let text = write_style(SCENE, "source", &source_style()).unwrap();
+    let source = dir.join("styled.pitofx");
+    Writer::new()
+        .named(pfx_file::SCNE, NEW_CHUNK, text.clone().into_bytes(), Codec::Auto)
+        .write(&source)
+        .unwrap();
+    let before = std::fs::read(&source).unwrap();
+    let into = dir.join("derived.pitofx");
+    let command = |score: Option<&str>| Analyze {
+        source: source.clone(),
+        into: into.clone(),
+        name: "derived".to_string(),
+        score: score.map(str::to_string),
+        json: false,
+    };
+    for score in [None, Some("take1")] {
+        let refused = cli::run(&command(score), &NoFilms, &|| 0.0).unwrap_err();
+        assert!(refused.contains("holds no [compose.score.*]"), "{refused}");
+        assert!(refused.contains("styled.pitofx"), "{refused}");
+        assert!(!into.exists());
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), before);
+    let refused = scores::pieces(&Compose::parse(&text).unwrap(), None).unwrap_err();
+    assert!(refused.contains("no [compose.score.*]"), "{refused}");
+    let refused = scores::pieces(&Compose::parse(&text).unwrap(), Some("take1")).unwrap_err();
+    assert!(refused.contains("no [compose.score.take1]"), "{refused}");
+    assert!(refused.contains("the document has no scores"), "{refused}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_bad_name_an_unknown_score_and_a_score_pick_on_a_film_are_refused() {
+    let dir = scratch("names");
+    let source = scored_document(&dir);
+    let into = dir.join("derived.pitofx");
+    let mut command = Analyze {
+        source: source.clone(),
+        into: into.clone(),
+        name: "two words".to_string(),
+        score: None,
+        json: false,
+    };
+    let refused = cli::run(&command, &NoFilms, &|| 0.0).unwrap_err();
+    assert!(refused.contains("--name `two words`"), "{refused}");
+    command.name = "derived".to_string();
+    command.score = Some("nowhere".to_string());
+    let refused = cli::run(&command, &NoFilms, &|| 0.0).unwrap_err();
+    assert!(refused.contains("no [compose.score.nowhere]"), "{refused}");
+    assert!(refused.contains("take1"), "{refused}");
+    assert!(!into.exists());
+    let film = dir.join("cues.film.toml");
+    std::fs::write(&film, "[film]\nbpm = 120\n").unwrap();
+    command.source = film;
+    let refused = cli::run(&command, &NoFilms, &|| 0.0).unwrap_err();
+    assert!(refused.contains("--score picks a composed score"), "{refused}");
+    assert!(!into.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn applied_piece() -> Piece {
+    let line = [
+        (0, 74),
+        (1, 78),
+        (2, 82),
+        (3, 85),
+        (4, 71),
+        (5, 74),
+        (6, 75),
+        (7, 81),
+        (8, 76),
+        (9, 79),
+        (10, 80),
+        (11, 74),
+        (12, 81),
+        (13, 85),
+        (14, 88),
+        (15, 81),
+    ];
+    let mut piece = plain_piece();
+    piece.key = Some("D:major".to_string());
+    piece.chords = Some(super::Chords {
+        beats: 4.0,
+        numerals: ["I", "vi", "ii", "V"].map(str::to_string).to_vec(),
+        applied: vec![
+            (2.0, "V7/vi".to_string()),
+            (6.0, "V7/ii".to_string()),
+            (10.0, "V7/V".to_string()),
+        ],
+        sevenths: false,
+    });
+    piece.parts[0].plays = Some(Plays::Melody);
+    piece.parts[0].notes = line
+        .iter()
+        .map(|&(beat, midi)| Note::new(f64::from(beat), f64::from(midi), 1.0, 0.8))
+        .collect();
+    piece
+}
+
+#[test]
+fn applied_chords_count_as_secondaries_and_the_melody_is_read_against_them() {
+    let key = crate::theory::Key::new("D", "major", 3).unwrap();
+    let piece = applied_piece();
+    let harmony = super::harmony::derive(std::slice::from_ref(&piece), &key);
+    assert_eq!(harmony.beats, 4.0);
+    assert_eq!(harmony.secondary, 1.0);
+    assert!(harmony.markov.keys().all(|n| !n.contains('/')), "{:?}", harmony.markov);
+    assert_eq!(super::harmony::walk(std::slice::from_ref(&piece), &key), [["I", "vi", "ii", "V"]]);
+    let melody = super::melody::derive_for(std::slice::from_ref(&piece), &key, false);
+    assert!(melody.chord_tones);
+
+    let mut half = applied_piece();
+    if let Some(chords) = half.chords.as_mut() {
+        chords.applied.truncate(1);
+    }
+    let harmony = super::harmony::derive(std::slice::from_ref(&half), &key);
+    assert_eq!(harmony.secondary, 0.33);
+    let melody = super::melody::derive_for(std::slice::from_ref(&half), &key, false);
+    assert!(!melody.chord_tones);
+
+    let mut plain = applied_piece();
+    if let Some(chords) = plain.chords.as_mut() {
+        chords.applied.clear();
+    }
+    let harmony = super::harmony::derive(std::slice::from_ref(&plain), &key);
+    assert_eq!(harmony.secondary, 0.0);
+
+    let analysis = style(&[piece]).unwrap();
+    analysis.style.check().unwrap();
+    assert_eq!(analysis.style.harmony.secondary, 1.0);
+    assert!(analysis.style.melody.chord_tones);
+    assert_eq!(analysis.report.chords, 4);
 }

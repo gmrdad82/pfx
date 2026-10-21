@@ -40,6 +40,7 @@ pub(crate) fn source<'a>(piece: &'a Piece, key: &Key) -> Option<&'a Chords> {
         && chords
             .numerals
             .iter()
+            .chain(chords.applied.iter().map(|(_, n)| n))
             .all(|n| key.chord(n, chords.sevenths).is_ok());
     ok.then_some(chords)
 }
@@ -281,7 +282,28 @@ fn quantize(beats: f64) -> f64 {
 struct Walked {
     beats: f64,
     sevenths: bool,
+    secondary: f64,
     walks: Vec<Vec<String>>,
+}
+
+fn secondary(sources: &[Option<&Chords>], key: &Key) -> f64 {
+    let mut applied = 0usize;
+    let mut eligible = 0usize;
+    for chords in sources.iter().flatten() {
+        if chords.beats < 2.0 {
+            continue;
+        }
+        applied += chords.applied.len();
+        eligible += chords
+            .numerals
+            .windows(2)
+            .filter(|w| w[0] != w[1] && key.secondary(&w[1]).is_some())
+            .count();
+    }
+    if eligible == 0 {
+        return 0.0;
+    }
+    ((applied as f64 / eligible as f64 * 100.0).round() / 100.0).clamp(0.0, 1.0)
 }
 
 fn common_beats(detected: &[Option<Vec<(String, f64)>>], pieces: &[Piece]) -> f64 {
@@ -356,6 +378,7 @@ fn walked(pieces: &[Piece], key: &Key) -> Walked {
     Walked {
         beats,
         sevenths,
+        secondary: secondary(&sources, key),
         walks,
     }
 }
@@ -380,6 +403,7 @@ pub(crate) fn derive_walked(pieces: &[Piece], key: &Key) -> (Harmony, Vec<Vec<St
     let Walked {
         beats,
         sevenths,
+        secondary,
         walks,
     } = walked(pieces, key);
     let mut start: Vec<String> = Vec::new();
@@ -432,7 +456,7 @@ pub(crate) fn derive_walked(pieces: &[Piece], key: &Key) -> (Harmony, Vec<Vec<St
         cadence,
         sevenths,
         markov,
-        secondary: 0.0,
+        secondary,
         phrase: 0,
         turn: Vec::new(),
         turns: Vec::new(),

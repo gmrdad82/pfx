@@ -53,6 +53,7 @@ pub struct Piece {
 pub struct Chords {
     pub beats: f64,
     pub numerals: Vec<String>,
+    pub applied: Vec<(f64, String)>,
     pub sevenths: bool,
 }
 

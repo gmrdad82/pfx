@@ -4,7 +4,7 @@ use crate::score::Note;
 use crate::style::{MAX_BEATS, Melody, Plays};
 use crate::theory::Key;
 
-use super::harmony::{harmonic, timeline};
+use super::harmony::{harmonic, source, timeline};
 use super::key::pitch_class;
 use super::{Part, Piece};
 
@@ -135,20 +135,26 @@ fn fill(mut ticks: u32, slots: &[u32]) -> Vec<u32> {
     out
 }
 
-fn chord_tones_of(
-    piece: &Piece,
-    key: &Key,
-    sevenths: bool,
-) -> Option<(f64, Vec<Option<Vec<i32>>>)> {
+fn chord_tones_of(piece: &Piece, key: &Key, sevenths: bool) -> Option<Vec<(f64, Option<Vec<i32>>)>> {
     let (step, line) = timeline(piece, key, false);
     if line.iter().all(Option::is_none) {
         return None;
     }
-    let chords = line
+    let mut chords: Vec<(f64, Option<String>)> = line
         .into_iter()
-        .map(|n| n.and_then(|n| key.chord(&n, sevenths).ok()))
+        .enumerate()
+        .map(|(i, n)| (i as f64 * step, n))
         .collect();
-    Some((step, chords))
+    if let Some(sourced) = source(piece, key) {
+        chords.extend(sourced.applied.iter().map(|(at, n)| (*at, Some(n.clone()))));
+        chords.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
+    Some(
+        chords
+            .into_iter()
+            .map(|(at, n)| (at, n.and_then(|n| key.chord(&n, sevenths).ok())))
+            .collect(),
+    )
 }
 
 fn chord_index(midi: i32, chord: &[i32]) -> Option<i32> {
@@ -248,9 +254,9 @@ pub(crate) fn derive_for(pieces: &[Piece], key: &Key, sevenths: bool) -> Melody 
         let bpb = f64::from(lead.piece.beats_per_bar.max(1));
         let chords = chord_tones_of(lead.piece, key, sevenths);
         let chord_at = |beat: f64| -> Option<&Vec<i32>> {
-            let (step, line) = chords.as_ref()?;
-            let i = (beat / step + 1e-9).floor().max(0.0) as usize;
-            line.get(i.min(line.len().saturating_sub(1)))?.as_ref()
+            let line = chords.as_ref()?;
+            let i = line.partition_point(|(at, _)| *at <= beat + 1e-9);
+            line.get(i.saturating_sub(1))?.1.as_ref()
         };
         let mut previous: Option<(i32, Option<i32>)> = None;
         for (i, note) in lead.notes.iter().enumerate() {
