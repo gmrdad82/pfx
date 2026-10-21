@@ -101,7 +101,7 @@ A new texture in group 3 therefore turns the gate red until the floor rises with
 | `max_compute_workgroup_size_z` | 64 | 4 | Room haze field (4×4×4) |
 | `max_compute_workgroup_storage_size` | 16384 | 1024 | Exposure reduction (`array<f32, 256>`) |
 | `max_compute_workgroups_per_dimension` | 65535 | 480 | Post chain at 3840 wide (8×8 groups) |
-| `max_storage_buffers_per_shader_stage` | 8 | 6 | Shadow casters, vertex: instances, sway, skins, the deformers and their plan, light tints. Opaque shading, fragment: 6 (instances, materials, probe anchors, map materials, light tints, clustered lights) |
+| `max_storage_buffers_per_shader_stage` | 8 | **8** | Shadow casters, vertex: instances, sway, skins, morph targets, morph weights, the deformers and their plan, light tints. Opaque shading, fragment: 6 (instances, materials, probe anchors, map materials, light tints, clustered lights) |
 | `max_uniform_buffers_per_shader_stage` | 12 | **11** | Tree cards and lit text, fragment: 7 in group 3, 2 in the shadow group, 1 scene, 1 their own. One more uniform in group 3 and this limit needs raising too; the test above catches it. |
 | `max_samplers_per_shader_stage` | 16 | 7 | Tree cards and lit text, fragment (5 filtering, 2 comparison) |
 | `max_dynamic_uniform_buffers_per_pipeline_layout` | 8 | 1 | Shadow cascades (`CASTER_BYTES` 80 per caster slot) |
@@ -164,11 +164,11 @@ Per-stage counts are summed over the pipeline layout's bind groups, the way WebG
 
 | Pass | Where | Groups | Per stage | Targets | Compute |
 |---|---|---|---|---|---|
-| Depth and velocity prepass | frame.rs | 4 | V: 1 uniform, 6 storage. F: 10 uniform, 5 storage, 17 textures, 6 samplers. C: 2 storage (deformers) | Rg16Float + R32Uint, Depth32Float | — |
+| Depth and velocity prepass | frame.rs | 4 | V: 1 uniform, 7 storage. F: 10 uniform, 5 storage, 17 textures, 6 samplers. C: 2 storage (deformers) | Rg16Float + R32Uint, Depth32Float | — |
 | Opaque PBR (± local lights) | frame.rs | 4 | as prepass | 2 × Rgba16Float, Depth32Float | — |
-| Shadow casters, transmissive casters | frame.rs, lights.rs | 3 | V: 2 uniform (1 dynamic), 7 storage | depth only; Rgba32Uint | — |
+| Shadow casters, transmissive casters | frame.rs, lights.rs | 3 | V: 2 uniform (1 dynamic), 8 storage | depth only; Rgba32Uint | — |
 | Sun shadow depth, creature shadow depth | shadow.rs | 1–2 | V: up to 2 uniform (1 dynamic), 2 storage | Depth32Float | — |
-| Tree cards (depth, shading) | frame.rs, canopy.rs | 4 | V: 2 uniform, 4 storage. F: 11 uniform, 5 storage, **18 textures**, 7 samplers | as prepass / opaque | — |
+| Tree cards (depth, shading) | frame.rs, canopy.rs | 4 | V: 2 uniform, 5 storage. F: 11 uniform, 5 storage, **18 textures**, 7 samplers | as prepass / opaque | — |
 | Canopy cookie | canopy.rs | 1 | V: 1 uniform, 1 storage. F: 1 texture, 1 sampler | R8Unorm, blended | — |
 | Sky | sky.rs | 1 | F: 1 uniform, 1 texture, 1 sampler | Rgba16Float | — |
 | Background motion, scene colour mips, output blit | renderer.rs | 1 | F: ≤ 2 textures | Rg16Float; Rgba16Float; sRGB output | — |

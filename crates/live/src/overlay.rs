@@ -2,7 +2,7 @@ use bytemuck::{Pod, Zeroable};
 use pfx_gpu::{GpuProfiler, wgpu};
 
 use crate::frame::{Frame, Instance, Matrix};
-use crate::morph::{MORPH_BINDING, MORPH_WGSL, NO_MORPH};
+use crate::morph::{MORPH_BINDING, MORPH_WEIGHTS_BINDING, MORPH_WGSL, NO_MORPH};
 use crate::skin::{NO_SKIN, SKIN_BINDING, SKIN_WGSL};
 
 pub const DEFORMED_STRIDE: u64 = 16;
@@ -116,6 +116,7 @@ pub fn deformed_entries() -> Vec<wgpu::BindGroupLayoutEntry> {
         },
         storage(SKIN_BINDING, true),
         storage(MORPH_BINDING, true),
+        storage(MORPH_WEIGHTS_BINDING, true),
     ]
 }
 
@@ -253,7 +254,7 @@ impl DeformedPositions {
             packed[at..at + std::mem::size_of::<Job>()].copy_from_slice(bytemuck::bytes_of(&job));
         }
         queue.write_buffer(jobs, 0, &packed);
-        let (skins, morphs) = frame.deform_stores();
+        let (skins, morphs, weights) = frame.deform_stores();
         let groups: Vec<wgpu::BindGroup> = sources
             .iter()
             .map(|(_, source)| {
@@ -284,6 +285,10 @@ impl DeformedPositions {
                         wgpu::BindGroupEntry {
                             binding: MORPH_BINDING,
                             resource: morphs.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: MORPH_WEIGHTS_BINDING,
+                            resource: weights.as_entire_binding(),
                         },
                     ],
                 })

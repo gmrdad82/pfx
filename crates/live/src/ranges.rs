@@ -11,6 +11,18 @@ impl FreeRanges {
         empty: T,
         what: &str,
     ) -> Result<u32, String> {
+        let mut extent = store.len();
+        let base = self.take_extent(&mut extent, needed, what)?;
+        store.resize(extent, empty);
+        Ok(base)
+    }
+
+    pub fn take_extent(
+        &mut self,
+        extent: &mut usize,
+        needed: usize,
+        what: &str,
+    ) -> Result<u32, String> {
         let too_many = || format!("too many {what}");
         let count = u32::try_from(needed).map_err(|_| too_many())?;
         if let Some(index) = self
@@ -26,9 +38,9 @@ impl FreeRanges {
             }
             return Ok(base);
         }
-        let base = u32::try_from(store.len()).map_err(|_| too_many())?;
+        let base = u32::try_from(*extent).map_err(|_| too_many())?;
         base.checked_add(count).ok_or_else(too_many)?;
-        store.resize(store.len() + needed, empty);
+        *extent += needed;
         Ok(base)
     }
 

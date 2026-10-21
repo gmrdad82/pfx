@@ -560,3 +560,175 @@ fn a_changing_weight_writes_its_motion() {
     );
     assert!(expected[0].abs() > 0.005);
 }
+
+fn head_words(head: &Head) -> u64 {
+    head.positions.len() as u64 * 2 * 2
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn uploading_many_morphed_meshes_grows_the_store_a_logarithmic_number_of_times() {
+    let head = head();
+    let (mut frame, _) = setup();
+    let before = frame.morph_stats();
+    let meshes = 64u64;
+    for _ in 0..meshes {
+        morphed(&mut frame, &head);
+    }
+    let after = frame.morph_stats();
+    let words = meshes * head_words(&head);
+    let bytes = words * 16;
+    let buffers = after.data_buffers - before.data_buffers;
+    assert!(
+        buffers <= words.ilog2() + 1,
+        "{meshes} morphed meshes made {buffers} morph buffers"
+    );
+    assert_eq!(
+        after.data_written - before.data_written,
+        bytes,
+        "each morph delta is written once"
+    );
+    assert!(
+        after.data_copied - before.data_copied < 2 * bytes,
+        "growing copied {} bytes for {bytes}",
+        after.data_copied - before.data_copied
+    );
+    assert!(after.data_capacity <= 2 * bytes + 64 * 16);
+    assert_eq!(after.weight_buffers, before.weight_buffers);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_frame_with_more_weights_than_ever_touches_only_the_weight_buffer() {
+    let head = head();
+    let (mut frame, mut shadows) = setup();
+    let floor = floor(&mut frame);
+    let mesh = morphed(&mut frame, &head);
+    let set = [0.7, 0.4];
+    frame.set_weights(&[weights(0, &set)]).unwrap();
+    let drawn = [Instance::new(mesh, translation(0.0), 0, HEAD_ID), floor];
+    shoot(&mut frame, &mut shadows, &drawn);
+    let before = frame.morph_stats();
+    let many: Vec<[f32; 2]> = (0..400).map(|_| [0.5, 0.25]).collect();
+    let mut entries = vec![weights(0, &set)];
+    entries.extend(
+        many.iter()
+            .enumerate()
+            .map(|(index, pair)| weights(index + 2, pair)),
+    );
+    frame.set_weights(&entries).unwrap();
+    shoot(&mut frame, &mut shadows, &drawn);
+    let after = frame.morph_stats();
+    assert_eq!(after.data_buffers, before.data_buffers);
+    assert_eq!(after.data_written, before.data_written);
+    assert_eq!(after.data_copied, before.data_copied);
+    assert_eq!(after.data_capacity, before.data_capacity);
+    assert!(after.weight_buffers > before.weight_buffers);
+    assert!(after.weight_capacity >= 802 * 16);
+    assert_eq!(after.weight_written - before.weight_written, 802 * 16);
+    let reserved = frame.morph_stats();
+    frame.reserve_weights(4096).unwrap();
+    frame.set_weights(&entries).unwrap();
+    shoot(&mut frame, &mut shadows, &drawn);
+    let grown = frame.morph_stats();
+    assert_eq!(grown.weight_buffers, reserved.weight_buffers + 1);
+    let mut more = entries.clone();
+    let extra: Vec<[f32; 2]> = (0..1000).map(|_| [0.125, 0.5]).collect();
+    more.extend(
+        extra
+            .iter()
+            .enumerate()
+            .map(|(index, pair)| weights(index + 1000, pair)),
+    );
+    frame.set_weights(&more).unwrap();
+    shoot(&mut frame, &mut shadows, &drawn);
+    assert_eq!(
+        frame.morph_stats().weight_buffers,
+        grown.weight_buffers,
+        "reserved weights take a larger frame without a new buffer"
+    );
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn reserving_past_the_device_limit_is_refused_and_leaves_the_frame_drawing() {
+    let head = head();
+    let (mut frame, mut shadows) = setup();
+    let floor = floor(&mut frame);
+    let mesh = morphed(&mut frame, &head);
+    let set = [0.7, 0.4];
+    frame.set_weights(&[weights(0, &set)]).unwrap();
+    let drawn = [Instance::new(mesh, translation(0.0), 0, HEAD_ID), floor];
+    let reference = shoot(&mut frame, &mut shadows, &drawn);
+    let limits = frame.gpu.device.limits();
+    let bytes = u64::from(limits.max_storage_buffer_binding_size).min(limits.max_buffer_size);
+    let limit = usize::try_from(bytes / 16).unwrap_or(usize::MAX);
+    let before = frame.morph_stats();
+    for over in [limit + 1, usize::MAX] {
+        let refused = frame.reserve_weights(over).unwrap_err();
+        assert!(refused.contains("morph weights"), "{refused}");
+        let refused = frame.reserve_morph_deltas(over).unwrap_err();
+        assert!(refused.contains("morph deltas"), "{refused}");
+    }
+    assert_eq!(frame.morph_stats(), before);
+    assert_eq!(shoot(&mut frame, &mut shadows, &drawn).ids, reference.ids);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_morphed_frame_is_byte_identical_after_both_stores_grow() {
+    let head = head();
+    let set = [0.7, 0.4];
+    let reference = {
+        let (mut frame, mut shadows) = setup();
+        let floor = floor(&mut frame);
+        let mesh = morphed(&mut frame, &head);
+        frame.set_weights(&[weights(1, &set)]).unwrap();
+        shoot(
+            &mut frame,
+            &mut shadows,
+            &[floor, Instance::new(mesh, translation(0.0), 0, HEAD_ID)],
+        )
+    };
+    let (mut frame, mut shadows) = setup();
+    let floor = floor(&mut frame);
+    for _ in 0..8 {
+        morphed(&mut frame, &head);
+    }
+    let mesh = morphed(&mut frame, &head);
+    let grown = frame.morph_stats();
+    for _ in 0..40 {
+        morphed(&mut frame, &head);
+    }
+    assert!(
+        frame.morph_stats().data_buffers > grown.data_buffers,
+        "the store grows after the drawn mesh, so its deltas move on the GPU"
+    );
+    let floor_weights = vec![1.0f32; 300];
+    let many: Vec<[f32; 2]> = (0..300).map(|_| [0.5, 0.25]).collect();
+    let mut entries = vec![
+        InstanceWeights {
+            instance: 0,
+            current: &floor_weights,
+            previous: &floor_weights,
+        },
+        weights(1, &set),
+    ];
+    entries.extend(
+        many.iter()
+            .enumerate()
+            .map(|(index, pair)| weights(index + 2, pair)),
+    );
+    frame.set_weights(&entries).unwrap();
+    let live = shoot(
+        &mut frame,
+        &mut shadows,
+        &[floor, Instance::new(mesh, translation(0.0), 0, HEAD_ID)],
+    );
+    assert!(frame.morph_stats().weight_buffers > 1);
+    assert!(reference.ids.contains(&HEAD_ID));
+    assert!(
+        live == reference,
+        "a morphed frame changed after the morph and weight stores grew"
+    );
+}
