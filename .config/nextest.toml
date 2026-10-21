@@ -1,3 +1,56 @@
 [profile.default]
 retries = 0
 fail-fast = false
+
+[test-groups]
+bench-folder = { max-threads = 1 }
+
+[profile.gpu]
+retries = 0
+fail-fast = false
+test-threads = 6
+slow-timeout = { period = "120s" }
+final-status-level = "slow"
+default-filter = '''not (
+    package(=pfx-gpu)
+    | (package(=pfx-live) & test(/(^|::)(twenty_glass_slabs_at_4k|two_thousand_lit_glyphs_at_4k_stay_under_budget|two_thousand_glyphs_and_fifty_icons_at_4k|a_page_of_msdf_text_at_4k_face_on_and_tilted|eighty_changing_numbers_at_4k_upload_nothing_once_warm)$/))
+    | (package(=pfx-post) & test(/(^|::)(benchmark_4k|benchmark_4k_styles)$/))
+    | (package(=pfx-editor) & test(/(^|::)ten_thousand_tile_cells_load_and_draw_within_the_frame_budget$/))
+    | (package(=pfx-trace) & test(/(^|::)a_one_sided_wall_still_casts_across_its_back$/))
+    | (package(=pfx-game) & test(/(^|::)dynamic_resolution_drops_the_render_size_under_a_tight_budget$/))
+)'''
+
+[[profile.gpu.overrides]]
+filter = 'binary_id(pfx-bench::bench)'
+test-group = 'bench-folder'
+
+[[profile.gpu.overrides]]
+filter = '''
+    (package(=pfx-bake) & test(/(^|::)room_sunlight_determinism_and_timing$/))
+    | (package(=pfx) & test(/(^|::)a_job_killed_mid_frame_resumes_to_the_bytes_of_an_uninterrupted_clip$/))
+    | (package(=pfx-live) & test(/(^|::)(the_deck_spike_with_real_text_sizes|prop_matches_its_mesh_under_the_sky)$/))
+'''
+priority = 100
+
+[[profile.gpu.overrides]]
+filter = '''
+    (package(=pfx-bench) & test(/(^|::)the_first_and_last_timeline_frames_streak_like_their_neighbours_live_and_traced$/))
+    | (package(=pfx-trace) & test(/(^|::)(film_curve_dump|many_lights_through_the_tree_match_the_sum_of_their_light_by_light_renders|clean_icon_budget)$/))
+    | (package(=pfx-live) & test(/(^|::)(a_swarm_of_shots_and_particles_fits_a_120_hz_frame_on_the_gpu_at_4k|a_burst_heavy_frame_fits_at_4k_and_on_a_deck_sized_target|plates_look_like_the_trace_at_an_anchor_and_between_anchors|the_spike_scene_fits_its_budget_at_4k_and_on_a_deck_sized_target)$/))
+'''
+priority = 50
+
+[profile.gpu-timed]
+retries = 0
+fail-fast = false
+test-threads = 1
+slow-timeout = { period = "120s" }
+final-status-level = "slow"
+default-filter = '''
+    package(=pfx-gpu)
+    | (package(=pfx-live) & test(/(^|::)(twenty_glass_slabs_at_4k|two_thousand_lit_glyphs_at_4k_stay_under_budget|two_thousand_glyphs_and_fifty_icons_at_4k|a_page_of_msdf_text_at_4k_face_on_and_tilted|eighty_changing_numbers_at_4k_upload_nothing_once_warm)$/))
+    | (package(=pfx-post) & test(/(^|::)(benchmark_4k|benchmark_4k_styles)$/))
+    | (package(=pfx-editor) & test(/(^|::)ten_thousand_tile_cells_load_and_draw_within_the_frame_budget$/))
+    | (package(=pfx-trace) & test(/(^|::)a_one_sided_wall_still_casts_across_its_back$/))
+    | (package(=pfx-game) & test(/(^|::)dynamic_resolution_drops_the_render_size_under_a_tight_budget$/))
+'''
