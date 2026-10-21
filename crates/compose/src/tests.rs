@@ -1103,7 +1103,7 @@ true_peak = -1.0
 const LEVELS: &str = r#"
 [compose.style.ramp]
 bpm = [100, 100]
-tonics = [["C", 1]]
+tonics = [["G", 1]]
 modes = [["major", 1]]
 
 [compose.style.ramp.harmony]
@@ -1132,7 +1132,7 @@ passing = 1.0
 name = "comp"
 patch = "tone"
 plays = "chord"
-patterns = ["x..xx..x"]
+patterns = ["x.x..x.x"]
 hold = 1.8
 
 [[compose.style.ramp.role]]
@@ -1189,7 +1189,7 @@ fn ramp(seed: u64) -> Score {
 
 #[test]
 fn a_chord_role_never_rings_a_foreign_tone_into_the_next_chord() {
-    let key = crate::theory::Key::new("C", "major", 3).unwrap();
+    let key = crate::theory::Key::new("G", "major", 3).unwrap();
     for seed in 1..=6 {
         let score = ramp(seed);
         assert_eq!(score, ramp(seed));
@@ -1378,6 +1378,7 @@ fn level_keys_are_bounded() {
         ("level = 1.0", "level = 1.0\npitch = inf", "`pitch`"),
         ("enter = 0.5", "enter = 1.5", "`enter`"),
         ("tempo = [1.0, 2.0]", "tempo = [0.0, 2.0]", "`tempo`"),
+        ("tempo = [1.0, 2.0]", "tempo = [1.0, 5.0]", "`tempo`"),
         ("plans = [\"a\"]", "plans = [\"\"]", "`plans`"),
     ];
     for (from, to, says) in cases {

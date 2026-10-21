@@ -1058,13 +1058,16 @@ impl Style {
                 }
             }
         }
+        let [t0, t1] = TEMPO_RATIO;
         if let Some(levels) = &self.levels
             && levels
                 .tempo
                 .iter()
-                .any(|t| !t.is_finite() || !(0.05..=20.0).contains(t))
+                .any(|t| !t.is_finite() || !(t0..=t1).contains(t))
         {
-            return Err("[levels]: `tempo` wants two multipliers from 0.05 to 20".into());
+            return Err(format!(
+                "[levels]: `tempo` wants two multipliers from {t0} to {t1}"
+            ));
         }
         Ok(())
     }

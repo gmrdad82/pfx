@@ -168,9 +168,9 @@ mod tests {
             intensity,
         };
         let parts = vec![
-            part("calm", 0, 4, [0.0, 0.2]),
-            part("panic", 4, 4, [0.8, 1.0]),
-            part("calm", 8, 2, [0.0, 0.2]),
+            part("quiet", 0, 4, [0.0, 0.2]),
+            part("busy", 4, 4, [0.8, 1.0]),
+            part("quiet", 8, 2, [0.0, 0.2]),
         ];
         let lines = vec![
             Line {
@@ -185,9 +185,9 @@ mod tests {
             },
         ];
         let stings = vec![Sting {
-            name: "game_over".into(),
-            event: "broken".into(),
-            file: "compose/a/cue/game_over.wav".into(),
+            name: "finale".into(),
+            event: "cleared".into(),
+            file: "compose/a/cue/finale.wav".into(),
         }];
         let music = table(120.0, 4, &parts, &lines, &stings);
         assert!(!music.contains_key("tempo"));
@@ -201,12 +201,12 @@ mod tests {
         assert_eq!(manifest.stems[0].gain.keys, vec![(0.0, 1.0)]);
         assert_eq!(manifest.stems[1].gain.keys, vec![(0.1, 0.0), (0.9, 1.0)]);
         let sections = &manifest.track.sections;
-        assert_eq!(sections[0].name, "calm");
+        assert_eq!(sections[0].name, "quiet");
         assert_eq!(sections[0].variants, vec![(0, 4), (8, 10)]);
         assert_eq!(sections[1].variants, vec![(4, 8)]);
-        assert_eq!(manifest.track.start.as_deref(), Some("calm"));
+        assert_eq!(manifest.track.start.as_deref(), Some("quiet"));
         assert_eq!(manifest.stingers.len(), 1);
-        assert_eq!(manifest.stingers[0].event, "broken");
-        assert_eq!(manifest.stingers[0].file, "compose/a/cue/game_over.wav");
+        assert_eq!(manifest.stingers[0].event, "cleared");
+        assert_eq!(manifest.stingers[0].file, "compose/a/cue/finale.wav");
     }
 }

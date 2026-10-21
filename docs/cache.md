@@ -25,6 +25,7 @@ Each kind is a subfolder.
 |---|---|---|
 | `pipelines` | The live renderer's compiled pipelines (a wgpu pipeline cache), loaded by every live renderer the `pfx` tool starts (`pfx shot`, `pfx bench`, `pfx film`, recipe stills and clips, the editor's viewport), and saved when the renderer closes if it compiled anything new. Vulkan only: other backends keep their own driver caches. | The backend, adapter, driver and driver version, and the pfx version. |
 | `bakes` | `pfx bake`'s probe volumes, prerendered props and reflection cubes, each a whole artifact folder. | The artifact's own scene hash (scene geometry, materials, sky, grid, samples, seed), a hash of the source of the bake library and every engine crate it is built from with the dependency lock file, `pfx bake`'s own source (tests and docs aside; of the lock file, the registry and git packages), the GPU, driver and backend that traced it, and the ray path: hardware ray queries or the software BVH (`PFX_TRACE_RT`), the box BLAS (`PFX_TRACE_RT_BOXES`) and the sampler (`PFX_TRACE_SAMPLER`). |
+| `compose` | `pfx compose`'s and `pfx compose render`'s mastered mixes, each one entry holding the master WAV and its measured levels ([compose.md](compose.md)). | The score's recipe (the style, the score and the SHA-256 of each sample chunk it reads), the render's pinned output hashes, and the pfx version. |
 
 A bake found in the cache prints `… (from the machine cache)` instead of tracing; a bake that traces keeps its result there for the next run. `pfx bake --force` traces again without reading the cache, and still keeps the result.
 
@@ -43,7 +44,7 @@ pfx cache info
 pfx cache info --json
 ```
 
-The folder, its size, its entries and its cap, then each kind's entries and size; the two kinds above are always listed, with any other kind a caller made. `--json` prints one line:
+The folder, its size, its entries and its cap, then each kind's entries and size; `pipelines` and `bakes` are always listed, with `compose` and any other kind a caller made once it holds an entry. `--json` prints one line:
 
 ```json
 {"v":1,"tool":"pfx","tool_version":"3.1.2","root":"~/.cache/pfx","root_set_by":null,"cap":4000000000,"bytes":52428800,"entries":3,"kinds":[{"kind":"bakes","entries":2,"bytes":41943040,"oldest":1792500000000,"newest":1792500600000},{"kind":"pipelines","entries":1,"bytes":10485760,"oldest":1792500300000,"newest":1792500300000}]}
@@ -60,7 +61,7 @@ pfx cache clean --older-than 30d
 pfx cache clean --kind pipelines --older-than 12h --json
 ```
 
-Removes entries: all of them, those of one kind (`pipelines`, `bakes`, or any other kind a caller made), or those unused for longer than the age (`45s`, `90m`, `12h`, `30d`, `2w`). It prints what it removed and freed; `--json` prints `{"v":1,"removed":N,"freed":BYTES}`. A kind that is not lowercase letters, digits and dashes, an unknown age or an unknown flag is refused in the usual shape, exit 2:
+Removes entries: all of them, those of one kind (`pipelines`, `bakes`, `compose`, or any other kind a caller made), or those unused for longer than the age (`45s`, `90m`, `12h`, `30d`, `2w`). It prints what it removed and freed; `--json` prints `{"v":1,"removed":N,"freed":BYTES}`. A kind that is not lowercase letters, digits and dashes, an unknown age or an unknown flag is refused in the usual shape, exit 2:
 
 ```text
 error: invalid value '3y' for '--older-than <OLDER_THAN>': unknown unit 'y': use s, m, h, d or w
