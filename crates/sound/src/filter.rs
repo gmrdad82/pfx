@@ -20,6 +20,7 @@ pub(crate) struct Filter {
     coef: [f64; 5],
     state: Vec<[f64; 2]>,
     primed: bool,
+    q: f64,
 }
 
 impl Filter {
@@ -34,7 +35,20 @@ impl Filter {
             coef: [1.0, 0.0, 0.0, 0.0, 0.0],
             state: Vec::new(),
             primed: false,
+            q: std::f64::consts::FRAC_1_SQRT_2,
         }
+    }
+
+    #[cfg(feature = "shot")]
+    pub(crate) fn starting(kind: Kind, hz: f32, q: f32, rate: u32) -> Self {
+        let mut filter = Self::new(kind);
+        filter.q = f64::from(q);
+        filter.on = true;
+        filter.target = Some(hz);
+        filter
+            .cutoff
+            .snap(pfx_core::sim::lnf(hz.clamp(MIN_HZ, 0.49 * rate as f32)));
+        filter
     }
 
     pub(crate) fn target(&self) -> Option<f32> {
@@ -131,7 +145,7 @@ impl Filter {
         let hz = pfx_core::sim::exp(f64::from(cutoff)).min(f64::from(rate) * 0.49);
         let w0 = std::f64::consts::TAU * hz / f64::from(rate);
         let (sin, cos) = (pfx_core::sim::sin(w0), pfx_core::sim::cos(w0));
-        let alpha = sin / std::f64::consts::SQRT_2;
+        let alpha = sin / (2.0 * self.q);
         let a0 = 1.0 + alpha;
         let (b0, b1, b2) = match self.kind {
             Kind::LowPass => ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0),

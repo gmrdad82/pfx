@@ -34,6 +34,14 @@ pub struct Common {
     pub fade_in: f32,
     pub fade_out: f32,
     pub seed: Option<u64>,
+    pub highpass: Option<Pass>,
+    pub lowpass: Option<Pass>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pass {
+    pub hz: Value,
+    pub q: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -279,6 +287,12 @@ impl Script {
         for layer in &self.layers {
             known(&layer.common.gain)?;
             known(&layer.common.pan)?;
+            for pass in [&layer.common.highpass, &layer.common.lowpass]
+                .into_iter()
+                .flatten()
+            {
+                known(&pass.hz)?;
+            }
             match &layer.kind {
                 Kind::Engine(e) => {
                     known(&e.rpm)?;
@@ -536,6 +550,12 @@ fn layer(kind: &str, table: &toml::Table, i: usize, dir: &Path) -> Result<Layer,
         fade_in: f.number_or("fade_in", 0.0)?.max(0.0),
         fade_out: f.number_or("fade_out", 0.0)?.max(0.0),
         seed: f.whole("seed")?,
+        highpass: pass(&mut f, &at, "highpass", "highpass_q")?,
+        lowpass: if kind == "engine" {
+            None
+        } else {
+            pass(&mut f, &at, "lowpass", "lowpass_q")?
+        },
     };
     let kind = match kind {
         "engine" => {
@@ -664,4 +684,30 @@ fn tyre(f: &mut Fields, at: &str) -> Result<Tyre, String> {
         ));
     }
     Ok(tyre)
+}
+
+const NYQUIST: f32 = RATE as f32 / 2.0;
+
+fn pass(
+    f: &mut Fields,
+    at: &str,
+    key: &'static str,
+    q_key: &'static str,
+) -> Result<Option<Pass>, String> {
+    if !f.has(key) {
+        if f.has(q_key) {
+            return Err(format!("{at}: `{q_key}` needs `{key}`"));
+        }
+        return Ok(None);
+    }
+    let q = bounded(
+        f,
+        at,
+        q_key,
+        std::f32::consts::FRAC_1_SQRT_2,
+        [0.1, 10.0],
+        "",
+    )?;
+    let hz = bounded_value(f, at, key, 0.0, [10.0, NYQUIST], " Hz")?;
+    Ok(Some(Pass { hz, q }))
 }

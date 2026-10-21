@@ -171,6 +171,10 @@ impl<'a> Fields<'a> {
         }
     }
 
+    pub(crate) fn has(&self, key: &str) -> bool {
+        self.table.contains_key(key)
+    }
+
     pub(crate) fn finish(self) -> Result<(), String> {
         match self.table.keys().find(|k| !self.used.contains(k.as_str())) {
             Some(key) => Err(format!("{}: unknown key `{key}`", self.at)),

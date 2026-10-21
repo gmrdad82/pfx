@@ -7,6 +7,7 @@ use super::tyre::{TyreVoice, Whine};
 use super::{CONTROL, Common, Ctx, Kind, Knob, RATE, Surface};
 use crate::DriveCurve;
 use crate::drive::shape;
+use crate::filter::{Filter, Kind as FilterKind};
 
 const ENGINE_LEVEL: f32 = 4.0;
 const WARMUP: usize = RATE as usize / 2;
@@ -179,6 +180,7 @@ pub(crate) fn run(mut voice: Box<dyn Voice>, common: &Common, ctx: &Ctx, out: &m
     let mut scratch = [[0.0f32; 2]; CONTROL];
     let mut at = first;
     let mut g0 = level(frame_to_seconds(at));
+    let mut passes = Passes::new(common, ctx, frame_to_seconds(at));
     while at < last {
         let len = CONTROL.min(last - at);
         let t = frame_to_seconds(at);
@@ -186,6 +188,7 @@ pub(crate) fn run(mut voice: Box<dyn Voice>, common: &Common, ctx: &Ctx, out: &m
         let block = &mut scratch[..len];
         block.fill([0.0, 0.0]);
         voice.block(ctx, t, block);
+        passes.apply(ctx, frame_to_seconds(at + len), block, stereo);
         let p = ctx.get(pan_knob, t).clamp(-1.0, 1.0);
         let (pl, pr) = if stereo {
             ((1.0 - p).min(1.0), (1.0 + p).min(1.0))
@@ -206,6 +209,50 @@ pub(crate) fn run(mut voice: Box<dyn Voice>, common: &Common, ctx: &Ctx, out: &m
         }
         g0 = g1;
         at += len;
+    }
+}
+
+struct Passes {
+    filters: Vec<(Filter, Knob)>,
+    buf: [f32; CONTROL * 2],
+}
+
+impl Passes {
+    fn new(common: &Common, ctx: &Ctx, t: f32) -> Self {
+        let filters = [
+            (FilterKind::HighPass, &common.highpass),
+            (FilterKind::LowPass, &common.lowpass),
+        ]
+        .into_iter()
+        .filter_map(|(kind, pass)| {
+            let pass = pass.as_ref()?;
+            let knob = ctx.knob(&pass.hz);
+            Some((Filter::starting(kind, ctx.get(knob, t), pass.q, RATE), knob))
+        })
+        .collect();
+        Self {
+            filters,
+            buf: [0.0; CONTROL * 2],
+        }
+    }
+
+    fn apply(&mut self, ctx: &Ctx, end: f32, block: &mut [[f32; 2]], stereo: bool) {
+        if self.filters.is_empty() {
+            return;
+        }
+        let channels = if stereo { 2 } else { 1 };
+        let len = block.len();
+        let buf = &mut self.buf[..len * channels];
+        for (i, frame) in block.iter().enumerate() {
+            buf[i * channels..(i + 1) * channels].copy_from_slice(&frame[..channels]);
+        }
+        for (filter, knob) in &mut self.filters {
+            filter.set(Some(ctx.get(*knob, end)), len as u32, RATE);
+            filter.process(buf, len, channels, RATE);
+        }
+        for (i, frame) in block.iter_mut().enumerate() {
+            frame[..channels].copy_from_slice(&buf[i * channels..(i + 1) * channels]);
+        }
     }
 }
 

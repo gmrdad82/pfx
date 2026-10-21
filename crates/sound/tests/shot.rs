@@ -449,6 +449,87 @@ fn a_tyre_refuses_values_out_of_bounds() {
     assert!(err.contains("no curve named `nope`"), "{err}");
 }
 
+fn band_power(signal: &[f32], lo: f32, hi: f32, step: f32) -> f64 {
+    let mut total = 0.0;
+    let mut hz = lo;
+    while hz <= hi {
+        let w = std::f64::consts::TAU * f64::from(hz) / f64::from(RATE);
+        let coeff = 2.0 * w.cos();
+        let (mut s1, mut s2) = (0.0f64, 0.0f64);
+        for &x in signal {
+            let s = f64::from(x) + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s;
+        }
+        total += s1 * s1 + s2 * s2 - coeff * s1 * s2;
+        hz += step;
+    }
+    total
+}
+
+fn filtered_road(keys: &str) -> Vec<f32> {
+    let text = format!(
+        "seed = 4\n[[curve]]\nname = \"cut\"\nkeys = [[0.0, 130.0], [0.5, 400.0], [1.0, 130.0]]\n[[road]]\nspeed = 20\n{keys}\n"
+    );
+    let script = Script::parse(&text, Path::new("")).unwrap();
+    mono(&script.mix(2 * RATE as usize).unwrap())
+}
+
+#[test]
+fn a_layer_highpass_removes_the_band_below_it() {
+    let plain = filtered_road("");
+    let cut = filtered_road("highpass = 130");
+    let body = |s: &[f32]| span(s, 0.25, 2.0).to_vec();
+    let (plain, cut) = (body(&plain), body(&cut));
+    let low = band_power(&cut, 20.0, 65.0, 5.0) / band_power(&plain, 20.0, 65.0, 5.0);
+    assert!(low < 0.1, "below 65 Hz kept {low}");
+    let high = band_power(&cut, 600.0, 1_500.0, 50.0) / band_power(&plain, 600.0, 1_500.0, 50.0);
+    assert!((0.8..1.25).contains(&high), "600 to 1500 Hz kept {high}");
+    let dull = body(&filtered_road("lowpass = 1000\nlowpass_q = 0.5"));
+    let top =
+        band_power(&dull, 4_000.0, 6_000.0, 100.0) / band_power(&plain, 4_000.0, 6_000.0, 100.0);
+    assert!(top < 0.1, "above 4 kHz kept {top}");
+}
+
+#[test]
+fn a_keyed_layer_filter_repeats_and_moves() {
+    let keys = "highpass = \"cut\"\nhighpass_q = 1.2\nlowpass = 8000";
+    let a = filtered_road(keys);
+    assert_eq!(a, filtered_road(keys));
+    assert!(a.iter().all(|s| s.is_finite()) && rms(&a) > 0.01);
+    assert_ne!(
+        a,
+        filtered_road("highpass = 130\nhighpass_q = 1.2\nlowpass = 8000")
+    );
+    assert_ne!(a, filtered_road(""));
+}
+
+#[test]
+fn layer_filters_refuse_out_of_bounds() {
+    let refused = |layer: &str, keys: &str, words: &str| {
+        let err = Script::parse(&format!("[[{layer}]]\n{keys}\n"), Path::new("")).unwrap_err();
+        assert!(err.contains(words), "{err}");
+    };
+    refused("road", "highpass = 5", "`highpass` must be 10 to 24000 Hz");
+    refused(
+        "road",
+        "lowpass = 30000",
+        "`lowpass` must be 10 to 24000 Hz",
+    );
+    refused(
+        "road",
+        "highpass = 100\nhighpass_q = 50",
+        "`highpass_q` must be 0.1 to 10",
+    );
+    refused("road", "lowpass_q = 1", "`lowpass_q` needs `lowpass`");
+    refused("road", "highpass = \"none\"", "no curve named `none`");
+    refused("engine", "lowpass_q = 1", "unknown key `lowpass_q`");
+    let engine =
+        Script::parse("[[engine]]\nlowpass = 3000\nhighpass = 40\n", Path::new("")).unwrap();
+    assert!(engine.layers[0].common.lowpass.is_none());
+    assert!(engine.layers[0].common.highpass.is_some());
+}
+
 #[test]
 #[ignore = "bench; run with --release"]
 fn bench_recorded_engine() {
