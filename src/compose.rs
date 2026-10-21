@@ -37,6 +37,7 @@ pub struct Compose {
     pub hits: Vec<f64>,
     pub bpm: Option<u32>,
     pub key: Option<String>,
+    pub plan: Option<String>,
     pub music: bool,
     pub fresh: bool,
     pub wav: Option<PathBuf>,
@@ -250,6 +251,7 @@ fn plan_compose(args: &[String]) -> Result<Compose, Refusal> {
             "--hits",
             "--bpm",
             "--key",
+            "--plan",
             "--wav",
         ],
         &["--music", "--fresh", "--json"],
@@ -298,6 +300,7 @@ fn plan_compose(args: &[String]) -> Result<Compose, Refusal> {
         hits,
         bpm,
         key: value("--key").map(str::to_string),
+        plan: value("--plan").map(|v| name_ok(v, "--plan")).transpose()?,
         music: found.switches.contains("--music"),
         fresh: found.switches.contains("--fresh"),
         wav: value("--wav").map(wav_path).transpose()?,
@@ -611,6 +614,7 @@ fn report(doc: &Path, done: &Done, music: bool, json: bool, total_ms: f64) {
             "doc": doc.display().to_string(),
             "score": done.name,
             "style": done.style,
+            "plan": score.plan,
             "replaced": done.replaced,
             "seed": score.seed,
             "seconds": score.seconds,
@@ -674,6 +678,7 @@ fn run_compose(command: &Compose) -> Result<(), String> {
         hits: command.hits.clone(),
         bpm: command.bpm,
         key: command.key.clone(),
+        plan: command.plan.clone(),
     };
     let before = now();
     let score = pfx_compose::compose(&command.style, style, &request)
@@ -942,6 +947,7 @@ fade = 0.5
                 hits: Vec::new(),
                 bpm: None,
                 key: None,
+                plan: None,
             };
             pfx_compose::compose("small", style, &request).unwrap()
         };
@@ -984,6 +990,7 @@ fade = 0.5
             hits: Vec::new(),
             bpm: None,
             key: None,
+            plan: None,
         };
         let score = pfx_compose::compose("small", style, &request).unwrap();
         let none = |_: &str| Ok(None);

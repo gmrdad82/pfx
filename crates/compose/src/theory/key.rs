@@ -55,7 +55,69 @@ impl Key {
         self.root + index.div_euclid(n) * 12 + self.degrees[index.rem_euclid(n) as usize]
     }
 
+    pub fn index(&self, midi: i32) -> i32 {
+        let n = self.degrees.len() as i32;
+        let mut best = (i32::MAX, 0);
+        let octave = (midi - self.root).div_euclid(12);
+        for o in [octave - 1, octave, octave + 1] {
+            for d in 0..n {
+                let index = o * n + d;
+                let gap = (self.pitch(index) - midi).abs();
+                if gap < best.0 {
+                    best = (gap, index);
+                }
+            }
+        }
+        best.1
+    }
+
+    pub fn secondary(&self, target: &str) -> Option<String> {
+        if target.contains('/') {
+            return None;
+        }
+        let n = numeral::parse(target)?;
+        if n.alt != 0 || n.degree >= self.degrees.len() {
+            return None;
+        }
+        let fifth = (self.degrees[n.degree] + 7).rem_euclid(12);
+        let at = self.degrees.iter().position(|d| *d == fifth)?;
+        let diatonic: Vec<i32> = chord::on_degree(&self.degrees, at as i32, 4)
+            .iter()
+            .map(|t| t - chord::on_degree(&self.degrees, at as i32, 1)[0])
+            .collect();
+        if diatonic == chord::intervals("7").unwrap_or_default() {
+            return None;
+        }
+        let bare: String = target
+            .chars()
+            .take_while(|c| matches!(c, 'I' | 'V' | 'i' | 'v'))
+            .collect();
+        Some(format!("V7/{bare}"))
+    }
+
+    fn applied(&self, chord: &str, target: &str, sevenths: bool) -> Result<Vec<i32>, String> {
+        let n = numeral::parse(target).ok_or_else(|| format!("`{target}` is no Roman numeral"))?;
+        let root = self.chord(target, false)?[0];
+        let mode = if n.major { "major" } else { "minor" };
+        let degrees = scale::degrees(mode).ok_or_else(|| format!("`{mode}` is no scale"))?;
+        let key = Key {
+            tonic: pitch_name(root).to_string(),
+            mode: mode.to_string(),
+            root,
+            degrees,
+        };
+        let mut tones = key.chord(chord, sevenths)?;
+        let shift = 12 * (tones[0] - self.root).div_euclid(12);
+        for t in &mut tones {
+            *t -= shift;
+        }
+        Ok(tones)
+    }
+
     pub fn chord(&self, text: &str, sevenths: bool) -> Result<Vec<i32>, String> {
+        if let Some((chord, target)) = text.split_once('/') {
+            return self.applied(chord, target, sevenths);
+        }
         let n = numeral::parse(text).ok_or_else(|| format!("`{text}` is no Roman numeral"))?;
         let degree = n.degree as i32;
         let root = self.pitch(degree) + n.alt;
@@ -110,5 +172,33 @@ mod tests {
         assert_eq!(c.chord("bVII", false).unwrap(), [58, 62, 65]);
         assert!(c.chord("Iwobble", false).is_err());
         assert!(Key::parse("H minor", 3).is_err());
+    }
+
+    #[test]
+    fn applied_dominants_follow_the_secondary_rule_and_resolve_in_their_target() {
+        let c = Key::parse("C major", 3).unwrap();
+        let found: Vec<Option<String>> = ["I", "ii", "iii", "IV", "V", "vi", "viio"]
+            .iter()
+            .map(|t| c.secondary(t))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                None,
+                Some("V7/ii".into()),
+                Some("V7/iii".into()),
+                Some("V7/IV".into()),
+                Some("V7/V".into()),
+                Some("V7/vi".into()),
+                None
+            ]
+        );
+        assert_eq!(c.secondary("V7/V"), None);
+        assert_eq!(c.secondary("V7"), Some("V7/V".into()));
+        assert_eq!(c.chord("V7/V", false).unwrap(), [50, 54, 57, 60]);
+        assert_eq!(c.chord("V7/ii", false).unwrap(), [57, 61, 64, 67]);
+        assert_eq!(c.chord("V7/IV", false).unwrap(), [48, 52, 55, 58]);
+        assert_eq!(c.index(64), 9);
+        assert_eq!(c.index(61), 7);
     }
 }

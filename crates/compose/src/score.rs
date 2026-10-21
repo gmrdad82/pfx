@@ -47,12 +47,16 @@ pub struct Score {
     pub seconds: f64,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hits: Vec<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
     pub bpm: u32,
     #[serde(default = "four", skip_serializing_if = "is_four")]
     pub beats_per_bar: u32,
     pub key: String,
     pub bars: u32,
     pub chords: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chord_beats: Vec<f64>,
     #[serde(rename = "section")]
     pub sections: Vec<Placed>,
     #[serde(rename = "track", default)]
@@ -375,6 +379,16 @@ impl Score {
                 "the score holds {} chords; it wants at most {MAX_NOTES}",
                 self.chords.len()
             ));
+        }
+        if !self.chord_beats.is_empty()
+            && (self.chord_beats.len() != self.chords.len()
+                || self.chord_beats.iter().any(|b| !b.is_finite() || *b < 0.0)
+                || self.chord_beats.windows(2).any(|w| w[0] >= w[1]))
+        {
+            return Err(
+                "`chord_beats` wants one rising beat from 0 per chord, or none when every chord fills its slot"
+                    .into(),
+            );
         }
         let [t0, t1] = TEMPO_RATIO;
         let mut bar = 0u32;

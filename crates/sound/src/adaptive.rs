@@ -169,6 +169,7 @@ pub struct AdaptiveTrack {
     pub stems: Vec<Stem>,
     pub bpm: f64,
     pub beats_per_bar: u32,
+    pub tempo: Vec<(u32, f64)>,
     pub offset: f64,
     pub sections: Vec<Section>,
     pub start: Option<String>,
@@ -183,6 +184,7 @@ impl AdaptiveTrack {
             stems,
             bpm,
             beats_per_bar,
+            tempo: Vec::new(),
             offset: 0.0,
             sections: Vec::new(),
             start: None,
@@ -243,6 +245,21 @@ impl AdaptiveTrack {
                 self.offset
             ));
         }
+        let mut last = None;
+        for &(bar, bpm) in &self.tempo {
+            if !bpm.is_finite() || bpm <= 0.0 {
+                return Err(format!(
+                    "the tempo at bar {bar} must be above 0 bpm, not {bpm}"
+                ));
+            }
+            if last.is_some_and(|last| bar <= last) {
+                return Err(format!(
+                    "the tempo at bar {bar} comes after a later one; tempo bars must rise"
+                ));
+            }
+            last = Some(bar);
+        }
+        let grid = Grid::new(self.bpm, self.beats_per_bar, &self.tempo, 1, self.offset);
         let seconds = frames as f64 / f64::from(rate);
         let mut sections = Vec::new();
         let named = |name: &str| self.sections.iter().position(|s| s.name == name);
@@ -260,8 +277,7 @@ impl AdaptiveTrack {
                         section.name
                     ));
                 }
-                let at =
-                    self.offset + f64::from(from) * f64::from(self.beats_per_bar) * 60.0 / self.bpm;
+                let at = grid.frame(f64::from(from) * f64::from(self.beats_per_bar));
                 if at >= seconds {
                     return Err(format!(
                         "section `{}`: bar {from} starts past the stems' end",
@@ -301,6 +317,7 @@ impl AdaptiveTrack {
         Ok(Plan {
             bpm: self.bpm,
             beats_per_bar: self.beats_per_bar,
+            tempo: self.tempo.clone(),
             offset: self.offset,
             sections,
             start,
@@ -311,10 +328,68 @@ impl AdaptiveTrack {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct Mark {
+    beat: f64,
+    frame: f64,
+    per_beat: f64,
+}
+
+#[derive(Clone, Debug)]
+struct Grid {
+    marks: Vec<Mark>,
+}
+
+impl Grid {
+    fn new(bpm: f64, beats_per_bar: u32, tempo: &[(u32, f64)], rate: u32, offset: f64) -> Grid {
+        let rate = f64::from(rate);
+        let mut marks = vec![Mark {
+            beat: 0.0,
+            frame: offset,
+            per_beat: 60.0 * rate / bpm,
+        }];
+        for &(bar, bpm) in tempo {
+            let beat = f64::from(bar) * f64::from(beats_per_bar);
+            let per_beat = 60.0 * rate / bpm;
+            if bar == 0 {
+                marks[0].per_beat = per_beat;
+                continue;
+            }
+            let last = marks[marks.len() - 1];
+            let frame = last.frame + (beat - last.beat) * last.per_beat;
+            marks.push(Mark {
+                beat,
+                frame,
+                per_beat,
+            });
+        }
+        Grid { marks }
+    }
+
+    fn frame(&self, beat: f64) -> f64 {
+        let i = self
+            .marks
+            .partition_point(|m| m.beat <= beat)
+            .saturating_sub(1);
+        let m = self.marks[i];
+        m.frame + (beat - m.beat) * m.per_beat
+    }
+
+    fn beat(&self, frame: f64) -> f64 {
+        let i = self
+            .marks
+            .partition_point(|m| m.frame <= frame)
+            .saturating_sub(1);
+        let m = self.marks[i];
+        m.beat + (frame - m.frame) / m.per_beat
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Plan {
     bpm: f64,
     beats_per_bar: u32,
+    tempo: Vec<(u32, f64)>,
     offset: f64,
     sections: Vec<PlanSection>,
     start: usize,
@@ -349,8 +424,7 @@ struct StemData {
 struct Score {
     rate: u32,
     frames: u64,
-    beat: f64,
-    offset: f64,
+    grid: Grid,
     stems: Vec<StemData>,
     variants: Vec<Vec<(u64, u64)>>,
     plan: Plan,
@@ -367,11 +441,16 @@ impl Score {
         if frames == 0 {
             return Err("the stems are empty at this rate".into());
         }
-        let beat = 60.0 * f64::from(rate) / plan.bpm;
-        let offset = plan.offset * f64::from(rate);
+        let grid = Grid::new(
+            plan.bpm,
+            plan.beats_per_bar,
+            &plan.tempo,
+            rate,
+            plan.offset * f64::from(rate),
+        );
         let bar = |index: u32| -> u64 {
             let beats = f64::from(index) * f64::from(plan.beats_per_bar);
-            ((offset + beats * beat).round() as u64).min(frames)
+            (grid.frame(beats).round() as u64).min(frames)
         };
         let variants = plan
             .sections
@@ -394,8 +473,7 @@ impl Score {
         Ok(Score {
             rate,
             frames,
-            beat,
-            offset,
+            grid,
             stems: stems
                 .into_iter()
                 .map(|(clip, gain)| StemData {
@@ -427,13 +505,12 @@ impl Score {
     }
 
     fn grid_frame(&self, beats: u64) -> u64 {
-        (self.offset + beats as f64 * self.beat).round() as u64
+        self.grid.frame(beats as f64).round() as u64
     }
 
     fn next_grid(&self, cursor: u64, step: u64) -> u64 {
         let step = step.max(1);
-        let span = self.beat * step as f64;
-        let into = (cursor as f64 - self.offset) / span;
+        let into = self.grid.beat(cursor as f64) / step as f64;
         let whole = if into > 0.0 { into as u64 } else { 0 };
         let mut k = whole.saturating_sub(1);
         loop {
@@ -1005,6 +1082,49 @@ mod tests {
         }
         let mut mixer = play(&track, 1);
         assert!(!mixer.request_music_section("c", Quantize::Bar));
+    }
+
+    #[test]
+    fn a_tempo_map_puts_every_bar_and_beat_on_its_own_tempo() {
+        let frames = 4000;
+        let mut track = index_track(frames);
+        track.tempo = vec![(2, 1200.0)];
+        track.sections = vec![Section::new("a", (0, 4)), Section::new("b", (4, 6))];
+        let prepared = track.prepare(RATE).unwrap();
+        assert_eq!(prepared.score.variants[0], vec![(0, 1200)]);
+        assert_eq!(prepared.score.variants[1], vec![(1200, 1600)]);
+        for (at, from, to) in [
+            (Quantize::Beat, 150, 200),
+            (Quantize::Bar, 150, 400),
+            (Quantize::Beat, 930, 950),
+            (Quantize::Bar, 900, 1000),
+            (Quantize::End, 900, 1200),
+        ] {
+            let mut mixer = play(&track, 1);
+            mixer.render(from as usize);
+            assert!(mixer.request_music_section("b", at));
+            let got = left(&mixer.render(1000));
+            let switch = (to - from) as usize;
+            assert_eq!(
+                frame_of(got[switch - 1], frames),
+                to - 1,
+                "{at:?} at {from}"
+            );
+            assert_eq!(frame_of(got[switch], frames), 1200, "{at:?} at {from}");
+        }
+        track.tempo = vec![(0, 1200.0)];
+        let prepared = track.prepare(RATE).unwrap();
+        assert_eq!(prepared.score.variants[1], vec![(800, 1200)]);
+        for (tempo, says) in [
+            (vec![(2, 1200.0), (2, 600.0)], "must rise"),
+            (vec![(3, 1200.0), (1, 600.0)], "must rise"),
+            (vec![(2, 0.0)], "above 0 bpm"),
+            (vec![(2, f64::NAN)], "above 0 bpm"),
+        ] {
+            track.tempo = tempo;
+            let e = track.prepare(RATE).unwrap_err();
+            assert!(e.contains(says), "{e}");
+        }
     }
 
     #[test]

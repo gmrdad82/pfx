@@ -3,7 +3,9 @@ use toml::{Table, Value};
 #[derive(Clone, Debug, PartialEq)]
 pub struct Part {
     pub name: String,
-    pub at: f64,
+    pub from: u32,
+    pub bars: u32,
+    pub bpm: f64,
     pub intensity: [f32; 2],
 }
 
@@ -24,15 +26,26 @@ pub struct Line {
 pub fn table(
     bpm: f64,
     beats_per_bar: u32,
-    seconds: f64,
     parts: &[Part],
     lines: &[Line],
     stings: &[Sting],
 ) -> Table {
-    let bar = 60.0 / bpm * f64::from(beats_per_bar);
-    let bar_of = |at: f64| (at / bar).round() as i64;
     let mut music = Table::new();
     music.insert("bpm".into(), number(bpm));
+    let mut now = bpm;
+    let mut tempo = Vec::new();
+    for part in parts {
+        if part.bpm != now {
+            now = part.bpm;
+            tempo.push(Value::Array(vec![
+                Value::Integer(i64::from(part.from)),
+                exact(part.bpm),
+            ]));
+        }
+    }
+    if !tempo.is_empty() {
+        music.insert("tempo".into(), Value::Array(tempo));
+    }
     music.insert(
         "beats_per_bar".into(),
         Value::Integer(i64::from(beats_per_bar)),
@@ -63,12 +76,11 @@ pub fn table(
         .iter()
         .filter_map(|name| {
             let mut variants = Vec::new();
-            for (i, part) in parts.iter().enumerate() {
-                if part.name != *name {
-                    continue;
-                }
-                let end = parts.get(i + 1).map_or(seconds, |next| next.at);
-                let (from, to) = (bar_of(part.at), bar_of(end));
+            for part in parts.iter().filter(|p| p.name == *name) {
+                let (from, to) = (
+                    i64::from(part.from),
+                    i64::from(part.from) + i64::from(part.bars),
+                );
                 if to > from {
                     variants.push(Value::Array(vec![Value::Integer(from), Value::Integer(to)]));
                 }
@@ -125,6 +137,14 @@ fn gain(parts: &[Part], plays: &[bool]) -> Option<Value> {
     ))
 }
 
+fn exact(value: f64) -> Value {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        Value::Integer(value as i64)
+    } else {
+        Value::Float(value)
+    }
+}
+
 fn number(value: f64) -> Value {
     let rounded = (value * 1000.0).round() / 1000.0;
     if rounded.fract() == 0.0 && rounded.abs() < 1e15 {
@@ -140,15 +160,17 @@ mod tests {
 
     #[test]
     fn a_score_becomes_a_music_table_the_game_side_loads() {
-        let part = |name: &str, at: f64, intensity: [f32; 2]| Part {
+        let part = |name: &str, from: u32, bars: u32, intensity: [f32; 2]| Part {
             name: name.into(),
-            at,
+            from,
+            bars,
+            bpm: 120.0,
             intensity,
         };
         let parts = vec![
-            part("calm", 0.0, [0.0, 0.2]),
-            part("panic", 8.0, [0.8, 1.0]),
-            part("calm", 16.0, [0.0, 0.2]),
+            part("calm", 0, 4, [0.0, 0.2]),
+            part("panic", 4, 4, [0.8, 1.0]),
+            part("calm", 8, 2, [0.0, 0.2]),
         ];
         let lines = vec![
             Line {
@@ -167,7 +189,8 @@ mod tests {
             event: "broken".into(),
             file: "compose/a/cue/game_over.wav".into(),
         }];
-        let music = table(120.0, 4, 20.0, &parts, &lines, &stings);
+        let music = table(120.0, 4, &parts, &lines, &stings);
+        assert!(!music.contains_key("tempo"));
         let mut doc = Table::new();
         doc.insert("music".into(), Value::Table(music));
         let text = toml::to_string(&doc).unwrap();

@@ -76,6 +76,8 @@ pub struct Style {
     #[serde(rename = "cue", default, skip_serializing_if = "Vec::is_empty")]
     pub cues: Vec<Cue>,
     pub master: Master,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub levels: Option<Levels>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -88,6 +90,16 @@ pub struct Harmony {
     #[serde(default, skip_serializing_if = "is_false")]
     pub sevenths: bool,
     pub markov: BTreeMap<String, Vec<(String, u32)>>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub secondary: f64,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub phrase: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turn: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub turns: Vec<Vec<String>>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub land: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -104,6 +116,35 @@ pub struct Melody {
     pub repeat: f64,
     #[serde(default, skip_serializing_if = "is_false")]
     pub chord_tones: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub develop: Vec<Develop>,
+    #[serde(default = "one_step", skip_serializing_if = "is_one_step")]
+    pub sequence: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fragment: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub passing: f64,
+}
+
+fn one_step() -> i32 {
+    1
+}
+
+fn is_one_step(v: &i32) -> bool {
+    *v == 1
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Develop {
+    State,
+    Repeat,
+    Vary,
+    Sequence,
+    Invert,
+    Return,
 }
 
 fn one_bar() -> u32 {
@@ -120,6 +161,11 @@ impl Default for Melody {
             motif_bars: 1,
             repeat: 0.0,
             chord_tones: false,
+            develop: Vec::new(),
+            sequence: 1,
+            split: None,
+            fragment: None,
+            passing: 0.0,
         }
     }
 }
@@ -136,6 +182,8 @@ pub enum Plays {
     Reverse,
     Roll,
     Impact,
+    Counter,
+    Answer,
 }
 
 impl Plays {
@@ -196,6 +244,24 @@ pub struct Role {
     pub range: Option<[i32; 2]>,
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub ramp: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follows: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub delay: f64,
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub interval: i32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub walk: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub inversions: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enter: Option<f32>,
+}
+
+impl Role {
+    pub fn follower(&self) -> bool {
+        matches!(self.plays, Plays::Counter | Plays::Answer)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -309,6 +375,24 @@ pub struct Section {
     pub cue: Option<String>,
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub gain_db: f32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub stop: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub through: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary: Option<f64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub triads: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plans: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub level: Option<f32>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Levels {
+    pub tempo: [f64; 2],
 }
 
 fn is_flat(v: &[f32; 2]) -> bool {
@@ -669,6 +753,69 @@ impl Style {
         self.cues.iter().find(|c| c.name == name)
     }
 
+    pub fn plan(&self, name: &str) -> Result<Style, String> {
+        let sections: Vec<Section> = self
+            .sections
+            .iter()
+            .filter(|s| s.plans.iter().any(|p| p == name))
+            .cloned()
+            .map(|mut s| {
+                s.plans.clear();
+                s
+            })
+            .collect();
+        if sections.is_empty() {
+            return Err(format!("no [[section]] is in the plan `{name}`"));
+        }
+        Ok(Style {
+            sections,
+            ..self.clone()
+        })
+    }
+
+    pub(crate) fn resolved(&self) -> Option<Style> {
+        if self
+            .sections
+            .iter()
+            .all(|s| s.plans.is_empty() && s.level.is_none())
+        {
+            return None;
+        }
+        let sections = self
+            .sections
+            .iter()
+            .filter(|s| s.plans.is_empty())
+            .cloned()
+            .map(|mut s| {
+                let Some(level) = s.level else {
+                    return s;
+                };
+                if let Some(levels) = &self.levels
+                    && s.tempo == 1.0
+                {
+                    let [lo, hi] = levels.tempo;
+                    s.tempo = lo * pfx_core::sim::pow(hi / lo, f64::from(level));
+                }
+                if s.intensity == [0.0, 0.0] {
+                    s.intensity = [level, level];
+                }
+                if s.roles.is_empty() {
+                    s.roles = self
+                        .roles
+                        .iter()
+                        .filter(|r| r.enter.is_none_or(|e| e <= level + 1e-6))
+                        .map(|r| r.name.clone())
+                        .collect();
+                }
+                s
+            })
+            .collect();
+        Some(Style {
+            sections,
+            ..self.clone()
+        })
+    }
+
     pub fn check(&self) -> Result<(), String> {
         let [lo, hi] = self.bpm;
         if lo == 0 || lo > hi || hi > MAX_BPM {
@@ -742,6 +889,57 @@ impl Style {
             {
                 return Err(format!(
                     "{at}: `range` [{a}, {b}] wants low below high, within 0 to 127"
+                ));
+            }
+            if let Some([a, b]) = role.range
+                && (-8..=8).contains(&role.octave)
+            {
+                let shift = 12 * i64::from(role.octave);
+                if i64::from(a) + shift < 0 || i64::from(b) + shift > 127 {
+                    return Err(format!(
+                        "{at}: `range` [{a}, {b}] wants low below high, within MIDI 0 to 127 after `octave`"
+                    ));
+                }
+            }
+            if role.follower() {
+                let leader = role.follows.as_deref().ok_or_else(|| {
+                    format!("{at}: a counter or answer wants `follows`, the role it answers")
+                })?;
+                match self.role(leader) {
+                    Some(l) if l.name != role.name && !l.follower() => {}
+                    _ => {
+                        return Err(format!(
+                            "{at}: `follows` names `{leader}`; it wants another role that is no counter or answer"
+                        ));
+                    }
+                }
+            }
+            if !(0.0..=1.0).contains(&role.walk) || !(0.0..=1.0).contains(&role.inversions) {
+                return Err(format!(
+                    "{at}: `walk` and `inversions` are chances from 0 to 1"
+                ));
+            }
+            let most = 4.0 * f64::from(self.beats_per_bar);
+            if !(0.0..=most).contains(&role.delay) {
+                return Err(format!(
+                    "{at}: `delay` is {} beats; it wants 0 to {most} (four bars)",
+                    role.delay
+                ));
+            }
+            if let Some(enter) = role.enter
+                && !(0.0..=1.0).contains(&enter)
+            {
+                return Err(format!("{at}: `enter` wants a level from 0 to 1"));
+            }
+            if !(-24..=24).contains(&role.interval) {
+                return Err(format!("{at}: `interval` wants -24 to 24 scale steps"));
+            }
+            if role.plays == Plays::Bass
+                && (role.walk > 0.0 || role.inversions > 0.0)
+                && !role.octaves.is_empty()
+            {
+                return Err(format!(
+                    "{at}: a walking bass or one with `inversions` picks its own octave; drop `octaves`"
                 ));
             }
             let fields = || -> Result<(), String> {
@@ -822,6 +1020,33 @@ impl Style {
                 }
                 last_hit = Some(hit);
             }
+            let beats = f64::from(a) * f64::from(self.beats_per_bar);
+            if !(0.0..=beats).contains(&section.stop) {
+                return Err(format!(
+                    "{at}: `stop` is {} beats; it wants 0 up to the section's shortest length, {beats}",
+                    section.stop
+                ));
+            }
+            for role in &section.through {
+                if self.role(role).is_none() {
+                    return Err(format!("{at}: `through` names no [[role]] `{role}`"));
+                }
+            }
+            if let Some(chance) = section.secondary
+                && !(0.0..=1.0).contains(&chance)
+            {
+                return Err(format!("{at}: `secondary` is a chance from 0 to 1"));
+            }
+            if let Some(level) = section.level
+                && !(0.0..=1.0).contains(&level)
+            {
+                return Err(format!("{at}: `level` wants 0 to 1"));
+            }
+            if section.plans.iter().any(String::is_empty) {
+                return Err(format!(
+                    "{at}: every `plans` name wants at least one letter"
+                ));
+            }
             if let Some(cue) = &section.cue {
                 if self.cue(cue).is_none() {
                     return Err(format!("{at}: no [[cue]] `{cue}`"));
@@ -832,6 +1057,14 @@ impl Style {
                     ));
                 }
             }
+        }
+        if let Some(levels) = &self.levels
+            && levels
+                .tempo
+                .iter()
+                .any(|t| !t.is_finite() || !(0.05..=20.0).contains(t))
+        {
+            return Err("[levels]: `tempo` wants two multipliers from 0.05 to 20".into());
         }
         Ok(())
     }
@@ -876,6 +1109,8 @@ impl Style {
             .start
             .iter()
             .chain(&h.cadence)
+            .chain(&h.turn)
+            .chain(h.turns.iter().flatten())
             .chain(h.markov.keys())
             .chain(h.markov.values().flatten().map(|(n, _)| n));
         for numeral in numerals {
@@ -893,6 +1128,28 @@ impl Style {
             if !h.markov.contains_key(numeral) {
                 return Err(format!(
                     "[harmony]: `{numeral}` has no `markov` row, so the walk would stop on it; give it one, such as `{numeral} = [[\"{numeral}\", 1]]` to hold it"
+                ));
+            }
+        }
+        if !(0.0..=1.0).contains(&h.secondary) {
+            return Err("[harmony]: `secondary` is a chance from 0 to 1".into());
+        }
+        if !h.turn.is_empty() && !h.turns.is_empty() {
+            return Err("[harmony]: give either `turn` or `turns`, not both".into());
+        }
+        if h.turns.iter().any(Vec::is_empty) {
+            return Err("[harmony]: every `turns` entry wants at least one numeral".into());
+        }
+        if std::iter::once(&h.turn)
+            .chain(&h.turns)
+            .any(|t| t.len() > h.phrase as usize)
+        {
+            return Err("[harmony]: `turn` and `turns` want a `phrase` at least as long".into());
+        }
+        for numeral in h.turn.iter().chain(h.turns.iter().flatten()) {
+            if !h.markov.contains_key(numeral) {
+                return Err(format!(
+                    "[harmony]: the turn `{numeral}` wants a `markov` row, so the phrase after it moves on"
                 ));
             }
         }
@@ -969,6 +1226,18 @@ impl Style {
             let [lo, hi] = m.range;
             if lo >= hi || lo < 0 || hi > 127 {
                 return Err("`range` wants low below high, within 0 to 127".into());
+            }
+            if !(-24..=24).contains(&m.sequence) {
+                return Err("`sequence` wants -24 to 24 scale steps".into());
+            }
+            for (what, value) in [
+                ("split", m.split),
+                ("fragment", m.fragment),
+                ("passing", Some(m.passing)),
+            ] {
+                if let Some(v) = value {
+                    within(what, v, 0.0, 1.0)?;
+                }
             }
             Ok(())
         };

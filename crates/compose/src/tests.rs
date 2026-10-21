@@ -221,6 +221,7 @@ fn request(seed: u64) -> Request {
         hits: vec![14.4, 24.4],
         bpm: None,
         key: None,
+        plan: None,
     }
 }
 
@@ -877,5 +878,512 @@ fn every_seed_composes_inside_the_form_and_the_midi_range_at_the_extremes() {
         }
         assert_eq!(score.check(), Ok(()));
         assert_eq!(score.check_style(&style), Ok(()));
+    }
+}
+
+const LINES: &str = r#"
+[compose.style.lines]
+bpm = [96, 96]
+tonics = [["D", 1]]
+modes = [["major", 1]]
+
+[compose.style.lines.harmony]
+beats = 4
+start = ["I"]
+phrase = 4
+turn = ["V"]
+cadence = ["IV", "V", "I"]
+secondary = 1.0
+land = true
+markov = { I = [["vi", 1], ["IV", 1]], vi = [["ii", 1]], ii = [["V", 1]], IV = [["ii", 1]], V = [["I", 1]] }
+
+[compose.style.lines.melody]
+range = [64, 84]
+chord_tones = true
+steps = [[1, 2], [-1, 2], [2, 1]]
+rhythm = [[0.5, 2], [1.0, 2]]
+motif_bars = 2
+develop = ["state", "repeat", "sequence", "invert", "vary", "return"]
+
+[[compose.style.lines.role]]
+name = "tune"
+patch = "tone"
+plays = "melody"
+octave = 1
+
+[[compose.style.lines.role]]
+name = "under"
+patch = "tone"
+plays = "counter"
+follows = "tune"
+patterns = ["x.x.x.x."]
+range = [48, 62]
+
+[[compose.style.lines.role]]
+name = "echo"
+patch = "tone"
+plays = "answer"
+follows = "tune"
+delay = 2.5
+interval = -2
+octave = -1
+range = [70, 86]
+
+[[compose.style.lines.role]]
+name = "bass"
+patch = "tone"
+plays = "bass"
+patterns = ["x...x.x."]
+semis = [0, 7]
+octave = -1
+walk = 0.7
+inversions = 0.4
+
+[compose.style.lines.patch.tone]
+osc = [{ wave = "sine" }]
+env = [0, 400, 0.0, 0]
+
+[[compose.style.lines.section]]
+name = "all"
+bars = [12, 12]
+roles = ["*"]
+
+[compose.style.lines.master]
+lufs = -18
+true_peak = -1.0
+"#;
+
+#[test]
+fn counter_lines_answers_and_development_keep_their_contract() {
+    let parsed = Compose::parse(LINES).unwrap();
+    let style = parsed.style("lines").unwrap();
+    let request = Request {
+        seed: 4,
+        seconds: 30.0,
+        ..Request::default()
+    };
+    let score = compose("lines", style, &request).unwrap();
+    assert_eq!(score, compose("lines", style, &request).unwrap());
+    assert!(score.chords.iter().any(|c| c.starts_with("V7/")));
+    assert_eq!(score.chords.last().map(String::as_str), Some("I"));
+    assert_eq!(score.chord_beats.len(), score.chords.len());
+    assert!(score.chord_beats.windows(2).all(|w| w[0] < w[1]));
+    assert!(score.chords.len() as u32 > score.bars);
+    let track = |name: &str| &score.tracks.iter().find(|t| t.role == name).unwrap().notes;
+    let (tune, under, echo, bass) = (track("tune"), track("under"), track("echo"), track("bass"));
+    assert!(!under.is_empty() && !echo.is_empty());
+    for n in under {
+        assert!((48.0..=62.0).contains(&n.midi), "{n:?}");
+        if let Some(t) = tune
+            .iter()
+            .find(|t| t.beat <= n.beat && t.beat + t.beats > n.beat)
+        {
+            assert!(t.midi - n.midi >= 3.0, "{t:?} over {n:?}");
+        }
+    }
+    for n in echo {
+        assert!(tune.iter().all(|t| (t.beat - n.beat).abs() >= 0.2), "{n:?}");
+    }
+    let last = f64::from(score.bars - 1) * 4.0;
+    for line in [tune, bass] {
+        let end = line.last().unwrap();
+        assert_eq!(end.beat, last);
+        assert_eq!((end.midi as i32).rem_euclid(12), 2);
+        assert_eq!(line.iter().filter(|n| n.beat >= last).count(), 1);
+    }
+    let rhythm = |from: f64| -> Vec<f64> {
+        tune.iter()
+            .filter(|n| n.beat >= from && n.beat < from + 8.0)
+            .map(|n| n.beat - from)
+            .collect()
+    };
+    assert_eq!(rhythm(0.0), rhythm(8.0));
+    assert_eq!(rhythm(0.0), rhythm(16.0));
+}
+
+#[test]
+fn unbounded_line_values_are_refused_before_composing() {
+    let cases = [
+        ("delay = 2.5", "delay = nan", "`delay`"),
+        ("delay = 2.5", "delay = inf", "`delay`"),
+        ("interval = -2", "interval = 2000000000", "`interval`"),
+        (
+            "range = [48, 62]",
+            "range = [-2000000000, 2000000000]",
+            "`range`",
+        ),
+        ("range = [70, 86]", "range = [70, 150]", "`range`"),
+        ("octave = 1", "octave = 9", "`octave`"),
+        ("roles = [\"*\"]", "roles = [\"*\"]\nstop = nan", "`stop`"),
+        ("roles = [\"*\"]", "roles = [\"*\"]\nstop = -1", "`stop`"),
+        ("roles = [\"*\"]", "roles = [\"*\"]\nstop = 49", "`stop`"),
+        (
+            "roles = [\"*\"]",
+            "roles = [\"*\"]\nthrough = [\"nobody\"]",
+            "`through`",
+        ),
+        (
+            "roles = [\"*\"]",
+            "roles = [\"*\"]\nsecondary = 1.5",
+            "`secondary`",
+        ),
+        (
+            "turn = [\"V\"]",
+            "turn = [\"V\"]\nturns = [[\"V\"], [\"vi\"]]",
+            "`turns`",
+        ),
+        ("turn = [\"V\"]", "turns = [[\"V\"], []]", "`turns`"),
+        (
+            "chord_tones = true",
+            "chord_tones = true\nsequence = 900",
+            "`sequence`",
+        ),
+        ("range = [64, 84]", "range = [64, 400]", "`range`"),
+        ("turn = [\"V\"]", "turn = [\"iii\"]", "`iii`"),
+    ];
+    for (from, to, says) in cases {
+        let text = LINES.replacen(from, to, 1);
+        assert_ne!(text, LINES, "{from}");
+        let e = Compose::parse(&text).unwrap_err();
+        assert!(e.contains(says), "{to}: {e}");
+    }
+}
+
+#[test]
+fn a_style_without_phrases_keeps_markov_s_choice_before_the_cadence() {
+    let text = r#"
+[compose.style.plain]
+bpm = [120, 120]
+tonics = [["C", 1]]
+modes = [["major", 1]]
+
+[compose.style.plain.harmony]
+beats = 4
+start = ["I"]
+cadence = ["V", "I"]
+markov = { I = [["V", 3], ["IV", 1]], IV = [["V", 1], ["I", 1]], V = [["I", 2], ["IV", 1]] }
+
+[[compose.style.plain.role]]
+name = "pad"
+patch = "tone"
+plays = "chord"
+
+[compose.style.plain.patch.tone]
+osc = [{ wave = "sine" }]
+env = [0, 400, 0.0, 0]
+
+[[compose.style.plain.section]]
+name = "all"
+bars = [8, 8]
+roles = ["*"]
+
+[compose.style.plain.master]
+lufs = -18
+true_peak = -1.0
+"#;
+    let parsed = Compose::parse(text).unwrap();
+    let style = parsed.style("plain").unwrap();
+    let chords = |seed: u64| {
+        let request = Request {
+            seed,
+            seconds: 16.0,
+            ..Request::default()
+        };
+        compose("plain", style, &request).unwrap().chords
+    };
+    assert_eq!(
+        [chords(1), chords(2)],
+        [
+            ["I", "V", "IV", "I", "V", "IV", "V", "I"],
+            ["I", "V", "I", "V", "IV", "V", "V", "I"]
+        ]
+    );
+}
+
+const LEVELS: &str = r#"
+[compose.style.ramp]
+bpm = [100, 100]
+tonics = [["C", 1]]
+modes = [["major", 1]]
+
+[compose.style.ramp.harmony]
+beats = 4
+sevenths = true
+start = ["I"]
+phrase = 4
+turn = ["V"]
+cadence = ["ii", "V", "I"]
+secondary = 0.5
+land = true
+markov = { I = [["vi", 2], ["IV", 1]], vi = [["ii", 1]], ii = [["V", 1]], IV = [["V", 1], ["ii", 1]], V = [["I", 1]] }
+
+[compose.style.ramp.melody]
+range = [64, 84]
+chord_tones = true
+steps = [[1, 2], [-1, 2], [2, 1]]
+rhythm = [[0.5, 2], [1.0, 2], [2.0, 1]]
+motif_bars = 2
+develop = ["state", "sequence", "sequence", "return"]
+split = 0.5
+fragment = 0.8
+passing = 1.0
+
+[[compose.style.ramp.role]]
+name = "comp"
+patch = "tone"
+plays = "chord"
+patterns = ["x..xx..x"]
+hold = 1.8
+
+[[compose.style.ramp.role]]
+name = "tune"
+patch = "tone"
+plays = "melody"
+octave = 1
+
+[[compose.style.ramp.role]]
+name = "bass"
+patch = "tone"
+plays = "bass"
+patterns = ["x...x.x."]
+octave = -1
+enter = 0.5
+
+[compose.style.ramp.patch.tone]
+osc = [{ wave = "sine" }]
+env = [0, 400, 0.0, 0]
+
+[[compose.style.ramp.section]]
+name = "low"
+bars = [4, 4]
+level = 0.0
+
+[[compose.style.ramp.section]]
+name = "high"
+bars = [4, 4]
+level = 1.0
+
+[[compose.style.ramp.section]]
+name = "lull"
+plans = ["a"]
+bars = [2, 2]
+roles = ["comp"]
+
+[compose.style.ramp.levels]
+tempo = [1.0, 2.0]
+
+[compose.style.ramp.master]
+lufs = -18
+true_peak = -1.0
+"#;
+
+fn ramp(seed: u64) -> Score {
+    let parsed = Compose::parse(LEVELS).unwrap();
+    let request = Request {
+        seed,
+        seconds: 20.0,
+        ..Request::default()
+    };
+    compose("ramp", parsed.style("ramp").unwrap(), &request).unwrap()
+}
+
+#[test]
+fn a_chord_role_never_rings_a_foreign_tone_into_the_next_chord() {
+    let key = crate::theory::Key::new("C", "major", 3).unwrap();
+    for seed in 1..=6 {
+        let score = ramp(seed);
+        assert_eq!(score, ramp(seed));
+        let beats: Vec<f64> = if score.chord_beats.is_empty() {
+            (0..score.chords.len()).map(|i| i as f64 * 4.0).collect()
+        } else {
+            score.chord_beats.clone()
+        };
+        let last = score.chords.len() - 1;
+        let tones: Vec<Vec<i32>> = score
+            .chords
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let t = key.chord(name, true).unwrap();
+                if i == last { t[..3].to_vec() } else { t }
+            })
+            .collect();
+        let comp = &score
+            .tracks
+            .iter()
+            .find(|t| t.role == "comp")
+            .unwrap()
+            .notes;
+        for n in comp {
+            for (k, at) in beats.iter().enumerate().skip(1) {
+                if n.beat < at - 1e-6 && n.beat + n.beats > at + 1e-6 {
+                    let m = n.midi.round() as i32;
+                    assert!(
+                        tones[k].iter().any(|t| (m - t).rem_euclid(12) == 0),
+                        "seed {seed}: {n:?} rings into {} at {at}",
+                        score.chords[k]
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn levels_and_plans_pick_tempo_layers_and_sections_from_one_style() {
+    let score = ramp(3);
+    let names: Vec<&str> = score.sections.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["low", "high"]);
+    assert!((score.sections[0].tempo - 1.0).abs() < 1e-9);
+    assert!((score.sections[1].tempo - 2.0).abs() < 1e-9);
+    assert_eq!(score.sections[1].intensity, [1.0, 1.0]);
+    let bass = &score
+        .tracks
+        .iter()
+        .find(|t| t.role == "bass")
+        .unwrap()
+        .notes;
+    assert!(!bass.is_empty());
+    assert!(bass.iter().all(|n| n.beat >= 16.0 - 1e-9));
+    let high = |text: &str| {
+        let parsed = Compose::parse(text).unwrap();
+        let request = Request {
+            seed: 3,
+            seconds: 20.0,
+            ..Request::default()
+        };
+        let score = compose("ramp", parsed.style("ramp").unwrap(), &request).unwrap();
+        let tune = score.tracks.iter().find(|t| t.role == "tune").unwrap();
+        tune.notes.iter().filter(|n| n.beat >= 16.0 - 1e-9).count()
+    };
+    let plain = LEVELS.replacen("passing = 1.0", "passing = 0.0", 1);
+    assert!(high(&plain) > high(&plain.replacen("split = 0.5\n", "", 1)));
+    let parsed = Compose::parse(LEVELS).unwrap();
+    let style = parsed.style("ramp").unwrap();
+    let lull = style.plan("a").unwrap();
+    assert_eq!(lull.sections.len(), 1);
+    assert!(lull.sections[0].plans.is_empty());
+    let request = Request {
+        seed: 3,
+        seconds: 5.0,
+        ..Request::default()
+    };
+    let score = compose("ramp", &lull, &request).unwrap();
+    assert_eq!(score.sections.len(), 1);
+    assert_eq!(score.sections[0].name, "lull");
+    assert!(style.plan("b").unwrap_err().contains("`b`"));
+    let planned = Request {
+        plan: Some("a".into()),
+        ..request.clone()
+    };
+    let score = compose("ramp", style, &planned).unwrap();
+    assert_eq!(score.plan.as_deref(), Some("a"));
+    assert_eq!(
+        score.tracks,
+        compose("ramp", &lull, &request).unwrap().tracks
+    );
+    let text = write_score(LEVELS, "lull", &score).unwrap();
+    let back = Compose::parse(&text).unwrap();
+    assert_eq!(back.score("lull").unwrap(), &score);
+    let replayed = compose(
+        "ramp",
+        back.style("ramp").unwrap(),
+        &Request {
+            seed: score.seed,
+            seconds: score.seconds,
+            hits: score.hits.clone(),
+            plan: score.plan.clone(),
+            ..Request::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(replayed, score);
+    let missing = Request {
+        plan: Some("b".into()),
+        ..request
+    };
+    assert!(
+        compose("ramp", style, &missing)
+            .unwrap_err()
+            .contains("`b`")
+    );
+}
+
+#[test]
+fn a_developed_tune_never_overlaps_itself_or_sounds_where_it_rests() {
+    let text = LEVELS.replacen(
+        "[[compose.style.ramp.section]]\nname = \"high\"",
+        "[[compose.style.ramp.section]]\nname = \"gap\"\nbars = [3, 3]\nlevel = 0.5\nroles = [\"comp\"]\n\n[[compose.style.ramp.section]]\nname = \"high\"",
+        1,
+    );
+    assert_ne!(text, LEVELS);
+    let varied = text.replacen(
+        "develop = [\"state\", \"sequence\", \"sequence\", \"return\"]",
+        "develop = [\"state\", \"vary\", \"sequence\", \"vary\", \"invert\"]",
+        1,
+    );
+    assert_ne!(varied, text);
+    for (text, seed) in [text, varied]
+        .iter()
+        .flat_map(|t| (1..=8).map(move |s| (t, s)))
+    {
+        let parsed = Compose::parse(text).unwrap();
+        let style = parsed.style("ramp").unwrap();
+        let request = Request {
+            seed,
+            seconds: 20.0,
+            ..Request::default()
+        };
+        let score = compose("ramp", style, &request).unwrap();
+        assert_eq!(score, compose("ramp", style, &request).unwrap());
+        let gap = score.sections.iter().find(|s| s.name == "gap").unwrap();
+        let rest = [
+            f64::from(gap.from) * 4.0,
+            f64::from(gap.from + gap.bars) * 4.0,
+        ];
+        let mut tune = score
+            .tracks
+            .iter()
+            .find(|t| t.role == "tune")
+            .unwrap()
+            .notes
+            .clone();
+        tune.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        assert!(!tune.is_empty());
+        for n in &tune {
+            assert!(
+                n.beat + n.beats <= rest[0] + 1e-6 || n.beat >= rest[1] - 1e-6,
+                "seed {seed}: {n:?} sounds in the rest {rest:?}"
+            );
+        }
+        for w in tune.windows(2) {
+            assert!(
+                w[0].beat + w[0].beats <= w[1].beat + 1e-6,
+                "seed {seed}: {:?} rings into {:?}",
+                w[0],
+                w[1]
+            );
+        }
+    }
+}
+
+#[test]
+fn level_keys_are_bounded() {
+    let cases = [
+        ("split = 0.5", "split = 1.5", "`split`"),
+        ("fragment = 0.8", "fragment = nan", "`fragment`"),
+        ("passing = 1.0", "passing = -0.1", "`passing`"),
+        ("level = 1.0", "level = 2.0", "`level`"),
+        ("level = 1.0", "level = 1.0\ntempo = nan", "`tempo`"),
+        ("level = 1.0", "level = 1.0\npitch = inf", "`pitch`"),
+        ("enter = 0.5", "enter = 1.5", "`enter`"),
+        ("tempo = [1.0, 2.0]", "tempo = [0.0, 2.0]", "`tempo`"),
+        ("plans = [\"a\"]", "plans = [\"\"]", "`plans`"),
+    ];
+    for (from, to, says) in cases {
+        let text = LEVELS.replacen(from, to, 1);
+        assert_ne!(text, LEVELS, "{from}");
+        let e = Compose::parse(&text).unwrap_err();
+        assert!(e.contains(says), "{to}: {e}");
     }
 }

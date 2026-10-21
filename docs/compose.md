@@ -13,7 +13,7 @@ cp samples/chase.pitofx tmp/chase.pitofx
 pfx compose tmp/chase.pitofx --style build_drop --seed 11 --seconds 30 --hits 18,26 --name title --wav tmp/title.wav --json
 ```
 
-It prints one JSON line (A minor at 120 bpm, 437 notes in 19 stems, -16.09 LUFS short-term max, -19.89 LUFS integrated, -1.05 dBTP) and writes `tmp/title.wav`. Then:
+It prints one JSON line (A minor at 120 bpm, 413 notes in 19 stems, -16.00 LUFS short-term max, -19.98 LUFS integrated, -1.18 dBTP) and writes `tmp/title.wav`. Then:
 
 ```
 pfx compose list tmp/chase.pitofx
@@ -97,6 +97,13 @@ room = [0.6, 0.4, 0.15]
 | `melody.rest` | the chance of a rest in place of a note |
 | `melody.motif_bars`, `melody.repeat` | the motif's length in bars, and the chance each bar repeats it |
 | `melody.chord_tones` | steps move through the chord's tones rather than the scale |
+| `harmony.secondary` | the chance of an applied dominant, such as `V7/ii`, on the second half of a chord before a different chord it leads to; a section's own `secondary` overrides it |
+| `harmony.phrase`, `harmony.turn`, `harmony.turns` | chords in a phrase, and the numerals that close every phrase (`turn`), or a list of them taken phrase by phrase (`turns`) |
+| `harmony.land` | the last chord plays as a triad, and the melody, counter and bass land on its root by stepwise cadence rules in the last bar |
+| `melody.develop` | statements in turn, one per motif: `state`, `repeat`, `vary` (the first half kept, a new second half), `sequence` (moved by `melody.sequence` scale steps, turning back at the range), `invert` or `return`; the first motif is the theme |
+| `melody.sequence` | scale steps a sequence moves, 1 by default |
+| `melody.split`, `melody.fragment` | from this intensity on, long notes split into two stepping toward the next note, and a sequence plays its first half twice |
+| `melody.passing` | the chance of a passing tone between two chord tones a third apart, one or two beats apart in one section, for a `chord_tones` melody |
 
 A numeral without an accidental takes the key's own scale degree, and its case sets the third.
 
@@ -107,7 +114,7 @@ Each role is one instrument line and becomes one stem.
 | Key | Meaning |
 |---|---|
 | `name`, `patch` | the stem's name and the patch it plays |
-| `plays` | `chord`, `bass`, `arp`, `melody`, `hit`, or one of the section events `riser`, `reverse`, `roll`, `impact` |
+| `plays` | `chord`, `bass`, `arp`, `melody`, `hit`, `counter`, `answer`, or one of the section events `riser`, `reverse`, `roll`, `impact` |
 | `patterns` | `x` and `.` steps for a `bass`, `arp` or `hit` role, picked by the section's intensity |
 | `euclid`, `rotate` | `[hits, steps]` Euclidean rhythms in place of patterns, and their rotations |
 | `tones`, `octaves`, `semis` | cycles, one value per hit: the chord tone, the octave and a transposition |
@@ -115,6 +122,10 @@ Each role is one instrument line and becomes one stem.
 | `range` | the midi range a chord is voiced in |
 | `octave`, `gain` | the role's octave and level |
 | `hold`, `accent`, `ramp` | the note length in beats, the velocity drop off the accent, and a velocity swell across a section |
+| `follows` | the role a `counter` or `answer` follows: a counter is a line below it, chord tones on strong beats and moving against it; an answer echoes its phrases where it rests |
+| `delay`, `interval` | how many beats after the leader an answer comes in (up to four bars) and how many scale steps away |
+| `walk`, `inversions` | chances that a bass walks by step into the next chord, and takes the chord's third or fifth when that moves it by step; such a bass picks its own octave, so it takes no `octaves` |
+| `enter` | the level from which the role plays in a section with a `level` and no `roles` |
 
 ### `[patch.<name>]`
 
@@ -155,6 +166,13 @@ Sections are the form. The composer fits them to `--seconds`, each within its ba
 | `tempo`, `pitch` | ratios to the base tempo and pitch |
 | `stutter` | drops the last eighth of every `stutter` eighths |
 | `gain_db` | the section's level |
+| `stop`, `through` | the last `stop` beats rest, but for the roles named in `through` |
+| `triads` | the section's chords play as triads |
+| `secondary` | the section's chance of an applied dominant |
+| `plans` | the plans the section is in: a section in a plan plays only when `--plan` composes that plan, and the plain form takes the sections in none |
+| `level` | from 0 to 1: sets the section's `intensity` to `[level, level]` when it has none, its `tempo` from `[levels]` when it is 1, and its roles from their `enter` when it names none |
+
+`[levels] tempo = [at level 0, at level 1]` gives a levelled section its tempo ratio, rising evenly in ratio between the two.
 
 ### `[[cue]]`
 
@@ -223,7 +241,7 @@ The target is the maximum short-term loudness (ITU-R BS.1770, 3 second windows i
 ## The command line
 
 ```
-pfx compose <doc.pitofx> --style <name> --seed <N> --seconds <S> [--name <score>] [--hits <t,t,...>] [--bpm <B>] [--key <E:minor>] [--music] [--fresh] [--wav <out.wav>] [--json]
+pfx compose <doc.pitofx> --style <name> --seed <N> --seconds <S> [--name <score>] [--hits <t,t,...>] [--bpm <B>] [--key <E:minor>] [--plan <plan>] [--music] [--fresh] [--wav <out.wav>] [--json]
 pfx compose render <doc.pitofx> --score <name> [--music] [--fresh] [--wav <out.wav>] [--json]
 pfx compose list <doc.pitofx> [--json]
 pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
@@ -237,6 +255,7 @@ pfx compose print <doc.pitofx> [--style <name> | --score <name>] [--json]
 | `print` | the `[compose]` TOML, or one style or score, as TOML or JSON |
 | `--hits` | rising seconds inside `--seconds`; a section with `hit = n` starts on the bar nearest the n-th |
 | `--bpm`, `--key` | pin the tempo (20 to 400) or the key instead of drawing them |
+| `--plan` | composes the form from the sections in that plan (`plans`) in place of the sections in none, and records the plan in the score |
 | `--music` | writes the document's `[music]` table from the score, for a game |
 | `--fresh` | renders the master even when the cache holds one, and replaces the cached entry |
 | `--wav` | writes the master as a WAV |
@@ -246,7 +265,7 @@ A command line pfx cannot parse is refused as clap refuses it: on stderr, exit 2
 
 ## In a game
 
-`--music` writes a `[music]` table for pfx-sound's adaptive music ([sound.md](sound.md#adaptive-music)), marked `score = "<score>"`: one stem per role and the room, named `compose/<score>/<role>.wav`, with gain curves from each role's presence per section; the sections by name with their bars (a name used twice becomes variants); and each cue as a `[[music.stinger]]` with its event. Sections start on the bar nearest their start, so a style with `tempo` ratios loops close to its bars, not exactly on them.
+`--music` writes a `[music]` table for pfx-sound's adaptive music ([sound.md](sound.md#adaptive-music)), marked `score = "<score>"`: one stem per role and the room, named `compose/<score>/<role>.wav`, with gain curves from each role's presence per section; the sections by name with their bars (a name used twice becomes variants); and each cue as a `[[music.stinger]]` with its event. Each section keeps its own bars, and a style whose sections change tempo (`tempo` ratios or `[levels]`) adds a `tempo` list, the bpm from each section that changes it, so every section loops on its own downbeats.
 
 The stems are not stored in the document, so pfx-sound's own loaders (`manifest::load`, `load_bytes`, `load_music`, `music_bytes`, `Manifest::track`) refuse a table marked `score` and name the loader to use. A game loads it with `pfx_compose::render::game::music(bytes, folder)`, which renders the score's stems and stingers on load and returns pfx-sound's `Music`, the adaptive track and its stingers. Call it on a worker thread before the music first plays; the 30 second sample takes about a third of a second (below), and a three-minute score proportionally longer. A file the table names that is a FILE chunk in the document, or a file beside it, is read as it is; only the parts missing from both are rendered, and only from the score the table is marked with: a missing part under another score's name is refused. The rendered parts the table doesn't name and the master mix are dropped as soon as the render returns, and the parts it keeps count toward the same 6 GiB as every part read from a chunk or a file, so the whole load holds at most that. A part with a sample that is not a finite number is refused. Such a part is refused from its size and WAV header before it is read in full when it is over 256 MiB, outside 8 to 192 kHz, over 8 channels or over 600 seconds of stereo, and a table naming over 65 stems or 64 stingers is refused. Composing a score again under a name drops the chunks at that score's own part names (`compose/<score>/<role>.wav` and `compose/<score>/cue/<cue>.wav`), since they belong to the score it replaces; `pfx compose render` keeps them.
 
@@ -254,16 +273,16 @@ The game's stems are mastered on their own: the same gain and limiter as the mas
 
 ## Measured
 
-`build_drop`, seed 11, 30 seconds, 437 notes in 19 stems, release build on a Ryzen 9 9950X, medians of 5 with other jobs keeping the load average at 16 to 20:
+`build_drop`, seed 11, 30 seconds, hits at 18 and 26 seconds, 413 notes in 19 stems, release build on a Ryzen 9 9950X, medians of 5 with other jobs keeping the load average at 5 to 7:
 
 | | |
 |---|---|
-| compose (the notes) | 0.09 ms |
-| render (the stems, over the cores) | 79 ms |
-| master (sidechain, room, loudness, limiter, true peak) | 239 ms |
-| the whole command, writing the document and the cached master | 357 ms |
-| the same command with the master cached | 12 ms |
+| compose (the notes) | 0.11 ms |
+| render (the stems, over the cores) | 59 ms |
+| master (sidechain, room, loudness, limiter, true peak) | 68 ms |
+| the whole command, writing the document and the cached master | 142 ms |
+| the same command with the master cached | 4.1 ms |
 
 ## Credits
 
-The music theory is ported, not invented: the scale and chord tables and the Euclidean rhythms from Sonic Pi, and the Roman numerals and voicings from tonal, both MIT. The loudness meter and true-peak scanner come from ebur128 (MIT) and the room from Freeverb (public domain), through pfx-sound. Each is pinned by commit in [INSPIRATION.md](../INSPIRATION.md), with its licence in [NOTICE.md](../NOTICE.md).
+The music theory is ported, not invented: the scale and chord tables and the Euclidean rhythms from Sonic Pi, the Roman numerals, voicings and applied dominants from tonal, and the counter-line's first-species rules and cadence from foox, all MIT. The loudness meter and true-peak scanner come from ebur128 (MIT) and the room from Freeverb (public domain), through pfx-sound. Each is pinned by commit in [INSPIRATION.md](../INSPIRATION.md), with its licence in [NOTICE.md](../NOTICE.md).

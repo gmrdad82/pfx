@@ -8,6 +8,7 @@ use crate::clip::Clip;
 
 const MUSIC_KEYS: &[&str] = &[
     "bpm",
+    "tempo",
     "beats_per_bar",
     "offset",
     "start",
@@ -85,6 +86,7 @@ impl Manifest {
         let bpm = number(music, "bpm", at)?.ok_or("[music]: `bpm` is required")?;
         let beats_per_bar = whole(music, "beats_per_bar", at)?.unwrap_or(4);
         let mut track = AdaptiveTrack::new(Vec::new(), bpm, beats_per_bar);
+        track.tempo = tempo(music, at)?;
         track.offset = number(music, "offset", at)?.unwrap_or(0.0);
         track.start = text(music, "start", at)?;
         track.intensity = number(music, "intensity", at)?.unwrap_or(0.0) as f32;
@@ -262,6 +264,26 @@ fn stem_file(table: &Table, at: &str) -> Result<StemFile, String> {
         file,
         gain: StemGain { keys, power },
     })
+}
+
+fn tempo(music: &Table, at: &str) -> Result<Vec<(u32, f64)>, String> {
+    let want = || format!("{at}: `tempo` is [[bar, bpm], ...], a whole bar and the bpm from it on");
+    let Some(value) = music.get("tempo") else {
+        return Ok(Vec::new());
+    };
+    value
+        .as_array()
+        .ok_or_else(want)?
+        .iter()
+        .map(|row| match row.as_array().map(Vec::as_slice) {
+            Some([bar, bpm]) => bar
+                .as_integer()
+                .and_then(|n| u32::try_from(n).ok())
+                .zip(as_number(bpm))
+                .ok_or_else(want),
+            _ => Err(want()),
+        })
+        .collect()
 }
 
 fn section(table: &Table, at: &str) -> Result<Section, String> {
@@ -456,7 +478,11 @@ next = "calm"
     fn a_wrong_music_table_names_its_table_and_key() {
         let cases = [
             ("[music]\nbeats_per_bar = 4", "`bpm` is required"),
-            ("[music]\nbpm = 1\ntempo = 2", "unknown key `tempo`"),
+            ("[music]\nbpm = 1\nswing = 2", "unknown key `swing`"),
+            (
+                "[music]\nbpm = 1\ntempo = 2",
+                "`tempo` is [[bar, bpm], ...]",
+            ),
             ("[music]\nbpm = 1", "at least one [[music.stem]]"),
             (
                 "[music]\nbpm = 1\n[[music.stem]]\nname = \"a\"\nfile = \"a.wav\"\ngain = [1]",

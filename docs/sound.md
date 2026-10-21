@@ -48,7 +48,7 @@ mixer.play_music(&track, 2.0, Level::default());
 
 ## Adaptive music
 
-An `AdaptiveTrack` is one piece of music made of stems: N clips of one length (one tempo, one bar grid), each with a gain curve over a live intensity from 0 to 1, and named sections the music moves between on the bar or the beat. It plays in the music slot, so it crossfades with a `MusicTrack` like any other track.
+An `AdaptiveTrack` is one piece of music made of stems: N clips of one length on one bar grid, each with a gain curve over a live intensity from 0 to 1, and named sections the music moves between on the bar or the beat. It plays in the music slot, so it crossfades with a `MusicTrack` like any other track.
 
 ```rust
 let mut track = AdaptiveTrack::new(stems, 120.0, 4);
@@ -65,7 +65,7 @@ mixer.request_music_section("fight", Quantize::Bar);
 - **Stems.** `Stem { name, clip, gain }`: mono or stereo clips, all at one rate and of one length (`prepare` refuses anything else, naming the stem). Every stem reads the same source frame on every output frame, so they stay sample-exact in sync through intensity changes, section jumps and crossfades.
 - **Gain curves.** `StemGain { keys, power }`: `[(intensity, gain), ...]` keys, held before the first and after the last. Between two keys the gain moves linearly, or with `power` along a quarter sine (rising) or cosine (falling), so a stem leaving over the same span another enters keeps the summed power constant. `StemGain::above(0.3, 0.1)` brings a stem in from 0.3 to 0.4 (drums above 0.3), `below` takes one out, `constant` holds it.
 - **Intensity.** `set_music_intensity(value, seconds)` eases from the current value to the new one over the given time with the track's `ease`: `Linear`, `In(n)`, `Out(n)` or `InOut(n)` (the integer power easings of kira's tweens, see [INSPIRATION.md](../INSPIRATION.md)). The stems' gains are worked out every 16 frames (`CONTROL_FRAMES`) on the track's own clock and ramp linearly inside each block, so the block size the device asks for never changes a sample. `music_intensity()` reads it back.
-- **Sections.** `Section { name, variants, next, avoid_repeat }`: each variant is a `[from, to)` range of whole bars of the stems, on the grid of `bpm`, `beats_per_bar` and `offset` (seconds before bar 0). When a variant ends the section flows to `next`: `Repeat` (the default; a fresh variant), `Section(name)` or `Stop` (the track ends and its voice is freed). With no sections the whole length loops as `main`.
+- **Sections.** `Section { name, variants, next, avoid_repeat }`: each variant is a `[from, to)` range of whole bars of the stems, on the grid of `bpm`, `tempo`, `beats_per_bar` and `offset` (seconds before bar 0). `tempo` is a list of `(bar, bpm)` changes, rising: from each bar on the bars and beats run at that bpm, so stems whose sections change tempo keep every bar on its own downbeat. When a variant ends the section flows to `next`: `Repeat` (the default; a fresh variant), `Section(name)` or `Stop` (the track ends and its voice is freed). With no sections the whole length loops as `main`.
 - **Variants.** Entering a section picks one of its variants from the track's seeded generator, which takes its seed from the mixer's (`set_seed`) when the track starts: the same seed and the same calls at the same frames give the same samples. `avoid_repeat` never plays the same variant of a section twice in a row.
 - **Transitions.** `request_music_section(name, at)` is taken at `Quantize::Now`, the next `Beat`, the next `Bar` or the current variant's `End`, and never later than that end. A boundary the music sits on is taken at once, and a later request replaces one still waiting. `music_section()` is the section playing. With `transition` (seconds, default 0) a jump crossfades equal power: the old position keeps playing on (its tail past the bar line) under a cosine while the new one comes in under a sine; at 0 the cut is sample exact on the boundary, as a `MusicTrack` loop is.
 - **Not here.** Pitch does not apply to an adaptive track (the bar grid stays exact); its voice's level, fades, channel and ducking apply as to any music. `Output` mirrors `play_adaptive` (preparing the track before it takes the lock), `set_music_intensity`, `music_intensity`, `request_music_section` and `music_section`.
@@ -106,6 +106,7 @@ next = "calm"
 | Key | Default | Meaning |
 |---|---|---|
 | `bpm` | required | beats a minute |
+| `tempo` | none | `[[bar, bpm], ...]`: the bpm from each whole bar on, the bars rising, for stems whose tempo changes |
 | `beats_per_bar` | 4 | beats in a bar |
 | `offset` | 0 | seconds of the stems before bar 0 |
 | `start` | the first section | the section the track opens with |

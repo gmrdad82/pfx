@@ -19,9 +19,9 @@ pub use master::Target;
 pub const RATE: u32 = 48_000;
 pub const CUES: &str = "cue";
 pub const RENDER: [&str; 3] = [
-    "d8fff70dda5bc8fc23ab9d5457d31a50718382a4c4f18b43873a3f8fdbff8654",
-    "38c11307a4bea258b304c80e590108bf4e0dab091890728710d13d287c7185d4",
-    "0000000000000000000000000000000000000000000000000000000000000000",
+    "c9c4cafb6f2b31af0a70255f38790851d52556de0618cf85a88ae4466c7f3ace",
+    "2e46f71af93204172c1d1c234535649b42e44ebdee0669e0ea480c8748f16bb6",
+    "8a8fb1cac4d60fef7aa54ccb370cf49f16ed492ae3236966ac1e359dfc36cb96",
 ];
 
 pub type Samples<'a> = dyn Fn(&str) -> Result<Option<Vec<u8>>, String> + 'a;
@@ -322,7 +322,9 @@ pub fn music_table(style: &Style, score: &Score, name: &str) -> toml::Table {
         .iter()
         .map(|s| music::Part {
             name: s.name.clone(),
-            at: s.at,
+            from: s.from,
+            bars: s.bars,
+            bpm: f64::from(score.bpm) * s.tempo,
             intensity: s.intensity,
         })
         .collect();
@@ -358,7 +360,6 @@ pub fn music_table(style: &Style, score: &Score, name: &str) -> toml::Table {
     let mut table = music::table(
         f64::from(score.bpm),
         score.beats_per_bar,
-        score.seconds,
         &parts,
         &lines,
         &stings,
@@ -488,6 +489,7 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
                 hits: hits.to_vec(),
                 bpm: None,
                 key: None,
+                plan: None,
             },
         )
         .unwrap()
@@ -617,6 +619,57 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
     }
 
     #[test]
+    fn a_music_table_keeps_every_section_on_its_own_tempo() {
+        let text = TEST_STYLE.replacen(
+            "name = \"lift\"\nbars = [2, 3]",
+            "name = \"lift\"\nbars = [2, 3]\ntempo = 1.5",
+            1,
+        );
+        assert_ne!(text, TEST_STYLE);
+        let score = scored(&text, "test", 3, 8.0, &[]);
+        let doc = crate::Compose::parse(&text).unwrap();
+        let style = doc.style("test").unwrap();
+        let mut music = toml::Table::new();
+        music.insert(
+            "music".into(),
+            toml::Value::Table(music_table(style, &score, "kept")),
+        );
+        let manifest = pfx_sound::manifest::Manifest::parse(&toml::to_string(&music).unwrap())
+            .unwrap()
+            .unwrap();
+        let track = &manifest.track;
+        let lift = score.sections.iter().find(|s| s.name == "lift").unwrap();
+        let bpm = f64::from(score.bpm);
+        assert_eq!(track.bpm, bpm);
+        assert_eq!(track.tempo, vec![(lift.from, bpm * 1.5)]);
+        let bpb = f64::from(score.beats_per_bar);
+        let seconds = |bar: u32| {
+            let mut at = 0.0;
+            for b in 0..bar {
+                let bpm = track
+                    .tempo
+                    .iter()
+                    .rfind(|(from, _)| *from <= b)
+                    .map_or(track.bpm, |(_, bpm)| *bpm);
+                at += bpb * 60.0 / bpm;
+            }
+            at
+        };
+        for s in &score.sections {
+            let section = track.sections.iter().find(|t| t.name == s.name).unwrap();
+            assert_eq!(section.variants, vec![(s.from, s.from + s.bars)]);
+            assert!(
+                (seconds(s.from) - s.at).abs() < 1e-6,
+                "{}: {}",
+                s.name,
+                s.at
+            );
+        }
+        let plain = scored(TEST_STYLE, "test", 3, 8.0, &[]);
+        assert!(!music_table(style, &plain, "kept").contains_key("tempo"));
+    }
+
+    #[test]
     fn the_sample_build_drop_style_renders_its_pinned_bytes() {
         let path =
             std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/chase.pitofx");
@@ -711,7 +764,9 @@ sidechain = { keys = ["kick"], beds = ["pad"], depth = 0.4, release_ms = 150 }
         let mut nan = score.clone();
         nan.sections[0].tempo = f64::NAN;
         assert!(refused(&nan).contains("`tempo`"));
-        let roomy = TEST_STYLE.replace("name = \"lead\"", "name = \"room\"");
+        let roomy = TEST_STYLE
+            .replace("name = \"lead\"", "name = \"room\"")
+            .replace("\"pad\", \"lead\"]", "\"pad\", \"room\"]");
         let roomy = crate::Compose::parse(&roomy).unwrap();
         let err = render(
             roomy.style("test").unwrap(),
