@@ -86,6 +86,22 @@ Found by diffing the public items of pfx-scene 1.6.0 (with manf 0.1.0) and pfx 2
 
 New at 3.0.0, beside the renames: `Project::from_pfx_bytes`, `Project::in_memory` and `Project::pfx_bytes` in pfx-scene, `pfx_load::scene::from_pfx_bytes` and `Scene::from_pfx_bytes` in pfx-load, and `Config::packed` in pfx-game (below).
 
+## New fields in 3.2.0
+
+These structs gained a public field. A struct literal that names every field without `..` stops building until it names the new one, and so does a pattern that names every field.
+
+| Item | Change | A 3.x caller does |
+|---|---|---|
+| `pfx_build::Part` | new field `scattered: Option<pfx_build::Scattered>` | add `scattered: None` to every `Part { … }` literal, and `..` to any pattern that names every field |
+| `pfx_build::Scattered` | new public struct `{ scatter, piece, copy }` | nothing |
+| `pfx_live::frame::Batch` | new field `crowd: Option<pfx_live::crowd::CrowdRef>` | add `crowd: None` to every `Batch { … }` literal |
+| `pfx_live::crowd` | new public module (`Crowd`, `CrowdRef`, `Chunk`, `Staged`, `Crowds`, `CHUNK`) and `Frame`/`Renderer::set_crowds`, `crowd_copies`, `packed_records` | nothing |
+| `pfx_recipe_scene::Keyed`, `Stage::bind_keys`/`set_keyed`/`packed_records`, `Reel::bind_keys`/`set_keyed` | new | nothing; `poses()` keeps its signature and its bits |
+| `pfx_still::Request` | new field `counters: bool` | add `counters: false` to every `Request { … }` literal |
+| `pfx_still::Paced` | new field `counts: Option<pfx_still::Counts>` | add `counts: None` where a `Paced` is built, and `..` to any pattern that names every field |
+| `pfx_trace::detail::Detail` | new field `counters: bool` | nothing for `Detail { .., ..Default::default() }`; add `counters: false` to a literal that names every field |
+| `pfx_live::Renderer::reserve_weights`, `reserve_morph_deltas` | new; both return `Result<(), String>` and refuse past the device's storage buffer limits | nothing |
+
 ## Converting a scene folder
 
 A scene folder (a `.scene.toml` with its includes, `.materials.toml` files, prefabs, GLBs or split glTF files, images, fonts and sounds) becomes one `.pitofx` file:

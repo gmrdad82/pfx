@@ -267,7 +267,11 @@ fn refused_crowds(recipe: &Recipe, parts: &[Part]) -> Result<BTreeSet<(u32, u32)
         let mut glass = false;
         let named: Vec<&str> = match part.node.mesh.slots.as_slice() {
             [] => vec![parts::DEFAULT_MATERIAL],
-            slots => slots.iter().map(|slot| slot.material.as_str()).collect(),
+            slots => slots
+                .iter()
+                .filter(|slot| slot.count > 0)
+                .map(|slot| slot.material.as_str())
+                .collect(),
         };
         for name in named {
             if let Some(material) = parts::material(recipe, name)? {
@@ -1856,6 +1860,46 @@ mod tests {
             assert_eq!(moved, worlds, "{objects}{leaf}");
             assert_ne!(edited, key, "{objects}{leaf}");
         }
+    }
+
+    #[test]
+    fn an_empty_glass_slot_keeps_a_scatter_crowded_and_a_drawn_one_bakes_it() {
+        let text = format!(
+            "{}\n[materials.glass]\nfamily = \"glass\"\nbase = [0.9, 0.95, 1.0]\nroughness = 0.02\ntransmission = 1.0\nior = 1.5\nthickness = 0.004\n",
+            CROWD.replace("OBJECTS", "").replace("LEAF", "")
+        );
+        let recipe = parse(&text).unwrap();
+        let built = pfx_build::build(&recipe, Path::new("")).unwrap();
+        let slotted = |glass_count: u32| {
+            let mut parts = built.parts.clone();
+            for part in parts.iter_mut().filter(|part| part.scattered.is_some()) {
+                let count = part.node.mesh.indices.len() as u32;
+                let material = part
+                    .node
+                    .mesh
+                    .slots
+                    .first()
+                    .map_or(parts::DEFAULT_MATERIAL.to_string(), |slot| {
+                        slot.material.clone()
+                    });
+                part.node.mesh.slots = vec![
+                    pfx_mesh::Slot {
+                        material,
+                        start: 0,
+                        count,
+                    },
+                    pfx_mesh::Slot {
+                        material: "glass".into(),
+                        start: 0,
+                        count: glass_count,
+                    },
+                ];
+            }
+            parts
+        };
+        assert!(built.parts.iter().any(|part| part.scattered.is_some()));
+        assert!(refused_crowds(&recipe, &slotted(0)).unwrap().is_empty());
+        assert!(!refused_crowds(&recipe, &slotted(3)).unwrap().is_empty());
     }
 
     fn texels(prepared: &Prepared) -> Vec<[f32; 4]> {
