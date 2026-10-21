@@ -1612,12 +1612,7 @@ pub(crate) fn counted_source(
     let source = [
         ("fn node_at(i: u32", "fn soft_node_at(i: u32"),
         ("fn motion_vec(k: u32", "fn soft_motion_vec(k: u32"),
-        ("fn scene(o: vec3f", "fn soft_scene(o: vec3f"),
-        ("fn occluded(o: vec3f", "fn soft_occluded(o: vec3f"),
-        (
-            "fn shadow_passed(o: vec3f",
-            "fn soft_shadow_passed(o: vec3f",
-        ),
+        ("fn traverse(o: vec3f", "fn soft_traverse(o: vec3f"),
     ]
     .into_iter()
     .fold(source, |source, (from, to)| source.replacen(from, to, 1));
