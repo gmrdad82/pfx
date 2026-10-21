@@ -842,6 +842,7 @@ const FLAT_UNPICKED: u32 = 65536u;
 const FLAT_BLUR_ROWS: u32 = 4u;
 const FLAT_BLUR_STEPS: u32 = 48u;
 const FLAT_BLUR_FLOOR: f32 = 0.35;
+const FLAT_BLUR_TAPS: u32 = 64u;
 
 @vertex
 fn flat_id_vertex_rich(instance: FlatInstance, @builtin(vertex_index) index: u32) -> FlatVaryings {
@@ -1063,6 +1064,48 @@ fn flat_blur_cover(v: FlatVaryings, kind: u32, stroke: bool, p: vec2f, inverse: 
     return clamp(total / f32(FLAT_BLUR_ROWS), 0.0, 1.0);
 }
 
+fn flat_blur_reach(v: FlatVaryings, kind: u32) -> vec2f {
+    if (kind == FLAT_RECT) {
+        return v.shape.xy;
+    }
+    if (kind == FLAT_CIRCLE) {
+        return vec2f(v.shape.x);
+    }
+    return vec2f(v.shape.x + 0.5 * v.shape.y);
+}
+
+fn flat_blur_texel(v: FlatVaryings, q: vec2f, low: vec2f, high: vec2f) -> vec4f {
+    let uv = clamp(v.icon.xy + q * v.icon.zw, low, high);
+    let texel = textureSampleLevel(flat_sprites, flat_sprite_sampler, uv, 0.0) * v.fill_top;
+    return vec4f(texel.rgb * texel.a, texel.a);
+}
+
+fn flat_blur_image(v: FlatVaryings, kind: u32, p: vec2f, inverse: mat2x2f) -> vec4f {
+    let axes = mat2x2f(vec2f(inverse[1].y, -inverse[0].y), vec2f(-inverse[1].x, inverse[0].x))
+        * (1.0 / determinant(inverse));
+    let screen = axes * v.material.xy;
+    let span = max(length(screen), 1e-6);
+    let along = inverse * (screen / span);
+    let unit = max(length(along), 1e-12);
+    let reach = flat_blur_reach(v, kind) * abs(v.icon.zw);
+    let inset = min(vec2f(0.5) / vec2f(textureDimensions(flat_sprites, 0)), reach);
+    let low = v.icon.xy - reach + inset;
+    let high = v.icon.xy + reach - inset;
+    let count = u32(clamp(ceil(span), 1.0, f32(FLAT_BLUR_TAPS)));
+    var total = vec4f(0.0);
+    var weight = 0.0;
+    for (var tap = 0u; tap < count; tap += 1u) {
+        let q = p + along * (((f32(tap) + 0.5) / f32(count) - 0.5) * span);
+        let w = clamp(0.5 - flat_field(v, kind, q).x / unit, 0.0, 1.0);
+        total += flat_blur_texel(v, q, low, high) * w;
+        weight += w;
+    }
+    if (weight <= 0.0) {
+        return flat_blur_texel(v, p, low, high);
+    }
+    return total / weight;
+}
+
 fn flat_blur(v: FlatVaryings) -> FlatPaint {
     let p = v.local;
     let inverse = mat2x2f(v.inverse.xy, v.inverse.zw);
@@ -1073,7 +1116,12 @@ fn flat_blur(v: FlatVaryings) -> FlatPaint {
     var fill_cover = 0.0;
     if (fill_mode != 0u) {
         fill_cover = flat_blur_cover(v, kind, false, p, inverse);
-        var base = flat_fill_base(v, fill_mode, p);
+        var base = vec4f(0.0);
+        if (fill_mode == 4u) {
+            base = flat_blur_image(v, kind, p, inverse);
+        } else {
+            base = flat_fill_base(v, fill_mode, p);
+        }
         let pattern = (v.info.x >> 12u) & 7u;
         if (pattern != 0u) {
             base = flat_pattern_over(base, pattern, v.icon, vec2f(v.icon.w, v.frame_z.w), v.info.z, p, inverse);

@@ -1215,9 +1215,6 @@ pub(crate) fn pack_plain(draw: &Draw, fit: &Fit, icons: Option<&Icons>) -> Optio
         flags |= UNPICKED;
     }
     if let Some(shift) = blur_shift(draw, &placed, fit) {
-        if flags & FILL_MASK == FILL_IMAGE {
-            flags = flags & !FILL_MASK | FILL_SOLID;
-        }
         flags = (flags & !(LIT | SLAB)) | BLUR;
         material_params = [shift[0], shift[1], 0.0, 0.0];
         frame = [[0.0; 4]; 3];

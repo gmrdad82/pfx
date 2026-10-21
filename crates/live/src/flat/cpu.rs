@@ -111,7 +111,7 @@ pub fn paint_sprite(
 ) -> Paint {
     let flags = instance.info[0];
     let mut paint = if flags & BLUR != 0 {
-        blur::paint(instance, icons, p)
+        blur::paint(instance, icons, sprites, p)
     } else {
         plain(instance, icons, gradient, sprites, p)
     };

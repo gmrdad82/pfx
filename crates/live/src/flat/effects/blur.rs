@@ -1,14 +1,16 @@
 use super::super::cpu::{self, Paint};
 use super::super::icons::Icons;
 use super::super::sdf;
+use super::super::sprites::SpriteImage;
 use super::super::{
-    DASHED, FILL_SOLID, FILL_VERTICAL, Instance, KIND_CIRCLE, KIND_ICON_FILL, KIND_ICON_LINE,
-    KIND_RECT, KIND_RING, PATTERN_MASK, PATTERN_SHIFT,
+    DASHED, FILL_IMAGE, FILL_MASK, FILL_SOLID, FILL_VERTICAL, Instance, KIND_CIRCLE,
+    KIND_ICON_FILL, KIND_ICON_LINE, KIND_RECT, KIND_RING, PATTERN_MASK, PATTERN_SHIFT,
 };
 
 pub const ROWS: u32 = 4;
 pub const STEPS: u32 = 48;
 pub const FLOOR: f32 = 0.35;
+pub const TAPS: u32 = 64;
 
 fn distance(instance: &Instance, icons: Option<&Icons>, p: [f32; 2]) -> f32 {
     let kind = instance.kind();
@@ -249,24 +251,7 @@ pub fn cover_with(
     p: [f32; 2],
     closed: bool,
 ) -> f32 {
-    let inverse = instance.inverse();
-    let shift = [instance.material[0], instance.material[1]];
-    let screen = [
-        instance.axes[0] * shift[0] + instance.axes[2] * shift[1],
-        instance.axes[1] * shift[0] + instance.axes[3] * shift[1],
-    ];
-    let span = (screen[0] * screen[0] + screen[1] * screen[1])
-        .sqrt()
-        .max(1e-6);
-    let direction = [screen[0] / span, screen[1] / span];
-    let map = |v: [f32; 2]| {
-        [
-            inverse[0][0] * v[0] + inverse[1][0] * v[1],
-            inverse[0][1] * v[0] + inverse[1][1] * v[1],
-        ]
-    };
-    let along = map(direction);
-    let across = map([-direction[1], direction[0]]);
+    let (span, along, across) = travel(instance);
     let unit = (along[0] * along[0] + along[1] * along[1])
         .sqrt()
         .max(1e-12);
@@ -283,6 +268,79 @@ pub fn cover_with(
     (total / ROWS as f32).clamp(0.0, 1.0)
 }
 
+fn travel(instance: &Instance) -> (f32, [f32; 2], [f32; 2]) {
+    let inverse = instance.inverse();
+    let shift = [instance.material[0], instance.material[1]];
+    let screen = [
+        instance.axes[0] * shift[0] + instance.axes[2] * shift[1],
+        instance.axes[1] * shift[0] + instance.axes[3] * shift[1],
+    ];
+    let span = (screen[0] * screen[0] + screen[1] * screen[1])
+        .sqrt()
+        .max(1e-6);
+    let direction = [screen[0] / span, screen[1] / span];
+    let map = |v: [f32; 2]| {
+        [
+            inverse[0][0] * v[0] + inverse[1][0] * v[1],
+            inverse[0][1] * v[0] + inverse[1][1] * v[1],
+        ]
+    };
+    (span, map(direction), map([-direction[1], direction[0]]))
+}
+
+fn reach(instance: &Instance) -> [f32; 2] {
+    let shape = instance.shape;
+    match instance.kind() {
+        KIND_RECT => [shape[0], shape[1]],
+        KIND_CIRCLE => [shape[0]; 2],
+        _ => [shape[0] + 0.5 * shape[1]; 2],
+    }
+}
+
+pub fn image(instance: &Instance, sprites: Option<&SpriteImage>, p: [f32; 2]) -> [f32; 4] {
+    let (span, along, _) = travel(instance);
+    let unit = (along[0] * along[0] + along[1] * along[1])
+        .sqrt()
+        .max(1e-12);
+    let uv = instance.icon;
+    let reach = reach(instance);
+    let size = sprites.map_or([1.0; 2], |sprites| {
+        [sprites.width as f32, sprites.height as f32]
+    });
+    let limits: [[f32; 2]; 2] = std::array::from_fn(|axis| {
+        let r = reach[axis] * uv[axis + 2].abs();
+        let inset = (0.5 / size[axis]).min(r);
+        [uv[axis] - r + inset, uv[axis] + r - inset]
+    });
+    let texel = |q: [f32; 2]| {
+        let at = std::array::from_fn(|axis| {
+            (uv[axis] + q[axis] * uv[axis + 2]).clamp(limits[axis][0], limits[axis][1])
+        });
+        let texel = sprites.map_or([1.0; 4], |sprites| sprites.sample(at));
+        premultiply(
+            std::array::from_fn(|k| texel[k] * instance.fill_top[k]),
+            1.0,
+        )
+    };
+    let count = span.ceil().clamp(1.0, TAPS as f32) as u32;
+    let mut total = [0.0; 4];
+    let mut weight = 0.0;
+    for tap in 0..count {
+        let x = ((tap as f32 + 0.5) / count as f32 - 0.5) * span;
+        let q = [p[0] + along[0] * x, p[1] + along[1] * x];
+        let w = (0.5 - cpu::field(instance, None, q)[0] / unit).clamp(0.0, 1.0);
+        let colour = texel(q);
+        for k in 0..4 {
+            total[k] += colour[k] * w;
+        }
+        weight += w;
+    }
+    if weight <= 0.0 {
+        return texel(p);
+    }
+    total.map(|value| value / weight)
+}
+
 fn premultiply(c: [f32; 4], cover: f32) -> [f32; 4] {
     [
         c[0] * c[3] * cover,
@@ -292,10 +350,19 @@ fn premultiply(c: [f32; 4], cover: f32) -> [f32; 4] {
     ]
 }
 
-pub fn paint(instance: &Instance, icons: Option<&Icons>, p: [f32; 2]) -> Paint {
+pub fn paint(
+    instance: &Instance,
+    icons: Option<&Icons>,
+    sprites: Option<&SpriteImage>,
+    p: [f32; 2],
+) -> Paint {
     let inverse = instance.inverse();
     let flags = instance.info[0];
-    let fill_mode = flags & (FILL_SOLID | FILL_VERTICAL);
+    let fill_mode = if flags & FILL_MASK == FILL_IMAGE {
+        FILL_IMAGE
+    } else {
+        flags & (FILL_SOLID | FILL_VERTICAL)
+    };
     let opacity = instance.opacity();
     let mut fill = [0.0; 4];
     let mut fill_cover = 0.0;
@@ -307,10 +374,16 @@ pub fn paint(instance: &Instance, icons: Option<&Icons>, p: [f32; 2]) -> Paint {
         } else {
             0.0
         };
-        let colour: [f32; 4] = std::array::from_fn(|i| {
-            instance.fill_top[i] + (instance.fill_bottom[i] - instance.fill_top[i]) * t
-        });
-        let mut base = premultiply(colour, 1.0);
+        let mut base = if fill_mode == FILL_IMAGE {
+            image(instance, sprites, p)
+        } else {
+            premultiply(
+                std::array::from_fn(|i| {
+                    instance.fill_top[i] + (instance.fill_bottom[i] - instance.fill_top[i]) * t
+                }),
+                1.0,
+            )
+        };
         let pattern = (flags & PATTERN_MASK) >> PATTERN_SHIFT;
         if pattern != 0 {
             let packed = instance.info[2];
