@@ -228,7 +228,9 @@ fn fits(needed: usize, limit: usize, what: &str) -> Result<(), String> {
 
 fn limit_words(device: &wgpu::Device) -> usize {
     let limits = device.limits();
-    let bytes = u64::from(limits.max_storage_buffer_binding_size).min(limits.max_buffer_size);
+    let bytes = limits
+        .max_storage_buffer_binding_size
+        .min(limits.max_buffer_size);
     usize::try_from(bytes / WORD).unwrap_or(usize::MAX)
 }
 

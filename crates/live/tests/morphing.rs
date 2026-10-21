@@ -661,7 +661,9 @@ fn reserving_past_the_device_limit_is_refused_and_leaves_the_frame_drawing() {
     let drawn = [Instance::new(mesh, translation(0.0), 0, HEAD_ID), floor];
     let reference = shoot(&mut frame, &mut shadows, &drawn);
     let limits = frame.gpu.device.limits();
-    let bytes = u64::from(limits.max_storage_buffer_binding_size).min(limits.max_buffer_size);
+    let bytes = limits
+        .max_storage_buffer_binding_size
+        .min(limits.max_buffer_size);
     let limit = usize::try_from(bytes / 16).unwrap_or(usize::MAX);
     let before = frame.morph_stats();
     for over in [limit + 1, usize::MAX] {

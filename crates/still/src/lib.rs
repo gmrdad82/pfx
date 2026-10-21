@@ -7,9 +7,9 @@ mod trace;
 
 pub use pfx_trace::bvh::Bounds as TraceBounds;
 pub use pfx_trace::checkpoint::{Keeper, Rounds, Saved};
+pub use pfx_trace::counters::Counts;
 pub use pfx_trace::gpu::TracedInstance;
 pub use pfx_trace::rt::Listed as TlasListed;
-pub use pfx_trace::counters::Counts;
 pub use pfx_trace::rt::{Path as TracePath, RayQueries};
 pub use picture::{
     Film, Format, Look, PASSES, Reach, crop_refusal, cut, delivered, developed, dithered,
