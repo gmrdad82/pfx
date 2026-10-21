@@ -11,9 +11,9 @@ authors.workspace = true
 [dependencies]
 i_overlay = { version = "=9.0.0", default-features = false }
 lyon_tessellation = "=1.0.22"
-meshopt = "=0.6.2"
 roxmltree = "=0.21.1"
 svgtypes = "=0.16.1"
 
 [dev-dependencies]
+meshopt = "=0.6.2"
 naga = { version = "30", default-features = false, features = ["wgsl-in"] }
