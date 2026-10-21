@@ -58,6 +58,8 @@ pub struct Staging {
     pub motion_blur: Option<pfx_post::MotionBlur>,
     pub steps: Option<Steps>,
     pub fog: Option<Fog>,
+    pub particles: Vec<(usize, Matrix)>,
+    pub hidden: Vec<bool>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -169,6 +171,8 @@ impl Staging {
             motion_blur: lighting.motion_blur.filter(|blur| blur.shutter > 0.0),
             steps: None,
             fog: fog(recipe),
+            particles: Vec::new(),
+            hidden: Vec::new(),
         })
     }
 
@@ -261,7 +265,8 @@ impl Staging {
 
     pub fn placements(&self, eye: &Eye) -> Vec<Placement<'_>> {
         let models = self.models(&self.posed, eye);
-        self.slots
+        let mut out: Vec<Placement<'_>> = self
+            .slots
             .iter()
             .zip(&self.pieces)
             .zip(&self.cards)
@@ -283,7 +288,76 @@ impl Staging {
                 }
                 placed
             })
-            .collect()
+            .collect();
+        let flying: Vec<Placement<'_>> = self
+            .particles
+            .iter()
+            .filter_map(|(at, model)| {
+                out.get(*at).map(|base| Placement {
+                    model: *model,
+                    motion: None,
+                    ..*base
+                })
+            })
+            .collect();
+        for (placed, hidden) in out.iter_mut().zip(&self.hidden) {
+            if *hidden {
+                placed.shadow_only = true;
+                placed.casts_shadow = false;
+            }
+        }
+        out.extend(flying);
+        out
+    }
+
+    pub fn set_particles(
+        &mut self,
+        emitted: &[pfx_build::Emitted],
+        pieces: &crate::sprays::Pieces,
+    ) {
+        self.particles.clear();
+        self.hidden = vec![false; self.pieces.len()];
+        for (index, emitter) in emitted.iter().enumerate() {
+            let Some(node) = &emitter.mesh else {
+                continue;
+            };
+            let Some(owner) = self.pieces.iter().find(|piece| &piece.name == node) else {
+                continue;
+            };
+            let owner = owner.object;
+            let shape: Vec<usize> = (0..self.pieces.len())
+                .filter(|at| self.pieces[*at].object == owner)
+                .collect();
+            let mut low = [f32::INFINITY; 3];
+            let mut high = [f32::NEG_INFINITY; 3];
+            for at in &shape {
+                self.hidden[*at] = true;
+                for p in &self.pieces[*at].geometry.positions {
+                    for axis in 0..3 {
+                        low[axis] = low[axis].min(p[axis]);
+                        high[axis] = high[axis].max(p[axis]);
+                    }
+                }
+            }
+            let mut centred = IDENTITY;
+            for axis in 0..3 {
+                centred[3][axis] = if low[axis] <= high[axis] {
+                    -0.5 * (low[axis] + high[axis])
+                } else {
+                    0.0
+                };
+            }
+            let Some((_, flown)) = pieces.iter().find(|(at, _)| *at == index) else {
+                continue;
+            };
+            for piece in flown {
+                let placed = multiply(piece.matrix(), centred);
+                for at in &shape {
+                    self.particles
+                        .push((*at, multiply(placed, self.shared[*at].model)));
+                }
+            }
+        }
     }
 
     pub fn stage(&self, eyepiece: Eyepiece) -> Result<Staged<Environment>, Error> {

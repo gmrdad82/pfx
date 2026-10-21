@@ -1,4 +1,5 @@
-use pfx_build::{Built, Emitted, Rate};
+use pfx_build::{Built, Emitted, Rate, Waking};
+use pfx_core::sim::particles::Piece;
 use pfx_load::scene::sprays::Sprays;
 use pfx_trace::sprites::Puff;
 
@@ -6,16 +7,36 @@ use pfx_live::frame::Matrix;
 
 use crate::staging::IDENTITY;
 
+pub type Pieces = Vec<(usize, Vec<Piece>)>;
+
 pub fn puffs(emitted: &[Emitted], built: &Built, fps: Rate, time: f64) -> Vec<Puff> {
+    sprays(emitted, &[], built, fps, time).0
+}
+
+pub fn sprays(
+    emitted: &[Emitted],
+    wakes: &[Waking],
+    built: &Built,
+    fps: Rate,
+    time: f64,
+) -> (Vec<Puff>, Pieces) {
     if emitted.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
-    let mut sprays = Sprays::of_emitters(
+    let mut sprays = Sprays::of_parts(
         emitted
             .iter()
             .map(|emitter| {
                 pfx_core::sim::particles::Emitter::new(emitter.recipe.clone(), emitter.at)
             })
+            .collect(),
+        emitted
+            .iter()
+            .map(|emitter| emitter.mesh.is_some())
+            .collect(),
+        wakes
+            .iter()
+            .map(|wake| pfx_core::sim::wake::Wake::new(wake.recipe))
             .collect(),
     );
     sprays.seek(time as f32, |t, out| {
@@ -23,6 +44,11 @@ pub fn puffs(emitted: &[Emitted], built: &Built, fps: Rate, time: f64) -> Vec<Pu
             emitted
                 .iter()
                 .map(|emitter| node_world(built, fps, emitter.node.as_deref(), t)),
+        );
+        out.extend(
+            wakes
+                .iter()
+                .map(|wake| node_world(built, fps, Some(&wake.node), t)),
         );
     });
     let mut puffs = Vec::with_capacity(sprays.live());
@@ -34,7 +60,13 @@ pub fn puffs(emitted: &[Emitted], built: &Built, fps: Rate, time: f64) -> Vec<Pu
             lit: recipe.lit,
         }));
     });
-    puffs
+    let mut pieces = Vec::new();
+    sprays.each_piece(|index, _, shown| {
+        if !shown.is_empty() {
+            pieces.push((index, shown.to_vec()));
+        }
+    });
+    (puffs, pieces)
 }
 
 fn single(columns: [[f64; 4]; 4]) -> Matrix {

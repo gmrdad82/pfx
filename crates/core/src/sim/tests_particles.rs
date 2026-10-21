@@ -1,6 +1,8 @@
 use super::particles::{
-    Emitter, Gradient, IDENTITY, Matrix, PREWARM_MAX, Recipe, RecipeKeys, STEP,
+    Body, Emitter, Gradient, Ground, IDENTITY, Matrix, PREWARM_MAX, Placed, Recipe, RecipeKeys,
+    STEP, rotate,
 };
+use super::wake::{Recipe as WakeRecipe, Wake};
 
 fn moved(x: f32) -> Matrix {
     let mut m = IDENTITY;
@@ -238,4 +240,333 @@ fn prewarm_starts_where_an_emitter_started_that_long_before_with_its_parent_held
         ..warmed
     };
     assert_eq!(capped.prewarm_steps(), (PREWARM_MAX / STEP).round() as u64);
+}
+
+fn leaves(seed: u64) -> Recipe {
+    Recipe {
+        burst: 200,
+        max: 200,
+        lifetime: [4.0, 5.0],
+        speed: [0.0, 0.5],
+        cone: 180.0,
+        gravity: [0.0, -9.81, 0.0],
+        size: [1.0, 1.0],
+        alpha: Gradient::constant(1.0),
+        seed,
+        body: Some(Body {
+            ground: Some(Ground::default()),
+            ..Body::default()
+        }),
+        ..Recipe::default()
+    }
+}
+
+fn rise(m: Matrix, y: f32) -> Matrix {
+    let mut m = m;
+    m[3][1] = y;
+    m
+}
+
+#[test]
+fn mesh_particles_settle_on_the_ground_and_stay_past_their_life() {
+    let mut fall = Emitter::new(leaves(3), [0.0; 3]);
+    fall.seek(10.0, STEP, |_| rise(IDENTITY, 1.5));
+    assert_eq!(fall.live(), 200);
+    for particle in fall.particles() {
+        assert!(particle.resting, "{particle:?}");
+        assert_eq!(particle.position[1], 0.0);
+        assert_eq!(particle.velocity, [0.0; 3]);
+        let up = rotate(particle.orientation, [0.0, 1.0, 0.0]);
+        assert!(up[1].abs() > 0.9999, "{up:?}");
+    }
+    let rested = fall.particles().to_vec();
+    fall.seek(20.0, STEP, |_| rise(IDENTITY, 1.5));
+    assert_eq!(fall.live(), 200);
+    for (now, then) in fall.particles().iter().zip(&rested) {
+        assert_eq!(now.position, then.position);
+        assert_eq!(now.orientation, then.orientation);
+        assert_eq!(now.age, then.age);
+    }
+}
+
+#[test]
+fn drag_by_area_and_mass_slows_a_light_card_more_than_a_heavy_one() {
+    let fallen = |mass: f32| {
+        let recipe = Recipe {
+            burst: 50,
+            speed: [0.0, 0.0],
+            body: Some(Body {
+                mass,
+                tumble: [0.0, 2.0],
+                ..Body::default()
+            }),
+            ..leaves(5)
+        };
+        let mut emitter = Emitter::new(recipe, [0.0; 3]);
+        emitter.seek(1.5, STEP, |_| rise(IDENTITY, 20.0));
+        let heights: f32 = emitter.particles().iter().map(|p| p.position[1]).sum();
+        heights / emitter.live() as f32
+    };
+    let heavy = fallen(1.0);
+    let light = fallen(0.001);
+    assert!(
+        (heavy - (20.0 - 0.5 * 9.81 * 1.5 * 1.5)).abs() < 0.2,
+        "{heavy}"
+    );
+    assert!(light > heavy + 3.0, "light {light}, heavy {heavy}");
+}
+
+#[test]
+fn mesh_particles_in_a_wake_are_the_same_from_the_same_seed() {
+    let car = |t: f32| rise(moved(15.0 * t - 10.0), 0.4);
+    let run = |seed: u64, seconds: f32| {
+        let recipe = Recipe {
+            burst: 0,
+            placed: (0..40)
+                .map(|i| Placed {
+                    position: [i as f32 * 0.25 - 5.0, 0.0, 0.3 * (i % 3) as f32],
+                    yaw: i as f32 * 17.0,
+                })
+                .collect(),
+            lifetime: [30.0, 30.0],
+            rate: 20.0,
+            ..leaves(seed)
+        };
+        let mut wake = Wake::new(WakeRecipe::default());
+        let mut emitter = Emitter::new(recipe, [0.0; 3]);
+        let steps = (seconds / STEP).round() as u32;
+        for n in 0..steps {
+            let t = n as f32 * STEP;
+            wake.step(STEP, car(t), car(t + STEP));
+            emitter.step_in(STEP, IDENTITY, IDENTITY, Some(&wake));
+        }
+        let mut pieces = Vec::new();
+        emitter.pieces(&mut pieces);
+        pieces
+    };
+    let a = run(9, 3.0);
+    let b = run(9, 3.0);
+    assert_eq!(a, b);
+    assert!(a.len() > 40);
+    assert_ne!(a, run(10, 3.0));
+    let lifted = a
+        .iter()
+        .take(40)
+        .enumerate()
+        .filter(|(i, piece)| piece.position != [*i as f32 * 0.25 - 5.0, 0.0, 0.3 * (i % 3) as f32])
+        .count();
+    assert!(lifted > 0, "the wake moved no placed piece");
+}
+
+struct Breeze([f32; 3]);
+
+impl super::particles::Field for Breeze {
+    fn velocity(&self, _: [f32; 3]) -> [f32; 3] {
+        self.0
+    }
+}
+
+fn close(a: [f32; 3], b: [f32; 3]) -> bool {
+    a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5)
+}
+
+#[test]
+fn placement_rotates_scales_and_moves_and_back_steps_along_the_motion() {
+    use super::particles::{Piece, UPRIGHT, placement, point, turned};
+    let quarter = turned(UPRIGHT, [0.0, std::f32::consts::FRAC_PI_2, 0.0]);
+    assert!(close(rotate(quarter, [1.0, 0.0, 0.0]), [0.0, 0.0, -1.0]));
+    let m = placement([1.0, 2.0, 3.0], quarter, 2.0);
+    assert!(close(point(m, [1.0, 0.0, 0.0]), [1.0, 2.0, 1.0]));
+    assert!(close(point(m, [0.0, 0.0, 0.0]), [1.0, 2.0, 3.0]));
+    assert_eq!(turned(quarter, [0.0; 3]), quarter);
+    assert_eq!(turned(quarter, [f32::NAN; 3]), quarter);
+    let piece = Piece {
+        position: [1.0, 0.0, 0.0],
+        previous: [0.0; 3],
+        velocity: [10.0, 0.0, 0.0],
+        orientation: UPRIGHT,
+        previous_orientation: UPRIGHT,
+        angular: [0.0; 3],
+        size: 1.0,
+        colour: [1.0; 3],
+        alpha: 1.0,
+        resting: false,
+    };
+    assert!(close(point(piece.back(0.1), [0.0; 3]), [0.0, 0.0, 0.0]));
+    assert_eq!(piece.back(0.0), piece.matrix());
+    assert_eq!(piece.back(f32::NAN), piece.matrix());
+    let rested = Piece {
+        resting: true,
+        ..piece
+    };
+    assert_eq!(rested.back(0.1), rested.matrix());
+    assert!(close(point(piece.previous_matrix(), [0.0; 3]), [0.0; 3]));
+}
+
+#[test]
+fn laid_keeps_the_heading_and_lies_face_up_or_down_whichever_is_nearer() {
+    use super::particles::{UPRIGHT, laid, turned};
+    let yawed = turned(UPRIGHT, [0.0, 0.7, 0.0]);
+    let tilted = turned(yawed, [0.3, 0.0, 0.2]);
+    let flat = laid(tilted);
+    assert!(rotate(flat, [0.0, 1.0, 0.0])[1] > 0.9999);
+    let heading = |q| {
+        let x = rotate(q, [1.0, 0.0, 0.0]);
+        (-x[2]).atan2(x[0])
+    };
+    assert!((heading(flat) - heading(yawed)).abs() < 0.2);
+    let upside = turned(yawed, [std::f32::consts::PI - 0.2, 0.0, 0.0]);
+    assert!(rotate(laid(upside), [0.0, 1.0, 0.0])[1] < -0.9999);
+    let edge = turned(UPRIGHT, [0.0, 0.0, std::f32::consts::FRAC_PI_2]);
+    let up = rotate(laid(edge), [0.0, 1.0, 0.0])[1];
+    assert!(up.abs() > 0.9999, "{up}");
+}
+
+#[test]
+fn an_emitter_without_a_body_or_a_field_steps_as_it_always_did() {
+    let mut plain = Emitter::new(spray(), [0.2, 0.1, -1.5]);
+    let mut fielded = Emitter::new(spray(), [0.2, 0.1, -1.5]);
+    for n in 0..120 {
+        let t = n as f32 * STEP;
+        plain.step(STEP, moved(20.0 * t), moved(20.0 * (t + STEP)));
+        fielded.step_in(STEP, moved(20.0 * t), moved(20.0 * (t + STEP)), None);
+    }
+    assert_eq!(plain.particles(), fielded.particles());
+    assert!(
+        plain
+            .particles()
+            .iter()
+            .all(|p| p.orientation == super::particles::UPRIGHT && !p.resting)
+    );
+}
+
+#[test]
+fn a_sprite_drifts_with_the_wind_only_through_its_drag() {
+    let still = |drag: f32| Recipe {
+        burst: 1,
+        lifetime: [10.0, 10.0],
+        speed: [0.0, 0.0],
+        drag,
+        ..Recipe::default()
+    };
+    let breeze = Breeze([3.0, 0.0, 0.0]);
+    let mut dragged = Emitter::new(still(4.0), [0.0; 3]);
+    let mut slick = Emitter::new(still(0.0), [0.0; 3]);
+    for _ in 0..240 {
+        dragged.step_in(STEP, IDENTITY, IDENTITY, Some(&breeze));
+        slick.step_in(STEP, IDENTITY, IDENTITY, Some(&breeze));
+    }
+    assert!((dragged.particles()[0].velocity[0] - 3.0).abs() < 0.01);
+    assert!(dragged.particles()[0].position[0] > 3.0);
+    assert_eq!(slick.particles()[0].velocity, [0.0; 3]);
+    assert_eq!(slick.particles()[0].position, [0.0; 3]);
+}
+
+fn resting_leaf(keep: bool, lift: f32) -> Emitter {
+    let recipe = Recipe {
+        burst: 0,
+        lifetime: [1.0, 1.0],
+        placed: vec![Placed {
+            position: [0.0, 0.0, 0.0],
+            yaw: 45.0,
+        }],
+        body: Some(Body {
+            ground: Some(Ground {
+                keep,
+                lift,
+                ..Ground::default()
+            }),
+            ..Body::default()
+        }),
+        gravity: [0.0, -9.81, 0.0],
+        ..Recipe::default()
+    };
+    Emitter::new(recipe, [0.0; 3])
+}
+
+#[test]
+fn a_placed_piece_rests_where_placed_and_ages_out_without_keep() {
+    let mut kept = resting_leaf(true, 2.0);
+    let mut aged = resting_leaf(false, 2.0);
+    for _ in 0..360 {
+        kept.step(STEP, IDENTITY, IDENTITY);
+        aged.step(STEP, IDENTITY, IDENTITY);
+    }
+    assert_eq!(kept.live(), 1);
+    let leaf = kept.particles()[0];
+    assert!(leaf.resting);
+    assert_eq!(leaf.position, [0.0; 3]);
+    assert_eq!(leaf.age, 0.0);
+    let up = rotate(leaf.orientation, [0.0, 1.0, 0.0]);
+    assert!(up[1] > 0.9999);
+    assert_eq!(aged.live(), 0);
+}
+
+#[test]
+fn wind_above_lift_raises_a_resting_piece_and_below_it_does_not() {
+    let gust = Breeze([1.5, 4.0, 0.0]);
+    let calm = Breeze([1.5, 0.5, 0.0]);
+    let mut lifted = resting_leaf(true, 2.0);
+    let mut held = resting_leaf(true, 2.0);
+    lifted.step(STEP, IDENTITY, IDENTITY);
+    held.step(STEP, IDENTITY, IDENTITY);
+    for _ in 0..30 {
+        lifted.step_in(STEP, IDENTITY, IDENTITY, Some(&gust));
+        held.step_in(STEP, IDENTITY, IDENTITY, Some(&calm));
+    }
+    assert!(!lifted.particles()[0].resting);
+    assert!(lifted.particles()[0].position[1] > 0.0);
+    assert!(lifted.particles()[0].age > 0.0);
+    assert!(held.particles()[0].resting);
+    assert_eq!(held.particles()[0].position, [0.0; 3]);
+}
+
+#[test]
+fn a_lump_takes_no_lift_and_falls_straight_while_a_card_glides_aside() {
+    let drop = |flat: f32| {
+        let recipe = Recipe {
+            burst: 1,
+            lifetime: [10.0, 10.0],
+            speed: [0.0, 0.0],
+            gravity: [0.0, -9.81, 0.0],
+            body: Some(Body {
+                flat,
+                tumble: [0.0, 0.0],
+                ..Body::default()
+            }),
+            seed: 21,
+            ..Recipe::default()
+        };
+        let mut emitter = Emitter::new(recipe, [0.0; 3]);
+        emitter.seek(2.0, STEP, |_| rise(IDENTITY, 20.0));
+        emitter.particles()[0]
+    };
+    let lump = drop(0.0);
+    let card = drop(1.0);
+    assert!(
+        lump.position[0].abs() < 1e-4 && lump.position[2].abs() < 1e-4,
+        "{lump:?}"
+    );
+    let aside = (card.position[0].powi(2) + card.position[2].powi(2)).sqrt();
+    assert!(aside > 0.01, "{card:?}");
+    assert!(card.angular.iter().all(|w| w.is_finite()));
+    assert!(super::particles::length(card.angular) <= super::particles::SPIN_MAX + 1e-3);
+}
+
+#[test]
+fn the_pool_cap_counts_placed_pieces_it_drops() {
+    let recipe = Recipe {
+        max: 2,
+        placed: (0..5)
+            .map(|i| Placed {
+                position: [i as f32, 0.0, 0.0],
+                yaw: 0.0,
+            })
+            .collect(),
+        ..leaves(1)
+    };
+    let mut emitter = Emitter::new(Recipe { burst: 0, ..recipe }, [0.0; 3]);
+    emitter.step(STEP, IDENTITY, IDENTITY);
+    assert_eq!(emitter.live(), 2);
+    assert_eq!(emitter.dropped(), 3);
 }

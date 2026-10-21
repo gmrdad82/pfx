@@ -3201,6 +3201,7 @@ fn follow_keys(cx: &mut Cx, tab: &mut Tab<'_>, object: String) -> Result<Follow,
         None => None,
     };
     let ride = tab.or(cx, "ride", 0.0, NUM)?;
+    let wake = effects::wake(cx, tab)?;
     let path = tab.kpath("root_motion");
     let root_motion = match tab.peek(cx, "root_motion") {
         None => RootMotion::Ignore,
@@ -3218,6 +3219,7 @@ fn follow_keys(cx: &mut Cx, tab: &mut Tab<'_>, object: String) -> Result<Follow,
         dynamics,
         ride,
         root_motion,
+        wake,
     })
 }
 

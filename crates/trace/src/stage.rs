@@ -512,7 +512,10 @@ pub fn scene_posed(
         })
         .collect();
     let mut placements = Vec::with_capacity(draws.items.len() + letterings.len());
-    for ((draw, model), skinned) in draws.items.iter().zip(&models).zip(&baked) {
+    let shaping = pfx_load::scene::shaping(scene, &draws);
+    let mut protos = BTreeMap::new();
+    for (index, ((draw, model), skinned)) in draws.items.iter().zip(&models).zip(&baked).enumerate()
+    {
         let mesh = match skinned {
             Some(skinned) => {
                 let geometry = &draw.geometry;
@@ -561,7 +564,7 @@ pub fn scene_posed(
             }
             _ => None,
         };
-        placements.push(Placement {
+        let placement = Placement {
             casts_shadow: draw.shadow.casts(),
             shadow_only: !draw.shadow.drawn(),
             two_sided: draw.two_sided,
@@ -569,7 +572,31 @@ pub fn scene_posed(
             content,
             alpha_cutoff: draw.alpha_cutoff,
             ..Placement::new(mesh, *model, draw.material)
-        });
+        };
+        if shaping.get(index) == Some(&true) {
+            protos.insert(index, placement);
+        } else {
+            placements.push(placement);
+        }
+    }
+    let (puffs, pieces) = scene_sprays(scene, &viewpoint, posed.time);
+    let shapes = pfx_load::scene::shapes(scene, &draws);
+    for (emitter, pieces) in &pieces {
+        let Some(shape) = shapes.get(*emitter) else {
+            continue;
+        };
+        for piece in pieces {
+            let placed = piece.matrix();
+            for (draw, local) in shape {
+                if let Some(proto) = protos.get(draw) {
+                    placements.push(Placement {
+                        model: pfx_load::scene::multiply(placed, *local),
+                        motion: None,
+                        ..*proto
+                    });
+                }
+            }
+        }
     }
     let mut materials = Cow::Borrowed(draws.materials.as_slice());
     let flows = |material: &Material| {
@@ -651,15 +678,20 @@ pub fn scene_posed(
         staged.detail.sky_look = sky.look;
     }
     staged.detail.fog = scene_fog(scene, posed.time);
-    let puffs = scene_puffs(scene, &viewpoint, posed.time);
     staged.spray(&Spray::new(&puffs, camera))?;
     Ok(staged)
 }
 
 pub fn scene_puffs(scene: &LoadedScene, camera: &SceneCamera, time: f32) -> Vec<Puff> {
+    scene_sprays(scene, camera, time).0
+}
+
+pub type Pieces = Vec<(usize, Vec<pfx_core::sim::particles::Piece>)>;
+
+pub fn scene_sprays(scene: &LoadedScene, camera: &SceneCamera, time: f32) -> (Vec<Puff>, Pieces) {
     let mut sprays = Sprays::of(scene);
     if sprays.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
     if scene.animated() {
         sprays.seek_posed(time, |t| Some(scene.posed(camera, t)));
@@ -675,7 +707,13 @@ pub fn scene_puffs(scene: &LoadedScene, camera: &SceneCamera, time: f32) -> Vec<
             lit: recipe.lit,
         }));
     });
-    puffs
+    let mut pieces = Vec::new();
+    sprays.each_piece(|index, _, shown| {
+        if !shown.is_empty() {
+            pieces.push((index, shown.to_vec()));
+        }
+    });
+    (puffs, pieces)
 }
 
 pub fn scene_fog(scene: &LoadedScene, time: f32) -> Option<crate::fog::Fog> {
@@ -684,6 +722,13 @@ pub fn scene_fog(scene: &LoadedScene, time: f32) -> Option<crate::fog::Fog> {
 }
 
 pub fn posed_transforms(scene: &LoadedScene, posed: &Posed) -> Result<Vec<Transform>, String> {
+    if scene
+        .particles
+        .values()
+        .any(|particles| particles.mesh.is_some())
+    {
+        return Err("mesh particles change the instances with the time; stage it again".into());
+    }
     let draws = scene.draws();
     if draws.items.iter().any(|draw| {
         draw.geometry.skin.is_some()

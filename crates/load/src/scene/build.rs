@@ -383,6 +383,7 @@ pub(super) fn build_with(
         .map(|entry| (entry.key.clone(), build_emitter(&entry.value)))
         .collect();
     let particles = super::particles::build(&places, &resolved.particles, &objects, &meshes)?;
+    let wakes = super::particles::wakes(&places, &resolved.objects, &objects, &meshes)?;
     let camera =
         match &resolved.camera {
             Some(camera) => {
@@ -462,6 +463,7 @@ pub(super) fn build_with(
         lights,
         emitters,
         particles,
+        wakes,
         camera,
         finish,
         trace: resolved

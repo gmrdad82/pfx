@@ -11,6 +11,120 @@ pub const IDENTITY: Matrix = [
 
 pub const STEP: f32 = 1.0 / 120.0;
 pub const PREWARM_MAX: f32 = 30.0;
+pub const AIR: f32 = 1.225;
+pub const REST_SPEED: f32 = 0.05;
+pub const SPIN_MAX: f32 = 30.0;
+
+pub type Quat = [f32; 4];
+
+pub const UPRIGHT: Quat = [0.0, 0.0, 0.0, 1.0];
+
+const LIFT_ATTACHED: f32 = 5.2;
+const LIFT_STALLED: f32 = 0.95;
+const DRAG_EDGE: f32 = 0.1;
+const DRAG_ATTACHED: f32 = 5.0;
+const DRAG_BROADSIDE: f32 = 1.9;
+const PRESSURE_EDGE: f32 = 0.3;
+const PRESSURE_FALL: f32 = 3.5;
+const PRESSURE_BROADSIDE: f32 = 0.2;
+const STALL: f32 = 14.0 * std::f32::consts::PI / 180.0;
+const STALL_WIDTH: f32 = 6.0 * std::f32::consts::PI / 180.0;
+const LUMP_DRAG: f32 = 1.0;
+
+pub trait Field {
+    fn velocity(&self, at: [f32; 3]) -> [f32; 3];
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ground {
+    pub height: f32,
+    pub bounce: f32,
+    pub friction: f32,
+    pub keep: bool,
+    pub lift: f32,
+}
+
+impl Default for Ground {
+    fn default() -> Self {
+        Self {
+            height: 0.0,
+            bounce: 0.1,
+            friction: 0.8,
+            keep: true,
+            lift: 2.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Body {
+    pub mass: f32,
+    pub area: f32,
+    pub flat: f32,
+    pub tumble: [f32; 2],
+    pub ground: Option<Ground>,
+}
+
+impl Default for Body {
+    fn default() -> Self {
+        Self {
+            mass: 0.0005,
+            area: 0.002,
+            flat: 1.0,
+            tumble: [0.0, 6.0],
+            ground: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placed {
+    pub position: [f32; 3],
+    pub yaw: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Piece {
+    pub position: [f32; 3],
+    pub previous: [f32; 3],
+    pub velocity: [f32; 3],
+    pub orientation: Quat,
+    pub previous_orientation: Quat,
+    pub angular: [f32; 3],
+    pub size: f32,
+    pub colour: [f32; 3],
+    pub alpha: f32,
+    pub resting: bool,
+}
+
+impl Piece {
+    pub fn matrix(&self) -> Matrix {
+        placement(self.position, self.orientation, self.size)
+    }
+
+    pub fn previous_matrix(&self) -> Matrix {
+        placement(self.previous, self.previous_orientation, self.size)
+    }
+
+    pub fn back(&self, span: f32) -> Matrix {
+        if self.resting || span.is_nan() || span <= 0.0 {
+            return self.matrix();
+        }
+        let position = std::array::from_fn(|i| self.position[i] - self.velocity[i] * span);
+        let turn = self.angular.map(|w| -w * span);
+        placement(position, turned(self.orientation, turn), self.size)
+    }
+}
+
+struct Spawn<'a> {
+    dt: f32,
+    late: f32,
+    start: [f32; 3],
+    end: [f32; 3],
+    parent: [f32; 3],
+    axis: [[f32; 3]; 2],
+    field: Option<&'a dyn Field>,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Blend {
@@ -116,6 +230,8 @@ pub struct Recipe {
     pub lit: bool,
     pub seed: u64,
     pub prewarm: f32,
+    pub body: Option<Body>,
+    pub placed: Vec<Placed>,
 }
 
 impl Default for Recipe {
@@ -141,6 +257,8 @@ impl Default for Recipe {
             lit: true,
             seed: 0,
             prewarm: 0.0,
+            body: None,
+            placed: Vec::new(),
         }
     }
 }
@@ -185,6 +303,10 @@ pub struct Particle {
     pub spin: f32,
     pub age: f32,
     pub life: f32,
+    pub orientation: Quat,
+    pub previous_orientation: Quat,
+    pub angular: [f32; 3],
+    pub resting: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -259,7 +381,7 @@ impl Emitter {
         }
         self.warmed = true;
         for _ in 0..self.recipe.prewarm_steps() {
-            self.advance(STEP, at, at, true);
+            self.advance(STEP, at, at, true, None);
         }
     }
 
@@ -280,28 +402,51 @@ impl Emitter {
     }
 
     pub fn step(&mut self, dt: f32, from: Matrix, to: Matrix) {
+        self.step_in(dt, from, to, None);
+    }
+
+    pub fn step_in(&mut self, dt: f32, from: Matrix, to: Matrix, field: Option<&dyn Field>) {
         if !(dt.is_finite() && dt > 0.0) {
             return;
         }
         self.warm(from);
-        self.advance(dt, from, to, false);
+        self.advance(dt, from, to, false, field);
         self.time += dt;
         self.steps += 1;
     }
 
-    fn advance(&mut self, dt: f32, from: Matrix, to: Matrix, held: bool) {
+    fn advance(
+        &mut self,
+        dt: f32,
+        from: Matrix,
+        to: Matrix,
+        held: bool,
+        field: Option<&dyn Field>,
+    ) {
         let keep = (-self.recipe.drag.max(0.0) * dt).exp();
         let gravity = self.recipe.gravity;
+        let body = self.recipe.body;
+        let kept = body
+            .and_then(|body| body.ground)
+            .is_some_and(|ground| ground.keep);
+        let rng = &mut self.rng;
+        let particles = &mut self.particles;
         let mut index = 0;
-        while index < self.particles.len() {
-            let particle = &mut self.particles[index];
+        while index < particles.len() {
+            let particle = &mut particles[index];
             particle.previous = particle.position;
-            particle.age += dt;
+            particle.previous_orientation = particle.orientation;
+            if !(kept && particle.resting) {
+                particle.age += dt;
+            }
             if particle.age >= particle.life {
-                self.particles.swap_remove(index);
+                particles.swap_remove(index);
                 continue;
             }
-            integrate(particle, gravity, keep, dt);
+            match &body {
+                Some(body) => fly(particle, body, gravity, dt, field, rng),
+                None => integrate(particle, gravity, keep, dt, field),
+            }
             index += 1;
         }
         let rate = if held {
@@ -320,44 +465,56 @@ impl Emitter {
             unit(vector(from, self.recipe.direction)),
             unit(vector(to, self.recipe.direction)),
         ];
+        let spawn = Spawn {
+            dt,
+            late,
+            start,
+            end,
+            parent,
+            axis,
+            field,
+        };
         if !self.started {
             self.started = true;
             for _ in 0..self.recipe.burst {
-                self.spawn(0.0, dt, late, start, end, parent, axis);
+                self.spawn(0.0, &spawn);
+            }
+            for index in 0..self.recipe.placed.len() {
+                self.place(index, from);
             }
         }
         let count = count as u32;
         for i in 0..count {
             let born = (i as f32 + 0.5) / count as f32;
-            self.spawn(born, dt, late, start, end, parent, axis);
+            self.spawn(born, &spawn);
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn spawn(
-        &mut self,
-        born: f32,
-        dt: f32,
-        late: f32,
-        start: [f32; 3],
-        end: [f32; 3],
-        parent: [f32; 3],
-        axis: [[f32; 3]; 2],
-    ) {
+    fn spawn(&mut self, born: f32, at: &Spawn<'_>) {
         if self.particles.len() >= self.recipe.max as usize {
             self.dropped += 1;
             return;
         }
         let recipe = &self.recipe;
         let rng = &mut self.rng;
-        let direction = cone(rng, unit(axis[0].lerp(axis[1], born)), recipe.cone);
-        let speed = between(rng, recipe.speed_at(self.time + late * born));
+        let direction = cone(rng, unit(at.axis[0].lerp(at.axis[1], born)), recipe.cone);
+        let speed = between(rng, recipe.speed_at(self.time + at.late * born));
         let life = between(rng, recipe.lifetime).max(1e-3);
         let angle = rng.next_f32() * std::f32::consts::TAU;
         let spin = between(rng, recipe.spin) * if rng.next_bool() { 1.0 } else { -1.0 };
-        let position = start.lerp(end, born);
-        let velocity = std::array::from_fn(|i| direction[i] * speed + parent[i] * recipe.inherit);
-        let rest = dt * (1.0 - born);
+        let (orientation, angular) = match &recipe.body {
+            Some(body) => {
+                let orientation = random_turn(rng);
+                let axis = random_axis(rng);
+                let rate = between(rng, body.tumble);
+                (orientation, axis.map(|w| w * rate))
+            }
+            None => (UPRIGHT, [0.0; 3]),
+        };
+        let position = at.start.lerp(at.end, born);
+        let velocity =
+            std::array::from_fn(|i| direction[i] * speed + at.parent[i] * recipe.inherit);
+        let rest = at.dt * (1.0 - born);
         let mut particle = Particle {
             position,
             previous: position,
@@ -366,15 +523,50 @@ impl Emitter {
             spin,
             age: rest,
             life,
+            orientation,
+            previous_orientation: orientation,
+            angular,
+            resting: false,
         };
         if particle.age >= particle.life {
             return;
         }
         if rest > 0.0 {
-            let keep = (-recipe.drag.max(0.0) * rest).exp();
-            integrate(&mut particle, recipe.gravity, keep, rest);
+            match &recipe.body {
+                Some(body) => fly(&mut particle, body, recipe.gravity, rest, at.field, rng),
+                None => {
+                    let keep = (-recipe.drag.max(0.0) * rest).exp();
+                    integrate(&mut particle, recipe.gravity, keep, rest, at.field);
+                }
+            }
         }
         self.particles.push(particle);
+    }
+
+    fn place(&mut self, index: usize, from: Matrix) {
+        if self.particles.len() >= self.recipe.max as usize {
+            self.dropped += 1;
+            return;
+        }
+        let placed = self.recipe.placed[index];
+        let position = point(from, placed.position);
+        let half = 0.5 * placed.yaw.to_radians();
+        let orientation = [0.0, half.sin(), 0.0, half.cos()];
+        let life = between(&mut self.rng, self.recipe.lifetime).max(1e-3);
+        let resting = self.recipe.body.is_some_and(|body| body.ground.is_some());
+        self.particles.push(Particle {
+            position,
+            previous: position,
+            velocity: [0.0; 3],
+            angle: 0.0,
+            spin: 0.0,
+            age: 0.0,
+            life,
+            orientation,
+            previous_orientation: orientation,
+            angular: [0.0; 3],
+            resting,
+        });
     }
 
     pub fn seek(&mut self, time: f32, step: f32, mut parent: impl FnMut(f32) -> Matrix) {
@@ -397,6 +589,37 @@ impl Emitter {
     }
 
     pub fn sprites(&self, out: &mut Vec<Sprite>) {
+        self.shown(|particle, size, colour, alpha| {
+            out.push(Sprite {
+                position: particle.position,
+                previous: particle.previous,
+                velocity: particle.velocity,
+                size,
+                angle: particle.angle,
+                colour,
+                alpha,
+            });
+        });
+    }
+
+    pub fn pieces(&self, out: &mut Vec<Piece>) {
+        self.shown(|particle, size, colour, alpha| {
+            out.push(Piece {
+                position: particle.position,
+                previous: particle.previous,
+                velocity: particle.velocity,
+                orientation: particle.orientation,
+                previous_orientation: particle.previous_orientation,
+                angular: particle.angular,
+                size,
+                colour,
+                alpha,
+                resting: particle.resting,
+            });
+        });
+    }
+
+    fn shown(&self, mut visit: impl FnMut(&Particle, f32, [f32; 3], f32)) {
         let recipe = &self.recipe;
         let sizes = recipe.size_at(self.time);
         let fade = recipe
@@ -420,27 +643,250 @@ impl Emitter {
             if !(size > 0.0 && alpha > 0.0) {
                 continue;
             }
-            out.push(Sprite {
-                position: particle.position,
-                previous: particle.previous,
-                velocity: particle.velocity,
+            visit(
+                particle,
                 size,
-                angle: particle.angle,
-                colour: tint.unwrap_or_else(|| recipe.colour.sample(t)),
+                tint.unwrap_or_else(|| recipe.colour.sample(t)),
                 alpha,
-            });
+            );
         }
     }
 }
 
-fn integrate(particle: &mut Particle, gravity: [f32; 3], keep: f32, dt: f32) {
+fn integrate(
+    particle: &mut Particle,
+    gravity: [f32; 3],
+    keep: f32,
+    dt: f32,
+    field: Option<&dyn Field>,
+) {
+    let wind = field.map(|field| field.velocity(particle.position));
     for (axis, pull) in gravity.iter().enumerate() {
-        particle.velocity[axis] = (particle.velocity[axis] + pull * dt) * keep;
+        let velocity = particle.velocity[axis] + pull * dt;
+        particle.velocity[axis] = match wind {
+            Some(wind) => wind[axis] + (velocity - wind[axis]) * keep,
+            None => velocity * keep,
+        };
         particle.position[axis] += particle.velocity[axis] * dt;
     }
     particle.angle += particle.spin * dt;
 }
 
+fn fly(
+    particle: &mut Particle,
+    body: &Body,
+    gravity: [f32; 3],
+    dt: f32,
+    field: Option<&dyn Field>,
+    rng: &mut Rng,
+) {
+    let wind = field.map_or([0.0; 3], |field| field.velocity(particle.position));
+    if particle.resting {
+        if length(wind) <= body.ground.map_or(0.0, |ground| ground.lift) {
+            return;
+        }
+        particle.resting = false;
+        let axis = random_axis(rng);
+        let rate = between(rng, body.tumble);
+        particle.angular = axis.map(|w| w * rate);
+    }
+    let mass = body.mass.max(1e-6);
+    let area = body.area.max(0.0);
+    let flat = body.flat.clamp(0.0, 1.0);
+    let chord = area.sqrt().max(1e-4);
+    let k = 0.5 * AIR * area / mass;
+    let air = sub(particle.velocity, wind);
+    let speed = length(air);
+    let mut drag = LUMP_DRAG * (1.0 - flat);
+    let mut lift = [0.0; 3];
+    let mut torque = [0.0; 3];
+    if speed > 1e-6 {
+        let along = air.map(|v| v / speed);
+        let normal = rotate(particle.orientation, [0.0, 1.0, 0.0]);
+        let facing = dot(normal, along);
+        let attack = facing.abs().min(1.0).asin();
+        let sin = attack.sin();
+        let attached = 0.5 * (1.0 - ((attack - STALL) / STALL_WIDTH).tanh());
+        let cd = attached * (DRAG_EDGE + DRAG_ATTACHED * sin * sin)
+            + (1.0 - attached) * DRAG_BROADSIDE * sin * sin;
+        let cl =
+            attached * LIFT_ATTACHED * sin + (1.0 - attached) * LIFT_STALLED * (2.0 * attack).sin();
+        let pressure = attached * (PRESSURE_EDGE - PRESSURE_FALL * attack * attack)
+            + (1.0 - attached) * PRESSURE_BROADSIDE * (1.0 - attack / std::f32::consts::FRAC_PI_2);
+        drag += flat * cd;
+        let side = sub(normal, along.map(|v| v * facing));
+        let across = length(side);
+        if across > 1e-6 && flat > 0.0 {
+            let sign = if facing >= 0.0 { -1.0 } else { 1.0 };
+            let push = (flat * cl * k * speed * speed * dt).min(0.5 * speed);
+            lift = side.map(|v| v * sign * push / across);
+        }
+        let chordwise = sub(along, normal.map(|v| v * facing));
+        let reach = length(chordwise);
+        if reach > 1e-6 && flat > 0.0 {
+            let lead = chordwise.map(|v| v / reach);
+            let force: [f32; 3] =
+                std::array::from_fn(|i| -k * drag * speed * air[i] + lift[i] / dt);
+            let arm = 12.0 * flat * pressure / chord;
+            torque = cross(lead, force).map(|v| v * arm);
+        }
+    }
+    let damping = 1.0 + k * drag * speed * dt;
+    let spun = 12.0 * AIR * DRAG_BROADSIDE * chord * chord * chord / (64.0 * mass);
+    for axis in 0..3 {
+        let next = (air[axis] + gravity[axis] * dt + lift[axis]) / damping;
+        particle.velocity[axis] = wind[axis] + next;
+        particle.angular[axis] += torque[axis] * dt;
+    }
+    let rate = length(particle.angular);
+    let slowed = 1.0 / (1.0 + spun * rate * dt);
+    let capped = if rate * slowed > SPIN_MAX {
+        SPIN_MAX / rate
+    } else {
+        slowed
+    };
+    particle.angular = particle.angular.map(|w| w * capped);
+    particle.orientation = turned(particle.orientation, particle.angular.map(|w| w * dt));
+    for axis in 0..3 {
+        particle.position[axis] += particle.velocity[axis] * dt;
+    }
+    let Some(ground) = body.ground else {
+        return;
+    };
+    if particle.position[1] > ground.height {
+        return;
+    }
+    particle.position[1] = ground.height;
+    if particle.velocity[1] < 0.0 {
+        particle.velocity[1] = -particle.velocity[1] * ground.bounce.clamp(0.0, 1.0);
+    }
+    let friction = ground.friction.clamp(0.0, 1.0);
+    let keep = 1.0 - friction;
+    particle.velocity[0] *= keep;
+    particle.velocity[2] *= keep;
+    particle.angular = particle.angular.map(|w| w * keep);
+    let flat = laid(particle.orientation);
+    particle.orientation = blend(particle.orientation, flat, friction);
+    if length(particle.velocity) < REST_SPEED && length(wind) <= ground.lift {
+        particle.resting = true;
+        particle.velocity = [0.0; 3];
+        particle.angular = [0.0; 3];
+        particle.orientation = flat;
+    }
+}
+
+pub fn placement(position: [f32; 3], orientation: Quat, size: f32) -> Matrix {
+    let x = rotate(orientation, [1.0, 0.0, 0.0]).map(|v| v * size);
+    let y = rotate(orientation, [0.0, 1.0, 0.0]).map(|v| v * size);
+    let z = rotate(orientation, [0.0, 0.0, 1.0]).map(|v| v * size);
+    [
+        [x[0], x[1], x[2], 0.0],
+        [y[0], y[1], y[2], 0.0],
+        [z[0], z[1], z[2], 0.0],
+        [position[0], position[1], position[2], 1.0],
+    ]
+}
+
+pub fn rotate(q: Quat, v: [f32; 3]) -> [f32; 3] {
+    let u = [q[0], q[1], q[2]];
+    let t = cross(u, v).map(|c| 2.0 * c);
+    let s = cross(u, t);
+    std::array::from_fn(|i| v[i] + q[3] * t[i] + s[i])
+}
+
+pub fn turned(q: Quat, by: [f32; 3]) -> Quat {
+    let angle = length(by);
+    if angle.is_nan() || angle <= 1e-9 {
+        return q;
+    }
+    let (sin, cos) = (0.5 * angle).sin_cos();
+    let d = [
+        by[0] / angle * sin,
+        by[1] / angle * sin,
+        by[2] / angle * sin,
+        cos,
+    ];
+    normal(multiply(d, q))
+}
+
+pub fn laid(q: Quat) -> Quat {
+    let x = rotate(q, [1.0, 0.0, 0.0]);
+    let yaw = if x[0].abs() + x[2].abs() > 1e-4 {
+        (-x[2]).atan2(x[0])
+    } else {
+        let z = rotate(q, [0.0, 0.0, 1.0]);
+        z[0].atan2(z[2])
+    };
+    let (sin, cos) = (0.5 * yaw).sin_cos();
+    let upright = [0.0, sin, 0.0, cos];
+    if rotate(q, [0.0, 1.0, 0.0])[1] >= 0.0 {
+        upright
+    } else {
+        multiply(upright, [1.0, 0.0, 0.0, 0.0])
+    }
+}
+
+fn blend(a: Quat, b: Quat, t: f32) -> Quat {
+    let sign = if a.iter().zip(&b).map(|(x, y)| x * y).sum::<f32>() < 0.0 {
+        -1.0
+    } else {
+        1.0
+    };
+    normal(std::array::from_fn(|i| a[i] + (sign * b[i] - a[i]) * t))
+}
+
+fn multiply(a: Quat, b: Quat) -> Quat {
+    [
+        a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+        a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+        a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+        a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+    ]
+}
+
+fn normal(q: Quat) -> Quat {
+    let length = q.iter().map(|v| v * v).sum::<f32>().sqrt();
+    if length > 1e-12 {
+        q.map(|v| v / length)
+    } else {
+        UPRIGHT
+    }
+}
+
+fn random_turn(rng: &mut Rng) -> Quat {
+    let u = rng.next_f32();
+    let (a, b) = ((1.0 - u).sqrt(), u.sqrt());
+    let (s1, c1) = (rng.next_f32() * std::f32::consts::TAU).sin_cos();
+    let (s2, c2) = (rng.next_f32() * std::f32::consts::TAU).sin_cos();
+    [a * s1, a * c1, b * s2, b * c2]
+}
+
+fn random_axis(rng: &mut Rng) -> [f32; 3] {
+    let z = 2.0 * rng.next_f32() - 1.0;
+    let (s, c) = (rng.next_f32() * std::f32::consts::TAU).sin_cos();
+    let r = (1.0 - z * z).max(0.0).sqrt();
+    [r * c, r * s, z]
+}
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| a[i] - b[i])
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+pub fn length(v: [f32; 3]) -> f32 {
+    dot(v, v).sqrt()
+}
 fn between(rng: &mut Rng, range: [f32; 2]) -> f32 {
     range[0] + (range[1] - range[0]) * rng.next_f32()
 }

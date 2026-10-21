@@ -172,7 +172,9 @@ pub(crate) fn keep_in(table: &mut Table, globs: &[String]) {
     }
     for key in ["light", "particles"] {
         retain(table, key, |t| {
-            text(t, "parent").is_none_or(|parent| !owned_by(&dropped, parent))
+            ["parent", "mesh"]
+                .iter()
+                .all(|key| text(t, key).is_none_or(|name| !owned_by(&dropped, name)))
         });
     }
     let aims_at_dropped = |c: &dyn TableLike| {

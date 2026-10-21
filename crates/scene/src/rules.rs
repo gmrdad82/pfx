@@ -7,7 +7,7 @@ use crate::types::{
     LAYER_COUNT, Light, LightKind, Lut, LutKey, Material, MotionBlur, Mover, MoverKind, Object,
     PREWARM_MAX, Particles, Physics, Plates, Preset, Projection, Proxy, ProxyKind, Rig, RigKind,
     Room, Scratches, Shadows, Sky, SkyKind, Sound, Sun, SunModel, Tape, Text, Tiles, Tone,
-    ToneKind, Trace, Trigger, Tunable, TunableKind, TunableValue,
+    ToneKind, Trace, Trigger, Tunable, TunableKind, TunableValue, Wake,
 };
 
 pub(crate) struct Issue {
@@ -188,6 +188,9 @@ pub(crate) fn object(object: &Object) -> Issues {
                 format!("object {name} faces the camera; a card takes no body"),
             );
         }
+    }
+    if let Some(wake) = &object.wake {
+        issues.nested(&["wake".to_string()], self::wake(name, wake));
     }
     if let Some(character) = &object.character {
         issues.nested(&["character".to_string()], self::character(name, character));
@@ -1423,6 +1426,72 @@ pub(crate) fn particles(particles: &Particles) -> Issues {
             &["prewarm"],
             format!("particle system {name}: prewarm is 0 to {PREWARM_MAX} seconds"),
         );
+    }
+    shape(&mut issues, particles);
+    issues
+}
+
+fn shape(issues: &mut Issues, particles: &Particles) {
+    let name = &particles.name;
+    if particles.mesh_node.is_some() && particles.mesh.is_none() {
+        issues.at(
+            &["mesh_node"],
+            format!("particle system {name}: mesh_node needs mesh, the object it is in"),
+        );
+    }
+    if let Some(mass) = particles.mass
+        && !(mass.is_finite() && mass > 0.0)
+    {
+        issues.at(
+            &["mass"],
+            format!("particle system {name}: mass is above 0 kilograms"),
+        );
+    }
+    at_least(issues, "area", particles.area, 0.0);
+    unit(issues, &["flat"], particles.flat);
+    span(issues, "tumble", particles.tumble);
+    if particles.ground.is_some_and(|ground| !ground.is_finite()) {
+        issues.at(
+            &["ground"],
+            format!("particle system {name}: ground is a finite height"),
+        );
+    }
+    unit(issues, &["bounce"], particles.bounce);
+    unit(issues, &["friction"], particles.friction);
+    at_least(issues, "lift", particles.lift, 0.0);
+    if let Some(placed) = &particles.placed
+        && !finite(&placed.concat())
+    {
+        issues.at(
+            &["placed"],
+            format!("particle system {name}: placed is [x, y, z, yaw] of finite numbers"),
+        );
+    }
+}
+
+pub(crate) fn wake(name: &str, wake: &Wake) -> Issues {
+    let mut issues = Issues::default();
+    if !finite(&wake.at.unwrap_or([0.0; 3])) {
+        issues.at(
+            &["at"],
+            format!("object {name}: wake.at is three finite numbers"),
+        );
+    }
+    for (key, value) in [("radius", wake.radius), ("decay", wake.decay)] {
+        if let Some(value) = value
+            && !(value.is_finite() && value > 0.0)
+        {
+            issues.at(&[key], format!("object {name}: wake.{key} is above 0"));
+        }
+    }
+    for (key, value) in [
+        ("strength", wake.strength),
+        ("grow", wake.grow),
+        ("spread", wake.spread),
+        ("rise", wake.rise),
+        ("length", wake.length),
+    ] {
+        at_least(&mut issues, key, value, 0.0);
     }
     issues
 }

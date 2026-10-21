@@ -109,6 +109,8 @@ pub struct Object {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Body>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake: Option<Wake>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub character: Option<Character>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<Trigger>,
@@ -214,6 +216,42 @@ pub enum ParticleBlend {
 
 pub const PREWARM_MAX: f32 = 30.0;
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Wake {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f32; 3]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strength: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grow: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decay: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spread: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rise: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<f32>,
+}
+
+impl Particles {
+    pub fn shaped(&self) -> bool {
+        self.mesh.is_some()
+            || self.mass.is_some()
+            || self.area.is_some()
+            || self.flat.is_some()
+            || self.tumble.is_some()
+            || self.ground.is_some()
+            || self.placed.is_some()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
@@ -269,6 +307,30 @@ pub struct Particles {
     pub seed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prewarm: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh_node: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mass: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flat: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tumble: Option<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ground: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounce: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub friction: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lift: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placed: Option<Vec<[f32; 4]>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keys: Option<Keys>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

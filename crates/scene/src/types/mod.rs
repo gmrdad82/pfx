@@ -28,8 +28,8 @@ pub use scene::{
     LiveSettings, Look, Mesh, Motion, MotionBlur, Mover, MoverKind, Node, Nudge, Object, Orbit,
     PREWARM_MAX, ParticleBlend, Particles, Physics, Plane, Plates, Play, Preset, Projection, Proxy,
     ProxyKind, Repeat, Rig, RigKind, Scale, Shadow, ShadowQuality, Shadows, ShutterPosition, Sound,
-    Sounds, SpriteClip, Sun, SunModel, Text, TileCell, TilePlane, Tiles, Trace, Trigger, Wander,
-    Zoom,
+    Sounds, SpriteClip, Sun, SunModel, Text, TileCell, TilePlane, Tiles, Trace, Trigger, Wake,
+    Wander, Zoom,
 };
 pub use sky::{Prepare, Room, RoomLamp, Sky, SkyKind};
 pub use tunable::{Tunable, TunableKind, TunableValue};

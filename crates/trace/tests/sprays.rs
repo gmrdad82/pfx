@@ -685,3 +685,81 @@ fn a_kept_trace_takes_each_frames_sprites_and_traces_the_bytes_of_a_fresh_one() 
         }
     }
 }
+
+fn chip(at: [f32; 3]) -> String {
+    format!(
+        "\n[[object]]\nname = \"chip\"\nmesh = \"block\"\nat = [{}, {}, {}]\nscale = 0.2\nmaterial = \"crate\"\n",
+        at[0], at[1], at[2]
+    )
+}
+
+const CHIPS: &str = "
+[[particles]]
+name = \"chips\"
+mesh = \"chip\"
+rate = 0.0
+lifetime = [60.0, 60.0]
+size = [1.0, 1.0]
+alpha = [[0.0, 1.0], [1.0, 1.0]]
+ground = 0.0
+placed = [[1.0, 0.0, -0.5, 0.0]]
+";
+
+fn worst(a: &[[f32; 3]], b: &[[f32; 3]]) -> (f64, f64) {
+    let mut sum = 0.0;
+    let mut most: f64 = 0.0;
+    for (a, b) in a.iter().zip(b) {
+        for c in 0..3 {
+            let d = (level(a[c]) - level(b[c])).abs();
+            sum += d;
+            most = most.max(d);
+        }
+    }
+    (sum / (a.len() * 3) as f64, most)
+}
+
+#[test]
+fn mesh_particles_stage_as_instances_and_refuse_a_kept_transform_update() {
+    let chips = scene(
+        "chips-staged",
+        &format!("{}{CHIPS}", chip([-1.5, 0.1, -1.0])),
+    );
+    let (puffs, pieces) = stage::scene_sprays(&chips, &chips.camera_or_default(), 1.0);
+    assert!(puffs.is_empty());
+    assert_eq!(pieces.len(), 1);
+    assert_eq!(pieces[0].1.len(), 1);
+    assert_eq!(pieces[0].1[0].position, [1.0, 0.0, -0.5]);
+    assert!(stage::posed_transforms(&chips, &pfx_load::scene::Posed::at(1.0)).is_err());
+    let again = stage::scene_sprays(&chips, &chips.camera_or_default(), 1.0).1;
+    assert_eq!(pieces, again);
+}
+
+#[test]
+#[ignore = "needs a GPU; run under pgpu"]
+fn a_resting_mesh_particle_draws_as_its_prototype_would_at_its_place() {
+    const SIZE: [u32; 2] = [160, 96];
+    let chips = scene("chips", &format!("{}{CHIPS}", chip([-1.5, 0.1, -1.0])));
+    let moved = scene("chips-moved", &chip([1.0, 0.0, -0.5]));
+    let bare = scene("chips-bare", "");
+    let aspect = 160.0 / 96.0;
+    let traced_chips = traced(&stage::scene_at(&chips, aspect, 1.0).unwrap(), SIZE, 16);
+    let traced_moved = traced(&stage::scene_at(&moved, aspect, 1.0).unwrap(), SIZE, 16);
+    let traced_bare = traced(&stage::scene_at(&bare, aspect, 1.0).unwrap(), SIZE, 16);
+    let (mean, most) = worst(&traced_chips.colour, &traced_moved.colour);
+    let (shown, _) = worst(&traced_moved.colour, &traced_bare.colour);
+    assert!(shown > 0.5, "the chip shows in the frame: {shown}");
+    assert!(
+        mean < 0.25 * shown,
+        "traced: {mean} against {shown}, worst {most}"
+    );
+    let live_chips = live(&chips, SIZE, 1.0);
+    let live_moved = live(&moved, SIZE, 1.0);
+    let live_bare = live(&bare, SIZE, 1.0);
+    let (mean, most) = worst(&live_chips, &live_moved);
+    let (shown, _) = worst(&live_moved, &live_bare);
+    assert!(shown > 0.5, "the chip shows live: {shown}");
+    assert!(
+        mean < 0.25 * shown,
+        "live: {mean} against {shown}, worst {most}"
+    );
+}

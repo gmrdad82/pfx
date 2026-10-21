@@ -2,7 +2,7 @@ use super::{Paths, shown};
 use crate::bake::{Section, list, number, string};
 use crate::{Built, Error};
 use pfx_recipe::{Colour, Recipe, Setting, Settings};
-use pfx_scene::types::Wet;
+use pfx_scene::types::{Wake, Wet};
 use std::path::Path;
 
 pub(super) fn file(
@@ -134,10 +134,26 @@ pub(super) fn particles(
             Some(name) => Some(parent(built, recipe, whole, name, &format!("{at}.parent"))?),
             None => None,
         };
+        let mesh = match &particles.mesh {
+            Some(name) => Some(self::parent(
+                built,
+                recipe,
+                whole,
+                name,
+                &format!("{at}.mesh"),
+            )?),
+            None => None,
+        };
         let mut s = Section::new(out, "[[particles]]", &at);
         s.put("name", &string(&particles.name));
         if let Some(parent) = parent {
             parent.put(&mut s);
+        }
+        if let Some(mesh) = mesh {
+            s.put("mesh", &string(&mesh.object));
+            if let Some(node) = &mesh.node {
+                s.put("mesh_node", &string(node));
+            }
         }
         put(&mut s, &particles.settings)?;
         let entry = format!("particles.{}", particles.name);
@@ -201,4 +217,50 @@ pub(super) fn unplaced(text: String, recipe: &Recipe, built: &Built) -> String {
         }
     }
     doc.to_string()
+}
+
+pub(super) fn wakes(
+    recipe: &Recipe,
+    built: &Built,
+    whole: Option<&str>,
+) -> Result<Vec<(String, Wake)>, Error> {
+    let mut out = Vec::new();
+    for follow in &recipe.follows {
+        let Some(settings) = &follow.wake else {
+            continue;
+        };
+        let at = format!("follow[{}].wake", follow.object);
+        let owner = self::parent(
+            built,
+            recipe,
+            whole,
+            &follow.object,
+            &format!("{at}.object"),
+        )?;
+        let mut wake = Wake {
+            node: owner.node.clone(),
+            ..Wake::default()
+        };
+        for (key, value) in settings {
+            let number = match value {
+                Setting::Number(v) => Some(*v as f32),
+                _ => None,
+            };
+            match (*key, value) {
+                ("at", Setting::Numbers(v)) if v.len() == 3 => {
+                    wake.at = Some([v[0] as f32, v[1] as f32, v[2] as f32]);
+                }
+                ("strength", _) => wake.strength = number,
+                ("radius", _) => wake.radius = number,
+                ("grow", _) => wake.grow = number,
+                ("decay", _) => wake.decay = number,
+                ("spread", _) => wake.spread = number,
+                ("rise", _) => wake.rise = number,
+                ("length", _) => wake.length = number,
+                _ => {}
+            }
+        }
+        out.push((owner.object, wake));
+    }
+    Ok(out)
 }

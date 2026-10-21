@@ -51,7 +51,7 @@ pub use pfx_motion::{Rate, Route, Timeline, Trs, matrix, sample, trs_from_matrix
 pub use pfx_recipe::NO_SIDECAR;
 pub use pfx_recipe::files;
 pub use pfx_recipe::{apply_only as only, apply_stage as staged};
-pub use scene::{Emitted, emitters, object_ids};
+pub use scene::{Emitted, Waking, emitters, object_ids, wakes};
 pub use subdiv::subdivide;
 pub use timeline::{Animates, Bake, Baker, camera_track, lens, pose, pose_cameras, time_refusal};
 

@@ -487,3 +487,71 @@ fn a_traced_recipe_runs_the_emitters_its_scene_file_loads() {
         );
     }
 }
+
+const LEAVES: &str = r#"[timeline]
+fps = 30
+frames = 30
+
+[[route]]
+name = "main"
+points = [[0.0, 0.0, 0.0], [0.0, 0.0, 20.0]]
+
+[[follow]]
+object = "car"
+route = "main"
+speed = [[0.0, 10.0]]
+wake = { strength = 0.7, radius = 1.5 }
+
+[[object]]
+name = "leaf"
+kind = "box"
+size = [0.1, 0.01, 0.08]
+material = "paint"
+
+[[particles]]
+name = "leaves"
+mesh = "leaf"
+burst = 20
+ground = 0.0
+mass = 0.002
+tumble = [1.0, 4.0]
+
+"#;
+
+#[test]
+fn a_recipes_mesh_particles_and_follow_wake_reach_the_scene_and_the_traced_path_alike() {
+    let sparks = "[[particles]]\nname = \"sparks\"";
+    let root = project("effects-leaves", &[(sparks, &format!("{LEAVES}{sparks}"))]);
+    let base = root.join("recipes");
+    let r = load(&base.join("street.toml")).unwrap().recipe;
+    assert_eq!(validate(&r), []);
+    let built = build(&r, &base).unwrap();
+    write(&built, &r, &base, Some(&root.join("scenes"))).unwrap();
+    let scene = pfx_load::scene::Scene::open(root.join("scenes/street.scene.toml")).unwrap();
+    let named = |attach: &pfx_load::scene::Attach| {
+        attach
+            .node
+            .as_ref()
+            .map_or(attach.object.clone(), |node| node.name.clone())
+    };
+    let leaves = &scene.particles["leaves"];
+    assert_eq!(named(leaves.mesh.as_ref().unwrap()), "leaf");
+    let body = leaves.recipe.body.unwrap();
+    assert_eq!((body.mass, body.tumble), (0.002, [1.0, 4.0]));
+    assert_eq!(body.ground.unwrap().height, 0.0);
+    assert_eq!(scene.wakes.len(), 1);
+    let wake = scene.wakes.values().next().unwrap();
+    assert_eq!(named(&wake.attach), "car");
+    assert_eq!((wake.recipe.strength, wake.recipe.radius), (0.7, 1.5));
+    let emitted = pfx_build::emitters(&r, &built).unwrap();
+    let flown = emitted.iter().find(|e| e.name == "leaves").unwrap();
+    assert_eq!(flown.mesh.as_deref(), Some("leaf"));
+    assert_eq!(flown.recipe, leaves.recipe);
+    let wakes = pfx_build::wakes(&r, &built).unwrap();
+    assert_eq!(wakes.len(), 1);
+    assert_eq!(wakes[0].node, "car");
+    assert_eq!(wakes[0].recipe, wake.recipe);
+    let diagnostics = Project::open(&root).unwrap().check();
+    let lines: Vec<String> = diagnostics.iter().map(ToString::to_string).collect();
+    assert!(lines.is_empty(), "{}", lines.join("\n"));
+}

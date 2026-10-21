@@ -1,18 +1,28 @@
 use std::collections::BTreeMap;
 
 use pfx_core::sim::mix64;
-use pfx_core::sim::particles::{Blend, Gradient, Lerp, Recipe, RecipeKeys};
+use pfx_core::sim::particles::{
+    Blend, Body, Gradient, Ground, IDENTITY, Lerp, Placed, Recipe, RecipeKeys,
+};
+use pfx_core::sim::wake::Recipe as WakeRecipe;
 use pfx_scene::Entry;
 use pfx_scene::types::{self as file, KeyValue};
 
 use super::build::{Places, Step, inner};
-use super::{Matrix, Object, Scene, SceneError, SceneMesh, multiply};
+use super::{Draw, Draws, Matrix, Object, Scene, SceneError, SceneMesh, multiply};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Particles {
     pub attach: Option<Attach>,
     pub at: [f32; 3],
     pub recipe: Recipe,
+    pub mesh: Option<Attach>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Wake {
+    pub attach: Attach,
+    pub recipe: WakeRecipe,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -101,7 +111,72 @@ pub fn recipe(name: &str, value: &file::Particles) -> Recipe {
         lit: value.lit.unwrap_or(base.lit),
         seed: value.seed.unwrap_or_else(|| seed_of(name)),
         prewarm: value.prewarm.unwrap_or(base.prewarm),
+        body: body(value),
+        placed: value
+            .placed
+            .iter()
+            .flatten()
+            .map(|[x, y, z, yaw]| Placed {
+                position: [*x, *y, *z],
+                yaw: *yaw,
+            })
+            .collect(),
     }
+}
+
+fn attach(
+    places: &Places,
+    entry: &Entry<file::Particles>,
+    objects: &[Object],
+    meshes: &BTreeMap<String, SceneMesh>,
+    keys: [&'static str; 2],
+    named: (Option<&String>, Option<&String>),
+) -> Result<Option<Attach>, SceneError> {
+    let name = entry.key.as_str();
+    let at = |key| [Step::Named("particles", inner(name)), Step::Key(key)];
+    let [object_key, node_key] = keys;
+    let object = match named {
+        (None, None) => return Ok(None),
+        (None, Some(_)) => {
+            return places.error(
+                &entry.file,
+                &at(node_key),
+                format!("particles {name}: {node_key} needs {object_key}, the object it is in"),
+            );
+        }
+        (Some(object), _) => object,
+    };
+    let Some(found) = objects.iter().find(|candidate| &candidate.name == object) else {
+        return places.error(
+            &entry.file,
+            &at(object_key),
+            format!("particles {name}: {object_key} {object} is no object of this scene"),
+        );
+    };
+    let node = match named.1 {
+        None => None,
+        Some(node) => {
+            let part = meshes
+                .get(&found.mesh)
+                .and_then(|mesh| mesh.parts.iter().find(|part| &part.node == node));
+            let Some(part) = part else {
+                return places.error(
+                    &entry.file,
+                    &at(node_key),
+                    format!("particles {name}: object {object} has no node {node} in its mesh"),
+                );
+            };
+            Some(Node {
+                name: node.clone(),
+                joint: part.joint,
+                transform: part.transform,
+            })
+        }
+    };
+    Ok(Some(Attach {
+        object: found.name.clone(),
+        node,
+    }))
 }
 
 pub(super) fn build(
@@ -112,60 +187,93 @@ pub(super) fn build(
 ) -> Result<BTreeMap<String, Particles>, SceneError> {
     let mut out = BTreeMap::new();
     for entry in entries {
-        let name = entry.key.as_str();
         let value = &entry.value;
-        let at = |key| [Step::Named("particles", inner(name)), Step::Key(key)];
-        let attach = match &value.parent {
-            None if value.node.is_some() => {
-                return places.error(
-                    &entry.file,
-                    &at("node"),
-                    format!("particles {name}: node needs a parent object"),
-                );
-            }
-            None => None,
-            Some(parent) => {
-                let Some(object) = objects.iter().find(|object| &object.name == parent) else {
-                    return places.error(
-                        &entry.file,
-                        &at("parent"),
-                        format!("particles {name}: parent {parent} is no object of this scene"),
-                    );
-                };
-                let node = match &value.node {
-                    None => None,
-                    Some(node) => {
-                        let part = meshes
-                            .get(&object.mesh)
-                            .and_then(|mesh| mesh.parts.iter().find(|part| &part.node == node));
-                        let Some(part) = part else {
-                            return places.error(
-                                &entry.file,
-                                &at("node"),
-                                format!(
-                                    "particles {name}: object {parent} has no node {node} in its mesh"
-                                ),
-                            );
-                        };
-                        Some(Node {
-                            name: node.clone(),
-                            joint: part.joint,
-                            transform: part.transform,
-                        })
-                    }
-                };
-                Some(Attach {
-                    object: object.name.clone(),
-                    node,
-                })
-            }
-        };
+        let parent = attach(
+            places,
+            entry,
+            objects,
+            meshes,
+            ["parent", "node"],
+            (value.parent.as_ref(), value.node.as_ref()),
+        )?;
+        let mesh = attach(
+            places,
+            entry,
+            objects,
+            meshes,
+            ["mesh", "mesh_node"],
+            (value.mesh.as_ref(), value.mesh_node.as_ref()),
+        )?;
         out.insert(
             entry.key.clone(),
             Particles {
-                attach,
+                attach: parent,
                 at: value.at.unwrap_or([0.0; 3]),
-                recipe: recipe(name, value),
+                recipe: recipe(entry.key.as_str(), value),
+                mesh,
+            },
+        );
+    }
+    Ok(out)
+}
+
+pub(super) fn wakes(
+    places: &Places,
+    entries: &[Entry<file::Object>],
+    objects: &[Object],
+    meshes: &BTreeMap<String, SceneMesh>,
+) -> Result<BTreeMap<String, Wake>, SceneError> {
+    let mut out = BTreeMap::new();
+    for entry in entries {
+        let Some(wake) = &entry.value.wake else {
+            continue;
+        };
+        let name = entry.key.as_str();
+        let Some(object) = objects.iter().find(|object| object.name == name) else {
+            continue;
+        };
+        let node = match &wake.node {
+            None => None,
+            Some(node) => {
+                let part = meshes
+                    .get(&object.mesh)
+                    .and_then(|mesh| mesh.parts.iter().find(|part| &part.node == node));
+                let Some(part) = part else {
+                    return places.error(
+                        &entry.file,
+                        &[
+                            Step::Named("object", inner(name)),
+                            Step::Key("wake"),
+                            Step::Key("node"),
+                        ],
+                        format!("object {name}: wake.node {node} is not in its mesh"),
+                    );
+                };
+                Some(Node {
+                    name: node.clone(),
+                    joint: part.joint,
+                    transform: part.transform,
+                })
+            }
+        };
+        let base = WakeRecipe::default();
+        out.insert(
+            entry.key.clone(),
+            Wake {
+                attach: Attach {
+                    object: object.name.clone(),
+                    node,
+                },
+                recipe: WakeRecipe {
+                    at: wake.at.unwrap_or(base.at),
+                    strength: wake.strength.unwrap_or(base.strength),
+                    radius: wake.radius.unwrap_or(base.radius),
+                    grow: wake.grow.unwrap_or(base.grow),
+                    decay: wake.decay.unwrap_or(base.decay),
+                    spread: wake.spread.unwrap_or(base.spread),
+                    rise: wake.rise.unwrap_or(base.rise),
+                    length: wake.length.unwrap_or(base.length),
+                },
             },
         );
     }
@@ -191,4 +299,101 @@ impl Attach {
             }
         }
     }
+
+    pub fn draws(&self, draw: &Draw) -> bool {
+        draw.object == self.object && self.node.as_ref().is_none_or(|node| draw.node == node.name)
+    }
+
+    fn placed(&self, scene: &Scene, draw: &Draw) -> Matrix {
+        match &self.node {
+            Some(_) => draw.part,
+            None => {
+                let model = scene
+                    .objects
+                    .iter()
+                    .find(|object| object.name == self.object)
+                    .map_or(IDENTITY, |object| object.model);
+                multiply(model, draw.part)
+            }
+        }
+    }
+}
+
+pub type Shape = Vec<(usize, Matrix)>;
+
+pub fn shapes(scene: &Scene, draws: &Draws) -> Vec<Shape> {
+    scene
+        .particles
+        .values()
+        .map(|particles| match &particles.mesh {
+            None => Vec::new(),
+            Some(mesh) => centred(
+                draws
+                    .items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, draw)| mesh.draws(draw))
+                    .map(|(index, draw)| (index, mesh.placed(scene, draw), draw)),
+            ),
+        })
+        .collect()
+}
+
+pub fn shaping(scene: &Scene, draws: &Draws) -> Vec<bool> {
+    let meshes: Vec<&Attach> = scene
+        .particles
+        .values()
+        .filter_map(|particles| particles.mesh.as_ref())
+        .collect();
+    draws
+        .items
+        .iter()
+        .map(|draw| meshes.iter().any(|mesh| mesh.draws(draw)))
+        .collect()
+}
+
+fn centred<'a>(found: impl Iterator<Item = (usize, Matrix, &'a Draw)>) -> Shape {
+    let found: Vec<(usize, Matrix, &Draw)> = found.collect();
+    let mut low = [f32::INFINITY; 3];
+    let mut high = [f32::NEG_INFINITY; 3];
+    for (_, model, draw) in &found {
+        for p in &draw.geometry.positions {
+            let q = pfx_core::sim::particles::point(*model, *p);
+            for axis in 0..3 {
+                low[axis] = low[axis].min(q[axis]);
+                high[axis] = high[axis].max(q[axis]);
+            }
+        }
+    }
+    let mut back = IDENTITY;
+    for axis in 0..3 {
+        if low[axis] <= high[axis] {
+            back[3][axis] = -0.5 * (low[axis] + high[axis]);
+        }
+    }
+    found
+        .into_iter()
+        .map(|(index, model, _)| (index, multiply(back, model)))
+        .collect()
+}
+
+fn body(value: &file::Particles) -> Option<Body> {
+    if !value.shaped() {
+        return None;
+    }
+    let base = Body::default();
+    let ground = Ground::default();
+    Some(Body {
+        mass: value.mass.unwrap_or(base.mass),
+        area: value.area.unwrap_or(base.area),
+        flat: value.flat.unwrap_or(base.flat),
+        tumble: value.tumble.unwrap_or(base.tumble),
+        ground: value.ground.map(|height| Ground {
+            height,
+            bounce: value.bounce.unwrap_or(ground.bounce),
+            friction: value.friction.unwrap_or(ground.friction),
+            keep: value.keep.unwrap_or(ground.keep),
+            lift: value.lift.unwrap_or(ground.lift),
+        }),
+    })
 }

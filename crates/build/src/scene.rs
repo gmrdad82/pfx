@@ -224,7 +224,8 @@ pub(crate) fn text_named(
         library,
         files: fonts,
     };
-    let mut done = one(written, built, recipe, &paths, stands)?;
+    let wakes = effects::wakes(recipe, built, whole.as_deref())?;
+    let mut done = one(written, built, recipe, &paths, stands, wakes)?;
     done.files.extend(paths.copied()?);
     Ok(done)
 }
@@ -1943,6 +1944,7 @@ fn one(
     recipe: &Recipe,
     paths: &Paths,
     stands: Option<(PathBuf, Vec<proxies::Stand>)>,
+    wakes: Vec<(String, pfx_scene::types::Wake)>,
 ) -> Result<Written, Error> {
     let refused = |key: &str, e: &dyn std::fmt::Display| {
         Error::new(
@@ -1952,6 +1954,11 @@ fn one(
     };
     let mut scene: SceneFile =
         toml::from_str(&written.text).map_err(|e| refused("output.scene", &e))?;
+    for (name, wake) in wakes {
+        if let Some(object) = scene.object.iter_mut().find(|object| object.name == name) {
+            object.wake = Some(wake);
+        }
+    }
     let source = source_of(recipe, &paths.provenance)?;
     let mut authoring = toml::Table::new();
     if let Some(source) = &source {
@@ -2132,6 +2139,33 @@ pub struct Emitted {
     pub node: Option<String>,
     pub at: [f32; 3],
     pub recipe: pfx_core::sim::particles::Recipe,
+    pub mesh: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Waking {
+    pub node: String,
+    pub recipe: pfx_core::sim::wake::Recipe,
+}
+
+pub fn wakes(recipe: &Recipe, built: &Built) -> Result<Vec<Waking>, Error> {
+    let base = pfx_core::sim::wake::Recipe::default();
+    Ok(effects::wakes(recipe, built, None)?
+        .into_iter()
+        .map(|(node, wake)| Waking {
+            node,
+            recipe: pfx_core::sim::wake::Recipe {
+                at: wake.at.unwrap_or(base.at),
+                strength: wake.strength.unwrap_or(base.strength),
+                radius: wake.radius.unwrap_or(base.radius),
+                grow: wake.grow.unwrap_or(base.grow),
+                decay: wake.decay.unwrap_or(base.decay),
+                spread: wake.spread.unwrap_or(base.spread),
+                rise: wake.rise.unwrap_or(base.rise),
+                length: wake.length.unwrap_or(base.length),
+            },
+        })
+        .collect())
 }
 
 pub fn emitters(recipe: &Recipe, built: &Built) -> Result<Vec<Emitted>, Error> {
@@ -2157,6 +2191,7 @@ pub fn emitters(recipe: &Recipe, built: &Built) -> Result<Vec<Emitted>, Error> {
                 node: value.parent.clone(),
                 at: value.at.unwrap_or([0.0; 3]),
                 recipe: pfx_load::scene::particle_recipe(&value.name, &value),
+                mesh: value.mesh_node.clone().or(value.mesh.clone()),
             })
         })
         .collect()

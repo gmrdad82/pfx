@@ -273,8 +273,36 @@ A deterministic emitter simulated on a 1/120 s grid and drawn by the live render
 | `lit` | lit as a scattering puff: thin parts glow toward a light behind them by the haze's phase, dense parts shade diffusely; by the sun and its shadows (lit in shade as much as the haze is), the probes or sky and local lights; unlit emits its colour | | `true` |
 | `seed` | the emitter's random stream | u64 | a hash of `name` |
 | `prewarm` | simulate this long before t = 0, the parent held at its t = 0 pose and the keys at their t = 0 values, so a shot opens with its trails formed (idling exhaust, a fire, steam), as Unity's Prewarm and Godot's `preprocess` do | 0 to 30 s | 0 |
+| `mesh` | draw each particle as an instance of this object's mesh instead of a sprite: a leaf, a paper scrap, a card; the object is the prototype and is not drawn where it stands ([particles.md](particles.md#mesh-particles)) | object key | none, sprites |
+| `mesh_node` | a glTF node inside the prototype's mesh to use alone; refused without `mesh` | node name | none, the whole object |
+| `mass` | each mesh particle's mass | kg, above 0 | `0.0005` |
+| `area` | one face's area, for drag and lift | m², ≥ 0 | `0.002` |
+| `flat` | 1 is a card that glides, flutters and tumbles, 0 a lump with plain drag | 0 to 1 | `1` |
+| `tumble` | `[min, max]` spawn spin about a random axis | rad/s, 0 ≤ min ≤ max | `[0, 6]` |
+| `ground` | the height of a ground plane the particles settle on and rest | metres | none |
+| `bounce` | share of the fall kept as a bounce | 0 to 1 | `0.1` |
+| `friction` | share of sliding and spin lost each step on the ground | 0 to 1 | `0.8` |
+| `keep` | a resting particle stops ageing, so it stays | | `true` |
+| `lift` | air speed that lifts a resting particle | m/s, ≥ 0 | `2` |
+| `placed` | `[[x, y, z, yaw], ...]` particles spawned resting on the first step, in the parent's space, yaw in degrees | | none |
 
 From the CLI and the editor these are keys of `Target::Particles(name)`, so `--set particles.<name>.<key>=<value>` (`--set particles.spray.rate=800`) goes through the same `SceneEdit` path as a hand edit and reaches the window through the scene watch.
+
+### `[object.wake]`: a wake behind a moving object
+
+Air dragged along behind an object as it moves, which moves every emitter's particles: mesh particles by their drag and lift, sprites by their `drag` ([particles.md](particles.md#wake-fields)). Fixed-step and deterministic; an object that stands still leaves no wake. pfx-load reads it into `Scene::wakes`, keyed by the object.
+
+| Key | Meaning | Range | Default |
+|---|---|---|---|
+| `node` | a glTF node inside the object's mesh the wake rides; refused when the mesh has no such node | node name | none, the object |
+| `at` | the point that leaves the wake, in the node's (else the object's) space | metres | `[0, 0, 0]` |
+| `strength` | share of the object's velocity the air behind it takes | ≥ 0 | `0.5` |
+| `radius` | the wake's radius where it is left | metres, above 0 | `1` |
+| `grow` | how fast the radius widens | m/s, ≥ 0 | `0.6` |
+| `decay` | the e-folding time of its strength | seconds, above 0 | `0.8` |
+| `spread` | outward push away from the line of travel, a share of the speed | ≥ 0 | `0.3` |
+| `rise` | upward push, a share of the speed | ≥ 0 | `0.15` |
+| `length` | how long a stretch of wake lasts | seconds, ≥ 0 | `3` |
 
 ## Reload
 

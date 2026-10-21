@@ -795,6 +795,7 @@ mod tests {
             dynamics: None,
             ride: 0.0,
             root_motion: pfx_recipe::RootMotion::Ignore,
+            wake: None,
         }
     }
 

@@ -144,6 +144,8 @@ pub struct Staged {
     shown: Option<Matrix>,
     sprays: crate::particles::Sprays,
     spray_instances: Vec<crate::particles::SprayInstance>,
+    shapes: Vec<pfx_load::scene::Shape>,
+    shaping: Vec<bool>,
     animators: BTreeMap<usize, pfx_core::anim::Animator>,
     rig: Vec<pfx_load::scene::Light>,
     lights: Option<Vec<LocalLight>>,
@@ -519,6 +521,8 @@ impl Renderer {
             shown: None,
             sprays: crate::particles::Sprays::of(scene),
             spray_instances: Vec::new(),
+            shapes: Vec::new(),
+            shaping: Vec::new(),
             animators: BTreeMap::new(),
             rig: Vec::new(),
             lights: None,
@@ -661,6 +665,7 @@ impl Staged {
         self.posing = (scene.animated() || clipped).then(|| scene.clone());
         self.rig = light_rig(scene, clipped);
         self.draws = draws;
+        self.shape(scene);
         self.slots = slots;
         self.base = base;
         self.base_glass = base_glass;
@@ -699,7 +704,8 @@ impl Staged {
                     }
                 };
             }
-            let hidden = shown.is_some_and(|change| change.hidden);
+            let hidden =
+                shown.is_some_and(|change| change.hidden) || self.shaping.get(index) == Some(&true);
             let change = shown.unwrap_or_default();
             match *slot {
                 Slot::Opaque(at) => {
@@ -739,6 +745,8 @@ impl Staged {
         }
         if !self.sprays.same(scene) {
             self.sprays = crate::particles::Sprays::of(scene);
+            self.shape(scene);
+            self.refresh();
         }
         if diff.camera {
             self.camera = scene.camera_or_default();
@@ -1128,8 +1136,64 @@ impl Staged {
             });
         }
         crate::particles::pack(&mut self.sprays, &mut self.spray_instances);
+        self.pieces();
     }
 
+    fn shape(&mut self, scene: &Scene) {
+        self.shapes = pfx_load::scene::shapes(scene, &self.draws);
+        self.shaping = pfx_load::scene::shaping(scene, &self.draws);
+    }
+
+    fn pieces(&mut self) {
+        self.instances.truncate(self.base.len());
+        place_pieces(
+            &self.shapes,
+            &self.slots,
+            &self.base,
+            &mut self.sprays,
+            &mut self.instances,
+        );
+    }
+
+    pub fn place_pieces(&self, sprays: &mut crate::particles::Sprays, out: &mut Vec<Instance>) {
+        out.truncate(self.base.len());
+        place_pieces(&self.shapes, &self.slots, &self.base, sprays, out);
+    }
+}
+
+fn place_pieces(
+    shapes: &[pfx_load::scene::Shape],
+    slots: &[Slot],
+    base: &[Instance],
+    sprays: &mut crate::particles::Sprays,
+    instances: &mut Vec<Instance>,
+) {
+    if shapes.iter().all(Vec::is_empty) {
+        return;
+    }
+    let span = sprays.span();
+    sprays.each_piece(|index, _, pieces| {
+        let Some(shape) = shapes.get(index) else {
+            return;
+        };
+        for piece in pieces {
+            let model = piece.matrix();
+            let previous = piece.back(span);
+            for (draw, local) in shape {
+                let Some(Slot::Opaque(at)) = slots.get(*draw) else {
+                    continue;
+                };
+                instances.push(Instance {
+                    model: multiply(model, *local),
+                    previous_model: multiply(previous, *local),
+                    ..base[*at]
+                });
+            }
+        }
+    });
+}
+
+impl Staged {
     pub fn sprays(&self) -> &crate::particles::Sprays {
         &self.sprays
     }

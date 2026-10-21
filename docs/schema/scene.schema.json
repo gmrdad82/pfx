@@ -2041,6 +2041,9 @@
         },
         "two_sided": {
           "type": "boolean"
+        },
+        "wake": {
+          "$ref": "#/$defs/Wake"
         }
       },
       "required": [
@@ -2129,6 +2132,10 @@
           },
           "type": "array"
         },
+        "area": {
+          "format": "float",
+          "type": "number"
+        },
         "at": {
           "items": {
             "format": "float",
@@ -2141,6 +2148,10 @@
         "authoring": true,
         "blend": {
           "$ref": "#/$defs/ParticleBlend"
+        },
+        "bounce": {
+          "format": "float",
+          "type": "number"
         },
         "burst": {
           "format": "uint32",
@@ -2184,6 +2195,14 @@
           "format": "float",
           "type": "number"
         },
+        "flat": {
+          "format": "float",
+          "type": "number"
+        },
+        "friction": {
+          "format": "float",
+          "type": "number"
+        },
         "gravity": {
           "items": {
             "format": "float",
@@ -2193,12 +2212,19 @@
           "minItems": 3,
           "type": "array"
         },
+        "ground": {
+          "format": "float",
+          "type": "number"
+        },
         "id": {
           "$ref": "#/$defs/Id"
         },
         "inherit": {
           "format": "float",
           "type": "number"
+        },
+        "keep": {
+          "type": "boolean"
         },
         "keys": {
           "additionalProperties": {
@@ -2229,13 +2255,27 @@
           "minItems": 2,
           "type": "array"
         },
+        "lift": {
+          "format": "float",
+          "type": "number"
+        },
         "lit": {
           "type": "boolean"
+        },
+        "mass": {
+          "format": "float",
+          "type": "number"
         },
         "max": {
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "mesh": {
+          "type": "string"
+        },
+        "mesh_node": {
+          "type": "string"
         },
         "name": {
           "type": "string"
@@ -2245,6 +2285,18 @@
         },
         "parent": {
           "type": "string"
+        },
+        "placed": {
+          "items": {
+            "items": {
+              "format": "float",
+              "type": "number"
+            },
+            "maxItems": 4,
+            "minItems": 4,
+            "type": "array"
+          },
+          "type": "array"
         },
         "prewarm": {
           "format": "float",
@@ -2301,6 +2353,15 @@
         "stretch": {
           "format": "float",
           "type": "number"
+        },
+        "tumble": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
         }
       },
       "required": [
@@ -3396,6 +3457,52 @@
           "type": "number"
         },
         "scale": {
+          "format": "float",
+          "type": "number"
+        },
+        "strength": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "type": "object"
+    },
+    "Wake": {
+      "additionalProperties": false,
+      "properties": {
+        "at": {
+          "items": {
+            "format": "float",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "decay": {
+          "format": "float",
+          "type": "number"
+        },
+        "grow": {
+          "format": "float",
+          "type": "number"
+        },
+        "length": {
+          "format": "float",
+          "type": "number"
+        },
+        "node": {
+          "type": "string"
+        },
+        "radius": {
+          "format": "float",
+          "type": "number"
+        },
+        "rise": {
+          "format": "float",
+          "type": "number"
+        },
+        "spread": {
           "format": "float",
           "type": "number"
         },

@@ -288,6 +288,9 @@ pub fn referrers(r: &Recipe, table: &str, name: &str) -> Vec<String> {
                 if p.parent.as_deref().is_some_and(|p| names_node(p, name)) {
                     by.push(format!("particles[{}].parent", p.name));
                 }
+                if p.mesh.as_deref().is_some_and(|m| names_node(m, name)) {
+                    by.push(format!("particles[{}].mesh", p.name));
+                }
             }
             for s in &r.scatters {
                 if s.object == name {

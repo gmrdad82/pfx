@@ -69,7 +69,10 @@ pub use mounted::{container_of, held_text, is_pfx_path, pack, unpack};
 pub fn from_pfx_bytes(name: impl AsRef<Path>, bytes: &[u8]) -> Result<Scene, SceneError> {
     Scene::from_pfx_bytes(name, bytes)
 }
-pub use particles::{Attach, Node as ParticleNode, Particles, recipe as particle_recipe};
+pub use particles::{
+    Attach, Node as ParticleNode, Particles, Shape, Wake, recipe as particle_recipe, shapes,
+    shaping,
+};
 pub use pfx_scene::Id;
 pub use pfx_scene::ProjectFile;
 pub use pfx_scene::types::{
@@ -683,6 +686,7 @@ pub struct Scene {
     pub lights: BTreeMap<String, Light>,
     pub emitters: BTreeMap<String, Emitter>,
     pub particles: BTreeMap<String, Particles>,
+    pub wakes: BTreeMap<String, Wake>,
     pub camera: Option<Camera>,
     pub finish: Option<Finish>,
     pub trace: TraceSettings,

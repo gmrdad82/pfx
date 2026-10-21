@@ -453,12 +453,15 @@ pub fn render_kept(
     turn(Report::default());
     let mut staging = Staging::of(&recipe, &built.parts)?;
     let emitted = pfx_build::emitters(&recipe, &built).map_err(|e| Fault::Failed(e.to_string()))?;
-    let puffs = crate::sprays::puffs(
+    let wakes = pfx_build::wakes(&recipe, &built).map_err(|e| Fault::Failed(e.to_string()))?;
+    let (puffs, pieces) = crate::sprays::sprays(
         &emitted,
+        &wakes,
         &built,
         recipe.timeline.map_or(pfx_build::Rate::whole(1), |t| t.fps),
         request.time.unwrap_or(0.0),
     );
+    staging.set_particles(&emitted, &pieces);
     drop(built);
     staging.shed();
     let camera = pfx_recipe_scene::camera(&recipe, request.camera)?;
@@ -589,6 +592,7 @@ pub struct Reel {
     moving_cameras: Vec<Camera>,
     time: f64,
     emitted: Vec<pfx_build::Emitted>,
+    wakes: Vec<pfx_build::Waking>,
     sprite_room: usize,
     shutter: Vec<f64>,
     plan: MemoryPlan,
@@ -646,6 +650,7 @@ impl Reel {
         let staging = Staging::of(&recipe, &built.parts)?;
         let emitted =
             pfx_build::emitters(&recipe, &built).map_err(|e| Fault::Failed(e.to_string()))?;
+        let wakes = pfx_build::wakes(&recipe, &built).map_err(|e| Fault::Failed(e.to_string()))?;
         let gpu = pfx_recipe_scene::headless()?;
         let seed = seed.unwrap_or_else(|| pfx_recipe_scene::seed(&recipe));
         Ok(Reel {
@@ -667,6 +672,7 @@ impl Reel {
                 .map(|emitter| emitter.recipe.max as usize)
                 .sum(),
             emitted,
+            wakes,
             shutter: Vec::new(),
             plan,
         })
@@ -699,6 +705,9 @@ impl Reel {
                         None if traced.sprite => {
                             particles += 1;
                             format!("particle.{}", particles - 1)
+                        }
+                        None if traced.index < pieces.len() + self.staging.particles.len() => {
+                            format!("piece.{}", traced.index - pieces.len())
                         }
                         None => {
                             letterings += 1;
@@ -879,7 +888,9 @@ impl Reel {
         if let Some(steps) = self.staging.steps.as_mut() {
             steps.cameras = traced_cameras;
         }
-        let puffs = self.puffs();
+        let (puffs, pieces) = self.sprays();
+        self.staging.set_particles(&self.emitted, &pieces);
+        let flying = self.emitted.iter().any(|emitter| emitter.mesh.is_some());
         let blur = self.sprite_steps(&puffs);
         let spray = Spray {
             steps: &blur,
@@ -890,7 +901,8 @@ impl Reel {
         let mut restaged = None;
         let mut kept = match self.kept.take() {
             Some(mut kept)
-                if kept.size == size
+                if !flying
+                    && kept.size == size
                     && kept.samples == samples
                     && kept.trace.moving() == moves
                     && kept.trace.sprite_quad().is_some() == spray.shown().next().is_some()
@@ -1012,9 +1024,10 @@ impl Reel {
         })
     }
 
-    fn puffs(&self) -> Vec<pfx_trace::sprites::Puff> {
-        crate::sprays::puffs(
+    fn sprays(&self) -> (Vec<pfx_trace::sprites::Puff>, crate::sprays::Pieces) {
+        crate::sprays::sprays(
             &self.emitted,
+            &self.wakes,
             &self.built,
             self.base
                 .timeline

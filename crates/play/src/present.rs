@@ -337,6 +337,9 @@ impl Presenter {
         }
         drop(poses);
         self.spray(world, &posed, time);
+        if let Some(sprays) = self.sprays.as_mut() {
+            staged.place_pieces(sprays, &mut self.instances);
+        }
         if !frames.is_empty() {
             renderer
                 .set_surfaces(&self.surfaces)

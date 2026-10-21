@@ -30,6 +30,7 @@ pub type Settings = Vec<(&'static str, Setting)>;
 pub struct Particles {
     pub name: String,
     pub parent: Option<String>,
+    pub mesh: Option<String>,
     pub settings: Settings,
 }
 
@@ -91,6 +92,26 @@ const PARTICLES: &[(&str, Shape)] = &[
     ("lit", Shape::Flag),
     ("seed", Shape::Whole(0, u64::MAX)),
     ("prewarm", Shape::Num(Rule::Within(0.0, 30.0))),
+    ("mass", Shape::Num(Rule::Above(0.0))),
+    ("area", Shape::Num(Rule::AtLeast(0.0))),
+    ("flat", Shape::Num(Rule::Within(0.0, 1.0))),
+    ("tumble", Shape::Span { above: false }),
+    ("ground", Shape::Num(Rule::Any)),
+    ("bounce", Shape::Num(Rule::Within(0.0, 1.0))),
+    ("friction", Shape::Num(Rule::Within(0.0, 1.0))),
+    ("keep", Shape::Flag),
+    ("lift", Shape::Num(Rule::AtLeast(0.0))),
+];
+
+const WAKE: &[(&str, Shape)] = &[
+    ("at", Shape::Vec3 { nonzero: false }),
+    ("strength", Shape::Num(Rule::AtLeast(0.0))),
+    ("radius", Shape::Num(Rule::Above(0.0))),
+    ("grow", Shape::Num(Rule::AtLeast(0.0))),
+    ("decay", Shape::Num(Rule::Above(0.0))),
+    ("spread", Shape::Num(Rule::AtLeast(0.0))),
+    ("rise", Shape::Num(Rule::AtLeast(0.0))),
+    ("length", Shape::Num(Rule::AtLeast(0.0))),
 ];
 
 const FLARE: &[(&str, Shape)] = &[
@@ -335,6 +356,7 @@ fn read_particles(
     let mut tab = Tab::new(cx, t, path, format!("particles#{index}"), line);
     let name = tab.req(cx, "name", STR)?;
     let parent = tab.opt(cx, "parent", STR)?;
+    let mesh = tab.opt(cx, "mesh", STR)?;
     let settings = settings(cx, &mut tab, PARTICLES)?;
     super::keys::read(
         cx,
@@ -366,6 +388,7 @@ fn read_particles(
     Ok(Particles {
         name,
         parent,
+        mesh,
         settings,
     })
 }
@@ -566,4 +589,13 @@ pub(super) fn read_light(
     super::constraint::keep(cx, owner, list);
     tab.finish(cx)?;
     Ok(light)
+}
+
+pub(super) fn wake(cx: &mut Cx, root: &mut Tab<'_>) -> Result<Option<Settings>, Error> {
+    let Some(mut tab) = root.sub(cx, "wake")? else {
+        return Ok(None);
+    };
+    let out = settings(cx, &mut tab, WAKE)?;
+    tab.finish(cx)?;
+    Ok(Some(out))
 }

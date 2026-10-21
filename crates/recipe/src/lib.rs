@@ -876,6 +876,7 @@ pub struct Follow {
     pub dynamics: Option<Dynamics>,
     pub ride: f64,
     pub root_motion: RootMotion,
+    pub wake: Option<Settings>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

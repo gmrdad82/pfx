@@ -1,8 +1,9 @@
 use std::collections::BTreeMap;
 
-use pfx_core::sim::particles::{Emitter, IDENTITY, Matrix, Recipe, STEP, Sprite};
+use pfx_core::sim::particles::{Emitter, Field, IDENTITY, Matrix, Piece, Recipe, STEP, Sprite};
+use pfx_core::sim::wake::{Wake, Wakes};
 
-use super::{Attach, Particles, Scene};
+use super::{Attach, Particles, Scene, Wake as Waking};
 
 pub const CATCH_UP: f32 = 120.0;
 pub const MAX_SPAN: f32 = 0.1;
@@ -37,10 +38,14 @@ pub type Palettes = BTreeMap<usize, Vec<Matrix>>;
 #[derive(Clone, Debug, Default)]
 pub struct Sprays {
     particles: Vec<Particles>,
+    waking: Vec<Waking>,
     links: Vec<Link>,
     emitters: Vec<Emitter>,
+    meshes: Vec<bool>,
+    wakes: Vec<Wake>,
     steps: u64,
     sprites: Vec<Sprite>,
+    pieces: Vec<Piece>,
     last: Option<f32>,
     span: f32,
 }
@@ -56,38 +61,52 @@ fn lerp(a: &Matrix, b: &Matrix, k: f32) -> Matrix {
 impl Sprays {
     pub fn of(scene: &Scene) -> Self {
         let particles: Vec<Particles> = scene.particles.values().cloned().collect();
+        let waking: Vec<Waking> = scene.wakes.values().cloned().collect();
+        let link = |attach: Option<&Attach>| {
+            let object = attach.and_then(|attach| attach.index(scene));
+            Link {
+                object,
+                model: object.map_or(IDENTITY, |index| scene.objects[index].model),
+                attach: attach.cloned(),
+            }
+        };
         let links = particles
             .iter()
-            .map(|particles| {
-                let object = particles
-                    .attach
-                    .as_ref()
-                    .and_then(|attach| attach.index(scene));
-                Link {
-                    object,
-                    model: object.map_or(IDENTITY, |index| scene.objects[index].model),
-                    attach: particles.attach.clone(),
-                }
-            })
+            .map(|particles| link(particles.attach.as_ref()))
+            .chain(waking.iter().map(|wake| link(Some(&wake.attach))))
             .collect();
         let emitters = particles
             .iter()
             .map(|particles| Emitter::new(particles.recipe.clone(), particles.at))
             .collect();
+        let meshes = particles
+            .iter()
+            .map(|particles| particles.mesh.is_some())
+            .collect();
+        let wakes = waking.iter().map(|wake| Wake::new(wake.recipe)).collect();
         Self {
             particles,
+            waking,
             links,
             emitters,
-            steps: 0,
-            sprites: Vec::new(),
-            last: None,
-            span: 0.0,
+            meshes,
+            wakes,
+            ..Self::default()
         }
     }
 
     pub fn of_emitters(emitters: Vec<Emitter>) -> Self {
         Self {
             emitters,
+            ..Self::default()
+        }
+    }
+
+    pub fn of_parts(emitters: Vec<Emitter>, meshes: Vec<bool>, wakes: Vec<Wake>) -> Self {
+        Self {
+            emitters,
+            meshes,
+            wakes,
             ..Self::default()
         }
     }
@@ -99,6 +118,7 @@ impl Sprays {
     pub fn same(&self, scene: &Scene) -> bool {
         self.particles.len() == scene.particles.len()
             && self.particles.iter().eq(scene.particles.values())
+            && self.waking.iter().eq(scene.wakes.values())
             && self.links.iter().all(|link| {
                 link.object.is_none_or(|index| {
                     scene
@@ -120,6 +140,9 @@ impl Sprays {
     pub fn reset(&mut self) {
         for emitter in &mut self.emitters {
             emitter.reset();
+        }
+        for wake in &mut self.wakes {
+            wake.reset();
         }
         self.steps = 0;
         self.last = None;
@@ -153,7 +176,8 @@ impl Sprays {
         }
         self.last = Some(time);
         self.span = span;
-        let count = self.emitters.len();
+        let count = self.emitters.len() + self.wakes.len();
+        let split = self.emitters.len();
         let mut from = Vec::with_capacity(count);
         if self.steps == goal {
             if self.steps == 0 {
@@ -172,8 +196,17 @@ impl Sprays {
             to.clear();
             pose((self.steps + 1) as f32 * STEP, &mut to);
             to.resize(count, IDENTITY);
+            for (wake, (from, to)) in self
+                .wakes
+                .iter_mut()
+                .zip(from[split..].iter().zip(&to[split..]))
+            {
+                wake.step(STEP, *from, *to);
+            }
+            let wakes = Wakes(&self.wakes);
+            let field = (!self.wakes.is_empty()).then_some(&wakes as &dyn Field);
             for (emitter, (from, to)) in self.emitters.iter_mut().zip(from.iter().zip(&to)) {
-                emitter.step(STEP, *from, *to);
+                emitter.step_in(STEP, *from, *to, field);
             }
             std::mem::swap(&mut from, &mut to);
             self.steps += 1;
@@ -223,8 +256,30 @@ impl Sprays {
         &self.emitters
     }
 
+    pub fn wakes(&self) -> &[Wake] {
+        &self.wakes
+    }
+
+    pub fn meshed(&self, index: usize) -> bool {
+        self.meshes.get(index).copied().unwrap_or(false)
+    }
+
+    pub fn each_piece(&mut self, mut visit: impl FnMut(usize, &Recipe, &[Piece])) {
+        for (index, emitter) in self.emitters.iter().enumerate() {
+            if !self.meshes.get(index).copied().unwrap_or(false) {
+                continue;
+            }
+            self.pieces.clear();
+            emitter.pieces(&mut self.pieces);
+            visit(index, emitter.recipe(), &self.pieces);
+        }
+    }
+
     pub fn each(&mut self, mut visit: impl FnMut(&Recipe, &[Sprite])) {
-        for emitter in &self.emitters {
+        for (index, emitter) in self.emitters.iter().enumerate() {
+            if self.meshes.get(index).copied().unwrap_or(false) {
+                continue;
+            }
             self.sprites.clear();
             emitter.sprites(&mut self.sprites);
             visit(emitter.recipe(), &self.sprites);

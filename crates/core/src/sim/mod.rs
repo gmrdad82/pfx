@@ -5,6 +5,7 @@ mod overlap;
 pub mod particles;
 mod rng;
 pub mod shots;
+pub mod wake;
 
 pub use director::Director;
 pub use journal::{Journal, JournalWriter, Schema};
@@ -27,3 +28,5 @@ mod tests_overlap;
 mod tests_particles;
 #[cfg(test)]
 mod tests_rng;
+#[cfg(test)]
+mod tests_wake;
