@@ -163,7 +163,8 @@ impl FrameClock for WallClock {
 
 #[cfg(feature = "dev-hooks")]
 pub(super) fn queue_turn(args: &[String]) {
-    let _ = std::process::Command::new("pgpu")
+    let _ = std::process::Command::new("pci")
+        .arg("gpu")
         .args(args)
         .stdout(std::process::Stdio::null())
         .status();

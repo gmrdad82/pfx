@@ -393,10 +393,12 @@ impl<A: App> Host<A> {
         }
         if !self.watching {
             self.watching = true;
-            let proxy = self.proxy.clone();
-            pgpu::watch(self.app.name().to_string(), move |state| {
-                proxy.send_event(Signal::Pgpu(state)).is_ok()
-            });
+            if pgpu::present() {
+                let proxy = self.proxy.clone();
+                pgpu::watch(self.app.name().to_string(), move |state| {
+                    proxy.send_event(Signal::Pgpu(state)).is_ok()
+                });
+            }
         }
         if self.watcher.stop.is_none() {
             self.watcher.follow(self.app.watched(), &self.proxy);

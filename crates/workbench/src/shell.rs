@@ -3065,7 +3065,7 @@ impl Shell {
             Pgpu::Queued => Tone::Neutral,
         };
         ui.add(Pill::new(self.pgpu.word(), tone));
-        ui.label(code(ui, "pgpu", palette.text_muted));
+        ui.label(code(ui, "gpu queue", palette.text_muted));
         divider(ui);
         let frame = self
             .frame_ms

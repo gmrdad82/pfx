@@ -1007,9 +1007,10 @@ fn pgpu_turn(args: &[String]) -> Result<(), String> {
     if !queued() {
         return Ok(());
     }
-    let status = pfx::adapter::pgpu_turn(args, false).map_err(|e| format!("pgpu turn: {e}"))?;
+    let status =
+        pfx::adapter::pgpu_turn(args, false).map_err(|e| format!("GPU queue turn: {e}"))?;
     if !status.success() {
-        return Err("pgpu turn failed".into());
+        return Err("the GPU queue's turn failed".into());
     }
     Ok(())
 }
@@ -1128,10 +1129,10 @@ mod tests {
                 direct.unwrap_or("unset")
             ));
         fs::create_dir_all(&scratch).unwrap();
-        let pgpu = scratch.join("pgpu");
-        fs::write(&pgpu, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TURN_LOG\"\n").unwrap();
+        let pci = scratch.join("pci");
+        fs::write(&pci, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TURN_LOG\"\n").unwrap();
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&pgpu, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&pci, fs::Permissions::from_mode(0o700)).unwrap();
         let log = scratch.join("turns");
         let path = std::env::var_os("PATH").unwrap_or_default();
         let mut paths = vec![scratch.clone()];
@@ -1161,10 +1162,10 @@ mod tests {
         assert_eq!(
             lines.lines().collect::<Vec<_>>(),
             [
-                "turn --work-ms 51.000 --longest-ms 30.000",
-                "turn --work-ms 7.500 --longest-ms 7.500",
-                "turn",
-                "turn",
+                "gpu turn --work-ms 51.000 --longest-ms 30.000",
+                "gpu turn --work-ms 7.500 --longest-ms 7.500",
+                "gpu turn",
+                "gpu turn",
             ],
             "PFX_DIRECT={direct:?}"
         );
@@ -1218,13 +1219,24 @@ mod tests {
         let scene = scene_with("queued", "scene = \"desk\"\napp = \"delta\"\n");
         let tools = scene.join("tools");
         fs::create_dir_all(&tools).unwrap();
-        let log = scene.join("pgpu.log");
-        let pgpu = tools.join("pgpu");
-        fs::write(&pgpu, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PGPU_LOG\"\n").unwrap();
-        fs::set_permissions(&pgpu, fs::Permissions::from_mode(0o700)).unwrap();
+        let log = scene.join("queue.log");
+        let pci = tools.join("pci");
+        fs::write(
+            &pci,
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$QUEUE_LOG\"\n[ \"$*\" = \"gpu status --json\" ] && echo '{\"v\":1,\"play\":null,\"jobs\":[]}'\nexit 0\n",
+        )
+        .unwrap();
+        fs::set_permissions(&pci, fs::Permissions::from_mode(0o700)).unwrap();
+        let stale = tools.join(concat!("p", "gpu"));
+        fs::write(
+            &stale,
+            "#!/bin/sh\nprintf 'stale %s\\n' \"$*\" >> \"$QUEUE_LOG\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&stale, fs::Permissions::from_mode(0o700)).unwrap();
         Command::new(&pfx)
             .env("PATH", &tools)
-            .env("PGPU_LOG", &log)
+            .env("QUEUE_LOG", &log)
             .env_remove("PFX_DIRECT")
             .env_remove("PFX_BAKE_GPU")
             .current_dir(env!("CARGO_MANIFEST_DIR"))
@@ -1234,10 +1246,12 @@ mod tests {
             .status()
             .unwrap();
         let logged = fs::read_to_string(&log).unwrap();
-        let first = logged.lines().next().unwrap();
+        let lines: Vec<_> = logged.lines().collect();
+        assert_eq!(lines.len(), 2, "{logged}");
+        assert_eq!(lines[0], "gpu status --json");
         assert!(
-            first.starts_with("run --class truth --as delta -- "),
-            "{first}"
+            lines[1].starts_with("gpu run --class truth --as delta -- "),
+            "{logged}"
         );
         fs::remove_dir_all(scene).ok();
     }

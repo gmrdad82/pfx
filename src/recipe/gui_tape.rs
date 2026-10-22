@@ -38,8 +38,8 @@ impl Idle {
 
     fn beat(&mut self) {
         if self.queued && self.last.elapsed() >= BEAT {
-            let _ = Command::new("pgpu")
-                .arg("turn")
+            let _ = Command::new("pci")
+                .args(["gpu", "turn"])
                 .stdout(Stdio::null())
                 .status();
             self.last = Instant::now();

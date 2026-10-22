@@ -1816,7 +1816,7 @@ mod tests {
         };
         assert_eq!(
             line("/opt/pfx", &args, full).unwrap().join(" "),
-            "systemd-run --user --quiet --scope --collect --slice=build.slice -p MemoryMax=12G -p MemorySwapMax=0 -- taskset -c 2-5 nice -n 10 pgpu run --class clip --as pfx -- /opt/pfx clip a.toml --camera main --trace"
+            "systemd-run --user --quiet --scope --collect --slice=build.slice -p MemoryMax=12G -p MemorySwapMax=0 -- taskset -c 2-5 nice -n 10 pci gpu run --class clip --as pfx -- /opt/pfx clip a.toml --camera main --trace"
         );
         let queued = Machine {
             queued: true,

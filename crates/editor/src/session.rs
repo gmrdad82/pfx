@@ -725,9 +725,9 @@ impl App for Session {
         if held {
             self.editor
                 .log
-                .info("pgpu: a game is playing; the viewport waits");
+                .info("GPU queue: a game is playing; the viewport waits");
         } else {
-            self.editor.log.info("pgpu: the viewport draws again");
+            self.editor.log.info("GPU queue: the viewport draws again");
         }
     }
 

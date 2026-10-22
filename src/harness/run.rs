@@ -1922,13 +1922,24 @@ mod tests {
             .join(format!("as-{label}-{}", std::process::id()));
         let tools = base.join("tools");
         std::fs::create_dir_all(&tools).unwrap();
-        let log = base.join("pgpu.log");
-        let pgpu = tools.join("pgpu");
-        std::fs::write(&pgpu, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$PGPU_LOG\"\n").unwrap();
-        std::fs::set_permissions(&pgpu, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let log = base.join("queue.log");
+        let pci = tools.join("pci");
+        std::fs::write(
+            &pci,
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$QUEUE_LOG\"\n[ \"$*\" = \"gpu status --json\" ] && echo '{\"v\":1,\"play\":null,\"jobs\":[]}'\nexit 0\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&pci, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let stale = tools.join(concat!("p", "gpu"));
+        std::fs::write(
+            &stale,
+            "#!/bin/sh\nprintf 'stale %s\\n' \"$*\" >> \"$QUEUE_LOG\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o700)).unwrap();
         Command::new(&pfx)
             .env("PATH", &tools)
-            .env("PGPU_LOG", &log)
+            .env("QUEUE_LOG", &log)
             .env("PFX_CACHE", base.join("cache"))
             .env_remove("PFX_DIRECT")
             .current_dir(&root)
@@ -1947,6 +1958,16 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn queue_run(logged: &str) -> &str {
+        let mut lines = logged.lines();
+        assert_eq!(lines.next(), Some("gpu status --json"), "{logged}");
+        assert!(!logged.contains("stale"), "{logged}");
+        lines
+            .find(|line| *line != "gpu status --json")
+            .unwrap_or_default()
+    }
+
+    #[cfg(unix)]
     #[test]
     fn an_app_render_asks_pgpu_to_run_as_its_product() {
         let logged = pgpu_log_of(
@@ -1962,10 +1983,10 @@ mod tests {
                 "{checker}",
             ],
         );
-        let first = logged.lines().next().unwrap_or_default();
+        let first = queue_run(&logged);
         assert!(
-            first.starts_with("run --class interactive --as beta -- "),
-            "{first}"
+            first.starts_with("gpu run --class interactive --as beta -- "),
+            "{logged}"
         );
     }
 
@@ -1985,11 +2006,11 @@ mod tests {
                 "--no-archive",
             ],
         );
-        let first = logged.lines().next().unwrap_or_default();
+        let first = queue_run(&logged);
         assert!(
-            first.starts_with("run --class truth --as pfx -- ")
+            first.starts_with("gpu run --class truth --as pfx -- ")
                 && first.contains("pfx render --icons shapes"),
-            "{first}"
+            "{logged}"
         );
     }
 
@@ -2049,13 +2070,13 @@ mod tests {
         std::fs::create_dir_all(&tools).unwrap();
         let started = base.join("started");
         let got = base.join("got");
-        let pgpu = tools.join("pgpu");
+        let pci = tools.join("pci");
         std::fs::write(
-            &pgpu,
-            "#!/bin/sh\ntrap 'printf term > \"$GOT\"; kill $! 2>/dev/null; exit 0' TERM\nprintf '%s' $$ > \"$STARTED\"\nwhile :; do /bin/sleep 30 & wait $!; done\n",
+            &pci,
+            "#!/bin/sh\n[ \"$*\" = \"gpu status --json\" ] && echo '{\"v\":1,\"jobs\":[]}' && exit 0\ntrap 'printf term > \"$GOT\"; kill $! 2>/dev/null; exit 0' TERM\nprintf '%s' $$ > \"$STARTED\"\nwhile :; do /bin/sleep 30 & wait $!; done\n",
         )
         .unwrap();
-        std::fs::set_permissions(&pgpu, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::set_permissions(&pci, std::fs::Permissions::from_mode(0o755)).unwrap();
         let err = std::fs::File::create(base.join("err")).unwrap();
         let mut child = Command::new(&pfx)
             .env("PATH", &tools)
@@ -2085,7 +2106,7 @@ mod tests {
         }
         assert!(
             started.exists(),
-            "{label}: pgpu never started\n{}",
+            "{label}: the GPU queue never started\n{}",
             std::fs::read_to_string(base.join("err")).unwrap_or_default()
         );
         let pid = loop {
@@ -2096,7 +2117,7 @@ mod tests {
             }
             assert!(
                 asked.elapsed() < std::time::Duration::from_secs(20),
-                "{label}: pgpu wrote no pid"
+                "{label}: the GPU queue wrote no pid"
             );
             std::thread::sleep(std::time::Duration::from_millis(20));
         };

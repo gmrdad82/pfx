@@ -22,7 +22,7 @@ use pfx_play::Game;
 pub fn setup() -> session::Setup {
     session::Setup {
         pgpu: std::env::var("PFX_EDIT_PGPU").map_or(true, |value| value != "off")
-            && std::env::var_os("PATH").is_some_and(|path| pgpu::on_path(&path)),
+            && pfx_editor_shell::pgpu::present(),
         audio: true,
     }
 }

@@ -1161,7 +1161,7 @@ mod tests {
         };
         assert_eq!(
             line("/opt/pfx", &args, full).unwrap().join(" "),
-            "systemd-run --user --quiet --scope --collect --slice=build.slice -p MemoryMax=12G -p MemorySwapMax=0 -- taskset -c 2-5 nice -n 10 pgpu run --class clip --as pfx -- /opt/pfx render --recipe a.toml --camera main --out a.png"
+            "systemd-run --user --quiet --scope --collect --slice=build.slice -p MemoryMax=12G -p MemorySwapMax=0 -- taskset -c 2-5 nice -n 10 pci gpu run --class clip --as pfx -- /opt/pfx render --recipe a.toml --camera main --out a.png"
         );
         let bare = Machine {
             systemd: false,
@@ -1170,7 +1170,7 @@ mod tests {
         };
         assert_eq!(
             line("pfx", &args, bare).unwrap().join(" "),
-            "pgpu run --class clip --as pfx -- pfx render --recipe a.toml --camera main --out a.png"
+            "pci gpu run --class clip --as pfx -- pfx render --recipe a.toml --camera main --out a.png"
         );
         let untasked = Machine { cpus: None, ..full };
         assert!(

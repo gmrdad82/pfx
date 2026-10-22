@@ -2039,16 +2039,16 @@ mod tests {
             .join("../../tmp")
             .join(format!("pace-turns-{}", std::process::id()));
         std::fs::create_dir_all(&scratch).unwrap();
-        let pgpu = scratch.join("pgpu");
+        let pci = scratch.join("pci");
         std::fs::write(
-            &pgpu,
+            &pci,
             "#!/bin/sh\nmkdir \"$TURN_LOG.held\" 2>/dev/null || echo overlap >> \"$TURN_LOG\"\nsleep 0.1\nprintf '%s\\n' \"$*\" >> \"$TURN_LOG\"\nrmdir \"$TURN_LOG.held\" 2>/dev/null\n",
         )
         .unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&pgpu, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&pci, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
         let log = scratch.join("turns");
         let path = std::env::var_os("PATH").unwrap_or_default();
@@ -2070,8 +2070,8 @@ mod tests {
         assert_eq!(
             lines,
             [
-                "turn --work-ms 1.000 --longest-ms 1.000",
-                "turn --work-ms 2.000 --longest-ms 2.000",
+                "gpu turn --work-ms 1.000 --longest-ms 1.000",
+                "gpu turn --work-ms 2.000 --longest-ms 2.000",
             ]
         );
     }
@@ -3104,12 +3104,12 @@ mod tests {
             .join("../../tmp")
             .join(format!("pace-frozen-turns-{}", std::process::id()));
         std::fs::create_dir_all(&scratch).unwrap();
-        let pgpu = scratch.join("pgpu");
-        std::fs::write(&pgpu, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TURN_LOG\"\n").unwrap();
+        let pci = scratch.join("pci");
+        std::fs::write(&pci, "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$TURN_LOG\"\n").unwrap();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&pgpu, std::fs::Permissions::from_mode(0o700)).unwrap();
+            std::fs::set_permissions(&pci, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
         let log = scratch.join("turns");
         let path = std::env::var_os("PATH").unwrap_or_default();
@@ -3135,11 +3135,11 @@ mod tests {
         assert_eq!(
             lines.lines().collect::<Vec<_>>(),
             [
-                "turn --work-ms 4.000 --longest-ms 4.000",
-                "turn --work-ms 0.000 --longest-ms 0.000",
-                "turn",
-                "turn",
-                "turn --work-ms 60.000 --longest-ms 30.000",
+                "gpu turn --work-ms 4.000 --longest-ms 4.000",
+                "gpu turn --work-ms 0.000 --longest-ms 0.000",
+                "gpu turn",
+                "gpu turn",
+                "gpu turn --work-ms 60.000 --longest-ms 30.000",
             ]
         );
     }

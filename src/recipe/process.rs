@@ -42,7 +42,7 @@ pub(super) fn line(
         }
         line.extend(["nice", "-n", "10"].map(String::from));
     }
-    line.extend(["pgpu", "run", "--class", "clip", "--as", "pfx", "--"].map(String::from));
+    line.extend(["pci", "gpu", "run", "--class", "clip", "--as", "pfx", "--"].map(String::from));
     line.push(exe.to_string());
     line.push(command.to_string());
     line.extend(args.iter().cloned());
@@ -66,7 +66,7 @@ pub(super) fn cpus(value: Option<&std::ffi::OsStr>) -> Option<String> {
 pub(super) fn unqueued(command: &str, direct: &str, machine: Machine<'_>) -> Option<String> {
     (!machine.queued && !machine.pgpu).then(|| {
         format!(
-            "pfx {command}: no GPU queue (pgpu) on the PATH, so the {command} {direct}, paced the same"
+            "pfx {command}: no GPU queue on the PATH, so the {command} {direct}, paced the same"
         )
     })
 }
@@ -78,9 +78,10 @@ pub(super) fn requeue(command: &str, args: &[String], direct: &str) -> Option<Ex
                 .or_else(|| cpus(option_env!("PFX_CPUS").map(std::ffi::OsStr::new)))
         })
         .flatten();
+    let queued = std::env::var_os("GPU_QUEUE").is_some();
     let machine = Machine {
-        queued: std::env::var_os("GPU_QUEUE").is_some(),
-        pgpu: on_path("pgpu"),
+        queued,
+        pgpu: !queued && pfx_run::queue::present(),
         systemd: on_path("systemd-run"),
         cpus: cpus.as_deref(),
     };
@@ -146,7 +147,7 @@ mod tests {
         assert_eq!(
             unqueued("render", "runs directly", absent).as_deref(),
             Some(
-                "pfx render: no GPU queue (pgpu) on the PATH, so the render runs directly, paced the same"
+                "pfx render: no GPU queue on the PATH, so the render runs directly, paced the same"
             )
         );
         assert_eq!(

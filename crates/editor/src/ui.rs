@@ -715,7 +715,7 @@ impl Editor {
                 ui.label(code(&theme, format!("sound  {sound}"), theme.dim));
             }
             if let Some(status) = &self.pgpu {
-                ui.label(code(&theme, format!("pgpu  {status}"), theme.dim));
+                ui.label(code(&theme, format!("gpu queue  {status}"), theme.dim));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let version = ui.label(code(&theme, &self.app, theme.dim));

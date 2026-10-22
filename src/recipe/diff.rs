@@ -402,8 +402,8 @@ mod tests {
 
     fn gpu_turn(since: std::time::Instant) {
         let ms = (since.elapsed().as_secs_f64() * 1000.0).ceil().to_string();
-        let _ = std::process::Command::new("pgpu")
-            .args(["turn", "--work-ms", &ms, "--longest-ms", &ms])
+        let _ = std::process::Command::new("pci")
+            .args(["gpu", "turn", "--work-ms", &ms, "--longest-ms", &ms])
             .status();
     }
 

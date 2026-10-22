@@ -32,6 +32,7 @@ lint() {
   step game-clippy cargo clippy -p pfx-game --all-targets --features tools,steam,dev-hud,modules -- -D warnings
   step core-serde-clippy cargo clippy -p pfx-core --all-targets --features serde -- -D warnings
   step agnostic cargo test -q --test agnostic
+  step queue-tool cargo test -q --test queue_tool
   step self-contained cargo test -q --test self_contained
   step brand cargo test -q --test brand
   step licences cargo test -q --test licences
@@ -86,6 +87,7 @@ fast() {
   fi
   step game-tests cargo test -p pfx-game --lib --features tools,steam
   step agnostic cargo test -q --test agnostic
+  step queue-tool cargo test -q --test queue_tool
   step self-contained cargo test -q --test self_contained
   step brand cargo test -q --test brand
   step licences cargo test -q --test licences

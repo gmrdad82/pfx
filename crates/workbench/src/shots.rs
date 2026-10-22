@@ -708,7 +708,7 @@ pub struct Runs {
 impl Runner for Runs {
     fn start(&self, _: &[String]) -> Result<Box<dyn Process>, String> {
         if self.refuse {
-            return Err("cannot start pgpu: not found".to_string());
+            return Err("cannot start pfx: not found".to_string());
         }
         let mut processes = self.processes.lock().unwrap();
         if processes.is_empty() {
@@ -1147,7 +1147,7 @@ mod tests {
         settle(&mut shots);
         assert_eq!(
             shots.job().unwrap().phase,
-            Phase::Failed("cannot start pgpu: not found".to_string())
+            Phase::Failed("cannot start pfx: not found".to_string())
         );
         assert!(shots.start(&recipe.display().to_string(), "front", [8, 4]));
         settle(&mut shots);

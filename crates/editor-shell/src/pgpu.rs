@@ -1,6 +1,7 @@
+use std::ffi::OsStr;
 use std::io::Read;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{OnceLock, mpsc};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -50,9 +51,15 @@ fn read(text: &str) -> Pgpu {
     serde_json::from_str::<Value>(text).map_or(Pgpu::Free, |status| classify(&status, "editor"))
 }
 
+pub const QUEUE: &str = "pci";
+
 pub fn fetch() -> Option<Value> {
-    let mut child = Command::new("pgpu")
-        .args(["status", "--json"])
+    fetch_from(QUEUE)
+}
+
+pub fn fetch_from(program: impl AsRef<OsStr>) -> Option<Value> {
+    let mut child = Command::new(program)
+        .args(["gpu", "status", "--json"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -84,6 +91,19 @@ pub fn fetch() -> Option<Value> {
             None
         }
     }
+}
+
+pub fn answers(status: &Value) -> bool {
+    status.is_object() && status.get("v").is_some()
+}
+
+pub fn found(program: impl AsRef<OsStr>) -> bool {
+    fetch_from(program).is_some_and(|status| answers(&status))
+}
+
+pub fn present() -> bool {
+    static PRESENT: OnceLock<bool> = OnceLock::new();
+    *PRESENT.get_or_init(|| found(QUEUE))
 }
 
 pub fn status(name: &str) -> Pgpu {
@@ -145,5 +165,62 @@ mod tests {
         for text in ["", "not json", "[]", "{}", r#"{"play":"#] {
             assert_eq!(read(text), Pgpu::Free, "{text:?}");
         }
+    }
+
+    #[test]
+    fn only_a_versioned_object_is_the_queue() {
+        let answer = |text: &str| serde_json::from_str::<Value>(text).is_ok_and(|v| answers(&v));
+        assert!(answer(r#"{"v":1,"paused":false,"play":null,"jobs":[]}"#));
+        for text in ["{}", "[1]", r#"{"jobs":[]}"#, r#""v""#, "1"] {
+            assert!(!answer(text), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_queue_is_pci_and_a_missing_one_is_not_found() {
+        assert_eq!(QUEUE, "pci");
+        assert!(!found("pfx-no-such-queue-anywhere"));
+        assert!(fetch_from("pfx-no-such-queue-anywhere").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_pci_whose_gpu_status_answers_is_found() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tmp")
+            .join(format!("shell-queue-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cases = [
+            (
+                "answers",
+                "[ \"$*\" = \"gpu status --json\" ] || exit 9\necho '{\"v\":1,\"play\":null,\"jobs\":[]}'",
+                true,
+            ),
+            (
+                "elsewhere",
+                "[ \"$*\" = \"status --json\" ] || exit 9\necho '{\"v\":1}'",
+                false,
+            ),
+            ("fails", "echo '{\"v\":1,\"jobs\":[]}'\nexit 2", false),
+            (
+                "speaks",
+                "echo \"error: unrecognized subcommand '$1'\"",
+                false,
+            ),
+            ("unversioned", "echo '{\"jobs\":[]}'", false),
+            ("silent", "exit 0", false),
+        ];
+        for (name, body, expected) in cases {
+            let path = dir.join(name);
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+            assert_eq!(found(&path), expected, "{name}");
+        }
+        let stale = dir.join(concat!("p", "gpu"));
+        std::fs::write(&stale, "#!/bin/sh\necho '{\"v\":1}'\n").unwrap();
+        std::fs::set_permissions(&stale, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(!found(dir.join("pci")));
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

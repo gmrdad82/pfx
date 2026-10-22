@@ -200,7 +200,7 @@ struct Opts {
     #[arg(
         long,
         default_value = "truth",
-        help = "pgpu class: truth, clip, interactive or search"
+        help = "GPU queue class: truth, clip, interactive or search"
     )]
     class: String,
     #[arg(
@@ -1349,7 +1349,7 @@ fn drive(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("pgpu: {e}"))?;
+        .map_err(|e| format!("the GPU run could not start: {e}"))?;
     let tracked = pfx_run::ending::track(&child);
     if queued && let Some(live) = live.as_deref() {
         live.pgpu(Some(child.id()));

@@ -1447,8 +1447,9 @@ mod tests {
             work += ms * 3.0;
             longest = longest.max(ms);
             if work >= 40.0 {
-                let _ = std::process::Command::new("pgpu")
+                let _ = std::process::Command::new("pci")
                     .args([
+                        "gpu",
                         "turn",
                         "--work-ms",
                         &format!("{:.0}", work.ceil()),
