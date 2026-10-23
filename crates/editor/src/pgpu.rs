@@ -146,9 +146,9 @@ mod tests {
                 .env("PATH", &dir)
                 .env("PFX_EDIT_CHILD", expected)
                 .env("QUEUE_LOG", &log)
-                .env_remove("PFX_EDIT_PGPU");
+                .env_remove(pfx_editor_shell::pgpu::SWITCH);
             if let Some(switch) = switch {
-                child.env("PFX_EDIT_PGPU", switch);
+                child.env(pfx_editor_shell::pgpu::SWITCH, switch);
             }
             let out = child.output().unwrap();
             let logged = std::fs::read_to_string(&log).unwrap_or_default();

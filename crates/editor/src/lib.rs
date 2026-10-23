@@ -21,8 +21,7 @@ use pfx_play::Game;
 
 pub fn setup() -> session::Setup {
     session::Setup {
-        pgpu: std::env::var("PFX_EDIT_PGPU").map_or(true, |value| value != "off")
-            && pfx_editor_shell::pgpu::present(),
+        pgpu: pfx_editor_shell::pgpu::wanted() && pfx_editor_shell::pgpu::present(),
         audio: true,
     }
 }

@@ -242,10 +242,25 @@ fn scan_rust(path: &str, source: &str) -> Vec<Finding> {
         .collect()
 }
 
+const GIT_VARS: [&str; 5] = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_COMMON_DIR",
+];
+
+fn git(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    for name in GIT_VARS {
+        command.env_remove(name);
+    }
+    command.arg("-C").arg(root);
+    command
+}
+
 fn listed(root: &Path) -> Result<Vec<String>, String> {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(root)
+    let out = git(root)
         .args([
             "ls-files",
             "-z",
@@ -284,9 +299,12 @@ fn private_files(root: &Path) -> Vec<String> {
             };
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_dir() {
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
+                if kind.is_dir() {
                     stack.push(path);
-                } else if path.is_file()
+                } else if (kind.is_file() || (kind.is_symlink() && path.is_file()))
                     && let Ok(relative) = path.strip_prefix(root)
                 {
                     paths.push(relative.to_string_lossy().replace('\\', "/"));
@@ -319,8 +337,17 @@ fn check(root: &Path) -> Result<Vec<Finding>, String> {
         if !rust && !script {
             continue;
         }
-        let Ok(text) = fs::read_to_string(root.join(path)) else {
-            continue;
+        let text = match fs::read(root.join(path)) {
+            Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                findings.push(Finding {
+                    path: path.clone(),
+                    line: 0,
+                    text: format!("cannot be read: {e}"),
+                });
+                continue;
+            }
         };
         if rust {
             findings.extend(scan_rust(path, &text));
@@ -361,13 +388,7 @@ impl Scratch {
             .join(format!("queue-tool-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
-        let ok = Command::new("git")
-            .arg("-C")
-            .arg(&root)
-            .args(["init", "-q"])
-            .status()
-            .unwrap()
-            .success();
+        let ok = git(&root).args(["init", "-q"]).status().unwrap().success();
         assert!(ok);
         Scratch { root }
     }
@@ -569,4 +590,102 @@ fn words_match_whole_and_lowercase_only() {
     assert!(word_hits(&format!("{OLD}.rs")).is_empty());
     assert!(word_hits(&format!("{OLD}::Status")).is_empty());
     assert_eq!(word_hits(&format!("{OLD}.log")), [0]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_loop_in_the_private_tree_is_walked_once() {
+    let tree = Scratch::new("loop");
+    tree.write("dev/briefs/one.md", "queue with `@ run`\n");
+    std::os::unix::fs::symlink(tree.root.join("dev"), tree.root.join("dev/briefs/again")).unwrap();
+    std::os::unix::fs::symlink(
+        tree.root.join("dev/briefs/one.md"),
+        tree.root.join("dev/linked.md"),
+    )
+    .unwrap();
+    assert_eq!(
+        places(&tree.findings()),
+        [at("dev/briefs/one.md", 1), at("dev/linked.md", 1)]
+    );
+}
+
+#[test]
+fn a_script_that_is_not_utf8_is_still_read() {
+    let tree = Scratch::new("bytes");
+    let path = tree.root.join("bin/render");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut bytes = b"#!/bin/sh\n\xff\xfe\n".to_vec();
+    bytes.extend_from_slice(format!("{OLD} run --class clip -- pfx\n").as_bytes());
+    fs::write(&path, bytes).unwrap();
+    assert_eq!(places(&tree.findings()), [at("bin/render", 3)]);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_script_that_cannot_be_read_is_a_finding() {
+    use std::os::unix::fs::PermissionsExt;
+    let tree = Scratch::new("unreadable");
+    tree.write("bin/render", "#!/bin/sh\n@ run\n");
+    let path = tree.root.join("bin/render");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = fs::read(&path).is_ok();
+    let findings = tree.findings();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    if readable {
+        assert_eq!(places(&findings), [at("bin/render", 2)]);
+    } else {
+        assert_eq!(places(&findings), [at("bin/render", 0)]);
+        assert!(
+            findings[0].text.starts_with("cannot be read: "),
+            "{findings:?}"
+        );
+    }
+}
+
+#[test]
+fn a_tracked_file_missing_from_the_tree_is_skipped() {
+    let tree = Scratch::new("deleted");
+    tree.write("bin/gone", "#!/bin/sh\n@ run\n");
+    let ok = git(&tree.root)
+        .args(["add", "bin/gone"])
+        .status()
+        .unwrap()
+        .success();
+    assert!(ok);
+    fs::remove_file(tree.root.join("bin/gone")).unwrap();
+    assert!(tree.findings().is_empty());
+}
+
+#[test]
+fn the_scratch_trees_ignore_the_callers_git_environment() {
+    if std::env::var_os("QUEUE_TOOL_CHILD").is_some() {
+        return;
+    }
+    let decoy = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tmp")
+        .join(format!("queue-tool-{}-decoy", std::process::id()));
+    let _ = fs::remove_dir_all(&decoy);
+    let out = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "a_script_that_runs_the_old_queue_fails_with_its_file_and_line",
+            "--test-threads",
+            "1",
+        ])
+        .env("QUEUE_TOOL_CHILD", "1")
+        .env("GIT_DIR", decoy.join(".git"))
+        .env("GIT_WORK_TREE", &decoy)
+        .env("GIT_INDEX_FILE", decoy.join("index"))
+        .output()
+        .unwrap();
+    let made = decoy.exists();
+    let _ = fs::remove_dir_all(&decoy);
+    assert!(
+        out.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed"));
+    assert!(!made);
 }

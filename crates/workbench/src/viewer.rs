@@ -1447,9 +1447,8 @@ mod tests {
             work += ms * 3.0;
             longest = longest.max(ms);
             if work >= 40.0 {
-                let _ = std::process::Command::new("pci")
+                let _ = pfx_editor_shell::pgpu::queue_command()
                     .args([
-                        "gpu",
                         "turn",
                         "--work-ms",
                         &format!("{:.0}", work.ceil()),

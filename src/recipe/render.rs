@@ -315,7 +315,7 @@ fn precheck(args: &Args) -> Result<Trace, String> {
     .map(|(_, trace)| trace)
 }
 
-fn requeue(args: &[String]) -> Option<ExitCode> {
+pub(super) fn requeue(args: &[String]) -> Option<ExitCode> {
     super::process::requeue("render", args, "runs directly")
 }
 

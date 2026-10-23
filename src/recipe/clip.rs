@@ -422,7 +422,7 @@ fn precheck(args: &Args) -> Result<(), String> {
     held(args, &camera)
 }
 
-fn requeue(args: &[String]) -> Option<ExitCode> {
+pub(super) fn requeue(args: &[String]) -> Option<ExitCode> {
     super::process::requeue("clip", args, "traces directly")
 }
 

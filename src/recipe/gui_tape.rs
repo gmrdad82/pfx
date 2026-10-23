@@ -37,13 +37,17 @@ impl Idle {
     }
 
     fn beat(&mut self) {
-        if self.queued && self.last.elapsed() >= BEAT {
-            let _ = Command::new("pci")
-                .args(["gpu", "turn"])
-                .stdout(Stdio::null())
-                .status();
-            self.last = Instant::now();
+        let now = Instant::now();
+        self.beat_at(now, pfx_run::queue::queue_command());
+    }
+
+    fn beat_at(&mut self, now: Instant, mut queue: Command) -> bool {
+        if !self.queued || now.saturating_duration_since(self.last) < BEAT {
+            return false;
         }
+        let _ = queue.arg("turn").stdout(Stdio::null()).status();
+        self.last = Instant::now();
+        true
     }
 }
 
@@ -787,6 +791,43 @@ fn film(args: &Args, rest: &[String], registry: &Registry) -> Result<ExitCode, S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_queued_tape_beats_the_queue_once_a_beat_has_passed() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tmp")
+            .join(format!("tape-beat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("log");
+        let fake = dir.join("queue");
+        std::fs::write(
+            &fake,
+            format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let queue = || {
+            let mut command = Command::new(&fake);
+            command.arg(pfx_run::queue::QUEUE_ARG);
+            command
+        };
+        let start = Instant::now();
+        let mut idle = Idle {
+            queued: false,
+            last: start,
+        };
+        assert!(!idle.beat_at(start + BEAT * 2, queue()));
+        idle.queued = true;
+        assert!(!idle.beat_at(start + BEAT / 2, queue()));
+        assert!(!idle.beat_at(start, queue()));
+        assert_eq!(idle.last, start);
+        assert!(idle.beat_at(start + BEAT, queue()));
+        let logged = std::fs::read_to_string(&log).unwrap_or_default();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(logged.lines().collect::<Vec<_>>(), ["gpu turn"]);
+    }
 
     fn args(text: &str) -> Result<Args, String> {
         let words: Vec<&str> = std::iter::once("gui")

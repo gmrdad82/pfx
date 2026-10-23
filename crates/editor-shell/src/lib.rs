@@ -207,8 +207,12 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
 }
 
 pub fn gpu_turn(since: std::time::Instant) {
+    if !pgpu::turning() {
+        return;
+    }
     let ms = (since.elapsed().as_secs_f64() * 1000.0).ceil().to_string();
-    let _ = std::process::Command::new("pci")
-        .args(["gpu", "turn", "--work-ms", &ms, "--longest-ms", &ms])
+    let _ = pgpu::queue_command()
+        .args(["turn", "--work-ms", &ms, "--longest-ms", &ms])
+        .stdout(std::process::Stdio::null())
         .status();
 }

@@ -401,9 +401,13 @@ mod tests {
     }
 
     fn gpu_turn(since: std::time::Instant) {
+        if !pfx_run::queue::turning() {
+            return;
+        }
         let ms = (since.elapsed().as_secs_f64() * 1000.0).ceil().to_string();
-        let _ = std::process::Command::new("pci")
-            .args(["gpu", "turn", "--work-ms", &ms, "--longest-ms", &ms])
+        let _ = pfx_run::queue::queue_command()
+            .args(["turn", "--work-ms", &ms, "--longest-ms", &ms])
+            .stdout(std::process::Stdio::null())
             .status();
     }
 

@@ -1,6 +1,10 @@
 use std::ffi::OsStr;
-use std::process::{Command, Stdio};
-use std::sync::OnceLock;
+use std::io::Read;
+use std::process::{Child, Command, Stdio};
+use std::sync::{OnceLock, mpsc};
+use std::time::{Duration, Instant};
+
+use serde_json::Value;
 
 pub const HEADLESS_VAR: &str = "PFX_HEADLESS";
 
@@ -11,6 +15,14 @@ pub const QUEUE: &str = "pci";
 pub const QUEUE_ARG: &str = "gpu";
 
 pub const NO_QUEUE: &str = "no GPU queue on the PATH";
+
+pub const TURN_VAR: &str = "GPU_QUEUE_TURN";
+
+pub const TIMEOUT: Duration = Duration::from_millis(1500);
+
+pub const LARGEST_STATUS: u64 = 1 << 20;
+
+const SETTLE: Duration = Duration::from_millis(2);
 
 pub fn headless(command: &mut Command) -> &mut Command {
     for name in DISPLAY_VARS {
@@ -25,25 +37,82 @@ pub fn queue_command() -> Command {
     command
 }
 
+pub fn turning() -> bool {
+    std::env::var_os(TURN_VAR).is_some()
+}
+
 pub fn present() -> bool {
     static PRESENT: OnceLock<bool> = OnceLock::new();
     *PRESENT.get_or_init(|| probe(QUEUE))
 }
 
 pub fn probe(program: impl AsRef<OsStr>) -> bool {
-    Command::new(program)
-        .args([QUEUE_ARG, "status", "--json"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .is_ok_and(|out| answers(out.status.success(), &out.stdout))
+    status_from(program).is_some_and(|status| answers(&status))
 }
 
-pub fn answers(success: bool, stdout: &[u8]) -> bool {
-    success
-        && serde_json::from_slice::<serde_json::Value>(stdout)
-            .is_ok_and(|status| status.is_object() && status.get("v").is_some())
+pub fn answers(status: &Value) -> bool {
+    status.is_object() && status.get("v").is_some()
 }
+
+pub fn status() -> Option<Value> {
+    status_from(QUEUE)
+}
+
+pub fn status_from(program: impl AsRef<OsStr>) -> Option<Value> {
+    status_within(program, TIMEOUT)
+}
+
+fn status_within(program: impl AsRef<OsStr>, timeout: Duration) -> Option<Value> {
+    let deadline = Instant::now() + timeout;
+    let mut child = Command::new(program)
+        .args([QUEUE_ARG, "status", "--json"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let Some(out) = child.stdout.take() else {
+        end(&mut child);
+        return None;
+    };
+    let (send, receive) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut text = Vec::new();
+        let read = out
+            .take(LARGEST_STATUS + 1)
+            .read_to_end(&mut text)
+            .map(|_| text);
+        let _ = send.send(read);
+    });
+    let text = match receive.recv_timeout(timeout) {
+        Ok(Ok(text)) if text.len() as u64 <= LARGEST_STATUS => text,
+        _ => {
+            end(&mut child);
+            return None;
+        }
+    };
+    let exit = loop {
+        match child.try_wait() {
+            Ok(Some(exit)) => break exit,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(SETTLE),
+            _ => {
+                end(&mut child);
+                return None;
+            }
+        }
+    };
+    if exit.success() {
+        serde_json::from_slice(&text).ok()
+    } else {
+        None
+    }
+}
+
+fn end(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub struct Launch {
     pub command: Command,
     pub queued: bool,
@@ -280,24 +349,20 @@ mod tests {
     }
 
     #[test]
-    fn only_a_versioned_json_object_from_a_clean_exit_is_a_queue() {
-        assert!(answers(
-            true,
-            br#"{"v":1,"paused":false,"play":null,"jobs":[]}"#
-        ));
-        assert!(answers(true, b"{\"v\":2}\n"));
-        assert!(!answers(false, br#"{"v":1,"jobs":[]}"#));
+    fn only_a_versioned_json_object_is_a_queue() {
+        let answer = |text: &[u8]| serde_json::from_slice::<Value>(text).is_ok_and(|v| answers(&v));
+        assert!(answer(br#"{"v":1,"paused":false,"play":null,"jobs":[]}"#));
+        assert!(answer(b"{\"v\":2}\n"));
         for text in [
-            &b""[..],
-            b"not json",
-            b"[1]",
+            &b"[1]"[..],
+            b"[{\"v\":1}]",
             b"{}",
             br#"{"jobs":[]}"#,
             br#""v""#,
-            br#"{"v":1"#,
-            b"error: unrecognized subcommand 'gpu'",
+            b"1",
+            b"null",
         ] {
-            assert!(!answers(true, text), "{}", String::from_utf8_lossy(text));
+            assert!(!answer(text), "{}", String::from_utf8_lossy(text));
         }
     }
 
@@ -307,14 +372,6 @@ mod tests {
         assert!(!probe(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp/no-such-dir/pci")
         ));
-    }
-
-    #[test]
-    fn the_queue_is_pci_gpu() {
-        let command = queue_command();
-        assert_eq!(command.get_program(), "pci");
-        assert_eq!(command.get_args().collect::<Vec<_>>(), [OsStr::new("gpu")]);
-        assert!(!NO_QUEUE.contains("pci"));
     }
 
     #[cfg(unix)]
@@ -376,10 +433,50 @@ mod tests {
             ("array", "echo '[{\"v\":1}]'", false),
             ("unversioned", "echo '{\"jobs\":[]}'", false),
             ("crashes", "kill -TERM $$", false),
+            ("silent", "exit 0", false),
+            (
+                "padded",
+                "printf '{\"v\":1,\"pad\":\"'\nhead -c 4096 /dev/zero | tr '\\0' a\nprintf '\"}'",
+                true,
+            ),
+            (
+                "oversized",
+                "printf '{\"v\":1,\"pad\":\"'\nhead -c 1100000 /dev/zero | tr '\\0' a\nprintf '\"}'",
+                false,
+            ),
         ];
         for (name, body, expected) in cases {
             let path = tool(&dir, name, body);
             assert_eq!(probe(&path), expected, "{name}");
+        }
+        let answers = tool(
+            &dir,
+            "reads",
+            "echo '{\"v\":1,\"play\":null,\"jobs\":[{\"as\":\"editor\"}]}'",
+        );
+        let status = status_from(&answers).unwrap();
+        assert_eq!(status["jobs"][0]["as"], "editor");
+        assert!(status["play"].is_null());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pci_that_never_finishes_is_no_queue_and_is_ended() {
+        let dir = scratch("stalls");
+        let cases = [
+            ("hangs", "exec sleep 30"),
+            ("lingers", "echo '{\"v\":1}'\nexec 1>&-\nexec sleep 30"),
+            ("streams", "exec yes '{\"v\":1}'"),
+        ];
+        for (name, body) in cases {
+            let path = tool(&dir, name, body);
+            let started = Instant::now();
+            assert!(
+                status_within(&path, Duration::from_millis(300)).is_none(),
+                "{name}"
+            );
+            assert!(started.elapsed() < Duration::from_secs(20), "{name}");
         }
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -424,6 +521,7 @@ mod tests {
                     "queue::tests::launch_child",
                     "--test-threads",
                     "1",
+                    "--nocapture",
                 ])
                 .env("PATH", &dir)
                 .env("PFX_QUEUE_CHILD", expected)

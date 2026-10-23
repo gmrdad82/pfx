@@ -119,9 +119,7 @@ pub(super) struct Plan<'a> {
 pub(super) fn pfx_line(plan: &Plan, queue: bool) -> Vec<String> {
     let mut line: Vec<String> = Vec::new();
     if queue {
-        line.extend(
-            ["pci", "gpu", "run", "--class", "clip", "--as", "pfx", "--"].map(String::from),
-        );
+        line.extend(super::process::queue_run());
     }
     line.extend(["pfx".to_string(), "shot".to_string()]);
     line.push(plan.scene.display().to_string());
@@ -289,11 +287,7 @@ impl Shoot<'_> {
         if !on_path("pfx") {
             return Err("pfx is not on the PATH; shoot renders with `pfx shot`".into());
         }
-        let queued = std::env::var_os("GPU_QUEUE").is_some();
-        let queue = !queued && pfx_run::queue::present();
-        if !queued && !queue {
-            eprintln!("pfx shoot: no GPU queue on the PATH, so pfx runs directly, paced the same");
-        }
+        let (_, queue) = super::process::found("shoot", "pfx runs directly");
         let base = base(file);
         let built = build_with(&recipe, base, registry).map_err(|e| format!("{file}: {e}"))?;
         for note in &built.notes {
