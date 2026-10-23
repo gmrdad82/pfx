@@ -3,3 +3,4 @@
 *.tza binary
 *.pfm binary
 *.pitofx binary
+*.pitofx diff=pitofx

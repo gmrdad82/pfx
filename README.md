@@ -6,7 +6,7 @@
 
 pfx: got questions or doubts? [Ping me on Discord](https://discord.gg/XsNcn3kYzn)
 
-pfx is a game and render engine in Rust, part of [PITO MD](https://pitomd.com). It draws scenes live at 4K, path-traces stills and clips with its own denoiser, builds scenes from recipes, edits them in its own editor, plays them with a game's WebAssembly module, and runs the physics, sound, input and Steam a game needs. It is one tool, `pfx`, and a set of library crates a game links. It is built to be fast, light and simple, and every number below was measured on this repository's code.
+pfx is a game and render engine in Rust, part of [PITO MD](https://pitomd.com). It draws scenes live at 4K, path-traces stills and clips with its own denoiser, builds scenes from recipes, edits them in its own editor, plays them with a game's WebAssembly module, and runs the physics, sound, input and Steam a game needs. Its scenes diff like code: after `pfx git setup`, `git diff` shows the one value you changed ([docs/git.md](docs/git.md)). It is one tool, `pfx`, and a set of library crates a game links. It is built to be fast, light and simple, and every number below was measured on this repository's code.
 
 | | Measured | Source |
 |---|---|---|
@@ -37,7 +37,7 @@ How and when each was measured is on its page, with every head-to-head against G
 
 | | |
 |---|---|
-| Linux, Windows, macOS | `cargo install --locked --git https://github.com/gmrdad82/pfx --tag v3.1.3 pfx` |
+| Linux, Windows, macOS | `cargo install --locked --git https://github.com/gmrdad82/pfx --tag v3.1.4 pfx` |
 
 The `pfx` tool builds from source on Linux, Windows and macOS (Apple Silicon); [docs/install.md](docs/install.md) also covers a release's prebuilt archives, their checksums and the `.pitofx` file type each one registers. It needs Rust 1.97 or newer and a GPU wgpu can open: Vulkan on Linux, Vulkan or DX12 on Windows, Metal on macOS. On Debian or Ubuntu, first `sudo apt install libasound2-dev libudev-dev libxkbcommon-dev libwayland-dev libx11-dev`.
 
@@ -53,12 +53,12 @@ cargo run --release
 cargo run --release -- edit
 ```
 
-<p align="center"><img src="docs/images/new.gif" width="800" alt="A terminal: pfx --version prints pfx 3.1.3; git init and pfx new demo scaffold a game of 20 files and set git to show its .pitofx diffs as TOML; ls shows AGENTS.md, CLAUDE.md, Cargo.toml, README.md, build.rs, content, project.toml, prompts, src and tests, and content holds first.pitofx, fonts and meshes; pfx bench plays demo/content/first.pitofx headless for 3 seconds and prints 180 frames, 0 dropped and GPU frame times under half a millisecond, held on screen."></p>
+<p align="center"><img src="docs/images/new.gif" width="800" alt="A terminal: pfx --version prints pfx 3.1.4; git init and pfx new demo scaffold a game of 20 files and set git to show its .pitofx diffs as TOML; ls shows AGENTS.md, CLAUDE.md, Cargo.toml, README.md, build.rs, content, project.toml, prompts, src and tests, and content holds first.pitofx, fonts and meshes; pfx bench plays demo/content/first.pitofx headless for 3 seconds and prints 180 frames, 0 dropped and GPU frame times under half a millisecond, held on screen."></p>
 
 A game links the crates it uses by the same tag, on Linux, Windows and macOS:
 
 ```toml
-pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.1.3" }
+pfx-game = { git = "https://github.com/gmrdad82/pfx", tag = "v3.1.4" }
 ```
 
 pfx and its crates build and pass their unit tests on Linux, Windows and macOS (Apple Silicon), and a game's Windows build runs on Linux and the Steam Deck through Proton ([docs/windows.md](docs/windows.md)). [Your first game](docs/first-game.md) walks through it, and [your first recipe](docs/recipe-first-scene.md) builds a scene.

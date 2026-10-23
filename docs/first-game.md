@@ -11,7 +11,7 @@ A game on pfx is its own repository and one binary. `pfx new` scaffolds it, `car
 ```
 $ git init my-game
 $ pfx new my-game
-my-game: scaffolded 15 files into my-game on pfx v3.1.3
+my-game: scaffolded 15 files into my-game on pfx v3.1.4
 git: diffs of .pitofx show their TOML (pfx scene print --all)
 next: cargo run --release (the game), cargo run --release -- edit (the editor)
 This game links pfx: publish its source under the AGPL-3.0, or use pfx's free licence (closed use under $200k a year, education, non-profits) or a commercial one: https://pitomd.com/pfx/license
@@ -23,9 +23,9 @@ The game pins the engine's crates at the tag the `pfx` tool was built from:
 
 ```toml
 [dependencies]
-pfx-game = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.3" }
-pfx-project = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.3" }
-pfx-workbench = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.3", optional = true }
+pfx-game = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.4" }
+pfx-project = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.4" }
+pfx-workbench = { git = "https://github.com/gmrdad82/pfx.git", tag = "v3.1.4", optional = true }
 ```
 
 The files it writes:

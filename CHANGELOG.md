@@ -1,5 +1,31 @@
 # Changelog
 
+## v3.1.4 — 2026-10-21
+
+### Added
+
+- pfx-compose, the core of pfx's music composer: it composes original music from a style kept in a `.pitofx` (harmony, melody, roles, form and hits from Sonic Pi's scales, chords and Euclidean rhythms), the same notes for the same style, seed and length.
+- `pfx clip --trace --denoise on|off` turns a traced clip's denoiser off, and `--passes <dir>` writes each frame's raw beauty, albedo and normal as linear EXR, the denoiser's exact inputs.
+- `pfx clip --trace --dump-scene <file.jsonl>` writes one JSON line for each traced frame, listing every instance the frame holds: its piece, object, material and mesh, how many instances share the mesh, its world bounds, sides, shadow, cut-out and alpha cutoff as the tracer applies them, and its top-level slot. docs/recipe-clips.md documents the format.
+- `pfx render --recipe` and `pfx shot --still` take `--background transparent` and write straight-alpha RGBA, and thin film takes a thickness that ramps along an axis or follows a map.
+- Compiled pipelines and bakes share one machine cache across checkouts and runs, checked on read and capped by last use; `pfx cache` shows and cleans it.
+- Games open http and https links in the system browser or the Steam overlay with `world.open_url`, and warm up for the surface's real format with `Warm::format`.
+- `pfx_splash::Lockup` draws the Powered by pfx lockup whole on any flat board, glows included.
+- The window shows the licence as one of five badges (Free, Indie, Pro, Owner, F&F), and the licence JSON carries the key's group and badge.
+
+### Changed
+
+- The Powered by pfx splash chime starts on the frame the line appears and plays 14 dB softer, at about −30 LUFS under a −15.5 dBTP peak, the same in every app and game. `pfx_splash::CEILING_DB` is now the chime's final peak, −15.5 dBTP.
+- A licence key carries a group: only a Pro key of the customer or owner group may hide the Powered by pfx splash, and the settings switch says why for every other key. `show = "always"` still shows it for everyone.
+- Every library crate builds from its own folder alone, as a vendored build copies it: the marks, icons and fonts a crate embeds now live inside that crate.
+- Traced clips with particles keep their trace across frames, placing sprites and moving instances in one top-level build a frame instead of restaging.
+
+### Fixed
+
+- A game whose surface configure is refused while another thread submits retries it on the next frame instead of panicking, and the splash frame's reconfigure goes through the same path.
+- A traced still no longer refuses a pose whose flat shared pieces sit far from the origin.
+- An extruded logo keeps the top face of its thin diagonal strokes.
+
 ## v3.1.3 — 2026-10-20
 
 ### Added
