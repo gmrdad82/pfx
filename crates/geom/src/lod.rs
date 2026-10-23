@@ -6,6 +6,7 @@ pub const NORMAL_WEIGHT: f32 = 0.5;
 pub const UV_WEIGHT: f32 = 1.0;
 pub const MIN_TRIANGLES: usize = 32;
 pub const MAX_LEVELS: usize = 8;
+pub const SIMPLIFIES: bool = cfg!(feature = "meshopt");
 
 #[derive(Clone, Debug)]
 pub struct Level {

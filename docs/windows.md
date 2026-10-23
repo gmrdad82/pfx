@@ -48,7 +48,7 @@ env -u DISPLAY -u WAYLAND_DISPLAY \
   bin/windows-check test
 ```
 
-`WINEPREFIX` is the checkout's `tmp/wine`. `WINEDLLOVERRIDES` keeps Wine from offering Mono or Gecko. The script runs `wine wineboot --init` under that same environment before the tests, so the prefix exists before the suite starts. Geometry's `meshopt` build script compiles C++ with `x86_64-w64-mingw32-g++`. After `cargo test --no-run`, the script copies `libstdc++-6.dll`, `libgcc_s_seh-1.dll` and `libwinpthread-1.dll` from `/usr/x86_64-w64-mingw32/bin`, and `steam_api64.dll` from the Steam crate's build output, next to the test executables. Wine loads those from the executable's directory.
+`WINEPREFIX` is the checkout's `tmp/wine`. `WINEDLLOVERRIDES` keeps Wine from offering Mono or Gecko. The script runs `wine wineboot --init` under that same environment before the tests, so the prefix exists before the suite starts. pfx-geom's `meshopt` feature, off in the library crates and on in the pfx tool, compiles C++ with `x86_64-w64-mingw32-g++`; the script lints pfx-geom once more with it on and runs that build's unit tests under Wine as well, so the simplifier the Windows pfx tool ships is tested there. After `cargo test --no-run`, the script copies `libstdc++-6.dll`, `libgcc_s_seh-1.dll` and `libwinpthread-1.dll` from `/usr/x86_64-w64-mingw32/bin`, and `steam_api64.dll` from the Steam crate's build output, next to the test executables. Wine loads those from the executable's directory.
 
 ## GPU
 

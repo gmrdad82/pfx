@@ -1,5 +1,5 @@
 use crate::detail::{detail_level, projected_pixels};
-use crate::lod::{chain, errors};
+use crate::lod::{SIMPLIFIES, chain, errors};
 use crate::mesh::{Bounds, Mesh};
 use crate::shapes::Shape;
 use crate::strip::{ROLL_WGSL, Roller, Strip, column_step};
@@ -96,6 +96,19 @@ fn without_the_simplifier_a_dense_mesh_keeps_its_one_full_level() {
     assert_eq!(levels[0].mesh.indices, dense.indices);
     assert_eq!(levels[0].mesh.positions, dense.positions);
     assert_eq!(errors(&levels), [0.0]);
+}
+
+#[test]
+fn the_simplifies_flag_says_whether_a_dense_mesh_gets_coarser_levels() {
+    let dense = Shape::Ellipsoid {
+        radius: 1.0,
+        squash: 1.0,
+    }
+    .mesh(0.0005);
+    let levels = chain(&dense);
+    assert_eq!(levels.len() > 1, SIMPLIFIES, "{} levels", levels.len());
+    assert_eq!(levels[0].mesh.bytes(), dense.bytes());
+    assert_eq!(levels[0].error, 0.0);
 }
 
 #[test]

@@ -1,8 +1,12 @@
 use std::process::Command;
 
-const LIBRARIES: [&str; 6] = [
+const LIBRARIES: [&str; 10] = [
     "pfx-game",
     "pfx-live",
+    "pfx-play",
+    "pfx-runtime",
+    "pfx-trace",
+    "pfx-assets",
     "pfx-bake",
     "pfx-geom",
     "pfx-splash",
@@ -11,7 +15,11 @@ const LIBRARIES: [&str; 6] = [
 
 const NATIVE: [&str; 2] = ["meshopt", "cc"];
 
-const C_BUILDS_THAT_STAY_OFF: [&str; 2] = ["android-activity", "wayland-backend"];
+const C_BUILDS_THAT_STAY_OFF: [&str; 3] = [
+    "android-activity",
+    "iana-time-zone-haiku",
+    "wayland-backend",
+];
 
 fn tree(args: &[&str]) -> Result<Vec<String>, String> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
@@ -53,41 +61,60 @@ fn normal(package: &str, features: &[&str]) -> Vec<String> {
     tree(&args).unwrap_or_else(|error| panic!("cargo tree -p {package}: {error}"))
 }
 
-fn builds_c(package: &str, features: &[&str]) -> Vec<String> {
-    let mut args = vec![
-        "-e",
-        "normal,build",
-        "-p",
-        package,
-        "-i",
-        "cc",
-        "--depth",
-        "1",
-    ];
-    args.extend_from_slice(features);
+fn specs(error: &str, spec: &str) -> Vec<String> {
+    let tail = spec.rsplit('#').next().unwrap_or(spec);
+    let name = tail.split('@').next().unwrap_or(tail);
+    let bare = format!("{name}@");
+    let qualified = format!("#{name}@");
+    error
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with(&bare) || line.contains(&qualified))
+        .filter(|line| *line != spec)
+        .map(String::from)
+        .collect()
+}
+
+fn inverted(package: &str, edges: &str, spec: &str, extra: &[&str]) -> Vec<String> {
+    let mut args = vec!["-e", edges, "-p", package, "-i", spec];
+    args.extend_from_slice(extra);
     match tree(&args) {
-        Ok(lines) => names(&lines)
-            .into_iter()
-            .filter(|name| *name != "cc" && !name.starts_with('['))
-            .map(String::from)
-            .collect(),
+        Ok(lines) => lines,
         Err(error) if error.contains("did not match any packages") => Vec::new(),
-        Err(error) => panic!("cargo tree -p {package} -i cc: {error}"),
+        Err(error) if error.contains("is ambiguous") => {
+            let versions = specs(&error, spec);
+            assert!(!versions.is_empty(), "cargo tree -p {package} -i {spec}: {error}");
+            versions
+                .iter()
+                .flat_map(|version| inverted(package, edges, version, extra))
+                .collect()
+        }
+        Err(error) => panic!("cargo tree -p {package} -i {spec}: {error}"),
     }
+}
+
+fn builds_c(package: &str, features: &[&str]) -> Vec<String> {
+    let mut extra = vec!["--depth", "1"];
+    extra.extend_from_slice(features);
+    let lines = inverted(package, "normal,build", "cc", &extra);
+    let mut builders: Vec<String> = names(&lines)
+        .into_iter()
+        .filter(|name| *name != "cc" && !name.starts_with('['))
+        .map(String::from)
+        .collect();
+    builders.sort();
+    builders.dedup();
+    builders
 }
 
 fn wayland_log(package: &str) -> bool {
-    match tree(&["-e", "features", "-p", package, "-i", "wayland-backend"]) {
-        Ok(lines) => lines
-            .iter()
-            .any(|line| line.starts_with("wayland-backend feature \"log\"")),
-        Err(error) if error.contains("did not match any packages") => false,
-        Err(error) => panic!("cargo tree -p {package} -i wayland-backend: {error}"),
-    }
+    inverted(package, "features", "wayland-backend", &[])
+        .iter()
+        .any(|line| line.starts_with("wayland-backend feature \"log\""))
 }
 
 #[test]
-fn no_library_crate_links_a_native_build_with_its_default_features() {
+fn no_library_crate_pulls_meshopt_or_cc_with_its_default_features() {
     let mut found = Vec::new();
     for package in LIBRARIES {
         let lines = normal(package, &[]);
@@ -135,4 +162,36 @@ fn the_meshopt_feature_brings_the_cpp_simplifier_in() {
 fn the_pfx_tool_keeps_the_simplifier_on() {
     let lines = normal("pfx", &[]);
     assert!(names(&lines).contains(&"meshopt"));
+}
+
+fn ambiguous(spec: &str, choices: &[&str]) -> String {
+    let mut lines = vec![
+        format!("error: specification `{spec}` is ambiguous"),
+        "help: re-run this command with one of the following specifications".to_string(),
+    ];
+    lines.extend(choices.iter().map(|choice| format!("  {choice}")));
+    lines.join("\n")
+}
+
+#[test]
+fn an_ambiguous_package_splits_into_each_version_cargo_names() {
+    let error = ambiguous("cc", &["cc@1.2.3", "cc@1.5.1"]);
+    assert_eq!(specs(&error, "cc"), ["cc@1.2.3", "cc@1.5.1"]);
+}
+
+#[test]
+fn a_version_from_two_sources_splits_into_qualified_specifications() {
+    let registry = "registry+https://github.com/rust-lang/crates.io-index#cc@1.5.1";
+    let git = "git+https://example.com/cc#cc@1.5.1";
+    let error = ambiguous("cc@1.5.1", &[registry, git]);
+    assert_eq!(specs(&error, "cc@1.5.1"), [registry, git]);
+    assert_eq!(specs(&error, registry), [git]);
+}
+
+#[test]
+fn an_ambiguity_without_choices_or_for_another_package_gives_none() {
+    assert!(specs(&ambiguous("cc", &[]), "cc").is_empty());
+    let other = ambiguous("ccx", &["ccx@0.1.0", "ccx@0.2.0", "base64@0.13.1"]);
+    assert!(specs(&other, "cc").is_empty());
+    assert_eq!(specs(&other, "ccx"), ["ccx@0.1.0", "ccx@0.2.0"]);
 }

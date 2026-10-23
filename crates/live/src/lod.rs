@@ -650,8 +650,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(feature = "meshopt"))]
-    fn without_the_simplifier_an_added_mesh_draws_its_full_level_at_any_distance() {
+    fn an_added_mesh_draws_its_full_level_at_any_distance_unless_geom_simplifies() {
         let mesh = dense();
         assert!(mesh.triangle_count() > 2000);
         let mut set = LodSet::new(2_000_000);
@@ -660,7 +659,13 @@ mod tests {
             assert_eq!(set.add_mesh(instance(z, at as u32 + 1), &mesh), Ok(at));
         }
         for eye in [5.0, 500.0, 50_000.0] {
-            set.select(camera(eye), 2160);
+            let stats = set.select(camera(eye), 2160);
+            assert_eq!(stats.degraded_objects, 0);
+            assert_eq!(stats.over_budget_triangles, 0);
+            if lod::SIMPLIFIES {
+                continue;
+            }
+            assert_eq!(stats.cached_levels, distances.len());
             for at in 0..distances.len() {
                 assert_eq!(
                     set.selected_level(at),
@@ -672,16 +677,19 @@ mod tests {
         let mut uploader = TriangleUploader(Vec::new());
         let drawn = set.upload_selected(&mut uploader).unwrap();
         assert_eq!(drawn.len(), distances.len());
-        assert_eq!(uploader.0, vec![mesh.triangle_count(); distances.len()]);
         let ids: Vec<u32> = drawn.iter().map(|instance| instance.id).collect();
         assert_eq!(ids, [1, 2, 3, 4]);
         let handles: Vec<u32> = drawn.iter().map(|instance| instance.mesh.0).collect();
         assert_eq!(handles, [0, 1, 2, 3]);
+        if lod::SIMPLIFIES {
+            assert!(uploader.0.iter().all(|&count| count <= mesh.triangle_count()));
+        } else {
+            assert_eq!(uploader.0, vec![mesh.triangle_count(); distances.len()]);
+        }
     }
 
     #[test]
-    #[cfg(feature = "meshopt")]
-    fn an_added_mesh_coarsens_with_distance() {
+    fn an_added_mesh_coarsens_with_distance_only_when_geom_simplifies() {
         let mesh = dense();
         let mut set = LodSet::new(2_000_000);
         set.add_mesh(instance(0.0, 1), &mesh).unwrap();
@@ -689,13 +697,47 @@ mod tests {
         set.select(camera(5.0), 2160);
         let near = set.selected_level(0).unwrap();
         let far = set.selected_level(1).unwrap();
-        assert_eq!(near.0, 0);
-        assert!(far.0 > 0, "{far:?}");
-        assert!(far.1 > near.1);
-        assert!(far.2 < near.2);
+        if lod::SIMPLIFIES {
+            assert!(far.0 > near.0, "{near:?} {far:?}");
+            assert!(far.1 > near.1);
+            assert!(far.2 < near.2);
+        } else {
+            assert_eq!(near, (0, 0.0, mesh.triangle_count()));
+            assert_eq!(far, near);
+        }
         let mut uploader = TriangleUploader(Vec::new());
         set.upload_selected(&mut uploader).unwrap();
         assert_eq!(uploader.0, vec![near.2, far.2]);
+    }
+
+    #[test]
+    fn added_meshes_over_the_budget_degrade_only_when_geom_simplifies() {
+        let mesh = dense();
+        let full = mesh.triangle_count();
+        let budget = full / 2;
+        let mut set = LodSet::new(budget);
+        for (at, z) in [0.0, -1.0, -2.0, -3.0].into_iter().enumerate() {
+            set.add_mesh(instance(z, at as u32 + 1), &mesh).unwrap();
+        }
+        let first = set.select(camera(5.0), 2160);
+        if lod::SIMPLIFIES {
+            assert!(first.degraded_objects > 0);
+            assert!(first.triangles < first.ideal_triangles);
+            assert!(set.objects[3].selected > 0);
+            assert!(set.objects[3].selected >= set.objects[0].selected);
+            return;
+        }
+        assert_eq!(first.ideal_triangles, 4 * full);
+        assert_eq!(first.triangles, 4 * full);
+        assert_eq!(first.degraded_objects, 0);
+        assert_eq!(first.over_budget_triangles, 4 * full - budget);
+        for at in 0..4 {
+            assert_eq!(set.selected_level(at), Some((0, 0.0, full)));
+        }
+        let second = set.select(camera(5.0), 2160);
+        assert_eq!(second.triangles, first.triangles);
+        assert_eq!(second.degraded_objects, 0);
+        assert_eq!(second.over_budget_triangles, first.over_budget_triangles);
     }
 
     #[test]

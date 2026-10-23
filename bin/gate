@@ -37,6 +37,13 @@ meshopt_tests() {
   step geom-tests cargo test -p pfx-geom --lib
   step geom-meshopt-tests cargo test -p pfx-geom --lib --features meshopt
   step live-lod-tests cargo test -p pfx-live --lib lod::tests
+  step live-meshopt-lod-tests cargo test -p pfx-live --lib --features meshopt lod::tests
+}
+
+meshopt_touched() {
+  local names
+  names=$(changed_packages) || return 0
+  printf '%s\n' "$names" | grep -Eqx 'pfx-(geom|live)'
 }
 
 lint() {
@@ -92,7 +99,9 @@ fast() {
   step clippy cargo clippy --workspace --all-targets -- -D warnings
   step game-clippy cargo clippy -p pfx-game --all-targets --features tools,steam,dev-hud,modules -- -D warnings
   step build cargo build -p pfx --bins --examples
-  meshopt_lint
+  if meshopt_touched; then
+    meshopt_lint
+  fi
   if names=$(changed_packages); then
     for name in $(printf '%s\n' "$names" | sort -u); do
       picks+=(-p "$name")
@@ -101,7 +110,9 @@ fast() {
   else
     step unit-tests cargo test --workspace --lib --bins
   fi
-  meshopt_tests
+  if meshopt_touched; then
+    meshopt_tests
+  fi
   step game-tests cargo test -p pfx-game --lib --features tools,steam
   step agnostic cargo test -q --test agnostic
   step self-contained cargo test -q --test self_contained

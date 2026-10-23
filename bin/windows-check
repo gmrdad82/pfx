@@ -25,6 +25,7 @@ fi
 echo "windows-check: ${args[*]} --target $target"
 cargo check --target "$target" "${args[@]}" --lib --tests
 cargo clippy --target "$target" "${args[@]}" --lib --tests -- -D warnings
+cargo clippy --target "$target" -p pfx-geom --features meshopt --lib --tests -- -D warnings
 if [ "$mode" != test ]; then
   echo "windows-check: clean"
   exit 0
@@ -34,15 +35,20 @@ run_dir="$top/tmp/wine-run"
 mkdir -p "$prefix" "$run_dir"
 chmod 700 "$run_dir"
 mingw_bin=/usr/x86_64-w64-mingw32/bin
+under_wine() {
+  env -u DISPLAY -u WAYLAND_DISPLAY \
+    XDG_RUNTIME_DIR="$run_dir" \
+    WINEPREFIX="$prefix" \
+    WINEDEBUG=-all \
+    WINEDLLOVERRIDES='mscoree,mshtml=;winemenubuilder.exe=d' \
+    CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine \
+    "$@"
+}
 echo "windows-check: wine prefix $prefix"
-env -u DISPLAY -u WAYLAND_DISPLAY \
-  XDG_RUNTIME_DIR="$run_dir" \
-  WINEPREFIX="$prefix" \
-  WINEDEBUG=-all \
-  WINEDLLOVERRIDES='mscoree,mshtml=;winemenubuilder.exe=d' \
-  wine wineboot --init
+under_wine wine wineboot --init
 echo "windows-check: build tests"
 cargo test --target "$target" "${args[@]}" --lib --tests --no-run
+cargo test --target "$target" -p pfx-geom --features meshopt --lib --no-run
 deps="$top/target/$target/debug/deps"
 cp -a "$mingw_bin/libstdc++-6.dll" "$mingw_bin/libgcc_s_seh-1.dll" "$mingw_bin/libwinpthread-1.dll" "$deps/"
 steam_dll=$(find "$top/target/$target/debug/build" -name steam_api64.dll -print -quit)
@@ -50,11 +56,7 @@ if [ -n "$steam_dll" ]; then
   cp -a "$steam_dll" "$deps/"
 fi
 echo "windows-check: cargo test under wine"
-env -u DISPLAY -u WAYLAND_DISPLAY \
-  XDG_RUNTIME_DIR="$run_dir" \
-  WINEPREFIX="$prefix" \
-  WINEDEBUG=-all \
-  WINEDLLOVERRIDES='mscoree,mshtml=;winemenubuilder.exe=d' \
-  CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUNNER=wine \
-  cargo test --target "$target" "${args[@]}" --lib --tests
+under_wine cargo test --target "$target" "${args[@]}" --lib --tests
+echo "windows-check: the meshopt simplifier under wine"
+under_wine cargo test --target "$target" -p pfx-geom --features meshopt --lib
 echo "windows-check: clean"
