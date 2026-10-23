@@ -26,15 +26,30 @@ step() {
   fi
 }
 
+meshopt_lint() {
+  step geom-clippy cargo clippy -p pfx-geom --all-targets -- -D warnings
+  step geom-meshopt-clippy cargo clippy -p pfx-geom --all-targets --features meshopt -- -D warnings
+  step live-clippy cargo clippy -p pfx-live --all-targets -- -D warnings
+  step live-meshopt-clippy cargo clippy -p pfx-live --all-targets --features meshopt -- -D warnings
+}
+
+meshopt_tests() {
+  step geom-tests cargo test -p pfx-geom --lib
+  step geom-meshopt-tests cargo test -p pfx-geom --lib --features meshopt
+  step live-lod-tests cargo test -p pfx-live --lib lod::tests
+}
+
 lint() {
   step fmt cargo fmt --all --check
   step clippy cargo clippy --workspace --all-targets -- -D warnings
   step game-clippy cargo clippy -p pfx-game --all-targets --features tools,steam,dev-hud,modules -- -D warnings
   step core-serde-clippy cargo clippy -p pfx-core --all-targets --features serde -- -D warnings
+  meshopt_lint
   step agnostic cargo test -q --test agnostic
   step self-contained cargo test -q --test self_contained
   step brand cargo test -q --test brand
   step licences cargo test -q --test licences
+  step native cargo test -q --test native
   step charts cargo test -q --test charts
   step steam-alone steam_alone
   step report-alone report_alone
@@ -43,6 +58,7 @@ lint() {
 tests() {
   step build cargo build --workspace --bins --examples
   step tests cargo test --workspace --all-targets
+  meshopt_tests
   step game-tests cargo test -p pfx-game --lib --features tools,steam
   step core-serde cargo test -p pfx-core --lib --features serde
   step doc-tests cargo test --workspace --doc
@@ -76,6 +92,7 @@ fast() {
   step clippy cargo clippy --workspace --all-targets -- -D warnings
   step game-clippy cargo clippy -p pfx-game --all-targets --features tools,steam,dev-hud,modules -- -D warnings
   step build cargo build -p pfx --bins --examples
+  meshopt_lint
   if names=$(changed_packages); then
     for name in $(printf '%s\n' "$names" | sort -u); do
       picks+=(-p "$name")
@@ -84,11 +101,13 @@ fast() {
   else
     step unit-tests cargo test --workspace --lib --bins
   fi
+  meshopt_tests
   step game-tests cargo test -p pfx-game --lib --features tools,steam
   step agnostic cargo test -q --test agnostic
   step self-contained cargo test -q --test self_contained
   step brand cargo test -q --test brand
   step licences cargo test -q --test licences
+  step native cargo test -q --test native
   step charts cargo test -q --test charts
   step steam-alone steam_alone
   step report-alone report_alone

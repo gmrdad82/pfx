@@ -632,6 +632,82 @@ mod tests {
         assert_eq!(stats.degraded_objects, 0);
     }
 
+    fn dense() -> Mesh {
+        Shape::Ellipsoid {
+            radius: 1.0,
+            squash: 1.0,
+        }
+        .mesh(0.0005)
+    }
+
+    struct TriangleUploader(Vec<usize>);
+
+    impl MeshUploader for TriangleUploader {
+        fn upload_mesh(&mut self, data: MeshData<'_>) -> Result<MeshHandle, String> {
+            self.0.push(data.indices.len() / 3);
+            Ok(MeshHandle(self.0.len() as u32 - 1))
+        }
+    }
+
+    #[test]
+    #[cfg(not(feature = "meshopt"))]
+    fn without_the_simplifier_an_added_mesh_draws_its_full_level_at_any_distance() {
+        let mesh = dense();
+        assert!(mesh.triangle_count() > 2000);
+        let mut set = LodSet::new(2_000_000);
+        let distances = [0.0, -60.0, -600.0, -6000.0];
+        for (at, z) in distances.into_iter().enumerate() {
+            assert_eq!(set.add_mesh(instance(z, at as u32 + 1), &mesh), Ok(at));
+        }
+        for eye in [5.0, 500.0, 50_000.0] {
+            set.select(camera(eye), 2160);
+            for at in 0..distances.len() {
+                assert_eq!(
+                    set.selected_level(at),
+                    Some((0, 0.0, mesh.triangle_count()))
+                );
+                assert_eq!(set.selected_mesh(at).unwrap().bytes(), mesh.bytes());
+            }
+        }
+        let mut uploader = TriangleUploader(Vec::new());
+        let drawn = set.upload_selected(&mut uploader).unwrap();
+        assert_eq!(drawn.len(), distances.len());
+        assert_eq!(uploader.0, vec![mesh.triangle_count(); distances.len()]);
+        let ids: Vec<u32> = drawn.iter().map(|instance| instance.id).collect();
+        assert_eq!(ids, [1, 2, 3, 4]);
+        let handles: Vec<u32> = drawn.iter().map(|instance| instance.mesh.0).collect();
+        assert_eq!(handles, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    #[cfg(feature = "meshopt")]
+    fn an_added_mesh_coarsens_with_distance() {
+        let mesh = dense();
+        let mut set = LodSet::new(2_000_000);
+        set.add_mesh(instance(0.0, 1), &mesh).unwrap();
+        set.add_mesh(instance(-600.0, 2), &mesh).unwrap();
+        set.select(camera(5.0), 2160);
+        let near = set.selected_level(0).unwrap();
+        let far = set.selected_level(1).unwrap();
+        assert_eq!(near.0, 0);
+        assert!(far.0 > 0, "{far:?}");
+        assert!(far.1 > near.1);
+        assert!(far.2 < near.2);
+        let mut uploader = TriangleUploader(Vec::new());
+        set.upload_selected(&mut uploader).unwrap();
+        assert_eq!(uploader.0, vec![near.2, far.2]);
+    }
+
+    #[test]
+    fn an_added_mesh_with_no_triangles_is_refused() {
+        let empty = Mesh::new(Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+        let mut set = LodSet::new(2_000_000);
+        assert!(set.add_mesh(instance(0.0, 1), &empty).is_err());
+        let mut uploader = TriangleUploader(Vec::new());
+        assert!(set.upload_selected(&mut uploader).unwrap().is_empty());
+        assert!(uploader.0.is_empty());
+    }
+
     #[test]
     fn a_prebuilt_chain_coarsens_with_distance_and_refuses_shrinking_errors() {
         let chain: Vec<(Mesh, f32)> = [0.0005, 0.005, 0.05]

@@ -32,6 +32,7 @@ pfx-theme = { path = "../theme", optional = true }
 
 [features]
 dev-hud = ["dep:egui", "dep:egui-wgpu", "dep:pfx-input", "dep:pfx-theme"]
+meshopt = ["pfx-geom/meshopt"]
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan", "metal", "wgsl"] }

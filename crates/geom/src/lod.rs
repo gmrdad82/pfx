@@ -1,4 +1,5 @@
 use crate::mesh::Mesh;
+#[cfg(feature = "meshopt")]
 use meshopt::{SimplifyOptions, VertexDataAdapter, simplify_with_attributes_and_locks};
 
 pub const NORMAL_WEIGHT: f32 = 0.5;
@@ -20,13 +21,26 @@ pub fn chain(mesh: &Mesh) -> Vec<Level> {
     if mesh.indices.is_empty() {
         return levels;
     }
+    simplify(mesh, &mut levels);
+    levels
+}
+
+pub fn errors(levels: &[Level]) -> Vec<f32> {
+    levels.iter().map(|level| level.error).collect()
+}
+
+#[cfg(not(feature = "meshopt"))]
+fn simplify(_mesh: &Mesh, _levels: &mut Vec<Level>) {}
+
+#[cfg(feature = "meshopt")]
+fn simplify(mesh: &Mesh, levels: &mut Vec<Level>) {
     let positions: Vec<u8> = mesh
         .positions
         .iter()
         .flat_map(|p| p.iter().flat_map(|v| v.to_le_bytes()))
         .collect();
     let Ok(adapter) = VertexDataAdapter::new(&positions, 12, 0) else {
-        return levels;
+        return;
     };
     let attributes: Vec<f32> = mesh
         .normals
@@ -70,13 +84,9 @@ pub fn chain(mesh: &Mesh) -> Vec<Level> {
         previous = triangles;
         target = triangles / 2;
     }
-    levels
 }
 
-pub fn errors(levels: &[Level]) -> Vec<f32> {
-    levels.iter().map(|level| level.error).collect()
-}
-
+#[cfg(feature = "meshopt")]
 fn compact(mesh: &Mesh, indices: &[u32]) -> Mesh {
     let mut remap = vec![u32::MAX; mesh.positions.len()];
     let mut positions = Vec::new();

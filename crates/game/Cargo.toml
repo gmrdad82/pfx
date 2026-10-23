@@ -16,6 +16,7 @@ dev-hud = ["pfx-play/dev-hud", "pfx-live/dev-hud"]
 steam = ["dep:pfx-steam"]
 modules = ["dep:pfx-mod", "dep:wit-parser", "dep:wit-component"]
 splash = ["dep:pfx-splash"]
+meshopt = ["pfx-live/meshopt", "pfx-play/meshopt"]
 
 [dependencies]
 pfx-core = { path = "../core" }

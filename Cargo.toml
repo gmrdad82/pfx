@@ -20,12 +20,13 @@ license.workspace = true
 authors.workspace = true
 
 [features]
-default = ["harness", "editor", "bench", "shot-sound", "sound-clean"]
+default = ["harness", "editor", "bench", "shot-sound", "sound-clean", "meshopt"]
 editor = ["harness", "dep:pfx-workbench"]
 bench = ["harness", "dep:pfx-bench"]
 harness = ["dep:pfx-core", "dep:pfx-cache", "dep:toml", "dep:sha2", "dep:png", "dep:hex", "dep:pollster", "dep:exr", "dep:pfx-run", "pfx-run/encode", "dep:pfx-sound", "pfx-sound/media", "dep:pfx-assets", "dep:pfx-bake", "dep:pfx-gpu", "pfx-gpu/dev-hooks", "dep:pfx-text", "dep:pfx-load", "dep:pfx-project", "dep:pfx-film", "dep:pfx-recipe", "dep:pfx-build", "dep:pfx-glb", "dep:pfx-mesh", "dep:pfx-motion", "dep:pfx-generators", "dep:pfx-recipe-scene", "dep:pfx-still", "dep:pfx-post", "dep:pfx-file", "dep:pfx-source", "dep:pfx-settings", "dep:pfx-splash", "dep:clap", "dep:gltf", "dep:glam", "dep:terminal_size"]
 shot-sound = ["bench", "pfx-sound/shot"]
 sound-clean = ["harness", "pfx-sound/clean"]
+meshopt = ["harness", "dep:pfx-geom", "pfx-geom/meshopt"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -39,6 +40,7 @@ pfx-cache = { path = "crates/cache", optional = true }
 pfx-run = { path = "crates/run", optional = true }
 pfx-assets = { path = "crates/assets", optional = true }
 pfx-bake = { path = "crates/bake", optional = true }
+pfx-geom = { path = "crates/geom", optional = true }
 pfx-gpu = { path = "crates/gpu", optional = true }
 pfx-load = { path = "crates/load", optional = true }
 pfx-text = { path = "crates/text", features = ["subset"], optional = true }

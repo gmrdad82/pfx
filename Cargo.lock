@@ -3239,6 +3239,7 @@ dependencies = [
  "pfx-file",
  "pfx-film",
  "pfx-generators",
+ "pfx-geom",
  "pfx-glb",
  "pfx-gpu",
  "pfx-load",

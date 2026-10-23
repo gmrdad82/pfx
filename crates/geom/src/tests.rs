@@ -81,6 +81,35 @@ fn a_farther_object_draws_a_coarser_level() {
 }
 
 #[test]
+#[cfg(not(feature = "meshopt"))]
+fn without_the_simplifier_a_dense_mesh_keeps_its_one_full_level() {
+    let dense = Shape::Ellipsoid {
+        radius: 1.0,
+        squash: 1.0,
+    }
+    .mesh(0.0005);
+    assert!(dense.triangle_count() > 2000);
+    let levels = chain(&dense);
+    assert_eq!(levels.len(), 1);
+    assert_eq!(levels[0].error, 0.0);
+    assert_eq!(levels[0].mesh.bytes(), dense.bytes());
+    assert_eq!(levels[0].mesh.indices, dense.indices);
+    assert_eq!(levels[0].mesh.positions, dense.positions);
+    assert_eq!(errors(&levels), [0.0]);
+}
+
+#[test]
+fn an_empty_mesh_keeps_its_one_level() {
+    let empty = Mesh::new(Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let levels = chain(&empty);
+    assert_eq!(levels.len(), 1);
+    assert_eq!(levels[0].error, 0.0);
+    assert_eq!(levels[0].mesh.triangle_count(), 0);
+    assert_eq!(levels[0].mesh.bytes(), empty.bytes());
+}
+
+#[test]
+#[cfg(feature = "meshopt")]
 fn the_lod_chain_shrinks_monotonically_and_is_deterministic() {
     let dense = Shape::Ellipsoid {
         radius: 1.0,
