@@ -90,8 +90,7 @@ With `hide = true` and `show = "auto"`, by the key's tier and its signed `group`
 |---|---|
 | none (Free) | no |
 | Indie | no |
-| Pro, `customer` | yes, while it covers the build date |
-| Pro, `owner` | yes, while it covers the build date (owner keys are issued through 9999-12-31) |
+| Pro, `customer` | yes, while it covers the build date (a key paid through 9999-12-31 never lapses and hides it in every build) |
 | Pro, `friends-family` | no |
 | Pro, `education`, `nonprofit` or any other group | no |
 

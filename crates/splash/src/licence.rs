@@ -52,9 +52,9 @@ pub struct Claims {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Group {
-    Owner,
     FriendsFamily,
     #[default]
+    #[serde(alias = "owner")]
     Customer,
     Education,
     Nonprofit,
@@ -65,7 +65,6 @@ pub enum Group {
 impl Group {
     pub fn name(self) -> &'static str {
         match self {
-            Group::Owner => "owner",
             Group::FriendsFamily => "friends-family",
             Group::Customer => "customer",
             Group::Education => "education",
@@ -75,7 +74,7 @@ impl Group {
     }
 
     pub fn may_hide_splash(self, tier: &str) -> bool {
-        tier == PRO && matches!(self, Group::Customer | Group::Owner)
+        tier == PRO && self == Group::Customer
     }
 }
 

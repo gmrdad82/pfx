@@ -265,16 +265,16 @@ impl Prefs {
                 let shown = badge(ui, self.licence.as_ref(), true);
                 shown.on_hover_text(match &self.licence {
                     Some(licence) => match licence.badge() {
-                        Badge::Owner | Badge::FriendsFamily => format!(
+                        Badge::FriendsFamily => format!(
                             "{} licence for {}",
                             licence.badge().label(),
                             licence.licensee
                         ),
                         badge => format!(
-                            "{} licence for {}, covering builds through {}",
+                            "{} licence for {}, {}",
                             badge.label(),
                             licence.licensee,
-                            licence.covered_through
+                            licence.coverage()
                         ),
                     },
                     None => "no key: pfx runs under the AGPL-3.0".to_string(),
@@ -342,13 +342,15 @@ impl Prefs {
         ui.add_space(4.0);
         match &self.licence {
             Some(licence) => {
-                let always = matches!(licence.badge(), Badge::Owner | Badge::FriendsFamily);
+                let family = licence.badge() == Badge::FriendsFamily;
                 let mut facts = vec![
                     ("Tier", licence.tier.label().to_string()),
                     ("Licensed to", licence.licensee.clone()),
                 ];
-                if always {
+                if family {
                     facts.push(("Group", licence.badge().label().to_string()));
+                } else if licence.never_lapses() {
+                    facts.push(("Covers", "every release".to_string()));
                 } else {
                     facts.push(("Paid through", licence.paid_through.clone()));
                     facts.push((
@@ -428,8 +430,8 @@ impl Prefs {
 
 fn splash_note(licence: Option<&Licence>) -> &'static str {
     match licence {
-        Some(licence) if licence.may_hide_splash() && licence.group == Group::Owner => {
-            "on, games built with an Owner key hide the Powered by pfx splash"
+        Some(licence) if licence.may_hide_splash() && licence.never_lapses() => {
+            "on, a Pro key hides the splash in every build"
         }
         Some(licence) if licence.may_hide_splash() => {
             "a game built while the key is paid keeps it: on, a Pro key hides the splash in builds made through the covered date"
@@ -819,7 +821,13 @@ pub fn badge(ui: &mut Ui, licence: Option<&Licence>, compact: bool) -> Response 
         art.ink,
     ));
     let detail = licence.map(|licence| match (state, compact) {
-        (Badge::Owner | Badge::FriendsFamily, _) => licence.licensee.clone(),
+        (Badge::FriendsFamily, _) => licence.licensee.clone(),
+        (_, true) if licence.never_lapses() => {
+            format!("{} · every release", licence.licensee)
+        }
+        (_, false) if licence.never_lapses() => {
+            format!("{}  ·  every release", licence.licensee)
+        }
         (_, true) => format!("{} · through {}", licence.licensee, licence.covered_through),
         (_, false) => format!(
             "{}  ·  paid through {}",
@@ -955,14 +963,14 @@ fn unlock_dialog(
                             ui.label(small(
                                 ui,
                                 match licence.badge() {
-                                    badge @ (Badge::Owner | Badge::FriendsFamily) => {
+                                    badge @ Badge::FriendsFamily => {
                                         format!("{} · {}", badge.label(), licence.licensee)
                                     }
                                     badge => format!(
-                                        "{} · {} · covers builds through {}",
+                                        "{} · {} · {}",
                                         badge.label(),
                                         licence.licensee,
-                                        licence.covered_through
+                                        licence.coverage()
                                     ),
                                 },
                                 palette.text_secondary,
@@ -1257,7 +1265,11 @@ mod tests {
                 "indie",
             ),
             (Badge::Pro, Some(mint(&signing, "pro", "2026-12-31")), "pro"),
-            (Badge::Owner, Some(grouped(&signing, "owner")), "owner"),
+            (
+                Badge::Pro,
+                Some(grouped(&signing, "customer")),
+                "pro-forever",
+            ),
             (
                 Badge::FriendsFamily,
                 Some(grouped(&signing, "friends-family")),

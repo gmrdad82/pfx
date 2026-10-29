@@ -255,14 +255,14 @@ fn lines(preferences: &Preferences, licence: Option<&Licence>) -> String {
 fn licence_line(licence: Option<&Licence>) -> String {
     match licence {
         Some(licence) => match licence.badge() {
-            badge @ (Badge::Owner | Badge::FriendsFamily) => {
+            badge @ Badge::FriendsFamily => {
                 format!("pfx {} · {}", badge.label(), licence.licensee)
             }
             badge => format!(
-                "pfx {} · {} · covers builds through {}",
+                "pfx {} · {} · {}",
                 badge.label(),
                 licence.licensee,
-                licence.covered_through
+                licence.coverage()
             ),
         },
         None => "pfx Free".into(),
@@ -407,17 +407,33 @@ mod tests {
             (&json!("pro"), &json!("customer"), &json!("pro"))
         );
         let forever = r#","type":"timed","paid_through":"9999-12-31","grace_days":14"#;
-        for (group, badge, label) in [
-            ("owner", "owner", "Owner"),
-            ("friends-family", "friends-family", "F&F"),
+        for (token, group, badge, line) in [
+            (
+                "customer",
+                "customer",
+                "pro",
+                "pfx Pro · Example Games · covers every release",
+            ),
+            (
+                "owner",
+                "customer",
+                "pro",
+                "pfx Pro · Example Games · covers every release",
+            ),
+            (
+                "friends-family",
+                "friends-family",
+                "friends-family",
+                "pfx F&F · Example Games",
+            ),
         ] {
-            let key = mint(&signing, "pro", &format!(r#","group":"{group}"{forever}"#));
+            let key = mint(&signing, "pro", &format!(r#","group":"{token}"{forever}"#));
             let unlocked: Value = serde_json::from_str(
                 &ran("settings unlock - --json", &store, &checker, &key).unwrap(),
             )
             .unwrap();
             let json = shown(&store);
-            assert_eq!(json["tier"], json!("pro"), "{group}");
+            assert_eq!(json["tier"], json!("pro"), "{token}");
             assert_eq!(json["group"], json!(group));
             assert_eq!(json["badge"], json!(badge));
             assert_eq!(json["licensee"], json!("Example Games"));
@@ -427,7 +443,7 @@ mod tests {
             assert!(unlocked["path"].is_string(), "{unlocked}");
             assert_eq!(
                 ran("settings get licence", &store, &checker, "").unwrap(),
-                format!("pfx {label} · Example Games")
+                line
             );
         }
     }

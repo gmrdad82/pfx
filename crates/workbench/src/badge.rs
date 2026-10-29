@@ -75,14 +75,6 @@ pub fn themed(badge: Badge, theme: &Theme) -> Art {
             ink: theme.on_hot,
             sign: theme.on_hot,
         },
-        Badge::Owner => Art {
-            form: Form::Plate,
-            mark: Mark::Diamond,
-            ground: theme.accent,
-            edge: theme.accent,
-            ink: theme.title,
-            sign: theme.hot,
-        },
         Badge::FriendsFamily => Art {
             form: Form::Pill,
             mark: Mark::Rings,
@@ -434,13 +426,7 @@ mod tests {
 
     #[test]
     fn the_tracked_render_masters_are_the_badges_the_window_draws() {
-        let masters = [
-            Badge::Free,
-            Badge::Indie,
-            Badge::Pro,
-            Badge::Owner,
-            Badge::FriendsFamily,
-        ];
+        let masters = [Badge::Free, Badge::Indie, Badge::Pro, Badge::FriendsFamily];
         for badge in masters {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
                 "../../render/badges/logos/badge-{}.svg",

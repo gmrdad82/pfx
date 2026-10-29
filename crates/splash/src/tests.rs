@@ -196,11 +196,11 @@ fn a_friends_family_key_never_hides_the_splash() {
 }
 
 #[test]
-fn an_owner_key_hides_the_splash_only_when_asked_under_auto() {
+fn a_never_lapsing_pro_key_hides_the_splash_only_when_asked_under_auto() {
     let (signing, public) = pair();
     for grace in [0, 14] {
-        let key = mint(&signing, &grouped("owner", "9999-12-31", grace));
-        assert_eq!(verify(&public, &key).unwrap().group, Group::Owner);
+        let key = mint(&signing, &grouped("customer", "9999-12-31", grace));
+        assert_eq!(verify(&public, &key).unwrap().group, Group::Customer);
         assert_eq!(hides(Some(&key), &public), [false, true, false]);
         assert!(hidden(
             &settings(key.clone()),
@@ -210,10 +210,51 @@ fn an_owner_key_hides_the_splash_only_when_asked_under_auto() {
     }
     let indie = mint(
         &signing,
+        &grouped("customer", "9999-12-31", 0).replace(r#""tier":"pro""#, r#""tier":"indie""#),
+    );
+    assert_eq!(hides(Some(&indie), &public), [false, false, false]);
+}
+
+#[test]
+fn an_older_owner_group_token_reads_as_a_customer_key_and_keeps_the_splash_hide() {
+    let (signing, public) = pair();
+    for grace in [0, 14] {
+        let key = mint(&signing, &grouped("owner", "9999-12-31", grace));
+        let claims = verify(&public, &key).unwrap();
+        assert_eq!(claims.group, Group::Customer);
+        assert_eq!(claims.group.name(), "customer");
+        assert_eq!(hides(Some(&key), &public), [false, true, false]);
+        let licence = unlock(&public, &key, BUILT).unwrap();
+        assert_eq!(licence.badge(), Badge::Pro);
+        assert!(licence.may_hide_splash());
+    }
+    let indie = mint(
+        &signing,
         &grouped("owner", "9999-12-31", 0).replace(r#""tier":"pro""#, r#""tier":"indie""#),
     );
-    assert_eq!(verify(&public, &indie).unwrap().group, Group::Owner);
     assert_eq!(hides(Some(&indie), &public), [false, false, false]);
+}
+
+#[test]
+fn a_never_lapsing_key_says_it_covers_every_release_and_a_dated_one_its_date() {
+    let (signing, public) = pair();
+    let forever = unlock(
+        &public,
+        &mint(&signing, &grouped("customer", "9999-12-31", 14)),
+        BUILT,
+    )
+    .unwrap();
+    assert!(forever.never_lapses());
+    assert_eq!(forever.coverage(), "covers every release");
+    assert!(forever.may_hide_splash());
+    let dated = unlock(
+        &public,
+        &mint(&signing, &claims("pro", Some(("2026-12-31", 14)))),
+        BUILT,
+    )
+    .unwrap();
+    assert!(!dated.never_lapses());
+    assert_eq!(dated.coverage(), "covers builds through 2027-01-14");
 }
 
 #[test]
@@ -245,21 +286,22 @@ fn the_badge_reads_the_keys_group_then_its_tier() {
     );
     assert_eq!(badge(&claims("pro", Some(("2026-12-31", 14)))), Badge::Pro);
     assert_eq!(badge(&claims("pro", Some(("2026-01-31", 14)))), Badge::Free);
-    assert_eq!(badge(&grouped("owner", "9999-12-31", 14)), Badge::Owner);
+    assert_eq!(badge(&grouped("customer", "9999-12-31", 14)), Badge::Pro);
+    assert_eq!(badge(&grouped("owner", "9999-12-31", 14)), Badge::Pro);
     assert_eq!(
         badge(&grouped("friends-family", "9999-12-31", 0)),
         Badge::FriendsFamily
     );
     assert_eq!(badge(&grouped("education", "2026-12-31", 14)), Badge::Pro);
-    let owner = unlock(
+    let forever = unlock(
         &public,
-        &mint(&signing, &grouped("owner", "9999-12-31", 14)),
+        &mint(&signing, &grouped("customer", "9999-12-31", 14)),
         built,
     )
     .unwrap();
-    assert_eq!(owner.covered_through, "9999-12-31");
-    assert_eq!(owner.tier, Tier::Pro);
-    assert!(owner.may_hide_splash());
+    assert_eq!(forever.covered_through, "9999-12-31");
+    assert_eq!(forever.tier, Tier::Pro);
+    assert!(forever.may_hide_splash());
     let family = unlock(
         &public,
         &mint(&signing, &grouped("friends-family", "9999-12-31", 14)),
@@ -269,7 +311,7 @@ fn the_badge_reads_the_keys_group_then_its_tier() {
     assert!(!family.may_hide_splash());
     assert_eq!(
         Badge::ALL.map(Badge::label),
-        ["Free", "Indie", "Pro", "Owner", "F&F"]
+        ["Free", "Indie", "Pro", "F&F"]
     );
 }
 

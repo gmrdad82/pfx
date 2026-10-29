@@ -53,9 +53,20 @@ impl Licence {
         self.group.may_hide_splash(self.tier.name())
     }
 
+    pub fn never_lapses(&self) -> bool {
+        self.paid_through == LAST_DAY
+    }
+
+    pub fn coverage(&self) -> String {
+        if self.never_lapses() {
+            "covers every release".to_string()
+        } else {
+            format!("covers builds through {}", self.covered_through)
+        }
+    }
+
     pub fn badge(&self) -> Badge {
         match self.group {
-            Group::Owner => Badge::Owner,
             Group::FriendsFamily => Badge::FriendsFamily,
             Group::Customer | Group::Education | Group::Nonprofit | Group::Other => match self.tier
             {
@@ -73,18 +84,11 @@ pub enum Badge {
     Free,
     Indie,
     Pro,
-    Owner,
     FriendsFamily,
 }
 
 impl Badge {
-    pub const ALL: [Badge; 5] = [
-        Badge::Free,
-        Badge::Indie,
-        Badge::Pro,
-        Badge::Owner,
-        Badge::FriendsFamily,
-    ];
+    pub const ALL: [Badge; 4] = [Badge::Free, Badge::Indie, Badge::Pro, Badge::FriendsFamily];
 
     pub fn of(licence: Option<&Licence>) -> Badge {
         licence.map_or(Badge::Free, Licence::badge)
@@ -95,7 +99,6 @@ impl Badge {
             Badge::Free => "free",
             Badge::Indie => "indie",
             Badge::Pro => "pro",
-            Badge::Owner => "owner",
             Badge::FriendsFamily => "friends-family",
         }
     }
@@ -105,7 +108,6 @@ impl Badge {
             Badge::Free => "Free",
             Badge::Indie => "Indie",
             Badge::Pro => "Pro",
-            Badge::Owner => "Owner",
             Badge::FriendsFamily => "F&F",
         }
     }
