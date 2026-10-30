@@ -84,6 +84,13 @@ pub const GUIDES: &[(&str, u32, Option<&str>)] = &[
             "pfx-input: keyboard, mouse and controllers behind one action map, with controller glyphs, rumble and input recording.",
         ),
     ),
+    (
+        "keys",
+        202,
+        Some(
+            "pfx-keys: one keymap declared once, with the ? help sheet's model, the legend's hints and the clashes built from it, and egui, winit and terminal key events read as its chords.",
+        ),
+    ),
     ("sound", 203, None),
     ("physics", 204, None),
     ("characters", 205, None),

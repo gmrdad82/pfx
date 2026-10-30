@@ -160,6 +160,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-physics` | rigid bodies, characters, world queries, fluid, rope, flocks and wind |
 | `pfx-sound` | live mixing, decoded streams and deterministic mixdown |
 | `pfx-input` | keyboard, mouse and controllers behind one action map, glyphs, rumble and recording |
+| `pfx-keys` | one keymap declared once, its `?` help sheet and hints built from it, egui, winit and terminal keys read as its chords ([docs/keys.md](docs/keys.md)) |
 | `pfx-steam` | achievements, stats, Cloud saves, the overlay, leaderboards, lobbies and Steam Input |
 | `pfx-film` | scripted films rendered offline from a game, and footage films (`pfx film`) |
 | `pfx-play` | play mode: a game run live over a runtime copy of a scene, with pause, step and an exact stop |
