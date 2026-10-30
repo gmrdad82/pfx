@@ -1,5 +1,7 @@
 # Check a project
 
+<p align="center"><img src="images/scene-check.gif" width="800" alt="The scene-check example on the demo project: a path with the wrong case and a misspelt material, each reported at its line and column with its code, then both fixed and the scene resolved"></p>
+
 `Project::check` checks every file of a project: each scene with everything it reads, each prefab on its own, and every include, prefab, reference, id and asset path. It returns a list of `Diagnostic`s, empty when the project is clean.
 
 ## From the command line

@@ -1,5 +1,7 @@
 # Import a TOML file
 
+<p align="center"><img src="images/scene-migrate.gif" width="800" alt="The scene-write example migrating a format 0 scene: the format line added, paths rewritten relative to the project root, the separate body table moved into its object and a stable id written into each entry"></p>
+
 Every file names its format version on its first line. A file without `format` is format 0. Reading it migrates it in memory and warns once (`old-format`), with every finding pointing into the file as written, so an older project keeps loading. A newer format than the crate knows is refused, naming the version it knows (`newer-format`).
 
 ## Import

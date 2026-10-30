@@ -147,7 +147,7 @@ Each is a package in this workspace that a game or app can link by tag:
 | `pfx-materials` | one physically based material for both renderers, with a WGSL BSDF library |
 | `pfx-text` | glyphs from vector outlines, laid along any baseline |
 | `pfx-post` | the finish chain (tone map, bloom, grade, vignette, grain, dither) and image styles |
-| `pfx-scene` | the scene format: typed tables, errors at file:line:column, stable ids, migrations, a writer that keeps comments, scenes packed into one `.pitofx` |
+| `pfx-scene` | the scene format: typed tables, errors at file:line:column, stable ids, migrations, a writer that keeps comments, scenes packed into one `.pitofx` ([docs/scene-crate.md](docs/scene-crate.md)) |
 | `pfx-file` | the `.pitofx` container: a chunk table, then checksummed chunks, stored or compressed |
 | `pfx-load` | meshes, images, HDR skies and fonts, scenes with in-place edits, and a content-addressed cache |
 | `pfx-recipe`, `pfx-build`, `pfx-recipe-scene` | recipes: parse, validate and patch them, build them into a GLB and a scene, and turn them into an engine scene |

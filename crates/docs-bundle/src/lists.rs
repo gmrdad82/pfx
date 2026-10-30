@@ -41,7 +41,15 @@ pub const GUIDES: &[(&str, u32, Option<&str>)] = &[
             "The start-up splash every game on pfx opens with: what it shows, how it overlaps loading, its settings, and the pro key that hides it.",
         ),
     ),
+    (
+        "lockup",
+        103,
+        Some(
+            "Draw pfx's Powered by lockup on a flat board in a credits or licences screen: the same artwork as the splash, whole, at any height and position.",
+        ),
+    ),
     ("scenes", 104, None),
+    ("scene-crate", 104, None),
     ("scene-format", 105, None),
     ("scene-projects", 106, None),
     ("scene-check", 107, None),

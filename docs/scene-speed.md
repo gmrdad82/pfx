@@ -1,5 +1,7 @@
 # Measure the speed
 
+<p align="center"><img src="images/scene-speed.png" width="540" alt="Bar chart: milliseconds to check the project, resolve the scene, check an unsaved buffer and make one checked edit, for scenes of 100 and 1,000 objects"></p>
+
 | Objects in the scene | 100 | 1,000 | 10,000 |
 |---|---|---|---|
 | Scene file size | 14 KB | 144 KB | 1.4 MB |
@@ -9,7 +11,9 @@
 | `SceneEdit::open` | 6.2 ms | 44.6 ms | 664 ms |
 | One `set_at`, checked and written | 5.9 ms | 122 ms | 990 ms |
 
-Measured once on 2026-10-14 on an AMD Ryzen 9 9950X under Linux with Rust 1.97.1, while the machine was busy with other work; nothing was re-run. The times grow faster than the object count from 1,000 objects up.
+Measured once on 2026-10-14, on the earlier standalone crate (pfx-scene 1.6.0), on an AMD Ryzen 9 9950X under Linux with Rust 1.97.1, while the machine was busy with other work; nothing was re-run. The times grow faster than the object count from 1,000 objects up.
+
+The chart above draws the 100 and 1,000 object columns. It was drawn in that earlier repository; `bin/charts` does not redraw it, and it is not one of the charts of `docs/charts`.
 
 ## Measure it yourself
 

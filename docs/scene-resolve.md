@@ -1,5 +1,7 @@
 # Resolve a scene
 
+<p align="center"><img src="images/scene-tree.gif" width="800" alt="The scene-tree example on the demo project: the room resolved from three files, each crate placed from one prefab with a namespaced key and id, and the right crate's box carrying its density override of 0.5"></p>
+
 `Project::scene` resolves a scene into a `Scene`: includes merged, prefabs placed as objects with their per-placement overrides, and every reference rewritten to the key of the entry it names. It is what an engine's loader reads. It returns the scene with its warnings, or the errors that stop it from loading.
 
 ## From the command line

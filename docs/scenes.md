@@ -4,7 +4,7 @@ A product's content is a scene: meshes, materials, lights, sky, haze, camera, fi
 
 ## The format is pfx-scene's
 
-The files are format 1 of the crate `pfx-scene`, which owns the format: every file kind, key, type, default and range, ids and references, includes and prefabs, paths, diagnostics and the format 0 to 1 migration. Its spec is [scene-format.md](scene-format.md); the crate lives in this workspace as `crates/scene`. This page keeps only what the engine does with a loaded scene.
+The files are format 1 of the crate `pfx-scene`, which owns the format: every file kind, key, type, default and range, ids and references, includes and prefabs, paths, diagnostics and the format 0 to 1 migration. Its spec is [scene-format.md](scene-format.md) and the crate is introduced in [scene-crate.md](scene-crate.md); it lives in this workspace as `crates/scene`. This page keeps only what the engine does with a loaded scene.
 
 ## Loading
 

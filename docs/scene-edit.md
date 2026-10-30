@@ -1,5 +1,7 @@
 # Edit a scene in place
 
+<p align="center"><img src="images/scene-write.gif" width="800" alt="The scene-write example: a crate moved and a lamp renamed, each written in place as a one-line change with every comment and key kept, and a misspelt material refused before anything is written"></p>
+
 `SceneEdit` edits a scene's files in place. A changed value keeps its place, its neighbours, the comments and the number spelling, so a diff shows only what changed. An edit the checker would refuse is refused before anything is written.
 
 ## From the command line
