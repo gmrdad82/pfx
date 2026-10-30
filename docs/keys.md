@@ -15,7 +15,7 @@ Put the pfx tag your project pins in place of `<tag>`. With no feature it depend
 
 | feature | converter | for |
 | --- | --- | --- |
-| `egui` | `pfx_keys::egui` (egui 0.36.2) | an egui window: `pressed(&events)`, `chord(key, modifiers)`, and `events(chord)` / `name(chord)` for scripted input |
+| `egui` | `pfx_keys::egui` (egui 0.36.2) | an egui window: `pressed(&events)`, `chord(key, modifiers)` (also `Chord::from_egui(key, modifiers)`), and `events(chord)` / `name(chord)` for scripted input |
 | `winit` | `pfx_keys::winit` (winit 0.30.13) | a winit window: `chord(&logical_key, modifiers)` |
 | `terminal` | `pfx_keys::terminal` (crossterm 0.29.0) | a terminal app: `chord(&key_event)`, also `Chord::from_crossterm(&key_event)` |
 

@@ -167,6 +167,30 @@ fn shift_ctrl_command_and_alt_reach_the_chord() {
 }
 
 #[test]
+fn a_chord_from_egui_is_the_egui_converters_chord() {
+    for (key, modifiers) in [
+        (E::Z, Modifiers::CTRL),
+        (E::Z, Modifiers::CTRL | Modifiers::SHIFT),
+        (E::S, Modifiers::MAC_CMD),
+        (E::Questionmark, Modifiers::SHIFT),
+        (E::F5, Modifiers::NONE),
+        (E::Enter, Modifiers::ALT),
+        (E::ShiftLeft, Modifiers::NONE),
+    ] {
+        assert_eq!(
+            Chord::from_egui(key, modifiers),
+            super::egui::chord(key, modifiers),
+            "{key:?}"
+        );
+    }
+    assert_eq!(
+        Chord::from_egui(E::S, Modifiers::MAC_CMD),
+        Chord::parse("ctrl+s").ok()
+    );
+    assert_eq!(Chord::from_egui(E::ShiftLeft, Modifiers::NONE), None);
+}
+
+#[test]
 fn cut_copy_and_paste_events_read_as_their_ctrl_chords_and_repeats_are_marked() {
     let pressed = super::egui::pressed(&[
         Event::Cut,

@@ -153,6 +153,12 @@ pub fn chord(key: E, modifiers: Modifiers) -> Option<Chord> {
     Some(Chord::new(self::key(key)?, mods(modifiers)))
 }
 
+impl Chord {
+    pub fn from_egui(key: E, modifiers: Modifiers) -> Option<Chord> {
+        chord(key, modifiers)
+    }
+}
+
 pub fn pressed(events: &[Event]) -> Vec<Pressed> {
     let held = |c: char| Pressed {
         chord: Chord::ctrl(c),
